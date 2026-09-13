@@ -126,6 +126,10 @@ class FeishuChannelConfig(BaseChannelConfig):
     app_secret: str = ""
     encrypt_key: str = ""
     verification_token: str = ""
+    domain: str = Field(
+        default="https://open.feishu.cn",
+        description="开放平台域名：飞书用 https://open.feishu.cn，Lark 国际版用 https://open.larksuite.com",
+    )
     allow_from: list[str] = Field(default_factory=list)
     allow_cmd_from: list[str] = Field(default_factory=list)  ## 允许执行命令的Feishu用户ID列表
     thread_require_mention: bool = Field(

@@ -327,3 +327,35 @@ def test_resolve_queuefs_mount_point_worker_mode_falls_back_to_pid(monkeypatch):
     config = StorageConfig(agfs={"queuefs": {"mode": "worker"}})
 
     assert resolve_queuefs_mount_point(config) == "/queue/worker-43210"
+
+
+def test_configure_default_executor_uses_configured_size(monkeypatch):
+    created: dict[str, object] = {}
+
+    class _Executor:
+        def __init__(self, *, max_workers, thread_name_prefix):
+            created["max_workers"] = max_workers
+            created["thread_name_prefix"] = thread_name_prefix
+
+    class _Loop:
+        def set_default_executor(self, executor):
+            created["executor"] = executor
+
+    monkeypatch.setattr(app_module, "ThreadPoolExecutor", _Executor)
+    monkeypatch.setattr(app_module.asyncio, "get_running_loop", lambda: _Loop())
+
+    app_module._configure_default_executor(ServerConfig(executor_threads=48))
+
+    assert created["max_workers"] == 48
+    assert created["thread_name_prefix"] == "openviking-asyncio"
+    assert created["executor"].__class__ is _Executor
+
+
+def test_configure_default_executor_keeps_python_default_when_zero(monkeypatch):
+    monkeypatch.setattr(
+        app_module.asyncio,
+        "get_running_loop",
+        lambda: pytest.fail("event loop should not be touched when the setting is zero"),
+    )
+
+    app_module._configure_default_executor(ServerConfig())

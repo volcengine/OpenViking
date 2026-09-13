@@ -43,9 +43,9 @@ def sanitize_relative_viking_path(rel_path: str) -> str:
 
 
 def validate_safe_viking_uri_path(uri: str) -> str:
-    """Reject ambiguous or traversal-bearing path syntax in a Viking URI."""
+    """Validate a literal storage path, where ``#`` is part of the filename."""
     normalized = VikingURI(uri.strip()).uri.rstrip("/")
-    if "?" in normalized or "#" in normalized:
+    if "?" in normalized:
         raise ValueError(f"Unsafe Viking URI path rejected: {uri}")
     path = normalized[len(f"{VikingURI.SCHEME}://") :]
     if not path:

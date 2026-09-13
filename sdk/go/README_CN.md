@@ -113,11 +113,19 @@ _, err = client.AdminRegenerateKeyWithOptions(ctx, "acme", "alice", &openviking.
 
 ## 技能和 Watch 示例
 
-```go
-_, err := client.AddSkill(ctx, "./skills/search-web", &openviking.AddSkillOptions{
-    Wait: true,
-})
+导入默认返回 `task_id`。通过 `client.GetTask(ctx, taskID)` 查询状态。
 
+```go
+skill, err := client.AddSkill(ctx, "./skills/search-web", nil)
+if err != nil {
+    return err
+}
+fmt.Println(skill["task_id"])
+```
+
+任务为 `completed` 后再检索导入的技能：
+
+```go
 skills, err := client.ListSkills(ctx, nil)
 found, err := client.FindSkills(ctx, "search the web", &openviking.FindSkillsOptions{
     Limit: 5,

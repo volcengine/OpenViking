@@ -1591,7 +1591,7 @@ class BotCompileService:
                 return link.text
             if "/" not in corrected and not corrected.startswith("."):
                 corrected = f"./{corrected}"
-            corrected = corrected.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+            corrected = LinkRenderer.encode_markdown_target(corrected)
             image_marker = "!" if image else ""
             return f"{image_marker}[{link.text}]({corrected}{suffix})"
 
