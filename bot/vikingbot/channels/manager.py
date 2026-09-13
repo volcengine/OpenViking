@@ -72,6 +72,7 @@ class ChannelManager:
                     channel_config,
                     self.bus,
                     workspace_path=workspace_path,
+                    bot_config=additional_deps.get("bot_config"),
                 )
 
             elif channel_config.type == ChannelType.DISCORD:
@@ -161,6 +162,7 @@ class ChannelManager:
             self.add_channel_from_config(
                 channel_config,
                 workspace_path=workspace_path,
+                bot_config=config,
             )
 
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:

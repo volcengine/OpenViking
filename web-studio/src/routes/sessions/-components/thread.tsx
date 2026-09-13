@@ -18,12 +18,17 @@ interface ThreadProps {
 }
 
 export function Thread({ sessionId }: ThreadProps) {
+  const { t } = useTranslation('sessions')
   const { identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 
   const { data: session } = useSession(sessionId)
-  const { data: historyMessages } = useSessionMessages(sessionId)
+  const {
+    data: historyMessages,
+    isPending: historyLoading,
+    error: historyError,
+  } = useSessionMessages(sessionId)
 
   const chat = useChat({
     identityScopeKey,
@@ -81,7 +86,7 @@ export function Thread({ sessionId }: ThreadProps) {
   return (
     <div className="relative flex h-full flex-col">
       {/* PixelBlast background — deferred until idle */}
-      {showBackground && (
+      {showBackground && isEmpty && (
         <div className="pointer-events-none absolute inset-0 z-0 opacity-40">
           <Suspense fallback={null}>
             <PixelBlast
@@ -105,9 +110,17 @@ export function Thread({ sessionId }: ThreadProps) {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-12 pb-24"
+        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-6 pb-6"
       >
-        {isEmpty ? (
+        {historyLoading ? (
+          <div role="status" className="py-6 text-sm text-muted-foreground">
+            {t('threadList.loading')}
+          </div>
+        ) : historyError ? (
+          <div role="alert" className="py-6 text-sm text-destructive">
+            {t('chat.historyLoadFailed', { error: historyError.message })}
+          </div>
+        ) : isEmpty ? (
           <ThreadEmpty />
         ) : (
           <MessageList
@@ -125,6 +138,14 @@ export function Thread({ sessionId }: ThreadProps) {
         <div ref={bottomRef} />
       </div>
 
+      {chat.error && (
+        <div
+          role="alert"
+          className="relative z-10 mx-auto w-full max-w-4xl px-4 py-2 text-sm text-destructive"
+        >
+          {t('chat.sendFailed', { error: chat.error })}
+        </div>
+      )}
       <div className="relative z-10">
         <Composer
           onSend={handleSend}

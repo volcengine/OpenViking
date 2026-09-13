@@ -295,11 +295,7 @@ function TasksRoute() {
               : 'size-3.5'
           }
         />
-        <span>
-          {status === 'pending'
-            ? (i18n.language.startsWith('zh') ? '队首等待中' : 'Queued')
-            : t(`status.${status}`)}
-        </span>
+        <span>{t(`status.${status}`)}</span>
         {status === 'running' && (
           <span className="font-mono font-semibold ml-0.5">
             {pct}%

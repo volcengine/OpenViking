@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchTasks, getEffectiveTaskStatus, MAX_TASKS } from './task-list'
+import { fetchTasks, MAX_TASKS } from './task-list'
 
 const clientMocks = vi.hoisted(() => ({
   getTasks: vi.fn(),
@@ -51,37 +51,41 @@ describe('task list requests', () => {
     })
   })
 
-  it('sends status to the API before the result limit is applied', async () => {
-    clientMocks.getTasks.mockResolvedValue([
-      {
-        created_at: 1,
-        status: 'failed',
-        task_id: 'old-failed',
-      },
-    ])
+  it('finds matching tasks before the server applies its result limit', async () => {
+    const failedTask = {
+      task_id: 'old-failure',
+      task_type: 'session_commit',
+      status: 'failed',
+      created_at: 1,
+    }
+    const records = [
+      ...Array.from({ length: MAX_TASKS }, (_, index) => ({
+        task_id: `completed-${index}`,
+        task_type: 'session_commit',
+        status: 'completed',
+        created_at: MAX_TASKS + 1 - index,
+      })),
+      failedTask,
+    ]
+    clientMocks.getTasks.mockImplementation(({ query }) =>
+      records
+        .filter((task) => !query.status || task.status === query.status)
+        .filter(
+          (task) => !query.task_type || task.task_type === query.task_type,
+        )
+        .slice(0, query.limit),
+    )
 
     await expect(fetchTasks('session_commit', 'failed')).resolves.toEqual([
-      expect.objectContaining({ task_id: 'old-failed' }),
+      failedTask,
     ])
     expect(clientMocks.getTasks).toHaveBeenCalledWith({
       query: {
         limit: MAX_TASKS,
-        status: 'failed',
         task_type: 'session_commit',
+        status: 'failed',
       },
     })
-  })
-
-  it('does not reclassify surplus running tasks as pending', () => {
-    const tasks = Array.from({ length: 12 }, (_, index) => ({
-      created_at: index + 1,
-      status: 'running' as const,
-      task_id: `task-${index + 1}`,
-    }))
-
-    expect(tasks.map((task) => getEffectiveTaskStatus(task, tasks))).toEqual(
-      Array.from({ length: 12 }, () => 'running'),
-    )
   })
 
   it('propagates request failures to the query error state', async () => {

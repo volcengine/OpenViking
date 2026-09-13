@@ -793,9 +793,10 @@ async def test_write_direct_reuses_outer_lease_for_viking_fs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resource_write_updates_target_and_queues_refresh_before_return(monkeypatch):
-    file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
+@pytest.mark.parametrize("path", ["demo/doc.md", "demo#1/a#one.md"])
+async def test_resource_write_updates_target_and_queues_refresh_before_return(monkeypatch, path):
+    file_uri = f"viking://resources/{path}"
+    root_uri = file_uri.rsplit("/", 1)[0]
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)

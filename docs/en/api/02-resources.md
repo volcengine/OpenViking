@@ -98,7 +98,7 @@ Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processi
 #### Stage 4: Semantic Processing
 - **Summary Generation**: `Summarizer` generates L0 (abstract) and L1 (overview)
 - **Vector Index**: Vectorizes content for semantic search
-- Processed asynchronously via `SemanticQueue`, can wait for completion with `wait=True`
+- Processed asynchronously via `SemanticQueue`; use the returned `task_id` to check completion
 
 #### Non-Wait Git Repository Imports
 - For Git repository sources with `wait=false`, OpenViking validates the repository, resolves the target URI, reserves the final `root_uri`, and returns before clone/parse/finalize completes.
@@ -144,7 +144,7 @@ Add a resource to the knowledge base. The SDK supports local files/directories, 
 
 #### 1. API Implementation Overview
 
-This endpoint is the core entry point for resource management, supporting adding resources from various sources with optional waiting for semantic processing and vectorization completion.
+This endpoint is the core entry point for resource management. It supports various resource sources and returns a `task_id` by default so callers can query processing status.
 
 **Processing Flow**:
 1. Identify and validate the resource source (URL or uploaded temporary file)
@@ -152,7 +152,7 @@ This endpoint is the core entry point for resource management, supporting adding
 3. Call the corresponding format Parser; `args.parse_mode` controls whether the converted Markdown body may be split
 4. Build the directory tree and write to AGFS
 5. Run post-ingest processing according to `processing_mode`: `semantic_and_vectors` generates semantic artifacts and vectors; `vectors_only` skips semantic understanding and only enqueues file vectorization
-6. Wait for semantic processing/vectorization completion when `wait=true`; with `wait=false`, return a `task_id` for queue tracking
+6. Return a `task_id` by default; callers confirm completion through the Task API
 7. If `reason` is non-empty, append it to the fixed resource reason session and commit through the normal memory extraction pipeline so suitable user memories can reference the resource URI
 8. Set up scheduled update task if `watch_interval` is specified
 
@@ -222,6 +222,8 @@ This endpoint is the core entry point for resource management, supporting adding
 
 #### 3. Usage Examples
 
+These examples use the default asynchronous mode without waiting parameters. Save the returned `task_id` and query the [Task API](17-tasks.md). Read summaries or search the imported content only after the task reaches `completed`.
+
 **HTTP API**
 
 ```
@@ -236,8 +238,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation",
-    "wait": true
+    "reason": "User guide documentation"
   }'
 
 # Import and watch a private HTTPS Git repository
@@ -264,8 +265,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d '{
     "path": "https://example.com/guide.md",
     "to": "viking://resources/guide",
-    "processing_mode": "vectors_only",
-    "wait": true
+    "processing_mode": "vectors_only"
   }'
 
 # Recursively crawl a site: expand along same-host links; depth bounds
@@ -275,8 +275,6 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://docs.openviking.ai/getting-started/01-introduction",
-    "wait": true,
-    "timeout": 60,
     "args": { "depth": 1, "max_pages": 10 }
   }'
 
@@ -348,7 +346,7 @@ result = client.add_resource(
     path="./documents/guide.md",
     options={"reason": "User guide documentation"},
 )
-print(f"Added: {result['root_uri']}")
+print(f"Task ID: {result['task_id']}")
 
 # Parse each document to Markdown without splitting its body
 result = client.add_resource(
@@ -366,8 +364,6 @@ result = client.add_resource(
 # Recursively crawl a site (same-host BFS; depth levels, max_pages cap)
 result = client.add_resource(
     path="https://docs.openviking.ai/getting-started/01-introduction",
-    wait=True,
-    timeout=180,
     options={
         "args": {"depth": 1, "max_pages": 10},
     },
@@ -396,8 +392,8 @@ result = client.add_resource(
     },
 )
 
-# Wait for processing to complete
-client.wait_processed()
+# Check the latest import task; use its results after it reaches completed
+print(client.get_task(result["task_id"]))
 
 # Enable scheduled updates
 client.add_resource(
@@ -435,10 +431,9 @@ client.add_resource(
 ```typescript
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
-  wait: true,
   args: { parse_mode: "no_split" },
 });
-console.log(task);
+console.log(task.task_id);
 ```
 
 **Go SDK**
@@ -446,13 +441,12 @@ console.log(task);
 ```go
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
-    Wait:   true,
     Args:   map[string]any{"parse_mode": "no_split"},
 })
 if err != nil {
     return err
 }
-fmt.Println(result["root_uri"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -479,8 +473,8 @@ ov add-resource "https://docs.openviking.ai/" \
 ov add-resource "https://example.com/docs" \
   --args="depth:1,max_pages:20,skip_download_links:false"
 
-# Wait for processing to complete
-ov add-resource ./documents/guide.md --wait
+# Check progress using the task_id returned by submission
+ov task status TASK_ID
 
 # Enable scheduled updates (check every 60 minutes)
 ov add-resource https://github.com/example/repo.git --to viking://resources/guide.md --watch-interval 60
@@ -525,31 +519,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 **Response Example**
 
-**HTTP API Response (JSON, `wait=true`)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "status": "success",
-    "root_uri": "viking://resources/guide.md",
-    "temp_uri": "viking://temp/username/04291108_b62dc7/guide.md",
-    "source_path": "./documents/guide.md",
-    "meta": {},
-    "errors": [],
-    "queue_status": {
-      "pending": 5,
-      "processing": 2,
-      "completed": 10
-    }
-  },
-  "telemetry": {
-    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
-  }
-}
-```
-
-**HTTP API Response (JSON, non-Git `wait=false`)**
+**HTTP API Response (default asynchronous mode)**
 
 ```json
 {
@@ -568,7 +538,7 @@ Use the returned `task_id` to poll `/api/v1/tasks/{task_id}` for queue completio
 
 ```
 Note: Resource is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
 status       accepted
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx

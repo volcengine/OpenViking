@@ -148,7 +148,7 @@ jobs:
           git fetch origin ${{ github.base_ref }}
           
           # Define grep pattern for dependency files
-          PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|\.github/workflows/_build\.yml"
+          PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|crates/|\.github/workflows/_build\.yml"
           
           # Check for changes
           CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$PATTERN" || true)
@@ -164,7 +164,7 @@ jobs:
 
           # Run the CPU-only cuVS regression suite when the optional backend,
           # its native filter bridge, or its focused tests are modified.
-          CUVS_PATTERN="openviking/storage/vectordb/|openviking/storage/vectordb_adapters/(factory|local_adapter)\.py|openviking_cli/utils/config/vectordb_config\.py|src/|tests/(vectordb/test_cuvs_|benchmark/test_cuvs_)|benchmark/cuvs/|examples/cuvs_smoke\.py|\.github/workflows/_test_lite\.yml"
+          CUVS_PATTERN="crates/|openviking/storage/vectordb/|openviking/storage/vectordb_adapters/(factory|local_adapter)\.py|openviking_cli/utils/config/vectordb_config\.py|src/|tests/(vectordb/test_cuvs_|benchmark/test_cuvs_)|benchmark/cuvs/|examples/cuvs_smoke\.py|\.github/workflows/_test_lite\.yml"
           CUVS_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$CUVS_PATTERN" || true)
 
           if [ -n "$CUVS_CHANGED_FILES" ]; then

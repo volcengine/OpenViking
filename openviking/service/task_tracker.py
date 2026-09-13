@@ -25,6 +25,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.service.task_events import (
+    PROCESS_EVENT_KINDS,
+    TaskEventHistory,
+    append_task_event,
+)
 from openviking.service.task_store import TaskStore
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
@@ -82,13 +87,15 @@ class TaskRecord:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     auth: Dict[str, Any] = field(default_factory=dict, repr=False)
+    execution_events: Optional[TaskEventHistory] = None
     _extra_fields: Dict[str, Any] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, *, include_events: bool = False) -> Dict[str, Any]:
         """Serialize for JSON response."""
         return {
+            **({"execution_events": deepcopy(self.execution_events)} if include_events else {}),
             "task_id": self.task_id,
             "task_type": self.task_type,
             "status": self.status.value,
@@ -499,7 +506,7 @@ class TaskTracker:
                 if stage is not None:
                     updated.stage = stage
                 updated.updated_at = self._next_updated_at(task)
-                await self._persist_and_publish("update", updated)
+                await self._persist_and_publish("update", updated, previous=task)
 
     async def update_stage(
         self,
@@ -531,7 +538,7 @@ class TaskTracker:
                 if meta:
                     updated.meta.update(deepcopy(meta))
                 updated.updated_at = self._next_updated_at(task)
-                await self._persist_and_publish("update", updated)
+                await self._persist_and_publish("update", updated, previous=task)
 
     async def update_task_auth(
         self,
@@ -565,7 +572,7 @@ class TaskTracker:
                 updated = deepcopy(task)
                 updated.auth.update(deepcopy(values))
                 updated.updated_at = self._next_updated_at(task)
-                await self._persist_and_publish("update", updated)
+                await self._persist_and_publish("update", updated, previous=task)
 
     async def record_feishu_response(
         self,
@@ -585,7 +592,7 @@ class TaskTracker:
                 updated = deepcopy(task)
                 updated.meta.setdefault("feishu_responses", {})[entry] = response_id
                 updated.updated_at = self._next_updated_at(task)
-                await self._persist_and_publish("update", updated)
+                await self._persist_and_publish("update", updated, previous=task)
 
         await self._dispatcher.run(record)
 
@@ -662,7 +669,7 @@ class TaskTracker:
                 updated = deepcopy(task)
                 updated.status = TaskStatus.CANCELLING
                 updated.updated_at = self._next_updated_at(task)
-                await self._persist_and_publish("update", updated)
+                await self._persist_and_publish("update", updated, previous=task)
         await self._finalize_task_on_owner(task_id, account_id, user_id)
 
     async def _record_outcome(
@@ -720,7 +727,7 @@ class TaskTracker:
                 updated.updated_at = self._next_updated_at(task)
                 updated.auth = {}
                 try:
-                    await self._persist_and_publish("update", updated)
+                    await self._persist_and_publish("update", updated, previous=task)
                 except _CommittedMutationCancelled as exc:
                     cancellation = exc
                     outcome_persisted = True
@@ -777,7 +784,7 @@ class TaskTracker:
                 updated.status = TaskStatus.CANCELLING
                 updated.updated_at = self._next_updated_at(task)
                 try:
-                    await self._persist_and_publish("update", updated)
+                    await self._persist_and_publish("update", updated, previous=task)
                 except _CommittedMutationCancelled as exc:
                     cancellation = exc
                     cancellation_persisted = True
@@ -846,7 +853,7 @@ class TaskTracker:
                 updated.stage = updated.status.value
                 updated.updated_at = self._next_updated_at(task)
                 updated.auth = {}
-                await self._persist_and_publish("update", updated)
+                await self._persist_and_publish("update", updated, previous=task)
                 self._work_index.clear_failure(task_id)
                 logger.info("[TaskTracker] Task %s %s", task_id, updated.status.value)
 
@@ -944,8 +951,56 @@ class TaskTracker:
 
     async def wait_for_descendants(self, task_id: str, current_work_id: str) -> None:
         """Wait on the same durable work index used by completion and cancellation."""
+        if self._work_index.has_work(task_id, exclude_work_id=current_work_id):
+            task = self._cached_task(task_id)
+            if task and task.account_id and task.user_id:
+                await self.record_event(
+                    task_id,
+                    "waiting_for_descendants",
+                    operation=current_work_id,
+                    account_id=task.account_id,
+                    user_id=task.user_id,
+                )
         while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
             await asyncio.sleep(0.05)
+
+    async def record_event(
+        self,
+        task_id: str,
+        kind: str,
+        *,
+        account_id: str,
+        user_id: str,
+        operation: Optional[str] = None,
+    ) -> None:
+        """Record a registered process event without changing task status or stage.
+
+        Add process event kinds here and their Studio translations when instrumenting
+        new execution points. Callers report facts, not inferred lifecycle transitions.
+        """
+        self._validate_owner(account_id, user_id)
+        if kind not in PROCESS_EVENT_KINDS:
+            raise ValueError(f"Unknown task process event: {kind}")
+        if operation is not None and not re.fullmatch(r"[\w.:-]{1,128}", operation):
+            raise ValueError("operation must be a bounded operation identifier")
+
+        async def record() -> None:
+            async with self._task_locks.acquire(task_id):
+                task = await self._load_for_update(task_id, account_id, user_id)
+                if task is None or task.status not in _ACTIVE_STATUSES:
+                    return
+                updated = deepcopy(task)
+                updated.execution_events = append_task_event(
+                    updated.execution_events,
+                    kind=kind,
+                    status=task.status.value,
+                    stage=_sanitize_error(task.stage) if task.stage else None,
+                    operation=operation,
+                )
+                updated.updated_at = self._next_updated_at(task)
+                await self._persist_and_publish("update", updated, previous=task)
+
+        await self._dispatcher.run(record)
 
     def has_work(self, task_id: str) -> bool:
         """Return whether a task still owns durable or active queue work."""
@@ -1129,7 +1184,36 @@ class TaskTracker:
             )
         ]
 
-    async def _persist_and_publish(self, operation: str, task: TaskRecord) -> None:
+    async def _persist_and_publish(
+        self, operation: str, task: TaskRecord, *, previous: Optional[TaskRecord] = None
+    ) -> None:
+        # All mutation callers supply the snapshot read under this task's lock.
+        # Build history before the same physical write as the state transition.
+        if operation == "update" and previous is None:
+            raise ValueError("Task updates require the previous snapshot")
+        kinds = []
+        if previous is None:
+            kinds.append("created")
+        else:
+            if task.error is not None and previous.error is None:
+                kinds.append("error_recorded")
+            if task.status != previous.status:
+                kinds.append("status_changed")
+            if task.stage != previous.stage and task.status not in _TERMINAL_STATUSES:
+                kinds.append("stage_changed")
+        stage = previous.stage if previous and task.status in _TERMINAL_STATUSES else task.stage
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        for kind in kinds:
+            task.execution_events = append_task_event(
+                task.execution_events,
+                kind=kind,
+                status=task.status.value,
+                stage=_sanitize_error(stage) if stage else None,
+                error=_sanitize_error(task.error)
+                if kind == "error_recorded" and task.error is not None
+                else None,
+                recorded_at=recorded_at,
+            )
         committed = False
 
         async def write_and_publish() -> None:

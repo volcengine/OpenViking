@@ -1870,7 +1870,9 @@ class ResourceService:
                 timeout=timeout,
             )
         except TimeoutError as exc:
-            raise DeadlineExceededError("add resource task", timeout) from exc
+            raise DeadlineExceededError(
+                "waiting for resource import", timeout, task_id=task_id
+            ) from exc
 
         if task.status == TaskStatus.COMPLETED:
             completed = dict(task.result)

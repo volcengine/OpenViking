@@ -91,7 +91,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 #### 阶段 4：语义处理 (Semantic Processing)
 - **摘要生成**：`Summarizer` 生成 L0（摘要）和 L1（概述）
 - **向量索引**：将内容向量化用于语义搜索
-- 通过 `SemanticQueue` 异步处理，可通过 `wait=True` 等待完成
+- 通过 `SemanticQueue` 异步处理，使用返回的 `task_id` 查询完成状态
 
 #### 非等待 Git 仓库导入
 - 对 Git 仓库来源使用 `wait=false` 时，OpenViking 会先校验仓库、解析目标 URI、预占最终 `root_uri`，然后在 clone/parse/finalize 完成前返回。
@@ -137,7 +137,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 #### 1. API 实现介绍
 
-此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
+此接口是资源管理的核心入口，支持多种来源的资源添加，默认返回 `task_id` 供调用方查询处理状态。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
 
 **处理流程**：
 1. 识别并校验资源来源（URL 或上传的临时文件）
@@ -145,7 +145,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 3. 调用对应格式 Parser；`args.parse_mode` 控制转换后的 Markdown 正文是否允许拆分
 4. 构建目录树并写入 AGFS
 5. 按 `processing_mode` 执行入库后的处理：`semantic_and_vectors` 生成语义产物和向量；`vectors_only` 跳过语义理解，只提交文件向量化
-6. `wait=true` 时等待语义处理/向量化完成；`wait=false` 时返回 `task_id` 用于队列跟踪
+6. 默认返回 `task_id`；调用方通过任务 API 确认处理完成
 7. 如果 `reason` 非空，将其追加到固定的资源 reason session 并 commit，复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
 8. 如指定 `--watch-interval`，设置定时更新任务
 
@@ -217,6 +217,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 #### 3. 使用示例
 
+以下示例使用默认异步模式，不设置等待参数。提交后保存 `task_id`，通过 [任务 API](17-tasks.md) 查询状态；只有任务为 `completed` 时，才读取摘要或检索本次导入的内容。
+
 **HTTP API**
 
 ```
@@ -231,8 +233,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation",
-    "wait": true
+    "reason": "User guide documentation"
   }'
 
 # 导入并定时同步 HTTPS 私有 Git 仓库
@@ -259,8 +260,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d '{
     "path": "https://example.com/guide.md",
     "to": "viking://resources/guide",
-    "processing_mode": "vectors_only",
-    "wait": true
+    "processing_mode": "vectors_only"
   }'
 
 # 递归抓取网页：从入口页沿同域链接展开，depth 控制层数，max_pages 限制页数
@@ -269,8 +269,6 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://docs.openviking.ai/zh/getting-started/01-introduction",
-    "wait": true,
-    "timeout": 60,
     "args": { "depth": 1, "max_pages": 10 }
   }'
 
@@ -308,7 +306,6 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"to\": \"viking://resources/tagged-guide.md\",
-    \"wait\": true,
     \"tags\": [\"team=search\", \"env=test\"],
     \"tag_mode\": \"replace\"
   }"
@@ -354,7 +351,7 @@ result = client.add_resource(
     path="./documents/guide.md",
     options={"reason": "User guide documentation"},
 )
-print(f"Added: {result['root_uri']}")
+print(f"Task ID: {result['task_id']}")
 
 ## 正常解析并转换为 Markdown，但每个文档正文不拆分
 result = client.add_resource(
@@ -372,8 +369,6 @@ result = client.add_resource(
 ## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
 result = client.add_resource(
     path="https://docs.openviking.ai/zh/getting-started/01-introduction",
-    wait=True,
-    timeout=180,
     options={
         "args": {"depth": 1, "max_pages": 10},
     },
@@ -402,8 +397,8 @@ result = client.add_resource(
     },
 )
 
-## 等待处理完成
-client.wait_processed()
+## 查询最近一次导入任务；状态为 completed 后再使用处理结果
+print(client.get_task(result["task_id"]))
 
 ## 开启定时更新
 client.add_resource(
@@ -441,10 +436,9 @@ client.add_resource(
 ```typescript
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
-  wait: true,
   args: { parse_mode: "no_split" },
 });
-console.log(task);
+console.log(task.task_id);
 ```
 
 **Go SDK**
@@ -452,13 +446,12 @@ console.log(task);
 ```go
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
-    Wait:   true,
     Args:   map[string]any{"parse_mode": "no_split"},
 })
 if err != nil {
     return err
 }
-fmt.Println(result["root_uri"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -485,8 +478,8 @@ ov add-resource "https://docs.openviking.ai/" \
 ov add-resource "https://example.com/docs" \
   --args="depth:1,max_pages:20,skip_download_links:false"
 
-# 等待处理完成
-ov add-resource ./documents/guide.md --wait
+# 使用提交时返回的 task_id 查询进度
+ov task status TASK_ID
 
 # 开启定时更新（每60分钟检测一次）
 ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 60
@@ -531,31 +524,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 #### 4. 响应示例
 
-**HTTP API 响应 (JSON, `wait=true`)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "status": "success",
-    "root_uri": "viking://resources/guide.md",
-    "temp_uri": "viking://temp/username/04291108_b62dc7/guide.md",
-    "source_path": "./documents/guide.md",
-    "meta": {},
-    "errors": [],
-    "queue_status": {
-      "pending": 5,
-      "processing": 2,
-      "completed": 10
-    }
-  },
-  "telemetry": {
-    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
-  }
-}
-```
-
-**HTTP API 响应 (JSON, 非 Git `wait=false`)**
+**HTTP API 响应（默认异步模式）**
 
 ```json
 {
@@ -574,7 +543,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 ```
 Note: Resource is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
 status       accepted
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
