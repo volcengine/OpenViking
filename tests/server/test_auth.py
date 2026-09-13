@@ -419,6 +419,7 @@ async def test_task_endpoints_require_auth():
             "/api/v1/tasks",
             "/api/v1/tasks/nonexistent-id",
             "/api/v1/tasks/nonexistent-id?include_events=true",
+            "/api/v1/tasks/nonexistent-id?include_pending_events=true",
         ):
             resp = await client.get(url)
             assert resp.status_code == 401
@@ -452,6 +453,13 @@ async def test_task_endpoints_are_user_scoped():
     )
     alice_transport = httpx.ASGITransport(app=alice_app)
     bob_transport = httpx.ASGITransport(app=bob_app)
+    tracker.emit_event(
+        alice_task.task_id,
+        "operation_started",
+        operation="archive_summary",
+        account_id=account_id,
+        user_id="alice",
+    )
 
     async with httpx.AsyncClient(
         transport=alice_transport, base_url="http://testserver"
@@ -460,15 +468,25 @@ async def test_task_endpoints_are_user_scoped():
         assert alice_get.status_code == 200
         assert alice_get.json()["result"]["resource_id"] == "alice-session"
         assert "execution_events" not in alice_get.json()["result"]
+        assert "pending_execution_events" not in alice_get.json()["result"]
         with_events = await alice_client.get(
             f"/api/v1/tasks/{alice_task.task_id}?include_events=true"
         )
         assert with_events.json()["result"]["execution_events"]["items"][0]["kind"] == "created"
+        assert "pending_execution_events" not in with_events.json()["result"]
+        live = await alice_client.get(
+            f"/api/v1/tasks/{alice_task.task_id}?include_pending_events=true"
+        )
+        assert (
+            live.json()["result"]["pending_execution_events"]["items"][0]["operation"]
+            == "archive_summary"
+        )
 
         alice_list = await alice_client.get("/api/v1/tasks")
         assert alice_list.status_code == 200
         assert {task["task_id"] for task in alice_list.json()["result"]} == {alice_task.task_id}
         assert all("execution_events" not in task for task in alice_list.json()["result"])
+        assert all("pending_execution_events" not in task for task in alice_list.json()["result"])
 
     async with httpx.AsyncClient(
         transport=bob_transport, base_url="http://testserver"
@@ -477,6 +495,10 @@ async def test_task_endpoints_are_user_scoped():
         assert bob_get_other.status_code == 404
         bob_events = await bob_client.get(f"/api/v1/tasks/{alice_task.task_id}?include_events=true")
         assert bob_events.status_code == 404
+        bob_pending = await bob_client.get(
+            f"/api/v1/tasks/{alice_task.task_id}?include_pending_events=true"
+        )
+        assert bob_pending.status_code == 404
 
         bob_list = await bob_client.get("/api/v1/tasks")
         assert bob_list.status_code == 200
@@ -1208,9 +1230,7 @@ async def test_trusted_identity_registration_keeps_rootless_admin_api_disabled(a
     from openviking.server.auth.plugins import TrustedAuthPlugin
 
     config = ServerConfig(auth_mode="trusted")
-    app = _build_auth_http_test_app(
-        identity=None, auth_enabled=False, auth_mode="trusted"
-    )
+    app = _build_auth_http_test_app(identity=None, auth_enabled=False, auth_mode="trusted")
     app.state.config = config
 
     @app.get("/api/v1/admin/guarded")
@@ -1262,9 +1282,7 @@ async def test_disabled_trusted_identity_registration_and_admin_paths_do_not_enq
                 "X-OpenViking-Account": "acme",
                 "X-OpenViking-User": "alice",
             }
-            request = _make_request(
-                path, headers=headers, auth_enabled=False, auth_mode="trusted"
-            )
+            request = _make_request(path, headers=headers, auth_enabled=False, auth_mode="trusted")
             request.app.state.config = config
             request.app.state.api_key_manager = app.state.api_key_manager
             await plugin.resolve_identity(
@@ -1335,7 +1353,9 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
         original_ensure = plugin._api_key_manager.ensure_trusted_identities
 
         async def _fail_once(identities):
-            monkeypatch.setattr(plugin._api_key_manager, "ensure_trusted_identities", original_ensure)
+            monkeypatch.setattr(
+                plugin._api_key_manager, "ensure_trusted_identities", original_ensure
+            )
             raise RuntimeError("temporary storage failure")
 
         monkeypatch.setattr(plugin._api_key_manager, "ensure_trusted_identities", _fail_once)
@@ -1351,7 +1371,12 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
 
 def test_trusted_identity_registration_config_allows_disabling():
     """A zero interval disables registration; negative values remain invalid."""
-    assert ServerConfig(trusted_identity_flush_interval_seconds=0).trusted_identity_flush_interval_seconds == 0
+    assert (
+        ServerConfig(
+            trusted_identity_flush_interval_seconds=0
+        ).trusted_identity_flush_interval_seconds
+        == 0
+    )
     with pytest.raises(ValueError):
         ServerConfig(trusted_identity_flush_interval_seconds=-1)
     with pytest.raises(ValueError):

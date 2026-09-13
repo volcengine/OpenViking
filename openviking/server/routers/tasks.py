@@ -29,23 +29,26 @@ router = APIRouter(prefix="/api/v1", tags=["tasks"])
 async def get_task(
     task_id: str,
     include_events: bool = Query(False, description="Include recorded execution events"),
+    include_pending_events: bool = Query(False, description="Include buffered execution events"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get the status of a single background task."""
     tracker = get_task_tracker()
     if _ctx.role == Role.ROOT:
-        task = await tracker.get(task_id)
+        task = await tracker.get(task_id, include_pending_events=include_pending_events)
         if task is None:
             task = await tracker.get(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
                 user_id=SYSTEM_TASK_USER_ID,
+                include_pending_events=include_pending_events,
             )
     else:
         task = await tracker.get(
             task_id,
             account_id=_ctx.account_id,
             user_id=_ctx.user.user_id,
+            include_pending_events=include_pending_events,
         )
     if not task:
         raise OpenVikingError(
@@ -53,7 +56,12 @@ async def get_task(
             code="NOT_FOUND",
             details={"resource": task_id, "type": "task"},
         )
-    return Response(status="ok", result=task.to_dict(include_events=include_events))
+    return Response(
+        status="ok",
+        result=task.to_dict(
+            include_events=include_events, include_pending_events=include_pending_events
+        ),
+    )
 
 
 @router.post("/tasks/{task_id}/cancel")

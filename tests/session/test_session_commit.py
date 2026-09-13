@@ -8,6 +8,10 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
+import pytest
+from fastapi import FastAPI
+
 from openviking.message import TextPart
 from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
@@ -36,6 +40,160 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 
 class TestCommit:
     """Test commit"""
+
+    async def test_operation_cancellation_propagates_and_is_recorded(
+        self, session_with_messages: Session, monkeypatch
+    ):
+        session = session_with_messages
+        summary_started, extraction_started = asyncio.Event(), asyncio.Event()
+        release = asyncio.Event()
+        workers = []
+        original_resume = Session.resume_queued_commit
+
+        async def resume(current, message):
+            workers.append(asyncio.current_task())
+            return await original_resume(current, message)
+
+        async def summary(*args, **kwargs):
+            summary_started.set()
+            await release.wait()
+            return "summary"
+
+        async def extract(**kwargs):
+            extraction_started.set()
+            await release.wait()
+            return []
+
+        monkeypatch.setattr(Session, "resume_queued_commit", resume)
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", summary)
+        monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", extract)
+        response = await session.commit_async()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(summary_started.wait(), extraction_started.wait()), 5
+            )
+            workers[0].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await workers[0]
+        finally:
+            release.set()
+        tracker = get_task_tracker()
+        task = await tracker.get(response["task_id"], include_pending_events=True)
+        events = task.to_dict(include_pending_events=True)["pending_execution_events"]["items"]
+        assert sorted(e["operation"] for e in events if e["kind"] == "operation_cancelled") == [
+            "archive_summary",
+            "long_term_memory_extraction",
+        ]
+        assert not any(e["kind"] in ("operation_completed", "operation_failed") for e in events)
+
+    @pytest.mark.parametrize("summary_fails", [False, True])
+    async def test_operation_failure_is_visible_before_parallel_summary_settles(
+        self, session_with_messages: Session, monkeypatch, summary_fails
+    ):
+        from openviking.server.auth import get_request_context
+        from openviking.server.routers.tasks import router
+
+        session = session_with_messages
+        summary_started, release_summary = asyncio.Event(), asyncio.Event()
+
+        async def summary(*args, **kwargs):
+            summary_started.set()
+            await release_summary.wait()
+            if summary_fails:
+                raise ValueError("summary rejected")
+            return "A summary of this session"
+
+        async def extract(**kwargs):
+            await summary_started.wait()
+            raise ValueError("extraction rejected sk-private-example")
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", summary)
+        monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", extract)
+        response = await session.commit_async()
+        task_id = response["task_id"]
+        owner = {"account_id": session.ctx.account_id, "user_id": session.ctx.user.user_id}
+        tracker = get_task_tracker()
+
+        async def wait_for_failure_event():
+            while True:
+                task = await tracker.get(task_id, include_pending_events=True, **owner)
+                if task:
+                    pending = task.to_dict(include_pending_events=True)["pending_execution_events"]
+                    if any(e["kind"] == "operation_failed" for e in pending["items"]):
+                        return pending
+                await asyncio.sleep(0.01)
+
+        try:
+            pending = await asyncio.wait_for(wait_for_failure_event(), 5)
+            failure = next(e for e in pending["items"] if e["kind"] == "operation_failed")
+            assert failure["operation"] == "long_term_memory_extraction"
+            assert "[REDACTED]" in failure["error"]
+            app = FastAPI()
+            app.include_router(router)
+            app.dependency_overrides[get_request_context] = lambda: session.ctx
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app), base_url="http://test"
+            ) as client:
+                current = (
+                    await client.get(
+                        f"/api/v1/tasks/{task_id}?include_events=true&include_pending_events=true"
+                    )
+                ).json()["result"]
+            assert current["status"] == "running"
+            assert current["error"] is None
+            assert failure in current["pending_execution_events"]["items"]
+            assert not any(
+                e["kind"] == "operation_failed" for e in current["execution_events"]["items"]
+            )
+        finally:
+            release_summary.set()
+        outcome = await _wait_for_task(task_id)
+        assert outcome["status"] == "failed"
+        task = await tracker.get(task_id, include_pending_events=True, **owner)
+        events = task.execution_events["items"]
+        assert (
+            next(e for e in events if e.get("event_id") == failure["event_id"])["recorded_at"]
+            == failure["recorded_at"]
+        )
+        summary_end = [e["kind"] for e in events if e.get("operation") == "archive_summary"]
+        assert summary_end == [
+            "operation_started",
+            "operation_failed" if summary_fails else "operation_completed",
+        ]
+        assert task.to_dict(include_pending_events=True)["pending_execution_events"]["items"] == []
+
+    @pytest.mark.parametrize("break_observer", [False, True])
+    async def test_operation_events_preserve_policy_skips_and_zero_output(
+        self, session_with_messages: Session, monkeypatch, break_observer
+    ):
+        session = session_with_messages
+        extractor = AsyncMock(return_value=[])
+        summary = AsyncMock(return_value="must not run")
+        monkeypatch.setattr(session._session_compressor, "extract_long_term_memories", extractor)
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", summary)
+        if break_observer:
+
+            def broken(*args, **kwargs):
+                raise RuntimeError("event intake is unavailable")
+
+            monkeypatch.setattr("openviking.service.task_tracker.make_process_event", broken)
+        response = await session.commit_async(memory_policy={"working_memory": {"enabled": False}})
+        outcome = await _wait_for_task(response["task_id"])
+        assert outcome["status"] == "completed"
+        assert sum(outcome["result"]["memories_extracted"].values()) == 0
+        summary.assert_not_awaited()
+        extractor.assert_awaited_once()
+        task = await get_task_tracker().get(response["task_id"])
+        events = [e for e in task.execution_events["items"] if e.get("operation")]
+        if break_observer:
+            assert events == []
+        else:
+            assert [(e["operation"], e["kind"]) for e in events] == [
+                ("archive_summary", "operation_skipped"),
+                ("long_term_memory_extraction", "operation_started"),
+                ("long_term_memory_extraction", "operation_completed"),
+            ]
+            assert events[0]["reason"] == "working_memory_disabled"
 
     async def test_commit_preserves_unicode_separators_and_accepts_later_messages(
         self, session_with_messages: Session

@@ -2635,6 +2635,36 @@ class Session:
                         )
                     )
 
+                    def _emit_operation(kind: str, operation: str, **fields: Any) -> None:
+                        tracker.emit_event(
+                            task_id,
+                            kind,
+                            account_id=self.ctx.account_id,
+                            user_id=self.ctx.user.user_id,
+                            operation=operation,
+                            **fields,
+                        )
+
+                    async def _run_task_operation(
+                        operation: str,
+                        fn: Callable[[], Awaitable[Any]],
+                    ) -> Any:
+                        _emit_operation("operation_started", operation)
+                        try:
+                            result = await fn()
+                        except asyncio.CancelledError:
+                            _emit_operation("operation_cancelled", operation)
+                            raise
+                        except Exception as exc:
+                            try:
+                                error = str(exc)
+                            except Exception:
+                                error = type(exc).__name__
+                            _emit_operation("operation_failed", operation, error=error)
+                            raise
+                        _emit_operation("operation_completed", operation)
+                        return result
+
                     async def _run_archive_summary() -> None:
                         if not working_memory_enabled:
                             logger.info(
@@ -2783,13 +2813,29 @@ class Session:
                         if message.id not in completed_memory_steps.get("long_term", set())
                     ]
 
-                    long_term_has_work = (
-                        memory_extraction_enabled
-                        and (self_memory_enabled or allowed_peer_ids)
-                        and (long_term_memory_types is None or bool(long_term_memory_types))
-                        and bool(long_term_messages)
-                    )
-                    if working_memory_enabled or (self._session_compressor and long_term_has_work):
+                    if not working_memory_enabled:
+                        _emit_operation(
+                            "operation_skipped", "archive_summary", reason="working_memory_disabled"
+                        )
+                    long_term_skip_reason = None
+                    if not self._session_compressor:
+                        long_term_skip_reason = "extractor_unavailable"
+                    elif not memory_extraction_enabled:
+                        long_term_skip_reason = "extraction_disabled"
+                    elif not (self_memory_enabled or allowed_peer_ids):
+                        long_term_skip_reason = "no_eligible_scope"
+                    elif long_term_memory_types is not None and not long_term_memory_types:
+                        long_term_skip_reason = "no_memory_types"
+                    elif not long_term_messages:
+                        long_term_skip_reason = "no_pending_messages"
+                    long_term_has_work = long_term_skip_reason is None
+                    if long_term_skip_reason:
+                        _emit_operation(
+                            "operation_skipped",
+                            "long_term_memory_extraction",
+                            reason=long_term_skip_reason,
+                        )
+                    if working_memory_enabled or long_term_has_work:
                         logger.info(
                             "Starting post-commit extraction from %s archived messages",
                             len(messages),
@@ -2799,11 +2845,16 @@ class Session:
                         extraction_labels: List[str] = []
                         if working_memory_enabled:
                             extraction_tasks.append(
-                                _run_retryable_phase2_step("archive_summary", _run_archive_summary)
+                                _run_task_operation(
+                                    "archive_summary",
+                                    lambda: _run_retryable_phase2_step(
+                                        "archive_summary", _run_archive_summary
+                                    ),
+                                )
                             )
                             extraction_labels.append("archive_summary")
 
-                        if self._session_compressor and long_term_has_work:
+                        if long_term_has_work:
 
                             async def _run_long_term_memory_extraction(
                                 batch_messages: Optional[List[Message]] = None,
@@ -2828,25 +2879,25 @@ class Session:
                                     event_search_tags=event_search_tags,
                                 )
 
-                            if extraction_batch_limits.enabled:
-                                extraction_tasks.append(
-                                    self._extract_long_term_memories_with_batching(
+                            async def _run_long_term() -> Any:
+                                if extraction_batch_limits.enabled:
+                                    return await self._extract_long_term_memories_with_batching(
                                         messages=long_term_messages,
                                         limits=extraction_batch_limits,
                                         archive_uri=archive_uri,
                                         extract_batch=_run_long_term_memory_extraction,
                                         record_batch=_run_recorded_memory_step,
                                     )
+                                return await _run_recorded_memory_step(
+                                    "long_term_memory_extraction",
+                                    "long_term",
+                                    long_term_messages,
+                                    _run_long_term_memory_extraction,
                                 )
-                            else:
-                                extraction_tasks.append(
-                                    _run_recorded_memory_step(
-                                        "long_term_memory_extraction",
-                                        "long_term",
-                                        long_term_messages,
-                                        _run_long_term_memory_extraction,
-                                    )
-                                )
+
+                            extraction_tasks.append(
+                                _run_task_operation("long_term_memory_extraction", _run_long_term)
+                            )
                             extraction_labels.append("long_term")
 
                         _results = await asyncio.gather(
@@ -2909,8 +2960,11 @@ class Session:
                                 "(disabled by config or memory_policy)"
                             )
                         if working_memory_enabled:
-                            await _run_retryable_phase2_step(
-                                "archive_summary", _run_archive_summary
+                            await _run_task_operation(
+                                "archive_summary",
+                                lambda: _run_retryable_phase2_step(
+                                    "archive_summary", _run_archive_summary
+                                ),
                             )
                         else:
                             await _run_archive_summary()

@@ -889,8 +889,11 @@ async def test_terminal_event_waits_for_owned_work(tracker, outcome):
     # Observe the public history while work remains, not a helper call sequence.
     async def observed_wait():
         while True:
-            record = await tracker.get(task.task_id, **owner)
-            if record.execution_events["items"][-1]["kind"] == "waiting_for_descendants":
+            record = await tracker.get(task.task_id, include_pending_events=True, **owner)
+            events = record.to_dict(include_pending_events=True)["pending_execution_events"][
+                "items"
+            ]
+            if events and events[-1]["kind"] == "waiting_for_descendants":
                 return
             await asyncio.sleep(0)
 
@@ -947,12 +950,10 @@ async def test_process_events_respect_owner_and_terminal_boundaries(tracker):
     assert (
         await tracker.get(task.task_id, **_owner_kwargs())
     ).execution_events == task.execution_events
-    with pytest.raises(ValueError, match="Unknown task process event"):
-        await tracker.record_event(task.task_id, "completed", **_owner_kwargs())
-    with pytest.raises(ValueError, match="operation"):
-        await tracker.record_event(
-            task.task_id, "waiting_for_descendants", operation="Bearer secret", **_owner_kwargs()
-        )
+    await tracker.record_event(task.task_id, "completed", **_owner_kwargs())
+    await tracker.record_event(
+        task.task_id, "waiting_for_descendants", operation="Bearer secret", **_owner_kwargs()
+    )
     await tracker.cancel(task.task_id, **_owner_kwargs())
     cancelled = await tracker.get(task.task_id, **_owner_kwargs())
     assert [event["status"] for event in cancelled.execution_events["items"]] == [
@@ -964,3 +965,146 @@ async def test_process_events_respect_owner_and_terminal_boundaries(tracker):
     assert (
         await tracker.get(task.task_id, **_owner_kwargs())
     ).execution_events == cancelled.execution_events
+
+
+async def test_process_intake_has_no_io_and_persists_identity_on_next_business_write():
+    agfs = _FakeAgfs()
+    store = PersistentTaskStore(agfs)
+    tracker = TaskTracker(store)
+    owner = _owner_kwargs()
+    task = await tracker.create("session_commit", **owner)
+    await tracker.start(task.task_id, **owner)
+    before = (await tracker.get(task.task_id, **owner)).to_dict(include_events=True)
+    writes = len(agfs.write_calls)
+    tracker.emit_event(
+        task.task_id,
+        "operation_failed",
+        operation="archive_summary",
+        error="provider rejected sk-example-secret",
+        **owner,
+    )
+    assert len(agfs.write_calls) == writes
+    assert (await tracker.get(task.task_id, **owner)).to_dict(include_events=True) == before
+    live = await tracker.get(task.task_id, include_pending_events=True, **owner)
+    event = live.to_dict(include_pending_events=True)["pending_execution_events"]["items"][0]
+    assert event["status"] == "running"
+    assert "[REDACTED]" in event["error"]
+    assert "seq" not in event
+    assert live.error is None
+    # A new tracker sees only the existing persisted task, not another process's buffer.
+    restored = await TaskTracker(store).get(task.task_id, include_pending_events=True, **owner)
+    assert restored.to_dict(include_pending_events=True)["pending_execution_events"]["items"] == []
+    await tracker.complete(task.task_id, {"ok": True}, **owner)
+    saved = await TaskTracker(store).get(task.task_id, **owner)
+    recorded = next(
+        x for x in saved.execution_events["items"] if x.get("event_id") == event["event_id"]
+    )
+    assert {key: recorded[key] for key in event} == event
+    assert saved.status == TaskStatus.COMPLETED
+    control_agfs = _FakeAgfs()
+    control = TaskTracker(PersistentTaskStore(control_agfs))
+    control_task = await control.create("session_commit", **owner)
+    await control.start(control_task.task_id, **owner)
+    control_before = len(control_agfs.write_calls)
+    await control.complete(control_task.task_id, {"ok": True}, **owner)
+    assert len(agfs.write_calls) - writes == len(control_agfs.write_calls) - control_before
+    assert "pending_execution_events" not in saved.to_dict(include_events=True)
+
+
+async def test_pending_drops_are_task_scoped_and_saved_separately_from_truncation(tracker):
+    from openviking.service.task_events import MAX_TASK_EVENTS
+
+    owner = _owner_kwargs()
+    task = await tracker.create("session_commit", **owner)
+    for _ in range(MAX_TASK_EVENTS + 3):
+        tracker.emit_event(task.task_id, "operation_started", operation="archive_summary", **owner)
+    pending = (await tracker.get(task.task_id, include_pending_events=True, **owner)).to_dict(
+        include_pending_events=True
+    )["pending_execution_events"]
+    assert len(pending["items"]) == MAX_TASK_EVENTS
+    assert pending["dropped_count"] == 3
+    await tracker.complete(task.task_id, {}, **owner)
+    history = (await tracker.get(task.task_id, **owner)).execution_events
+    assert history["discarded_count"] == 3
+    assert history["dropped_count"] == 2  # created and oldest process event, not intake drops
+    assert tracker._event_buffer.bytes == 0
+
+
+@pytest.mark.parametrize("failure", ["intake", "encoding"])
+async def test_observation_failure_does_not_change_business_outcome(tracker, monkeypatch, failure):
+    owner = _owner_kwargs()
+    task = await tracker.create("session_commit", **owner)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("observer unavailable")
+
+    target = "make_process_event" if failure == "intake" else "append_task_event"
+    monkeypatch.setattr(f"openviking.service.task_tracker.{target}", broken)
+    tracker.emit_event(task.task_id, "operation_started", operation="archive_summary", **owner)
+    await tracker.complete(task.task_id, {"value": 42}, **owner)
+    result = await tracker.get(task.task_id, **owner)
+    assert result.status == TaskStatus.COMPLETED
+    assert result.result == {"value": 42}
+    assert result.error is None
+
+
+async def test_process_event_contract_rejects_invalid_payloads_without_dirtying_task(tracker):
+    from openviking.service.task_events import make_process_event
+
+    with pytest.raises(ValueError, match="requires error"):
+        make_process_event(
+            "operation_completed",
+            status="running",
+            stage=None,
+            operation="archive_summary",
+            error="not a failure",
+        )
+    owner = _owner_kwargs()
+    task = await tracker.create("session_commit", **owner)
+    for fields in (
+        {"operation": "bad operation"},
+        {"reason": "arbitrary reason"},
+        {"error": "secret"},
+    ):
+        tracker.emit_event(task.task_id, "operation_started", **owner, **fields)
+    live = await tracker.get(task.task_id, include_pending_events=True, **owner)
+    assert live.to_dict(include_pending_events=True)["pending_execution_events"] == {
+        "items": [],
+        "dropped_count": 3,
+    }
+    assert live.to_dict(include_events=True) == task.to_dict(include_events=True)
+
+
+@pytest.mark.parametrize("limit", ["MAX_TASKS", "MAX_BYTES"])
+async def test_global_buffer_pressure_does_not_affect_tasks_and_releases_capacity(
+    tracker, monkeypatch, limit
+):
+    from openviking.service.task_events import TaskEventBuffer
+
+    owner = _owner_kwargs()
+    first = await tracker.create("session_commit", **owner)
+    second = await tracker.create("session_commit", **owner)
+    monkeypatch.setattr(TaskEventBuffer, limit, 1 if limit == "MAX_TASKS" else 500)
+    for _ in range(5):
+        tracker.emit_event(first.task_id, "operation_started", operation="archive_summary", **owner)
+        tracker.emit_event(
+            second.task_id, "operation_started", operation="archive_summary", **owner
+        )
+    assert tracker._event_buffer.bytes <= TaskEventBuffer.MAX_BYTES
+    await tracker.complete(first.task_id, {"ok": True}, **owner)
+    await tracker.complete(second.task_id, {"ok": True}, **owner)
+    assert (await tracker.get(first.task_id, **owner)).status == TaskStatus.COMPLETED
+    assert (await tracker.get(second.task_id, **owner)).status == TaskStatus.COMPLETED
+    assert tracker._event_buffer.bytes == 0
+
+
+async def test_invalid_event_diagnostics_do_not_call_blocking_log_handlers(tracker, monkeypatch):
+    from unittest.mock import Mock
+
+    warning = Mock()
+    monkeypatch.setattr("openviking.service.task_tracker.logger.warning", warning)
+    owner = _owner_kwargs()
+    task = await tracker.create("session_commit", **owner)
+    tracker.emit_event(task.task_id, "not_registered", **owner)
+    warning.assert_not_called()
+    assert tracker._event_drops["invalid"] == 1

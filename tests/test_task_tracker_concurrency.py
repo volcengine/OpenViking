@@ -9,6 +9,57 @@ from typing import Any
 import pytest
 
 
+async def test_pending_event_acknowledgement_keeps_events_received_during_write():
+    from openviking.service.task_tracker import TaskTracker
+
+    store = _ControllableTaskStore()
+    tracker = TaskTracker(store)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    task = await tracker.create("session_commit", **owner)
+    await tracker.start(task.task_id, **owner)
+    tracker.emit_event(task.task_id, "operation_started", operation="archive_summary", **owner)
+    started = store.update_started[task.task_id] = asyncio.Event()
+    release = store.update_release[task.task_id] = asyncio.Event()
+    update = asyncio.create_task(tracker.update_stage(task.task_id, "processing", **owner))
+    await asyncio.wait_for(started.wait(), 2)
+    # Synchronous intake remains available even with the business store/lock occupied.
+    tracker.emit_event(task.task_id, "operation_completed", operation="archive_summary", **owner)
+    live = await tracker.get(task.task_id, include_pending_events=True, **owner)
+    assert len(live.to_dict(include_pending_events=True)["pending_execution_events"]["items"]) == 2
+    release.set()
+    await update
+    live = await tracker.get(task.task_id, include_pending_events=True, **owner)
+    pending = live.to_dict(include_pending_events=True)["pending_execution_events"]["items"]
+    assert [e["kind"] for e in pending] == ["operation_completed"]
+    await tracker.complete(task.task_id, {}, **owner)
+    live = await tracker.get(task.task_id, include_pending_events=True, **owner)
+    process = [e for e in live.execution_events["items"] if e.get("event_id")]
+    assert [e["kind"] for e in process] == ["operation_started", "operation_completed"]
+    assert len({e["event_id"] for e in process}) == 2
+    assert live.to_dict(include_pending_events=True)["pending_execution_events"]["items"] == []
+
+
+async def test_failed_terminal_write_reopens_intake_without_losing_its_batch():
+    from openviking.service.task_tracker import TaskTracker
+
+    store = _ControllableTaskStore()
+    tracker = TaskTracker(store)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    task = await tracker.create("session_commit", **owner)
+    await tracker.start(task.task_id, **owner)
+    tracker.emit_event(task.task_id, "operation_started", operation="archive_summary", **owner)
+    store.update_errors[task.task_id] = RuntimeError("store offline")
+    with pytest.raises(RuntimeError, match="store offline"):
+        await tracker.complete(task.task_id, {}, **owner)
+    tracker.emit_event(task.task_id, "operation_completed", operation="archive_summary", **owner)
+    live = await tracker.get(task.task_id, include_pending_events=True, **owner)
+    assert len(live.to_dict(include_pending_events=True)["pending_execution_events"]["items"]) == 2
+    store.update_errors.clear()
+    await tracker.complete(task.task_id, {}, **owner)
+    live = await tracker.get(task.task_id, **owner)
+    assert len([e for e in live.execution_events["items"] if e.get("event_id")]) == 2
+
+
 class _ControllableTaskStore:
     def __init__(self) -> None:
         self.payloads: dict[str, dict[str, Any]] = {}

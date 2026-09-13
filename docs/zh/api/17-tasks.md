@@ -146,11 +146,17 @@ ov task status uuid-xxx
 | `error_recorded` | TaskTracker 接受了任务的首个脱敏错误 |
 | `waiting_for_descendants` | 等待路径发现任务仍有未结束的队列工作，已排除自身 work ID |
 
-`recorded_at` 是 TaskTracker 记录事件的 UTC 时间，不是浏览器轮询时间，也不一定是底层异常发生的时间。事件与任务状态在同一次写入成功后才对外发布。`seq` 确定任务内的事件顺序，即使多个事件时间相同也不会混淆。`stage` 表示任务最后上报的阶段；并行工作可能在其他阶段产生错误。`operation` 存在时标识上报事件的工作项。错误沿用现有脱敏和长度限制；这里不包含完整组件日志或 Python 堆栈。
+`recorded_at` 是 TaskTracker 记录事件的 UTC 时间，不是浏览器轮询时间，也不一定是底层异常发生的时间。`execution_events` 中的持久化历史与任务状态在同一次写入成功后才对外发布，实时缓冲另见下文。`seq` 确定任务内已保存事件的顺序，即使多个事件时间相同也不会混淆。`stage` 表示任务最后上报的阶段；并行工作可能在其他阶段产生错误。`operation` 存在时标识上报事件的工作项。错误沿用现有脱敏和长度限制；这里不包含完整组件日志或 Python 堆栈。
 
 每个任务最多保留 64 条事件，序列化事件数据不超过 32 KiB。超限时优先删除较早事件，`dropped_count` 记录删除数量，保留事件的序号不重置。事件随任务过期清理。旧任务返回 `execution_events: null`；若旧的活跃任务后来产生事件，则 `started_mid_task` 为 true，不会重建此前的历史。旧版本服务即使收到参数也可能不返回该字段。Studio 会说明这些情况，并保留任务元数据、结果和错误展示。
 
-扩展执行事件时，在 `openviking/service/task_events.py` 注册事件类型、补充 Studio 翻译，然后在实际执行点调用 `await tracker.record_event(task_id, kind, account_id=..., user_id=..., operation=...)`。这个内部接口不修改任务状态或阶段，只接受有长度限制的操作标识，不接受任意日志内容。现有生命周期方法会自动记录它们接受的状态变化。
+Session 提交分别为 `archive_summary`（归档摘要处理）和 `long_term_memory_extraction`（长期记忆提取）上报整个逻辑操作的事件：`operation_started`、`operation_completed`、`operation_failed`、`operation_cancelled`、`operation_skipped`。已有重试和批次不会额外产生操作事件；完成包括该操作自己的进度写入，不代表新增了记忆或下游索引已完成。失败事件带具体操作和脱敏错误，可早于另一个并行操作结束；任务全局错误和终态仍沿用原规则。跳过不补造开始或完成事件，原因码为 `working_memory_disabled`、`extractor_unavailable`、`extraction_disabled`、`no_eligible_scope`、`no_memory_types` 或 `no_pending_messages`。
+
+扩展执行事件时，在 `openviking/service/task_events.py` 注册事件类型、补充 Studio 翻译，然后调用 `tracker.emit_event(task_id, kind, account_id=..., user_id=..., operation=...)`。这是 best-effort 内部入口，不执行 I/O，不修改任务状态、阶段、错误、结果或 `updated_at`。操作失败可提供 `error`，跳过可提供已注册的 `reason`。普通上报错误和容量限制不能导致业务失败或重试。原异步 `record_event()` 名称作为同一入口的兼容包装，等待其返回不再代表已持久化；生命周期变更仍与原有业务快照一起记录。
+
+实时查询使用 `GET /api/v1/tasks/{task_id}?include_events=true&include_pending_events=true`。新增可选参数 `include_pending_events` 默认为 false，开启后额外返回 `result.pending_execution_events`（含 `items` 和 `dropped_count`）。缓冲事件有稳定的 `event_id`、`recorded_at`，尚无持久化的 `seq`。任务原有写入附带此前接收的批次，保留事件标识和时间、分配序号；写入成功后才确认移除该批。没有专用后台日志写入或 flush。进程异常退出可丢失上次业务快照之后的缓冲记录，可能涵盖整个长操作期间。默认详情和任务列表不包含两个事件字段；仅 `include_events=true` 仍只返回已持久化历史。两种视图沿用相同任务权限。
+
+缓冲按单任务 64 条 / 32 KiB、单 Tracker 1,024 个缓冲任务 / 8 MiB 序列化事件 payload 限制；满时丢弃新事件。已知的单任务上报丢弃数与历史截断分开返回，并在下次快照中记录到可选的 `execution_events.discarded_count`；全局诊断计数不能当作每个任务均丢失事件的证据。内存计数也可能因进程退出而丢失。Studio 按事件标识合并两种来源，不展示保存状态或常驻说明，仅在已知丢弃、截断或刷新失败时提示。
 
 持久化任务文件新增 `execution_events` 字段。回滚目标需要具备未知任务字段的保留能力（提交 `a5166386` 或之后的版本）；更早的读取实现可能拒绝这些文件。回滚期间也会停止上报事件，因此跨降级执行的任务历史可能不完整。
 
