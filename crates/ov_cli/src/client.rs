@@ -344,8 +344,14 @@ impl HttpClient {
         self.get("/api/v1/content/read", &params).await
     }
 
-    pub async fn read_profiled(&self, uri: &str) -> Result<Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
+    /// Read content and optional profiling data, propagating HTTP errors.
+    /// `offset` is zero-based and nonnegative; `limit` is a line count or -1 for EOF.
+    pub async fn read_profiled(&self, uri: &str, offset: i64, limit: i64) -> Result<Value> {
+        let params = vec![
+            ("uri".to_string(), uri.to_string()),
+            ("offset".to_string(), offset.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
         self.get("/api/v1/content/read", &params).await
     }
 
@@ -2760,6 +2766,28 @@ mod tests {
         let result = crate::base_client::unwrap_success_envelope(body, false);
 
         assert_eq!(result, json!("content"));
+    }
+
+    #[tokio::test]
+    async fn read_profiled_sends_line_ranges() {
+        for (offset, limit) in [(0, -1), (10, 5), (10, -1), (0, 0)] {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            client
+                .read_profiled("viking://resources/example.md", offset, limit)
+                .await
+                .expect("read request should succeed");
+            let request = request_rx.await.expect("request should be captured");
+            let target = request.split_whitespace().nth(1).expect("request target");
+            let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
+            assert_eq!(url.path(), "/api/v1/content/read");
+            let params = url
+                .query_pairs()
+                .collect::<std::collections::HashMap<_, _>>();
+            assert_eq!(params.get("uri").unwrap(), "viking://resources/example.md");
+            assert_eq!(params.get("offset").unwrap(), &offset.to_string());
+            assert_eq!(params.get("limit").unwrap(), &limit.to_string());
+        }
     }
 
     async fn spawn_request_capture_server() -> (String, oneshot::Receiver<String>) {

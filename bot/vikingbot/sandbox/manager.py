@@ -113,6 +113,9 @@ class SandboxManager:
         self._sandboxes.clear()
 
     def get_workspace_path(self, session_key: SessionKey) -> Path:
+        # Compile managers receive a task-specific root shared by parent and child agents.
+        if session_key.type == "compile":
+            return self.workspace
         return resolve_workspace_path(
             self.workspace,
             session_key,

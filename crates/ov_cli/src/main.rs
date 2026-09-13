@@ -679,6 +679,12 @@ enum Commands {
         /// Viking URI
         #[arg(value_name = "uri")]
         uri: String,
+        /// Starting line offset (0-indexed)
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(i64).range(0..), help_heading = "Common options")]
+        offset: i64,
+        /// Number of lines to read; -1 reads to the end
+        #[arg(long, default_value_t = -1, allow_negative_numbers = true, value_parser = clap::value_parser!(i64).range(-1..), help_heading = "Common options")]
+        limit: i64,
     },
     /// [Data] Read abstract content (Level 0)
     Abstract {
@@ -3664,7 +3670,9 @@ async fn main() {
             }
             Ok(())
         }
-        Commands::Read { uri } => handlers::handle_read(uri, ctx).await,
+        Commands::Read { uri, offset, limit } => {
+            handlers::handle_read(uri, offset, limit, ctx).await
+        }
         Commands::Abstract { uri } => handlers::handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handlers::handle_overview(uri, ctx).await,
         Commands::Write {
@@ -4106,6 +4114,37 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn cli_read_line_ranges() {
+        for (args, expected_offset, expected_limit) in [
+            (vec![], 0, -1),
+            (vec!["--offset", "10", "--limit", "5"], 10, 5),
+            (vec!["--offset", "10", "--limit", "-1"], 10, -1),
+            (vec!["--limit", "0"], 0, 0),
+            (vec!["--offset", "10"], 10, -1),
+        ] {
+            let mut argv = vec!["ov", "read", "viking://resources/example.md"];
+            argv.extend(args);
+            let cli = Cli::try_parse_from(argv).expect("valid read range should parse");
+            match cli.command {
+                Commands::Read { offset, limit, .. } => {
+                    assert_eq!((offset, limit), (expected_offset, expected_limit));
+                }
+                _ => panic!("expected read command"),
+            }
+        }
+        for args in [["--offset", "-1"], ["--limit", "-2"], ["--limit", "abc"]] {
+            assert!(
+                Cli::try_parse_from(
+                    ["ov", "read", "viking://resources/example.md"]
+                        .into_iter()
+                        .chain(args)
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
