@@ -54,7 +54,10 @@ export function UserMemoryPolicyCell({
       setOpen(false)
       toast.success(t('memoryPolicy.saved'))
     },
-    onError: (error) => toast.error(getErrorMessage(error)),
+    onError: (error) =>
+      toast.error(t('memoryPolicy.saveFailed'), {
+        description: getErrorMessage(error),
+      }),
   })
   if (query.isPending)
     return (
@@ -83,7 +86,11 @@ export function UserMemoryPolicyCell({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setOpen(true)}
+              disabled={query.isFetching}
+              onClick={async () => {
+                const result = await query.refetch()
+                if (result.isSuccess) setOpen(true)
+              }}
               aria-label={t('memoryPolicy.editUser', { user: user.userId })}
             />
           }

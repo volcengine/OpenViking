@@ -27,6 +27,7 @@ export default {
   edit: '修改记忆策略',
   editUser: '修改 {{user}} 的记忆策略',
   saved: '记忆策略已更新',
+  saveFailed: '记忆策略保存失败',
   retry: '加载失败 · 重试',
   saveHint: '选择后立即保存，已有记忆会保留。',
   custom: {

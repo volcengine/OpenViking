@@ -337,7 +337,17 @@ function UserManagementRoute() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => void usersQuery.refetch()}
+            onClick={() => {
+              void usersQuery.refetch()
+              void queryClient.invalidateQueries({
+                queryKey: [
+                  'user-memory-settings',
+                  adminConnection.baseUrl,
+                  adminConnection.apiKey,
+                  connection.accountId,
+                ],
+              })
+            }}
             disabled={usersQuery.isFetching}
           >
             <RefreshCwIcon

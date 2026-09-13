@@ -28,6 +28,7 @@ export default {
   edit: 'Edit memory policy',
   editUser: 'Edit memory policy for {{user}}',
   saved: 'Memory policy updated',
+  saveFailed: 'Failed to save memory policy',
   retry: 'Failed to load · Retry',
   saveHint:
     'Selecting a policy saves it immediately. Existing memories are kept.',
