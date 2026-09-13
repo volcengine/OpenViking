@@ -1,0 +1,32 @@
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 1909-1911
+bot/vikingbot/sandbox/manager.py
+  h_b34c679d17e2ac 116-118
+crates/ov_cli/README.md
+  h_b34c679d17e2ac 109-110
+crates/ov_cli/README_CN.md
+  h_b34c679d17e2ac 109-110
+crates/ov_cli/src/client.rs
+  h_b34c679d17e2ac 347-354,2815-2836
+crates/ov_cli/src/commands/content.rs
+  h_b34c679d17e2ac 9,13-14,18
+crates/ov_cli/src/handlers.rs
+  h_b34c679d17e2ac 1372-1373,1375
+crates/ov_cli/src/help_ui.rs
+  h_b34c679d17e2ac 398-407
+crates/ov_cli/src/main.rs
+  h_b34c679d17e2ac 707-712,3715-3717,4161-4191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4f79268dea8cb7dbce53f9b9816b33ff435a6f27",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
