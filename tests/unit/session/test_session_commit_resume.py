@@ -4,11 +4,12 @@
 import inspect
 import json
 from dataclasses import fields
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.message import Message, TextPart
+from openviking.message import Message, TextPart, ToolPart
 from openviking.service.task_tracker import TaskStatus, TaskTracker, set_task_tracker
 from openviking.session.session import Session
 from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
@@ -49,6 +50,84 @@ class _MemoryVikingFS:
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
         self.files[uri] = content
+
+    async def append_file(self, uri, content, ctx=None):
+        self.files[uri] += content
+
+    async def exists(self, uri, ctx=None):
+        return uri in self.files or any(path.startswith(f"{uri}/") for path in self.files)
+
+    async def ls(self, uri, ctx=None):
+        prefix = f"{uri}/"
+        names = {
+            path[len(prefix) :].split("/")[0] for path in self.files if path.startswith(prefix)
+        }
+        return [{"name": name} for name in sorted(names)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "keep_count, keep_turns, archive_count",
+    [(10, None, 5), (10, 1, 2), (10, 0, 15), (0, None, 15)],
+)
+async def test_commit_retention_boundary_and_pending_tokens_after_reload(
+    monkeypatch, keep_count, keep_turns, archive_count
+):
+    session_uri = "viking://user/default/sessions/session-1"
+    messages = [
+        Message(id="old-user", role="user", parts=[TextPart("old question")]),
+        Message(id="old-assistant", role="assistant", parts=[TextPart("old answer")]),
+        Message(id="latest-user", role="user", parts=[TextPart("latest question")]),
+        *[
+            Message(
+                id=f"step-{i}",
+                role="assistant",
+                parts=[
+                    ToolPart(tool_id=f"tool-{i}", tool_name="read", tool_output=f"result {i}"),
+                ],
+            )
+            for i in range(12)
+        ],
+    ]
+    storage = _MemoryVikingFS(
+        {
+            f"{session_uri}/messages.jsonl": "\n".join(message.to_jsonl() for message in messages),
+        }
+    )
+    tracker = TaskTracker(_TaskStore())
+    monkeypatch.setattr("openviking.session.session._enabled_memory_types", lambda: set())
+    monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(enqueue=AsyncMock()),
+    )
+    session = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+    turn_options = (
+        {"retention_mode": "turn_budget", "keep_recent_turn_count": keep_turns}
+        if keep_turns is not None
+        else {}
+    )
+    result = await session.commit_async(keep_recent_count=keep_count, **turn_options)
+    archived = await session._read_archive_messages(result["archive_uri"])
+    retained = messages[archive_count:]
+    assert [message.id for message in archived] == [m.id for m in messages[:archive_count]]
+    assert [message.id for message in session.messages] == [m.id for m in retained]
+    assert session.meta.pending_tokens == 0
+
+    reloaded = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+    await reloaded.load()
+    assert reloaded.meta.pending_tokens == 0
+    appended = await reloaded.add_message_async("user", [TextPart("next question")])
+    if keep_turns == 0 or keep_count == 0:
+        expected = appended.estimated_tokens
+    elif keep_turns == 1:
+        expected = sum(message.estimated_tokens for message in retained)
+    else:
+        expected = retained[0].estimated_tokens
+    assert reloaded.meta.pending_tokens == expected
+    fresh = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
+    await fresh.load()
+    assert fresh.meta.pending_tokens == expected
 
 
 def test_phase2_auto_commit_policy_parameters_are_appended():
@@ -97,9 +176,9 @@ async def test_resume_queued_commit_continues_phase2(monkeypatch):
     assert session._run_memory_extraction.await_args.kwargs["auto_commit_policy"] == {
         "pending_token_threshold": 8000
     }
-    assert [
-        item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]
-    ] == ["archived"]
+    assert [item.id for item in session._run_memory_extraction.await_args.kwargs["messages"]] == [
+        "archived"
+    ]
 
 
 @pytest.mark.asyncio
@@ -150,9 +229,7 @@ async def test_session_context_skips_pending_archive_with_missing_messages(monke
         session,
         "_list_archive_refs",
         AsyncMock(
-            return_value=[
-                {"archive_id": "archive_001", "archive_uri": archive_uri, "index": 1}
-            ]
+            return_value=[{"archive_id": "archive_001", "archive_uri": archive_uri, "index": 1}]
         ),
     )
 

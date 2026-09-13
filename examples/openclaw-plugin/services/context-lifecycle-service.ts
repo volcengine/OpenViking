@@ -140,6 +140,7 @@ export type AfterTurnOpenVikingSessionParams = {
     autoCapture: boolean;
     commitTokenThresholdRatio: number;
     commitKeepRecentCount: number;
+    commitRetentionMode?: "message_count" | "turn_budget";
     logFindRequests: boolean;
     peer_role?: OpenVikingPeerRole;
   };
@@ -987,7 +988,9 @@ export async function afterTurnOpenVikingSession({
 
     const commitResult = await client.commitSession(ovSessionId, {
       wait: false,
-      keepRecentCount: cfg.commitKeepRecentCount,
+      ...(cfg.commitRetentionMode === "turn_budget"
+        ? { retentionMode: "turn_budget" as const }
+        : { keepRecentCount: cfg.commitKeepRecentCount }),
     });
     logger.info(
       `openviking: committed session=${ovSessionId}, ` +
