@@ -90,27 +90,22 @@ def build_diff_plan(
     """
     plan = DiffPlan()
     plan.new_files = sorted(key for key, entry in new.items() if not entry.is_dir)
-    plan.new_md5s = {
-        key: entry.md5 for key, entry in new.items() if not entry.is_dir and entry.md5
-    }
+    plan.new_md5s = {key: entry.md5 for key, entry in new.items() if not entry.is_dir and entry.md5}
     plan.file_abstracts = {
         key: vector.abstract
         for key, vector in target_vectors.items()
         if key in new and vector.abstract
     }
 
-    # Business-file key universe, excluding control sidecars.
-    keys = {
-        key
-        for key in (*new.keys(), *target_files.keys(), *target_vectors.keys())
-        if not _is_control_path(key)
-    }
+    # New/file snapshots exclude generated control files. Keep every L2 URI in
+    # the vector snapshot so malformed or stale records are cleaned as orphans.
+    keys = {key for key in (*new.keys(), *target_files.keys()) if not _is_control_path(key)}
+    keys.update(target_vectors)
 
     for key in sorted(keys):
         n = new.get(key)
         f = target_files.get(key)
         v = target_vectors.get(key)
-
         # Type conflict: a path that is a dir on one side and a file on the other
         # cannot be a content overwrite; it is a structural replacement.
         n_is_dir = n.is_dir if n is not None else None
@@ -121,9 +116,11 @@ def build_diff_plan(
                 plan.added.append(key)
             continue
 
-        # Directories carry no file-level md5; their children are classified on
-        # their own keys, so a directory-only entry needs no content decision.
+        # Directories carry no legitimate L2 record. If one exists at the same
+        # URI, clean that vector while children are classified on their own keys.
         if (n is not None and n.is_dir) or (f is not None and f.is_dir):
+            if v is not None:
+                plan.orphan_vectors.append(key)
             continue
 
         if n is not None and f is not None and v is not None:
@@ -152,8 +149,10 @@ def build_diff_plan(
             plan.orphan_vectors.append(key)
 
     if plan.deleted and not target_files_complete:
+        raise ValueError("refusing to plan deletions from an incomplete target file snapshot")
+    if plan.orphan_vectors and not target_files_complete:
         raise ValueError(
-            "refusing to plan deletions from an incomplete target file snapshot"
+            "refusing to plan orphan-vector deletions from an incomplete target file snapshot"
         )
     if plan.orphan_vectors and not target_vectors_complete:
         raise ValueError(

@@ -55,9 +55,7 @@ async def test_persist_local_artifact_uploads_to_resource_tree(tmp_path, monkeyp
     await store.write_bytes(ref, "repository/src/b.py", b"print('b')")
 
     agfs = _RecordingAgfs()
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_viking_fs", lambda: agfs
-    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: agfs)
 
     rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
 
@@ -83,6 +81,30 @@ async def test_persist_local_artifact_uploads_to_resource_tree(tmp_path, monkeyp
     assert apply_result.uploaded == ["a.py", "src/b.py"]
     assert apply_result.files == ["a.py", "src/b.py"]
     assert set(apply_result.md5_by_rel) == {"a.py", "src/b.py"}
+
+
+@pytest.mark.asyncio
+async def test_persist_local_flat_file_uploads_exact_target(tmp_path, monkeypatch):
+    store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
+    ref = await store.create_artifact(root_type="dir")
+    await store.write_bytes(ref, "document/report.md", b"report")
+    agfs = _RecordingAgfs()
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: agfs)
+
+    result = await ResourceProcessor(
+        vikingdb=_DummyVikingDB(), media_storage=None
+    )._persist_local_artifact(
+        output_store=store,
+        artifact_ref=ref,
+        doc_rel="document/report.md",
+        root_uri="viking://resources/report.md",
+        root_is_file=True,
+        ctx=object(),
+        lease_ref=None,
+    )
+
+    assert agfs.files == {"viking://resources/report.md": b"report"}
+    assert result.files == [""]
 
 
 def test_build_parse_output_store_defaults_to_none(monkeypatch):

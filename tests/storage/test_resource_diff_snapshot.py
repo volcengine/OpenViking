@@ -33,11 +33,17 @@ class _FakeVikingFS:
         self.files = files or {}
         self.tree_calls = []
 
-    async def tree(self, uri, *, output="original", show_all_hidden=False,
-                   node_limit=1000, level_limit=3, ctx=None):
-        self.tree_calls.append(
-            {"uri": uri, "node_limit": node_limit, "level_limit": level_limit}
-        )
+    async def tree(
+        self,
+        uri,
+        *,
+        output="original",
+        show_all_hidden=False,
+        node_limit=1000,
+        level_limit=3,
+        ctx=None,
+    ):
+        self.tree_calls.append({"uri": uri, "node_limit": node_limit, "level_limit": level_limit})
         return list(self._tree_entries)
 
     # Output-store surface for read_new_manifest via AgfsParseOutputStore.
@@ -49,7 +55,7 @@ class _FakeVikingFS:
         seen = {}
         for stored in self.files:
             if stored.startswith(prefix):
-                rest = stored[len(prefix):]
+                rest = stored[len(prefix) :]
                 head = rest.split("/", 1)
                 name = head[0]
                 seen[name] = {"name": name, "uri": f"{prefix}{name}", "isDir": len(head) > 1}
@@ -65,6 +71,15 @@ class _FakeVikingDB:
         self.requested = list(uris)
         return {u: self._records[u] for u in uris if u in self._records}
 
+    async def get_l2_diff_records_under_uri(self, target_uri, *, ctx):
+        self.requested = target_uri
+        prefix = target_uri.rstrip("/") + "/"
+        return {
+            uri: value
+            for uri, value in self._records.items()
+            if uri == target_uri or uri.startswith(prefix)
+        }
+
 
 @pytest.mark.asyncio
 class TestReadTargetFileSnapshot:
@@ -76,9 +91,7 @@ class TestReadTargetFileSnapshot:
                 {"rel_path": "sub/b.py", "isDir": False, "uri": "viking://resources/x/sub/b.py"},
             ]
         )
-        files, complete = await read_target_file_snapshot(
-            vfs, "viking://resources/x", ctx=_Ctx()
-        )
+        files, complete = await read_target_file_snapshot(vfs, "viking://resources/x", ctx=_Ctx())
         assert complete is True
         assert set(files) == {"a.py", "sub", "sub/b.py"}
         assert files["sub"].is_dir is True
@@ -91,13 +104,15 @@ class TestReadTargetFileSnapshot:
         vfs = _FakeVikingFS(
             [
                 {"rel_path": "a.py", "isDir": False, "uri": "viking://resources/x/a.py"},
-                {"rel_path": "secret", "isDir": True, "access": "denied",
-                 "uri": "viking://resources/x/secret"},
+                {
+                    "rel_path": "secret",
+                    "isDir": True,
+                    "access": "denied",
+                    "uri": "viking://resources/x/secret",
+                },
             ]
         )
-        files, complete = await read_target_file_snapshot(
-            vfs, "viking://resources/x", ctx=_Ctx()
-        )
+        files, complete = await read_target_file_snapshot(vfs, "viking://resources/x", ctx=_Ctx())
         # A permission-hidden subtree means we cannot trust the tree for deletion.
         assert complete is False
         assert "secret" not in files
@@ -106,38 +121,62 @@ class TestReadTargetFileSnapshot:
         vfs = _FakeVikingFS(
             [
                 {"rel_path": "a.py", "isDir": False, "uri": "viking://resources/x/a.py"},
-                {"rel_path": ".abstract.md", "isDir": False,
-                 "uri": "viking://resources/x/.abstract.md"},
+                {
+                    "rel_path": ".abstract.md",
+                    "isDir": False,
+                    "uri": "viking://resources/x/.abstract.md",
+                },
                 {"rel_path": "_system", "isDir": True, "uri": "viking://resources/x/_system"},
             ]
         )
-        files, complete = await read_target_file_snapshot(
-            vfs, "viking://resources/x", ctx=_Ctx()
-        )
+        files, complete = await read_target_file_snapshot(vfs, "viking://resources/x", ctx=_Ctx())
         assert set(files) == {"a.py"}
         assert complete is True
 
 
 @pytest.mark.asyncio
 class TestReadTargetVectorSnapshot:
-    async def test_maps_relative_paths_to_vectors(self) -> None:
+    async def test_reads_all_l2_vectors_under_target_and_maps_relative_paths(self) -> None:
         from openviking.storage.viking_fs._diff_plan import TargetVector
 
         vikingdb = _FakeVikingDB(
             {
                 "viking://resources/x/a.py": {"md5": "m1", "abstract": "A"},
                 "viking://resources/x/sub/b.py": {"md5": "m2", "abstract": "B"},
+                "viking://resources/x/ghost.py": {"md5": "m3", "abstract": "G"},
+                "viking://resources/x/a.py#chunk_0001": {
+                    "md5": "chunk",
+                    "abstract": "chunk summary",
+                },
             }
         )
         vectors = await read_target_vector_snapshot(
             vikingdb,
             target_uri="viking://resources/x",
-            rel_paths=["a.py", "sub/b.py", "missing.py"],
             ctx=_Ctx(),
         )
         assert vectors["a.py"] == TargetVector(md5="m1", abstract="A")
         assert vectors["sub/b.py"].md5 == "m2"
-        assert "missing.py" not in vectors
+        assert vectors["ghost.py"].md5 == "m3"
+        assert vectors["a.py#chunk_0001"].md5 == "chunk"
+        assert vikingdb.requested == "viking://resources/x"
+
+    async def test_rejects_noncanonical_vector_uri(self) -> None:
+        vikingdb = _FakeVikingDB({"viking://resources/x//a.py": {"md5": "m1", "abstract": "A"}})
+
+        with pytest.raises(RuntimeError, match="non-canonical L2 URI"):
+            await read_target_vector_snapshot(
+                vikingdb, target_uri="viking://resources/x", ctx=_Ctx()
+            )
+
+    async def test_maps_directory_root_l2_record_for_orphan_cleanup(self) -> None:
+        vikingdb = _FakeVikingDB({"viking://resources/x": {"md5": "m1", "abstract": "invalid"}})
+
+        vectors = await read_target_vector_snapshot(
+            vikingdb, target_uri="viking://resources/x", ctx=_Ctx()
+        )
+
+        assert vectors[""].md5 == "m1"
 
 
 @pytest.mark.asyncio

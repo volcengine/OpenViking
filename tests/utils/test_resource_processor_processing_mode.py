@@ -100,7 +100,36 @@ async def test_flat_file_refreshes_parent_semantics_and_vectorizes_via_summary(
         skip_vectorization=False,
         ingest_options=IngestOptions(),
         created=True,
+        file_md5=None,
+        file_abstract="",
     )
+
+
+@pytest.mark.asyncio
+async def test_local_flat_file_refresh_passes_final_md5(monkeypatch, ctx):
+    root_uri = "viking://resources/report.md"
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    processor = ResourceProcessor(_FakeVikingDB())
+    summarizer = SimpleNamespace(refresh_file_parent=AsyncMock(return_value={"status": "success"}))
+    processor._get_summarizer = Mock(return_value=summarizer)
+
+    await processor.finish_prepared_resource(
+        {
+            "root_uri": root_uri,
+            "temp_uri": root_uri,
+            "source_committed": True,
+            "target_preexisting": True,
+            "root_is_file": True,
+            "file_md5s": {root_uri: "final-md5"},
+        },
+        ctx=ctx,
+        build_index=True,
+    )
+
+    assert summarizer.refresh_file_parent.await_args.kwargs["file_md5"] == "final-md5"
 
 
 @pytest.mark.asyncio
@@ -150,6 +179,82 @@ async def test_local_artifact_without_semantic_work_is_cleaned(monkeypatch, ctx,
         ctx=ctx,
         build_index=False,
     )
+
+    assert not tmp_path.joinpath(ref.root).exists()
+
+
+@pytest.mark.asyncio
+async def test_local_incremental_noop_skips_semantic_queue_and_releases_resources(
+    monkeypatch, ctx, tmp_path
+):
+    from openviking.parse.output import LocalParseOutputStore
+
+    store = LocalParseOutputStore(local_root=str(tmp_path))
+    ref = await store.create_artifact()
+    await store.write_bytes(ref, "repository/a.py", b"a")
+    lock = {"lease_ref": "noop"}
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._build_parse_output_store = Mock(return_value=store)
+    summarizer = SimpleNamespace(summarize=AsyncMock(return_value={"status": "success"}))
+    processor._get_summarizer = Mock(return_value=summarizer)
+
+    result = await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/demo",
+            "temp_uri": "viking://resources/demo",
+            "source_committed": True,
+            "target_preexisting": True,
+            "artifact_ref": ref.to_dict(),
+            "artifact_files": ["a.py"],
+            "changes": {},
+            "file_md5s": {},
+            "file_abstracts": {},
+            "incremental_noop": True,
+        },
+        ctx=ctx,
+        resource_lock=lock,
+        build_index=True,
+    )
+
+    assert result == {"status": "success", "root_uri": "viking://resources/demo"}
+    summarizer.summarize.assert_not_awaited()
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
+    assert not tmp_path.joinpath(ref.root).exists()
+
+
+@pytest.mark.asyncio
+async def test_local_flat_refresh_failure_cleans_artifact(monkeypatch, ctx, tmp_path):
+    from openviking.parse.output import LocalParseOutputStore
+
+    store = LocalParseOutputStore(local_root=str(tmp_path))
+    ref = await store.create_artifact()
+    await store.write_bytes(ref, "document/report.md", b"body")
+    processor = ResourceProcessor(_FakeVikingDB())
+    processor._build_parse_output_store = Mock(return_value=store)
+    processor._get_summarizer = Mock(
+        return_value=SimpleNamespace(
+            refresh_file_parent=AsyncMock(side_effect=RuntimeError("queue unavailable"))
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await processor.finish_prepared_resource(
+            {
+                "root_uri": "viking://resources/report.md",
+                "temp_uri": "viking://resources/report.md",
+                "source_committed": True,
+                "target_preexisting": True,
+                "root_is_file": True,
+                "artifact_ref": ref.to_dict(),
+                "artifact_files": [""],
+            },
+            ctx=ctx,
+            build_index=True,
+        )
 
     assert not tmp_path.joinpath(ref.root).exists()
 
@@ -367,9 +472,7 @@ async def test_local_vectors_only_uses_artifact_snapshot_when_target_tree_is_emp
             "source_committed": True,
             "artifact_ref": ref.to_dict(),
             "artifact_files": ["a.py"],
-            "file_md5s": {
-                "viking://resources/demo/a.py": content_md5(b"print('a')")
-            },
+            "file_md5s": {"viking://resources/demo/a.py": content_md5(b"print('a')")},
         },
         ctx=ctx,
         build_index=True,

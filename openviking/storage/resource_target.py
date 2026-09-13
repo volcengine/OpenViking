@@ -41,7 +41,7 @@ class AgfsResourceTarget:
     def _resolve(self, rel_path: str) -> str:
         # safe_join_viking_uri rejects absolute paths, drive prefixes and ..
         # traversal, keeping every write inside the resource root.
-        return safe_join_viking_uri(self._root_uri, rel_path)
+        return self._root_uri if not rel_path else safe_join_viking_uri(self._root_uri, rel_path)
 
     async def write_file(self, rel_path: str, data: bytes) -> bytes:
         """Write ``data`` under the resource root, returning final stored bytes.

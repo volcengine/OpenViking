@@ -94,6 +94,43 @@ class TestDecisionTable:
         assert plan.orphan_vectors == ["a.py"]
         assert plan.deleted == []
 
+    def test_chunk_named_vector_without_exact_file_is_orphan(self) -> None:
+        plan = build_diff_plan(
+            new={"a.md": _n("m1")},
+            target_files={"a.md": _f()},
+            target_vectors={
+                "a.md": _v("m1"),
+                "a.md#chunk_0001": _v("chunk"),
+                "ghost.md#chunk_0001": _v("chunk"),
+            },
+        )
+
+        assert plan.unchanged == ["a.md"]
+        assert plan.orphan_vectors == ["a.md#chunk_0001", "ghost.md#chunk_0001"]
+
+    def test_real_filename_with_chunk_suffix_uses_normal_diff_rules(self) -> None:
+        name = "notes#chunk_0001"
+        plan = build_diff_plan(
+            new={name: _n("m1")},
+            target_files={name: _f()},
+            target_vectors={name: _v("m1")},
+        )
+
+        assert plan.unchanged == [name]
+        assert plan.orphan_vectors == []
+
+    def test_deleted_real_chunk_named_file_is_orphan_even_when_prefix_file_exists(self) -> None:
+        plan = build_diff_plan(
+            new={"report": _n("m1")},
+            target_files={"report": _f()},
+            target_vectors={
+                "report": _v("m1"),
+                "report#chunk_0001": _v("old"),
+            },
+        )
+
+        assert plan.orphan_vectors == ["report#chunk_0001"]
+
     def test_new_only_is_added(self) -> None:
         plan = build_diff_plan(
             new={"a.py": _n("m1")},
@@ -161,6 +198,24 @@ class TestControlFileExclusion:
         assert plan.deleted == []
         assert plan.unchanged == ["a.py"]
 
+    def test_vector_only_control_path_is_cleaned_as_orphan(self) -> None:
+        plan = build_diff_plan(
+            new={},
+            target_files={},
+            target_vectors={".abstract.md": _v("invalid-l2")},
+        )
+
+        assert plan.orphan_vectors == [".abstract.md"]
+
+    def test_l2_record_for_directory_path_is_cleaned_as_orphan(self) -> None:
+        plan = build_diff_plan(
+            new={"sub": _n("", is_dir=True)},
+            target_files={"sub": _f(is_dir=True)},
+            target_vectors={"sub": _v("invalid-l2")},
+        )
+
+        assert plan.orphan_vectors == ["sub"]
+
 
 class TestCompletenessGate:
     def test_incomplete_target_files_forbids_deletion(self) -> None:
@@ -181,6 +236,15 @@ class TestCompletenessGate:
                 target_files={},
                 target_vectors={"a.py": _v("m1")},
                 target_vectors_complete=False,
+            )
+
+    def test_incomplete_target_files_forbids_orphan_vector_delete(self) -> None:
+        with pytest.raises(ValueError, match="incomplete target file"):
+            build_diff_plan(
+                new={},
+                target_files={},
+                target_vectors={"hidden.py": _v("m1")},
+                target_files_complete=False,
             )
 
     def test_incomplete_snapshot_still_allows_pure_additions(self) -> None:

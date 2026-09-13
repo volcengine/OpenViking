@@ -20,8 +20,9 @@ Assembling the plan then delegates to :func:`build_diff_plan`.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
+from openviking.core.namespace import uri_parts
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.viking_fs._diff_plan import (
     DiffPlan,
@@ -30,6 +31,7 @@ from openviking.storage.viking_fs._diff_plan import (
     TargetVector,
     build_diff_plan,
 )
+from openviking_cli.utils import VikingURI
 
 _CONTROL_BASENAMES = frozenset({".abstract.md", ".overview.md"})
 
@@ -49,12 +51,17 @@ async def read_target_file_snapshot(
     target_uri: str,
     *,
     ctx: Any,
+    root_is_file: bool = False,
 ) -> Tuple[Dict[str, TargetFile], bool]:
     """Return ``(rel_path -> TargetFile, complete)`` for the target tree.
 
     ``complete`` is False when any entry is permission-denied, because a subtree
     we cannot see must not be interpreted as absent (which would drive deletion).
     """
+    if root_is_file:
+        stat = await viking_fs.stat(target_uri, ctx=ctx, skip_count=True)
+        return {"": TargetFile(is_dir=bool(stat.get("isDir")))}, True
+
     entries = await viking_fs.tree(
         target_uri,
         output="original",
@@ -80,23 +87,33 @@ async def read_target_vector_snapshot(
     vikingdb: Any,
     *,
     target_uri: str,
-    rel_paths: List[str],
     ctx: Any,
+    root_is_file: bool = False,
 ) -> Dict[str, TargetVector]:
-    """Return ``rel_path -> TargetVector`` for the target's L2 records.
-
-    URIs are derived from ``target_uri`` + each relative path so the result keys
-    line up with the file/manifest snapshots.
-    """
+    """Return every L2 vector below ``target_uri``, keyed by relative path."""
     base = target_uri.rstrip("/")
-    uri_by_rel = {rel: f"{base}/{rel}" for rel in rel_paths if rel}
-    records = await vikingdb.get_l2_diff_records_by_uris(
-        list(uri_by_rel.values()), ctx=ctx
+    records = (
+        await vikingdb.get_l2_diff_records_by_uris([base], ctx=ctx)
+        if root_is_file
+        else await vikingdb.get_l2_diff_records_under_uri(base, ctx=ctx)
     )
     vectors: Dict[str, TargetVector] = {}
-    for rel, uri in uri_by_rel.items():
-        record = records.get(uri)
-        if record is None:
+    prefix = base + "/"
+    for uri, record in records.items():
+        if root_is_file and uri == base:
+            vectors[""] = TargetVector(
+                md5=str(record.get("md5") or ""),
+                abstract=str(record.get("abstract") or ""),
+            )
+            continue
+        canonical_record_uri = VikingURI.build(*uri_parts(uri))
+        if uri != canonical_record_uri:
+            raise RuntimeError(f"Vector scan returned non-canonical L2 URI: {uri}")
+        if uri == base:
+            rel = ""
+        elif uri.startswith(prefix):
+            rel = uri[len(prefix) :]
+        else:
             continue
         vectors[rel] = TargetVector(
             md5=str(record.get("md5") or ""),
@@ -105,7 +122,9 @@ async def read_target_vector_snapshot(
     return vectors
 
 
-async def read_new_manifest(store: Any, ref: Any, *, doc_rel: str = "") -> Dict[str, NewEntry]:
+async def read_new_manifest(
+    store: Any, ref: Any, *, doc_rel: str = "", root_is_file: bool = False
+) -> Dict[str, NewEntry]:
     """Walk the parse output store and return ``rel_path -> NewEntry``.
 
     md5 is populated from the artifact manifest (``.artifact_manifest.json``)
@@ -134,6 +153,9 @@ async def read_new_manifest(store: Any, ref: Any, *, doc_rel: str = "") -> Dict[
         # md5 so the diff compares bytes instead of assuming equality.
         md5_by_artifact_rel = {}
 
+    if root_is_file:
+        return {"": NewEntry(md5=md5_by_artifact_rel.get(base, ""), is_dir=False)}
+
     async def _walk(rel: str) -> None:
         for entry in await store.list(ref, rel):
             if _is_excluded_rel_path(entry.rel_path):
@@ -141,7 +163,7 @@ async def read_new_manifest(store: Any, ref: Any, *, doc_rel: str = "") -> Dict[
             if entry.is_dir:
                 await _walk(entry.rel_path)
                 continue
-            key = entry.rel_path[len(prefix):] if prefix else entry.rel_path
+            key = entry.rel_path[len(prefix) :] if prefix else entry.rel_path
             if key:
                 manifest[key] = NewEntry(
                     md5=md5_by_artifact_rel.get(entry.rel_path, ""), is_dir=False
@@ -160,6 +182,7 @@ async def build_resource_diff_plan(
     target_uri: str,
     ctx: Any,
     doc_rel: str = "",
+    root_is_file: bool = False,
 ) -> DiffPlan:
     """Read all three snapshots and assemble the incremental plan.
 
@@ -171,16 +194,15 @@ async def build_resource_diff_plan(
     ``repository``); it is stripped from the manifest so the new-tree keys align
     with the target file/vector snapshots.
     """
-    new = await read_new_manifest(store, artifact_ref, doc_rel=doc_rel)
+    new = await read_new_manifest(store, artifact_ref, doc_rel=doc_rel, root_is_file=root_is_file)
     target_files, files_complete = await read_target_file_snapshot(
-        viking_fs, target_uri, ctx=ctx
+        viking_fs, target_uri, ctx=ctx, root_is_file=root_is_file
     )
-    file_rel_paths = [rel for rel, tf in target_files.items() if not tf.is_dir]
     target_vectors = await read_target_vector_snapshot(
         vikingdb,
         target_uri=target_uri,
-        rel_paths=file_rel_paths,
         ctx=ctx,
+        root_is_file=root_is_file,
     )
     return build_diff_plan(
         new=new,

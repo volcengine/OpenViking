@@ -90,7 +90,9 @@ async def apply_diff_plan(
         result.structural.append(rel_path)
 
     for rel_path in [*plan.added, *plan.modified]:
-        await _upload(rel_path, store=store, artifact_ref=artifact_ref, target=target, result=result)
+        await _upload(
+            rel_path, store=store, artifact_ref=artifact_ref, target=target, result=result
+        )
 
     for rel_path in plan.needs_body_compare:
         new_bytes = await store.read_bytes(artifact_ref, rel_path)
@@ -127,6 +129,7 @@ async def apply_full_artifact_upload(
     artifact_ref: Any,
     doc_rel: str,
     target: Any,
+    root_is_file: bool = False,
 ) -> ApplyResult:
     """Upload every file under ``doc_rel`` in the artifact to the target.
 
@@ -139,13 +142,22 @@ async def apply_full_artifact_upload(
     result = ApplyResult()
     base = doc_rel.strip("/")
     prefix = f"{base}/" if base else ""
+    if root_is_file:
+        data = await store.read_bytes(artifact_ref, base)
+        written = await target.write_file("", data)
+        final_bytes = written if written is not None else data
+        result.uploaded.append("")
+        result.added.append("")
+        result.files.append("")
+        result.md5_by_rel[""] = content_md5(final_bytes)
+        return result
 
     async def _walk(rel: str) -> None:
         for entry in await store.list(artifact_ref, rel):
             if entry.is_dir:
                 await _walk(entry.rel_path)
                 continue
-            target_rel = entry.rel_path[len(prefix):] if prefix else entry.rel_path
+            target_rel = entry.rel_path[len(prefix) :] if prefix else entry.rel_path
             data = await store.read_bytes(artifact_ref, entry.rel_path)
             written = await target.write_file(target_rel, data)
             final_bytes = written if written is not None else data

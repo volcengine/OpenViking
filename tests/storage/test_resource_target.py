@@ -61,9 +61,7 @@ _ROOT = "viking://resources/proj"
 
 
 def _target(vfs, vikingdb):
-    return AgfsResourceTarget(
-        viking_fs=vfs, vikingdb=vikingdb, root_uri=_ROOT, ctx=_Ctx()
-    )
+    return AgfsResourceTarget(viking_fs=vfs, vikingdb=vikingdb, root_uri=_ROOT, ctx=_Ctx())
 
 
 @pytest.mark.asyncio
@@ -75,6 +73,17 @@ class TestAgfsResourceTarget:
         await target.write_file("sub/a.py", b"print(1)")
 
         assert vfs.files[f"{_ROOT}/sub/a.py"] == b"print(1)"
+
+    async def test_empty_rel_path_targets_root_file(self) -> None:
+        vfs = _FakeVikingFS()
+        vikingdb = _FakeVikingDB()
+        target = _target(vfs, vikingdb)
+
+        await target.write_file("", b"body")
+        await target.delete_vector("")
+
+        assert vfs.files[_ROOT] == b"body"
+        assert vikingdb.deleted_uris == [_ROOT]
 
     async def test_write_normalizes_text_encoding(self) -> None:
         vfs = _FakeVikingFS()

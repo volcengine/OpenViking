@@ -16,6 +16,7 @@ from openviking.storage.abstract_overview import (
     render_abstract_overview,
 )
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -43,6 +44,10 @@ class _FakeVikingFS:
 
     async def read_file(self, path, ctx=None):
         return self._file_contents.get(self._norm(path), "")
+
+    async def read_file_bytes(self, path, ctx=None):
+        content = self._file_contents.get(self._norm(path), b"")
+        return content if isinstance(content, bytes) else content.encode()
 
     async def abstract(self, uri, ctx=None):
         return self._file_contents.get(
@@ -226,8 +231,8 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
     assert processor.summarized_files == [f"{root_uri}/a.txt"]
     assert processor.vectorized_files == [f"{root_uri}/a.txt"]
     assert processor.sync_calls == []
-    # The apply-time md5 is threaded through so the vector record is refreshed.
-    assert processor.file_md5s[f"{root_uri}/a.txt"] == "md5-a-new"
+    # The same bytes used for summarization/vectorization provide the final md5.
+    assert processor.file_md5s[f"{root_uri}/a.txt"] == content_md5(b"new content")
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
     assert "- a.txt: summary" in overview
     assert "- b.txt: old-b" in overview
@@ -284,7 +289,7 @@ async def test_modified_file_with_same_abstract_stops_directory_propagation(monk
 
     assert processor.summarized_files == [file_uri]
     assert processor.vectorized_files == [file_uri]
-    assert processor.file_md5s[file_uri] == "new-md5"
+    assert processor.file_md5s[file_uri] == content_md5(b"changed body")
     assert processor.generated_overviews == []
     assert processor.vectorized_dirs == []
     assert fake_fs._file_contents[f"{child_uri}/.overview.md"] == old_child_overview
@@ -406,9 +411,7 @@ async def test_deleted_last_nested_file_still_refreshes_existing_ancestor(monkey
 
 
 @pytest.mark.asyncio
-async def test_artifact_snapshot_drives_dag_when_target_listing_is_empty(
-    tmp_path, monkeypatch
-):
+async def test_artifact_snapshot_drives_dag_when_target_listing_is_empty(tmp_path, monkeypatch):
     from openviking.parse.output import LocalParseOutputStore
 
     root_uri = "viking://resources/root"
@@ -425,9 +428,7 @@ async def test_artifact_snapshot_drives_dag_when_target_listing_is_empty(
     await store.write_bytes(ref, "repository/a.txt", b"alpha")
     await store.write_bytes(ref, "repository/src/b.txt", b"beta")
     fake_fs = _FakeVikingFS(tree={}, file_contents={})
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
@@ -467,9 +468,7 @@ async def test_direct_incremental_reuses_vector_abstract_without_overview(monkey
         tree={root_uri: [{"name": "a.txt", "isDir": False}]},
         file_contents={},
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
@@ -495,9 +494,7 @@ async def test_direct_incremental_reuses_vector_abstract_without_overview(monkey
 
 
 @pytest.mark.asyncio
-async def test_missing_local_artifact_fails_instead_of_using_empty_summary(
-    tmp_path, monkeypatch
-):
+async def test_missing_local_artifact_fails_instead_of_using_empty_summary(tmp_path, monkeypatch):
     from openviking.parse.output import LocalParseOutputStore, ParseArtifactRef
 
     root_uri = "viking://resources/root"
@@ -508,9 +505,7 @@ async def test_missing_local_artifact_fails_instead_of_using_empty_summary(
         resource_rel="repository",
     )
     fake_fs = _FakeVikingFS(tree={}, file_contents={})
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
@@ -624,6 +619,40 @@ async def test_content_write_with_same_abstract_still_updates_file_and_skips_par
     assert processor.generated_overviews == []
     assert processor.vectorized_dirs == []
     assert fake_fs._file_contents[f"{root_uri}/.overview.md"] == old_overview
+
+
+@pytest.mark.asyncio
+async def test_content_write_recomputes_md5_from_content_read_by_worker(monkeypatch):
+    root_uri = "viking://resources/root"
+    changed_uri = f"{root_uri}/a.txt"
+    latest_content = "newer content"
+    fake_fs = _FakeVikingFS(
+        tree={root_uri: [{"name": "a.txt", "isDir": False}]},
+        file_contents={changed_uri: latest_content},
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        changes={"modified": [changed_uri]},
+        file_md5s={changed_uri: "stale-enqueued-md5"},
+        generation_trigger="content_write",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.file_contents[("vector", changed_uri)] == latest_content.encode()
+    assert processor.file_md5s[changed_uri] == content_md5(latest_content.encode())
 
 
 @pytest.mark.asyncio

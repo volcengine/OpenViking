@@ -28,6 +28,7 @@ PORTABLE_VECTOR_SCALAR_FIELDS = [
     "description",
     "tags",
     "abstract",
+    "md5",
 ]
 EXPORT_VECTOR_FIELDS = [*PORTABLE_VECTOR_SCALAR_FIELDS, "vector"]
 

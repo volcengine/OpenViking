@@ -526,6 +526,143 @@ async def test_transfer_scan_emits_supported_aggregate_request(
 
 
 @pytest.mark.asyncio
+async def test_l2_diff_scan_reads_every_page_under_target_directory():
+    root = "viking://resources/docs"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("a", f"{root}/a.py", md5="ma", abstract="A"),
+            _record("b", f"{root}/sub/b.py", md5="mb", abstract="B"),
+            _record("ghost", f"{root}/ghost.py", md5="mg", abstract="G"),
+            _record("directory", root, level=1),
+            _record("outside", "viking://resources/other.py"),
+            _record("other-account", f"{root}/private.py", account_id="other"),
+        ]
+    )
+
+    records = await backend.get_l2_diff_records_under_uri(root, ctx=_ctx(), batch_size=2)
+
+    assert records == {
+        f"{root}/a.py": {"md5": "ma", "abstract": "A"},
+        f"{root}/ghost.py": {"md5": "mg", "abstract": "G"},
+        f"{root}/sub/b.py": {"md5": "mb", "abstract": "B"},
+    }
+    assert len(backend.scroll_filters) == 2
+
+
+@pytest.mark.asyncio
+async def test_l2_diff_scan_reads_real_local_backend(tmp_path):
+    if not getattr(vectordb_engine, "PersistStore", None):
+        pytest.skip("local persistent vectordb engine is not available in this environment")
+
+    root = "viking://resources/docs"
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path)
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        records = [
+            _record(
+                "a",
+                f"{root}/a.py",
+                md5="ma",
+                abstract="A",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                created_at="2026-08-20T00:00:00Z",
+                updated_at="2026-08-20T00:00:00Z",
+            ),
+            _record(
+                "ghost",
+                f"{root}/ghost.py",
+                md5="mg",
+                abstract="G",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                created_at="2026-08-20T00:00:01Z",
+                updated_at="2026-08-20T00:00:01Z",
+            ),
+            _record(
+                "outside",
+                "viking://resources/other.py",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                created_at="2026-08-20T00:00:02Z",
+                updated_at="2026-08-20T00:00:02Z",
+            ),
+        ]
+        await backend.upsert_many(records, ctx=_ctx())
+
+        result = await backend.get_l2_diff_records_under_uri(root, ctx=_ctx(), batch_size=1)
+
+        assert result == {
+            f"{root}/a.py": {"md5": "ma", "abstract": "A"},
+            f"{root}/ghost.py": {"md5": "mg", "abstract": "G"},
+        }
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_l2_diff_scan_fails_closed_on_repeated_cursor(monkeypatch):
+    backend = _MemoryTransferBackend([])
+    monkeypatch.setattr(backend, "_strict_transfer_count", AsyncMock(return_value=3))
+    page = [{"uri": "viking://resources/docs/a.py", "md5": "m"}]
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(side_effect=[(page, "same"), (page, "same")]),
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate L2 URI|cursor repeated"):
+        await backend.get_l2_diff_records_under_uri(
+            "viking://resources/docs", ctx=_ctx(), batch_size=1
+        )
+
+
+@pytest.mark.asyncio
+async def test_l2_diff_scan_does_not_ignore_trailing_page_after_count(monkeypatch):
+    backend = _MemoryTransferBackend([])
+    monkeypatch.setattr(backend, "_strict_transfer_count", AsyncMock(return_value=1))
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(
+            side_effect=[
+                ([{"uri": "viking://resources/docs/a.py"}], "1"),
+                ([{"uri": "viking://resources/docs/new.py"}], None),
+            ]
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="count was 1"):
+        await backend.get_l2_diff_records_under_uri(
+            "viking://resources/docs", ctx=_ctx(), batch_size=1
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_record",
+    [
+        {"md5": "missing-uri"},
+        {"uri": "viking://resources/other.py", "md5": "outside"},
+    ],
+)
+async def test_l2_diff_scan_fails_closed_on_invalid_scoped_record(monkeypatch, bad_record):
+    backend = _MemoryTransferBackend([])
+    monkeypatch.setattr(backend, "_strict_transfer_count", AsyncMock(return_value=1))
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(return_value=([bad_record], None)),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid L2 URI"):
+        await backend.get_l2_diff_records_under_uri("viking://resources/docs", ctx=_ctx())
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
 async def test_uri_mapping_overwrites_affected_target_and_removes_obsolete_chunks(
     transfer_method,

@@ -40,6 +40,8 @@ class Summarizer:
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
         created: bool = False,
+        file_md5: str | None = None,
+        file_abstract: str = "",
     ) -> Dict[str, Any]:
         """Summarize one flat file and refresh its parent directory semantics."""
         parent = VikingURI(file_uri).parent
@@ -69,6 +71,8 @@ class Summarizer:
                 peer_id=ctx.user.user_id,
             ),
             ingest_options=ingest_options,
+            file_md5s={file_uri: file_md5} if file_md5 else None,
+            file_abstracts={file_uri: file_abstract} if file_abstract else None,
         )
         if telemetry_id:
             get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)

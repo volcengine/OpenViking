@@ -1,3 +1,4 @@
+import pytest
 from volcengine.base.Request import Request
 
 from openviking.storage.vectordb.collection.volcengine_clients import (
@@ -957,3 +958,35 @@ def test_http_collection_update_data_posts_to_update_endpoint(monkeypatch):
         "collection_name": "context",
         "fields": '[{"id": "doc-1", "name": "updated"}]',
     }
+
+
+def test_http_adapter_strict_count_rejects_empty_failure_response(monkeypatch):
+    from openviking.storage.vectordb.collection.collection import Collection
+    from openviking.storage.vectordb.collection.http_collection import HttpCollection
+    from openviking.storage.vectordb_adapters.http_adapter import HttpCollectionAdapter
+
+    class _Response:
+        status_code = 503
+        text = "unavailable"
+
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.http_collection.requests.post",
+        lambda *args, **kwargs: _Response(),
+    )
+    adapter = HttpCollectionAdapter(
+        host="127.0.0.1",
+        port=1933,
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    adapter._collection = Collection(
+        HttpCollection(
+            ip="127.0.0.1",
+            port=1933,
+            meta_data={"ProjectName": "default", "CollectionName": "context"},
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="invalid count response"):
+        adapter.strict_count()

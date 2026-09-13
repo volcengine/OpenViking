@@ -254,6 +254,8 @@ async def test_flat_file_refresh_enqueues_incremental_parent_summary():
             file_uri="viking://resources/神雕.md",
             ctx=ctx,
             skip_vectorization=False,
+            file_md5="final-md5",
+            file_abstract="old summary",
         )
 
     assert result == {"status": "success", "enqueued_count": 1}
@@ -263,6 +265,8 @@ async def test_flat_file_refresh_enqueues_incremental_parent_summary():
     assert msg.recursive is False
     assert msg.changes == {"modified": ["viking://resources/神雕.md"]}
     assert msg.skip_vectorization is False
+    assert msg.file_md5s == {"viking://resources/神雕.md": "final-md5"}
+    assert msg.file_abstracts == {"viking://resources/神雕.md": "old summary"}
     assert msg.role == Role.ROOT
     assert msg.telemetry_id == "tid"
     assert wait_tracker.registered == [("tid", msg.id)]

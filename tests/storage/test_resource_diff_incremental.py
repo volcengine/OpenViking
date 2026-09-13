@@ -22,8 +22,16 @@ class _FakeVikingFS:
     def __init__(self, tree_entries):
         self._tree_entries = tree_entries
 
-    async def tree(self, uri, *, output="original", show_all_hidden=False,
-                   node_limit=1000, level_limit=3, ctx=None):
+    async def tree(
+        self,
+        uri,
+        *,
+        output="original",
+        show_all_hidden=False,
+        node_limit=1000,
+        level_limit=3,
+        ctx=None,
+    ):
         return list(self._tree_entries)
 
 
@@ -31,8 +39,9 @@ class _FakeVikingDB:
     def __init__(self, records):
         self._records = records
 
-    async def get_l2_diff_records_by_uris(self, uris, *, ctx):
-        return {u: self._records[u] for u in uris if u in self._records}
+    async def get_l2_diff_records_under_uri(self, target_uri, *, ctx):
+        prefix = target_uri.rstrip("/") + "/"
+        return {uri: record for uri, record in self._records.items() if uri.startswith(prefix)}
 
 
 class _FakeStore:
@@ -48,7 +57,7 @@ class _FakeStore:
         for rel in self._rels:
             if not rel.startswith(prefix):
                 continue
-            rest = rel[len(prefix):]
+            rest = rel[len(prefix) :]
             head = rest.split("/", 1)
             name = head[0]
             is_dir = len(head) > 1
@@ -88,3 +97,27 @@ async def test_manifest_prefix_stripped_aligns_with_target() -> None:
     assert "b.py" in plan.added
     assert "a.py" in plan.needs_body_compare
     assert plan.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_vector_only_uri_under_target_is_planned_as_orphan() -> None:
+    store = _FakeStore({"repository/a.py"})
+    vfs = _FakeVikingFS([{"rel_path": "a.py", "isDir": False, "uri": f"{_TARGET}/a.py"}])
+    vikingdb = _FakeVikingDB(
+        {
+            f"{_TARGET}/a.py": {"md5": "same", "abstract": "A"},
+            f"{_TARGET}/ghost.py": {"md5": "stale", "abstract": "G"},
+        }
+    )
+
+    plan = await build_resource_diff_plan(
+        viking_fs=vfs,
+        vikingdb=vikingdb,
+        store=store,
+        artifact_ref=_REF,
+        target_uri=_TARGET,
+        ctx=_Ctx(),
+        doc_rel="repository",
+    )
+
+    assert plan.orphan_vectors == ["ghost.py"]

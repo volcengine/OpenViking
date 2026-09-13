@@ -641,7 +641,7 @@ class _SingleAccountBackend:
     async def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         """Count transaction records without converting backend errors to zero."""
         return int(
-            await self._async_adapter.call("count", filter=self._with_account_filter(filter)) or 0
+            await self._async_adapter.call("strict_count", filter=self._with_account_filter(filter))
         )
 
     async def delete(self, ids: List[str]) -> int:
@@ -1739,6 +1739,80 @@ class VikingVectorIndexBackend:
             for uri, record in records_by_uri.items()
             if uri in requested_by_canonical
         }
+
+    async def get_l2_diff_records_under_uri(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        batch_size: int = 100,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Strictly load every L2 diff record below one target directory."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        canonical_uri = resolve_uri(uri).uri.rstrip("/")
+        scope = And(
+            [
+                Eq("account_id", ctx.account_id),
+                PathScope("uri", canonical_uri, depth=-1),
+                Eq("level", 2),
+            ]
+        )
+        expected_count = await self._strict_transfer_count(ctx, scope)
+        records: Dict[str, Dict[str, Any]] = {}
+        cursor: Optional[str] = None
+        scanned_count = 0
+        seen_cursors: set[str] = set()
+        while True:
+            page, next_cursor = await self._strict_transfer_page(
+                ctx,
+                scope,
+                limit=batch_size,
+                cursor=cursor,
+                output_fields=INCREMENTAL_DIFF_OUTPUT_FIELDS,
+            )
+            if not page and scanned_count < expected_count:
+                raise RuntimeError(
+                    f"Vector scan ended after {scanned_count} of {expected_count} L2 records "
+                    f"under {canonical_uri}"
+                )
+            scanned_count += len(page)
+            for record in page:
+                record_uri = str(record.get("uri") or "")
+                if not record_uri or not uri_in_transfer_scope(
+                    record_uri, canonical_uri, recursive=True
+                ):
+                    raise RuntimeError(
+                        f"Vector scan returned invalid L2 URI under {canonical_uri}: "
+                        f"{record_uri or '<missing>'}"
+                    )
+                if record_uri in records:
+                    raise RuntimeError(
+                        f"Vector scan returned duplicate L2 URI under {canonical_uri}: {record_uri}"
+                    )
+                records[record_uri] = {
+                    "md5": str(record.get("md5") or ""),
+                    "abstract": str(record.get("abstract") or ""),
+                }
+            if scanned_count > expected_count:
+                raise RuntimeError(
+                    f"Vector scan returned {scanned_count} L2 records but count was "
+                    f"{expected_count} under {canonical_uri}"
+                )
+            if next_cursor is None:
+                if scanned_count == expected_count:
+                    break
+                raise RuntimeError(
+                    f"Vector scan cursor ended after {scanned_count} of {expected_count} L2 "
+                    f"records under {canonical_uri}"
+                )
+            if next_cursor in seen_cursors:
+                raise RuntimeError(
+                    f"Vector scan cursor repeated under {canonical_uri}: {next_cursor}"
+                )
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+        return records
 
     async def delete_account_data(self, account_id: str, *, ctx: RequestContext) -> int:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""

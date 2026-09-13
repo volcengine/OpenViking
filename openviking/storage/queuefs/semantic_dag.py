@@ -25,6 +25,7 @@ from openviking.storage.abstract_overview import (
 from openviking.storage.acl import CreatorAclGrant
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, get_current_telemetry
+from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -179,6 +180,7 @@ class SemanticDagExecutor:
         generation_trigger: str = "semantic_refresh",
         aggregate_directory: bool = True,
         copy_source_uri: str = "",
+        prefer_target_files: bool = False,
         file_md5s: Optional[Dict[str, str]] = None,
         artifact_files: Optional[List[str]] = None,
         artifact_store: Optional[Any] = None,
@@ -204,6 +206,7 @@ class SemanticDagExecutor:
         self._generation_trigger = generation_trigger
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
+        self._prefer_target_files = prefer_target_files
         self._task_context = get_task_context()
         self._telemetry = get_current_telemetry()
         self._stale = False
@@ -638,6 +641,8 @@ class SemanticDagExecutor:
         return sorted(child_dirs), sorted(file_paths)
 
     async def _read_artifact_file(self, file_path: str) -> Optional[bytes]:
+        if self._prefer_target_files:
+            return None
         if not self._artifact_store or not self._artifact_ref or not self._root_uri:
             return None
         root = self._root_uri.rstrip("/")
@@ -865,6 +870,8 @@ class SemanticDagExecutor:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
                 file_content = await self._read_artifact_file(file_path)
+                if file_content is None and hasattr(self._viking_fs, "read_file_bytes"):
+                    file_content = await self._viking_fs.read_file_bytes(file_path, ctx=self._ctx)
                 summary_kwargs: Dict[str, Any] = {
                     "llm_sem": self._llm_sem,
                     "ctx": self._ctx,
@@ -905,6 +912,11 @@ class SemanticDagExecutor:
                 vectorize_kwargs: Dict[str, Any] = {}
                 if file_content is not None:
                     vectorize_kwargs["file_content"] = file_content
+                file_md5 = (
+                    content_md5(file_content)
+                    if file_content is not None
+                    else self._file_md5s.get(file_path.rstrip("/")) or None
+                )
                 await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,
@@ -914,7 +926,7 @@ class SemanticDagExecutor:
                     use_summary=use_summary,
                     ingest_options=self._ingest_options_for_file(file_path),
                     creator_acl_grant=self._creator_acl_grant(file_path),
-                    file_md5=self._file_md5s.get(file_path.rstrip("/")) or None,
+                    file_md5=file_md5,
                     **vectorize_kwargs,
                 )
             except Exception as e:

@@ -43,15 +43,28 @@ class _RecordingAgfs:
         self.removed.append(uri)
         self.files.pop(uri, None)
 
-    async def tree(self, uri, *, output="original", show_all_hidden=False,
-                   node_limit=1000, level_limit=None, ctx=None):
+    async def tree(
+        self,
+        uri,
+        *,
+        output="original",
+        show_all_hidden=False,
+        node_limit=1000,
+        level_limit=None,
+        ctx=None,
+    ):
         base = f"{uri.rstrip('/')}/"
         entries = []
         for stored in self.files:
             if stored.startswith(base):
-                rel = stored[len(base):]
+                rel = stored[len(base) :]
                 entries.append({"rel_path": rel, "isDir": False, "uri": stored})
         return entries
+
+    async def stat(self, uri, *, ctx=None, skip_count=True):
+        if uri in self.files:
+            return {"uri": uri, "isDir": False}
+        raise FileNotFoundError(uri)
 
 
 class _RecordingVikingDB(_DummyVikingDB):
@@ -59,8 +72,12 @@ class _RecordingVikingDB(_DummyVikingDB):
         self._records = records
         self.deleted_uris = []
 
+    async def get_l2_diff_records_under_uri(self, target_uri, *, ctx):
+        prefix = target_uri.rstrip("/") + "/"
+        return {uri: record for uri, record in self._records.items() if uri.startswith(prefix)}
+
     async def get_l2_diff_records_by_uris(self, uris, *, ctx):
-        return {u: self._records[u] for u in uris if u in self._records}
+        return {uri: self._records[uri] for uri in uris if uri in self._records}
 
     async def delete_uris(self, ctx, uris):
         self.deleted_uris.extend(uris)
@@ -90,9 +107,7 @@ async def _artifact(tmp_path, files: dict[str, bytes]):
 async def test_incremental_noop_uploads_nothing(tmp_path, monkeypatch):
     # Same content as target (matching md5) -> no writes, no deletes.
     store, ref = await _artifact(tmp_path, {"a.py": b"print('a')", "b.py": b"print('b')"})
-    agfs = _RecordingAgfs(
-        {f"{_ROOT}/a.py": b"print('a')", f"{_ROOT}/b.py": b"print('b')"}
-    )
+    agfs = _RecordingAgfs({f"{_ROOT}/a.py": b"print('a')", f"{_ROOT}/b.py": b"print('b')"})
     vikingdb = _RecordingVikingDB(
         {
             f"{_ROOT}/a.py": {"md5": content_md5(b"print('a')"), "abstract": ""},
@@ -120,9 +135,7 @@ async def test_incremental_noop_uploads_nothing(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_incremental_modified_uploads_only_changed(tmp_path, monkeypatch):
     store, ref = await _artifact(tmp_path, {"a.py": b"print('A2')", "b.py": b"print('b')"})
-    agfs = _RecordingAgfs(
-        {f"{_ROOT}/a.py": b"print('a')", f"{_ROOT}/b.py": b"print('b')"}
-    )
+    agfs = _RecordingAgfs({f"{_ROOT}/a.py": b"print('a')", f"{_ROOT}/b.py": b"print('b')"})
     vikingdb = _RecordingVikingDB(
         {
             f"{_ROOT}/a.py": {"md5": content_md5(b"print('a')"), "abstract": ""},
@@ -152,9 +165,7 @@ async def test_incremental_modified_uploads_only_changed(tmp_path, monkeypatch):
 async def test_incremental_deletes_removed_file_and_vector(tmp_path, monkeypatch):
     # New artifact drops b.py -> target b.py file and its vector are removed.
     store, ref = await _artifact(tmp_path, {"a.py": b"print('a')"})
-    agfs = _RecordingAgfs(
-        {f"{_ROOT}/a.py": b"print('a')", f"{_ROOT}/b.py": b"print('b')"}
-    )
+    agfs = _RecordingAgfs({f"{_ROOT}/a.py": b"print('a')", f"{_ROOT}/b.py": b"print('b')"})
     vikingdb = _RecordingVikingDB(
         {
             f"{_ROOT}/a.py": {"md5": content_md5(b"print('a')"), "abstract": ""},
@@ -175,6 +186,63 @@ async def test_incremental_deletes_removed_file_and_vector(tmp_path, monkeypatch
 
     assert f"{_ROOT}/b.py" in agfs.removed
     assert result.deleted == ["b.py"]
+
+
+@pytest.mark.asyncio
+async def test_incremental_deletes_chunk_only_orphan(tmp_path, monkeypatch):
+    store, ref = await _artifact(tmp_path, {"a.py": b"print('a')"})
+    agfs = _RecordingAgfs({f"{_ROOT}/a.py": b"print('a')"})
+    chunk_uri = f"{_ROOT}/ghost.py#chunk_0001"
+    vikingdb = _RecordingVikingDB(
+        {
+            f"{_ROOT}/a.py": {
+                "md5": content_md5(b"print('a')"),
+                "abstract": "",
+            },
+            chunk_uri: {"md5": "", "abstract": "stale chunk"},
+        }
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: agfs)
+
+    result = await ResourceProcessor(
+        vikingdb=vikingdb, media_storage=None
+    )._apply_local_incremental(
+        output_store=store,
+        artifact_ref=ref,
+        doc_rel="repository",
+        root_uri=_ROOT,
+        ctx=_Ctx(),
+        lease_ref=None,
+    )
+
+    assert result.orphan_vectors == ["ghost.py#chunk_0001"]
+    assert vikingdb.deleted_uris == [chunk_uri]
+
+
+@pytest.mark.asyncio
+async def test_incremental_flat_file_updates_exact_target(tmp_path, monkeypatch):
+    store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
+    ref = await store.create_artifact(root_type="dir")
+    await store.write_bytes(ref, "document/report.md", b"new")
+    agfs = _RecordingAgfs({_ROOT: b"old"})
+    vikingdb = _RecordingVikingDB({_ROOT: {"md5": content_md5(b"old"), "abstract": "old summary"}})
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: agfs)
+
+    result = await ResourceProcessor(
+        vikingdb=vikingdb, media_storage=None
+    )._apply_local_incremental(
+        output_store=store,
+        artifact_ref=ref,
+        doc_rel="document/report.md",
+        root_uri=_ROOT,
+        root_is_file=True,
+        ctx=_Ctx(),
+        lease_ref=None,
+    )
+
+    assert agfs.files[_ROOT] == b"new"
+    assert result.modified == [""]
+    assert result.abstracts_by_rel == {"": "old summary"}
 
 
 def test_apply_result_to_changes_maps_to_target_uris():
@@ -198,6 +266,16 @@ def test_apply_result_to_changes_maps_to_target_uris():
     }
 
 
+def test_flat_file_apply_result_maps_empty_relative_path_to_root_uri():
+    from openviking.storage.resource_diff_apply import ApplyResult
+
+    result = ApplyResult(modified=[""], md5_by_rel={"": "new-md5"}, abstracts_by_rel={"": "old"})
+
+    assert ResourceProcessor._apply_result_to_changes(result, _ROOT) == {"modified": [_ROOT]}
+    assert ResourceProcessor._apply_result_to_file_md5s(result, _ROOT) == {_ROOT: "new-md5"}
+    assert ResourceProcessor._apply_result_to_file_abstracts(result, _ROOT) == {_ROOT: "old"}
+
+
 def test_apply_result_to_changes_empty_when_noop():
     from openviking.storage.resource_diff_apply import ApplyResult
 
@@ -205,6 +283,14 @@ def test_apply_result_to_changes_empty_when_noop():
         ApplyResult(unchanged=["a.py", "b.py"]), _ROOT
     )
     assert changes == {}
+
+
+def test_apply_result_noop_requires_no_diff_side_effects():
+    from openviking.storage.resource_diff_apply import ApplyResult
+
+    assert ResourceProcessor._apply_result_is_noop(ApplyResult(unchanged=["a.py"]))
+    assert not ResourceProcessor._apply_result_is_noop(ApplyResult(orphan_vectors=["ghost.py"]))
+    assert not ResourceProcessor._apply_result_is_noop(ApplyResult(structural=["old-file"]))
 
 
 def test_apply_result_to_changes_reindexes_repair_files():

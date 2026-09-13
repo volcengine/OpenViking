@@ -177,6 +177,105 @@ async def test_local_artifact_is_cleaned_after_semantic_success(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
+async def test_local_incremental_reads_final_target_bytes_after_apply(monkeypatch, tmp_path):
+    from openviking.parse.output import LocalParseOutputStore, ParseArtifactRef
+
+    store = LocalParseOutputStore(local_root=str(tmp_path))
+    raw_ref = await store.create_artifact()
+    ref = ParseArtifactRef(
+        backend=raw_ref.backend,
+        root=raw_ref.root,
+        resource_rel="repository",
+        root_type=raw_ref.root_type,
+    )
+    await store.write_bytes(ref, "repository/a.md", b"unrewritten")
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        _FakeDagExecutor,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            storage=SimpleNamespace(
+                parse_output=SimpleNamespace(resolved_local_root=lambda: str(tmp_path))
+            )
+        ),
+    )
+    _FakeDagExecutor.calls = []
+    processor = SemanticProcessor()
+    processor._enqueue_parent_refresh = AsyncMock()
+    msg = SemanticMsg(
+        uri="viking://resources/root",
+        context_type="resource",
+        target_preexisting=True,
+        changes={"modified": ["viking://resources/root/a.md"]},
+        artifact_ref=ref.to_dict(),
+        artifact_files=["a.md"],
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert _FakeDagExecutor.calls[0]["prefer_target_files"] is True
+
+
+@pytest.mark.asyncio
+async def test_local_initial_reads_final_target_bytes_after_apply(monkeypatch, tmp_path):
+    from openviking.parse.output import LocalParseOutputStore, ParseArtifactRef
+
+    store = LocalParseOutputStore(local_root=str(tmp_path))
+    raw_ref = await store.create_artifact()
+    ref = ParseArtifactRef(
+        backend=raw_ref.backend,
+        root=raw_ref.root,
+        resource_rel="repository",
+        root_type=raw_ref.root_type,
+    )
+    await store.write_bytes(ref, "repository/a.md", b"unrewritten")
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        _FakeDagExecutor,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(
+            storage=SimpleNamespace(
+                parse_output=SimpleNamespace(resolved_local_root=lambda: str(tmp_path))
+            )
+        ),
+    )
+    _FakeDagExecutor.calls = []
+    processor = SemanticProcessor()
+    processor._enqueue_parent_refresh = AsyncMock()
+    msg = SemanticMsg(
+        uri="viking://resources/root",
+        context_type="resource",
+        target_preexisting=False,
+        artifact_ref=ref.to_dict(),
+        artifact_files=["a.md"],
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert _FakeDagExecutor.calls[0]["prefer_target_files"] is True
+
+
+@pytest.mark.asyncio
 async def test_stale_content_write_keeps_file_work_without_directory_aggregation(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",

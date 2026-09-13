@@ -106,6 +106,7 @@ class SemanticProcessor(DequeueHandlerBase):
             await store.cleanup(artifact_ref)
         except Exception as exc:
             logger.warning("Failed to clean local parse artifact: %s", exc)
+
     _dag_stats_by_telemetry_id: Dict[str, DagStats] = {}
     _dag_stats_by_uri: Dict[str, DagStats] = {}
     _dag_stats_order: List[Tuple[str, str]] = []
@@ -540,6 +541,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 artifact_ref=artifact_ref,
                                 artifact_files=msg.artifact_files,
                                 file_abstracts=msg.file_abstracts,
+                                prefer_target_files=(
+                                    artifact_ref is not None and artifact_ref.backend == "local"
+                                ),
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(

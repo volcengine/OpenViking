@@ -585,6 +585,19 @@ class CollectionAdapter(ABC):
 
         return 0
 
+    def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
+        """Count records and reject responses without an explicit total."""
+        coll = self.get_collection()
+        result = coll.aggregate_data(
+            index_name=self._index_name,
+            op="count",
+            filters=self._compile_filter(filter),
+        )
+        parsed_total = self._extract_count_total(result.agg)
+        if parsed_total is None:
+            raise RuntimeError("Vector backend returned an invalid count response")
+        return parsed_total
+
     def search_by_keywords(
         self,
         keywords: Optional[list[str]] = None,
