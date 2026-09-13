@@ -267,9 +267,14 @@ class _SnapshotMixin:
 
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
+        lock_targets = set()
+        for uri in paths:
+            lock_targets.add(
+                await self._existing_lock_target(self._uri_to_path(uri, ctx=real_ctx))
+            )
         lock_paths: List[str] = []
         for path in sorted(
-            {self._uri_to_path(uri, ctx=real_ctx) for uri in paths},
+            lock_targets,
             key=lambda value: (value.count("/"), value),
         ):
             if not any(path == root or path.startswith(f"{root.rstrip('/')}/") for root in lock_paths):
@@ -287,6 +292,28 @@ class _SnapshotMixin:
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
             await self._async_agfs.pathlock_release(lease)
+
+    async def _existing_lock_target(self, path: str) -> str:
+        """Return the nearest existing path to tree-lock for ``path``.
+
+        A tree lock stores its token at ``{path}/.path.ovlock``, so locking a
+        path that no longer exists materializes it as an empty directory.
+        Deletion snapshots legitimately name already-deleted files, so walk up
+        to the closest surviving ancestor instead. The commit itself still
+        receives the original paths, keeping the deletion in history.
+        """
+        current = path.rstrip("/") or "/"
+        while current and current != "/":
+            try:
+                await self._async_agfs.stat(current)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                parent = current.rsplit("/", 1)[0]
+                current = parent or "/"
+                continue
+            return current
+        return current or "/"
 
     async def restore(
         self,

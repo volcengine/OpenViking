@@ -348,3 +348,131 @@ async def test_diff_does_not_treat_missing_storage_object_as_absent():
             to_ref="to",
             ctx=_request_context(),
         )
+
+
+async def test_commit_locks_nearest_existing_ancestor_for_deleted_paths():
+    """A deletion snapshot must not tree-lock the deleted path itself.
+
+    Tree locks live at ``{path}/.path.ovlock``, so locking a path that was just
+    deleted recreates it as an empty directory. Lock the closest surviving
+    ancestor instead; the commit still records the original path.
+    """
+
+    class RecordingAGFS:
+        def __init__(self, existing):
+            self.existing = existing
+            self.locked = None
+            self.commits = []
+            self.released = []
+
+        async def stat(self, path):
+            if path not in self.existing:
+                raise AGFSPathNotFoundError(path)
+            return {"path": path, "is_dir": True}
+
+        async def pathlock_acquire_tree_batch(self, paths):
+            self.locked = list(paths)
+            return "lease-1"
+
+        async def pathlock_release(self, lease):
+            self.released.append(lease)
+
+        async def run(self, operation, **kwargs):
+            self.commits.append((operation, kwargs))
+            return {"result": "created", "commit_oid": "b" * 40}
+
+    class CommitVikingFS:
+        _DEFAULT_GIT_AUTHOR_NAME = "bot"
+        _DEFAULT_GIT_AUTHOR_EMAIL = "bot@example.com"
+
+        def __init__(self, existing):
+            self._async_agfs = RecordingAGFS(existing)
+
+        def _ctx_or_default(self, ctx):
+            return ctx
+
+        def _uri_to_tree_path(self, uri, *, ctx):
+            return uri.removeprefix("viking://")
+
+        def _uri_to_path(self, uri, *, ctx):
+            return "/acct/" + uri.removeprefix("viking://")
+
+        async def _snapshot_scope_uris(self, paths, ctx):
+            return list(paths)
+
+        async def _ensure_access_many(self, uris, ctx, *, action):
+            return None
+
+    deleted = "viking://user/alice/memories/experiences/example.md"
+    vfs = CommitVikingFS({"/acct/user/alice/memories/experiences"})
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="account", user_id="alice"),
+        role=Role.USER,
+    )
+
+    result = await VikingFS.commit(vfs, message="record deletion", paths=[deleted], ctx=ctx)
+
+    assert result["result"] == "created"
+    # Locked the surviving parent, never the deleted file path.
+    assert vfs._async_agfs.locked == ["/acct/user/alice/memories/experiences"]
+    # The deletion itself is still part of the commit.
+    assert vfs._async_agfs.commits[0][1]["paths"] == [
+        "user/alice/memories/experiences/example.md"
+    ]
+    assert vfs._async_agfs.released == ["lease-1"]
+
+
+async def test_commit_locks_the_path_itself_when_it_still_exists():
+    class RecordingAGFS:
+        def __init__(self, existing):
+            self.existing = existing
+            self.locked = None
+
+        async def stat(self, path):
+            if path not in self.existing:
+                raise AGFSPathNotFoundError(path)
+            return {"path": path, "is_dir": False}
+
+        async def pathlock_acquire_tree_batch(self, paths):
+            self.locked = list(paths)
+            return "lease-1"
+
+        async def pathlock_release(self, lease):
+            return None
+
+        async def run(self, operation, **kwargs):
+            return {"result": "created", "commit_oid": "c" * 40}
+
+    class CommitVikingFS:
+        _DEFAULT_GIT_AUTHOR_NAME = "bot"
+        _DEFAULT_GIT_AUTHOR_EMAIL = "bot@example.com"
+
+        def __init__(self, existing):
+            self._async_agfs = RecordingAGFS(existing)
+
+        def _ctx_or_default(self, ctx):
+            return ctx
+
+        def _uri_to_tree_path(self, uri, *, ctx):
+            return uri.removeprefix("viking://")
+
+        def _uri_to_path(self, uri, *, ctx):
+            return "/acct/" + uri.removeprefix("viking://")
+
+        async def _snapshot_scope_uris(self, paths, ctx):
+            return list(paths)
+
+        async def _ensure_access_many(self, uris, ctx, *, action):
+            return None
+
+    uri = "viking://user/alice/memories/experiences/example.md"
+    path = "/acct/user/alice/memories/experiences/example.md"
+    vfs = CommitVikingFS({path})
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="account", user_id="alice"),
+        role=Role.USER,
+    )
+
+    await VikingFS.commit(vfs, message="create", paths=[uri], ctx=ctx)
+
+    assert vfs._async_agfs.locked == [path]
