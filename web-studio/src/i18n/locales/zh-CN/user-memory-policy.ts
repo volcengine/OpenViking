@@ -1,0 +1,108 @@
+export default {
+  simple: {
+    self: '当前 User 记忆',
+    selfHint: 'self.enabled · 包含用户信息和 Agent 经验',
+    peer: 'Peer 记忆',
+    peerHint: 'peer.enabled · 为参与者分别保存记忆',
+    working_memory: '会话摘要',
+    working_memoryHint: 'working_memory.enabled · 生成归档摘要',
+    typesHint:
+      'memory_types · 对 User 和 Peer 共用；Agent 经验三种类型联动，Peer 不抽取 cases。类型是否可用由服务端校验。',
+    unlimited: '不限类型（不传 memory_types）',
+    defaults: '选择默认类型',
+    clear: '清空',
+  },
+  title: '记忆策略',
+  choose: '选择记忆抽取策略',
+  back: '返回',
+  change: '更换',
+  select: '选择',
+  selected: '已选择',
+  enabled: '已开启',
+  disabled: '已关闭',
+  userMemory: '用户记忆抽取',
+  agentMemory: 'Agent 经验记忆抽取',
+  preview: 'User 记忆目录预览',
+  previewHint: '目录仅作示意，实际文件在记忆抽取后生成。',
+  edit: '修改记忆策略',
+  editUser: '修改 {{user}} 的记忆策略',
+  saved: '记忆策略已更新',
+  retry: '加载失败 · 重试',
+  saveHint: '选择后立即保存，已有记忆会保留。',
+  custom: {
+    userDescription: '选择要记住的用户画像、偏好、事件和实体。',
+    peerLabel: 'Peer 记忆抽取',
+    peerDescription:
+      '为不同参与者分别保存所选类型的记忆。与上面的用户记忆、Agent 经验记忆共用类型范围；需要应用标记参与者（peer_id），不抽取案例。',
+    advancedSettings: '高级设置',
+    selfStorage: '保存到当前 User',
+    selfStorageHint:
+      '控制所选用户记忆、Agent 经验等是否在当前 User 下积累。关闭后仍可按 Peer 开关分别保存参与者记忆。',
+    otherTypes: '其他记忆类型',
+    serverManaged: '按服务端已启用类型抽取；切换到“指定类型”可自行选择。',
+
+    save: '保存修改',
+    extraHint:
+      '填写管理员已在服务端配置的类型标识。这里只加入抽取范围，不会创建新的记忆类型。',
+    advanced: '高级：引用扩展类型',
+    allHint: '使用服务端当前及以后新增或启用的类型。无需逐项选择。',
+    specified: '指定类型',
+    typesTitle: '长期记忆类型',
+    workingHint:
+      '会话提交归档时，将这段对话整理成摘要，便于后续回顾。关闭后不生成这份摘要，仍可按上方设置抽取长期记忆。',
+    workingEnable: '生成会话摘要',
+    peerHint:
+      '同一个 User 服务多人时，为每个人分别积累记忆，例如客服分别记住各位客户的偏好。需要应用在消息中标记参与者（peer_id）。',
+    selfHint:
+      '在多次会话中积累这个 User 的记忆，例如个人助理记住你的偏好，或任务 Agent 积累执行经验。',
+    scopeTitle: '长期记忆保存给谁',
+    configurable: '可配置',
+    name: '自定义策略',
+    edit: '自定义记忆策略',
+    self: '为当前 User 积累记忆',
+    peer: '为不同参与者分别记忆',
+    working_memory: '会话摘要',
+    all: '全部已启用类型',
+    availability:
+      '以下为内置类型参考，当前服务端可用类型以保存时校验为准。已有扩展类型会保留，也可手动添加。',
+    defaultOff: '默认关闭',
+    linked: 'cases、trajectories、experiences 联动选择；Peer 不抽取 cases。',
+    empty: '未选择任何类型：不抽取长期记忆，工作记忆由上方开关控制。',
+    extra: '服务端已注册的扩展类型名称',
+    add: '加入选择',
+    apply: '使用此策略',
+    description: '按自定义范围和记忆类型抽取。',
+    examples: '可独立配置当前 User、Peer 和工作记忆。',
+  },
+  general: {
+    name: '通用策略',
+    description:
+      '同时抽取用户记忆和 Agent 执行经验，可按 Session 灵活调整抽取范围。开启 Peer 记忆抽取。',
+    examples: '示例 Agent：个人 Coding Agent、群聊 Agent',
+  },
+  personal: {
+    name: '用户个人记忆',
+    description:
+      '长期积累本人的画像、偏好、事件和实体，关闭 Agent 经验和 Peer 记忆抽取。',
+    examples: '示例 Agent：个人助理、长期陪伴助手',
+  },
+  agent: {
+    name: 'Agent 经验记忆',
+    description:
+      '积累跨任务可复用的案例、执行轨迹和经验，关闭用户个人记忆和 Peer 记忆抽取。',
+    examples: '示例 Agent：任务执行 Agent、Coding Agent',
+  },
+  directories: {
+    identity: 'Agent 身份',
+    soul: 'Agent 价值观与边界',
+    skills: '技能使用记忆',
+    tools: '工具使用记忆',
+    profile: 'User 画像',
+    preferences: '偏好与习惯',
+    events: '发生过的事',
+    entities: '常提到的人、事、物',
+    cases: '可训练或评估的案例样本',
+    trajectories: '执行过程与结果',
+    experiences: 'Agent 可复用经验',
+  },
+} as const
