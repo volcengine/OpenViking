@@ -35,6 +35,43 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
   }
 }
 
+void test_search_invalid_dsl_throws() {
+  SPDLOG_INFO("[Running] test_search_invalid_dsl_throws...");
+
+  const std::string config = R"({
+        "CollectionName": "search_invalid_dsl_throws",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 4,
+            "Dimension": 1,
+            "Distance": "l2",
+            "Quant": "float"
+        }
+    })";
+
+  IndexEngine engine(config);
+  if (!engine.is_valid()) {
+    SPDLOG_ERROR("Search engine initialization failed");
+    exit(1);
+  }
+
+  SearchRequest req;
+  req.query = {0.1f};
+  req.topk = 1;
+  req.dsl = "{";
+
+  try {
+    (void)engine.search(req);
+    SPDLOG_ERROR("Search accepted invalid DSL");
+    exit(1);
+  } catch (const std::runtime_error&) {
+  }
+
+  SPDLOG_INFO("[Passed] test_search_invalid_dsl_throws");
+}
+
 void test_basic_workflow() {
   SPDLOG_INFO("[Running] test_basic_workflow...");
 
@@ -585,6 +622,7 @@ void test_paged_store_scan() {
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  test_search_invalid_dsl_throws();
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
