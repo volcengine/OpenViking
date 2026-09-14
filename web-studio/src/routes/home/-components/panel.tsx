@@ -63,3 +63,23 @@ export function EmptyState({ children }: { children: ReactNode }) {
     </div>
   )
 }
+
+export function RequestError({
+  summary,
+  detail,
+}: {
+  summary: string
+  detail?: string
+}) {
+  const message = detail?.trim()
+  return (
+    <div className="min-w-0">
+      <p>{summary}</p>
+      {message ? (
+        <p className="mt-1 whitespace-pre-wrap break-words text-xs">
+          {message}
+        </p>
+      ) : null}
+    </div>
+  )
+}

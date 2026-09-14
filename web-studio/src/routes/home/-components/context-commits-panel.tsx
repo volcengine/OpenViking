@@ -19,7 +19,7 @@ import {
   computeCommitHeatmapStats,
   normalizeCommitHeatmapData,
 } from '../-lib/normalize'
-import { EmptyState, Panel, SectionHeading } from './panel'
+import { EmptyState, Panel, RequestError, SectionHeading } from './panel'
 
 const ContextCommitsHeatmap = lazy(() =>
   import('./context-commits-heatmap').then((module) => ({
@@ -31,6 +31,7 @@ export function ContextCommitsPanel({
   data,
   disabled: disabledProp,
   disabledMessage,
+  errorMessage,
   isError,
   isLoading,
   t,
@@ -38,6 +39,7 @@ export function ContextCommitsPanel({
   data: ConsoleSeries<ContextCommitItem> | undefined
   disabled?: boolean
   disabledMessage?: string
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -82,7 +84,9 @@ export function ContextCommitsPanel({
       {isLoading ? (
         <Skeleton className="h-72 w-full" />
       ) : isError ? (
-        <EmptyState>{t('requestFailed')}</EmptyState>
+        <EmptyState>
+          <RequestError summary={t('requestFailed')} detail={errorMessage} />
+        </EmptyState>
       ) : disabled ? (
         <EmptyState>{disabledMessage ?? t('usageDisabled')}</EmptyState>
       ) : items.length === 0 ? (

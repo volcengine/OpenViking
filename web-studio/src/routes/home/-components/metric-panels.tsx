@@ -12,7 +12,7 @@ import type {
   TokenCounts,
 } from '../-types/dashboard'
 import { asNumber, formatNumber } from '../-lib/format'
-import { DetailRow, Panel } from './panel'
+import { DetailRow, Panel, RequestError } from './panel'
 
 function parseDisplayNumber(value: string): number | null {
   const normalized = value.replace(/,/g, '').trim()
@@ -29,6 +29,7 @@ function MetricPanel({
   children,
   description,
   icon: Icon,
+  errorMessage,
   isError,
   isLoading,
   title,
@@ -37,6 +38,7 @@ function MetricPanel({
   children?: ReactNode
   description: string
   icon: ComponentType<{ className?: string; style?: CSSProperties }>
+  errorMessage?: string
   isError?: boolean
   isLoading?: boolean
   title: string
@@ -114,7 +116,9 @@ function MetricPanel({
         {isLoading ? (
           <Skeleton className="mt-4 h-10 w-24" />
         ) : isError ? (
-          <p className="mt-4 text-sm text-destructive">{value}</p>
+          <div className="mt-4 text-sm text-destructive">
+            <RequestError summary={value} detail={errorMessage} />
+          </div>
         ) : (
           <div className="mt-4 text-4xl font-bold leading-none tracking-normal tabular-nums text-foreground">
             <span ref={valueRef}>{value}</span>
@@ -135,6 +139,7 @@ export function ContextDataPanel({
   data,
   disabled,
   disabledMessage,
+  errorMessage,
   isError,
   isLoading,
   t,
@@ -142,6 +147,7 @@ export function ContextDataPanel({
   data: ContextCounts | undefined
   disabled: boolean
   disabledMessage: string
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -151,6 +157,7 @@ export function ContextDataPanel({
     <MetricPanel
       description={t('contextData.description')}
       icon={Database}
+      errorMessage={errorMessage}
       isError={isError}
       isLoading={isLoading}
       title={t('contextData.title')}
@@ -182,6 +189,7 @@ export function TodayTokensPanel({
   data,
   disabled,
   disabledMessage,
+  errorMessage,
   isError,
   isLoading,
   t,
@@ -189,6 +197,7 @@ export function TodayTokensPanel({
   data: TokenCounts | undefined
   disabled: boolean
   disabledMessage: string
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -198,6 +207,7 @@ export function TodayTokensPanel({
     <MetricPanel
       description={t('todayTokens.description')}
       icon={Coins}
+      errorMessage={errorMessage}
       isError={isError}
       isLoading={isLoading}
       title={t('todayTokens.title')}
@@ -229,6 +239,7 @@ export function TodayRetrievalsPanel({
   data,
   disabled,
   disabledMessage,
+  errorMessage,
   isError,
   isLoading,
   t,
@@ -236,6 +247,7 @@ export function TodayRetrievalsPanel({
   data: RetrievalCounts | undefined
   disabled: boolean
   disabledMessage: string
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -245,6 +257,7 @@ export function TodayRetrievalsPanel({
     <MetricPanel
       description={t('todayRetrievals.description')}
       icon={Search}
+      errorMessage={errorMessage}
       isError={isError}
       isLoading={isLoading}
       title={t('todayRetrievals.title')}
