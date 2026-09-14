@@ -87,11 +87,13 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 openviking-server
 ```
 
-## 使用 Systemd 部署服务（推荐）
+## 本地服务常驻运行
 
-对于 Linux 系统，可以使用 Systemd 服务来管理 OpenViking，实现自动重启、开机自启等功能。首先，你应该已经成功安装并配置了 OpenViking 服务器，确保它可以正常运行，再进行服务化部署。
+### Linux：systemd（推荐）
 
-### 创建 Systemd 服务文件
+在 Linux 上，systemd 可以让 OpenViking 在退出终端后继续运行、异常退出后自动重启，并随系统启动。请先完成 OpenViking 的安装和配置，确认 `openviking-server` 能在前台正常启动。运行 `command -v openviking-server`，并将下面 `ExecStart` 替换为返回的绝对路径。
+
+#### 创建 systemd 服务文件
 
 创建 `/etc/systemd/system/openviking.service` 文件：
 
@@ -108,7 +110,7 @@ User=your-username
 Group=your-group
 # 替换为工作目录
 WorkingDirectory=/var/lib/openviking
-# 以下两种启动方式二选一
+# 替换为 command -v openviking-server 的输出
 ExecStart=/path/to/your/python/bin/openviking-server
 Restart=always
 RestartSec=5
@@ -119,7 +121,7 @@ Environment="OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf"
 WantedBy=multi-user.target
 ```
 
-### 管理服务
+#### 管理服务
 
 创建好服务文件后，使用以下命令管理 OpenViking 服务：
 
@@ -139,6 +141,67 @@ sudo systemctl status openviking.service
 # 查看服务日志
 sudo journalctl -u openviking.service -f
 ```
+
+### macOS：launchd
+
+用户级 LaunchAgent 可以让 OpenViking 在关闭终端后继续运行、异常退出后自动重启，并在该用户登录时自动加载；它不会在用户登录前运行。请先确认服务能在前台正常启动，再运行 `command -v openviking-server` 获取可执行文件的绝对路径。
+
+#### 创建 LaunchAgent
+
+创建 `~/Library/LaunchAgents/ai.openviking.server.plist`，内容如下。请将所有 `/Users/your-name` 路径（包括可执行文件路径）替换为本机绝对路径；launchd 不会展开 `~`。
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.openviking.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/your-name/.local/bin/openviking-server</string>
+    <string>--config</string>
+    <string>/Users/your-name/.openviking/ov.conf</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/your-name/.openviking</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/your-name/Library/Logs/OpenViking.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/your-name/Library/Logs/OpenViking.error.log</string>
+</dict>
+</plist>
+```
+
+校验并加载配置：
+
+```bash
+plutil -lint ~/Library/LaunchAgents/ai.openviking.server.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.openviking.server.plist
+```
+
+#### 管理 LaunchAgent
+
+```bash
+# 查看状态
+launchctl print gui/$(id -u)/ai.openviking.server
+
+# 修改 OpenViking 配置后重启
+launchctl kickstart -k gui/$(id -u)/ai.openviking.server
+
+# 持续查看日志
+tail -f ~/Library/Logs/OpenViking.log ~/Library/Logs/OpenViking.error.log
+
+# 停止并卸载
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/ai.openviking.server.plist
+```
+
+如果修改了 plist 文件本身，请先执行 `bootout`，再执行 `bootstrap`，让 launchd 重新加载服务定义。
 
 ## 连接客户端
 
