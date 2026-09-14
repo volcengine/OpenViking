@@ -301,6 +301,7 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
     vlm_collector = VLMCollector()
     session_collector = SessionCollector()
     resource_collector = ResourceIngestionCollector()
+    resource_collector.collect(registry)
     retrieval_collector = RetrievalCollector()
     encryption_collector = EncryptionCollector()
     telemetry_bridge_collector = TelemetryBridgeCollector()
