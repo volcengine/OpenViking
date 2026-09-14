@@ -456,7 +456,14 @@ async def test_glob_filters_and_projects_tags_before_applying_node_limit(request
         "count": 1,
     }
     assert viking_fs.glob.await_args.kwargs["extra_fields"] == []
-    assert viking_fs.glob.await_args.kwargs["node_limit"] is None
+    assert viking_fs.glob.await_args.kwargs["node_limit"] == 1
+    assert viking_fs.glob.await_args.kwargs["tag_filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
 
 
 @pytest.mark.asyncio

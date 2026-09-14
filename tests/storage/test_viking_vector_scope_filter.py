@@ -6,9 +6,11 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import And, Eq, In, Or, PathScope
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
+from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.viking_vector_index_backend import (
+    VikingVectorIndexBackend,
+    _SingleAccountBackend,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -49,6 +51,15 @@ def _tenant_filter(ctx: RequestContext):
 class _FailingAsyncAdapter:
     async def call(self, method_name, **kwargs):
         raise RuntimeError(f"{method_name} failed")
+
+
+class _RecordingAsyncAdapter:
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, method_name, **kwargs):
+        self.calls.append((method_name, kwargs))
+        return []
 
 
 def test_descendant_target_elides_only_visible_root_path_filter():
@@ -374,3 +385,26 @@ async def test_search_by_random_propagates_adapter_errors():
 
     with pytest.raises(RuntimeError, match="search_by_random failed"):
         await backend.search_by_random(filter=Eq("uri", "viking://resources/a.md"))
+
+
+@pytest.mark.asyncio
+async def test_search_by_random_reuses_account_filter_for_raw_dsl():
+    backend = object.__new__(_SingleAccountBackend)
+    backend._bound_account_id = "acct"
+    backend._async_adapter = _RecordingAsyncAdapter()
+    raw_filter = {"op": "must", "field": "uri", "conds": ["viking://resources"]}
+
+    await backend.search_by_random(filter=raw_filter)
+
+    assert backend._async_adapter.calls == [
+        (
+            "search_by_random",
+            {
+                "filter": And([Eq("account_id", "acct"), RawDSL(raw_filter)]),
+                "limit": 10,
+                "offset": 0,
+                "output_fields": None,
+                "advance": None,
+            },
+        )
+    ]

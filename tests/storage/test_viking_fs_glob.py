@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import PathScope
+from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -173,12 +173,7 @@ async def test_glob_uses_remote_vikingdb_when_count_reaches_threshold(monkeypatc
     assert call["limit"] == 3
     assert call["offset"] == 0
     assert call["output_fields"] == ["uri", "level", "name"]
-    assert call["filter"] == {
-        "op": "must",
-        "field": "uri",
-        "conds": ["viking://resources/docs"],
-        "para": "-d=-1",
-    }
+    assert call["filter"] == PathScope("uri", "viking://resources/docs", depth=-1)
     assert call["advance"] == {
         "post_process_input_limit": 1000000,
         "post_process_ops": [
@@ -193,7 +188,7 @@ async def test_glob_uses_remote_vikingdb_when_count_reaches_threshold(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_glob_remote_uses_limit_1000_when_node_limit_is_none(monkeypatch, fs):
+async def test_glob_remote_uses_limit_100000_when_node_limit_is_none(monkeypatch, fs):
     vector_store = _RemoteGlobVectorStore([], count=1000)
     fs.vector_store = vector_store
     fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
@@ -201,8 +196,8 @@ async def test_glob_remote_uses_limit_1000_when_node_limit_is_none(monkeypatch, 
     await fs.glob("**/*.md", uri="viking://resources", node_limit=None, ctx=_default_ctx())
 
     call = vector_store.random_calls[0]
-    assert call["limit"] == 1000
-    assert call["advance"]["post_process_ops"][0]["stop_after_matches"] == 1000
+    assert call["limit"] == 100000
+    assert call["advance"]["post_process_ops"][0]["stop_after_matches"] == 100000
 
 
 @pytest.mark.asyncio
@@ -478,7 +473,7 @@ async def test_glob_remote_filters_hidden_files_but_keeps_hidden_dir_children(mo
 
 
 @pytest.mark.asyncio
-async def test_glob_remote_absolute_pattern_uses_pattern_prefix_as_filter(monkeypatch, fs):
+async def test_glob_remote_leading_slash_stays_relative_to_request_uri(monkeypatch, fs):
     vector_store = _RemoteGlobVectorStore(
         [{"uri": "viking://resources/docs/a.md", "level": 2, "name": "a.md"}],
         count=1000,
@@ -487,7 +482,7 @@ async def test_glob_remote_absolute_pattern_uses_pattern_prefix_as_filter(monkey
     fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
 
     result = await fs.glob(
-        "/resources/docs/**/*.md",
+        "/docs/**/*.md",
         uri="viking://resources",
         node_limit=2,
         ctx=_default_ctx(),
@@ -495,13 +490,158 @@ async def test_glob_remote_absolute_pattern_uses_pattern_prefix_as_filter(monkey
 
     assert result == {"matches": ["viking://resources/docs/a.md"], "count": 1}
     call = vector_store.random_calls[0]
-    assert call["filter"] == {
-        "op": "must",
-        "field": "uri",
-        "conds": ["viking://resources/docs"],
-        "para": "-d=-1",
-    }
+    assert call["filter"] == PathScope("uri", "viking://resources/docs", depth=-1)
     assert call["advance"]["post_process_ops"][0]["pattern"] == "/resources/docs/**/*.md"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pattern",
+    ["./docs/**/*.md", "docs//**/*.md"],
+)
+async def test_glob_remote_normalizes_dot_and_empty_path_segments(fs, pattern):
+    vector_store = _RemoteGlobVectorStore(
+        [{"uri": "viking://resources/docs/a.md", "level": 2, "name": "a.md"}],
+        count=1000,
+    )
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
+
+    result = await fs.glob(
+        pattern,
+        uri="viking://resources",
+        node_limit=2,
+        ctx=_default_ctx(),
+    )
+
+    assert result == {"matches": ["viking://resources/docs/a.md"], "count": 1}
+    call = vector_store.random_calls[0]
+    assert call["filter"] == PathScope("uri", "viking://resources/docs", depth=-1)
+    assert call["advance"]["post_process_ops"][0]["pattern"] == ("/resources/docs/**/*.md")
+
+
+@pytest.mark.asyncio
+async def test_glob_auto_keeps_dot_only_pattern_validation_in_fs(monkeypatch, fs):
+    vector_store = _RemoteGlobVectorStore([], count=1000)
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=0)
+
+    async def fake_glob_directory(_path, pattern, **_kwargs):
+        raise InvalidArgumentError(f"invalid glob pattern: {pattern}")
+
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
+
+    with pytest.raises(InvalidArgumentError, match="invalid glob pattern"):
+        await fs.glob("././", uri="viking://resources", ctx=_default_ctx())
+
+    assert vector_store.random_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pattern", ["/", "///"])
+async def test_glob_auto_keeps_separator_only_pattern_in_fs(monkeypatch, fs, pattern):
+    vector_store = _RemoteGlobVectorStore([], count=1000)
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=0)
+    fs_calls = []
+
+    async def fake_glob_directory(_path, received_pattern, **_kwargs):
+        fs_calls.append(received_pattern)
+        return {"entries": [], "next_token": None}
+
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
+
+    assert await fs.glob(pattern, uri="viking://resources", ctx=_default_ctx()) == {
+        "matches": [],
+        "count": 0,
+    }
+    assert fs_calls == [pattern]
+    assert vector_store.random_calls == []
+
+
+@pytest.mark.asyncio
+async def test_glob_remote_pushes_tag_filter_before_limit(fs):
+    vector_store = _RemoteGlobVectorStore(
+        [{"uri": "viking://resources/b.md", "level": 2, "name": "b.md"}],
+        count=1000,
+    )
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
+    tag_filter = {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
+            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
+        ],
+    }
+
+    result = await fs.glob(
+        "**/*.md",
+        uri="viking://resources",
+        node_limit=1,
+        ctx=_default_ctx(),
+        extra_fields=[],
+        tag_filter=tag_filter,
+    )
+
+    assert result["count"] == 1
+    call = vector_store.random_calls[0]
+    assert call["limit"] == 2
+    assert call["filter"] == And(
+        [
+            PathScope("uri", "viking://resources", depth=-1),
+            RawDSL(tag_filter),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_glob_remote_tag_failure_falls_back_to_unbounded_fs(monkeypatch, fs):
+    vector_store = _FailingRemoteGlobVectorStore([], count=1000)
+    fs.vector_store = vector_store
+    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
+    calls = []
+
+    async def fake_glob_directory(path, pattern, **kwargs):
+        calls.append({"path": path, "pattern": pattern, **kwargs})
+        return {
+            "entries": [
+                {
+                    "path": "/local/test_account/resources/a.md",
+                    "name": "a.md",
+                    "is_dir": False,
+                },
+                {
+                    "path": "/local/test_account/resources/b.md",
+                    "name": "b.md",
+                    "is_dir": False,
+                },
+            ],
+            "next_token": None,
+        }
+
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
+
+    async def fake_stat(uri, **_kwargs):
+        return {
+            "uri": uri,
+            "name": uri.rsplit("/", 1)[-1],
+            "isDir": False,
+        }
+
+    monkeypatch.setattr(fs, "stat", fake_stat)
+
+    result = await fs.glob(
+        "**/*.md",
+        uri="viking://resources",
+        node_limit=1,
+        ctx=_default_ctx(),
+        extra_fields=[],
+        tag_filter={"op": "must", "field": "search_tags", "conds": ["team=search"]},
+    )
+
+    assert result["count"] == 2
+    assert calls[0]["page_size"] > 1
 
 
 @pytest.mark.asyncio
@@ -619,23 +759,27 @@ async def test_glob_trusts_backend_glob_matches(monkeypatch, fs):
 
 
 @pytest.mark.asyncio
-async def test_glob_rejects_empty_pattern(fs):
-    with pytest.raises(InvalidArgumentError):
-        await fs.glob("", uri="viking://resources", ctx=_default_ctx())
+@pytest.mark.parametrize("pattern", ["file].md", "file[]].md"])
+async def test_glob_fs_preserves_globset_compatible_closing_brackets(monkeypatch, fs, pattern):
+    calls = []
+
+    async def fake_glob_directory(path, received_pattern, **kwargs):
+        calls.append({"path": path, "pattern": received_pattern, **kwargs})
+        return {"entries": [], "next_token": None}
+
+    monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
+
+    assert await fs.glob(pattern, uri="viking://resources", ctx=_default_ctx()) == {
+        "matches": [],
+        "count": 0,
+    }
+    assert calls[0]["pattern"] == pattern
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("pattern", ["[", "foo[bar", "[]", "{", "foo}"])
-async def test_glob_rejects_invalid_pattern_before_remote_search(fs, pattern):
-    vector_store = _RemoteGlobVectorStore([], count=1000)
-    fs.vector_store = vector_store
-    fs.glob_config = SimpleNamespace(engine="auto", switch_to_remote_threshold=1000)
-
+async def test_glob_rejects_empty_pattern(fs):
     with pytest.raises(InvalidArgumentError):
-        await fs.glob(pattern, uri="viking://resources", ctx=_default_ctx())
-
-    assert vector_store.count_calls == []
-    assert vector_store.random_calls == []
+        await fs.glob("", uri="viking://resources", ctx=_default_ctx())
 
 
 @pytest.mark.asyncio

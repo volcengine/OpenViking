@@ -725,18 +725,9 @@ class _SingleAccountBackend:
         advance: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         try:
-            if self._bound_account_id:
-                account_filter = Eq("account_id", self._bound_account_id)
-                if filter:
-                    if isinstance(filter, dict):
-                        filter = RawDSL(filter)
-                    filter = And([account_filter, filter])
-                else:
-                    filter = account_filter
-
             return await self._async_adapter.call(
                 "search_by_random",
-                filter=filter,
+                filter=self._with_account_filter(filter),
                 limit=limit,
                 offset=offset,
                 output_fields=output_fields,

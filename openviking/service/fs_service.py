@@ -1064,15 +1064,21 @@ class FSService:
         viking_fs = self._ensure_initialized()
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         project_tags = bool(normalized_tags) or include_tags
+        tag_filter = None
+        if normalized_tags:
+            from openviking.utils.tags import build_search_tags_filter
+
+            tag_filter = build_search_tags_filter(normalized_tags)
         result = dict(
             await viking_fs.glob(
                 pattern,
                 uri=uri,
-                node_limit=None if normalized_tags else node_limit,
+                node_limit=node_limit,
                 ctx=ctx,
                 extra_fields=extra_fields
                 if extra_fields is not None
                 else ([] if project_tags else None),
+                tag_filter=tag_filter,
             )
         )
         if not project_tags:

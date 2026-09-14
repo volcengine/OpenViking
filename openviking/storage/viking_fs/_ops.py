@@ -28,7 +28,7 @@ from openviking.storage.abstract_overview import (
     rewrite_abstract_overview_for_transfer,
 )
 from openviking.storage.acl import AclAction, is_acl_uri
-from openviking.storage.expr import PathScope
+from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
@@ -62,7 +62,7 @@ def _glob_match_uri(entry_uri: str, is_dir: Optional[bool]) -> str:
 
 _REMOTE_GLOB_OUTPUT_FIELDS = ["uri", "level", "name"]
 _REMOTE_GLOB_ENTRY_FIELDS = ["size", "mode", "modTime"]
-_REMOTE_GLOB_DEFAULT_LIMIT = 1000
+_REMOTE_GLOB_DEFAULT_LIMIT = 100000
 _REMOTE_GLOB_MAX_LIMIT = 100000
 _REMOTE_GLOB_POST_PROCESS_INPUT_LIMIT = 1000000
 _REMOTE_GLOB_LOCAL_STAT_FIELDS = {
@@ -81,94 +81,19 @@ _REMOTE_GLOB_LOCAL_COMPUTED_FIELDS = {
 _GLOB_SPECIAL_CHARS = set("*?[{")
 
 
-def _normalize_glob_pattern_for_validation(pattern: str) -> str:
-    return "/".join(
-        segment for segment in pattern.split("/") if segment and segment != "."
-    )
-
-
-def _find_unescaped(value: str, target: str, start: int) -> int:
-    escaped = False
-    for index in range(start, len(value)):
-        char = value[index]
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if char == target:
-            return index
-    return -1
-
-
-def _validate_glob_pattern(pattern: str) -> None:
-    """Reject invalid glob patterns before the remote VikingDB path_glob call.
-
-    Rust/AGFS remains the source of truth for full glob matching. This guard
-    mirrors the public validation cases so clearly invalid patterns do not
-    reach VikingDB before the local backend has a chance to reject them.
-    """
-    if pattern == "":
-        raise InvalidArgumentError("empty glob pattern")
-
-    saw_segment = False
-    for segment in pattern.split("/"):
-        if not segment:
-            continue
-        saw_segment = True
-        if segment != ".":
-            break
-    else:
-        if saw_segment:
-            raise InvalidArgumentError("empty glob pattern")
-        return
-
-    normalized = _normalize_glob_pattern_for_validation(pattern)
-    if not normalized:
-        return
-
-    index = 0
-    while index < len(normalized):
-        char = normalized[index]
-        if char == "\\":
-            if index == len(normalized) - 1:
-                raise InvalidArgumentError("invalid glob pattern: dangling escape")
-            index += 2
-            continue
-        if char == "[":
-            end = _find_unescaped(normalized, "]", index + 1)
-            content_start = index + 1
-            if content_start < len(normalized) and normalized[content_start] in {"!", "^"}:
-                content_start += 1
-            if end < 0 or end <= content_start:
-                raise InvalidArgumentError("invalid glob pattern: empty or unclosed class")
-            index = end + 1
-            continue
-        if char == "]":
-            raise InvalidArgumentError("invalid glob pattern: unopened class")
-        if char == "{":
-            end = _find_unescaped(normalized, "}", index + 1)
-            if end < 0 or end == index + 1:
-                raise InvalidArgumentError("invalid glob pattern: empty or unclosed alternate")
-            index = end + 1
-            continue
-        if char == "}":
-            raise InvalidArgumentError("invalid glob pattern: unopened alternate")
-        index += 1
-
-
 def _normalize_uri_for_glob(uri: str) -> str:
     return "viking://" if uri == "viking://" else uri.rstrip("/")
 
 
+def _normalize_glob_path(pattern: str) -> str:
+    return "/".join(segment for segment in pattern.split("/") if segment and segment != ".")
+
+
 def _uri_to_remote_path_pattern(uri: str, pattern: str) -> str:
-    if pattern.startswith("/"):
-        return pattern
     base_path = "/" + _normalize_uri_for_glob(uri)[len("viking://") :].strip("/")
     if base_path == "/":
         base_path = ""
-    normalized_pattern = pattern.lstrip("/")
+    normalized_pattern = _normalize_glob_path(pattern)
     if not normalized_pattern:
         return base_path or "/"
     return f"{base_path}/{normalized_pattern}" if base_path else f"/{normalized_pattern}"
@@ -176,7 +101,7 @@ def _uri_to_remote_path_pattern(uri: str, pattern: str) -> str:
 
 def _literal_glob_prefix(pattern: str) -> str:
     parts = []
-    for segment in pattern.lstrip("/").split("/"):
+    for segment in _normalize_glob_path(pattern).split("/"):
         if not segment or any(ch in segment for ch in _GLOB_SPECIAL_CHARS):
             break
         parts.append(segment)
@@ -191,11 +116,6 @@ def _join_uri_path(uri: str, suffix: str) -> str:
     if normalized_uri == "viking://":
         return f"viking://{suffix}"
     return f"{normalized_uri}/{suffix}"
-
-
-def _remote_path_to_uri(path: str) -> str:
-    suffix = path.strip("/")
-    return f"viking://{suffix}" if suffix else "viking://"
 
 
 def _rel_path_sort_key(uri: str, root_uri: str) -> List[str]:
@@ -1269,6 +1189,7 @@ class _OpsMixin:
         node_limit: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
         extra_fields: Optional[List[str]] = None,
+        tag_filter: Optional[Dict[str, Any]] = None,
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive.
 
@@ -1295,19 +1216,23 @@ class _OpsMixin:
                 return {"matches": [], "count": 0}
             raise NotFoundError(uri, "directory")
 
-        _validate_glob_pattern(pattern)
         remote_result = await self._try_glob_vikingdb(
             pattern=pattern,
             uri=uri,
             node_limit=node_limit,
             return_entries=return_entries,
             extra_fields=aug_fields,
+            tag_filter=tag_filter,
             ctx=real_ctx,
         )
         if remote_result is not None:
             return remote_result
 
-        page_size = self._glob_page_size(node_limit)
+        # Tag filtering happens in FSService on the local fallback path. Fetch
+        # all matches so an early filesystem limit cannot discard later tagged
+        # entries. The remote path applies the same filter before its limit.
+        fs_node_limit = None if tag_filter else node_limit
+        page_size = self._glob_page_size(fs_node_limit)
         continuation_token: Optional[str] = None
         matches = []
         while True:
@@ -1362,12 +1287,16 @@ class _OpsMixin:
                     matches.append(entry_stat)
                 else:
                     matches.append(match_uri)
-                if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
+                if (
+                    fs_node_limit is not None
+                    and fs_node_limit > 0
+                    and len(matches) >= fs_node_limit
+                ):
                     if return_entries:
                         await self._augment_entries_extra_fields(matches, aug_fields, ctx=ctx)
                     return {"matches": matches, "count": len(matches)}
 
-            if node_limit is not None and node_limit > 0 and len(matches) >= node_limit:
+            if fs_node_limit is not None and fs_node_limit > 0 and len(matches) >= fs_node_limit:
                 if return_entries:
                     await self._augment_entries_extra_fields(matches, aug_fields, ctx=ctx)
                 return {"matches": matches, "count": len(matches)}
@@ -1386,6 +1315,7 @@ class _OpsMixin:
         node_limit: Optional[int],
         return_entries: bool,
         extra_fields: List[str],
+        tag_filter: Optional[Dict[str, Any]],
         ctx: RequestContext,
     ) -> Optional[Dict[str, Any]]:
         if not await self._should_use_vikingdb_glob(
@@ -1402,6 +1332,8 @@ class _OpsMixin:
 
         remote_limit = self._remote_glob_limit(node_limit)
         filter_expr = self._remote_glob_filter(uri, pattern)
+        if tag_filter:
+            filter_expr = And([filter_expr, RawDSL(tag_filter)])
         full_pattern = _uri_to_remote_path_pattern(uri, pattern)
         advance = {
             "post_process_input_limit": _REMOTE_GLOB_POST_PROCESS_INPUT_LIMIT,
@@ -1463,6 +1395,8 @@ class _OpsMixin:
         ctx: RequestContext,
     ) -> bool:
         if node_limit is not None and node_limit <= 0:
+            return False
+        if not _normalize_glob_path(pattern):
             return False
 
         glob_config = getattr(self, "glob_config", None)
@@ -1537,20 +1471,11 @@ class _OpsMixin:
     @staticmethod
     def _remote_glob_scoped_uri(uri: str, pattern: str) -> str:
         prefix = _literal_glob_prefix(pattern)
-        if pattern.startswith("/") and prefix:
-            scoped_uri = _remote_path_to_uri(prefix)
-        else:
-            scoped_uri = _join_uri_path(uri, prefix) if prefix else _normalize_uri_for_glob(uri)
-        return scoped_uri
+        return _join_uri_path(uri, prefix) if prefix else _normalize_uri_for_glob(uri)
 
-    def _remote_glob_filter(self, uri: str, pattern: str) -> Dict[str, Any]:
+    def _remote_glob_filter(self, uri: str, pattern: str) -> PathScope:
         scoped_uri = self._remote_glob_scoped_uri(uri, pattern)
-        return {
-            "op": "must",
-            "field": "uri",
-            "conds": [scoped_uri],
-            "para": "-d=-1",
-        }
+        return PathScope("uri", scoped_uri, depth=-1)
 
     def _remote_glob_records_to_entries(
         self,
