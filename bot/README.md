@@ -528,3 +528,4 @@ The repository includes `deploy/docker/deploy_langfuse.sh` for local deployment.
 - [Channels, Gateway, and Operations](docs/en/concepts/03-channels-and-gateway.md)
 - [VikingBot and OpenViking Integration](docs/en/concepts/04-openviking-integration.md)
 - [Channel Configuration](docs/en/concepts/05-channel.md)
+- [Skills: Local and Remote](docs/en/concepts/06-skills.md)

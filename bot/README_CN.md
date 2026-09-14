@@ -525,3 +525,4 @@ Gateway 的 Bot API 前缀为 `/bot/v1`：
 - [渠道、Gateway 与运行管理](docs/zh/concepts/03-channels-and-gateway.md)
 - [VikingBot 与 OpenViking 集成](docs/zh/concepts/04-openviking-integration.md)
 - [渠道配置](docs/zh/concepts/05-channel.md)
+- [Skills：本地与远程技能](docs/zh/concepts/06-skills.md)
