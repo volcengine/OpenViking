@@ -163,7 +163,7 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
       case FieldType::LIST_INT64: {
         if (std::holds_alternative<std::vector<int64_t>>(val)) {
           const auto& vec = std::get<std::vector<int64_t>>(val);
-          int len = vec.size();
+          int len = checked_uint16_length(vec.size(), meta.name, "list");
           var_infos[i] = {variable_region_offset, len};
           variable_region_offset += UINT16_SIZE + len * INT64_SIZE;
         } else {
@@ -175,7 +175,7 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
       case FieldType::LIST_FLOAT32: {
         if (std::holds_alternative<std::vector<float>>(val)) {
           const auto& vec = std::get<std::vector<float>>(val);
-          int len = vec.size();
+          int len = checked_uint16_length(vec.size(), meta.name, "list");
           var_infos[i] = {variable_region_offset, len};
           variable_region_offset += UINT16_SIZE + len * FLOAT32_SIZE;
         } else {
@@ -187,7 +187,8 @@ std::string BytesRow::serialize(const std::vector<Value>& row_data) const {
       case FieldType::LIST_STRING: {
         if (std::holds_alternative<std::vector<std::string>>(val)) {
           const auto& vec = std::get<std::vector<std::string>>(val);
-          int len = vec.size();
+          int len = checked_uint16_length(vec.size(), meta.name, "list");
+          check_list_string_lengths(vec, meta.name);
           var_infos[i] = {variable_region_offset, len};
           variable_region_offset += UINT16_SIZE;  // List length
           for (const auto& s : vec) {
