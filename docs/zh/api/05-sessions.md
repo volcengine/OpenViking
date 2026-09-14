@@ -44,7 +44,7 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。包含 `experiences` 时会自动激活 `cases` 和 `trajectories`；不包含 `experiences` 时，显式传入的 `cases` 和 `trajectories` 会被忽略。所有 `enabled` 值都应使用 JSON 布尔值。旧版 boolean-like 值暂时仍兼容（字符串 `"false"` 会正确解析为 false），但会产生弃用警告。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
-| auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。之后可通过 `update_session_config()` 部分更新或禁用该策略。 |
+| auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。省略时，新 Session 先继承 `server.user_config_defaults.auto_commit_policy`，再沿用现有 `memory.session_auto_commit.default_enabled` 行为。之后可通过 `update_session_config()` 部分更新或禁用该策略。 |
 
 `auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 

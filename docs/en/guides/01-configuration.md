@@ -1284,8 +1284,8 @@ Notes:
 
 - `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
 - Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). Set it when creating a session with `POST /api/v1/sessions`, or partially update it through `PATCH /api/v1/sessions/{session_id}/config`. Omitting `auto_commit_policy` from a PATCH preserves it; sending `null` disables automatic commits. Use `GET /api/v1/sessions/{session_id}` to inspect the effective policy.
-- When `default_enabled=false`, sessions created without `auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
-- When `default_enabled=true`, sessions created without `auto_commit_policy` get the default policy below.
+- When `default_enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`. Providing either policy enables auto commit and fills missing fields from the defaults below.
+- When `default_enabled=true`, sessions without an explicit or deployment-default policy get the built-in policy below.
 - When `idle_enabled=false`:
   - `SessionAutoCommitScheduler` is not started
 - When `idle_enabled=true`:
@@ -1686,6 +1686,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://~/...` resolves per request user. | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://~/skills` and `viking://agent/skills` are accepted. | `null` |
 | `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
+| `user_config_defaults.auto_commit_policy` | object | Deployment default auto-commit policy for newly created sessions without an explicit policy. | `null` |
 | `agent_evolution.enabled` | bool | Instance-wide Agent Evolution switch. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. When disabled, production of these memory types stops for every account and user. Existing memories remain readable and searchable. | `false` |
 
 `api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
