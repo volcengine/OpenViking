@@ -412,14 +412,16 @@ class AsyncAGFSClient:
         owner_lease_ref: Dict[str, Any] | None = None,
         *,
         fs_ctx: Dict[str, str] | None = None,
+        create_missing_dirs: bool = True,
     ) -> Dict[str, Any]:
-        """Acquire tree locks on multiple paths."""
+        """Acquire tree locks; non-reserving mode covers missing paths via ancestors."""
         return await self.run(
             "pathlock_acquire_tree_batch",
             _fs_ctx_or_default(paths[0] if paths else "/", fs_ctx),
             paths,
             timeout_secs,
             owner_lease_ref,
+            **({} if create_missing_dirs else {"create_missing_dirs": False}),
         )
 
     async def pathlock_acquire_exact_tree_batch(

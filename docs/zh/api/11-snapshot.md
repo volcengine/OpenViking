@@ -63,6 +63,12 @@ USER 和 ADMIN 调用 `commit`、`log`、`restore` 时必须显式传入 `paths`
 | author_name | str | 否 | null | 覆盖默认的提交者名字（默认 `viking-bot`） |
 | author_email | str | 否 | null | 覆盖默认的提交者邮箱 |
 
+要记录删除历史，应在 `paths` 中保留已删除的 URI。快照加锁不会把它重新创建为空目录，
+即使其父目录也已删除。USER/ADMIN 请求会用最近仍存在的祖先上的树锁保护缺失路径，
+因此可能暂时与同一祖先下的其他写入发生锁冲突；锁范围扩大不会扩大实际快照范围，
+ACL 仍按原始请求范围检查。若锁目录在获取锁期间消失，操作会失败而不是补建目录，
+待并发修改完成后可重新提交快照。
+
 **Python HTTP SDK**
 
 ```python

@@ -63,6 +63,14 @@ Save the current workspace state as a new snapshot.
 | author_name | str | No | null | Override the default author name (default `viking-bot`) |
 | author_email | str | No | null | Override the default author email |
 
+Keep deleted URIs in `paths` to record their deletion in history. Snapshot locking
+does not recreate them as empty directories, even when their parent directory is
+also gone. For USER/ADMIN requests, missing paths are protected by a tree lock on
+the nearest existing ancestor; this can temporarily conflict with sibling writes.
+The wider lock does not expand the snapshot or its ACL checks beyond the original
+requested scope. If a lock directory disappears during acquisition, the operation
+fails instead of recreating it; retry the snapshot once concurrent mutations finish.
+
 **Python HTTP SDK**
 
 ```python

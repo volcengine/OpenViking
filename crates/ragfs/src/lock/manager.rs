@@ -775,6 +775,61 @@ impl PathLockManager {
             .await
     }
 
+    /// Acquire tree coverage without reserving missing paths as directories.
+    ///
+    /// Snapshot readers must be able to lock deleted paths without recreating
+    /// them. Cover missing targets with their nearest existing ancestor instead.
+    /// Acquisition never creates lock directories, so a concurrent deletion of
+    /// a resolved ancestor fails safely rather than materializing it again.
+    pub async fn acquire_tree_batch_existing(
+        &self,
+        paths: &[String],
+        timeout: Duration,
+        owner_capability: Option<(&str, &str)>,
+    ) -> PathLockResult<OwnedPathLockLease> {
+        let mut requests = Vec::new();
+        for path in paths {
+            let mut existing = path.trim_end_matches('/').to_string();
+            if existing.is_empty() {
+                existing = "/".to_string();
+            }
+            loop {
+                match self.resolver.fs.stat(&existing).await {
+                    Ok(_) => break,
+                    Err(crate::core::Error::NotFound(_)) if existing != "/" => {
+                        existing = existing
+                            .rsplit_once('/')
+                            .map(|(parent, _)| if parent.is_empty() { "/" } else { parent })
+                            .unwrap_or("/")
+                            .to_string();
+                    }
+                    Err(error) => {
+                        return Err(PathLockError::Io(format!(
+                            "failed to resolve existing snapshot lock scope '{existing}': {error}"
+                        )));
+                    }
+                }
+            }
+            requests.push(PathLockRequest {
+                path: existing,
+                kind: PathLockKind::Tree,
+            });
+        }
+        // Ancestor fallback can make formerly disjoint paths overlap.
+        let mut scopes: Vec<PathLockRequest> = Vec::new();
+        for request in Self::normalize_requests(&requests) {
+            if !scopes.iter().any(|held| {
+                held.path == "/"
+                    || request.path == held.path
+                    || request.path.starts_with(&format!("{}/", held.path))
+            }) {
+                scopes.push(request);
+            }
+        }
+        self.acquire_batch_inner(&scopes, timeout, owner_capability, false)
+            .await
+    }
+
     /// Acquire a mixed batch of exact and tree locks.
     pub async fn acquire_exact_tree_batch(
         &self,
@@ -806,6 +861,17 @@ impl PathLockManager {
         requests: &[PathLockRequest],
         timeout: Duration,
         owner_capability: Option<(&str, &str)>,
+    ) -> PathLockResult<OwnedPathLockLease> {
+        self.acquire_batch_inner(requests, timeout, owner_capability, true)
+            .await
+    }
+
+    async fn acquire_batch_inner(
+        &self,
+        requests: &[PathLockRequest],
+        timeout: Duration,
+        owner_capability: Option<(&str, &str)>,
+        create_missing_dirs: bool,
     ) -> PathLockResult<OwnedPathLockLease> {
         if requests.is_empty() {
             return Err(PathLockError::InvalidRequest(
@@ -864,7 +930,10 @@ impl PathLockManager {
                 }
             }
             first_attempt = false;
-            let acquired_lock_paths = match self.try_acquire_batch_once(&sorted, &owner_id).await {
+            let acquired_lock_paths = match self
+                .try_acquire_batch_once(&sorted, &owner_id, create_missing_dirs)
+                .await
+            {
                 Ok(acquired) => acquired,
                 Err((err, pre_conflict)) => {
                     drop(owner_registry);
@@ -998,6 +1067,7 @@ impl PathLockManager {
         &self,
         requests: &[PathLockRequest],
         owner_id: &str,
+        create_missing_dirs: bool,
     ) -> Result<Vec<(String, AcquisitionChange)>, (PathLockError, bool)> {
         let mut acquired = Vec::new();
         let mut exact_resolutions: HashMap<String, ResolvedExactPaths> = HashMap::new();
@@ -1012,9 +1082,7 @@ impl PathLockManager {
                             .await?;
                         let lock_path = resolved.acquire_lock_path.clone();
                         exact_resolutions.insert(request.path.clone(), resolved);
-                        self.ensure_lock_dir(&lock_path).await.map_err(|error| {
-                            PathLockError::Io(format!("failed to create lock dir: {error}"))
-                        })?;
+                        self.prepare_lock_dir(&lock_path, create_missing_dirs).await?;
                         let change = self
                             .try_acquire_one(&lock_path, owner_id, PathLockKind::Exact)
                             .await?;
@@ -1030,9 +1098,7 @@ impl PathLockManager {
                             .await?;
                         self.check_lock_paths(&exact_candidates, owner_id).await?;
                         self.check_descendant_locks(&request.path, owner_id).await?;
-                        self.ensure_lock_dir(&lock_path).await.map_err(|error| {
-                            PathLockError::Io(format!("failed to create lock dir: {error}"))
-                        })?;
+                        self.prepare_lock_dir(&lock_path, create_missing_dirs).await?;
                         let change = self
                             .try_acquire_one(&lock_path, owner_id, PathLockKind::Tree)
                             .await?;
@@ -1265,6 +1331,31 @@ impl PathLockManager {
             }
         }
         Ok(())
+    }
+
+    /// Validate snapshot lock directories without creating reservation paths.
+    async fn prepare_lock_dir(&self, lock_path: &str, create_missing: bool) -> PathLockResult<()> {
+        if create_missing {
+            return self.ensure_lock_dir(lock_path).await;
+        }
+        let parent = lock_path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .unwrap_or("/");
+        let parent = if parent.is_empty() { "/" } else { parent };
+        match self.resolver.fs.stat(parent).await {
+            Ok(info) if info.is_dir => Ok(()),
+            Ok(_) => Err(PathLockError::Io(format!(
+                "lock parent is not a directory: {parent}"
+            ))),
+            Err(crate::core::Error::NotFound(_)) => Err(PathLockError::Busy {
+                lock_path: lock_path.to_string(),
+                operation: "acquire without creating missing directories".to_string(),
+            }),
+            Err(error) => Err(PathLockError::Io(format!(
+                "failed to stat snapshot lock directory '{parent}': {error}"
+            ))),
+        }
     }
 
     /// Ensure the parent directory of a lock path exists.
@@ -2439,6 +2530,168 @@ mod tests {
             .await
             .is_none());
         assert_eq!(mgr.metrics_snapshot().await.active_lock_count, 0);
+    }
+
+    async fn snapshot_lock_manager() -> (Arc<MemFileSystem>, PathLockManager) {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
+            fs.clone(),
+            PathLockConfig::default().lock_expire_secs,
+        ));
+        let manager = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
+        (fs, manager)
+    }
+
+    #[tokio::test]
+    async fn snapshot_locks_missing_paths_without_materializing_them() {
+        let (fs, manager) = snapshot_lock_manager().await;
+        fs.mkdir("/data/kept", 0o755).await.unwrap();
+        fs.write("/data/kept/file.md", b"keep", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        let paths = vec![
+            "/data/deleted/nested/example.md".to_string(),
+            "/data/kept/file.md".to_string(),
+            "/data/deleted".to_string(),
+        ];
+        let lease = manager
+            .acquire_tree_batch_existing(&paths, Duration::ZERO, None)
+            .await
+            .unwrap();
+
+        // Fallback subsumes the other requests, without changing their callers'
+        // snapshot inputs. The lease accurately records its wider coverage.
+        assert_eq!(
+            lease.lease.covered_paths,
+            vec![PathLockRequest {
+                path: "/data".to_string(),
+                kind: PathLockKind::Tree,
+            }]
+        );
+        assert_eq!(lease.lease.lock_paths, vec!["/data/.path.ovlock"]);
+        assert!(matches!(
+            fs.stat("/data/deleted").await,
+            Err(Error::NotFound(_))
+        ));
+        assert!(lease.lease.covers(&PathLockRequest {
+            path: paths[0].clone(),
+            kind: PathLockKind::Tree,
+        }));
+        assert!(manager
+            .acquire_exact(&paths[0], Duration::ZERO, None)
+            .await
+            .is_err());
+        assert!(manager
+            .acquire_exact(&format!("{}/child", paths[0]), Duration::ZERO, None)
+            .await
+            .is_err());
+
+        manager.release(&lease).await.unwrap();
+        assert!(matches!(
+            fs.stat("/data/deleted").await,
+            Err(Error::NotFound(_))
+        ));
+        assert_eq!(fs.read("/data/kept/file.md", 0, 0).await.unwrap(), b"keep");
+        assert!(fs.stat("/data").await.unwrap().is_dir);
+    }
+
+    #[tokio::test]
+    async fn snapshot_locks_existing_files_and_directories_without_widening() {
+        let (fs, manager) = snapshot_lock_manager().await;
+        fs.mkdir("/data/dir", 0o755).await.unwrap();
+        fs.write("/data/file.md", b"original", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        let paths = vec!["/data/file.md".to_string(), "/data/dir".to_string()];
+        let lease = manager
+            .acquire_tree_batch_existing(&paths, Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert_eq!(lease.lease.covered_paths.len(), 2);
+        assert!(lease
+            .lease
+            .covered_paths
+            .iter()
+            .all(|request| paths.contains(&request.path)));
+        let sibling = manager
+            .acquire_exact("/data/sibling.md", Duration::ZERO, None)
+            .await
+            .unwrap();
+        manager.release(&sibling).await.unwrap();
+        manager.release(&lease).await.unwrap();
+        assert_eq!(fs.read("/data/file.md", 0, 0).await.unwrap(), b"original");
+        assert!(fs.stat("/data/dir").await.unwrap().is_dir);
+    }
+
+    #[tokio::test]
+    async fn snapshot_lock_does_not_recreate_scope_deleted_after_resolution() {
+        let (fs, manager) = snapshot_lock_manager().await;
+        // Exercise the acquire attempt with a scope that existed during the
+        // ancestor-resolution step but was removed before token acquisition.
+        for is_dir in [false, true] {
+            let path = "/data/disappeared";
+            if is_dir {
+                fs.mkdir(path, 0o755).await.unwrap();
+            } else {
+                fs.write(path, b"old", 0, WriteFlag::Create).await.unwrap();
+            }
+            let resolved = vec![PathLockRequest {
+                path: path.to_string(),
+                kind: PathLockKind::Tree,
+            }];
+            fs.remove_all(path).await.unwrap();
+            let result = manager
+                .try_acquire_batch_once(&resolved, "snapshot-test", false)
+                .await;
+            assert!(matches!(result, Err((PathLockError::Busy { .. }, _))));
+            assert!(matches!(fs.stat(path).await, Err(Error::NotFound(_))));
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_lock_failure_rolls_back_earlier_tokens() {
+        let (fs, manager) = snapshot_lock_manager().await;
+        fs.mkdir("/data/a", 0o755).await.unwrap();
+        let resolved = vec![
+            PathLockRequest {
+                path: "/data/a".to_string(),
+                kind: PathLockKind::Tree,
+            },
+            PathLockRequest {
+                path: "/data/missing".to_string(),
+                kind: PathLockKind::Tree,
+            },
+        ];
+        assert!(manager
+            .try_acquire_batch_once(&resolved, "snapshot-test", false)
+            .await
+            .is_err());
+        assert!(matches!(
+            fs.stat("/data/a/.path.ovlock").await,
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            fs.stat("/data/missing").await,
+            Err(Error::NotFound(_))
+        ));
+        let retry = manager
+            .acquire_tree_batch_existing(&["/data/a".to_string()], Duration::ZERO, None)
+            .await
+            .unwrap();
+        manager.release(&retry).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_non_reserving_mode_keeps_default_reservations_unchanged() {
+        let (fs, manager) = snapshot_lock_manager().await;
+        let lease = manager
+            .acquire_tree("/data/reserved", Duration::ZERO, None)
+            .await
+            .unwrap();
+        assert!(fs.stat("/data/reserved").await.unwrap().is_dir);
+        manager.release(&lease).await.unwrap();
+        assert!(fs.stat("/data/reserved").await.unwrap().is_dir);
     }
 
     #[tokio::test]

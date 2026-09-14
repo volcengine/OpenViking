@@ -2393,8 +2393,8 @@ impl RAGFSBindingClient {
         Python::attach(|py| owned_lease_to_py_dict(py, &lease))
     }
 
-    /// Acquire tree locks on multiple paths.
-    #[pyo3(signature = (ctx, paths, timeout_secs=0.0, owner_lease_ref=None))]
+    /// Acquire tree locks, optionally without creating reservation directories.
+    #[pyo3(signature = (ctx, paths, timeout_secs=0.0, owner_lease_ref=None, *, create_missing_dirs=true))]
     fn pathlock_acquire_tree_batch(
         &self,
         py: Python<'_>,
@@ -2402,6 +2402,7 @@ impl RAGFSBindingClient {
         paths: Vec<String>,
         timeout_secs: f64,
         owner_lease_ref: Option<Py<PyAny>>,
+        create_missing_dirs: bool,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
@@ -2416,7 +2417,12 @@ impl RAGFSBindingClient {
                     let capability = capability.as_ref().map(|(lease_ref, ownership_ref)| {
                         (lease_ref.as_str(), ownership_ref.as_str())
                     });
-                    mgr.acquire_tree_batch(&paths, timeout, capability).await
+                    if create_missing_dirs {
+                        mgr.acquire_tree_batch(&paths, timeout, capability).await
+                    } else {
+                        mgr.acquire_tree_batch_existing(&paths, timeout, capability)
+                            .await
+                    }
                 }
             })
             .map_err(pathlock_err_to_py)?;

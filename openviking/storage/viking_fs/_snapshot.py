@@ -31,6 +31,7 @@ from openviking_cli.exceptions import (
 def _pkg():
     return sys.modules[__package__]
 
+
 class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
 
@@ -95,8 +96,7 @@ class _SnapshotMixin:
                 write_targets.append(uri)
 
         delete_targets = [
-            self._tree_path_to_uri(f"{tree_dir}/{path}".strip("/"))
-            for path in diff["to_delete"]
+            self._tree_path_to_uri(f"{tree_dir}/{path}".strip("/")) for path in diff["to_delete"]
         ]
         if write_targets:
             await self._ensure_access_many(
@@ -272,10 +272,16 @@ class _SnapshotMixin:
             {self._uri_to_path(uri, ctx=real_ctx) for uri in paths},
             key=lambda value: (value.count("/"), value),
         ):
-            if not any(path == root or path.startswith(f"{root.rstrip('/')}/") for root in lock_paths):
+            if not any(
+                path == root or path.startswith(f"{root.rstrip('/')}/") for root in lock_paths
+            ):
                 lock_paths.append(path)
         try:
-            lease = await self._async_agfs.pathlock_acquire_tree_batch(lock_paths)
+            # Deletion snapshots must retain their original paths without the
+            # tree-lock reservation protocol recreating them as directories.
+            lease = await self._async_agfs.pathlock_acquire_tree_batch(
+                lock_paths, create_missing_dirs=False
+            )
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 "A snapshot path is being processed",
