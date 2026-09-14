@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -641,7 +642,7 @@ async def read(
 
 @mcp.tool(name="list")
 async def ls(
-    uri: str,
+    uri: str = "viking://",
     recursive: bool = False,
     offset: int = 0,
     limit: int | None = None,
@@ -651,7 +652,7 @@ async def ls(
     """List one sorted page under a viking:// directory URI.
 
     Args:
-        uri: Directory URI to list.
+        uri: Directory URI to list (defaults to "viking://").
         recursive: Whether to recursively list descendants.
         offset: Number of visible entries to skip.
         limit: Optional maximum number of entries.
@@ -666,9 +667,10 @@ async def ls(
     if limit is not None and limit <= 0:
         raise InvalidArgumentError("limit must be greater than 0")
 
+    effective_uri = uri.strip() if isinstance(uri, str) and uri.strip() else "viking://"
     service = get_service()
     ctx = _get_ctx()
-    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+    resolved_uri = _resolve_mcp_workspace_uri(effective_uri, ctx)
 
     options: dict[str, Any] = {
         "ctx": ctx,
@@ -684,7 +686,7 @@ async def ls(
         options["sort_order"] = sort_order
     entries = await service.fs.ls(resolved_uri, **options)
     if not entries:
-        return f"(no entries under {uri})"
+        return f"(no entries under {effective_uri})"
 
     lines = []
     for e in entries:
@@ -773,30 +775,102 @@ async def tree(
 
 
 class StoreMessage(BaseModel):
-    role: Literal["user", "assistant"] = Field(description="Message role")
+    role: Literal["user", "assistant"] = Field(default="user", description="Message role")
     content: str = Field(description="Message text content")
 
 
+def _normalize_store_messages(
+    messages: Optional[
+        Union[list[Union[StoreMessage, dict[str, Any], str]], dict[str, Any], str]
+    ] = None,
+    content: Optional[Union[str, list[str]]] = None,
+) -> list[StoreMessage]:
+    raw_items: list[Any] = []
+
+    def _collect(val: Any) -> None:
+        if val is None:
+            return
+        if isinstance(val, list):
+            raw_items.extend(val)
+        else:
+            raw_items.append(val)
+
+    _collect(messages)
+    _collect(content)
+
+    normalized: list[StoreMessage] = []
+    for item in raw_items:
+        if isinstance(item, StoreMessage):
+            normalized.append(item)
+        elif isinstance(item, str):
+            if item.strip():
+                normalized.append(StoreMessage(role="user", content=item.strip()))
+        elif isinstance(item, dict):
+            raw_role = item.get("role")
+            if raw_role is not None:
+                cleaned_role = str(raw_role).lower().strip()
+                if cleaned_role not in ("user", "assistant"):
+                    raise InvalidArgumentError(
+                        f"Invalid message role '{raw_role}'. Must be 'user' or 'assistant'"
+                    )
+                role: Literal["user", "assistant"] = cleaned_role  # type: ignore
+            else:
+                role = "user"
+
+            text: Optional[str] = None
+            for key in ("content", "text", "body", "message"):
+                if key in item:
+                    val = item[key]
+                    if isinstance(val, (dict, list)):
+                        text = json.dumps(val, ensure_ascii=False)
+                    else:
+                        text = str(val) if val is not None else ""
+                    break
+
+            if text is None:
+                keys_without_role = [k for k in item if k != "role"]
+                if not keys_without_role:
+                    continue
+                text = json.dumps(item, ensure_ascii=False)
+
+            if not text.strip():
+                continue
+
+            normalized.append(StoreMessage(role=role, content=text.strip()))
+
+    if not normalized or not any(msg.content.strip() for msg in normalized):
+        raise InvalidArgumentError(
+            "At least one message with non-empty content must be provided to remember"
+        )
+    return normalized
+
+
 @mcp.tool()
-async def remember(messages: list[StoreMessage]) -> str:
+async def remember(
+    messages: Optional[
+        Union[list[Union[StoreMessage, dict[str, Any], str]], dict[str, Any], str]
+    ] = None,
+    content: Optional[Union[str, list[str]]] = None,
+) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
     import uuid
 
     from openviking.message.part import TextPart
 
+    normalized_messages = _normalize_store_messages(messages=messages, content=content)
     service = get_service()
     ctx = _get_ctx()
     session_id = f"mcp-store-{uuid.uuid4().hex[:12]}"
     session = await service.sessions.get(session_id, ctx, auto_create=True)
-    for msg in messages:
-        if msg.content:
+    for msg in normalized_messages:
+        if msg.content.strip():
             add_async = getattr(session, "add_message_async", None)
             if callable(add_async):
                 await add_async(msg.role, [TextPart(text=msg.content)])
             else:
                 session.add_message(msg.role, [TextPart(text=msg.content)])
     await service.sessions.commit_async(session_id, ctx)
-    return f"Stored {len(messages)} message(s) and committed for memory extraction."
+    return f"Stored {len(normalized_messages)} message(s) and committed for memory extraction."
 
 
 # -- write -----------------------------------------------------------------
@@ -868,8 +942,11 @@ async def edit(
         raise NotFoundError(uri, "file") from exc
     occurrences = current.count(old_string)
     if occurrences == 0:
+        hint = ""
+        if current.replace("\r\n", "\n").count(old_string.replace("\r\n", "\n")) > 0:
+            hint = " (detected CRLF/LF line ending mismatch between old_string and file content; normalize line endings)"
         raise InvalidArgumentError(
-            f"old_string not found in {uri}. "
+            f"old_string not found in {uri}.{hint} "
             "Re-read the file with the read tool to get its current content."
         )
     if occurrences > 1 and not replace_all:
