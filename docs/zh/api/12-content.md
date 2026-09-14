@@ -365,7 +365,7 @@ openviking write viking://resources/docs/api.md \
 - 所有目标必须是 `root_uri` 下的文件、属于同一 context type，且 canonical URI 不能重复。
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
 - `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。
-- 写入期间整批共用一个目标 tree lock。所有文件写完并释放锁后才启动语义处理，因此 `.overview.md` / `.abstract.md` 每批只统一刷新一次。
+- 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。所有文件写完并释放锁后才启动语义处理，统一刷新受影响的 `.overview.md` / `.abstract.md`。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
 - 响应体中，通过 `semantic_status`（`queued`、`complete` 或 `deferred`）表达目录聚合状态，通过 `vector_status` 表达变化文件的向量维护状态。

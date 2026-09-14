@@ -215,8 +215,8 @@ class ContentWriteCoordinator:
 
         Each operation follows the same create/replace/append semantics as ``write``;
         ``upsert`` is available for callers that already hold the desired final tree.
-        Refresh runs only after every write and after releasing the tree lock, so derived
-        summaries are generated once per batch.
+        All target files stay locked from state validation through the last write,
+        while unrelated files remain writable. Refresh starts after the locks are released.
         """
         normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         await self._validate_batch_root(normalized_root, ctx=ctx)
@@ -224,9 +224,12 @@ class ContentWriteCoordinator:
             normalized_root, operations, ctx=ctx
         )
 
-        root_path = self._viking_fs._uri_to_path(normalized_root, ctx=ctx)
+        target_paths = [
+            self._viking_fs._uri_to_path(operation["uri"], ctx=ctx)
+            for operation in normalized_operations
+        ]
         try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(root_path)
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(target_paths)
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {normalized_root}",

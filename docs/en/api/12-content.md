@@ -365,7 +365,7 @@ Each operation contains:
 - All targets must be files below `root_uri`, use the same context type, and have unique canonical URIs.
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
 - `replace`, `append`, and `create` match `write()` semantics. `upsert` replaces an existing file or creates a missing file.
-- The batch holds one target tree lock while writing. Semantic processing starts only after every file is written and the lock is released, so `.overview.md` and `.abstract.md` are refreshed once for the batch.
+- The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Semantic processing starts after all writes finish and the locks are released, refreshing the affected `.overview.md` and `.abstract.md` files together.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.
 - In the response body, `semantic_status` (`queued`, `complete`, or `deferred`) reports the directory aggregation status, while `vector_status` reports vector maintenance for changed files.
