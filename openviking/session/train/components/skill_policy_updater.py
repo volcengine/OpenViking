@@ -89,7 +89,9 @@ class SkillPolicyUpdater:
             skill_processor=processor,
             viking_fs=viking_fs,
         )
-        result = await updater.apply_operations(operations, ctx)
+        result = await updater.apply_operations(
+            operations, ctx, transaction_handle=transaction_handle
+        )
 
         errors = [f"{uri}: {exc}" for uri, exc in result.errors]
 
