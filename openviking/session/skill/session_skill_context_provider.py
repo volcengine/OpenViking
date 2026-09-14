@@ -88,8 +88,10 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         return (
-            "You are an extraction agent. Analyze the archived conversation, use read when "
-            "needed, and output only JSON that matches the schema descriptions."
+            "You are an extraction agent. Analyze the archived conversation and output only JSON "
+            "that matches the schema descriptions. Only call read on an exact .../SKILL.md URI "
+            "from the prefetched skill listing. Never read a directory URI; if the listing is "
+            "empty, proceed without reading an existing skill."
         )
 
     async def prefetch(self) -> List[Dict[str, Any]]:
@@ -118,8 +120,7 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
                     if not entry.get("isDir", False):
                         continue
                     skill_root = (
-                        entry.get("uri")
-                        or f"{skill_root_uri.rstrip('/')}/{entry.get('name', '')}"
+                        entry.get("uri") or f"{skill_root_uri.rstrip('/')}/{entry.get('name', '')}"
                     )
                     skill_name = entry.get("name") or skill_root.rstrip("/").split("/")[-1]
                     if skill_name in seen_names:
@@ -163,7 +164,14 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
         limit = arguments.get("limit", -1)
 
         if not uri.endswith("/SKILL.md"):
-            return await super().execute_tool(tool_call)
+            return {
+                "error": (
+                    "This extraction agent can only read an exact .../SKILL.md URI from the "
+                    "prefetched skill listing. Directory URIs cannot be read because no list tool "
+                    "is available. If the listing was empty, proceed without reading an existing "
+                    "skill."
+                )
+            }
 
         try:
             raw_content = await self._viking_fs.read_file(uri, ctx=self._ctx)

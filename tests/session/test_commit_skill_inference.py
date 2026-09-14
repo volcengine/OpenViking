@@ -116,6 +116,23 @@ async def test_session_skill_context_provider_prefetch_lists_existing_skills():
 
 
 @pytest.mark.asyncio
+async def test_session_skill_context_provider_rejects_directory_read_with_actionable_guidance():
+    viking_fs = MagicMock()
+    viking_fs.read_file = AsyncMock()
+    provider = object.__new__(SessionSkillContextProvider)
+    provider._viking_fs = viking_fs
+
+    result = await provider.execute_tool(
+        SimpleNamespace(name="read", arguments={"uri": "viking://user/default/skills"})
+    )
+
+    assert result["error"].startswith("This extraction agent can only read")
+    assert "no list tool is available" in result["error"]
+    assert "proceed without reading" in result["error"]
+    viking_fs.read_file.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_agent_trajectory_context_provider_without_session_skills_prefetches_history_only():
     provider = AgentTrajectoryContextProvider(
         messages=[
