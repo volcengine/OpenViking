@@ -9,7 +9,11 @@ from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
-from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
+from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
+    render_abstract_overview,
+)
 from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
@@ -42,15 +46,16 @@ class _SemanticMixin:
         file_path = f"{path}/.abstract.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory abstract for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            return f"# {uri} [Directory abstract is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri} [Directory abstract is not ready]"
 
     async def _read_abstract_for_known_dir(
         self,
@@ -173,16 +178,16 @@ class _SemanticMixin:
         file_path = f"{path}/.overview.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory overview for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            # Fallback to default if .overview.md doesn't exist
-            return f"# {uri}\n\n[Directory overview is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri}\n\n[Directory overview is not ready]"
 
     async def find(
         self,

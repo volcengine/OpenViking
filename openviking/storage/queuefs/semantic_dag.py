@@ -698,8 +698,6 @@ class SemanticDagExecutor:
             if file_name in existing_summaries:
                 return {"name": file_name, "summary": existing_summaries[file_name]}
 
-        except AbstractOverviewFormatError:
-            raise
         except Exception as e:
             logger.debug(f"Failed to read existing summary from overview.md for {file_path}: {e}")
 
@@ -754,8 +752,6 @@ class SemanticDagExecutor:
             overview = await self._viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._ctx)
             abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
             return body_for_preview(overview), body_for_preview(abstract)
-        except AbstractOverviewFormatError:
-            raise
         except Exception:
             return None, None
 
@@ -797,11 +793,6 @@ class SemanticDagExecutor:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
                 )
-        except AbstractOverviewFormatError:
-            # A generated sidecar that opted into OKF must never be treated as
-            # an empty file summary; doing so would silently feed metadata or
-            # corrupted YAML into a later regeneration.
-            raise
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
@@ -1028,9 +1019,11 @@ class SemanticDagExecutor:
                 )
 
                 if not children_changed:
-                    need_vectorize = False
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
                     should_write = overview is None or abstract is None
+                    # Rebuilt sidecars must also replace their stale vectors.
+                    need_vectorize = should_write
+                    children_changed = should_write
             if should_write and (overview is None or abstract is None):
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)

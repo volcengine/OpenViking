@@ -425,7 +425,11 @@ async def _read_existing_document(
     viking_fs: Any, uri: str, ctx: Optional[RequestContext]
 ) -> Optional[AbstractOverviewDocument]:
     raw = await _raw_if_exists(viking_fs, uri, ctx)
-    return parse_abstract_overview(raw) if raw is not None else None
+    try:
+        return parse_abstract_overview(raw) if raw is not None else None
+    except AbstractOverviewFormatError as exc:
+        logger.warning("[Semantic] Ignoring malformed sidecar %s: %s", uri, exc)
+        return None
 
 
 async def write_abstract_overview(
