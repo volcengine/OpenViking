@@ -9,6 +9,7 @@ import pytest
 import openviking.storage.viking_fs as viking_fs_module
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
+from openviking.storage.viking_fs._base import LS_ALL_NODES
 from openviking_cli.utils.config.grep_config import GrepConfig
 
 
@@ -81,6 +82,28 @@ async def test_collect_grep_files_skips_directory_vector_count(monkeypatch):
 
 def test_grep_config_default_switch_to_remote_threshold_is_10000():
     assert GrepConfig().switch_to_remote_threshold == 10000
+
+
+@pytest.mark.asyncio
+async def test_collect_grep_files_does_not_use_ls_ui_limit(monkeypatch, fs):
+    calls = []
+
+    async def fake_ls(uri, *, node_limit=1000, ctx=None, **kwargs):
+        calls.append((uri, node_limit, ctx))
+        return []
+
+    monkeypatch.setattr(fs, "ls", fake_ls)
+
+    assert (
+        await fs._collect_grep_files(
+            "viking://resources/root",
+            excluded_prefix=None,
+            level_limit=10,
+            ctx=None,
+        )
+        == []
+    )
+    assert calls == [("viking://resources/root", LS_ALL_NODES, None)]
 
 
 @pytest.mark.asyncio
