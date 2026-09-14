@@ -89,6 +89,40 @@ async def test_search_skips_intent_and_uses_raw_query_when_disabled(monkeypatch)
     assert captured["typed_query"].target_directories == ["viking://resources/docs"]
 
 
+@pytest.mark.asyncio
+async def test_search_forwards_context_type_to_raw_query_fallback(monkeypatch):
+    from openviking_cli.retrieve.types import ContextType
+
+    fs = _make_viking_fs(enable_intent=False)
+    captured = {}
+
+    class FakeRetriever:
+        def __init__(self, storage, embedder, rerank_config, retrieval_config):
+            pass
+
+        async def retrieve(self, typed_query, **kwargs):
+            captured["typed_query"] = typed_query
+            return QueryResult(
+                query=typed_query,
+                matched_contexts=[],
+                searched_directories=typed_query.target_directories,
+            )
+
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.HierarchicalRetriever",
+        FakeRetriever,
+    )
+
+    await fs.search(
+        "raw query",
+        target_uri="viking://resources/docs",
+        ctx=_ctx(),
+        context_type=ContextType.SKILL,
+    )
+
+    assert captured["typed_query"].context_type is ContextType.SKILL
+
+
 def test_search_service_is_intent_enabled_follows_config():
     from openviking.service.search_service import SearchService
 

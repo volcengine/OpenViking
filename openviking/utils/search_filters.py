@@ -95,6 +95,22 @@ def resolve_context_types(context_type: Optional[SearchContextTypeInput]) -> Lis
     return normalized_values
 
 
+def resolve_single_context_type(
+    context_type: Optional[SearchContextTypeInput],
+) -> Optional[ContextType]:
+    """Resolve context_type into a single ContextType for TypedQuery classification.
+
+    TypedQuery.context_type carries one value, not a list. When zero or more
+    than one type was requested, this returns None: multi-type requests keep
+    scope_dsl filtering as the source of truth for results and stay
+    unclassified in observer stats.
+    """
+    resolved = resolve_context_types(context_type)
+    if len(resolved) != 1:
+        return None
+    return ContextType(resolved[0])
+
+
 def merge_time_filter(
     existing_filter: Optional[Dict[str, Any]],
     since: Optional[str] = None,
