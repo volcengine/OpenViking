@@ -259,6 +259,39 @@ def test_memory_type_registry_prefers_custom_memory_dir_over_prompt_manager_temp
     assert registry.get("prompt_root_memory") is None
 
 
+def test_memory_type_registry_keeps_builtin_for_invalid_custom_override(tmp_path, monkeypatch):
+    custom_dir = tmp_path / "custom-memory"
+    custom_dir.mkdir()
+    (custom_dir / "cases.yaml").write_text(
+        "memory_type: cases\n"
+        "directory: viking://user/{{ user_space }}/memories/cases\n"
+        "fields:\n"
+        "  - name: case_id\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(
+                custom_templates_dir=str(custom_dir),
+                experimental_memory_switch=False,
+            )
+        ),
+    )
+
+    registry = MemoryTypeRegistry()
+    current = registry.get("cases")
+    built_in = yaml.safe_load(
+        (PromptManager._get_bundled_templates_dir() / "memory" / "cases.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert current is not None
+    assert current.filename_template == built_in["filename_template"]
+    assert current.content_template == built_in["content_template"]
+
+
 def test_memory_type_registry_loads_experimental_templates_when_switch_enabled(monkeypatch):
     """When experimental_memory_switch is True, experimental templates override defaults."""
     monkeypatch.setattr(
