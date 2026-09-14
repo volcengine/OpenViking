@@ -40,6 +40,19 @@ impl PathLockWrappedFS {
         &self.inner
     }
 
+    /// Return true when `path` does not exist.
+    ///
+    /// Deleting a missing path has nothing to protect, and acquiring a lock
+    /// there would create the path (or its ancestors) just to hold lock
+    /// metadata. Return not-found without delegating a delete: the target
+    /// could be created by another writer after this check.
+    async fn is_missing(&self, path: &str) -> bool {
+        matches!(
+            self.inner.stat(path).await,
+            Err(crate::core::Error::NotFound(_))
+        )
+    }
+
     /// Return true for virtual control paths and lock metadata that must not be auto-locked.
     fn should_bypass_auto_lock(path: &str) -> bool {
         path == "/queue"
@@ -133,6 +146,9 @@ impl FileSystem for PathLockWrappedFS {
         if Self::should_bypass_auto_lock(path) {
             return self.inner.remove(path).await;
         }
+        if self.is_missing(path).await {
+            return Err(crate::core::Error::NotFound(path.to_string()));
+        }
         let requests = [PathLockRequest {
             path: path.to_string(),
             kind: PathLockKind::Exact,
@@ -153,6 +169,9 @@ impl FileSystem for PathLockWrappedFS {
     async fn remove_all(&self, path: &str) -> crate::core::Result<()> {
         if Self::should_bypass_auto_lock(path) {
             return self.inner.remove_all(path).await;
+        }
+        if self.is_missing(path).await {
+            return Err(crate::core::Error::NotFound(path.to_string()));
         }
         let requests = [PathLockRequest {
             path: path.to_string(),
@@ -392,5 +411,148 @@ impl FileSystem for PathLockWrappedFS {
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> crate::core::Result<()> {
         self.inner.ensure_parent_dirs(path, mode).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::manager::PathLockConfig;
+    use super::*;
+    use crate::core::Error;
+    use crate::lock::provider::MemoryPathLockProvider;
+    use crate::plugins::memfs::MemFileSystem;
+
+    /// Missing at stat time; any subsequent mutation would be a bug.
+    struct MissingFS;
+
+    #[async_trait]
+    impl FileSystem for MissingFS {
+        async fn stat(&self, path: &str) -> crate::core::Result<FileInfo> {
+            Err(Error::NotFound(path.to_string()))
+        }
+
+        async fn remove(&self, _path: &str) -> crate::core::Result<()> {
+            panic!("must not delete after stat returned NotFound")
+        }
+
+        async fn remove_all(&self, _path: &str) -> crate::core::Result<()> {
+            panic!("must not delete recursively after stat returned NotFound")
+        }
+
+        async fn create(&self, _path: &str) -> crate::core::Result<()> {
+            panic!("must not create lock metadata")
+        }
+
+        async fn mkdir(&self, _path: &str, _mode: u32) -> crate::core::Result<()> {
+            panic!("must not create a lock directory")
+        }
+
+        async fn read(
+            &self,
+            _path: &str,
+            _offset: u64,
+            _size: u64,
+        ) -> crate::core::Result<Vec<u8>> {
+            unreachable!()
+        }
+
+        async fn write(
+            &self,
+            _path: &str,
+            _data: &[u8],
+            _offset: u64,
+            _flags: WriteFlag,
+        ) -> crate::core::Result<u64> {
+            panic!("must not write lock metadata")
+        }
+
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<ListSortBy>,
+            _sort_order: Option<SortOrder>,
+        ) -> crate::core::Result<Vec<FileInfo>> {
+            unreachable!()
+        }
+
+        async fn rename(&self, _old_path: &str, _new_path: &str) -> crate::core::Result<()> {
+            unreachable!()
+        }
+
+        async fn chmod(&self, _path: &str, _mode: u32) -> crate::core::Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_deletes_return_without_delegating() {
+        let fs: Arc<dyn FileSystem> = Arc::new(MissingFS);
+        let manager = Arc::new(PathLockManager::new(
+            fs.clone(),
+            Arc::new(MemoryPathLockProvider::new()),
+            PathLockConfig::default(),
+        ));
+        let wrapped = PathLockWrappedFS::new(manager, fs);
+        for recursive in [false, true] {
+            let result = if recursive {
+                wrapped.remove_all("/data/gone").await
+            } else {
+                wrapped.remove("/data/gone").await
+            };
+            assert!(matches!(result, Err(Error::NotFound(path)) if path == "/data/gone"));
+        }
+    }
+
+    async fn wrapped() -> (PathLockWrappedFS, Arc<MemFileSystem>) {
+        let fs = Arc::new(MemFileSystem::new());
+        fs.mkdir("/data", 0o755).await.unwrap();
+        let manager = Arc::new(PathLockManager::new(
+            fs.clone() as Arc<dyn FileSystem>,
+            Arc::new(MemoryPathLockProvider::new()),
+            PathLockConfig::default(),
+        ));
+        (
+            PathLockWrappedFS::new(manager, fs.clone() as Arc<dyn FileSystem>),
+            fs,
+        )
+    }
+
+    #[tokio::test]
+    async fn remove_missing_path_does_not_create_ancestors() {
+        let (wrapped, fs) = wrapped().await;
+        assert!(matches!(
+            wrapped.remove("/data/gone/file.md").await,
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            fs.stat("/data/gone").await,
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_all_missing_path_does_not_create_ancestors() {
+        let (wrapped, fs) = wrapped().await;
+        assert!(matches!(
+            wrapped.remove_all("/data/gone/sub").await,
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            fs.stat("/data/gone").await,
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_existing_path_still_locks_and_deletes() {
+        let (wrapped, fs) = wrapped().await;
+        fs.create("/data/a.md").await.unwrap();
+        wrapped.remove("/data/a.md").await.unwrap();
+        assert!(matches!(
+            fs.stat("/data/a.md").await,
+            Err(Error::NotFound(_))
+        ));
     }
 }
