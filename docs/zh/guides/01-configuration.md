@@ -221,7 +221,7 @@ openviking-server doctor
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
-| `input` | str | 输入类型：`"text"` 或 `"multimodal"` |
+| `input` | str | 输入类型：`"text"` 或 `"multimodal"`。对 `openai`/`ollama` 等 OpenAI 兼容 provider，只有显式设置为 `"multimodal"` 且后端支持内容 parts 时才会发送图片输入；官方 OpenAI 文本模型请使用 `"text"` 或省略。 |
 | `batch_size` | int | 批量请求大小 |
 | `encoding_format` | str | （仅 OpenAI / Azure）Embedding 值的传输格式：`"float"` 或 `"base64"`。留空时使用 OpenAI Python SDK 默认值；当上游网关无法正确处理 base64 embedding payload 时，可设置为 `"float"`。 |
 | `extra_body` | object | （仅 OpenAI / Azure）合并进每次 embedding 请求体的额外 JSON 字段。适用于接受厂商专有字段的 OpenAI 兼容网关，例如 OpenRouter 的 provider 路由 `{"provider": {"sort": "latency"}}`。发生冲突时，显式设置的 `query_param`/`document_param` 键优先。 |
@@ -257,7 +257,7 @@ openviking-server doctor
 | `doubao-embedding-vision-251215` | 1024 | multimodal | 推荐 |
 | `doubao-embedding-250615` | 1024 | text | 仅文本 |
 
-使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。以图搜图需要该模式；纯文本 embedding 模型仍会索引图片 summary，但不能接收图片查询。
+使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。以图搜图需要该模式；纯文本 embedding 模型仍会索引图片 summary，但不能接收图片查询。对于 OpenAI 兼容后端，需确认模型实际接受 `input` 内容 parts（例如 `image_url`），OpenViking 不会替后端完成图片能力转换。
 
 **支持的 provider:**
 - `openai`: OpenAI Embedding API
