@@ -469,6 +469,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/observer/models` | 模型状态 |
 | GET | `/api/v1/observer/lock` | 锁状态 |
 | GET | `/api/v1/observer/retrieval` | 检索状态 |
+| GET | `/api/v1/observer/keyword` | 本地关键词副索引状态 |
 | GET | `/api/v1/observer/filesystem` | 文件系统状态 |
 | GET | `/api/v1/observer/system` | 聚合运行状态 |
 | GET | `/metrics` | Prometheus 指标 |

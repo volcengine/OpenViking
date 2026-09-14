@@ -348,6 +348,53 @@ ov observer retrieval
 
 ---
 
+### observer.keyword
+
+#### 1. API 实现介绍
+
+获取默认账号的本地关键词（FTS5）副索引状态：是否启用、是否就绪、已索引文档数、构建它的分词器版本，以及对应的数据库文件。已启用但尚未索引任何文档时，组件仍视为健康，状态中会标注 "not built yet"；只有副索引不可读才算错误。
+
+**代码入口**:
+- `openviking/server/routers/observer.py:observer_keyword` - HTTP 路由
+- `openviking/service/debug_service.py:ObserverService.keyword` - 核心实现
+- `openviking/storage/keywordfs/keyword_fs.py:KeywordFS.stats` - 副索引统计
+
+#### 2. 接口和参数说明
+
+无参数。
+
+#### 3. 使用示例
+
+**HTTP API**
+
+```
+GET /api/v1/observer/keyword
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/keyword \
+  -H "X-API-Key: your-key"
+```
+
+公开 SDK 和 CLI 目前没有单独的 keyword observer 方法。请使用 HTTP API 查询该组件；`ov observer system` 会在汇总状态中包含它。
+
+**响应示例**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "keyword",
+    "is_healthy": true,
+    "has_errors": false,
+    "status": "Enabled: true\nReady: true\nDocs: 12\nTokenizer version: 1\nLast built: 2026-09-14T02:10:11Z\nDB: /data/_system/keyword/default.sqlite3"
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### observer.filesystem
 
 #### 1. API 实现介绍
@@ -404,7 +451,7 @@ ov observer filesystem
 
 #### 1. API 实现介绍
 
-获取整体系统状态，包括所有组件（queue、vikingdb、models、lock、retrieval）。
+获取整体系统状态，包括所有组件（queue、vikingdb、models、lock、retrieval、keyword）。
 
 **代码入口**:
 - `openviking/server/routers/observer.py:observer_system` - HTTP 路由

@@ -78,6 +78,7 @@ from openviking.storage.viking_fs._base import (
     logger,
 )
 from openviking.storage.viking_fs._grep import _GrepMixin
+from openviking.storage.viking_fs._keyword import _KeywordMixin
 from openviking.storage.viking_fs._ops import _OpsMixin
 from openviking.storage.viking_fs._semantic import _SemanticMixin
 from openviking.storage.viking_fs._snapshot import _SnapshotMixin
@@ -100,8 +101,14 @@ from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking.storage.acl import AclManager
+    from openviking.storage.keywordfs.keyword_fs import KeywordFS
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
+    from openviking_cli.utils.config import (
+        GrepConfig,
+        KeywordConfig,
+        RerankConfig,
+        RetrievalConfig,
+    )
 
 
 # ========== VikingFS Main Class ==========
@@ -112,6 +119,7 @@ class VikingFS(
     _OpsMixin,
     _SyncMixin,
     _GrepMixin,
+    _KeywordMixin,
     _SemanticMixin,
     _SnapshotMixin,
     _VectorMixin,
@@ -134,6 +142,8 @@ class VikingFS(
         acl_manager: Optional["AclManager"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
         grep_config: Optional["GrepConfig"] = None,
+        keyword_config: Optional["KeywordConfig"] = None,
+        keyword_fs: Optional["KeywordFS"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -145,6 +155,8 @@ class VikingFS(
         self.acl_manager = acl_manager
         self.retrieval_config = retrieval_config
         self.grep_config = grep_config
+        self.keyword_config = keyword_config
+        self._keyword_fs = keyword_fs
         self._encryptor = encryptor
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024

@@ -348,6 +348,59 @@ ov observer retrieval
 
 ---
 
+### observer.keyword
+
+#### 1. API Implementation Overview
+
+Get the local keyword (FTS5) sidecar status for the default account: whether the
+sidecar is enabled and ready, how many documents it holds, which tokenizer
+version built it, and which database file backs it. An enabled sidecar that has
+not indexed anything yet is reported as healthy with a "not built yet" note;
+only an unreadable sidecar is an error.
+
+**Code Entry Points**:
+- `openviking/server/routers/observer.py:observer_keyword` - HTTP route
+- `openviking/service/debug_service.py:ObserverService.keyword` - Core implementation
+- `openviking/storage/keywordfs/keyword_fs.py:KeywordFS.stats` - Sidecar statistics
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+GET /api/v1/observer/keyword
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/observer/keyword \
+  -H "X-API-Key: your-key"
+```
+
+The public SDK and CLI have no dedicated keyword observer command yet: query the
+component over HTTP, or use `ov observer system`, whose aggregate status includes
+it.
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "keyword",
+    "is_healthy": true,
+    "has_errors": false,
+    "status": "Enabled: true\nReady: true\nDocs: 12\nTokenizer version: 1\nLast built: 2026-09-14T02:10:11Z\nDB: /data/_system/keyword/default.sqlite3"
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### observer.filesystem
 
 #### 1. API Implementation Overview
@@ -404,7 +457,7 @@ ov observer filesystem
 
 #### 1. API Implementation Overview
 
-Get overall system status, including all components (queue, vikingdb, models, lock, retrieval).
+Get overall system status, including all components (queue, vikingdb, models, lock, retrieval, keyword).
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_system` - HTTP route

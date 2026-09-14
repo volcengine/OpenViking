@@ -3,6 +3,8 @@
 
 from pydantic import BaseModel, Field
 
+from .keyword_config import HybridRetrievalConfig
+
 
 class RetrievalConfig(BaseModel):
     """Configuration for retrieval ranking behavior."""
@@ -44,6 +46,10 @@ class RetrievalConfig(BaseModel):
             "get_context_for_search, and IntentAnalyzer — searches with the raw query only "
             "(same path as no-session search)."
         ),
+    )
+    hybrid: HybridRetrievalConfig = Field(
+        default_factory=HybridRetrievalConfig,
+        description="Keyword/dense score fusion for find/search.",
     )
 
     model_config = {"extra": "forbid"}

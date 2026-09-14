@@ -92,6 +92,16 @@ async def observer_retrieval(
     return Response(status="ok", result=_component_to_dict(component))
 
 
+@router.get("/keyword")
+async def observer_keyword(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get local keyword (FTS5) sidecar status."""
+    service = get_service()
+    component = service.debug.observer.keyword
+    return Response(status="ok", result=_component_to_dict(component))
+
+
 @router.get("/filesystem")
 async def observer_filesystem(
     _ctx: RequestContext = Depends(get_request_context),

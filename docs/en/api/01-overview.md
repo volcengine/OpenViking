@@ -474,6 +474,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/observer/models` | Model status |
 | GET | `/api/v1/observer/lock` | Lock status |
 | GET | `/api/v1/observer/retrieval` | Retrieval status |
+| GET | `/api/v1/observer/keyword` | Local keyword sidecar status |
 | GET | `/api/v1/observer/filesystem` | Filesystem status |
 | GET | `/api/v1/observer/system` | Aggregate runtime status |
 | GET | `/metrics` | Prometheus metrics |

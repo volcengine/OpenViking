@@ -35,6 +35,8 @@ class _VectorMixin:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
             raise
 
+        await self._enqueue_keyword_delete(uris, ctx)
+
     async def _copy_vector_store_uris(
         self,
         old_base: str,
@@ -48,7 +50,7 @@ class _VectorMixin:
         vector_store = self._get_vector_store()
         if not vector_store:
             return None
-        return await vector_store.copy_uri_mapping(
+        result = await vector_store.copy_uri_mapping(
             ctx=self._ctx_or_default(ctx),
             source_uri=old_base,
             target_uri=new_base,
@@ -56,6 +58,14 @@ class _VectorMixin:
             target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
             **({"source_uris": source_uris} if source_uris is not None else {}),
         )
+        # Keep the keyword sidecar in sync with the copied scope.
+        await self._enqueue_keyword_copy(
+            list(source_uris) if source_uris is not None else [old_base],
+            old_base,
+            new_base,
+            ctx,
+        )
+        return result
 
     async def _update_vector_store_uris(
         self,
@@ -73,7 +83,7 @@ class _VectorMixin:
         vector_store = self._get_vector_store()
         if not vector_store:
             return None
-        return await vector_store.update_uri_mapping(
+        result = await vector_store.update_uri_mapping(
             ctx=self._ctx_or_default(ctx),
             source_uri=old_base,
             target_uri=new_base,
@@ -81,6 +91,15 @@ class _VectorMixin:
             target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
             **({"source_uris": source_uris} if source_uris is not None else {}),
         )
+
+        # Keep the keyword sidecar in sync with the moved scope.
+        await self._enqueue_keyword_move(
+            list(source_uris) if source_uris is not None else [old_base],
+            old_base,
+            new_base,
+            ctx,
+        )
+        return result
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""

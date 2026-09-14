@@ -5,8 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Grep engine mode type alias — import this instead of repeating Literal["auto", "fs"]
-GrepEngine = Literal["auto", "fs"]
+# Grep engine mode type alias — import this instead of repeating Literal["auto", "fs", "local", "vikingdb"]
+GrepEngine = Literal["auto", "fs", "local", "vikingdb"]
 
 
 class GrepConfig(BaseModel):
@@ -15,8 +15,11 @@ class GrepConfig(BaseModel):
     engine: GrepEngine = Field(
         default="auto",
         description=(
-            "Search engine mode: 'auto' uses vikingdb bm25 recall when available, "
-            "'fs' forces local filesystem search."
+            "Search engine mode: 'auto' uses remote VikingDB BM25 recall when "
+            "available, falls back to the local FTS5 keyword sidecar when enabled, "
+            "otherwise forces filesystem scan. 'fs' forces filesystem search; "
+            "'local' forces the local FTS5 keyword sidecar; 'vikingdb' forces the "
+            "remote VikingDB BM25 path."
         ),
     )
 
