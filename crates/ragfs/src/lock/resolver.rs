@@ -71,18 +71,20 @@ impl LockPathResolver {
 
     /// Compute the tree lock path for `path`.
     ///
-    /// - Regular directory or missing path → `{path}/.path.ovlock`
-    /// - Existing file path → parent directory sidecar
+    /// - Existing directory → `{path}/.path.ovlock`
+    /// - File or missing path → parent directory sidecar
+    ///
+    /// A missing target must not be materialized just to store its lock. The
+    /// token still carries Tree semantics, regardless of its filename.
     pub async fn resolve_tree_lock_path(&self, path: &str) -> PathLockResult<String> {
-        let stat_result = self.fs.stat(path).await;
-        match stat_result {
-            Ok(info) if !info.is_dir => {
-                // Existing file: use parent sidecar to avoid `{file}/.path.ovlock`.
-                Ok(prefixed_exact_lock_path(path))
-            }
-            _ => Ok(path_lock_path(path)),
-        }
+        self.resolve_exact_lock_path(path).await
     }
+}
+
+/// Both token locations, independent of the target's current filesystem type.
+/// A sidecar acquired while absent remains valid if the target becomes a directory.
+pub(crate) fn lock_conflict_paths(path: &str) -> Vec<String> {
+    vec![path_lock_path(path), prefixed_exact_lock_path(path)]
 }
 
 /// Return the `.path.ovlock` path for one target.

@@ -1216,23 +1216,21 @@ impl PathLockManager {
                 _ => break,
             };
 
-            let ancestor_lock = if parent == "/" {
-                format!("/{}", PATH_LOCK_FILE)
-            } else {
-                format!("{}/{}", parent, PATH_LOCK_FILE)
-            };
-            if let Some(token) = self.provider.read_token(&ancestor_lock).await? {
-                // Only Tree locks propagate to descendants; an Exact lock on
-                // /a must not block /a/b.
-                if token.lock_type == PathLockKind::Tree
-                    && token.owner_id != owner_id
-                    && !self.is_stale(&token, now_ns)
-                {
-                    return Err(PathLockError::Conflict {
-                        lock_path: ancestor_lock,
-                        owner: token.owner_id,
-                        kind: token.lock_type,
-                    });
+            // Missing targets use sidecars. Check both locations even after
+            // creation changes the target's filesystem type.
+            for ancestor_lock in super::resolver::lock_conflict_paths(&parent) {
+                if let Some(token) = self.provider.read_token(&ancestor_lock).await? {
+                    // Only Tree locks propagate to descendants.
+                    if token.lock_type == PathLockKind::Tree
+                        && token.owner_id != owner_id
+                        && !self.is_stale(&token, now_ns)
+                    {
+                        return Err(PathLockError::Conflict {
+                            lock_path: ancestor_lock,
+                            owner: token.owner_id,
+                            kind: token.lock_type,
+                        });
+                    }
                 }
             }
 
@@ -1781,7 +1779,7 @@ impl PathLockManager {
                             .await?
                     }
                     PathLockKind::Tree => {
-                        vec![self.resolver.resolve_tree_lock_path(&request.path).await?]
+                        super::resolver::lock_conflict_paths(&request.path)
                     }
                 };
                 if !expected_paths.contains(lp) {
@@ -1909,17 +1907,14 @@ impl PathLockManager {
                 Some(_) if current != "/" => "/".to_string(),
                 _ => break,
             };
-            let ancestor_lock = if parent == "/" {
-                format!("/{}", PATH_LOCK_FILE)
-            } else {
-                format!("{}/{}", parent, PATH_LOCK_FILE)
-            };
-            if let Ok(Some(token)) = self.provider.read_token(&ancestor_lock).await {
-                // Only Tree locks propagate to descendants.
-                if token.lock_type == PathLockKind::Tree
-                    && (!ignore_stale || !self.is_stale(&token, now_ns))
-                {
-                    return Ok(true);
+            for ancestor_lock in super::resolver::lock_conflict_paths(&parent) {
+                if let Ok(Some(token)) = self.provider.read_token(&ancestor_lock).await {
+                    // Only Tree locks propagate to descendants.
+                    if token.lock_type == PathLockKind::Tree
+                        && (!ignore_stale || !self.is_stale(&token, now_ns))
+                    {
+                        return Ok(true);
+                    }
                 }
             }
             current = parent;
@@ -2547,6 +2542,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deleted_file_tree_lock_preserves_absence_and_excludes_writers() {
+        let (mgr, fs) = make_manager_with_fs().await;
+        let path = "/data/experience.md";
+        fs.write(path, b"experience", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.remove(path).await.unwrap();
+        let lease = mgr.acquire_tree(path, Duration::ZERO, None).await.unwrap();
+        assert!(
+            fs.stat(path).await.is_err(),
+            "locking must not recreate the file as a directory"
+        );
+        assert!(lease.lease.lock_paths[0].starts_with("/data/.exact.ovlock.experience.md."));
+        assert!(matches!(
+            mgr.acquire_exact(path, Duration::ZERO, None).await,
+            Err(PathLockError::Timeout { .. })
+        ));
+        assert!(matches!(
+            mgr.acquire_tree("/data", Duration::ZERO, None).await,
+            Err(PathLockError::Timeout { .. })
+        ));
+        let sibling = mgr
+            .acquire_exact("/data/sibling", Duration::ZERO, None)
+            .await
+            .unwrap();
+        mgr.release(&sibling).await.unwrap();
+        mgr.release(&lease).await.unwrap();
+        assert!(fs.stat(path).await.is_err());
+        let writer = mgr.acquire_exact(path, Duration::ZERO, None).await.unwrap();
+        fs.write(path, b"replacement", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        mgr.release(&writer).await.unwrap();
+        assert!(!fs.stat(path).await.unwrap().is_dir);
+    }
+
+    #[tokio::test]
+    async fn missing_tree_sidecar_covers_descendants_after_directory_creation() {
+        let (mgr, fs) = make_manager_with_fs().await;
+        let lease = mgr
+            .acquire_tree("/data/new", Duration::ZERO, None)
+            .await
+            .unwrap();
+        for created in [false, true] {
+            if created {
+                fs.mkdir("/data/new", 0o755).await.unwrap();
+            }
+            assert!(mgr.is_locked("/data/new/child", true).await.unwrap());
+            assert!(matches!(
+                mgr.acquire_exact("/data/new/child", Duration::ZERO, None)
+                    .await,
+                Err(PathLockError::Timeout { .. })
+            ));
+            assert!(matches!(
+                mgr.acquire_tree("/data/new/child", Duration::ZERO, None)
+                    .await,
+                Err(PathLockError::Timeout { .. })
+            ));
+            assert!(matches!(
+                mgr.acquire_tree("/data/new", Duration::ZERO, None).await,
+                Err(PathLockError::Timeout { .. })
+            ));
+        }
+        let handoff = mgr.to_handoff(&lease);
+        mgr.handoff(&lease).await.unwrap();
+        // A new manager exercises durable adoption, without the local registry fast path.
+        let consumer = PathLockManager::new(fs, mgr.provider.clone(), PathLockConfig::default());
+        let adopted = consumer.adopt(&handoff).await.unwrap();
+        consumer.release(&adopted).await.unwrap();
+        assert!(!consumer.is_locked("/data/new/child", true).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn exact_sidecar_does_not_cover_descendants() {
+        let (mgr, fs) = make_manager_with_fs().await;
+        let exact = mgr
+            .acquire_exact("/data/new", Duration::ZERO, None)
+            .await
+            .unwrap();
+        fs.mkdir("/data/new", 0o755).await.unwrap();
+        assert!(!mgr.is_locked("/data/new/child", true).await.unwrap());
+        let child = mgr
+            .acquire_exact("/data/new/child", Duration::ZERO, None)
+            .await
+            .unwrap();
+        mgr.release(&child).await.unwrap();
+        mgr.release(&exact).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn missing_exact_and_same_path_tree_conflict_in_both_orders() {
         let (mgr, _) = make_manager_with_fs().await;
         let exact = mgr
@@ -2837,10 +2922,14 @@ mod tests {
         let fs = Arc::new(MemFileSystem::new());
         fs.mkdir("/data", 0o755).await.unwrap();
         let provider = Arc::new(FailNextRemoveProvider::with_busy_remove());
+        let lock_path = LockPathResolver::new(fs.clone())
+            .resolve_tree_lock_path("/data/file.txt")
+            .await
+            .unwrap();
         provider
             .inner
             .try_create_token(
-                "/data/file.txt/.path.ovlock",
+                &lock_path,
                 &LockToken {
                     owner_id: "stale-owner".to_string(),
                     time_ns: 1,
