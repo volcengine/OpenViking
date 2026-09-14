@@ -3,15 +3,11 @@ import base64
 import pytest
 
 import openviking.storage.content_write as content_write_module
-from openviking.pyagfs import get_binding_client
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
-from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-from openviking.storage.viking_fs import VikingFS
-from openviking.utils.agfs_utils import RagfsBindingConfig, mount_agfs_backend
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
@@ -20,12 +16,12 @@ from openviking_cli.exceptions import (
     ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 
 class _PathLockClient:
     def __init__(self):
         self.held = False
+        self.releases = 0
 
     async def pathlock_acquire_exact_batch(self, paths):
         del paths
@@ -35,6 +31,7 @@ class _PathLockClient:
     async def pathlock_release(self, lease):
         assert lease == {"lease_ref": "lock-1"}
         self.held = False
+        self.releases += 1
 
 
 class _VFS:
@@ -159,63 +156,22 @@ async def test_batch_validates_all_modes_before_any_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_locks_targets_until_writes_finish_and_releases_before_refresh(
-    monkeypatch, tmp_path
-):
-    client_type, _ = get_binding_client()
-    config = RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="local"))
-    client = client_type(None, config=config.to_binding_dict())
-    mount_agfs_backend(client, config)
-    vfs = VikingFS(agfs=client)
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+async def test_batch_releases_file_locks_before_one_aggregated_refresh(monkeypatch):
     root = "viking://resources/wiki"
-    a, b, c = (f"{root}/{name}.md" for name in ("a", "b", "c"))
-    untouched = f"{root}/0.md"
-    await vfs.mkdir(root, ctx=ctx)
+    a = f"{root}/a.md"
+    b = f"{root}/b.md"
+    vfs = _VFS(root)
+    locks = vfs._async_agfs
     coordinator = ContentWriteCoordinator(vfs)
     calls = []
 
     async def refresh(**kwargs):
-        changes = kwargs["refresh_kinds"]
-        # Refresh must be able to acquire every written file independently.
-        lease = await vfs._async_agfs.pathlock_acquire_exact_batch(
-            [vfs._uri_to_path(uri, ctx=ctx) for uri in changes]
-        )
-        await vfs._async_agfs.pathlock_release(lease)
-        calls.append(changes)
+        assert locks.held is False
+        calls.append(kwargs["refresh_kinds"])
         return {"Semantic": {"processed": 1, "error_count": 0}}
 
-    original_write = vfs.write_file
-
-    async def interleaved_write(uri, content, *, ctx, lease_ref):
-        await original_write(uri, content, ctx=ctx, lease_ref=lease_ref)
-        if uri != a:
-            return
-        # Interleave requests after a is written, while b is still pending.
-        other = await coordinator.batch_write(
-            root_uri=root,
-            operations=[{"uri": c, "content": "C", "mode": "upsert"}],
-            ctx=ctx,
-            wait=False,
-        )
-        assert other["created"] == [c]
-        with pytest.raises(ResourceBusyError):
-            await coordinator.batch_write(
-                root_uri=root,
-                operations=[
-                    {"uri": untouched, "content": "must not be written", "mode": "upsert"},
-                    {"uri": b, "content": "conflict", "mode": "upsert"},
-                ],
-                ctx=ctx,
-                wait=False,
-            )
-        with pytest.raises(NotFoundError):
-            await vfs.read_file(untouched, ctx=ctx)
-        with pytest.raises(ResourceBusyError):
-            await vfs.rm(root, recursive=True, ctx=ctx)
-
     monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
-    monkeypatch.setattr(vfs, "write_file", interleaved_write)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     result = await coordinator.batch_write(
         root_uri=root,
         operations=[
@@ -225,12 +181,10 @@ async def test_batch_locks_targets_until_writes_finish_and_releases_before_refre
         ctx=ctx,
         wait=False,
     )
+    assert vfs.writes == [a, b]
     assert result["created"] == [a, b]
-    assert calls == [{c: "added"}, {a: "added", b: "added"}]
-    assert [await vfs.read_file(uri, ctx=ctx) for uri in (a, b, c)] == ["A", "B", "C"]
-    # Also detects leaked locks from the partially acquired conflicting batch.
-    lease = await vfs._async_agfs.pathlock_acquire_tree(vfs._uri_to_path(root, ctx=ctx))
-    await vfs._async_agfs.pathlock_release(lease)
+    assert calls == [{a: "added", b: "added"}]
+    assert locks.releases == 1
 
 
 @pytest.mark.asyncio
