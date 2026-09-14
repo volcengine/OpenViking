@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 from openviking.core.namespace import is_content_root_uri
@@ -937,6 +937,9 @@ class ResourceService:
         understanding_response_id = None
         understanding_file_id = None
         defer_unnamed_target = False
+        tos_header_auth = bool(
+            processor_kwargs.get("tos_signature") or processor_kwargs.get("tos_access")
+        )
 
         if git_source:
             reject_git_http_userinfo(path)
@@ -1005,58 +1008,82 @@ class ResourceService:
                     queued_args["parser_backend"] = processor_kwargs.get("parser_backend")
                     queued_args["_feishu_prepared_source"] = True
         else:
-            prepared = await self._resource_processor.prepare_durable_source(
-                path,
-                ctx,
-                snapshot_required=local_source
-                or bool(
-                    processor_kwargs.get("tos_signature") or processor_kwargs.get("tos_access")
-                ),
-                parse_mode=mode,
-                allow_local_path_resolution=allow_local_path_resolution,
-                **processor_kwargs,
+            direct_understanding = bool(
+                remote_source
+                and mode is ParseMode.DEFAULT
+                and not tos_header_auth
+                and self._resource_processor.should_use_understanding_directly(
+                    path,
+                    **processor_kwargs,
+                )
             )
-            if prepared is None:
-                parsed_path = Path(urlparse(path).path)
+            if direct_understanding:
+                parsed_url = urlparse(path)
+                parsed_path = Path(unquote(parsed_url.path))
+                queued_path = parsed_url._replace(query="", fragment="").geturl()
                 source_name = source_name or parsed_path.name or None
                 source_info = _ResourceSourceInfo(
                     source_name=source_name,
-                    source_path=path,
+                    source_path=queued_path,
                     source_format=parsed_path.suffix.lower().lstrip(".") or "file",
                 )
+                understanding_response_id = await self._resource_processor.submit_understanding(
+                    path,
+                    **processor_kwargs,
+                )
+                path = queued_path
             else:
-                try:
-                    resolved_extension, source_info = self._prepared_source_info(
-                        prepared,
-                        path,
-                        source_name,
-                        use_path_name=local_source,
+                prepared = await self._resource_processor.prepare_durable_source(
+                    path,
+                    ctx,
+                    snapshot_required=local_source or tos_header_auth,
+                    parse_mode=mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    **processor_kwargs,
+                )
+                if prepared is None:
+                    parsed_path = Path(urlparse(path).path)
+                    source_name = source_name or parsed_path.name or None
+                    source_info = _ResourceSourceInfo(
+                        source_name=source_name,
+                        source_path=path,
+                        source_format=parsed_path.suffix.lower().lstrip(".") or "file",
                     )
-                    if resolved_extension:
-                        queued_args["resolved_extension"] = resolved_extension
-                    if (
-                        mode is ParseMode.DEFAULT
-                        and self._resource_processor.should_use_understanding_api(prepared)
-                    ):
-                        if processor_kwargs.get("temp_file_id"):
-                            understanding_file_id = (
-                                await self._resource_processor.upload_understanding_file(prepared)
-                            )
-                        else:
-                            understanding_response_id = (
-                                await self._resource_processor.submit_understanding(
-                                    prepared,
-                                    **processor_kwargs,
-                                )
-                            )
-                    else:
-                        staged_source = await stage_source(
+                else:
+                    try:
+                        resolved_extension, source_info = self._prepared_source_info(
                             prepared,
-                            viking_fs=self._viking_fs,
-                            ctx=ctx,
+                            path,
+                            source_name,
+                            use_path_name=local_source,
                         )
-                finally:
-                    prepared.cleanup()
+                        if resolved_extension:
+                            queued_args["resolved_extension"] = resolved_extension
+                        if (
+                            mode is ParseMode.DEFAULT
+                            and self._resource_processor.should_use_understanding_api(prepared)
+                        ):
+                            if processor_kwargs.get("temp_file_id"):
+                                understanding_file_id = (
+                                    await self._resource_processor.upload_understanding_file(
+                                        prepared
+                                    )
+                                )
+                            else:
+                                understanding_response_id = (
+                                    await self._resource_processor.submit_understanding(
+                                        prepared,
+                                        **processor_kwargs,
+                                    )
+                                )
+                        else:
+                            staged_source = await stage_source(
+                                prepared,
+                                viking_fs=self._viking_fs,
+                                ctx=ctx,
+                            )
+                    finally:
+                        prepared.cleanup()
 
         return _SourcePlan(
             path=path,

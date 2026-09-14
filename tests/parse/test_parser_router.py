@@ -38,6 +38,43 @@ def test_should_use_understanding_api_for_signed_video_url(monkeypatch):
     )
 
 
+def test_tos_video_url_can_submit_to_understanding_directly(monkeypatch):
+    config = SimpleNamespace(
+        parser_api=SimpleNamespace(
+            enable=True,
+            enable_feishu_url=False,
+            extensions=["mp4"],
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: config,
+    )
+
+    router = ParserRouter(parser_registry=object())
+    from openviking.parse.understanding_api import UnderstandingAPI
+
+    router._understanding_api = UnderstandingAPI.__new__(UnderstandingAPI)
+
+    assert router.should_use_understanding_directly(
+        "https://bucket.tos-cn-beijing.volces.com/video/sample.mp4?signature=1"
+    )
+    assert not router.should_use_understanding_directly(
+        "https://example.com/video/sample.mp4?signature=1"
+    )
+    assert not router.should_use_understanding_directly(
+        "https://bucket.tos-cn-beijing.volces.com/video/sample.pdf?signature=1"
+    )
+    assert not router.should_use_understanding_directly(
+        "https://bucket.tos-cn-beijing.volces.com/video/sample.mp4",
+        tos_signature="header-signature",
+    )
+    assert not router.should_use_understanding_directly(
+        "https://bucket.tos-cn-beijing.volces.com/video/sample.mp4",
+        tos_access="header-access",
+    )
+
+
 def test_resolved_extension_routes_extensionless_download(monkeypatch, tmp_path):
     config = SimpleNamespace(
         parser_api=SimpleNamespace(
