@@ -489,18 +489,24 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
       uint32_t offset;
       if (sizeof(offset) >
           serialized_data.size() -
-              static_cast<size_t>(field_ptr - serialized_data.data()))
-        return std::vector<std::string>{};
+              static_cast<size_t>(field_ptr - serialized_data.data())) {
+        throw std::runtime_error("LIST_STRING field '" + meta.name +
+                                 "' truncated while reading offset");
+      }
       std::memcpy(&offset, field_ptr, sizeof(offset));
-      if (offset >= serialized_data.size())
-        return std::vector<std::string>{};
+      if (offset >= serialized_data.size()) {
+        throw std::runtime_error("LIST_STRING field '" + meta.name +
+                                 "' offset out of range");
+      }
 
       const char* var_ptr = ptr + offset;
       uint16_t list_len;
 
       if (static_cast<size_t>(offset) + sizeof(list_len) >
-          serialized_data.size())
-        return std::vector<std::string>{};
+          serialized_data.size()) {
+        throw std::runtime_error("LIST_STRING field '" + meta.name +
+                                 "' truncated while reading list length");
+      }
       std::memcpy(&list_len, var_ptr, sizeof(list_len));
       var_ptr += sizeof(list_len);
 
@@ -509,13 +515,17 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
       for (int i = 0; i < list_len; ++i) {
         uint16_t s_len;
         if (static_cast<size_t>(var_ptr - ptr) + sizeof(s_len) >
-            serialized_data.size())
-          break;
+            serialized_data.size()) {
+          throw std::runtime_error("LIST_STRING field '" + meta.name +
+                                   "' truncated while reading element length");
+        }
         std::memcpy(&s_len, var_ptr, sizeof(s_len));
         var_ptr += sizeof(s_len);
 
-        if (static_cast<size_t>(var_ptr - ptr) + s_len > serialized_data.size())
-          break;
+        if (static_cast<size_t>(var_ptr - ptr) + s_len > serialized_data.size()) {
+          throw std::runtime_error("LIST_STRING field '" + meta.name +
+                                   "' truncated while reading element data");
+        }
         vec.emplace_back(var_ptr, s_len);
         var_ptr += s_len;
       }
