@@ -158,6 +158,12 @@ int parse_dsl_query(const std::string& dsl_filter_query_str,
   }
   if (has_filter) {
     ctx.filter_op = parse_filter_json_doc_outter(dsl_filter_query);
+    if (!ctx.filter_op) {
+      SPDLOG_ERROR(
+          "IndexManagerImpl::parse_dsl_query filter parse failed: {}",
+          dsl_filter_query_str);
+      return -1;
+    }
   }
   if (has_sorter) {
     ctx.sorter_op = parse_sorter_json_doc_outter(dsl_filter_query);
