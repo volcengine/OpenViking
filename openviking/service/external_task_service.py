@@ -65,12 +65,18 @@ class ExternalTaskProvider(Protocol):
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot: ...
 
     async def cancel(
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot: ...
 
 
@@ -276,7 +282,12 @@ class ExternalTaskService:
                 )
             while True:
                 snapshot = await self._retry(
-                    lambda: provider.get(external_task_id, connection),
+                    lambda: provider.get(
+                        external_task_id,
+                        connection,
+                        payload=payload,
+                        private_payload=private_payload,
+                    ),
                     task_id=task_id,
                     operation_name="poll",
                     poll_interval=provider.poll_interval_seconds,
@@ -359,7 +370,9 @@ class ExternalTaskService:
             meta = snapshot.meta or {}
             if task is not None and (
                 task.stage != stage
-                or any(key not in task.meta or task.meta[key] != value for key, value in meta.items())
+                or any(
+                    key not in task.meta or task.meta[key] != value for key, value in meta.items()
+                )
             ):
                 await tracker.update_stage(
                     task_id,
@@ -441,7 +454,9 @@ class ExternalTaskService:
                         user_id=user_id,
                     )
                 snapshot = await self._retry(
-                    lambda task_id=external_task_id: provider.cancel(task_id, connection),
+                    lambda task_id=external_task_id: provider.cancel(
+                        task_id, connection, payload=payload, private_payload=private_payload
+                    ),
                     task_id=ov_task_id,
                     operation_name="cancel",
                     poll_interval=provider.poll_interval_seconds,
@@ -457,7 +472,9 @@ class ExternalTaskService:
                         return
                     await asyncio.sleep(provider.poll_interval_seconds)
                     snapshot = await self._retry(
-                        lambda task_id=external_task_id: provider.get(task_id, connection),
+                        lambda task_id=external_task_id: provider.get(
+                            task_id, connection, payload=payload, private_payload=private_payload
+                        ),
                         task_id=ov_task_id,
                         operation_name="poll cancellation",
                         poll_interval=provider.poll_interval_seconds,

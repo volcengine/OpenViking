@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 import openviking.server.routers.bot as bot_router_module
 import openviking.server.routers.compile as compile_router_module
+import openviking.server.routers.tasks as tasks_router_module
 import openviking.service.compile_service as compile_service_module
 import openviking.service.external_task_service as external_task_service_module
 from openviking.server.auth.plugins import DevAuthPlugin, TrustedAuthPlugin
@@ -296,10 +297,29 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("finish", ["complete", "cancel", "poll_failure", "restart"])
+@pytest.mark.parametrize(
+    "finish", ["complete", "cancel", "poll_failure", "restart", "restart_cancel"]
+)
+@pytest.mark.parametrize(
+    "args",
+    [
+        None,
+        {},
+        {"user_key": ""},
+        {"user_key": "model-user-key"},
+        {
+            "model_name": "model-1",
+            "user_key": "model-user-key",
+            "api_key": "compile-api-key",
+            "options": {"temperature": 0.2, "tags": ["wiki", "source"]},
+        },
+    ],
+    ids=["no-args", "empty-args", "empty-key", "private-only", "full-args"],
+)
 async def test_compile_api_client_session_protocol_retry_and_cancellation(
-    monkeypatch, tmp_path, finish
+    monkeypatch, tmp_path, caplog, finish, args
 ):
+    """Runtime callbacks retain saved args through polling, cancellation, and queue recovery."""
     forwarded = []
     response_status = {
         "cancel": "cancelled",
@@ -374,17 +394,14 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
             "instruction": "Keep supporting evidence.",
-            "args": {
-                "model_name": "model-1",
-                "user_key": "model-user-key",
-                "api_key": "compile-api-key",
-            },
+            "args": args,
         }
     )
     monkeypatch.setattr(service, "_normalize_request", AsyncMock(return_value=request))
     store = PersistentTaskStore(MockLocalAGFS(root_path=tmp_path))
     tracker = TaskTracker(store)
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(tasks_router_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr(
         external_task_service_module,
         "get_queue_manager",
@@ -392,23 +409,31 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     )
     connection = {"api_key": "active-user-key"}
     owner = {"account_id": "acct", "user_id": "alice"}
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
     task = await service.create(
         request,
         connection=connection,
-        ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+        ctx=ctx,
     )
-    assert task.to_dict()["meta"]["request"]["args"] == {"model_name": "model-1"}
+    public_args = {
+        key: value for key, value in (args or {}).items() if key not in {"user_key", "api_key"}
+    }
+    private_args = {
+        key: value for key, value in (args or {}).items() if key in {"user_key", "api_key"}
+    }
+    private_payload = {"args": private_args} if private_args else {}
+    assert task.to_dict()["meta"]["request"].get("args", {}) == public_args
     stored = await store.get(task.task_id, **owner)
-    assert stored["meta"]["request"]["args"] == {"model_name": "model-1"}
+    assert stored is not None
+    assert stored["meta"]["request"].get("args", {}) == public_args
 
     tracker = TaskTracker(store)
     restored = await tracker.get(task.task_id, **owner)
+    assert restored is not None
     listed = (await tracker.list_tasks(**owner))[0]
     assert restored.to_dict() == listed.to_dict() == task.to_dict()
     auth = await tracker.get_task_auth(task.task_id, **owner)
-    assert auth["external_request_private"] == {
-        "args": {"user_key": "model-user-key", "api_key": "compile-api-key"}
-    }
+    assert auth["external_request_private"] == private_payload
     external_task_id = await service.submit(
         task.task_id,
         restored.meta["request"],
@@ -418,10 +443,14 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     status_snapshot = await service.get(
         external_task_id,
         {"api_key": "active-user-key"},
+        payload=restored.meta["request"],
+        private_payload=auth["external_request_private"],
     )
     cancel_snapshot = await service.cancel(
         external_task_id,
         {"api_key": "active-user-key"},
+        payload=restored.meta["request"],
+        private_payload=auth["external_request_private"],
     )
 
     assert external_task_id == "ma-session-1"
@@ -441,16 +470,18 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
             "instruction": "Keep supporting evidence.",
-            "args": {
-                "model_name": "model-1",
-                "user_key": "model-user-key",
-                "api_key": "compile-api-key",
-            },
+            **({"args": args} if args else {}),
         },
     }
-    assert forwarded[1]["body"] == {"session_id": "ma-session-1"}
+    callback_body = {"session_id": "ma-session-1", **({"args": args} if args else {})}
+    assert forwarded[1]["body"] == forwarded[2]["body"] == callback_body
+    assert restored.meta["request"].get("args", {}) == public_args
     assert status_snapshot.meta == {"token_usage": {"total_tokens": 12}}
     assert cancel_snapshot.status == "cancelled"
+    if not args:
+        await service.get(external_task_id, connection)
+        await service.cancel(external_task_id, connection)
+        assert forwarded[-1]["body"] == forwarded[-2]["body"] == callback_body
     await tracker.complete(task.task_id, {"output": "wiki"}, **owner)
     assert await tracker.get_task_auth(task.task_id, **owner) == {}
 
@@ -517,17 +548,21 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     async def runtime_request(_client, method, url, headers, json):
         nonlocal polls
         if url.endswith("/runtime/v1/tasks"):
+            assert json["payload"].get("args") == (args or None)
             task_id = headers["Idempotency-Key"]
             if task_id == rejected_id:
                 return FakeResponse({"detail": "invalid request"}, status_code=422)
             submitted.append(task_id)
             return FakeResponse({"session_id": task_id})
         task_id = json["session_id"]
+        assert json == {"session_id": task_id, **({"args": args} if args else {})}
         if task_id != first.task_id:
             return FakeResponse({"status": "completed", "stage": "done", "result": {"ok": True}})
         if url.endswith("/cancel"):
             cancel_entered.set()
             await release.wait()
+            return FakeResponse({"status": "cancelling", "stage": "cancelling"})
+        if cancel_entered.is_set():
             return FakeResponse({"status": "cancelled", "stage": "cancelled"})
         polls += 1
         if polls == 1:
@@ -546,6 +581,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             "compile",
             resource_id="viking://resources/source",
             payload={**restored.meta["request"], "to": target},
+            private_payload=private_payload,
             connection={"api_key": "active-user-key"},
             ctx=RequestContext(user=UserIdentifier(account, user), role=Role.USER),
         )
@@ -560,6 +596,13 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     other_account = await create(account="other-account")
     worker = asyncio.create_task(queue.dequeue())
     await asyncio.wait_for(entered.wait(), timeout=5)
+    queried = await tasks_router_module.get_task(
+        first.task_id,
+        include_events=False,
+        _ctx=ctx,
+    )
+    assert queried.result == (await state(first)).to_dict()
+    assert queried.result["meta"]["request"].get("args", {}) == public_args
 
     await queue.dequeue()  # Same target rotates, including across users.
     assert (await state(waiting)).status == TaskStatus.PENDING
@@ -578,7 +621,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
         await asyncio.wait_for(cancel_entered.wait(), timeout=5)
         assert (await state(first)).status == TaskStatus.CANCELLING
-    elif finish == "restart":
+    elif finish in {"restart", "restart_cancel"}:
         worker.cancel()  # Process stops without requesting cancellation of the OV task.
         with pytest.raises(asyncio.CancelledError):
             await worker
@@ -594,13 +637,16 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     await queue.dequeue()
     assert waiting.task_id not in submitted
     assert (await state(waiting)).status == TaskStatus.PENDING
+    if finish == "restart_cancel":
+        await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
     release.set()
-    if finish == "restart":
+    if finish in {"restart", "restart_cancel"}:
         await queue.dequeue()
     else:
         await asyncio.wait_for(worker, timeout=5)
     expected = {
         "cancel": TaskStatus.CANCELLED,
+        "restart_cancel": TaskStatus.CANCELLED,
         "poll_failure": TaskStatus.FAILED,
     }.get(finish, TaskStatus.COMPLETED)
     assert (await state(first)).status == expected
@@ -623,6 +669,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     after_rejection = await create()
     await queue.dequeue()
     assert (await state(after_rejection)).status == TaskStatus.COMPLETED
+    for secret in private_args.values():
+        if secret:
+            assert secret not in caplog.text
 
 
 @pytest.mark.asyncio

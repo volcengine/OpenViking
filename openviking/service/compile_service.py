@@ -62,7 +62,9 @@ class CompileRequest(BaseModel):
         self.from_ = sources
         self.to = self.to.strip().rstrip("/")
         self.skill = self.skill.strip().rstrip("/")
-        self.instruction = self.instruction.strip() if self.instruction and self.instruction.strip() else None
+        self.instruction = (
+            self.instruction.strip() if self.instruction and self.instruction.strip() else None
+        )
         self.args = dict(self.args) if self.args else None
         if not self.to:
             raise ValueError("to must not be empty")
@@ -147,11 +149,13 @@ class CompileAPIClient:
         session_id: str,
         *,
         connection: Mapping[str, Any],
+        args: Mapping[str, Any] | None = None,
     ) -> CompileSessionStatus:
+        """Query a session with its original args; omit args for legacy tasks."""
         body = await self._request(
             "POST",
             "/runtime/v1/tasks/status",
-            json={"session_id": session_id},
+            json={"session_id": session_id, **({"args": dict(args)} if args is not None else {})},
             headers=self._headers(connection),
         )
         return self._validate(CompileSessionStatus, body)
@@ -161,11 +165,13 @@ class CompileAPIClient:
         session_id: str,
         *,
         connection: Mapping[str, Any],
+        args: Mapping[str, Any] | None = None,
     ) -> CompileSessionStatus:
+        """Cancel a session with its original args; omit args for legacy tasks."""
         body = await self._request(
             "POST",
             "/runtime/v1/tasks/cancel",
-            json={"session_id": session_id},
+            json={"session_id": session_id, **({"args": dict(args)} if args is not None else {})},
             headers=self._headers(connection),
         )
         return self._validate(CompileSessionStatus, body)
@@ -315,13 +321,9 @@ class CompileService:
         connection: Mapping[str, Any],
     ) -> str:
         request_payload = dict(payload)
-        public_args = request_payload.get("args")
-        private_args = private_payload.get("args")
-        if isinstance(public_args, dict) or isinstance(private_args, dict):
-            request_payload["args"] = {
-                **(public_args if isinstance(public_args, dict) else {}),
-                **(private_args if isinstance(private_args, dict) else {}),
-            }
+        args = self._merge_args(payload, private_payload)
+        if args is not None:
+            request_payload["args"] = args
         accepted = await self._client().create(
             {"task_type": self.task_type, "payload": request_payload},
             connection=connection,
@@ -333,15 +335,54 @@ class CompileService:
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot:
-        return self._snapshot(await self._client().get(external_task_id, connection=connection))
+        """Query Runtime using args from the task's persisted public and private payloads."""
+        return self._snapshot(
+            await self._client().get(
+                external_task_id,
+                connection=connection,
+                args=self._merge_args(payload, private_payload),
+            )
+        )
 
     async def cancel(
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot:
-        return self._snapshot(await self._client().cancel(external_task_id, connection=connection))
+        """Cancel Runtime work using the original task payloads, including restored secrets."""
+        return self._snapshot(
+            await self._client().cancel(
+                external_task_id,
+                connection=connection,
+                args=self._merge_args(payload, private_payload),
+            )
+        )
+
+    @staticmethod
+    def _merge_args(
+        payload: Mapping[str, Any] | None,
+        private_payload: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Recombine saved args without mutation, or return None when absent.
+
+        Private values take precedence. The result can contain credentials and
+        is only for Runtime request bodies, never logs or public task metadata.
+        """
+        public_args = (payload or {}).get("args")
+        private_args = (private_payload or {}).get("args")
+        if not isinstance(public_args, dict) and not isinstance(private_args, dict):
+            return None
+        return {
+            **(public_args if isinstance(public_args, dict) else {}),
+            **(private_args if isinstance(private_args, dict) else {}),
+        }
 
     async def _normalize_request(
         self,
@@ -487,6 +528,7 @@ class CompileService:
             error_code=error_code,
             error_message=error_message,
         )
+
 
 __all__ = [
     "CompileAPIClient",
