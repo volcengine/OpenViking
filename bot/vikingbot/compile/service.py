@@ -2006,7 +2006,8 @@ class BotCompileService:
                     "On validation failure, make one targeted repair within at most three remaining model turns; "
                     "a second invalid submission ends repair. Each repair round includes the validation "
                     "error and remaining repair budget. If repair does not succeed, runtime commits every "
-                    "file in the final output directory as written, without content validation or an "
+                    "file in the final output directory, completing links in valid Wiki pages and "
+                    "preserving invalid files as written, without requiring content validation or an "
                     "incomplete-output report. Preserve generated files and existing target files; "
                     "do not launch reviewers or rewrite all pages."
                 )

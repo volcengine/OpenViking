@@ -395,7 +395,7 @@ class CompileChildTool(Tool):
 
 
 class SubmitCompileOutputTool(Tool):
-    """Prepare Resource upserts, with bounded validation repair and byte-preserving fallback."""
+    """Prepare Resource upserts, completing valid Wiki links and preserving invalid fallback files."""
 
     def __init__(
         self,
@@ -421,7 +421,7 @@ class SubmitCompileOutputTool(Tool):
         self.warnings: list[str] = []
         # Task-owned children must be collected before output can be finalized.
         self.submission_guard: Callable[[bool], str | None] | None = None
-        # Normal submission checks merge coverage; exhausted repair submits files as written.
+        # Only normal submission requires complete merge coverage.
         self.output_guard: Callable[[Any, dict[str, bytes]], Awaitable[None]] | None = None
 
     @property
@@ -435,7 +435,8 @@ class SubmitCompileOutputTool(Tool):
             "Pass no pages, files, paths, or content; "
             "Compile preserves omitted existing target files and commits "
             "validated changes. If bounded repair cannot resolve validation errors, "
-            "the runtime commits every generated final-output file as written."
+            "the runtime completes links in valid Wiki pages and commits every generated "
+            "final-output file, preserving invalid files as written."
         )
 
     @property
@@ -542,9 +543,10 @@ class SubmitCompileOutputTool(Tool):
     async def accept_generated_output(self, tool_context: ToolContext) -> None:
         """Prepare every final-output file for upsert when repair or execution rounds run out.
 
-        This runtime-only path bypasses content, link and merge-coverage validation.
-        It retains original bytes and target-relative paths, leaves omitted targets alone,
-        and raises for missing output or filesystem errors rather than silently skipping files.
+        Valid Wiki pages receive normal link completion using the retained target catalog.
+        Invalid pages and other artifacts retain their bytes and target-relative paths;
+        merge coverage is not required. Retained navigation may be refreshed, while other
+        omitted targets remain unchanged. Missing output and read failures raise.
         """
         self.bundle = None
         self.page_count = self.file_count = 0
@@ -554,6 +556,28 @@ class SubmitCompileOutputTool(Tool):
         if not files:
             raise ValueError("No generated final-output files to submit")
         rendered = RenderedBundle()
+        valid_files: dict[str, bytes] = {}
+        for path, payload in files.items():
+            try:
+                if validate_resource_file(path, payload):
+                    valid_files[path] = payload
+            except (ValueError, UnicodeError):
+                continue
+        if valid_files:
+            if self._load_existing is not None and self._existing_catalog is None:
+                self._existing_catalog = await self._load_existing()
+            existing_files, known_paths = self._existing_catalog or ({}, set())
+            finalized = finalize_resource_output(
+                valid_files,
+                target_uri=self.target_uri,
+                source_roots=self.source_roots,
+                # Invalid output still occupies its path, including unfinished indexes.
+                existing_files={**existing_files, **files},
+                known_paths=known_paths,
+            )
+            files.update(finalized.files)
+            rendered.link_count = finalized.link_count
+            rendered.link_report = finalized.link_report
         for path, payload in sorted(files.items()):
             uri = safe_join_viking_uri(self.target_uri, path).rstrip("/")
             rendered.operations.append(
