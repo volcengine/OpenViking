@@ -30,15 +30,24 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeVikingFS:
-    def __init__(self, tree, abstracts=None):
+    def __init__(self, tree, abstracts=None, file_uris=None):
         self._tree = tree
         self._abstracts = abstracts or {}
+        self._file_uris = set(file_uris or ())
         self.writes = []
         self._async_agfs = self
 
     async def ls(self, uri, node_limit=None, ctx=None):
         del node_limit
         return self._tree.get(uri, [])
+
+    async def stat(self, uri, ctx=None):
+        del ctx
+        if uri in self._file_uris:
+            return {"isDir": False}
+        if uri not in self._tree:
+            raise FileNotFoundError(uri)
+        return {"isDir": True}
 
     async def write_file(self, path, content, ctx=None, lease_ref=None):
         self.writes.append((path, content))
@@ -498,6 +507,33 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     )
     assert processor.vectorized_dirs == []
     assert processor.vectorized_files == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("root_kind", ["missing", "file"])
+async def test_semantic_dag_does_not_materialize_non_directory_root(monkeypatch, root_kind):
+    root_uri = "viking://resources/chunked-away.md"
+    fake_fs = _FakeVikingFS(
+        tree={"viking://resources": []},
+        file_uris=[root_uri] if root_kind == "file" else [],
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    _patch_semantic_config(monkeypatch)
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=1,
+        ctx=ctx,
+        skip_vectorization=True,
+    )
+
+    await executor.run(root_uri)
+
+    assert fake_fs.writes == []
+    assert processor.overview_inputs == []
 
 
 if __name__ == "__main__":
