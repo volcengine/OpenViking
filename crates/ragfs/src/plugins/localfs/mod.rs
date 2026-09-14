@@ -402,7 +402,8 @@ impl LocalFileSystem {
         };
         cmd.current_dir(current_dir);
 
-        cmd.arg(pattern);
+        // Keep user-controlled patterns and file names out of option parsing.
+        cmd.arg("--").arg(pattern);
         // Search relative to the query root so returned paths can be interpreted as query-root relative.
         if target_path.is_dir() {
             cmd.arg(".");
@@ -1655,22 +1656,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_localfs_grep_returns_query_root_relative_paths() {
-        let (dir, fs) = fallback_localfs();
-        write_file(dir.path(), "sub/a.txt", "hello\n");
+        let dir = TempDir::new().unwrap();
+        write_file(dir.path(), "sub/-a.txt", "hello --version\n");
+        let mut fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
 
-        let result = fs
-            .grep("/sub", "hello", true, false, None, None, None)
-            .await
-            .unwrap();
-        assert_eq!(result.count, 1);
-        assert_eq!(result.matches[0].file, "a.txt");
+        for has_rg in [fs.has_rg, false] {
+            fs.has_rg = has_rg;
+            for pattern in ["--version", "hello"] {
+                let result = fs
+                    .grep("/sub", pattern, true, false, None, None, None)
+                    .await
+                    .unwrap();
+                assert_eq!(result.count, 1);
+                assert_eq!(result.matches[0].file, "-a.txt");
+                assert_eq!(result.matches[0].content, "hello --version");
 
-        let single_file = fs
-            .grep("/sub/a.txt", "hello", true, false, None, None, None)
-            .await
-            .unwrap();
-        assert_eq!(single_file.count, 1);
-        assert_eq!(single_file.matches[0].file, ".");
+                let single_file = fs
+                    .grep("/sub/-a.txt", pattern, true, false, None, None, None)
+                    .await
+                    .unwrap();
+                assert_eq!(single_file.count, 1);
+                assert_eq!(single_file.matches[0].file, ".");
+                assert_eq!(single_file.matches[0].content, "hello --version");
+            }
+        }
     }
 
     #[cfg(unix)]
