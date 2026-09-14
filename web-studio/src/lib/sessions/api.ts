@@ -288,6 +288,62 @@ export async function extractSession(sessionId: string): Promise<unknown> {
   )
 }
 
+export interface RetryFailedCommitsEntry {
+  archive_uri?: string
+  task_id?: string
+  reason?: string
+  error?: string
+}
+
+export interface RetryFailedCommitsResult {
+  retried: RetryFailedCommitsEntry[]
+  skipped: RetryFailedCommitsEntry[]
+  failed: RetryFailedCommitsEntry[]
+  task_ids: Array<string | undefined>
+}
+
+/**
+ * Re-enqueue memory extraction for failed session commit archives.
+ *
+ * Unlike `commitSession` — which silently no-ops (`skipped/no_messages`) for
+ * an already-archived session — this targets the failed Phase 2 archives
+ * directly: the server clears each `.failed.json` marker and re-enqueues the
+ * persisted Phase 2 work under a fresh task ID.
+ */
+export async function retryFailedCommits(
+  sessionId: string,
+  archiveUri?: string,
+): Promise<RetryFailedCommitsResult> {
+  const resp = await ovClient.instance.post(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/commits/retry`,
+    archiveUri === undefined ? {} : { archive_uri: archiveUri },
+  )
+  // The endpoint is not part of the generated client schema yet; parse the
+  // envelope defensively like the reindex calls in the tasks route do.
+  const payload: any = resp.data
+  if (payload?.status === 'error' || payload?.error) {
+    throw normalizeOvClientError(
+      new Error(
+        (typeof payload.error === 'object' && payload.error?.message) ||
+          payload.message ||
+          'Re-queue failed',
+      ),
+    )
+  }
+  const result: any = payload?.result ?? payload
+  const toEntries = (value: unknown): RetryFailedCommitsEntry[] =>
+    Array.isArray(value) ? (value as RetryFailedCommitsEntry[]) : []
+  return {
+    retried: toEntries(result?.retried),
+    skipped: toEntries(result?.skipped),
+    failed: toEntries(result?.failed),
+    task_ids: toEntries(result?.task_ids).map((entry) => {
+      const value: unknown = entry
+      return typeof value === 'string' ? value : undefined
+    }),
+  }
+}
+
 export async function recordSessionUsed(
   sessionId: string,
   body: UsedRequest,
