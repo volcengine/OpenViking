@@ -342,13 +342,35 @@ Value BytesRow::deserialize_field(const std::string& serialized_data,
   const FieldMeta& meta = *meta_ptr;
   const char* ptr = serialized_data.data();
 
+  const size_t field_offset = static_cast<size_t>(meta.offset);
+
   // Check if data is large enough for this field's offset
-  if (serialized_data.size() <= static_cast<size_t>(meta.offset)) {
+  if (serialized_data.size() <= field_offset) {
     return meta.default_value;
   }
 
   uint8_t field_count = static_cast<uint8_t>(ptr[0]);
   if (meta.id >= field_count) {
+    return meta.default_value;
+  }
+
+  size_t fixed_field_size = 0;
+  switch (meta.data_type) {
+    case FieldType::INT64:
+    case FieldType::UINT64:
+      fixed_field_size = sizeof(uint64_t);
+      break;
+    case FieldType::FLOAT32:
+      fixed_field_size = sizeof(float);
+      break;
+    case FieldType::BOOLEAN:
+      fixed_field_size = sizeof(uint8_t);
+      break;
+    default:
+      break;
+  }
+  if (fixed_field_size > 0 &&
+      serialized_data.size() - field_offset < fixed_field_size) {
     return meta.default_value;
   }
 
