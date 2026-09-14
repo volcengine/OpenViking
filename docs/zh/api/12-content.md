@@ -231,7 +231,8 @@ openviking read viking://resources/docs/api.md
 - 显式 `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
-- 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
+- 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
+- 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
 - 提供 `tags` 时，标签会在该文件首次向量 upsert 时写入，而非在处理完成后再单独更新。省略 `tags` 不改变已有标签；显式 `tags: []` 配合 `tag_mode: "replace"` 可清空标签。
 
 
@@ -366,9 +367,10 @@ openviking write viking://resources/docs/api.md \
 - Resource 目标允许任意安全文件扩展名；Memory 目标仍使用文本扩展名白名单，且不接受二进制内容。
 - `replace`、`append`、`create` 与 `write()` 语义一致；`upsert` 会覆盖已有文件或创建缺失文件。
 - 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。所有文件写完并释放锁后才启动语义处理，统一刷新受影响的 `.overview.md` / `.abstract.md`。
+- 资源父目录刷新与 `write()` 一样采用尽力更新：L0/L1 锁冲突时跳过目录刷新及对应目录向量更新，保留原文和文件自身的处理，不保证自动补刷。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
-- 响应体中，通过 `semantic_status`（`queued`、`complete` 或 `deferred`）表达目录聚合状态，通过 `vector_status` 表达变化文件的向量维护状态。
+- 响应体中，通过 `semantic_status`（`queued`、`complete`、`deferred` 或 `skipped`）表达目录聚合状态；提交任务前任一目录因锁冲突跳过时为 `skipped`，通过 `vector_status` 表达变化文件的向量维护状态。
 
 **Python SDK**
 

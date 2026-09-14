@@ -15,6 +15,7 @@ from openviking.storage.abstract_overview import (
     parse_abstract_overview,
     render_abstract_overview,
 )
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
@@ -327,15 +328,7 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
     file_path = f"{root_uri}/a.txt"
     fake_fs = _FakeVikingFS(
         tree={root_uri: [{"name": "a.txt", "isDir": False}]},
-        file_contents={
-            file_path: "new content",
-            f"{root_uri}/.overview.md": render_abstract_overview(
-                ContextLevel.OVERVIEW, root_uri, "FILES:\n- a.txt: old-summary"
-            ),
-            f"{root_uri}/.abstract.md": render_abstract_overview(
-                ContextLevel.ABSTRACT, root_uri, "old abstract"
-            ),
-        },
+        file_contents={file_path: "new content"},
     )
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
@@ -359,6 +352,16 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
             recursive=False,
             changes={"modified": [file_path]},
         )
+
+    acquire = fake_fs.pathlock_acquire_exact_batch
+    fake_fs.pathlock_acquire_exact_batch = AsyncMock(
+        side_effect=[{"paths": []}, LockAcquisitionError("parent sidecars are busy")]
+    )
+    await make_executor().run(root_uri)
+    assert fake_fs.writes == []
+    assert processor.vectorized_files == [file_path]
+    vectorize_directory.assert_not_awaited()
+    fake_fs.pathlock_acquire_exact_batch = acquire
 
     with pytest.raises(RuntimeError, match="temporary failure"):
         await make_executor().run(root_uri)

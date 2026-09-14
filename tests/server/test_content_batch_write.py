@@ -230,20 +230,15 @@ async def test_batch_replace_memory_preserves_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypatch):
+async def test_batch_reports_skipped_directory_and_queued_file_vectors(monkeypatch):
     root = "viking://resources/wide"
     page = f"{root}/page.md"
     coordinator = ContentWriteCoordinator(_VFS(root))
 
-    async def resolve_root(uri, **kwargs):
-        del uri, kwargs
-        return root
-
     async def enqueue(**kwargs):
         del kwargs
-        return FreshnessAction.MARK_PENDING
+        return FreshnessAction.NOOP
 
-    monkeypatch.setattr(coordinator, "_resolve_root_uri", resolve_root)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
@@ -260,7 +255,7 @@ async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypa
         wait=False,
     )
 
-    assert result["semantic_status"] == "deferred"
+    assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"
     assert result["queue_status"] is None
 

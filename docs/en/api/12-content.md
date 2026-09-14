@@ -231,7 +231,8 @@ Write a file and automatically refresh related semantics and vectors.
 - Explicit `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
-- The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
+- The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
+- Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
 - When `tags` is supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags` preserves existing tags; explicit `tags: []` with `tag_mode: "replace"` clears them.
 
 
@@ -366,9 +367,10 @@ Each operation contains:
 - Resource targets may use any safe file extension; Memory targets retain the text extension allowlist and do not accept binary content.
 - `replace`, `append`, and `create` match `write()` semantics. `upsert` replaces an existing file or creates a missing file.
 - The batch acquires exact locks for all target files before validating file state and writing. Writes to disjoint files in the same directory can proceed concurrently; overlapping writes and parent-directory deletion or moves still conflict. Semantic processing starts after all writes finish and the locks are released, refreshing the affected `.overview.md` and `.abstract.md` files together.
+- Resource parent refreshes use the same best-effort behavior as `write()`: L0/L1 lock conflicts skip the directory refresh and its vector updates while preserving file writes and file processing. A later refresh is not guaranteed.
 - An underlying I/O failure can still leave writes completed earlier in the batch visible.
 - Existing `.abstract.md` and `.overview.md` bodies may be replaced or appended. OpenViking preserves and validates protected OKF metadata and rebuilds only the directory's existing L0/L1 vectors for these operations.
-- In the response body, `semantic_status` (`queued`, `complete`, or `deferred`) reports the directory aggregation status, while `vector_status` reports vector maintenance for changed files.
+- In the response body, `semantic_status` (`queued`, `complete`, `deferred`, or `skipped`) reports the directory aggregation status; it is `skipped` if any directory encounters contention before enqueueing. Meanwhile, `vector_status` reports vector maintenance for changed files.
 
 **Python SDK**
 

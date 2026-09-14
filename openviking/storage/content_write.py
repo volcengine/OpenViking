@@ -95,7 +95,9 @@ class _BatchRefreshOutcome:
     embedding_requested: bool = False
 
     def statuses(self, *, wait: bool) -> tuple[str, str]:
-        if self.semantic_actions:
+        if FreshnessAction.NOOP in self.semantic_actions:
+            semantic_status = "skipped"
+        elif self.semantic_actions:
             semantic_status = (
                 "deferred"
                 if all(action is FreshnessAction.MARK_PENDING for action in self.semantic_actions)
@@ -581,19 +583,25 @@ class ContentWriteCoordinator:
     ) -> FreshnessAction:
         changed_entries = len({uri for values in changes.values() for uri in values})
         semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=changed_entries,
-            ctx=ctx,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-            force_refresh=force_refresh,
-        )
-        aggregate_directory = decision.action is FreshnessAction.REFRESH_NOW
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=changed_entries,
+                ctx=ctx,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                force_refresh=force_refresh,
+            )
+            action = decision.action
+        except LockAcquisitionError:
+            # Parent aggregation is best-effort; changed-file work must still run.
+            logger.info("Skipping busy parent semantic refresh: %s", root_uri)
+            action = FreshnessAction.NOOP
+        aggregate_directory = action is FreshnessAction.REFRESH_NOW
         has_live_files = any(changes.get(kind) for kind in ("added", "modified"))
         if not aggregate_directory and not has_live_files:
-            return decision.action
+            return action
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry = get_current_telemetry()
@@ -635,7 +643,7 @@ class ContentWriteCoordinator:
             if msg.telemetry_id:
                 get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(exc))
             raise
-        return decision.action
+        return action
 
     @staticmethod
     def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
@@ -868,12 +876,14 @@ class ContentWriteCoordinator:
                     "semantic_status": "skipped",
                     "vector_status": vector_status,
                 }
-            elif refresh_action is FreshnessAction.MARK_PENDING:
+            elif refresh_action in {FreshnessAction.MARK_PENDING, FreshnessAction.NOOP}:
                 # Changed-file semantic/vector work may still be queued, while
-                # the directory aggregation itself is intentionally deferred.
+                # directory aggregation is deferred or skipped on contention.
                 _, vector_status = self._refresh_statuses(wait=wait, queue_status=queue_status)
                 result_kwargs = {
-                    "semantic_status": "deferred",
+                    "semantic_status": (
+                        "skipped" if refresh_action is FreshnessAction.NOOP else "deferred"
+                    ),
                     "vector_status": vector_status,
                 }
             return self._build_write_result(

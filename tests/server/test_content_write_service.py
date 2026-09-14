@@ -20,7 +20,6 @@ from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -641,28 +640,6 @@ async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resource_write_wait_forces_directory_refresh(monkeypatch):
-    file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    coordinator = ContentWriteCoordinator(
-        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
-    )
-    enqueue = AsyncMock(return_value=FreshnessAction.REFRESH_NOW)
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", enqueue)
-    monkeypatch.setattr(coordinator, "_wait_for_request", AsyncMock(return_value=None))
-
-    await coordinator.write(
-        uri=file_uri,
-        content="updated",
-        ctx=ctx,
-        wait=True,
-    )
-
-    assert enqueue.await_args.kwargs["force_refresh"] is True
-
-
-@pytest.mark.asyncio
 async def test_write_timeout_after_enqueue_releases_resource_lock(monkeypatch):
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
@@ -793,36 +770,35 @@ async def test_write_direct_reuses_outer_lease_for_viking_fs(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["demo/doc.md", "demo#1/a#one.md"])
-async def test_resource_write_updates_target_and_queues_refresh_before_return(monkeypatch, path):
-    file_uri = f"viking://resources/{path}"
+@pytest.mark.parametrize("wait", [False, True])
+async def test_resource_write_skips_busy_parent_and_keeps_file_work(monkeypatch, wait):
+    file_uri = "viking://resources/demo/doc.md"
     root_uri = file_uri.rsplit("/", 1)[0]
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
-    captured_enqueue = {}
-
-    async def _fake_enqueue_semantic_refresh(**kwargs):
-        captured_enqueue.update(kwargs)
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-
-    result = await coordinator.write(
-        uri=file_uri,
-        content="updated",
-        ctx=ctx,
-        mode="replace",
-        wait=False,
+    queue = _FakeSemanticQueue()
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_queue_manager", lambda: _FakeQueueManager(queue)
     )
+    plan = AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy"))
+    monkeypatch.setattr("openviking.storage.content_write.plan_abstract_overview_refresh", plan)
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace()),
+    )
+    monkeypatch.setattr(coordinator, "_wait_for_request", AsyncMock(return_value=None))
 
+    result = await coordinator.write(uri=file_uri, content="updated", ctx=ctx, wait=wait)
+
+    assert plan.await_args.kwargs["force_refresh"] is wait
     assert viking_fs.content[file_uri] == "updated"
     assert result["content_updated"] is True
-    assert result["semantic_status"] == "queued"
-    assert result["vector_status"] == "queued"
-    assert captured_enqueue["root_uri"] == root_uri
-    assert captured_enqueue["changed_uri"] == file_uri
-    assert captured_enqueue["change_type"] == "modified"
-    assert viking_fs.delete_temp_calls == []
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == ("complete" if wait else "queued")
+    assert len(queue.messages) == 1
+    assert queue.messages[0].changes == {"modified": [file_uri]}
+    assert queue.messages[0].aggregate_directory is False
     assert viking_fs._async_agfs.release_calls == ["lock-1"]
 
 
