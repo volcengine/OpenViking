@@ -860,11 +860,32 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
-| `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
-| `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
-| `mineru_bodys` | dict | MinerU API multipart form 参数 |
+| `mineru_endpoint` | str | MinerU API **base URL**（如自托管 `http://127.0.0.1:8000`，在线服务 `https://mineru.net/api/v4`） |
+| `mineru_timeout` | float | 请求/轮询超时秒数（默认 `300.0`） |
+| `mineru_bodys` | dict | MinerU API multipart form 参数（透传） |
+| `mineru_api_mode` | str | 协议形态：`auto`（按响应自动识别，默认）/ `sync`（旧版内联 `/file_parse`）/ `async`（任务式 API） |
+| `mineru_token` | str | 在线 MinerU API 的 bearer token（以 `Authorization: Bearer ...` 发送） |
 
-**MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
+**MinerU 协议**——支持三种形态：
+
+- **旧版自托管（`sync`）**：单次 `POST {mineru_endpoint}/file_parse` 内联返回 markdown；form 参数由 `mineru_bodys` 透传。
+- **新版自托管（`async`）**：`POST {mineru_endpoint}/tasks` 返回 `202` 与 `task_id`/`status_url`/`result_url`；轮询任务至 `completed` 后从结果 zip 下载 markdown。
+- **在线批量 API（`async`）**：`POST {mineru_endpoint}/extract/task/batch`（通过 `mineru_token` 做 Bearer 认证），轮询 `{mineru_endpoint}/extract-results/batch/{batch_id}` 至 `state=done`，下载 `full_zip_url` 并解包。
+
+默认 `mineru_api_mode=auto` 时自动识别协议形态：先尝试内联端点，返回 `404`（或任务式响应）即切换到任务流，存量自托管 v1 部署无需改配置。启动时的 `/health` 预检仅适用于 sync 形态（在线服务没有该端点）。
+
+**在线服务示例：**
+
+```json
+{
+  "pdf": {
+    "strategy": "mineru",
+    "mineru_endpoint": "https://mineru.net/api/v4",
+    "mineru_api_mode": "auto",
+    "mineru_token": "your-mineru-api-token"
+  }
+}
+```
 
 ### rerank
 
