@@ -58,6 +58,7 @@ from openviking.server.auth import (
     resolve_identity,
 )
 from openviking.server.dependencies import get_server_config, get_service
+from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     TEMP_FILE_ID_RE,
@@ -1343,7 +1344,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], Optional[BaseException]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -1353,29 +1354,50 @@ async def grep(
                     case_insensitive=case_insensitive,
                     node_limit=node_limit,
                 )
-                return (p, result.get("matches", []))
-            except Exception:
-                return (p, [])
+                return (p, result.get("matches", []), None)
+            except Exception as exc:
+                # Same mapping rule as POST /api/v1/search/grep
+                # (routers/search.py): a failure must reach the caller as an
+                # error, never as a successful empty result.
+                mapped = map_exception(exc, resource=resolved_uri, resource_type="file")
+                return (p, [], mapped if mapped is not None else exc)
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
     merged: dict[str, list[tuple]] = {}
     total = 0
-    for p, matches in results:
+    failed: list[tuple[str, BaseException]] = []
+    for p, matches, error in results:
+        if error is not None:
+            failed.append((p, error))
+            continue
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
             merged.setdefault(m_uri, []).append((m.get("line", "?"), m.get("content", ""), p))
 
-    if not merged:
+    if len(failed) == len(patterns):
+        # Every pattern failed (missing URI, permission denial, bad regex):
+        # the call itself failed, so raise instead of answering "no matches".
+        raise failed[0][1]
+
+    lines = []
+    if merged:
+        lines.append(f"Found {total} match(es) across {len(patterns)} pattern(s):")
+        for m_uri, hits in merged.items():
+            hits.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
+            lines.append(f"\n{m_uri}")
+            for line_no, content, p in hits:
+                lines.append(f"  L{line_no} [{p}]: {content}")
+    elif not failed:
         return f"No matches found for pattern(s): {', '.join(patterns)}"
 
-    lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
-    for m_uri, hits in merged.items():
-        hits.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
-        lines.append(f"\n{m_uri}")
-        for line_no, content, p in hits:
-            lines.append(f"  L{line_no} [{p}]: {content}")
+    if failed:
+        lines.append(
+            f"\nError: {len(failed)} of {len(patterns)} pattern(s) failed and were not searched:"
+        )
+        for p, error in failed:
+            lines.append(f"  {p}: {error}")
     return "\n".join(lines)
 
 
