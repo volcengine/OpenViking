@@ -137,6 +137,9 @@ class ParserRouter:
         if use_understanding:
             if isinstance(source, LocalResource):
                 kwargs["source_name"] = source.meta["resolved_name"]
+                kwargs["resolved_extension"] = (
+                    kwargs.get("resolved_extension") or source.meta["resolved_extension"]
+                )
             display = source_path
             if isinstance(source_path, str) and source_path.startswith(("http://", "https://")):
                 display = "<url>"
@@ -164,7 +167,13 @@ class ParserRouter:
                 else kwargs.get("source_name")
             )
             return await self._get_understanding_api().submit_file(
-                source_path, source_name=source_name
+                source_path,
+                source_name=source_name,
+                resolved_extension=(
+                    source.meta["resolved_extension"]
+                    if isinstance(source, LocalResource)
+                    else kwargs.get("resolved_extension", "")
+                ),
             )
         if not self.should_use_understanding_api(str(source_path)):
             raise ValueError("source is not routed to UnderstandingAPI")
@@ -174,7 +183,13 @@ class ParserRouter:
         """Upload a local source file and return only the external Files API file_id."""
         source_path = self._extract_source_path(source)
         source_name = source.meta["resolved_name"] if isinstance(source, LocalResource) else None
-        return await self._get_understanding_api().upload_file(source_path, source_name=source_name)
+        return await self._get_understanding_api().upload_file(
+            source_path,
+            source_name=source_name,
+            resolved_extension=(
+                source.meta["resolved_extension"] if isinstance(source, LocalResource) else ""
+            ),
+        )
 
     def _extract_source_path(self, source: Union[str, Path, LocalResource]) -> Union[str, Path]:
         """Extract a filesystem path from the source."""

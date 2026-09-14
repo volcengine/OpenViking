@@ -29,7 +29,7 @@ from openviking.parse.image_rewrite import (
     build_artifact_image_mappings,
 )
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS
+from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS, TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.parsers.media.constants import (
     AUDIO_EXTENSIONS,
     IMAGE_EXTENSIONS,
@@ -180,7 +180,11 @@ class UnderstandingAPI(BaseParser):
                 task_meta["file_id"] = prepared_file_id
                 response_obj = await self._create_response_for_file(file_id=prepared_file_id)
             elif url is None and local_path is not None:
-                file_obj = await self._create_file(local_path=local_path, source_name=source_name)
+                file_obj = await self._create_file(
+                    local_path=local_path,
+                    source_name=source_name,
+                    resolved_extension=resolved_extension,
+                )
                 file_id_value = file_obj.get("id")
                 if not file_id_value:
                     raise RuntimeError(
@@ -280,24 +284,36 @@ class UnderstandingAPI(BaseParser):
         return result
 
     async def upload_file(
-        self, source: Union[str, Path], *, source_name: Optional[str] = None
+        self,
+        source: Union[str, Path],
+        *,
+        source_name: Optional[str] = None,
+        resolved_extension: str = "",
     ) -> str:
         """Upload a local file and return a durable Files API file_id."""
         local_path = Path(source)
         if not local_path.is_file():
             raise ValueError("UnderstandingAPI file upload requires an existing local file")
 
-        file_obj = await self._create_file(local_path=local_path, source_name=source_name)
+        file_obj = await self._create_file(
+            local_path=local_path, source_name=source_name, resolved_extension=resolved_extension
+        )
         file_id = file_obj.get("id")
         if not file_id:
             raise RuntimeError(f"files api missing file_id: {self._safe_error_summary(file_obj)}")
         return str(file_id)
 
     async def submit_file(
-        self, source: Union[str, Path], *, source_name: Optional[str] = None
+        self,
+        source: Union[str, Path],
+        *,
+        source_name: Optional[str] = None,
+        resolved_extension: str = "",
     ) -> str:
         """Upload a local file and submit it without retaining the local artifact."""
-        file_id = await self.upload_file(source, source_name=source_name)
+        file_id = await self.upload_file(
+            source, source_name=source_name, resolved_extension=resolved_extension
+        )
         response_obj = await self._create_response_for_file(file_id=str(file_id))
         response_id = response_obj.get("id")
         if not response_id:
@@ -443,13 +459,23 @@ class UnderstandingAPI(BaseParser):
         return body
 
     async def _create_file(
-        self, *, local_path: Path, source_name: Optional[str] = None
+        self,
+        *,
+        local_path: Path,
+        source_name: Optional[str] = None,
+        resolved_extension: str = "",
     ) -> Dict[str, Any]:
         file_size = local_path.stat().st_size
         if file_size == 0:
             raise InvalidArgumentError("Understanding parser does not support empty files.")
         # The local path locates bytes; its temporary basename is not the source identity.
         file_name = Path(source_name).name if source_name else local_path.name
+        extension = (resolved_extension or local_path.suffix).lower().lstrip(".")
+        if extension == MPEG_TS_EXTENSION_ALIAS:
+            extension = TYPESCRIPT_MPEG_TS_EXTENSION.lstrip(".")
+        # Preserve dotted identifiers (e.g. 2601.00014) and existing suffix casing.
+        if extension and not file_name.lower().endswith(f".{extension}"):
+            file_name = f"{file_name}.{extension}"
         if file_size > self._upload_simple_max_bytes:
             if not self._enable_resumable_upload:
                 raise ValueError(
@@ -461,7 +487,7 @@ class UnderstandingAPI(BaseParser):
 
         data: Dict[str, Any] = {"purpose": "user_data"}
 
-        content_type = mimetypes.guess_type(str(local_path))[0] or "application/octet-stream"
+        content_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
         with open(local_path, "rb") as f:
             files = {"file": (file_name, f, content_type)}
             async with httpx.AsyncClient(timeout=1200.0, follow_redirects=True) as client:
@@ -628,7 +654,7 @@ class UnderstandingAPI(BaseParser):
         payload = {
             "file_name": file_name,
             "file_size": file_path.stat().st_size,
-            "content_type": mimetypes.guess_type(str(file_path))[0] or "application/octet-stream",
+            "content_type": mimetypes.guess_type(file_name)[0] or "application/octet-stream",
             "part_size": int(self._upload_part_size_bytes),
         }
         async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:

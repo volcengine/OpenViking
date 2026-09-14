@@ -37,7 +37,7 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(
     resolved_extension,
     source_format,
 ):
-    source_name = f"original.{source_format}"
+    source_name = "export"
     uploaded_names = []
     uploaded_content = []
 
@@ -114,7 +114,7 @@ async def test_parse_uses_downloaded_file_and_resolved_extension(
         else:
             assert await processor.upload_understanding_file(resource) == "file-1"
 
-    assert uploaded_names == [source_name, source_name]
+    assert uploaded_names == [f"{source_name}.{source_format}"] * 2
     assert uploaded_content == [content, content]
 
 

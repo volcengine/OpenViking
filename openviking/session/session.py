@@ -792,7 +792,6 @@ class Session:
         """Calculate pending tokens without mutating session state."""
         if (
             self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET
-            and self._meta.keep_recent_turn_count > 0
             and self._meta.retained_message_token_budget > 0
         ):
             plan = plan_retention(

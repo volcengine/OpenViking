@@ -69,6 +69,8 @@ function clonePart(part: MessagePart): MessagePart {
       } satisfies ToolPart
     case 'tool_result':
       return { ...part } satisfies ToolResultPart
+    case 'image_url':
+      return { ...part, image_url: { ...part.image_url } }
     case 'context':
       return { ...part } satisfies ContextPart
   }

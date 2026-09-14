@@ -58,7 +58,7 @@ export function Composer({
       <div
         className={cn(
           'mx-auto w-full border border-border/50 bg-background/95',
-          isCompact ? 'max-w-none' : 'max-w-[clamp(48rem,68vw,72rem)]',
+          isCompact ? 'max-w-none' : 'max-w-4xl',
           isCompact ? 'rounded-xl' : 'rounded-2xl',
           'shadow-lg shadow-black/8 dark:shadow-black/25',
         )}
@@ -67,6 +67,7 @@ export function Composer({
         <textarea
           ref={textareaRef}
           autoFocus
+          aria-label={t('chat.placeholder')}
           placeholder={t('chat.placeholder')}
           rows={1}
           value={value}
@@ -93,6 +94,7 @@ export function Composer({
           {isStreaming ? (
             <button
               type="button"
+              aria-label={t('chat.cancel')}
               onClick={onCancel}
               className={cn(
                 'inline-flex size-8 items-center justify-center rounded-lg',
@@ -105,6 +107,7 @@ export function Composer({
           ) : (
             <button
               type="button"
+              aria-label={t('chat.send')}
               onClick={handleSend}
               disabled={!value.trim()}
               className={cn(

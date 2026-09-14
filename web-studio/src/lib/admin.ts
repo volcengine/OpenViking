@@ -8,10 +8,11 @@ import {
   getAdminAccounts,
   getOvResult,
   postAdminAccountIdUserIdKey,
-  postAdminAccountIdUsers,
   postAdminAccounts,
   putAdminAccountIdUserIdRole,
 } from '#/lib/ov-client'
+
+import type { UserMemoryPolicy } from './user-memory-policy'
 
 export type AdminUserRole = 'admin' | 'root' | 'user'
 
@@ -42,6 +43,7 @@ export type CreateAccountInput = {
 }
 
 export type CreateUserInput = {
+  memoryPolicy?: UserMemoryPolicy
   accountId: string
   role: string
   userId: string
@@ -411,12 +413,16 @@ export async function createAdminUser(
   input: CreateUserInput,
 ): Promise<KeyResult> {
   const result = await getOvResult<unknown>(
-    postAdminAccountIdUsers({
+    createAdminClient(connection).post({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      headers: { 'Content-Type': 'application/json' },
       body: {
         role: input.role,
         user_id: input.userId,
+        ...(input.memoryPolicy
+          ? { user_config: { memory_policy: input.memoryPolicy } }
+          : {}),
       },
-      client: createAdminClient(connection),
       path: {
         account_id: input.accountId,
       },
@@ -476,6 +482,37 @@ export async function updateAdminUserRole(
         account_id: input.accountId,
         user_id: input.userId,
       },
+    }),
+  )
+}
+
+export type UserMemorySettings = { memory_policy: UserMemoryPolicy }
+
+export async function fetchUserMemorySettings(
+  connection: AdminConnection,
+  accountId: string,
+  userId: string,
+): Promise<UserMemorySettings> {
+  return getOvResult<UserMemorySettings>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users/{user_id}/settings',
+      path: { account_id: accountId, user_id: userId },
+    }),
+  )
+}
+
+export async function updateUserMemorySettings(
+  connection: AdminConnection,
+  accountId: string,
+  userId: string,
+  memoryPolicy: UserMemoryPolicy,
+): Promise<UserMemorySettings> {
+  return getOvResult<UserMemorySettings>(
+    createAdminClient(connection).patch({
+      url: '/api/v1/admin/accounts/{account_id}/users/{user_id}/settings',
+      path: { account_id: accountId, user_id: userId },
+      headers: { 'Content-Type': 'application/json' },
+      body: { memory_policy: memoryPolicy },
     }),
   )
 }

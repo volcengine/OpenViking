@@ -23,6 +23,8 @@ const activity = {
       shortcut: '⌘ N to create a new session',
     },
     chat: {
+      historyLoadFailed: 'Could not load conversation history: {{error}}',
+      sendFailed: 'Could not send message: {{error}}',
       copy: 'Copy',
       emptyDescription: 'Explore your knowledge base and start a conversation.',
       placeholder: 'Type a message...',

@@ -227,6 +227,14 @@ After that, the plugin checks `pending_tokens`. Once it reaches `commitTokenThre
 
 Memory extraction on this automatic path is commit-dependent. Short but important facts can stay only in the live session until a threshold commit, `/compact`, or an explicit store happens.
 
+Auto-commit keeps the most recent 10 messages by default (`commitKeepRecentCount`). This count-based window can start mid-turn. With a server that supports turn-aware retention, set `"commitRetentionMode": "turn_budget"` in the plugin config to opt in:
+
+- `commitKeepRecentCount` is ignored. The server defaults apply: up to 3 recent user turns, a 12,000-token retention budget, and at least the final assistant/tool step.
+- For an oversized newest turn, the server retains its user question and recent steps and checkpoints the archived prefix. The mandatory tail can exceed the retention budget.
+- `pending_tokens` counts only messages that will leave the live window, not a user question shared with the archive.
+
+Manual commit and `/compact` still archive everything. Leave the option unset (or use `"message_count"`) to preserve existing behavior.
+
 ### Explicit long-term memory writes
 
 When the user explicitly asks the agent to remember, save, or store an important long-term fact, preference, project, or decision, prefer `memory_store` over waiting for normal auto-capture. `memory_store` writes the text to an OpenViking session and calls `commit(wait=true)`, so it is the reliable integration-side path for facts that should be available as long-term memory as soon as possible.

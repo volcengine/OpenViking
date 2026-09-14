@@ -22,12 +22,13 @@ function makeLogger() {
   };
 }
 
-function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
+function makeEngine(commitResult: unknown, opts?: { throwError?: Error; commitRetentionMode?: string }) {
   const cfg = memoryOpenVikingConfigSchema.parse({
     mode: "remote",
     baseUrl: "http://127.0.0.1:1933",
     autoCapture: false,
     autoRecall: false,
+    commitRetentionMode: opts?.commitRetentionMode,
   });
   const logger = makeLogger();
 
@@ -71,15 +72,20 @@ function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
 }
 
 describe("context-engine commitOVSession()", () => {
-  it("returns true on successful commit", async () => {
-    const { engine } = makeEngine({
+  it.each(["message_count", "turn_budget"])("manual commit archives everything in %s mode", async (commitRetentionMode) => {
+    const { engine, client } = makeEngine({
       status: "completed",
       archived: false,
       memories_extracted: { core: 1 },
-    });
+    }, { commitRetentionMode });
 
     const ok = await engine.commitOVSession({ sessionId: "test-session" });
     expect(ok).toBe(true);
+    expect(client.commitSession.mock.calls[0][1]).toEqual({
+      wait: true,
+      keepRecentCount: 0,
+      resetContext: true,
+    });
   });
 
   it("returns false on failed commit", async () => {
@@ -245,13 +251,13 @@ describe("context-engine compact()", () => {
     expect(getClient).not.toHaveBeenCalled();
   });
 
-  it("returns compacted=true when commit succeeds with archived=true", async () => {
-    const { engine } = makeEngine({
+  it.each(["message_count", "turn_budget"])("compact archives everything in %s mode", async (commitRetentionMode) => {
+    const { engine, client } = makeEngine({
       status: "completed",
       archived: true,
       task_id: "task-1",
       memories_extracted: { core: 3, preferences: 1 },
-    });
+    }, { commitRetentionMode });
 
     const result = await engine.compact({
       sessionId: "s1",
@@ -261,6 +267,7 @@ describe("context-engine compact()", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.reason).toBe("commit_completed");
+    expect(client.commitSession.mock.calls[0][1]).toEqual({ wait: true, keepRecentCount: 0 });
   });
 
   it("returns compacted=false when commit succeeds with archived=false", async () => {
