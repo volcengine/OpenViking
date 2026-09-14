@@ -301,6 +301,9 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
     vlm_collector = VLMCollector()
     session_collector = SessionCollector()
     resource_collector = ResourceIngestionCollector()
+    # Pre-initialize known resource stage/status counter series at zero so Prometheus can
+    # scrape the pre-increment sample and `increase()` counts the first error (#4500).
+    resource_collector.preinitialize_series(registry)
     retrieval_collector = RetrievalCollector()
     encryption_collector = EncryptionCollector()
     telemetry_bridge_collector = TelemetryBridgeCollector()

@@ -20,7 +20,7 @@ from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
 
-from .base import EventMetricCollector
+from .base import CollectorMetricWriter, EventMetricCollector
 
 
 @dataclass
@@ -49,9 +49,34 @@ class ResourceIngestionCollector(EventMetricCollector):
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"resource.stage", "resource.wait"})
 
+    # Closed sets of pipeline stage names and outcomes, mirroring the instrumentation sites
+    # in `openviking/utils/resource_processor.py`. They are enumerated eagerly so every
+    # stage/status series is scraped at zero before its first increment (issue #4500).
+    KNOWN_STAGES: ClassVar[tuple[str, ...]] = ("finalize", "parse", "persist", "summarize")
+    KNOWN_STATUSES: ClassVar[tuple[str, ...]] = ("error", "ok")
+
     def collect(self, registry=None) -> None:
         """Implement the collector interface as a no-op because resource metrics are push-driven."""
         return None
+
+    def preinitialize_series(self, registry) -> None:
+        """
+        Create zero-valued `stage_total` series for every known stage/status label pair.
+
+        Following the Prometheus client guidance of initializing label values, this makes
+        each series visible to scrapes before any error occurs, so PromQL `increase()` can
+        account for the first increment of a label set instead of silently dropping it.
+        The `account_id` dimension resolves with no request context, which is the label
+        value (`__unknown__`) used by the background resource pipeline in practice.
+        """
+        writer = CollectorMetricWriter(registry)
+        for stage in self.KNOWN_STAGES:
+            for status in self.KNOWN_STATUSES:
+                writer.init_counter_series(
+                    self.STAGE_TOTAL,
+                    labels={"stage": stage, "status": status},
+                    label_names=("stage", "status"),
+                )
 
     def receive_hook(self, event_name: str, payload: dict, registry) -> None:
         """
@@ -87,6 +112,17 @@ class ResourceIngestionCollector(EventMetricCollector):
         account_id: str | None = None,
     ) -> None:
         """Record one named resource stage outcome together with its execution latency."""
+        # Pre-initialize every known outcome for this stage and account before incrementing,
+        # so a series that has not been scraped yet is exposed at zero rather than appearing
+        # with its first increment (issue #4500).
+        normalized_stage = str(stage)
+        for known_status in self.KNOWN_STATUSES:
+            registry.init_counter_series(
+                self.STAGE_TOTAL,
+                labels={"stage": normalized_stage, "status": known_status},
+                label_names=("stage", "status"),
+                account_id=account_id,
+            )
         labels = {"stage": str(stage), "status": str(status)}
         registry.inc_counter(
             self.STAGE_TOTAL,
