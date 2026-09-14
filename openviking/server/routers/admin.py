@@ -524,6 +524,10 @@ async def list_users(
     name: str | None = None,
     role: str | None = None,
     page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
+    query: str | None = Query(None, description="Case-insensitive username substring"),
+    include_summary: bool = Query(
+        False, description="Return users, matching total and account statistics"
+    ),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
@@ -532,15 +536,16 @@ async def list_users(
     if not _registry_watcher_running(request):
         await manager.refresh_account_users_from_store(account_id)
     expose_key = _should_expose_user_key(request)
-    users = manager.get_users(
+    users = manager.get_users_page(
         account_id,
         limit=limit,
         name_filter=name,
         role_filter=role,
         expose_key=expose_key,
         page=page,
+        query_filter=query,
     )
-    return Response(status="ok", result=users)
+    return Response(status="ok", result=users if include_summary else users["users"])
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")

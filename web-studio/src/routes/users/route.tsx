@@ -18,6 +18,9 @@ import { toast } from 'sonner'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import { Input } from '#/components/ui/input'
+import { UserPagination } from './-components/user-pagination'
+import { useUserList } from './-lib/use-user-list'
 import {
   Card,
   CardContent,
@@ -58,7 +61,7 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   createAdminUser,
-  fetchAdminUsers,
+  fetchAdminUsersPage,
   regenerateAdminUserKey,
   removeAdminUser,
   updateAdminUserRole,
@@ -146,17 +149,50 @@ function UserManagementRoute() {
     ],
   )
 
+  const userList = useUserList(
+    JSON.stringify([
+      adminConnection.baseUrl,
+      adminConnection.apiKey,
+      connection.accountId,
+    ]),
+  )
+  const [searchQuery, setSearchQuery] = React.useState('')
+  React.useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(userList.search), 250)
+    return () => clearTimeout(timer)
+  }, [userList.search])
   const usersQuery = useQuery({
-    enabled: canManageUsers && Boolean(connection.accountId),
-    queryFn: () => fetchAdminUsers(adminConnection, connection.accountId),
+    enabled:
+      canManageUsers &&
+      Boolean(connection.accountId) &&
+      searchQuery === userList.search,
+    queryFn: () =>
+      fetchAdminUsersPage(adminConnection, connection.accountId, {
+        page: userList.page,
+        pageSize: userList.pageSize,
+        search: searchQuery,
+      }),
     queryKey: [
       'managed-users',
       adminConnection.baseUrl,
       adminConnection.apiKey,
       connection.accountId,
+      userList.page,
+      userList.pageSize,
+      searchQuery,
     ],
     retry: false,
   })
+  const users = usersQuery.data?.users ?? []
+  const total = usersQuery.data?.total ?? 0
+  const accountTotal = usersQuery.data?.accountTotal ?? 0
+  const managerCount = usersQuery.data?.managerCount ?? 0
+  const visibleKeys = usersQuery.data?.keyCount ?? 0
+  const pageCount = Math.max(1, Math.ceil(total / userList.pageSize))
+  React.useEffect(() => {
+    if (usersQuery.isSuccess && userList.page > pageCount)
+      userList.setPage(pageCount)
+  }, [usersQuery.isSuccess, userList, pageCount])
 
   const createUser = useMutation({
     mutationFn: (input: CreateUserInput) =>
@@ -302,13 +338,6 @@ function UserManagementRoute() {
     )
   }
 
-  const users = usersQuery.data ?? []
-  const managerCount = users.filter(
-    (user) => user.role === 'admin' || user.role === 'root',
-  ).length
-  const visibleKeys = users.filter(
-    (user) => user.apiKey || user.keyPrefix,
-  ).length
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -370,7 +399,7 @@ function UserManagementRoute() {
                 {t('stats.users')}
               </p>
               <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {users.length || '-'}
+                {usersQuery.isSuccess ? accountTotal : '-'}
               </p>
             </div>
             <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
@@ -385,7 +414,7 @@ function UserManagementRoute() {
                 {t('stats.apiKeys')}
               </p>
               <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {visibleKeys || '-'}
+                {usersQuery.isSuccess ? visibleKeys : '-'}
               </p>
             </div>
             <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
@@ -405,9 +434,17 @@ function UserManagementRoute() {
                 : 'management.memberListDescription',
             )}
           </CardDescription>
+          <Input
+            type="search"
+            className="max-w-sm"
+            aria-label={t('userList.search')}
+            placeholder={t('userList.search')}
+            value={userList.search}
+            onChange={(event) => userList.setSearch(event.target.value)}
+          />
         </CardHeader>
         <CardContent className="p-0">
-          {usersQuery.isLoading ? (
+          {usersQuery.isPending || searchQuery !== userList.search ? (
             <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">
               <LoaderCircleIcon className="size-4 animate-spin" />
               {t('loading')}
@@ -419,11 +456,17 @@ function UserManagementRoute() {
                 {getErrorMessage(usersQuery.error)}
               </p>
             </div>
-          ) : users.length === 0 ? (
+          ) : total === 0 ? (
             <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
-              <p className="font-medium">{t('empty.usersTitle')}</p>
+              <p className="font-medium">
+                {t(accountTotal ? 'userList.noResults' : 'empty.usersTitle')}
+              </p>
               <p className="text-sm text-muted-foreground">
-                {t('empty.usersDescription')}
+                {t(
+                  accountTotal
+                    ? 'userList.noResultsDescription'
+                    : 'empty.usersDescription',
+                )}
               </p>
             </div>
           ) : (
@@ -649,6 +692,11 @@ function UserManagementRoute() {
                   })}
                 </TableBody>
               </Table>
+              <UserPagination
+                {...userList}
+                total={total}
+                pageCount={pageCount}
+              />
             </div>
           )}
         </CardContent>

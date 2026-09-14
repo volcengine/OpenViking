@@ -987,43 +987,76 @@ class LegacyAPIKeyManager:
         Pagination is opt-in via ``limit``/``page`` (1-based); ``limit=None``
         returns every matching user.
         """
+        return self.get_users_page(
+            account_id,
+            limit=limit,
+            name_filter=name_filter,
+            role_filter=role_filter,
+            expose_key=expose_key,
+            page=page,
+        )["users"]
+
+    def get_users_page(
+        self,
+        account_id: str,
+        limit: int | None = 100,
+        name_filter: str | None = None,
+        role_filter: str | None = None,
+        expose_key: bool = True,
+        page: int = 1,
+        query_filter: str | None = None,
+    ) -> dict:
+        """Return one page, matching total, and unfiltered account statistics.
+
+        Only materialize credentials for the requested page. Deleting users are
+        excluded from both the results and statistics.
+        """
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
 
         result = []
+        total = account_total = manager_count = key_count = 0
+        start = (max(1, page) - 1) * limit if limit is not None else 0
+        query = (query_filter or "").strip().casefold()
         for user_id, user_info in account.users.items():
             if user_info.get("deletion"):
                 continue
-
             user_role = user_info.get("role", "user")
+            key = user_info.get("key")
+            visible_key = bool(
+                expose_key
+                and key
+                and (not key.startswith("$argon2") or user_info.get("key_prefix"))
+            )
+            account_total += 1
+            manager_count += user_role in {"admin", "root"}
+            key_count += visible_key
 
-            # Apply name filter if provided
             if name_filter and not fnmatch.fnmatch(user_id, name_filter):
                 continue
-
-            # Apply role filter if provided
             if role_filter and user_role != role_filter:
                 continue
+            if query and query not in user_id.casefold():
+                continue
+            total += 1
+            if total <= start or (limit is not None and len(result) >= limit):
+                continue
 
-            user_data = {
-                "user_id": user_id,
-                "role": user_role,
-            }
-            if expose_key:
-                key = user_info.get("key")
-                if key:
-                    if key.startswith("$argon2"):
-                        # Hashed key - show key_prefix
-
-                        key_prefix = user_info.get("key_prefix")
-                        if key_prefix:
-                            user_data["key_prefix"] = key_prefix
-                    else:
-                        # Plaintext key - show full api_key
-                        user_data["api_key"] = key
+            user_data = {"user_id": user_id, "role": user_role}
+            if visible_key:
+                if key.startswith("$argon2"):
+                    user_data["key_prefix"] = user_info["key_prefix"]
+                else:
+                    user_data["api_key"] = key
             result.append(user_data)
-        return _paginate(result, limit, page)
+        return {
+            "users": result,
+            "total": total,
+            "account_total": account_total,
+            "manager_count": manager_count,
+            "key_count": key_count,
+        }
 
     def has_user(self, account_id: str, user_id: str) -> bool:
         """Return True when the account registry contains the given user."""

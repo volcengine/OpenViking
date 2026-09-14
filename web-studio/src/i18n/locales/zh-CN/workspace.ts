@@ -797,6 +797,19 @@ const workspace = {
       title: '新的 API 密钥',
     },
     loading: '正在加载身份...',
+    userList: {
+      search: '按用户名搜索全部用户',
+      noResults: '没有匹配的用户',
+      noResultsDescription: '试试其他用户名，或清空搜索。',
+      pagination: '用户列表分页',
+      summary: '共 {{total}} 个用户 · 第 {{page}} / {{pageCount}} 页',
+      pageSize: '每页用户数',
+      pageSizeValue: '每页 {{count}} 个',
+      first: '首页',
+      previous: '上一页',
+      next: '下一页',
+      last: '末页',
+    },
     management: {
       accountFilter: '账号',
       accessDeniedDescription:

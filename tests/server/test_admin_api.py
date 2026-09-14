@@ -1849,3 +1849,93 @@ async def test_trusted_mode_create_account_lists_current_account_metadata(
     manager = trusted_admin_app.state.api_key_manager
     account = next(item for item in manager.get_accounts() if item["account_id"] == acct)
     assert set(account) == {"account_id", "created_at", "user_count"}
+
+
+async def test_user_page_summary_and_search_preserve_legacy_response(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "owner"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200
+    manager = lightweight_admin_app.state.api_key_manager
+    seed = {
+        f"user-{index}": {
+            "role": "admin" if index == 2832 else "user",
+            "key": f"test-key-{index}",
+        }
+        for index in range(1, 2833)
+    }
+    seed["deleting-user"] = {"role": "admin", "key": "deleted", "deletion": {"status": "pending"}}
+    await manager._legacy._save_users_json(acct, seed)
+    url = f"/api/v1/admin/accounts/{acct}/users"
+
+    response = await lightweight_admin_client.get(
+        url, params={"include_summary": True, "limit": 20, "page": 142}, headers=root_headers()
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert len(result["users"]) == 13
+    assert result["users"][-1]["user_id"] == "user-2832"
+    assert result["total"] == result["account_total"] == result["key_count"] == 2833
+    assert result["manager_count"] == 2
+
+    response = await lightweight_admin_client.get(
+        url,
+        params={"include_summary": True, "limit": 20, "query": " UsEr-2832 "},
+        headers=root_headers(),
+    )
+    result = response.json()["result"]
+    assert result["total"] == 1
+    assert result["users"][0]["user_id"] == "user-2832"
+    assert result["account_total"] == 2833
+    assert result["manager_count"] == 2
+
+    response = await lightweight_admin_client.get(
+        url,
+        params={"include_summary": True, "limit": 20, "query": "missing"},
+        headers=root_headers(),
+    )
+    assert response.json()["result"]["total"] == 0
+    assert response.json()["result"]["users"] == []
+    assert response.json()["result"]["account_total"] == 2833
+
+    response = await lightweight_admin_client.get(url, headers=root_headers())
+    assert isinstance(response.json()["result"], list)
+    assert len(response.json()["result"]) == 2833
+    response = await lightweight_admin_client.get(
+        url,
+        params={"limit": 1, "page": 2, "name": "user-*", "role": "user"},
+        headers=root_headers(),
+    )
+    assert response.json()["result"][0]["user_id"] == "user-2"
+
+    hidden = manager.get_users_page(acct, expose_key=False, limit=1)
+    assert hidden["key_count"] == 0
+    assert "api_key" not in hidden["users"][0]
+    assert "key_prefix" not in hidden["users"][0]
+
+
+async def test_user_page_summary_respects_account_access(lightweight_admin_client):
+    acct = _uid()
+    response = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "owner"},
+        headers=root_headers(),
+    )
+    admin_key = response.json()["result"]["user_key"]
+    own = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users?include_summary=true&limit=20",
+        headers={"X-API-Key": admin_key},
+    )
+    assert own.status_code == 200
+    assert own.json()["result"]["account_total"] == 1
+    denied = await lightweight_admin_client.get(
+        "/api/v1/admin/accounts/default/users?include_summary=true&limit=20",
+        headers={"X-API-Key": admin_key},
+    )
+    assert denied.status_code == 403

@@ -368,14 +368,53 @@ export async function fetchAdminUsers(
       path: {
         account_id: accountId,
       },
-      query: {
-        limit: 500,
-      },
     }),
   )
   return result
     .map((item) => normalizeUser(accountId, item))
     .filter((item): item is AdminUser => Boolean(item))
+}
+
+export type AdminUserPage = {
+  users: AdminUser[]
+  total: number
+  accountTotal: number
+  managerCount: number
+  keyCount: number
+}
+
+export async function fetchAdminUsersPage(
+  connection: AdminConnection,
+  accountId: string,
+  options: { page: number; pageSize: number; search: string },
+): Promise<AdminUserPage> {
+  const result = await getOvResult<{
+    users: unknown[]
+    total: number
+    account_total: number
+    manager_count: number
+    key_count: number
+  }>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      path: { account_id: accountId },
+      query: {
+        page: options.page,
+        limit: options.pageSize,
+        query: options.search.trim() || undefined,
+        include_summary: true,
+      },
+    }),
+  )
+  return {
+    users: result.users
+      .map((item) => normalizeUser(accountId, item))
+      .filter((item): item is AdminUser => Boolean(item)),
+    total: result.total,
+    accountTotal: result.account_total,
+    managerCount: result.manager_count,
+    keyCount: result.key_count,
+  }
 }
 
 export async function createAdminAccount(

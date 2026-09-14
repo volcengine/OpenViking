@@ -832,6 +832,19 @@ const workspace = {
       title: 'New API key',
     },
     loading: 'Loading identities...',
+    userList: {
+      search: 'Search all users by username',
+      noResults: 'No matching users',
+      noResultsDescription: 'Try another username or clear the search.',
+      pagination: 'User pagination',
+      summary: '{{total}} users · Page {{page}} of {{pageCount}}',
+      pageSize: 'Users per page',
+      pageSizeValue: '{{count}} per page',
+      first: 'First',
+      previous: 'Previous',
+      next: 'Next',
+      last: 'Last',
+    },
     management: {
       accountFilter: 'Accounts',
       accessDeniedDescription:
