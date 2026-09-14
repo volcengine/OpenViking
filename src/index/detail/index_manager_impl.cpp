@@ -120,17 +120,21 @@ void IndexManagerImpl::register_label_offset_converter_() {
         try {
           offsets.clear();
           offsets.reserve(labels.size());
+          bool all_found = true;
           for (auto label : labels) {
             if (!vector_index_) {
               SPDLOG_ERROR("label_offset_converter vector_index_ is null");
               return false;
             }
             int offset = vector_index_->get_offset_by_label(label);
-            if (offset >= 0) {
-              offsets.push_back(static_cast<uint32_t>(offset));
+            if (offset < 0) {
+              SPDLOG_ERROR("label_offset_converter missing label={}", label);
+              all_found = false;
+              continue;
             }
+            offsets.push_back(static_cast<uint32_t>(offset));
           }
-          return true;
+          return all_found;
         } catch (const std::exception& e) {
           SPDLOG_ERROR("label_offset_converter exception: {}", e.what());
           return false;
