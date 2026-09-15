@@ -105,7 +105,9 @@ it('creates the draft before sending and publishes only the persisted ID', async
   })
   expect(onSessionChange).toHaveBeenCalledWith(id)
   expect(mocks.send).toHaveBeenCalledWith('hello')
-  expect(mocks.history.mock.calls.every(([historyId]) => historyId === undefined)).toBe(true)
+  expect(
+    mocks.history.mock.calls.every(([historyId]) => historyId === undefined),
+  ).toBe(true)
 })
 
 it('does not send or publish the draft when creation fails', async () => {
