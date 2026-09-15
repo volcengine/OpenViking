@@ -74,7 +74,7 @@ class AddResourceRequest(BaseModel):
             create no Watch: native imports with explicit ``to`` pause a single accessible
             Watch (409 if ambiguous); Connector imports leave Watches untouched.
             See the endpoint's Watch ownership rules.
-        is_active: Initial Watch state for Connector and native Feishu imports. When false,
+        is_active: Initial Watch state for Connector, native Feishu, and native Git imports. When false,
             requires watch_interval > 0 and an explicit to or parent target and creates the Watch
             paused; it stays paused until updated, regardless of the import result.
     """
