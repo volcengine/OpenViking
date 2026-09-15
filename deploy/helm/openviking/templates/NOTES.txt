@@ -34,8 +34,8 @@ WARNING: config.server.root_api_key is not set. When the server binds to 0.0.0.0
 (the default), a root_api_key is REQUIRED for security. The server will refuse to
 start without it.
 
-Set it via:
+Set it while retaining the release's other settings via:
 
-  helm upgrade {{ .Release.Name }} <chart> --set config.server.root_api_key="YOUR_SECRET_KEY"
+  helm upgrade {{ .Release.Name }} <chart> --reuse-values --set config.server.root_api_key="YOUR_SECRET_KEY"
 
 {{- end }}

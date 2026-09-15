@@ -19,19 +19,23 @@ helm install openviking ./deploy/helm/openviking \
   --set-string config.vlm.api_key="YOUR_VOLCENGINE_API_KEY"
 ```
 
-The chart deploys `ghcr.io/volcengine/openviking:latest` by default. To choose
-a different image tag:
+The chart deploys `ghcr.io/volcengine/openviking:latest` by default. To change only
+the image tag of the existing release installed above, use `--reuse-values` to
+retain its API keys and other settings:
 
 ```bash
 # newest image from the main branch
-helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=main
+helm upgrade openviking ./deploy/helm/openviking --reuse-values --set image.tag=main
 
 # pinned release image
-helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=v0.3.17
+helm upgrade openviking ./deploy/helm/openviking --reuse-values --set image.tag=v0.3.17
 
 # use the default latest image
-helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=
+helm upgrade openviking ./deploy/helm/openviking --reuse-values --set image.tag=
 ```
+
+For a first-time installation, add `--set image.tag=...` to the install command
+above, alongside the API key settings.
 
 ### Install with Custom Values
 
