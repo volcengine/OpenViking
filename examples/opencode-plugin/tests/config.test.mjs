@@ -372,3 +372,30 @@ test("loadConfig keeps env peer over config peerId when ovcli has none", async (
     }
   })
 })
+
+test("loadConfig accepts captureFilters with env override and validation", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-filter-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const project = join(dir, "project")
+      await mkdir(join(project, ".opencode"), { recursive: true })
+      await writeFile(join(project, ".opencode", "openviking-config.json"), JSON.stringify({
+        endpoint: "https://example.com",
+        apiKey: "key",
+        captureFilters: ["s/sk-[A-Za-z0-9-]+/[REDACTED-SK]/g", 42, "d|internal|"],
+      }))
+
+      const cfg = loadConfig(dir, project)
+      assert.deepEqual(cfg.captureFilters, ["s/sk-[A-Za-z0-9-]+/[REDACTED-SK]/g", "d|internal|"])
+
+      process.env.OPENVIKING_CAPTURE_FILTERS = JSON.stringify(["s/ghp_[A-Za-z0-9]+/[REDACTED-GHP]/g"])
+      const cfgEnv = loadConfig(dir, project)
+      assert.deepEqual(cfgEnv.captureFilters, ["s/ghp_[A-Za-z0-9]+/[REDACTED-GHP]/g"])
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})

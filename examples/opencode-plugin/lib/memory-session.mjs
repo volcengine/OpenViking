@@ -3,6 +3,7 @@ import path from "path"
 import {
   extractPartsFromPayload,
   extractTextFromPayload,
+  filterCaptureParts,
   shouldCaptureText,
 } from "./shared/capture-utils.mjs"
 import {
@@ -25,7 +26,7 @@ import {
   safeStringify,
 } from "./utils.mjs"
 
-export function createMemorySessionManager({ config, pluginRoot }) {
+export function createMemorySessionManager({ config, pluginRoot, client }) {
   const sessions = new Map()
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
@@ -107,6 +108,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function serializeSessionState(state) {
     return {
       ovSessionId: state.ovSessionId,
+      subagent: Boolean(state.subagent),
       createdAt: state.createdAt,
       lastActivityAt: state.lastActivityAt,
       lastCommitTime: state.lastCommitTime,
@@ -125,6 +127,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function deserializeSessionState(persisted) {
     return {
       ovSessionId: persisted.ovSessionId,
+      subagent: Boolean(persisted.subagent),
       createdAt: persisted.createdAt,
       lastActivityAt: persisted.lastActivityAt,
       lastCommitTime: persisted.lastCommitTime,
@@ -229,6 +232,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId || !messageId) return
 
     const state = getOrCreateSession(sessionId, event)
+    if (state.subagent) return
     const captured = state.messages.get(messageId)
     const next = captured ?? createMessageState()
     if (role === "user") {
@@ -250,6 +254,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId || !messageId) return
 
     const state = getOrCreateSession(sessionId, event)
+    if (state.subagent) return
     const message = state.messages.get(messageId) ?? createMessageState()
     if (message.captured) return
     const partId = part.id ?? `${messageId}:${message.parts.size}`
@@ -284,6 +289,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!opencodeSessionId) return false
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
+    // 自愈：旧持久化状态无 subagent 标志，按 ov id 命名补标（否则 flushAll 会复活已删目录）
+    if (!state.subagent && state.ovSessionId && String(state.ovSessionId).includes("subagent-")) state.subagent = true
+    if (state.subagent) return false
+    await ensureParentChecked(opencodeSessionId, state)
+    if (state.subagent) return false
 
     const added = await flushPendingMessages(opencodeSessionId, state)
     if (commit && config.autoCapture) {
@@ -298,7 +308,21 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function commitSession(sessionId, opencodeSessionId, abortSignal) {
     if (opencodeSessionId) {
       const state = sessions.get(opencodeSessionId)
-      if (state) await flushPendingMessages(opencodeSessionId, state)
+      if (state) {
+        if (state.subagent) {
+          log("INFO", "patch", "Subagent session commit skipped", { opencode_session: opencodeSessionId })
+          return { status: "skipped", reason: "subagent-excluded" }
+        }
+        await flushPendingMessages(opencodeSessionId, state)
+        if (state.subagent) {
+          log("INFO", "patch", "Subagent session commit skipped (post-flush)", { opencode_session: opencodeSessionId })
+          return { status: "skipped", reason: "subagent-excluded" }
+        }
+        if (state.messages.size === 0) {
+          log("INFO", "patch", "Empty session commit skipped", { ov_session: state.ovSessionId })
+          return { status: "skipped", reason: "empty-session" }
+        }
+      }
     }
     return commitOvSession(sessionId, { force: true, abortSignal, reason: "tool" })
   }
@@ -314,9 +338,24 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   function createSessionState(opencodeSessionId, event = {}) {
     const parentId = event?.properties?.info?.parentID ?? event?.properties?.parentID ?? event?.parentID ?? ""
-    const ovSessionId = parentId
-      ? deriveHarnessSessionId("oc-", parentId, `subagent-${opencodeSessionId}`)
-      : deriveHarnessSessionId("oc-", opencodeSessionId)
+    // Subagent sessions are excluded from the memory loop entirely (mirrors the DSH
+    // plugin's skipSubagentSessions): injecting into a subagent run pollutes the parent
+    // conversation's memory, so capture and commit must be skipped too, not just recall.
+    // The subagent marker is recorded so flush/commit paths can short-circuit.
+    if (parentId) {
+      log("INFO", "patch", "Subagent session excluded from memory loop", {
+        opencode_session: opencodeSessionId,
+        parent: parentId,
+      })
+      return {
+        ovSessionId: deriveHarnessSessionId("oc-", parentId, `subagent-${opencodeSessionId}`),
+        subagent: true,
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+        messages: new Map(),
+      }
+    }
+    const ovSessionId = deriveHarnessSessionId("oc-", opencodeSessionId)
     return {
       ovSessionId,
       createdAt: Date.now(),
@@ -340,6 +379,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!state) {
       state = createSessionState(opencodeSessionId, event)
       sessions.set(opencodeSessionId, state)
+    }
+    if (!state.subagent && state.ovSessionId && String(state.ovSessionId).includes("subagent-")) {
+      state.subagent = true
     }
     return state
   }
@@ -377,18 +419,56 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     const captureParts = partsRaw.flatMap((part) => extractPartsFromPayload(part, {
       toolMaxChars: config.captureToolMaxChars,
     }))
-    const decision = shouldCaptureText(rawText, role, config)
-    if (!decision.shouldCapture && captureParts.length === 0) return null
-    const body = captureParts.length > 0
-      ? { role, parts: captureParts }
+    // Apply captureFilters (sed-style redaction rules) to the extracted parts,
+    // mirroring the Codex plugin's reference flow in shared/capture-utils.mjs.
+    const shaped = filterCaptureParts(captureParts, role, config)
+    if (shaped.dropped) return null
+    const decision = shouldCaptureText(rawText, role, config, { filters: shaped.parts.length === 0 })
+    if (!decision.shouldCapture && shaped.parts.length === 0) return null
+    const body = shaped.parts.length > 0
+      ? { role, parts: shaped.parts }
       : { role, content: decision.text }
     const peerId = effectivePeerId(config)
     if (peerId) body.peer_id = peerId
     return body
   }
 
+  // Authoritative parent check before flushing: query the client API for the session's
+  // parentID (order-independent relative to message events) and skip capture/commit for
+  // subagent sessions entirely. Query failure fails open (proceed as before).
+  async function ensureParentChecked(opencodeSessionId, state) {
+    if (state.parentChecked) return
+    state.parentChecked = true
+    let info = null
+    try {
+      if (client?.session?.get) {
+        const res = await client.session.get({ sessionID: opencodeSessionId })
+        info = res?.data ?? res
+      }
+    } catch {}
+    if (!info) {
+      try {
+        if (client?.session?.get) {
+          const res = await client.session.get(opencodeSessionId)
+          info = res?.data ?? res
+        }
+      } catch {}
+    }
+    const parentId = info?.parentID ?? info?.parentid ?? ""
+    if (parentId) {
+      state.subagent = true
+      log("INFO", "patch", "Subagent session excluded from memory loop (client check)", {
+        opencode_session: opencodeSessionId,
+        parent: parentId,
+      })
+    }
+    if (!state.subagent && state.ovSessionId && String(state.ovSessionId).includes("subagent-")) state.subagent = true
+  }
+
   async function flushPendingMessages(opencodeSessionId, state) {
     if (!config.autoCapture) return 0
+    await ensureParentChecked(opencodeSessionId, state)
+    if (state.subagent) return 0
     const toSend = []
     for (const [messageId, message] of state.messages.entries()) {
       if (message.captured) continue
