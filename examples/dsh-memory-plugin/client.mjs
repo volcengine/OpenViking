@@ -114,11 +114,15 @@ export class OpenVikingClient {
   }
 
   async commitSession(sessionId, actorPeerId, options = {}) {
+    const body = { keep_recent_count: this.config.commitKeepRecentCount };
+    if (this.config.attributionTags) {
+      body.extraction_metadata = { event: { tags: String(this.config.attributionTags).split(",").map((t) => t.trim()).filter(Boolean) } };
+    }
     return this.fetchJSON(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       {
         method: "POST",
-        body: JSON.stringify({ keep_recent_count: this.config.commitKeepRecentCount }),
+        body: JSON.stringify(body),
       },
       { timeoutMs: options.timeoutMs ?? 30000, actorPeerId },
     );
