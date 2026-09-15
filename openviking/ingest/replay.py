@@ -192,7 +192,15 @@ class SessionReplayer:
             # Nothing live to archive (already committed elsewhere); clear the stale flag.
             self.store.mark_committed(harness, ref.native_session_id)
             return False
-        await self.client.commit(sid, keep_recent_count=keep_recent_count)
+        try:
+            await self.client.commit(sid, keep_recent_count=keep_recent_count)
+        except Exception as commit_error:  # noqa: BLE001 - commit may have succeeded remotely
+            try:
+                pending = await self.client.pending_tokens(sid)
+            except Exception:  # noqa: BLE001 - preserve the original commit failure
+                raise commit_error
+            if pending > 0:
+                raise
         self.store.mark_committed(harness, ref.native_session_id)
         return True
 
