@@ -1318,15 +1318,15 @@ ov --sudo admin regenerate-key acme bob
 
 #### 1. API 实现介绍
 
-将 0.3.x legacy `viking://agent/...` / `viking://session/...` 数据迁移到 0.4.0 的 user / peer namespace，或在确认迁移结果后清理旧 namespace。该接口仅 ROOT 可调用，并以后台 task 执行。
+将旧 `viking://session/...` 数据迁移到 `viking://user/<user_id>/sessions/...`，或在确认迁移结果后清理旧 Session 目录。该接口仅 ROOT 可调用，并以后台 task 执行。`agent` 是账号内公共目录，不参与迁移或 cleanup。
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
 2. `action=migrate` 时执行 preflight，检查 account registry、session owner 等前置条件
 3. 创建 root 级后台 task
-4. 迁移时复制文件和已有向量记录；cleanup 时先删除旧向量记录，再删除旧 AGFS 目录
+4. 迁移时复制 Session 文件；cleanup 时先删除旧 Session 向量记录，再删除旧 Session AGFS 目录
 
-迁移不会自动调用 `reindex`。如果迁移后的检索结果不符合预期，需要用户对新路径手动执行 reindex。
+迁移保留目标路径中已有的文件。cleanup 不删除 `agent` 公共目录或已迁移的用户数据。
 
 **代码入口：**
 - `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP 路由
@@ -1351,10 +1351,8 @@ POST /api/v1/admin/migrate
 | 字段 | 说明 |
 |------|------|
 | migrated.files / migrated.directories | 复制的文件和目录数量 |
-| migrated.vector_records | 复制的已有向量记录数量 |
-| migrated.skipped_vector_records | 因没有向量 payload 而跳过的旧记录数量 |
-| migrated.operations | 按迁移类别统计的操作数量 |
-| skipped / warnings / created_users | 跳过项、告警、自动创建的用户 |
+| migrated.operations | Session 迁移操作数量（`sessions`） |
+| skipped / created_users | 跳过的文件、自动创建的用户 |
 
 **Cleanup 结果字段**
 

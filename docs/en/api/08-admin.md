@@ -1375,15 +1375,15 @@ ov --sudo admin regenerate-key acme bob
 
 #### 1. API Implementation Overview
 
-Migrate 0.3.x legacy `viking://agent/...` / `viking://session/...` data into the 0.4.0 user / peer namespace, or clean up old namespaces after migration has been verified. This endpoint is ROOT-only and runs as a background task.
+Migrate legacy `viking://session/...` data into `viking://user/<user_id>/sessions/...`, or clean up old session directories after verifying migration. This endpoint is ROOT-only and runs as a background task. The account-shared `agent` directory is excluded from migration and cleanup.
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
 2. For `action=migrate`, run preflight checks for account registry, session owner metadata, and other prerequisites
 3. Create a root-level background task
-4. During migration, copy files and existing vector records; during cleanup, delete old vector records before deleting old AGFS directories
+4. During migration, copy session files; during cleanup, delete old session vector records before deleting old session AGFS directories
 
-Migration does not automatically call `reindex`. If retrieval after migration is not as expected, users should manually reindex the new paths.
+Migration preserves files that already exist at the destination. Cleanup leaves shared `agent` directories and migrated user data intact.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP route
@@ -1408,10 +1408,8 @@ POST /api/v1/admin/migrate
 | Field | Description |
 |-------|-------------|
 | migrated.files / migrated.directories | Number of files and directories copied |
-| migrated.vector_records | Number of existing vector records copied |
-| migrated.skipped_vector_records | Number of old records skipped because they had no vector payload |
-| migrated.operations | Operation counts grouped by migration category |
-| skipped / warnings / created_users | Skipped items, warnings, and users created automatically |
+| migrated.operations | Session migration operation count (`sessions`) |
+| skipped / created_users | Skipped files and users created automatically |
 
 **Cleanup result fields**
 

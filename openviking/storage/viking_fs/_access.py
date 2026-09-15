@@ -413,11 +413,6 @@ class _AccessMixin:
                 f"Writing {normalized_uri} is not supported; use user-owned namespaces instead.",
                 resource=normalized_uri,
             )
-        if self._is_legacy_agent_id_uri(normalized_uri):
-            raise PermissionDeniedError(
-                "viking://agent/{agent_id} is deprecated. Use viking://user/.../peers/{agent_id} instead.",
-                resource=normalized_uri,
-            )
 
     def _pathlock_fs_ctx(
         self,
@@ -648,10 +643,6 @@ class _AccessMixin:
         parts = self._safe_uri_parts(uri)
         if parts[:1] == ["session"]:
             raise ValueError(f"Legacy session URI is not accepted internally: {uri}")
-        if parts and parts[0] == "agent" and self._is_legacy_agent_id_uri(uri):
-            # Old format: viking://agent/{agent_id}/... — direct mapping for read-only compat
-            safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
-            return f"/local/{account_id}/{'/'.join(safe_parts)}"
         if not parts:
             return f"/local/{account_id}"
 
@@ -687,16 +678,6 @@ class _AccessMixin:
 
     def _is_session_root_uri(self, uri: str) -> bool:
         return self._legacy_session_alias(uri) == "viking://session"
-
-    def _is_legacy_agent_id_uri(self, uri: str) -> bool:
-        parts = self._safe_uri_parts(uri)
-        return bool(
-            parts
-            and parts[0] == "agent"
-            and len(parts) >= 2
-            and parts[1] not in {"skills", "endpoints", "tools", "payments"}
-            and not (len(parts) == 2 and parts[1] in self._DIR_MARKER_LEVELS)
-        )
 
     def _read_paths(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Return read candidates for a URI, including legacy alias fallbacks."""
@@ -735,13 +716,8 @@ class _AccessMixin:
         ctx: Optional[RequestContext],
     ) -> str:
         base = base_path.rstrip("/")
-        request_parts = self._safe_uri_parts(request_uri)
         request_root = request_uri if request_uri == "viking://" else request_uri.rstrip("/")
-        preserve_request_alias = request_uri in {"viking://", "viking://user"} or bool(
-            request_parts
-            and request_parts[0] == "agent"
-            and self._is_legacy_agent_id_uri(request_uri)
-        )
+        preserve_request_alias = request_uri in {"viking://", "viking://user"}
         rel_path = entry_path[len(base) :].strip("/") if entry_path.startswith(base) else ""
         if entry_path.startswith(base):
             separator = "" if request_root.endswith("://") else "/"
@@ -1029,14 +1005,6 @@ class _AccessMixin:
             return ctx.role == Role.ROOT
         if scope == "_system":
             return False
-        if scope == "agent":
-            # New format: agent/skills/..., agent/endpoints/... — globally readable (account scope)
-            if len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}:
-                return True
-            # Old format: agent/{agent_id}/... — actor_peer_id match for read-only access
-            if not ctx.actor_peer_id or len(parts) < 2:
-                return True
-            return parts[1] == ctx.actor_peer_id
         return namespace_is_accessible(uri, ctx)
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:

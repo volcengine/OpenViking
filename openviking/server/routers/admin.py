@@ -367,7 +367,7 @@ async def migrate_legacy_data(
     body: MigrateLegacyDataRequest | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Preflight and enqueue legacy agent/session data migration or cleanup."""
+    """Preflight and enqueue legacy session data migration or cleanup."""
     manager = _get_api_key_manager(request)
     service = get_service()
     if service.viking_fs is None:

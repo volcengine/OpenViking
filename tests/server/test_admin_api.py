@@ -37,7 +37,8 @@ from openviking.service.task_store import (
     SYSTEM_TASK_USER_ID,
 )
 from openviking.service.task_tracker import get_task_tracker
-from openviking_cli.exceptions import OpenVikingError, PermissionDeniedError
+from openviking.session.memory.account_templates import EDITABLE_MEMORY_TEMPLATE_FIELDS
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import get_openviking_config
 
@@ -2401,276 +2402,72 @@ async def test_legacy_migration_preflight_failure_does_not_create_task(
     assert tasks_resp.json()["result"] == []
 
 
-async def test_legacy_migration_task_migrates_legacy_data(
+async def test_legacy_migration_only_moves_sessions(
     admin_client: httpx.AsyncClient,
     admin_app,
     admin_service: OpenVikingService,
 ):
-    """ROOT migrate fans out shared agent data and moves sessions under users."""
+    """Migration preserves public agent content and moves sessions under their owners."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    register_bob = await admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "bob", "role": "user"},
-        headers=root_headers(),
-    )
-    bob_key = register_bob.json()["result"]["user_key"]
-
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/agent/code-agent/memories/facts/project.md",
-        "shared fact",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/agent/code-agent/skills/code-review/SKILL.md",
-        "legacy skill",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/agent/code-agent/instructions/system.md",
-        "do not migrate",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/user/bob/skills/code-review/SKILL.md",
-        "existing skill",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/session/sess-001/.meta.json",
-        json.dumps({"created_by_user_id": "alice"}),
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/session/sess-001/messages.jsonl",
-        '{"role":"user"}\n',
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/session/sess-002/.meta.json",
-        json.dumps({"user_id": "charlie"}),
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/session/sess-002/messages.jsonl",
-        '{"role":"assistant"}\n',
-    )
-
-    resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
-    assert resp.status_code == 200
-    task_id = resp.json()["result"]["task_id"]
-    assert await _agfs_exists(
-        admin_service,
-        f"/local/{SYSTEM_TASK_ACCOUNT_ID}/tasks/{SYSTEM_TASK_USER_ID}/{task_id}.json",
-    )
-    hidden_resp = await admin_client.get(f"/api/v1/tasks/{task_id}", headers={"X-API-Key": bob_key})
-    assert hidden_resp.status_code == 404
-
-    task = await _wait_for_task(admin_client, task_id)
-    assert task["status"] == "completed"
-    result = task["result"]
-    created_user = next(item for item in result["created_users"] if item["user_id"] == "charlie")
-    assert created_user["account_id"] == acct
-    assert "user_key" not in created_user
-    assert result["migrated"]["operations"]["agent_memories"] == 3
-    assert result["migrated"]["operations"]["agent_skills"] == 2
-    assert result["migrated"]["operations"]["sessions"] == 2
-    assert any(item["reason"] == "target skill already exists" for item in result["skipped"])
-    assert any("Skipped legacy instructions" in item for item in result["warnings"])
-
-    manager = admin_app.state.api_key_manager
-    assert manager.has_user(acct, "charlie")
-    for user_id in ("alice", "bob", "charlie"):
-        assert (
-            await _agfs_read_text(
-                admin_service,
-                f"/local/{acct}/user/{user_id}/peers/code-agent/memories/facts/project.md",
-            )
-            == "shared fact"
-        )
-    assert (
-        await _agfs_read_text(
+    shared_path = f"/local/{acct}/agent/workflows/memories/guide.md"
+    await _agfs_write(admin_service, shared_path, "shared workflow")
+    for session_id, owner in (("s1", "alice"), ("s2", "charlie")):
+        await _agfs_write(
             admin_service,
-            f"/local/{acct}/user/alice/skills/code-review/SKILL.md",
+            f"/local/{acct}/session/{session_id}/.meta.json",
+            json.dumps({"created_by_user_id": owner}),
         )
-        == "legacy skill"
-    )
-    assert (
-        await _agfs_read_text(
+        await _agfs_write(
             admin_service,
-            f"/local/{acct}/user/bob/skills/code-review/SKILL.md",
+            f"/local/{acct}/session/{session_id}/messages.jsonl",
+            '{"role":"user"}\n',
         )
-        == "existing skill"
-    )
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/alice/sessions/sess-001/messages.jsonl",
-        )
-        == '{"role":"user"}\n'
-    )
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/charlie/sessions/sess-002/messages.jsonl",
-        )
-        == '{"role":"assistant"}\n'
-    )
-    assert not await _agfs_exists(
-        admin_service,
-        f"/local/{acct}/user/alice/peers/code-agent/instructions/system.md",
-    )
-
-
-async def test_legacy_migration_covers_all_accounts_and_agent_user_layout(
-    admin_client: httpx.AsyncClient,
-    admin_app,
-    admin_service: OpenVikingService,
-):
-    """One ROOT migration scans all accounts and handles agent/user scoped legacy data."""
-    acct = _uid()
-    other_acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "admin"},
-        headers=root_headers(),
-    )
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": other_acct, "admin_user_id": "dana"},
-        headers=root_headers(),
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/user/charlie/memories/.overview.md",
-        "legacy physical user",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/agent/code-agent/memories/facts/shared.md",
-        "shared fact",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/agent/review-agent/user/charlie/memories/facts/private.md",
-        "private fact",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/agent/review-agent/user/charlie/skills/review/SKILL.md",
-        "review skill",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{other_acct}/agent/code-agent/memories/facts/other.md",
-        "other account fact",
-    )
 
     resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
     assert resp.status_code == 200
     task = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
     assert task["status"] == "completed"
-
     result = task["result"]
-    assert any(
-        item["account_id"] == acct and item["user_id"] == "charlie"
-        for item in result["created_users"]
-    )
-    manager = admin_app.state.api_key_manager
-    assert manager.has_user(acct, "charlie")
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/admin/peers/code-agent/memories/facts/shared.md",
+    assert result["migrated"]["operations"] == {"sessions": 2}
+    assert result["created_users"] == [{"account_id": acct, "user_id": "charlie"}]
+    assert admin_app.state.api_key_manager.has_user(acct, "charlie")
+    assert await _agfs_read_text(admin_service, shared_path) == "shared workflow"
+    for session_id, owner in (("s1", "alice"), ("s2", "charlie")):
+        assert (
+            await _agfs_read_text(
+                admin_service, f"/local/{acct}/user/{owner}/sessions/{session_id}/messages.jsonl"
+            )
+            == '{"role":"user"}\n'
         )
-        == "shared fact"
-    )
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/charlie/peers/code-agent/memories/facts/shared.md",
-        )
-        == "shared fact"
-    )
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/charlie/peers/review-agent/memories/facts/private.md",
-        )
-        == "private fact"
-    )
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/charlie/skills/review/SKILL.md",
-        )
-        == "review skill"
-    )
-    assert not await _agfs_exists(
-        admin_service,
-        f"/local/{acct}/user/admin/peers/review-agent/memories/facts/private.md",
-    )
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{other_acct}/user/dana/peers/code-agent/memories/facts/other.md",
-        )
-        == "other account fact"
-    )
+        assert not await _agfs_exists(admin_service, f"/local/{acct}/user/{owner}/peers/workflows")
 
 
-async def test_legacy_cleanup_removes_only_legacy_namespaces(
+async def test_legacy_cleanup_preserves_public_agent_directories(
     admin_client: httpx.AsyncClient,
     admin_service: OpenVikingService,
 ):
-    """Cleanup removes legacy agent/session roots without deleting migrated user data."""
+    """Session cleanup leaves public agent directories and user-owned data intact."""
     acct = _uid()
-    other_acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": other_acct, "admin_user_id": "dana"},
-        headers=root_headers(),
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/agent/code-agent/memories/facts/old.md",
-        "legacy agent",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/session/sess-001/messages.jsonl",
-        '{"role":"user"}\n',
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/user/alice/agent/review-agent/memories/facts/old.md",
-        "legacy user agent",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/user/alice/peers/code-agent/memories/facts/new.md",
-        "new peer data",
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{acct}/user/alice/sessions/sess-001/messages.jsonl",
-        '{"role":"assistant"}\n',
-    )
-    await _agfs_write(
-        admin_service,
-        f"/local/{other_acct}/agent/code-agent/memories/facts/old.md",
-        "other legacy agent",
-    )
+    await _agfs_write(admin_service, f"/local/{acct}/session/s1/messages.jsonl", "old session")
+    preserved_paths = [
+        f"/local/{acct}/agent/skills/demo/SKILL.md",
+        f"/local/{acct}/agent/workflows/daily.md",
+        f"/local/{acct}/user/alice/agent/notes.md",
+        f"/local/{acct}/user/alice/peers/customer/memories/profile.md",
+        f"/local/{acct}/user/alice/sessions/s1/messages.jsonl",
+    ]
+    for path in preserved_paths:
+        await _agfs_write(admin_service, path, "preserved")
 
     resp = await admin_client.post(
         "/api/v1/admin/migrate",
@@ -2681,47 +2478,19 @@ async def test_legacy_cleanup_removes_only_legacy_namespaces(
     task = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
     assert task["status"] == "completed"
     assert task["task_type"] == "legacy_cleanup"
-    assert task["result"]["cleanup"]["directories"] == 4
-    removed = {
-        (item["account_id"], item["source"]) for item in task["result"]["cleanup"]["targets"]
-    }
-    # Cleanup targets each legacy agent_id individually (reserved subdirs such as
-    # viking://agent/skills are preserved), so the agent roots appear per agent.
-    assert (acct, "viking://agent/code-agent") in removed
-    assert (acct, "viking://session") in removed
-    assert (acct, "viking://user/alice/agent") in removed
-    assert (other_acct, "viking://agent/code-agent") in removed
-
-    assert not await _agfs_exists(admin_service, f"/local/{acct}/agent/code-agent")
+    assert task["result"]["cleanup"]["targets"] == [
+        {"account_id": acct, "type": "session", "source": "viking://session"}
+    ]
     assert not await _agfs_exists(admin_service, f"/local/{acct}/session")
-    assert not await _agfs_exists(admin_service, f"/local/{acct}/user/alice/agent")
-    assert not await _agfs_exists(admin_service, f"/local/{other_acct}/agent/code-agent")
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/alice/peers/code-agent/memories/facts/new.md",
-        )
-        == "new peer data"
-    )
-    assert (
-        await _agfs_read_text(
-            admin_service,
-            f"/local/{acct}/user/alice/sessions/sess-001/messages.jsonl",
-        )
-        == '{"role":"assistant"}\n'
-    )
+    for path in preserved_paths:
+        assert await _agfs_read_text(admin_service, path) == "preserved"
 
 
-async def test_legacy_agent_uri_is_read_only_and_session_storage_uses_canonical_uri(
+async def test_session_storage_uses_canonical_uri(
     admin_service: OpenVikingService,
 ):
-    """Old agent/session URIs remain readable but not mutable."""
+    """Canonical session URIs can read existing session storage."""
     ctx = RequestContext(user=UserIdentifier("default", "admin_user"), role=Role.USER)
-    await _agfs_write(
-        admin_service,
-        "/local/default/agent/code-agent/memories/facts/project.md",
-        "legacy agent fact",
-    )
     await _agfs_write(
         admin_service,
         "/local/default/session/old-session/messages.jsonl",
@@ -2735,24 +2504,11 @@ async def test_legacy_agent_uri_is_read_only_and_session_storage_uses_canonical_
 
     assert (
         await admin_service.viking_fs.read_file(
-            "viking://agent/code-agent/memories/facts/project.md",
-            ctx=ctx,
-        )
-        == "legacy agent fact"
-    )
-    assert (
-        await admin_service.viking_fs.read_file(
             "viking://user/admin_user/sessions/old-session/messages.jsonl",
             ctx=ctx,
         )
         == '{"role":"user"}\n'
     )
-    with pytest.raises(PermissionDeniedError):
-        await admin_service.viking_fs.write_file(
-            "viking://agent/code-agent/memories/facts/new.md",
-            "blocked",
-            ctx=ctx,
-        )
 
 
 @pytest_asyncio.fixture(scope="function")

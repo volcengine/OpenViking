@@ -1638,12 +1638,15 @@ async def test_reindex_executor_infers_user_namespace_root():
 
 
 @pytest.mark.asyncio
-async def test_reindex_executor_rejects_deprecated_agent_namespace_root():
+async def test_reindex_executor_infers_shared_agent_content():
     from openviking.service.reindex_executor import ReindexExecutor
 
     service = ReindexExecutor()
 
-    with pytest.raises(OpenVikingError, match="no longer supported"):
+    assert service._infer_target_type("viking://agent/skills") == "skill_namespace"
+    assert service._infer_target_type("viking://agent/skills/demo") == "skill"
+    assert service._infer_target_type("viking://agent/workflows/daily.md") == "resource"
+    with pytest.raises(OpenVikingError, match="Unsupported reindex URI"):
         service._infer_target_type("viking://agent/")
 
 
