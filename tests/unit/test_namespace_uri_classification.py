@@ -11,6 +11,7 @@ from openviking.core.namespace import (
     canonical_session_uri,
     classify_uri,
     context_type_for_uri,
+    is_accessible,
     is_content_root_uri,
     is_session_uri,
     owner_space_for_uri,
@@ -318,3 +319,29 @@ def test_home_alias_is_only_recognized_as_first_segment():
     # Anywhere else it stays a literal path segment.
     assert resolve_request_uri("viking://resources/~/x", ctx) == "viking://resources/~/x"
     assert resolve_request_uri("viking://user/alice/~/x", ctx) == "viking://user/alice/~/x"
+
+
+def _ctx_with_peer(actor_peer_id: str | None = "workspace-test-peer") -> RequestContext:
+    return RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="support_bot"),
+        role=Role.ADMIN,
+        actor_peer_id=actor_peer_id,
+    )
+
+
+def test_shared_agent_skills_root_ignores_actor_peer_view():
+    # The first segment of a shared root is a fixed name, not an agent id, so the
+    # actor-peer filter must not deny the shared skills root to its own account.
+    ctx = _ctx_with_peer()
+
+    assert is_accessible("viking://agent/skills", ctx)
+    assert is_accessible("viking://agent/skills/demo", ctx)
+    assert is_accessible("viking://agent/skills/demo/SKILL.md", ctx)
+
+
+def test_legacy_agent_id_scope_still_filters_other_peers():
+    # The shared-root exemption must not widen the peer view for agent-owned paths.
+    ctx = _ctx_with_peer()
+
+    assert not is_accessible("viking://agent/some-other-peer/memories", ctx)
+    assert is_accessible("viking://agent/workspace-test-peer/memories", ctx)
