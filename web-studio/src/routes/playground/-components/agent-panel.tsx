@@ -62,6 +62,13 @@ export function AgentPanel({
   const [historySessionId, setHistorySessionId] = useState(initialSessionId)
   const [persistedSessionId, setPersistedSessionId] = useState(initialSessionId)
   const creationStartedRef = useRef(false)
+  const creationGenerationRef = useRef(0)
+  useEffect(
+    () => () => {
+      creationGenerationRef.current += 1
+    },
+    [],
+  )
   const botHealth = useBotHealth()
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } =
@@ -83,6 +90,7 @@ export function AgentPanel({
   const handleNewSession = useCallback(async () => {
     if (isCreatingSession) return
 
+    const generation = ++creationGenerationRef.current
     chat.abort()
     chat.setMessages([])
     creationStartedRef.current = true
@@ -95,6 +103,7 @@ export function AgentPanel({
         12_000,
         t('agent.createTimeout'),
       )
+      if (generation !== creationGenerationRef.current) return
       setPlaygroundSessionIds(
         registerPlaygroundAgentSessionId(result.session_id, identityScopeKey),
       )
@@ -105,10 +114,14 @@ export function AgentPanel({
       onSessionChange(result.session_id)
       setHistoryOpen(false)
     } catch (error) {
+      if (generation !== creationGenerationRef.current) return
       creationStartedRef.current = false
       setSessionError(error instanceof Error ? error.message : String(error))
     } finally {
-      setIsCreatingSession(false)
+      if (generation === creationGenerationRef.current) {
+        creationStartedRef.current = false
+        setIsCreatingSession(false)
+      }
     }
   }, [
     chat,
@@ -122,8 +135,9 @@ export function AgentPanel({
 
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
+      creationGenerationRef.current += 1
       chat.abort()
-      creationStartedRef.current = true
+      creationStartedRef.current = false
       setSessionError(null)
       setIsCreatingSession(false)
       setPlaygroundSessionIds(
@@ -158,24 +172,31 @@ export function AgentPanel({
 
   const send = useCallback(
     async (message: string) => {
-      if (creationStartedRef.current && !persistedSessionId) return
+      if (creationStartedRef.current) return false
       if (!persistedSessionId) {
+        const generation = ++creationGenerationRef.current
         creationStartedRef.current = true
         setIsCreatingSession(true)
         setSessionError(null)
         try {
           const result = await createSession.mutateAsync(sessionId)
+          if (generation !== creationGenerationRef.current) return false
           setPersistedSessionId(result.session_id)
           onSessionChange(result.session_id)
         } catch (error) {
-          setSessionError(getErrorMessage(error))
-          return
+          if (generation === creationGenerationRef.current) {
+            setSessionError(getErrorMessage(error))
+          }
+          return false
         } finally {
-          creationStartedRef.current = false
-          setIsCreatingSession(false)
+          if (generation === creationGenerationRef.current) {
+            creationStartedRef.current = false
+            setIsCreatingSession(false)
+          }
         }
       }
-      await chat.send(message)
+      void chat.send(message)
+      return true
     },
     [chat, createSession, onSessionChange, persistedSessionId, sessionId],
   )
@@ -268,6 +289,7 @@ export function AgentPanel({
         ) : (
           <div className="border-t bg-background/80">
             <Composer
+              key={sessionId}
               variant="compact"
               isStreaming={isStreaming}
               onCancel={chat.abort}

@@ -5,7 +5,7 @@ import { ArrowUpIcon, SquareIcon } from 'lucide-react'
 import { cn } from '#/lib/utils'
 
 interface ComposerProps {
-  onSend: (message: string) => void
+  onSend: (message: string) => void | boolean | Promise<void | boolean>
   onCancel: () => void
   isStreaming: boolean
   variant?: 'default' | 'compact'
@@ -19,6 +19,8 @@ export function Composer({
 }: ComposerProps) {
   const { t } = useTranslation('sessions')
   const [value, setValue] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const submittingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isCompact = variant === 'compact'
 
@@ -29,16 +31,23 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [])
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = value.trim()
-    if (!trimmed) return
-    onSend(trimmed)
-    setValue('')
-    requestAnimationFrame(() => {
-      const el = textareaRef.current
-      if (el) el.style.height = 'auto'
-    })
-  }, [value, onSend])
+    if (!trimmed || submittingRef.current || isStreaming) return
+    submittingRef.current = true
+    setIsSubmitting(true)
+    try {
+      const accepted = await onSend(trimmed)
+      if (accepted === false) return
+      // Do not erase text edited while the submission was pending.
+      setValue((current) => (current === value ? '' : current))
+    } catch {
+      // The caller owns error reporting; keep the input available for retry.
+    } finally {
+      submittingRef.current = false
+      setIsSubmitting(false)
+    }
+  }, [value, onSend, isStreaming])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -109,7 +118,7 @@ export function Composer({
               type="button"
               aria-label={t('chat.send')}
               onClick={handleSend}
-              disabled={!value.trim()}
+              disabled={!value.trim() || isSubmitting}
               className={cn(
                 'inline-flex size-8 items-center justify-center rounded-lg',
                 'bg-primary text-primary-foreground',
