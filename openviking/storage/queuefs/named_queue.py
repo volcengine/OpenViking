@@ -186,7 +186,8 @@ class NamedQueue:
         Must be called after the dequeue handler finishes processing a message.
         Middleware can provisionally settle application state before deletion.
         If not called (e.g. process crashes), the message will be automatically
-        re-queued on the next startup via RecoverStale.
+        re-queued on the next startup via the backend's RecoverStale
+        (``recover_stale_sec``, see ``dequeue``).
         """
         if not msg_id:
             return
@@ -228,7 +229,10 @@ class NamedQueue:
           3. Call ack()          → backend deletes the message permanently
 
         If the process crashes between steps 1 and 3, the backend's RecoverStale
-        on the next startup resets the message back to 'pending' for retry.
+        at mount time resets the message back to 'pending' for retry: with
+        ``recover_stale_sec > 0`` (default 300) only rows older than the
+        threshold are reset; with ``0`` ALL processing rows are reset on every
+        mount (the UPDATE is not scoped per queue).
         """
         await self._ensure_initialized()
         try:
