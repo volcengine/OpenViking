@@ -372,6 +372,7 @@ ov config show
 ov config list -o json
 ov config validate
 ov health
+ov verify-retrieval
 ov status
 ```
 
@@ -382,6 +383,8 @@ ov status
 如果验证命令提示 OpenViking 需要显示语言，请运行 `ov language en`；如果用户希望使用中文，则运行 `ov language zh-CN`，然后重新验证。
 
 `ov status` 包含更宽泛的服务端和数据诊断。如果 `ov config validate` 和 `ov health` 通过，`ov status` 中的 warning 不一定代表 CLI 配置失败。
+
+`ov verify-retrieval` 会为 active 用户创建唯一的测试资源，等待处理完成，要求 `find` 返回该资源的准确 URI，然后删除资源。命令分别报告 `write`、`stat`、`find`、`cleanup` 和 `absence` 阶段。在自动化中使用 `ov --output json verify-retrieval`。如果清理失败且资源可能仍然存在，命令会报告该 URI。生成的测试内容使用正常的资源处理路径，可能会发送到已配置的模型服务。
 
 ## 学习其他 CLI 命令
 

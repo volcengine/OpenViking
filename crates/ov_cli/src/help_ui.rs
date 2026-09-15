@@ -80,7 +80,15 @@ const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
 ];
 
 const CONFIG_STATUS: &[HelpCommand] = help_commands![
-    "config", "language", "health", "status", "observer", "wait", "task", "version",
+    "config",
+    "language",
+    "health",
+    "verify-retrieval",
+    "status",
+    "observer",
+    "wait",
+    "task",
+    "version",
 ];
 
 const IMPORT_EXPORT_SESSIONS: &[HelpCommand] = help_commands![
@@ -1017,6 +1025,24 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Inspect detailed backend status.",
             },
         ],
+    },
+    CommandHelpSpec {
+        path: &["verify-retrieval"],
+        purpose: "Verify one user-scoped write-to-retrieval path and remove the test resource.",
+        examples: &[
+            HelpItem {
+                label: "ov verify-retrieval",
+                description: "Run the bounded retrieval verification.",
+            },
+            HelpItem {
+                label: "ov --output json verify-retrieval",
+                description: "Return a machine-readable stage report.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov status --verbose",
+            description: "Inspect components when verification fails.",
+        }],
     },
     CommandHelpSpec {
         path: &["config"],
