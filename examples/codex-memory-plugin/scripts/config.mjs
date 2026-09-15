@@ -48,6 +48,7 @@ import { join } from "node:path";
 import { resolveOpenVikingCredentials } from "./ov-credentials.mjs";
 import { buildUserAgent, readManifestVersion } from "./shared/credentials.mjs";
 import { HARNESS_KEYS, loadPluginSettings } from "./shared/plugin-config.mjs";
+import { compileInputFilters } from "./shared/input-filters.mjs";
 
 const USER_AGENT = buildUserAgent(
   "codex",
@@ -100,7 +101,11 @@ function hasOwn(obj, key) {
 function filterList(envName, configured) {
   const raw = str(process.env[envName], null);
   const list = raw !== null ? raw.split(",") : (Array.isArray(configured) ? configured : []);
-  return list.filter((r) => typeof r === "string").map((r) => r.trim()).filter(Boolean);
+  const rules = list.filter((r) => typeof r === "string").map((r) => r.trim()).filter(Boolean);
+  for (const { index, message } of compileInputFilters(rules).errors) {
+    console.warn(`[openviking] ${envName}[${index}]: ${message}; rule skipped (see ov-memory-doctor).`);
+  }
+  return rules;
 }
 
 function normalizeAuthMode(val) {

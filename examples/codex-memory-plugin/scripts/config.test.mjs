@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { loadConfig } from "./config.mjs";
+import { filterCaptureParts } from "./capture-utils.mjs";
 
 const OVERRIDES = [
   "OPENVIKING_CONFIG_FILE",
@@ -204,5 +205,49 @@ test("a comma survives in a configured rule but splits an env one", () => {
     env: { OPENVIKING_CAPTURE_FILTERS: "s/a{2,}/X/" },
   }, () => {
     assert.deepEqual(loadConfig().captureFilters, ["s/a{2", "}/X/"]);
+  });
+});
+
+test("invalid capture rules warn at config load while valid rules still redact", (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  withConfigs({
+    cli: {
+      url: "http://127.0.0.1:1933",
+      plugin: { codex: { captureFilters: ["sk-[A-Za-z0-9-]+", "s/sk-[A-Za-z0-9-]+/[redacted]/g"] } },
+    },
+  }, ({ otherDir }) => {
+    const cfg = loadConfig(otherDir);
+    assert.equal(warn.mock.callCount(), 1);
+    const warning = warn.mock.calls[0].arguments.join(" ");
+    assert.match(warning, /OPENVIKING_CAPTURE_FILTERS.*\[0\]/);
+    assert.match(warning, /invalid delimiter/);
+    assert.match(warning, /skipped/);
+    assert.deepEqual(
+      filterCaptureParts([{ type: "text", text: "token sk-synthetic123" }], "user", cfg),
+      { parts: [{ type: "text", text: "token [redacted]" }], dropped: false },
+    );
+  });
+});
+
+test("filter warnings follow env overrides and leave valid or empty configs quiet", (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  withConfigs({
+    cli: {
+      url: "http://127.0.0.1:1933",
+      plugin: { codex: { captureFilters: ["broken"] } },
+    },
+    env: { OPENVIKING_CAPTURE_FILTERS: "s/token/[redacted]/g" },
+  }, ({ otherDir }) => {
+    loadConfig(otherDir);
+    assert.equal(warn.mock.callCount(), 0);
+    process.env.OPENVIKING_CAPTURE_FILTERS = "s/token/[redacted]/z";
+    loadConfig(otherDir);
+    assert.equal(warn.mock.callCount(), 1);
+    assert.match(warn.mock.calls[0].arguments.join(" "), /unknown flag/);
+  });
+  warn.mock.resetCalls();
+  withConfigs({}, ({ otherDir }) => {
+    loadConfig(otherDir);
+    assert.equal(warn.mock.callCount(), 0);
   });
 });
