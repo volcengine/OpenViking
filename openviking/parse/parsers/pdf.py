@@ -19,6 +19,7 @@ import io
 import re
 import time
 from collections import Counter, defaultdict
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -30,6 +31,14 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.pdf_routing import (
+    EXTRACTOR_INSPECTOR,
+    SCANNED_TYPES,
+    RoutingSignals,
+    choose_extractor,
+    code_ratio,
+    page_aspect,
+)
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
@@ -47,10 +56,11 @@ class PDFParser(BaseParser):
     structure instead of flat numbered files.
 
     Strategies:
+    - "auto": Extract with pdf-inspector, route to MinerU on the signals in
+      ``pdf_routing`` (this is the default)
     - "local": Use pdfplumber for text and table extraction
     - "anydoc": Use anydoc for text extraction (faster, no images/tables)
     - "mineru": Use MinerU API for advanced PDF processing
-    - "auto": Try local first, fallback to MinerU if configured
 
     Examples:
         >>> # Local parsing
@@ -197,6 +207,20 @@ class PDFParser(BaseParser):
                 warnings=[f"Failed to parse PDF: {e}"],
             )
 
+    def _classify_pdf(self, pdf_path: Path) -> Optional[Any]:
+        """pdf-inspector's classification of a PDF, or None when unavailable.
+
+        Both the scan guard and the ``auto`` router read this, and both treat it
+        as a signal source rather than a gate: a missing dependency or a damaged
+        file degrades to "no opinion", never to a failed parse.
+        """
+        try:
+            pdf_inspector = lazy_import("pdf_inspector", "pdf-inspector")
+            return pdf_inspector.classify_pdf(str(pdf_path))
+        except Exception as e:
+            logger.warning(f"PDF classification unavailable for {pdf_path.name}: {e}")
+            return None
+
     def _detect_scanned(self, pdf_path: Path) -> Optional[Dict[str, Any]]:
         """Report scan evidence for a PDF, or None when it has a usable text layer.
 
@@ -208,18 +232,15 @@ class PDFParser(BaseParser):
         """
         if not self.config.scan_detection:
             return None
-        try:
-            pdf_inspector = lazy_import("pdf_inspector", "pdf-inspector")
-            classification = pdf_inspector.classify_pdf(str(pdf_path))
-        except Exception as e:
-            logger.warning(f"PDF scan detection unavailable for {pdf_path.name}: {e}")
+        classification = self._classify_pdf(pdf_path)
+        if classification is None:
             return None
 
         pdf_type = str(getattr(classification, "pdf_type", "") or "")
         page_count = int(getattr(classification, "page_count", 0) or 0)
         ocr_pages = len(list(getattr(classification, "pages_needing_ocr", None) or []))
 
-        is_scan = pdf_type in ("scanned", "image_based")
+        is_scan = pdf_type in SCANNED_TYPES
         if not is_scan and pdf_type == "mixed" and page_count:
             # "mixed" still has extractable text -- only reject it when most
             # pages are the unreadable part.
@@ -262,23 +283,91 @@ class PDFParser(BaseParser):
             return await self._convert_mineru(pdf_path, resource_name=resource_name)
 
         elif self.config.strategy == "auto":
-            # Try local first
-            try:
-                return await self._convert_local(pdf_path, resource_name=resource_name)
-            except Exception as e:
-                logger.warning(f"Local conversion failed: {e}")
-
-                # Fallback to MinerU if configured
-                if self.config.mineru_endpoint:
-                    logger.info("Falling back to MinerU API")
-                    return await self._convert_mineru(pdf_path, resource_name=resource_name)
-                else:
-                    raise ValueError(
-                        f"Local conversion failed and no MinerU endpoint configured: {e}"
-                    )
+            return await self._convert_routed(pdf_path, resource_name=resource_name)
 
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
+
+    async def _convert_routed(
+        self, pdf_path: Path, resource_name: Optional[str] = None
+    ) -> tuple[str, Dict[str, Any]]:
+        """Convert with pdf-inspector, escalating to MinerU on the routing signals.
+
+        The decision needs evidence that only shows up after an extraction --
+        blank pages and dropped text are not visible from the file alone -- so
+        every document is extracted once, cheaply, before being judged. See
+        ``pdf_routing`` for the rule table and where its thresholds come from.
+
+        When the signals say MinerU but no endpoint is configured, the
+        pdf-inspector output is kept and a warning logged: the offline OCR batch
+        owns those files, and a missing endpoint is not a reason to lose the
+        text we did extract.
+        """
+        try:
+            markdown, meta = await self._convert_pdf_inspector(pdf_path)
+        except Exception as e:
+            if not self.config.mineru_endpoint:
+                raise
+            logger.warning(f"pdf-inspector conversion failed, falling back to MinerU: {e}")
+            return await self._convert_mineru(pdf_path, resource_name=resource_name)
+
+        classification = self._classify_pdf(pdf_path)
+        signals = RoutingSignals(
+            pdf_type=str(getattr(classification, "pdf_type", "") or ""),
+            page_count=int(meta.get("total_pages", 0) or 0),
+            ocr_pages=len(getattr(classification, "pages_needing_ocr", None) or []),
+            empty_pages=int(meta.get("empty_pages", 0) or 0),
+            chars=len(markdown),
+            code_ratio=code_ratio(markdown),
+            aspect=page_aspect(pdf_path) if markdown else None,
+        )
+        chosen = choose_extractor(signals)
+        evidence = asdict(signals)
+        meta["routing"] = {**evidence, "chosen": chosen}
+
+        if chosen == EXTRACTOR_INSPECTOR:
+            return markdown, meta
+
+        if not self.config.mineru_endpoint:
+            logger.warning(
+                f"{pdf_path.name}: routing chose MinerU but no mineru_endpoint is "
+                f"configured; keeping pdf-inspector output ({evidence})"
+            )
+            return markdown, meta
+
+        logger.info(f"{pdf_path.name}: routing to MinerU ({evidence})")
+        return await self._convert_mineru(pdf_path, resource_name=resource_name)
+
+    async def _convert_pdf_inspector(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+        """Convert PDF to Markdown with pdf-inspector.
+
+        Markdown only -- no images, no bookmarks -- which is the whole point:
+        it is roughly 30x faster than pdfplumber and matches it on body text.
+        """
+        return await asyncio.to_thread(self._convert_pdf_inspector_sync, pdf_path)
+
+    def _convert_pdf_inspector_sync(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
+        """同步版：用 pdf-inspector 将 PDF 转 Markdown。
+
+        该方法会在 :meth:`_convert_pdf_inspector` 中通过 asyncio.to_thread 调用。
+        """
+        pdf_inspector = lazy_import("pdf_inspector", "pdf-inspector")
+
+        result = pdf_inspector.extract_pages_markdown(str(pdf_path))
+        pages = list(result.pages or [])
+        markdown_content = "\n\n".join(page.markdown or "" for page in pages)
+        meta = {
+            "strategy": EXTRACTOR_INSPECTOR,
+            "library": "pdf-inspector",
+            "total_pages": len(pages),
+            "pages_processed": sum(1 for page in pages if (page.markdown or "").strip()),
+            "empty_pages": sum(1 for page in pages if not (page.markdown or "").strip()),
+            "images_extracted": 0,
+            "tables_extracted": len(result.pages_with_tables or []),
+        }
+
+        logger.info(f"pdf-inspector conversion: {len(markdown_content)} chars")
+        return markdown_content, meta
 
     async def _convert_anydoc(self, pdf_path: Path) -> tuple[str, Dict[str, Any]]:
         """Convert PDF to Markdown with anydoc.

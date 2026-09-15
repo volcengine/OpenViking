@@ -140,11 +140,15 @@ class PDFConfig(ParserConfig):
     Configuration for PDF parsing.
 
     Supports four strategies:
+    - "auto": Extract with pdf-inspector, escalating to MinerU when the routing
+      signals say pdf-inspector cannot handle the file (scanned or partly
+      scanned pages, silently empty output, slides, code-heavy documents). This
+      is the default and needs ``mineru_endpoint`` only for the files it routes
+      away.
     - "local": Use pdfplumber for local PDF→Markdown conversion
     - "anydoc": Use anydoc for local PDF→Markdown conversion (much faster, but
       drops images and most tables; text-heavy books only)
     - "mineru": Use MinerU API for remote PDF→Markdown conversion
-    - "auto": Try local first, fallback to MinerU if available
 
     Attributes:
         strategy: Parsing strategy ("local" | "anydoc" | "mineru" | "auto")
