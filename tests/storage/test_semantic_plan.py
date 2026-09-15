@@ -223,3 +223,68 @@ def test_semantic_plan_modified_directory_executes_the_directory_itself() -> Non
     )
 
     assert plan.execution_root_uris() == ("viking://resources/repo/src",)
+
+
+def test_semantic_plan_keeps_disconnected_nested_execution_root() -> None:
+    plan = SemanticPlan(
+        root_uri="viking://resources/repo",
+        context_type="resource",
+        tree=SemanticTreeSnapshot(
+            entries=(
+                SemanticTreeEntry("", "directory", "unchanged"),
+                SemanticTreeEntry("root.py", "file", "modified"),
+                SemanticTreeEntry(
+                    "docs/deep/tests", "directory", "unchanged"
+                ),
+                SemanticTreeEntry(
+                    "docs/deep/tests/test_a.py", "file", "modified"
+                ),
+            )
+        ),
+    )
+
+    # The root is a lexical ancestor of docs/deep/tests, but the sparse plan
+    # intentionally omits docs and docs/deep. The root DAG therefore cannot
+    # reach the nested change, which must remain a separate execution root.
+    assert plan.execution_root_uris() == (
+        "viking://resources/repo",
+        "viking://resources/repo/docs/deep/tests",
+    )
+
+
+def test_semantic_plan_deduplicates_reachable_nested_execution_root() -> None:
+    plan = SemanticPlan(
+        root_uri="viking://resources/repo",
+        context_type="resource",
+        tree=SemanticTreeSnapshot(
+            entries=(
+                SemanticTreeEntry("", "directory", "unchanged"),
+                SemanticTreeEntry("docs", "directory", "unchanged"),
+                SemanticTreeEntry("docs/deep", "directory", "unchanged"),
+                SemanticTreeEntry(
+                    "docs/deep/tests", "directory", "unchanged"
+                ),
+                SemanticTreeEntry(
+                    "docs/deep/tests/test_a.py", "file", "modified"
+                ),
+            )
+        ),
+    )
+
+    assert plan.execution_root_uris() == ("viking://resources/repo",)
+
+
+def test_semantic_plan_rejects_changed_entry_without_direct_parent() -> None:
+    plan = SemanticPlan(
+        root_uri="viking://resources/repo",
+        context_type="resource",
+        tree=SemanticTreeSnapshot(
+            entries=(
+                SemanticTreeEntry("", "directory", "unchanged"),
+                SemanticTreeEntry("missing/a.py", "file", "modified"),
+            )
+        ),
+    )
+
+    with pytest.raises(ValueError, match="lacks execution directory 'missing'"):
+        plan.execution_root_uris()

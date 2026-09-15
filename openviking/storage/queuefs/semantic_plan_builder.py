@@ -29,6 +29,21 @@ def _join_uri(root_uri: str, rel_path: str) -> str:
     return root_uri.rstrip("/") if not rel_path else f"{root_uri.rstrip('/')}/{rel_path}"
 
 
+def _with_ancestor_dirs(paths: set[str]) -> set[str]:
+    """Return directory paths plus every ancestor through the resource root."""
+    result = set(paths)
+    pending = list(paths)
+    while pending:
+        path = pending.pop()
+        if not path:
+            continue
+        parent = _parent(path)
+        if parent not in result:
+            result.add(parent)
+            pending.append(parent)
+    return result
+
+
 def _current_tree(new: Mapping[str, NewEntry]) -> dict[str, str]:
     kinds: dict[str, str] = {"": "directory"}
     for rel_path, item in new.items():
@@ -143,6 +158,12 @@ async def build_semantic_plan(
             if parent and parent in new_dirs:
                 pending.append(parent)
 
+        # Keep the semantic graph connected through the resource root. Every
+        # candidate directory contributes all direct children below, so adding
+        # only the directory ancestors preserves a minimal tree rather than
+        # expanding unchanged sibling subtrees.
+        candidate_dirs = _with_ancestor_dirs(candidate_dirs)
+
         retained = set(changed) | set(deleted_dirs) | candidate_dirs
         for path in current:
             if path and _parent(path) in candidate_dirs:
@@ -169,8 +190,11 @@ async def build_semantic_plan(
         if kind == "file":
             wanted_levels = {2}
         elif rel_path in candidate_dirs:
+            # Active directories may be rebuilt at both semantic levels.
             wanted_levels = {0, 1}
         else:
+            # An unchanged sibling directory contributes only its L0 abstract
+            # when its parent is aggregated; its own overview (L1) is not read.
             wanted_levels = {0}
         for record in records:
             if int(record.get("level", -1)) not in wanted_levels:

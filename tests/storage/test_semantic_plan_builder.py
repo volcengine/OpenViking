@@ -107,14 +107,25 @@ async def test_builder_prunes_unchanged_subtrees_and_hydrates_only_dependencies(
     )
 
     entries = {entry.relative_path: entry for entry in plan.tree.entries}
-    assert set(entries) == {"src", "src/a.py", "src/b.py", "src/utils"}
+    assert set(entries) == {
+        "",
+        "docs",
+        "src",
+        "src/a.py",
+        "src/b.py",
+        "src/utils",
+    }
     assert entries["src/a.py"].state == "modified"
     assert entries["src/b.py"].state == "unchanged"
     assert [record.level for record in entries["src"].indexed_records] == [0, 1]
+    assert [record.level for record in entries["src/utils"].indexed_records] == [0]
     assert entries["src/utils"].indexed_records[0].abstract == "abstract:utils-l0"
     assert not hasattr(entries["src/a.py"].indexed_records[0], "vector")
     expected = vikingdb.hydrate_incremental_records.await_args.args[0]
     assert set(expected) == {
+        "root-l0",
+        "root-l1",
+        "docs-l0",
         "src-l0",
         "src-l1",
         "a-l2",
@@ -123,6 +134,71 @@ async def test_builder_prunes_unchanged_subtrees_and_hydrates_only_dependencies(
     }
     assert plan.orphan_vector_deletes[0].record_id == "ghost-l2"
     assert plan.file_vector_source.value == "summary_when_available"
+
+
+@pytest.mark.asyncio
+async def test_builder_connects_deep_change_through_minimal_ancestor_tree():
+    root = "viking://resources/repo"
+    new = {
+        "root.py": NewEntry(md5="new-root"),
+        "docs/deep/tests/test_a.py": NewEntry(md5="new-deep"),
+    }
+    target_files = {
+        "root.py": TargetFile(is_dir=False),
+        "docs": TargetFile(is_dir=True),
+        "docs/deep": TargetFile(is_dir=True),
+        "docs/deep/tests": TargetFile(is_dir=True),
+        "docs/deep/tests/test_a.py": TargetFile(is_dir=False),
+    }
+    inventory = {}
+    for rel_path, levels in {
+        "": (0, 1),
+        "docs": (0, 1),
+        "docs/deep": (0, 1),
+        "docs/deep/tests": (0, 1),
+        "root.py": (2,),
+        "docs/deep/tests/test_a.py": (2,),
+    }.items():
+        uri = root if not rel_path else f"{root}/{rel_path}"
+        for level in levels:
+            record_id = f"{rel_path or 'root'}-l{level}"
+            inventory[record_id] = {
+                "id": record_id,
+                "uri": uri,
+                "level": level,
+                "md5": "old",
+            }
+    vikingdb = AsyncMock()
+    vikingdb.hydrate_incremental_records.side_effect = lambda expected, **_: {
+        record_id: {**identity, "id": record_id, "abstract": f"abstract:{record_id}"}
+        for record_id, identity in expected.items()
+    }
+
+    plan = await build_semantic_plan(
+        root_uri=root,
+        context_type="resource",
+        new=new,
+        target_files=target_files,
+        diff_plan=DiffPlan(
+            modified=["root.py", "docs/deep/tests/test_a.py"],
+            new_files=sorted(new),
+            new_md5s={path: entry.md5 for path, entry in new.items()},
+        ),
+        inventory=inventory,
+        vikingdb=vikingdb,
+        ctx=_Ctx(),
+        vectorize=True,
+        is_code_repo=True,
+        root_preexisting=True,
+    )
+
+    entries = {entry.relative_path: entry for entry in plan.tree.entries}
+    assert {"", "docs", "docs/deep", "docs/deep/tests"} <= set(entries)
+    assert {path for path, entry in entries.items() if entry.state == "modified"} == {
+        "root.py",
+        "docs/deep/tests/test_a.py",
+    }
+    assert plan.execution_root_uris() == (root,)
 
 
 @pytest.mark.asyncio

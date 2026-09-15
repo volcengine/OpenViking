@@ -309,6 +309,57 @@ async def test_plan_dag_uses_manifest_adjacency_without_listing_unchanged_subtre
 
 
 @pytest.mark.asyncio
+async def test_connected_plan_propagates_deep_change_to_resource_root(monkeypatch):
+    root_uri = "viking://resources/repo"
+    deep_dir = f"{root_uri}/a/b/tests"
+    root_file = f"{root_uri}/root.py"
+    deep_file = f"{deep_dir}/deep.py"
+    fake_fs = _FakeVikingFS(
+        tree={},
+        file_contents={root_file: "root body", deep_file: "deep body"},
+    )
+    fake_fs.ls = AsyncMock(side_effect=AssertionError("plan DAG must not list storage"))
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    entries = [
+        SemanticTreeEntry("", "directory", "unchanged"),
+        SemanticTreeEntry("root.py", "file", "modified", md5="new-root"),
+        SemanticTreeEntry("a", "directory", "unchanged"),
+        SemanticTreeEntry("a/b", "directory", "unchanged"),
+        SemanticTreeEntry("a/b/tests", "directory", "unchanged"),
+        SemanticTreeEntry("a/b/tests/deep.py", "file", "modified", md5="new-deep"),
+    ]
+    plan = SemanticPlan(
+        root_uri=root_uri,
+        context_type="resource",
+        tree=SemanticTreeSnapshot(entries=tuple(entries)),
+    )
+    processor = _FakeProcessor(fake_fs)
+
+    assert plan.execution_root_uris() == (root_uri,)
+    await SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        semantic_plan=plan,
+    ).run(root_uri)
+
+    assert set(processor.summarized_files) == {root_file, deep_file}
+    assert processor.generated_overviews[-1] == root_uri
+    assert set(processor.generated_overviews) == {
+        deep_dir,
+        f"{root_uri}/a/b",
+        f"{root_uri}/a",
+        root_uri,
+    }
+
+
+@pytest.mark.asyncio
 async def test_code_plan_same_abstract_updates_scalars_without_reembedding(monkeypatch):
     root_uri = "viking://resources/repo"
     file_uri = f"{root_uri}/a.py"

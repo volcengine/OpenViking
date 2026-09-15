@@ -215,18 +215,42 @@ class SemanticPlan:
             else:
                 parent = str(PurePosixPath(entry.relative_path).parent)
                 candidate = "" if parent == "." else parent
+            if candidate not in current_dirs and entry.state != "deleted":
+                raise ValueError(
+                    "semantic plan lacks execution directory "
+                    f"{candidate!r} for changed entry {entry.relative_path!r}"
+                )
             while candidate not in current_dirs and candidate:
                 parent = str(PurePosixPath(candidate).parent)
                 candidate = "" if parent == "." else parent
             candidates.add(candidate)
             if entry.kind == "directory" and entry.state == "added":
                 candidates.add(entry.relative_path)
+        if candidates and "" in current_dirs:
+            candidates.add("")
 
+        def is_reachable_descendant(parent: str, path: str) -> bool:
+            """Whether plan adjacency can walk from parent down to path."""
+            if parent == path or (parent and not path.startswith(parent + "/")):
+                return False
+            current = path
+            while current != parent:
+                if current not in current_dirs:
+                    return False
+                current_parent = str(PurePosixPath(current).parent)
+                current = "" if current_parent == "." else current_parent
+                if parent and not current:
+                    return False
+            return True
+
+        # A sparse plan intentionally omits unchanged subtrees. A lexical ancestor
+        # only covers a nested candidate when every directory on the path is in
+        # the plan; otherwise the DAG adjacency has no edge to that candidate.
         shallowest = sorted(
             path
             for path in candidates
             if not any(
-                parent != path and (not parent or path.startswith(parent + "/"))
+                parent != path and is_reachable_descendant(parent, path)
                 for parent in candidates
             )
         )

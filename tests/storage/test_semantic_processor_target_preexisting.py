@@ -191,6 +191,54 @@ async def test_semantic_plan_skips_sync_and_runs_only_minimal_roots(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_semantic_plan_runs_disconnected_nested_root(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        _FakeDagExecutor,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    plan = SemanticPlan(
+        root_uri="viking://resources/repo",
+        context_type="resource",
+        tree=SemanticTreeSnapshot(
+            entries=(
+                SemanticTreeEntry("", "directory", "unchanged"),
+                SemanticTreeEntry("root.py", "file", "modified", md5="root"),
+                SemanticTreeEntry("docs/deep/tests", "directory", "unchanged"),
+                SemanticTreeEntry(
+                    "docs/deep/tests/test_a.py", "file", "modified", md5="deep"
+                ),
+            )
+        ),
+    )
+    _FakeDagExecutor.calls = []
+    _FakeDagExecutor.runs = []
+    processor = SemanticProcessor()
+    processor._enqueue_plan_vector_deletes = AsyncMock()
+    processor._enqueue_parent_refresh = AsyncMock()
+    msg = SemanticMsg(
+        uri=plan.root_uri,
+        context_type="resource",
+        plan_version=1,
+        plan=plan,
+    )
+
+    await processor.on_dequeue(msg.to_dict())
+
+    assert _FakeDagExecutor.runs == [
+        "viking://resources/repo",
+        "viking://resources/repo/docs/deep/tests",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_plan_added_entry_does_not_delete_same_level_stale_record(monkeypatch):
     # A re-added file (F missing, V had a stale same-level L2) must NOT enqueue a
     # delete for that record: the re-vectorize upsert reuses the same
