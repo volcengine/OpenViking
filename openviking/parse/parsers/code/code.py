@@ -39,6 +39,7 @@ from openviking.parse.parsers.constants import (
 from openviking.parse.parsers.upload_utils import upload_directory
 from openviking.utils import is_github_url, parse_code_hosting_url
 from openviking.utils.code_hosting_utils import _domain_matches
+from openviking.utils.zip_safe import ZipExtractionLimit
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
@@ -409,6 +410,9 @@ class CodeRepositoryParser(BaseParser):
 
             req = urllib.request.Request(zip_url, headers=headers)
             with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > ZipExtractionLimit().max_total_bytes:
+                    raise ValueError(f"GitHub ZIP too large to download: {content_length} bytes")
                 shutil.copyfileobj(resp, f)
 
         try:
