@@ -7,6 +7,8 @@
  * batches, either at session-start (consuming retry budgets, with
  * maxRetries/TTL) or by a long-running drainer that passes
  * `consumeRetries: false` so transient failures stay retryable.
+ * Consecutive same-session addMessage entries use `/messages/batch` when
+ * replaying (#4504 / #4692 / #4714).
  *
  * Each file contains: { type, sessionId, payload, createdAt, retries, dedupKey }
  *
@@ -365,6 +367,12 @@ export async function cleanStale() {
  * healthy. Each run processes at most OPENVIKING_PENDING_REPLAY_LIMIT items so
  * a just-recovered server is not hit with an unbounded replay burst.
  *
+ * Consecutive same-session addMessage entries are sent through `/messages/batch`
+ * (BATCH_LIMIT per request) so a large offline backlog does not burn one HTTP
+ * round-trip per entry — the shared follow-up to #4504 / #4692. commitSession
+ * and session boundaries still go one at a time to preserve createdAt order.
+ * batch-send is loaded dynamically to avoid a static cycle with enqueue.
+ *
  * @param {Function} fetchJSON - the configured fetchJSON from makeFetchJSON
  * @param {Function} log - logger function
  * @param {object} [options]
@@ -386,53 +394,32 @@ export async function replayPending(fetchJSON, log, options = {}) {
   const replayLimit = getReplayLimit();
   log("pending-queue", { count: pending.length, replayLimit, action: "replay-start" });
 
+  // Dynamic import avoids a static cycle: batch-send.mjs imports enqueue here.
+  const { BATCH_LIMIT, sendSessionMessages } = await import("./batch-send.mjs");
+
   let replayed = 0;
   let failed = 0;
   let skipped = 0;
   let deferred = 0;
   let processed = 0;
+  let stop = false;
 
-  for (const { filename, entry } of pending) {
-    if (processed >= replayLimit) {
-      deferred++;
-      continue;
+  async function handleRetryableFailure(claimedFilename, entry) {
+    if (consumeRetries) {
+      await incrementRetry(claimedFilename, entry);
+    } else {
+      const released = await releaseClaim(claimedFilename);
+      log("pending-queue", {
+        action: released ? "replay-deferred" : "release-failed",
+        sessionId: entry.sessionId,
+        type: entry.type,
+        retries: entry.retries || 0,
+      });
     }
+    failed++;
+  }
 
-    if ((entry.retries || 0) >= getMaxRetries()) {
-      await dequeue(filename);
-      skipped++;
-      continue;
-    }
-
-    const claimedFilename = await claimForReplay(filename);
-    if (!claimedFilename) {
-      skipped++;
-      continue;
-    }
-    processed++;
-
-    let res;
-    try {
-      const encodedSid = encodeURIComponent(entry.sessionId);
-      if (entry.type === "addMessage") {
-        res = await fetchJSON(`/api/v1/sessions/${encodedSid}/messages`, {
-          method: "POST",
-          body: JSON.stringify(entry.payload),
-        });
-      } else if (entry.type === "commitSession") {
-        res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {
-          method: "POST",
-          body: JSON.stringify(entry.payload || {}),
-        });
-      } else {
-        await dequeue(claimedFilename);
-        skipped++;
-        continue;
-      }
-    } catch {
-      res = { ok: false };
-    }
-
+  async function finishClaimed(claimedFilename, entry, res) {
     if (entry.type === "commitSession") {
       log("pending-queue", {
         action: "commit-replay",
@@ -447,28 +434,163 @@ export async function replayPending(fetchJSON, log, options = {}) {
     if (res?.ok) {
       await dequeue(claimedFilename);
       replayed++;
-    } else if (!isRetryableReplayFailure(res)) {
+      return;
+    }
+    if (!isRetryableReplayFailure(res)) {
       await dequeue(claimedFilename);
       skipped++;
-    } else {
-      if (consumeRetries) {
-        await incrementRetry(claimedFilename, entry);
-      } else {
-        const released = await releaseClaim(claimedFilename);
-        log("pending-queue", {
-          action: released ? "replay-deferred" : "release-failed",
-          sessionId: entry.sessionId,
-          type: entry.type,
-          status: res?.result?.status || res?.status,
-          retries: entry.retries || 0,
-        });
-      }
-      failed++;
-      if (entry.type === "addMessage") {
-        deferred += Math.max(0, pending.length - processed);
-        break;
-      }
+      return;
     }
+    await handleRetryableFailure(claimedFilename, entry);
+  }
+
+  async function replayAddMessageBatch(items) {
+    const claimed = [];
+    for (const { filename, entry } of items) {
+      const name = await claimForReplay(filename);
+      if (!name) {
+        skipped++;
+        continue;
+      }
+      claimed.push({ filename: name, entry });
+      processed++;
+    }
+    if (claimed.length === 0) return;
+
+    const sid = claimed[0].entry.sessionId;
+    let delivered = 0;
+    let sendResult;
+    try {
+      sendResult = await sendSessionMessages(
+        fetchJSON,
+        sid,
+        claimed.map(({ entry }) => entry.payload),
+        {
+          onSent: async (count) => {
+            for (let i = 0; i < count; i++) {
+              await dequeue(claimed[delivered++].filename);
+              replayed++;
+            }
+          },
+        },
+      );
+    } catch {
+      sendResult = { retryable: true };
+    }
+
+    if (delivered === claimed.length) return;
+
+    const remaining = claimed.slice(delivered);
+    if (!sendResult?.retryable) {
+      // Non-retryable batch failures (e.g. 422) reject the whole request. Fall
+      // back to per-item POSTs so one poison payload cannot drop up to
+      // BATCH_LIMIT valid messages that shared the claimed batch (#4714 review).
+      for (let j = 0; j < remaining.length; j++) {
+        const { filename, entry } = remaining[j];
+        let res;
+        try {
+          const encodedSid = encodeURIComponent(entry.sessionId);
+          res = await fetchJSON(`/api/v1/sessions/${encodedSid}/messages`, {
+            method: "POST",
+            body: JSON.stringify(entry.payload),
+          });
+        } catch {
+          res = { ok: false };
+        }
+
+        if (res?.ok) {
+          await dequeue(filename);
+          replayed++;
+          continue;
+        }
+
+        if (!isRetryableReplayFailure(res)) {
+          await dequeue(filename);
+          skipped++;
+          continue;
+        }
+
+        for (let k = j; k < remaining.length; k++) {
+          await handleRetryableFailure(remaining[k].filename, remaining[k].entry);
+        }
+        deferred += Math.max(0, pending.length - processed);
+        stop = true;
+        return;
+      }
+      return;
+    }
+
+    for (const { filename, entry } of remaining) {
+      await handleRetryableFailure(filename, entry);
+    }
+    deferred += Math.max(0, pending.length - processed);
+    stop = true;
+  }
+
+  let i = 0;
+  while (i < pending.length) {
+    if (stop) break;
+
+    if (processed >= replayLimit) {
+      deferred += pending.length - i;
+      break;
+    }
+
+    const { filename, entry } = pending[i];
+
+    if ((entry.retries || 0) >= getMaxRetries()) {
+      await dequeue(filename);
+      skipped++;
+      i++;
+      continue;
+    }
+
+    if (entry.type === "addMessage") {
+      const sid = entry.sessionId;
+      const room = Math.min(BATCH_LIMIT, replayLimit - processed);
+      const batch = [];
+      while (i < pending.length && batch.length < room) {
+        const cur = pending[i];
+        if (cur.entry.type !== "addMessage" || cur.entry.sessionId !== sid) break;
+        if ((cur.entry.retries || 0) >= getMaxRetries()) {
+          if (batch.length > 0) break;
+          await dequeue(cur.filename);
+          skipped++;
+          i++;
+          continue;
+        }
+        batch.push(cur);
+        i++;
+      }
+      if (batch.length > 0) await replayAddMessageBatch(batch);
+      continue;
+    }
+
+    const claimedFilename = await claimForReplay(filename);
+    i++;
+    if (!claimedFilename) {
+      skipped++;
+      continue;
+    }
+    processed++;
+
+    if (entry.type !== "commitSession") {
+      await dequeue(claimedFilename);
+      skipped++;
+      continue;
+    }
+
+    let res;
+    try {
+      const encodedSid = encodeURIComponent(entry.sessionId);
+      res = await fetchJSON(`/api/v1/sessions/${encodedSid}/commit`, {
+        method: "POST",
+        body: JSON.stringify(entry.payload || {}),
+      });
+    } catch {
+      res = { ok: false };
+    }
+    await finishClaimed(claimedFilename, entry, res);
   }
 
   const cleaned = await cleanStale();
