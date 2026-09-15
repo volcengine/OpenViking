@@ -4,10 +4,13 @@ from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 TEXT_SOURCE_CONTENT_ONLY = "content_only"
 TEXT_SOURCE_SUMMARY_FIRST = "summary_first"
-TEXT_SOURCE_SUMMARY_ONLY = "summary_only"
-SUMMARY_TEXT_SOURCES = frozenset({TEXT_SOURCE_SUMMARY_FIRST, TEXT_SOURCE_SUMMARY_ONLY})
+SUMMARY_TEXT_SOURCES = frozenset({TEXT_SOURCE_SUMMARY_FIRST})
 TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
 
 
@@ -649,7 +652,7 @@ class EmbeddingConfig(BaseModel):
     )
     text_source: str = Field(
         default=TEXT_SOURCE_CONTENT_ONLY,
-        description="Text source for file vectorization: summary_first|summary_only|content_only",
+        description="Text source for file vectorization: summary_first|content_only",
     )
     max_input_tokens: int = Field(
         default=4096,
@@ -695,10 +698,14 @@ class EmbeddingConfig(BaseModel):
             raise ValueError(
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
             )
-        if self.text_source not in TEXT_SOURCES:
-            raise ValueError(
-                "embedding.text_source must be one of: summary_first, summary_only, content_only"
+        if self.text_source == "summary_only":
+            logger.warning(
+                "embedding.text_source=summary_only is deprecated; use summary_first instead. "
+                "Files without a summary still fall back to content for vectorization."
             )
+            self.text_source = TEXT_SOURCE_SUMMARY_FIRST
+        if self.text_source not in TEXT_SOURCES:
+            raise ValueError("embedding.text_source must be one of: summary_first, content_only")
         return self
 
     def _create_embedder(

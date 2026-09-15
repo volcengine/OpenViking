@@ -40,7 +40,7 @@ from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.embedding_config import (
     SUMMARY_TEXT_SOURCES,
-    TEXT_SOURCE_SUMMARY_ONLY,
+    TEXT_SOURCE_SUMMARY_FIRST,
 )
 
 logger = get_logger(__name__)
@@ -552,7 +552,7 @@ async def vectorize_file(
         content_type = await _resolve_resource_content_type(file_path, file_name, viking_fs, ctx)
         embedding_cfg = get_openviking_config().embedding
         configured_text_source = embedding_cfg.text_source
-        effective_text_source = TEXT_SOURCE_SUMMARY_ONLY if use_summary else configured_text_source
+        effective_text_source = TEXT_SOURCE_SUMMARY_FIRST if use_summary else configured_text_source
         embed_summary = bool(summary and effective_text_source in SUMMARY_TEXT_SOURCES)
 
         if content_type in (ResourceContentType.AUDIO, ResourceContentType.VIDEO):

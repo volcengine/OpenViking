@@ -165,26 +165,38 @@ async def test_vectorize_disambiguates_typescript_and_mpeg_ts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vectorize_file_uses_summary_first(monkeypatch):
+@pytest.mark.parametrize("text_source", ["summary_first", "summary_only"])
+@pytest.mark.parametrize("summary", ["short summary", ""])
+async def test_vectorize_file_uses_summary_first(monkeypatch, text_source, summary):
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    cfg = EmbeddingConfig(
+        dense={
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "api_base": "http://localhost:8080/v1",
+            "dimension": 1536,
+        },
+        text_source=text_source,
+        max_input_tokens=1000,
+    )
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("X" * 5000))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("raw content"))
     monkeypatch.setattr(
         embedding_utils,
         "get_openviking_config",
-        lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
-        ),
+        lambda: types.SimpleNamespace(embedding=cfg),
     )
     await embedding_utils.vectorize_file(
         file_path="viking://user/default/resources/test.md",
-        summary_dict={"name": "test.md", "summary": "short summary"},
+        summary_dict={"name": "test.md", "summary": summary},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
     )
 
     assert len(queue.items) == 1
-    assert queue.items[0].message == "short summary"
+    assert queue.items[0].message == (summary or "raw content")
     assert "content" not in queue.items[0].context_data
 
 
