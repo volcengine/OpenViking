@@ -10,6 +10,7 @@ import logging
 import queue
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
 from pathlib import Path
@@ -97,7 +98,20 @@ class _RustAwareTimedRotatingFileHandler(TimedRotatingFileHandler):
 
     def doRollover(self) -> None:
         """Rotate the active Python log file and then refresh the Rust writer."""
-        super().doRollover()
+        try:
+            super().doRollover()
+        except Exception as exc:
+            if self.stream is None and not self.delay:
+                self.stream = self._open()
+
+            current_time = int(time.time())
+            rollover_at = self.computeRollover(current_time)
+            while rollover_at <= current_time:
+                rollover_at += self.interval
+            self.rolloverAt = rollover_at
+            sys.stderr.write(f"Warning: log rotation failed; continuing with active log file: {exc}\n")
+            return
+
         _reopen_rust_tracing_file()
 
 
