@@ -163,7 +163,7 @@ impl FileSystem for ServerInfoFileSystem {
         }
 
         if path == "/" {
-            return Err(Error::plugin("is a directory: /".to_string()));
+            return Err(Error::IsADirectory("/".to_string()));
         }
 
         let data = match path {
