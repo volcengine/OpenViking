@@ -1403,8 +1403,8 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 **Notes:**
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
 - Empty sessions, or commits where all messages remain inside `keep_recent_count`, complete synchronously with `archived: false`.
-- Background Phase 2 work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
-- If an earlier archive failed and left no `.done`, later commit requests fail with `FAILED_PRECONDITION` until that failure is resolved.
+- Background Phase 2 work is serialized by archive order while the direct predecessor is still pending.
+- If Phase 1 archived messages but Phase 2 later fails, the archive is marked with `.failed.json`. That failed archive is terminal and skippable: it is not returned as a completed archive, it does not provide an overview, and it does not block later commit requests.
 - If committed messages contain durable facts, judgments, preferences, or events that mention `viking://resources/...`, memory extraction preserves the resource as a markdown link and records it in `MEMORY_FIELDS.resource_refs`.
 
 **Code Entries:**

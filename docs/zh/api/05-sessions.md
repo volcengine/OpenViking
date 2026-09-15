@@ -1374,8 +1374,8 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 **注意事项**：
 - 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`
 - 空 session，或所有消息都仍在 `keep_recent_count` 保留窗口内时，会同步完成并返回 `archived: false`
-- 后台 Phase 2 会按 archive 顺序串行推进：`archive_N+1` 会等待 `archive_N` 写出 `.done` 后再继续
-- 如果更早的 archive 已失败且没有 `.done`，后续 commit 会直接返回错误，直到该失败被处理
+- 后台 Phase 2 会按 archive 顺序串行推进；只有直接前序 archive 仍为 pending 时，后续 archive 才会等待
+- 如果 Phase 1 已经归档消息但 Phase 2 随后失败，该 archive 会写入 `.failed.json`。这个 failed archive 是终态且可跳过：它不会作为 completed archive 返回，不提供 overview，也不会阻塞后续 commit 请求
 - 如果提交的消息中包含带 `viking://resources/...` 的长期事实、评价、偏好或事件，记忆抽取会把资源保留为 markdown 链接，并写入 `MEMORY_FIELDS.resource_refs`
 
 **代码入口**：
