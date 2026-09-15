@@ -137,6 +137,8 @@ ov health
 | `--data-root-uri` | `viking://resources/bench/load_test` | Server 侧压测资源根目录 |
 | `--output-dir` | 自动生成 | 报告输出目录 |
 | `--ov-bin` | `ov` | 真实 CLI 子进程使用的可执行文件 |
+| `--max-failure-rate-percent` | 未启用 | 任一 adapter / operation 总体失败率超过阈值时退出非零 |
+| `--max-success-p95-ms` | 未启用 | 任一 adapter / operation 成功请求 p95 超过阈值时退出非零 |
 
 ## Profile 说明
 
@@ -172,11 +174,26 @@ benchmark/results/openviking_server_load/20260511T120000Z/
 报告会重点展示：
 
 - 总请求量、失败数和成功率。
-- 各接口 p50 / p95 / p99 / max 延迟。
+- 各接口尝试 QPS 和成功 QPS；总体 QPS 使用当前 adapter / operation 自身的活跃时间跨度。
+- 成功请求和失败请求分别统计延迟；兼容字段 `p50_ms` / `p95_ms` / `p99_ms` / `max_ms` 表示成功请求延迟。
 - `retrieval` 阶段到 `mixed` 阶段的检索延迟变化。
 - SDK、CLI HTTP 封装、真实 CLI 子进程之间的差异。
 - commit / add_resource 后台任务是否积压。
 - Top 错误类型和发生位置。
+
+默认情况下请求失败和 SLO 超限只进入报告，不改变退出码，以保持已有用法不变。需要 CI
+门禁时显式传入一个或两个阈值，例如：
+
+```bash
+.venv/bin/python benchmark/custom/session_contention_benchmark.py \
+  --profile smoke \
+  --adapters sdk \
+  --max-failure-rate-percent 1 \
+  --max-success-p95-ms 500
+```
+
+门禁按 `scenario=ALL` 的每个 adapter / operation 分组评估；任一分组超限时，报告仍会
+完整写出，命令随后退出非零。
 
 ## 示例：指定认证信息
 
