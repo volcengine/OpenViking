@@ -1002,7 +1002,9 @@ def _ollama_vlm_config(vlm: VLMPreset) -> dict[str, Any]:
     ``extra_request_body`` raises Ollama's context window past its 4096-token
     default (OV's memory-extraction prompt alone is ~5k tokens, so the default
     silently truncates the conversation) and disables thinking, which otherwise
-    makes thinking models emit only reasoning and stall.
+    makes thinking models emit only reasoning and stall. The litellm backend
+    promotes ``num_ctx`` out of the request body into Ollama's ``options``
+    object, which is the only place Ollama honours it.
     """
     return {
         "provider": "litellm",

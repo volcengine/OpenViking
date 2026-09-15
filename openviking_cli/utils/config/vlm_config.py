@@ -179,7 +179,9 @@ class VLMConfig(BaseModel):
         default=None,
         description=(
             "Extra JSON body fields passed to OpenAI-compatible VLM completion requests. "
-            "Useful for provider-specific options such as Ollama's {'think': false}."
+            "Useful for provider-specific options such as Ollama's {'think': false}. "
+            "For litellm ollama/ models, 'num_ctx' and an 'options' dict are routed "
+            "into Ollama's 'options' object rather than sent at the top level."
         ),
     )
 
