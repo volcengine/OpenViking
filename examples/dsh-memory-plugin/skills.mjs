@@ -12,6 +12,8 @@ export function buildSkillsConfig() {
     providerName: SKILL_PROVIDER_NAME,
     includeDefaultRoots: false,
     bundledSkillDir: SKILLS_DIR,
+    // Packaged skills change only on upgrade; watchers can block replacement on Windows.
+    watch: false,
   };
 }
 

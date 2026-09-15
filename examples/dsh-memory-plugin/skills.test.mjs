@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import chokidar from "chokidar";
 import { Config, FileSystemSkillProvider } from "@deepseek-ai/dsh-skill-filesystem";
 import { apply } from "./index.mjs";
 import { buildSkillsConfig, mountOpenVikingSkills, SKILLS_DIR } from "./skills.mjs";
@@ -17,7 +18,8 @@ test("the provider config validates against the pinned provider's own schema", (
   assert.equal(parsed.bundledSkillDir, SKILLS_DIR);
 });
 
-test("the bundled skill stays readable outside a restricted workspace filesystem", async () => {
+test("the bundled skill stays readable without watching the installed package", async (t) => {
+  const watch = t.mock.method(chokidar, "watch");
   const filesystem = {
     async resolve() {
       throw new Error("Path is outside the workspace filesystem");
@@ -29,7 +31,7 @@ test("the bundled skill stays readable outside a restricted workspace filesystem
   }, {
     signal: new AbortController().signal,
     invalidate() {},
-  }, { ...buildSkillsConfig(), watch: false });
+  }, buildSkillsConfig());
   try {
     const candidates = await provider.list({ cwd: "/workspace" });
     assert.equal(candidates.length, 1);
@@ -38,6 +40,7 @@ test("the bundled skill stays readable outside a restricted workspace filesystem
     assert.equal(candidates[0].provider, "openviking");
     const skill = await provider.get(candidates[0], {});
     assert.match(skill.content, /mcp__openviking__/);
+    assert.equal(watch.mock.callCount(), 0, "bundled skills must not hold directory watchers");
   } finally {
     await provider.dispose();
   }

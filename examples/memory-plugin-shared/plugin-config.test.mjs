@@ -41,7 +41,7 @@ const LOADERS = {
   dsh: {
     harness: "dsh",
     load: (cwd) => loadDsh({}, process.env, cwd),
-    options: { version: "0.4.0", deriveEffectivePeer: true },
+    options: { manifestUrl: new URL("../dsh-memory-plugin/package.json", import.meta.url), deriveEffectivePeer: true },
     owns: ["peerId"],
   },
   pi: {
