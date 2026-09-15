@@ -1,4 +1,6 @@
-import { getOvResult, getTasks } from '#/lib/ov-client'
+import type { TaskSummary } from '@ov-server/api/v1/tasks'
+
+import { getOvResult, getTasks, ovClient } from '#/lib/ov-client'
 import { normalizeTasks } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord, TaskStatus } from '#/routes/tasks/-lib/task-record'
 
@@ -33,5 +35,16 @@ export async function fetchTasks(
   return normalizeTasks(result).sort(
     (left, right) =>
       Number(right.created_at || 0) - Number(left.created_at || 0),
+  )
+}
+
+export async function fetchTaskSummary(
+  taskType: TaskTypeFilter,
+): Promise<TaskSummary> {
+  return getOvResult<TaskSummary>(
+    ovClient.client.get({
+      url: '/api/v1/tasks/summary',
+      query: taskType === 'all' ? {} : { task_type: taskType },
+    }),
   )
 }
