@@ -60,6 +60,18 @@ DEFAULT_CTX = RequestContext(
 )
 
 
+def _wire_tool(tool):
+    return tool.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _tool_content(result):
+    return result if isinstance(result, list) else result.content
+
+
+def _wire_content(content):
+    return content.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
 @pytest.fixture(autouse=True)
 def _set_mcp_identity(service):
     """Set identity contextvar and wire service for all tests."""
@@ -190,7 +202,7 @@ async def test_search_tools_expose_only_context_type_parameter():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
     for tool_name in ("find", "search"):
-        properties = tools[tool_name].inputSchema["properties"]
+        properties = _wire_tool(tools[tool_name])["inputSchema"]["properties"]
         assert "context_type" in properties
         assert "filter" not in properties
 
@@ -199,7 +211,7 @@ async def test_recall_tool_is_replaced_by_search_context_mode():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
     assert "recall" not in tools
-    search_properties = tools["search"].inputSchema["properties"]
+    search_properties = _wire_tool(tools["search"])["inputSchema"]["properties"]
     assert search_properties["mode"]["enum"] == ["list", "context"]
     for parameter in (
         "query_expansion",
@@ -241,7 +253,7 @@ async def test_tool_schemas_are_portable():
     tools = await mcp_endpoint.mcp.list_tools()
     assert tools
     for tool in tools:
-        assert_portable(tool.inputSchema, tool.name)
+        assert_portable(_wire_tool(tool)["inputSchema"], tool.name)
 
 
 def test_portable_schema_collapses_unions():
@@ -472,7 +484,7 @@ async def test_search_mode_defaults_preserve_list_threshold_but_not_context_thre
 
 async def test_search_context_schema_uses_portable_scalar_types():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    properties = tools["search"].inputSchema["properties"]
+    properties = _wire_tool(tools["search"])["inputSchema"]["properties"]
 
     assert properties["detail"]["type"] == "string"
     assert properties["detail"]["enum"] == [
@@ -636,13 +648,15 @@ async def test_read_passes_offset_limit_to_visible_read(monkeypatch):
     )
     uri = "viking://resources/notes.md"
 
-    result = await mcp_endpoint.mcp.call_tool(
-        "read",
-        {
-            "uris": uri,
-            "offset": 2,
-            "limit": 2,
-        },
+    result = _tool_content(
+        await mcp_endpoint.mcp.call_tool(
+            "read",
+            {
+                "uris": uri,
+                "offset": 2,
+                "limit": 2,
+            },
+        )
     )
 
     assert isinstance(result, list)
@@ -681,13 +695,13 @@ async def test_read_image_returns_native_mcp_content(monkeypatch, uri, image_byt
             )
         ),
     )
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+    result = _tool_content(await mcp_endpoint.mcp.call_tool("read", {"uris": uri}))
 
     assert isinstance(result, list)
     assert isinstance(result[0], TextContent)
     assert result[0].text == f"Source: {uri}"
     assert isinstance(result[1], ImageContent)
-    assert result[1].mimeType == mime_type
+    assert _wire_content(result[1])["mimeType"] == mime_type
     assert base64.b64decode(result[1].data) == image_bytes
     read_file_bytes.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
     read_visible.assert_not_awaited()
@@ -712,14 +726,16 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
     text_uri = "viking://resources/notes.md"
     image_uri = "viking://resources/chart.jpg"
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": [text_uri, image_uri]})
+    result = _tool_content(
+        await mcp_endpoint.mcp.call_tool("read", {"uris": [text_uri, image_uri]})
+    )
 
     assert isinstance(result, list)
     assert [block.type for block in result] == ["text", "text", "text", "image"]
     assert result[0].text == f"=== {text_uri} ==="
     assert result[1].text == "notes"
     assert result[2].text == f"=== {image_uri} ==="
-    assert result[3].mimeType == "image/jpeg"
+    assert _wire_content(result[3])["mimeType"] == "image/jpeg"
 
 
 @pytest.mark.parametrize(
@@ -749,13 +765,13 @@ async def test_read_audio_returns_native_mcp_content(monkeypatch, uri, audio_byt
         ),
     )
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+    result = _tool_content(await mcp_endpoint.mcp.call_tool("read", {"uris": uri}))
 
     assert isinstance(result, list)
     assert isinstance(result[0], TextContent)
     assert result[0].text == f"Source: {uri}"
     assert isinstance(result[1], AudioContent)
-    assert result[1].mimeType == mime_type
+    assert _wire_content(result[1])["mimeType"] == mime_type
     assert base64.b64decode(result[1].data) == audio_bytes
 
 
@@ -900,7 +916,9 @@ async def test_read_rejects_media_batch_over_aggregate_limit_before_read(monkeyp
         ),
     )
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": [first_uri, second_uri]})
+    result = _tool_content(
+        await mcp_endpoint.mcp.call_tool("read", {"uris": [first_uri, second_uri]})
+    )
 
     assert isinstance(result, list)
     assert "combined media size" in result[3].text
@@ -931,7 +949,7 @@ async def test_read_svg_remains_text(monkeypatch):
 async def test_read_tool_has_no_structured_output_schema():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
-    assert tools["read"].outputSchema is None
+    assert "outputSchema" not in _wire_tool(tools["read"])
 
 
 # ---------------------------------------------------------------------------
@@ -1675,21 +1693,23 @@ async def test_write_user_managed_subtree_rejected(service):
 
 async def test_write_tool_schema_is_portable():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    props = tools["write"].inputSchema["properties"]
+    schema = _wire_tool(tools["write"])["inputSchema"]
+    props = schema["properties"]
     assert props["uri"]["type"] == "string"
     assert props["content"]["type"] == "string"
     assert props["mode"]["enum"] == ["replace", "append", "create"]
-    assert {"uri", "content"} <= set(tools["write"].inputSchema.get("required", []))
+    assert {"uri", "content"} <= set(schema.get("required", []))
 
 
 async def test_edit_tool_schema_is_portable():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    props = tools["edit"].inputSchema["properties"]
+    schema = _wire_tool(tools["edit"])["inputSchema"]
+    props = schema["properties"]
     assert props["uri"]["type"] == "string"
     assert props["old_string"]["type"] == "string"
     assert props["new_string"]["type"] == "string"
     assert props["replace_all"]["type"] == "boolean"
-    assert {"uri", "old_string", "new_string"} <= set(tools["edit"].inputSchema.get("required", []))
+    assert {"uri", "old_string", "new_string"} <= set(schema.get("required", []))
 
 
 # ---------------------------------------------------------------------------
