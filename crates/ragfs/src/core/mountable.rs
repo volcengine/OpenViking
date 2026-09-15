@@ -14,6 +14,9 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::lock::{AutoPathLockAction, PathLockKind, PathLockManager, PathLockRequest};
+use crate::metrics::{
+    lock_metrics, merge_metrics, operation_metrics, RagfsMetric, RagfsMetricValue,
+};
 use crate::multibackend::factory::build_multi_write_fs;
 use crate::multibackend::types::MultiBackendBuildContext;
 use crate::plugins::QueueFileSystem;
@@ -593,6 +596,55 @@ impl MountableFS {
         }
 
         result
+    }
+
+    /// Read current mount and lock collectors; return merged, sorted native metrics or an error.
+    pub async fn metrics(&self) -> Result<Vec<RagfsMetric>> {
+        let mut mounts: Vec<_> = {
+            let mounts = self.mounts.read().await;
+            mounts.iter().map(|(_, info)| info.clone()).collect()
+        };
+        mounts.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let mut metrics = Vec::new();
+        for mount in mounts {
+            metrics.extend(operation_metrics(
+                &mount.plugin_name,
+                &mount.stats.snapshot().await,
+            ));
+            #[cfg(feature = "cache")]
+            if let Some(cache) = Self::as_cached(&mount.fs) {
+                metrics.extend(crate::metrics::cache_metrics(cache.metrics().snapshot()));
+            }
+            if let Some(multiwrite) = Self::as_multiwrite(&mount.fs) {
+                metrics.push(RagfsMetric {
+                    name: "ragfs_multiwrite_background_tasks".into(),
+                    labels: Default::default(),
+                    value: RagfsMetricValue::Gauge(multiwrite.background_task_count() as f64),
+                });
+                let routes = multiwrite.inner.read_route_metrics();
+                for (route, key) in [
+                    ("primary", "primary_hits"),
+                    ("backup", "backup_hits"),
+                    ("redirect", "redirect_hits"),
+                    ("miss", "misses"),
+                ] {
+                    let count = routes[key].as_u64().ok_or_else(|| {
+                        Error::internal(format!("invalid read-route counter '{key}'"))
+                    })?;
+                    metrics.push(RagfsMetric::counter(
+                        "ragfs_multiwrite_read_routes_total",
+                        &[("route", route)],
+                        count,
+                        1.0,
+                    ));
+                }
+            }
+        }
+        if let Some(manager) = self.pathlock_manager.get() {
+            metrics.extend(lock_metrics(manager.metrics_snapshot().await));
+        }
+        merge_metrics(metrics)
     }
 
     /// Read raw bytes from the underlying plugin backend, bypassing the encryption layer.

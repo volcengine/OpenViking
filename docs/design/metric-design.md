@@ -348,7 +348,7 @@ graph LR
     I["CacheCollector"]
     J["EncryptionCollector"]
     K["QueueCollector"]
-    L["LockCollector"]
+    L["RagfsMetricCollector"]
     M["VikingDBCollector"]
     N["ObserverHealthCollector"]
     O["TaskTrackerCollector"]
@@ -372,7 +372,7 @@ graph LR
     B --> I
     B --> J
     C --> K
-    C --> L
+    D --> L
     C --> M
     C --> N
     C --> O
@@ -416,7 +416,7 @@ Collector 与 DataSource 的主映射关系如下：
 | `CacheCollector` | `EventMetricCollector` | cache 命中或未命中事件 | hit / miss |
 | `EncryptionCollector` | `EventMetricCollector` | encrypt / decrypt / verify / kdf / key_load 事件 | 加密次数、认证失败、耗时、字节量、密钥处理统计 |
 | `QueueCollector` | `StateMetricCollector` | QueueManager / DAG 当前状态 | pending、in_progress、processed、errors |
-| `LockCollector` | `StateMetricCollector` | LockManager 当前状态 | active、waiting、stale |
+| `RagfsMetricCollector` | `DomainStatsMetricCollector` | `RagfsMetricDataSource`，一次 RAGFS `metrics()` 调用 | 文件操作、Cache、multi-backend、Lock |
 | `VikingDBCollector` | `StateMetricCollector` | VikingDB collection 当前状态 | health、vectors、collections |
 | `ObserverHealthCollector` | `StateMetricCollector` | ObserverService 结果 | component health、component errors |
 | `TaskTrackerCollector` | `StateMetricCollector` | TaskTracker 当前状态 | pending、running、completed、failed |
@@ -465,10 +465,30 @@ Registry 只解决“如何统一保存指标”，不解决：
 
 - EventCollector 决定何时调用 `inc_counter` 或 `observe_histogram`；
 - StateCollector 决定何时调用 `set_gauge`；
-- DomainStatsCollector 决定如何把已有累计统计映射到统一写接口；
+- DomainStatsCollector 决定如何把已有累计统计映射到统一写接口；RAGFS 使用绝对值覆盖；
 - ProbeCollector 决定如何把 probe 结果翻译成 readiness / health gauge。
 
 也就是说，Registry 不感知“当前写入的是事件、状态、统计还是探针”，它只感知“要写入哪种指标类型、哪个指标名、哪些标签和值”。
+
+RAGFS 使用单一 `metrics()` 接口，返回扁平指标记录，不暴露内部对象层级。
+`RagfsMetricDataSource` 校验整批记录，`RagfsMetricCollector` 只按类型分发：
+
+```text
+Counter   -> value * scale -> set_counter()
+Gauge     -> value         -> set_gauge()
+Histogram -> bounds/sum * scale -> set_histogram()
+```
+
+耗时在 Rust 内部以整数纳秒累计，通过 `scale=1e-9` 转为小数秒。
+Registry 的绝对值 setter 支持零值和计数重置，原有增量接口保持不变。
+Collector 不保存前值、不计算差分；只保存序列标识，用于删除消失的序列。
+读取或校验失败时保留旧数据；写入失败后由下一轮全量覆盖恢复。
+采集锁覆盖整轮读取和写入，避免超时线程与后续刷新并行更新。
+
+RAGFS 首期导出 20 个指标族，不带 `mount` 或 `account_id` 标签。
+`openviking_lock_active` 保留原名和 Gauge 类型，表示当前已发布的锁租约数。
+`openviking_lock_stale` 保留原名和 Gauge 类型，表示累计已清理的过期锁 token 数。
+`get_stats()` 在 Binding 输出层转换回微秒，Python Observer 不变。
 
 由此，registry 可以作为整个指标系统的稳定核心，而不随 exporter 或 collector 的演化频繁变动。
 
@@ -620,7 +640,8 @@ sequenceDiagram
 | 模型链路监控 | `ModelUsageDataSource`、模型调用事件 | `VLMCollector`、`EmbeddingCollector`、`ModelUsageCollector` | Counter、Histogram | model calls、tokens、duration |
 | 资源导入监控 | `ResourceIngestionEventDataSource` | `ResourceIngestionCollector` | Counter、Histogram | parse / finalize / summarize / wait duration |
 | Session 与异步任务监控 | `SessionLifecycleDataSource`、`TaskStateDataSource`、`QueuePipelineStateDataSource` | `TaskTrackerCollector`、`QueueCollector` | Gauge、Counter | task pending、queue backlog、session lifecycle count |
-| 诊断与状态监控 | `ObserverStateDataSource`、`QueuePipelineStateDataSource` | `ObserverHealthCollector`、`LockCollector`、`VikingDBCollector` | Gauge | component health、lock active、collection health |
+| 诊断与状态监控 | `ObserverStateDataSource`、`VikingDBStateDataSource` | `ObserverHealthCollector`、`VikingDBCollector` | Gauge | component health、collection health |
+| RAGFS 监控 | `RagfsMetricDataSource` | `RagfsMetricCollector` | Counter、Histogram、Gauge | 文件操作、Cache、multi-backend、Lock |
 | 加密监控 | `EncryptionEventDataSource`、`EncryptionProbeDataSource` | `EncryptionCollector`、`EncryptionProbeCollector` | Counter、Histogram、Gauge | encrypt count、decrypt duration、root key readiness |
 | 系统探针监控 | 各类 `*ProbeDataSource` | 各类 `*ProbeCollector` | Gauge、Health | service readiness、storage readiness、kms availability |
 | 操作级 Telemetry 指标化 | telemetry adapter / bridge | `TelemetryBridgeCollector` | Counter、Histogram、Gauge | operation requests、vector scanned、memory extracted |
