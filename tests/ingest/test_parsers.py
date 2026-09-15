@@ -117,6 +117,62 @@ def test_codex(tmp_path):
     assert msgs[1].peer_id == "codex__openai"
 
 
+def test_codex_forked_rollout_file_gets_its_own_session_id(tmp_path):
+    """A forked/continued session writes a second file that reuses ``session_meta.id``.
+
+    Sharing one native_session_id makes the two files share one byte-offset cursor, and
+    since the cursor also stores the inode, every poll looks like log rotation and
+    re-reads the file from the top. Each file must own its cursor instead.
+    """
+    root = tmp_path / "sessions"
+    day = root / "2026" / "09" / "02"
+    base = "01a0600e-e891-7b42-8da9-b73b83d46acd"
+    fork = "01a06126-7ca2-7eb1-b795-40499a2b3ce6"
+
+    def _records(text):
+        return [
+            {
+                "type": "session_meta",
+                "timestamp": "2026-09-02T00:00:00Z",
+                "payload": {"id": base, "model_provider": "openai", "cwd": str(tmp_path)},
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-09-02T00:00:01Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            },
+        ]
+
+    parent = day / f"rollout-2026-09-02T10-59-44-{base}.jsonl"
+    child = day / f"rollout-2026-09-02T16-05-07-{base}_{fork}.jsonl"
+    _write_jsonl(parent, _records("parent turn"))
+    _write_jsonl(child, _records("child turn"))
+
+    src = CodexSource(_cfg(root), fallback_user="tester")
+    refs = {r.native_session_id: r for r in src.discover_sessions()}
+    # Two files -> two cursors. Before the fix both collapsed onto ``base``.
+    assert set(refs) == {base, f"{base}_{fork}"}
+
+    # Simulate two ingest sweeps, keying the cursor by native_session_id like the store does.
+    first = {}
+    for sid, ref in refs.items():
+        msgs, cursor = src.read_messages(ref, None)
+        first[sid] = cursor
+        assert len(msgs) == 1
+    assert {src.read_messages(refs[sid], None)[0][0].text for sid in refs} == {
+        "parent turn",
+        "child turn",
+    }
+
+    for sid, ref in refs.items():
+        msgs, _ = src.read_messages(ref, first[sid])
+        assert msgs == [], f"{sid} re-read its rollout file on the second sweep"
+
+
 def test_hermes_group_username(tmp_path):
     root = tmp_path / "sessions"
     _write_jsonl(
