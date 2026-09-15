@@ -220,6 +220,8 @@ class SemanticDagExecutor:
         self._closed = False
         self._failure: Optional[Exception] = None
         self._stats = DagStats()
+        self._llm_attempt_count = 0
+        self._llm_failure_count = 0
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
@@ -796,10 +798,12 @@ class SemanticDagExecutor:
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
+                self._llm_attempt_count += 1
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
                 )
         except Exception as e:
+            self._llm_failure_count += 1
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
         finally:
@@ -927,6 +931,16 @@ class SemanticDagExecutor:
     def stale(self) -> bool:
         return self._stale
 
+    @property
+    def llm_attempt_count(self) -> int:
+        """LLM-backed summary/overview generations attempted in this run."""
+        return self._llm_attempt_count
+
+    @property
+    def llm_failure_count(self) -> int:
+        """Summary/overview generations that fell back to empty in this run."""
+        return self._llm_failure_count
+
     async def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
         results: List[Dict[str, str]] = []
         for idx, child_uri in enumerate(node.children_dirs):
@@ -1049,6 +1063,7 @@ class SemanticDagExecutor:
                 if self._generation_trigger != "content_copy":
                     overview = self._select_direct_media_overview(node, file_summaries)
                 if overview is None:
+                    self._llm_attempt_count += 1
                     async with self._llm_sem:
                         overview = await self._processor._generate_overview(
                             dir_uri,
@@ -1088,6 +1103,7 @@ class SemanticDagExecutor:
         except AbstractOverviewFormatError:
             raise
         except Exception as e:
+            self._llm_failure_count += 1
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
         else:
             if need_vectorize and not self._skip_vectorization:
