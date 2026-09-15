@@ -11,7 +11,7 @@ import asyncio
 import inspect
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
@@ -31,6 +31,7 @@ from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.resource_rnfv import RequestIntent
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry
@@ -196,6 +197,9 @@ class ResourceProcessor:
         root_is_file: bool = False,
         ctx: RequestContext,
         lease_ref: Optional[Dict[str, Any]],
+        vectorize: bool = True,
+        ingest_options: IngestOptions | None = None,
+        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
     ) -> Any:
         """Apply a local artifact incrementally against an existing resource tree.
 
@@ -205,11 +209,12 @@ class ResourceProcessor:
         deletions from an incomplete target snapshot, so an unreadable target
         never causes data loss.
         """
-        from openviking.storage.resource_diff import build_resource_diff_plan
+        from openviking.storage.resource_diff import build_resource_diff_snapshot
         from openviking.storage.resource_diff_apply import apply_diff_plan
         from openviking.storage.resource_target import AgfsResourceTarget
+        from openviking.storage.viking_fs._diff_plan import apply_request_scalar_intents
 
-        plan = await build_resource_diff_plan(
+        snapshot = await build_resource_diff_snapshot(
             viking_fs=get_viking_fs(),
             vikingdb=self.vikingdb,
             store=output_store,
@@ -218,6 +223,13 @@ class ResourceProcessor:
             ctx=ctx,
             doc_rel=doc_rel,
             root_is_file=root_is_file,
+            require_vectors=vectorize,
+            request_intent=RequestIntent.from_ingest_options(
+                target_uri=root_uri,
+                processing_mode=processing_mode,
+                ingest_options=ingest_options,
+                vectorize=vectorize,
+            ),
         )
         target = AgfsResourceTarget(
             viking_fs=get_viking_fs(),
@@ -229,12 +241,16 @@ class ResourceProcessor:
         # The store reads/writes artifact-relative paths, but the manifest walk
         # keys diff results without the doc_rel prefix; apply reads bytes via the
         # same store, so wrap it to re-add the prefix on read.
-        return await apply_diff_plan(
-            plan,
+        result = await apply_diff_plan(
+            snapshot.plan,
             store=_DocRelStore(output_store, doc_rel),
             artifact_ref=artifact_ref,
             target=target,
         )
+        resolved_plan = self._resolved_diff_plan(snapshot.plan, result)
+        apply_request_scalar_intents(snapshot.rnfv, resolved_plan)
+        result.scalar_updates = list(resolved_plan.scalar_updates)
+        return result
 
     async def _commit_directory_artifact_with_plan(
         self,
@@ -259,6 +275,7 @@ class ResourceProcessor:
         from openviking.storage.resource_diff import build_resource_diff_snapshot
         from openviking.storage.resource_diff_apply import apply_diff_plan
         from openviking.storage.resource_target import AgfsResourceTarget
+        from openviking.storage.viking_fs._diff_plan import apply_request_scalar_intents
 
         target = AgfsResourceTarget(
             viking_fs=get_viking_fs(),
@@ -307,6 +324,12 @@ class ResourceProcessor:
             ctx=ctx,
             doc_rel=doc_rel,
             require_vectors=vectorize,
+            request_intent=RequestIntent.from_ingest_options(
+                target_uri=root_uri,
+                processing_mode=SEMANTIC_AND_VECTORS,
+                ingest_options=ingest_options,
+                vectorize=vectorize,
+            ),
         )
         apply_result = await apply_diff_plan(
             snapshot.plan,
@@ -322,12 +345,14 @@ class ResourceProcessor:
             )
             for path, entry in snapshot.new.items()
         }
+        resolved_diff_plan = self._resolved_diff_plan(snapshot.plan, apply_result)
+        apply_request_scalar_intents(snapshot.rnfv, resolved_diff_plan)
         plan = await build_semantic_plan(
             root_uri=root_uri,
             context_type=context_type_for_uri(root_uri),
             new=committed_new,
             target_files=snapshot.target_files,
-            diff_plan=self._resolved_diff_plan(snapshot.plan, apply_result),
+            diff_plan=resolved_diff_plan,
             inventory=snapshot.vector_inventory,
             vikingdb=self.vikingdb,
             ctx=ctx,
@@ -471,7 +496,7 @@ class ResourceProcessor:
         """
         local_store = self._build_parse_output_store() if local_artifact is not None else None
         artifact_files = prepared.get("artifact_files")
-        if local_artifact is not None and prepared.get("changes") is not None:
+        if prepared.get("changes") is not None:
             base = root_uri.rstrip("/") + "/"
             changed_uris = {
                 uri
@@ -868,6 +893,8 @@ class ResourceProcessor:
             local_artifact_doc_rel = ""
             incremental_noop = False
             semantic_plan = None
+            apply_result = None
+            rnfv_artifact_committed = False
 
             if root_uri and temp_uri:
                 stage_start = time.perf_counter()
@@ -960,8 +987,8 @@ class ResourceProcessor:
                             ctx=ctx,
                             lease_ref=resource_lock,
                             vectorize=bool(kwargs.get("build_index", True)),
-                            is_code_repo=parse_result.source_format == "repository",
                             ingest_options=ingest_options,
+                            is_code_repo=parse_result.source_format == "repository",
                             source_metadata=semantic_source,
                         )
                         local_artifact_files = list(apply_result.files)
@@ -973,13 +1000,7 @@ class ResourceProcessor:
                             root_uri=root_uri,
                             is_initial=not target_preexisting,
                         )
-                        incremental_noop = (
-                            target_preexisting
-                            and not any(
-                                entry.state != "unchanged" for entry in semantic_plan.tree.entries
-                            )
-                            and not semantic_plan.orphan_vector_deletes
-                        )
+                        incremental_noop = target_preexisting and semantic_plan.is_noop()
                         if incremental_noop:
                             semantic_plan = None
                         temp_uri = root_uri
@@ -1028,21 +1049,30 @@ class ResourceProcessor:
                             )
                         temp_uri = root_uri
                         source_committed = True
-                    elif artifact_ref is not None and artifact_ref.backend == "local":
-                        # Incremental local import: the target already exists, so
+                    elif artifact_ref is not None:
+                        # Incremental artifact import: the target already exists, so
                         # only upload changed files and delete removed ones,
                         # decided by DiffPlan (artifact md5 vs vector-store md5).
-                        # This mirrors the initial branch but with a diff subset;
-                        # AGFS incremental still flows through the semantic sync.
+                        from openviking.parse.output import store_for_artifact_ref
+
+                        artifact_store = output_store or store_for_artifact_ref(
+                            artifact_ref, viking_fs=viking_fs, ctx=ctx
+                        )
                         apply_result = await self._apply_local_incremental(
-                            output_store=output_store,
+                            output_store=artifact_store,
                             artifact_ref=artifact_ref,
                             doc_rel=self._artifact_doc_rel(artifact_ref, temp_uri),
                             root_uri=root_uri,
                             root_is_file=root_is_file,
                             ctx=ctx,
                             lease_ref=resource_lock,
+                            vectorize=bool(kwargs.get("build_index", True)),
+                            ingest_options=ingest_options,
+                            processing_mode=normalize_processing_mode(
+                                kwargs.get("processing_mode")
+                            ),
                         )
+                        rnfv_artifact_committed = True
                         local_artifact_doc_rel = self._artifact_doc_rel(artifact_ref, temp_uri)
                         local_artifact_files = list(apply_result.files)
                         # Hand the applied change set to post-processing so the
@@ -1125,8 +1155,19 @@ class ResourceProcessor:
                 "file_abstracts": local_file_abstracts,
                 "artifact_files": local_artifact_files,
                 "incremental_noop": incremental_noop,
+                "scalar_updates": [
+                    {
+                        "record_id": update.record_id,
+                        "uri": update.uri,
+                        "level": update.level,
+                        "fields": dict(update.fields),
+                    }
+                    for update in getattr(apply_result, "scalar_updates", ())
+                ]
+                if apply_result is not None
+                else [],
                 "semantic_plan": semantic_plan.to_dict() if semantic_plan is not None else None,
-                "plan_artifact_committed": use_semantic_plan,
+                "plan_artifact_committed": use_semantic_plan or rnfv_artifact_committed,
                 "semantic_source": self._semantic_source_metadata(
                     path=path,
                     prepared_resource=prepared_resource,
@@ -1204,6 +1245,7 @@ class ResourceProcessor:
         )
         local_artifact_handed_off = False
         artifact_cleaned = False
+        scalar_updates = list(prepared.get("scalar_updates") or [])
 
         async def cleanup_artifact_if_owned() -> None:
             nonlocal artifact_cleaned
@@ -1226,7 +1268,7 @@ class ResourceProcessor:
                 await output_store.cleanup(artifact_ref)
                 artifact_cleaned = True
 
-        if prepared.get("incremental_noop"):
+        if prepared.get("incremental_noop") and not scalar_updates:
             try:
                 await cleanup_artifact_if_owned()
             finally:
@@ -1339,6 +1381,8 @@ class ResourceProcessor:
                         )
                     if temp_dir_path:
                         await viking_fs.delete_temp(temp_dir_path, ctx=ctx)
+                if scalar_updates:
+                    await self._enqueue_scalar_updates(scalar_updates, ctx=ctx)
                 if vectors_only:
                     if sync_deleted_files or sync_deleted_dirs:
                         await self._delete_removed_resource_vectors(
@@ -1450,6 +1494,38 @@ class ResourceProcessor:
         else:
             kind = "local"
         return {"kind": kind, "uri": str(path)}
+
+    async def _enqueue_scalar_updates(
+        self, scalar_updates: List[Mapping[str, Any]], *, ctx: RequestContext
+    ) -> None:
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+        from openviking.telemetry import get_current_telemetry
+        from openviking.utils.embedding_utils import _enqueue_embedding_message
+        from openviking.utils.time_utils import get_current_timestamp
+
+        queue_manager = get_queue_manager()
+        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
+        for update in scalar_updates:
+            fields = dict(update.get("fields") or {})
+            fields["updated_at"] = get_current_timestamp()
+            uri = str(update.get("uri") or "")
+            message = EmbeddingMsg.for_update_fields(
+                record_id=str(update["record_id"]),
+                fields=fields,
+                context_data={
+                    "uri": uri,
+                    "level": int(update["level"]),
+                    "account_id": ctx.account_id,
+                    "owner_user_id": ctx.user.user_id,
+                },
+                telemetry_id=get_current_telemetry().telemetry_id,
+            )
+            await _enqueue_embedding_message(
+                embedding_queue,
+                message,
+                failure_message=f"Failed to enqueue scalar update for {uri}",
+            )
 
     async def _delete_removed_resource_vectors(
         self,

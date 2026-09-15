@@ -13,6 +13,7 @@ from openviking.storage.queuefs.semantic_plan import (
     SemanticTreeEntry,
     SemanticTreeSnapshot,
 )
+from openviking.storage.viking_fs._diff_plan import ScalarUpdate
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -229,6 +230,58 @@ async def test_local_incremental_noop_skips_semantic_queue_and_releases_resource
     summarizer.summarize.assert_not_awaited()
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
     assert not tmp_path.joinpath(ref.root).exists()
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_scalar_update_is_enqueued_before_lock_release(monkeypatch, ctx):
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value="queued"))
+    manager = SimpleNamespace(
+        EMBEDDING="embedding",
+        get_queue=lambda *_args, **_kwargs: queue,
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    viking_fs = SimpleNamespace(
+        _async_agfs=SimpleNamespace(pathlock_release=AsyncMock()),
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
+    processor = ResourceProcessor(_FakeVikingDB())
+    update = ScalarUpdate(
+        record_id="a-l2",
+        uri="viking://resources/demo/a.py",
+        relative_path="a.py",
+        level=2,
+        fields={"search_tags": ["team=search"]},
+    )
+    lock = {"lease_ref": "tags"}
+
+    result = await processor.finish_prepared_resource(
+        {
+            "root_uri": "viking://resources/demo",
+            "temp_uri": "viking://resources/demo",
+            "source_committed": True,
+            "target_preexisting": True,
+            "incremental_noop": True,
+            "scalar_updates": [
+                {
+                    "record_id": update.record_id,
+                    "uri": update.uri,
+                    "level": update.level,
+                    "fields": dict(update.fields),
+                }
+            ],
+        },
+        ctx=ctx,
+        resource_lock=lock,
+        build_index=False,
+        processing_mode="vectors_only",
+    )
+
+    assert result == {"status": "success", "root_uri": "viking://resources/demo"}
+    message = queue.enqueue.await_args.args[0]
+    assert message.operation.value == "update_fields"
+    assert message.record_ids == ["a-l2"]
+    assert message.update_fields["search_tags"] == ["team=search"]
+    viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 
 
 @pytest.mark.asyncio

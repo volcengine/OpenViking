@@ -13,6 +13,7 @@ from openviking.storage.queuefs.semantic_plan_builder import (
 from openviking.storage.viking_fs._diff_plan import (
     DiffPlan,
     NewEntry,
+    ScalarUpdate,
     TargetFile,
 )
 
@@ -762,3 +763,109 @@ async def test_builder_puts_stale_same_path_vector_on_added_entry_for_delete():
     assert [record.record_id for record in entry.indexed_records] == ["stale-l2"]
     assert plan.orphan_vector_deletes == ()
     vikingdb.hydrate_incremental_records.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_builder_serializes_scalar_updates_and_applies_rebuild_overrides():
+    root = "viking://resources/repo"
+    inventory = {
+        "root-l0": {
+            "id": "root-l0",
+            "uri": root,
+            "level": 0,
+            "search_tags": ["env=test"],
+        },
+        "a-l2": {
+            "id": "a-l2",
+            "uri": f"{root}/a.py",
+            "level": 2,
+            "md5": "old",
+            "search_tags": ["env=test"],
+        },
+    }
+    vikingdb = AsyncMock()
+    vikingdb.hydrate_incremental_records.side_effect = lambda expected, **_: {
+        record_id: {**inventory[record_id], "abstract": f"abstract:{record_id}"}
+        for record_id in expected
+    }
+    diff_plan = DiffPlan(
+        modified=["a.py"],
+        new_files=["a.py"],
+        new_md5s={"a.py": "new"},
+        scalar_updates=[
+            ScalarUpdate(
+                record_id="root-l0",
+                uri=root,
+                relative_path="",
+                level=0,
+                fields={"search_tags": ["team=search"]},
+            )
+        ],
+        scalar_overrides={
+            "root-l0": {"search_tags": ["team=search"]},
+            "a-l2": {"search_tags": ["team=search"]},
+        },
+    )
+
+    plan = await build_semantic_plan(
+        root_uri=root,
+        context_type="resource",
+        new={"a.py": NewEntry(md5="new")},
+        target_files={"a.py": TargetFile(is_dir=False)},
+        diff_plan=diff_plan,
+        inventory=inventory,
+        vikingdb=vikingdb,
+        ctx=_Ctx(),
+        vectorize=True,
+        is_code_repo=True,
+        root_preexisting=True,
+    )
+
+    assert plan.scalar_updates[0].record_id == "root-l0"
+    entries = {entry.relative_path: entry for entry in plan.tree.entries}
+    assert entries[""].indexed_records[0].search_tags == ("team=search",)
+    assert entries["a.py"].indexed_records[0].search_tags == ("team=search",)
+
+
+@pytest.mark.asyncio
+async def test_builder_preserves_unknown_persisted_scalar_without_new_allowlist():
+    root = "viking://resources/repo"
+    inventory = {
+        "a-l2": {
+            "id": "a-l2",
+            "uri": f"{root}/a.py",
+            "level": 2,
+            "md5": "old",
+        }
+    }
+    vikingdb = AsyncMock()
+    vikingdb.hydrate_incremental_records.return_value = {
+        "a-l2": {
+            **inventory["a-l2"],
+            "abstract": "old abstract",
+            "business_priority": 7,
+        }
+    }
+
+    plan = await build_semantic_plan(
+        root_uri=root,
+        context_type="resource",
+        new={"a.py": NewEntry(md5="new")},
+        target_files={"a.py": TargetFile(is_dir=False)},
+        diff_plan=DiffPlan(modified=["a.py"]),
+        inventory=inventory,
+        vikingdb=vikingdb,
+        ctx=_Ctx(),
+        vectorize=True,
+        is_code_repo=True,
+        root_preexisting=True,
+    )
+
+    record = next(
+        entry.indexed_records[0]
+        for entry in plan.tree.entries
+        if entry.relative_path == "a.py"
+    )
+    assert record.fields["business_priority"] == 7
+    assert record.portable_fields()["business_priority"] == 7
+    assert "abstract" not in record.portable_fields()

@@ -214,6 +214,7 @@ class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
         super().__init__(records)
         self.acl_manager = AclManager(self)
         self.acl_manager.set_enabled("acct", True)
+        self.scroll_output_fields = []
 
     async def scroll(
         self,
@@ -224,7 +225,8 @@ class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
         *,
         ctx: RequestContext,
     ) -> tuple[list[dict[str, Any]], str | None]:
-        del output_fields, ctx
+        del ctx
+        self.scroll_output_fields.append(list(output_fields or []))
         self.scroll_filters.append(filter)
         offset = int(cursor or 0)
         ordered = [
@@ -583,6 +585,33 @@ async def test_incremental_inventory_reads_all_semantic_levels_under_target():
 
 
 @pytest.mark.asyncio
+async def test_incremental_inventory_projects_request_scalar_fields():
+    root = "viking://resources/docs"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record(
+                "file-l2",
+                f"{root}/a.py",
+                level=2,
+                md5="ma",
+                search_tags=["env=test"],
+            )
+        ]
+    )
+
+    records = await backend.get_incremental_inventory_under_uri(
+        root,
+        ctx=_ctx(),
+        output_fields=["id", "uri", "level", "md5", "search_tags"],
+    )
+
+    assert records["file-l2"]["search_tags"] == ["env=test"]
+    assert all("search_tags" in fields for fields in backend.scroll_output_fields)
+    assert all("vector" not in fields for fields in backend.scroll_output_fields)
+    assert all("sparse_vector" not in fields for fields in backend.scroll_output_fields)
+
+
+@pytest.mark.asyncio
 async def test_incremental_hydration_uses_dsl_then_fetches_only_missing_ids():
     root = "viking://resources/docs"
     first = _record("root-l0", root, level=0, abstract="root abstract")
@@ -654,6 +683,45 @@ async def test_incremental_hydration_returns_only_records_still_present():
     )
 
     assert records == {}
+
+
+@pytest.mark.asyncio
+async def test_incremental_hydration_projects_dynamic_non_vector_schema_fields():
+    root = "viking://resources/docs"
+    record = _record(
+        "file-l2",
+        f"{root}/a.py",
+        level=2,
+        business_priority=7,
+    )
+    backend = _MemoryTransferBackend([record])
+    backend.get_collection_meta = AsyncMock(
+        return_value={
+            "Fields": [
+                {"FieldName": "id"},
+                {"FieldName": "uri"},
+                {"FieldName": "level"},
+                {"FieldName": "abstract"},
+                {"FieldName": "business_priority"},
+                {"FieldName": "vector"},
+                {"FieldName": "sparse_vector"},
+                {"FieldName": "content"},
+            ]
+        }
+    )
+    backend._strict_transfer_page = AsyncMock(return_value=([record], None))
+
+    hydrated = await backend.hydrate_incremental_records(
+        {"file-l2": {"uri": f"{root}/a.py", "level": 2}},
+        ctx=_ctx(),
+    )
+
+    assert hydrated["file-l2"]["business_priority"] == 7
+    fields = backend._strict_transfer_page.await_args.kwargs["output_fields"]
+    assert "business_priority" in fields
+    assert "vector" not in fields
+    assert "sparse_vector" not in fields
+    assert "content" not in fields
 
 
 @pytest.mark.asyncio

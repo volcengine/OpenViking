@@ -7,6 +7,11 @@ from unittest.mock import patch
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.queuefs.semantic_plan import (
+    PlannedScalarUpdate,
+    SemanticPlan,
+    SemanticTreeSnapshot,
+)
 from openviking.utils.summarizer import Summarizer
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -201,6 +206,50 @@ async def test_local_artifact_snapshot_is_forwarded_to_semantic_message():
     assert queue.msgs[0].artifact_ref == artifact_ref
     assert queue.msgs[0].artifact_ref["resource_rel"] == "repository"
     assert queue.msgs[0].artifact_files == ["a.py", "src/b.py"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("with_scalar_update", "expected_version"), [(False, 1), (True, 2)])
+async def test_semantic_plan_version_tracks_scalar_operation_contract(
+    with_scalar_update, expected_version
+):
+    queue = _DummyQueue()
+    qm = _DummyQueueManager(queue)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    scalar_updates = (
+        PlannedScalarUpdate(
+            record_id="a-l2",
+            uri="viking://resources/repo/a.py",
+            level=2,
+            fields={"search_tags": ["team=search"]},
+        ),
+    ) if with_scalar_update else ()
+    plan = SemanticPlan(
+        root_uri="viking://resources/repo",
+        context_type="resource",
+        tree=SemanticTreeSnapshot(entries=()),
+        scalar_updates=scalar_updates,
+    )
+
+    with (
+        patch("openviking.utils.summarizer.get_queue_manager", return_value=qm),
+        patch(
+            "openviking.utils.summarizer.get_current_telemetry",
+            return_value=SimpleNamespace(telemetry_id="tid"),
+        ),
+        patch(
+            "openviking.utils.summarizer.get_request_wait_tracker",
+            return_value=_DummyWaitTracker(),
+        ),
+    ):
+        await Summarizer(vlm_processor=None).summarize(
+            resource_uris=[plan.root_uri],
+            temp_uris=[plan.root_uri],
+            ctx=ctx,
+            semantic_plan=plan.to_dict(),
+        )
+
+    assert queue.msgs[0].plan_version == expected_version
 
 
 @pytest.mark.asyncio

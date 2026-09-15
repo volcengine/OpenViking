@@ -382,6 +382,44 @@ class SemanticProcessor(DequeueHandlerBase):
             failure_message=f"Failed to enqueue planned vector deletes for {plan.root_uri}",
         )
 
+    async def _enqueue_plan_scalar_updates(
+        self,
+        msg: SemanticMsg,
+        plan: SemanticPlan,
+        *,
+        exclude_record_ids: Optional[set[str]] = None,
+    ) -> None:
+        if not plan.scalar_updates:
+            return
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+        from openviking.utils.embedding_utils import _enqueue_embedding_message
+        from openviking.utils.time_utils import get_current_timestamp
+
+        queue_manager = get_queue_manager()
+        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
+        for update in plan.scalar_updates:
+            if update.record_id in (exclude_record_ids or set()):
+                continue
+            fields = dict(update.fields)
+            fields["updated_at"] = get_current_timestamp()
+            update_msg = EmbeddingMsg.for_update_fields(
+                record_id=update.record_id,
+                fields=fields,
+                context_data={
+                    "uri": update.uri,
+                    "level": update.level,
+                    "account_id": msg.account_id,
+                    "owner_user_id": msg.user_id,
+                },
+                telemetry_id=msg.telemetry_id,
+            )
+            await _enqueue_embedding_message(
+                embedding_queue,
+                update_msg,
+                failure_message=f"Failed to enqueue scalar update for {update.uri}",
+            )
+
     async def on_dequeue(
         self,
         data: Optional[Dict[str, Any]],
@@ -487,6 +525,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                     "semantic message context_type must match semantic plan"
                                 )
                             await self._enqueue_plan_vector_deletes(msg, msg.plan)
+                            scheduled_vector_record_ids: set[str] = set()
                             for run_uri in msg.plan.execution_root_uris():
                                 executor = SemanticDagExecutor(
                                     processor=self,
@@ -498,6 +537,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                     semantic_plan=msg.plan,
                                 )
                                 await executor.run(run_uri)
+                                scheduled_vector_record_ids.update(
+                                    executor.scheduled_vector_record_ids
+                                )
                                 self._cache_dag_stats(
                                     msg.telemetry_id, run_uri, executor.get_stats()
                                 )
@@ -514,6 +556,11 @@ class SemanticProcessor(DequeueHandlerBase):
                                         run_uri,
                                         l0_body_changed=write_result.abstract_body_changed,
                                     )
+                            await self._enqueue_plan_scalar_updates(
+                                msg,
+                                msg.plan,
+                                exclude_record_ids=scheduled_vector_record_ids,
+                            )
                         # Regular memory writes keep their specialized update path.
                         # Callers must explicitly opt into directory aggregation; the
                         # trigger remains descriptive metadata, not an algorithm switch.
@@ -1678,13 +1725,13 @@ class SemanticProcessor(DequeueHandlerBase):
         creator_acl_grant: CreatorAclGrant | None = None,
         scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
         partial_update: bool = True,
-    ) -> None:
+    ) -> set[int]:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
         from openviking.utils.embedding_utils import vectorize_directory_meta
 
         active_ctx = ctx or self._default_ctx
-        await vectorize_directory_meta(
+        return await vectorize_directory_meta(
             uri=uri,
             abstract=abstract,
             overview=overview,
@@ -1719,7 +1766,8 @@ class SemanticProcessor(DequeueHandlerBase):
         file_md5: Optional[str],
         file_content: Optional[bytes],
         ctx: RequestContext,
-    ) -> None:
+        scalar_fields: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
         from openviking.storage.viking_vector_index_backend import VIKINGDB_CONTENT_MAX_SIZE
@@ -1735,6 +1783,7 @@ class SemanticProcessor(DequeueHandlerBase):
             fields["md5"] = file_md5
         if file_content is not None:
             fields["content"] = _coerce_text_file_content(file_content)[:VIKINGDB_CONTENT_MAX_SIZE]
+        fields.update(dict(scalar_fields or {}))
         embedding_msg = EmbeddingMsg.for_update_fields(
             record_id=record_id,
             fields=fields,
@@ -1747,7 +1796,7 @@ class SemanticProcessor(DequeueHandlerBase):
         )
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
-        await _enqueue_embedding_message(
+        return await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,
             failure_message=f"Failed to enqueue file scalar update for {file_path}",
@@ -1768,12 +1817,12 @@ class SemanticProcessor(DequeueHandlerBase):
         file_content: Optional[bytes] = None,
         scalar_override: Optional[Dict[str, Any]] = None,
         partial_update: bool = True,
-    ) -> None:
+    ) -> bool:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
 
         active_ctx = ctx or self._default_ctx
-        await vectorize_file(
+        return await vectorize_file(
             file_path=file_path,
             summary_dict=summary_dict,
             parent_uri=parent_uri,

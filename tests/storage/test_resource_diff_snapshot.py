@@ -20,6 +20,8 @@ from openviking.storage.resource_diff import (
     read_target_file_snapshot,
     read_target_vector_snapshot,
 )
+from openviking.storage.resource_rnfv import RequestIntent
+from openviking.utils.ingest_options import IngestOptions
 
 
 class _Ctx:
@@ -67,6 +69,7 @@ class _FakeVikingDB:
     def __init__(self, records):
         self._records = records
         self.requested = None
+        self.inventory_output_fields = None
 
     async def get_l2_diff_records_by_uris(self, uris, *, ctx):
         self.requested = list(uris)
@@ -81,15 +84,23 @@ class _FakeVikingDB:
             if uri == target_uri or uri.startswith(prefix)
         }
 
-    async def get_incremental_inventory_under_uri(self, target_uri, *, ctx):
+    async def get_incremental_inventory_under_uri(
+        self, target_uri, *, ctx, output_fields=None
+    ):
         del ctx
+        self.inventory_output_fields = list(output_fields or [])
         prefix = target_uri.rstrip("/") + "/"
         return {
             str(value.get("id") or f"id-{index}"): {
-                "id": str(value.get("id") or f"id-{index}"),
-                "uri": uri,
-                "level": int(value.get("level", 2)),
-                "md5": str(value.get("md5") or ""),
+                key: item
+                for key, item in {
+                    **value,
+                    "id": str(value.get("id") or f"id-{index}"),
+                    "uri": uri,
+                    "level": int(value.get("level", 2)),
+                    "md5": str(value.get("md5") or ""),
+                }.items()
+                if not output_fields or key in output_fields
             }
             for index, (uri, value) in enumerate(self._records.items())
             if uri == target_uri or uri.startswith(prefix)
@@ -243,6 +254,45 @@ async def test_resource_diff_snapshot_reuses_all_level_inventory_for_l2_diff(tmp
 
     assert set(snapshot.vector_inventory) == {"root-l0", "a-l2"}
     assert snapshot.plan.needs_body_compare == ["a.py"]
+    assert set(vikingdb.inventory_output_fields) == {"id", "uri", "level", "md5"}
+
+
+@pytest.mark.asyncio
+async def test_resource_diff_snapshot_projects_tags_only_when_request_needs_them(tmp_path):
+    from openviking.parse.output import LocalParseOutputStore
+    from openviking.parse.parsers.upload_utils import ARTIFACT_MANIFEST_NAME
+
+    root = "viking://resources/x"
+    store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+    ref = await store.create_artifact(root_type="dir")
+    await store.write_bytes(ref, "repository/a.py", b"a")
+    await store.write_text(ref, ARTIFACT_MANIFEST_NAME, json.dumps({"repository/a.py": "m"}))
+    vfs = _FakeVikingFS([{"rel_path": "a.py", "isDir": False, "uri": f"{root}/a.py"}])
+    vikingdb = _FakeVikingDB(
+        {f"{root}/a.py": {"id": "a-l2", "level": 2, "md5": "m", "search_tags": ["env=test"]}}
+    )
+    request = RequestIntent.from_ingest_options(
+        target_uri=root,
+        processing_mode="semantic_and_vectors",
+        ingest_options=IngestOptions(search_tags=["team=search"], search_tag_mode="append"),
+    )
+
+    snapshot = await build_resource_diff_snapshot(
+        viking_fs=vfs,
+        vikingdb=vikingdb,
+        store=store,
+        artifact_ref=ref,
+        target_uri=root,
+        ctx=_Ctx(),
+        doc_rel="repository",
+        request_intent=request,
+    )
+
+    assert "search_tags" in vikingdb.inventory_output_fields
+    assert snapshot.rnfv.vectors.projected_fields == request.required_vector_fields()
+    assert snapshot.plan.scalar_updates[0].fields == {
+        "search_tags": ["env=test", "team=search"]
+    }
 
 
 @pytest.mark.asyncio

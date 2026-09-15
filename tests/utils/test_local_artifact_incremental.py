@@ -84,18 +84,25 @@ class _RecordingVikingDB(_DummyVikingDB):
     async def delete_uris(self, ctx, uris):
         self.deleted_uris.extend(uris)
 
-    async def get_incremental_inventory_under_uri(self, target_uri, *, ctx):
+    async def get_incremental_inventory_under_uri(
+        self, target_uri, *, ctx, output_fields=None
+    ):
         del ctx
         prefix = target_uri.rstrip("/") + "/"
         return {
-            f"record-{index}": {
-                "id": f"record-{index}",
-                "uri": uri,
-                "level": int(record.get("level", 2)),
-                "md5": str(record.get("md5") or ""),
+            str(record.get("id") or f"record-{index}"): {
+                key: value
+                for key, value in {
+                    **record,
+                    "id": str(record.get("id") or f"record-{index}"),
+                    "uri": uri,
+                    "level": int(record.get("level", 2)),
+                    "md5": str(record.get("md5") or ""),
+                }.items()
+                if not output_fields or key in output_fields
             }
             for index, (uri, record) in enumerate(self._records.items())
-            if uri.startswith(prefix)
+            if uri == target_uri or uri.startswith(prefix)
         }
 
     async def hydrate_incremental_records(self, expected, *, ctx):
@@ -160,6 +167,50 @@ async def test_incremental_noop_uploads_nothing(tmp_path, monkeypatch):
     assert agfs.removed == []
     assert set(result.unchanged) == {"a.py", "b.py"}
     assert result.files == ["a.py", "b.py"]
+
+
+@pytest.mark.asyncio
+async def test_incremental_tags_only_returns_l2_scalar_update_without_file_write(
+    tmp_path, monkeypatch
+):
+    body = b"print('a')"
+    store, ref = await _artifact(tmp_path, {"a.py": body})
+    agfs = _RecordingAgfs({f"{_ROOT}/a.py": body})
+    vikingdb = _RecordingVikingDB(
+        {
+            f"{_ROOT}/a.py": {
+                "id": "a-l2",
+                "level": 2,
+                "md5": content_md5(body),
+                "abstract": "a",
+                "search_tags": ["env=test"],
+            }
+        }
+    )
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: agfs)
+
+    result = await ResourceProcessor(
+        vikingdb=vikingdb, media_storage=None
+    )._apply_local_incremental(
+        output_store=store,
+        artifact_ref=ref,
+        doc_rel="repository",
+        root_uri=_ROOT,
+        ctx=_Ctx(),
+        lease_ref=None,
+        processing_mode="vectors_only",
+        ingest_options=IngestOptions(
+            search_tags=["team=search"], search_tag_mode="append"
+        ),
+    )
+
+    assert agfs.written == []
+    assert result.unchanged == ["a.py"]
+    assert len(result.scalar_updates) == 1
+    assert result.scalar_updates[0].record_id == "a-l2"
+    assert result.scalar_updates[0].fields == {
+        "search_tags": ["env=test", "team=search"]
+    }
 
 
 @pytest.mark.asyncio

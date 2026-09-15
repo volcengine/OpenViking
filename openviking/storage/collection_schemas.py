@@ -615,18 +615,17 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             )
             return {"deleted_count": deleted_count}
 
-        records = await self._vikingdb.get_strict(embedding_msg.record_ids, ctx=ctx)
-        if len(records) != 1:
-            raise RuntimeError(
-                f"update_fields target record is missing: {embedding_msg.record_ids[0]}"
-            )
-        updated_record = dict(records[0])
-        updated_record.update(embedding_msg.update_fields)
+        record_id = embedding_msg.record_ids[0]
+        # Backends expose update_data as a strict partial update. Send only the
+        # primary key and requested fields: re-reading and writing the complete
+        # record here can restore a stale vector/content value if a full upsert
+        # for the same record completes concurrently.
+        updated_record = {"id": record_id, **embedding_msg.update_fields}
         result = await self._vikingdb.update(updated_record, ctx=ctx)
         if not result.ok:
             raise RuntimeError(
                 result.error_message
-                or f"failed to update vector record: {embedding_msg.record_ids[0]}"
+                or f"failed to update vector record: {record_id}"
             )
         return updated_record
 

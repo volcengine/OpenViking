@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from openviking.storage.queuefs.semantic_plan import (
     FileVectorSource,
     IndexedRecordSnapshot,
+    PlannedScalarUpdate,
     SemanticOutputs,
     SemanticPlan,
     SemanticTreeEntry,
@@ -59,26 +60,21 @@ def _current_tree(new: Mapping[str, NewEntry]) -> dict[str, str]:
     return kinds
 
 
-def _snapshot(record: Mapping[str, Any]) -> IndexedRecordSnapshot:
+def _snapshot(
+    record: Mapping[str, Any],
+    scalar_overrides: Mapping[str, Mapping[str, Any]] | None = None,
+) -> IndexedRecordSnapshot:
+    values = dict(record)
+    values.update((scalar_overrides or {}).get(str(record.get("id") or ""), {}))
     return IndexedRecordSnapshot(
-        record_id=str(record["id"]),
-        level=int(record["level"]),
-        type=(str(record["type"]) if record.get("type") is not None else None),
-        abstract=(str(record["abstract"]) if record.get("abstract") is not None else None),
-        md5=(str(record["md5"]) if record.get("md5") else None),
-        created_at=(str(record["created_at"]) if record.get("created_at") else None),
-        updated_at=(str(record["updated_at"]) if record.get("updated_at") else None),
-        active_count=(
-            int(record["active_count"]) if record.get("active_count") is not None else None
-        ),
-        name=(str(record["name"]) if record.get("name") is not None else None),
-        description=(str(record["description"]) if record.get("description") is not None else None),
-        tags=(str(record["tags"]) if record.get("tags") is not None else None),
-        search_tags=(
-            tuple(str(value) for value in record["search_tags"])
-            if record.get("search_tags") is not None
-            else None
-        ),
+        record_id=str(values["id"]),
+        level=int(values["level"]),
+        fields={
+            key: value
+            for key, value in values.items()
+            if key not in {"id", "uri", "level", "vector", "sparse_vector", "content"}
+            and value is not None
+        },
     )
 
 
@@ -292,7 +288,10 @@ async def build_semantic_plan(
             kind = "directory" if old is not None and old.is_dir else "file"
             records = inventory_by_uri.get(_join_uri(root_uri, rel_path), [])
             indexed_records = tuple(
-                sorted((_snapshot(record) for record in records), key=lambda item: item.level)
+                sorted(
+                    (_snapshot(record, diff_plan.scalar_overrides) for record in records),
+                    key=lambda item: item.level,
+                )
             )
             entries.append(
                 SemanticTreeEntry(
@@ -317,7 +316,7 @@ async def build_semantic_plan(
             indexed_records = tuple(
                 sorted(
                     (
-                        _snapshot(record)
+                        _snapshot(record, diff_plan.scalar_overrides)
                         for record in inventory_by_uri.get(_join_uri(root_uri, rel_path), [])
                     ),
                     key=lambda item: item.level,
@@ -327,7 +326,7 @@ async def build_semantic_plan(
             indexed_records = tuple(
                 sorted(
                     (
-                        _snapshot(hydrated[record_id])
+                        _snapshot(hydrated[record_id], diff_plan.scalar_overrides)
                         for record_id in entry_record_ids.get(rel_path, [])
                         if record_id in hydrated
                     ),
@@ -377,6 +376,15 @@ async def build_semantic_plan(
         tree=SemanticTreeSnapshot(entries=tuple(entries)),
         orphan_vector_deletes=tuple(
             sorted(orphan_deletes, key=lambda record: (record.uri, record.level, record.record_id))
+        ),
+        scalar_updates=tuple(
+            PlannedScalarUpdate(
+                record_id=update.record_id,
+                uri=update.uri,
+                level=update.level,
+                fields=dict(update.fields),
+            )
+            for update in diff_plan.scalar_updates
         ),
         outputs=SemanticOutputs(vectorize=vectorize),
         file_vector_source=(

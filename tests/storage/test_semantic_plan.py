@@ -8,6 +8,7 @@ from openviking.storage.queuefs.semantic_plan import (
     FileVectorSource,
     IndexedRecordSnapshot,
     ParentPropagation,
+    PlannedScalarUpdate,
     SemanticOutputs,
     SemanticPlan,
     SemanticTreeEntry,
@@ -68,6 +69,14 @@ def _plan() -> SemanticPlan:
                 level=2,
             ),
         ),
+        scalar_updates=(
+            PlannedScalarUpdate(
+                record_id="root-tag",
+                uri="viking://resources/repo/tag-only.py",
+                level=2,
+                fields={"search_tags": ["team=search"]},
+            ),
+        ),
         outputs=SemanticOutputs(vectorize=True),
         propagation=ParentPropagation(enabled=True, use_freshness=True),
         file_vector_source=FileVectorSource.SUMMARY_WHEN_AVAILABLE,
@@ -93,6 +102,7 @@ def test_semantic_plan_round_trips_through_semantic_msg() -> None:
     assert restored.plan.tree.entries[1].indexed_records[0].search_tags == (
         "language:python",
     )
+    assert restored.plan.scalar_updates[0].fields == {"search_tags": ["team=search"]}
 
 
 def test_legacy_semantic_msg_has_no_plan() -> None:
@@ -102,6 +112,20 @@ def test_legacy_semantic_msg_has_no_plan() -> None:
 
     assert restored.plan_version is None
     assert restored.plan is None
+
+
+def test_semantic_msg_accepts_scalar_plan_v2() -> None:
+    msg = SemanticMsg(
+        uri="viking://resources/repo",
+        context_type="resource",
+        plan_version=2,
+        plan=_plan(),
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.plan_version == 2
+    assert restored.plan.scalar_updates == _plan().scalar_updates
 
 
 @pytest.mark.parametrize(

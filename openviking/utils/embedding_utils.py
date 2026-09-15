@@ -30,6 +30,7 @@ from openviking.storage.abstract_overview import body_for_preview, embedding_tex
 from openviking.storage.acl import CreatorAclGrant
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
@@ -62,21 +63,6 @@ def _truncate_abstract_bytes(abstract: str) -> str:
     return encoded[:_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
 
 
-_PORTABLE_SCALAR_FIELDS = frozenset(
-    {
-        "type",
-        "level",
-        "name",
-        "description",
-        "tags",
-        "search_tags",
-        "abstract",
-        "created_at",
-        "active_count",
-    }
-)
-
-
 def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) -> None:
     if not embedding_msg or not overrides:
         return
@@ -84,10 +70,14 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
     if record_id:
         # Internal queue metadata, removed by TextEmbeddingHandler before upsert.
         embedding_msg.context_data["_upsert_record_id"] = str(record_id)
-    for field in _PORTABLE_SCALAR_FIELDS:
-        value = overrides.get(field)
-        if value is not None:
-            embedding_msg.context_data[field] = value
+    for field, value in overrides.items():
+        if (
+            field.startswith("_")
+            or field in NON_PORTABLE_VECTOR_RECORD_FIELDS
+            or value is None
+        ):
+            continue
+        embedding_msg.context_data[field] = value
 
 
 def _apply_ingest_options(
@@ -388,7 +378,7 @@ async def vectorize_directory_meta(
     creator_acl_grant: CreatorAclGrant | None = None,
     include_abstract: bool = True,
     partial_update: bool = True,
-) -> None:
+) -> set[int]:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
 
@@ -400,10 +390,11 @@ async def vectorize_directory_meta(
     abstract = body_for_preview(abstract)
     overview = body_for_preview(overview)
     first_enqueue_error: Optional[Exception] = None
+    enqueued_levels: set[int] = set()
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
-            return
+            return enqueued_levels
 
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
@@ -454,10 +445,11 @@ async def vectorize_directory_meta(
                         failure_message=f"Failed to enqueue directory L0 vector for {uri}",
                     )
                     if enqueued:
+                        enqueued_levels.add(int(ContextLevel.ABSTRACT.value))
                         logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
                 except TaskWorkRejected:
                     logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
-                    return
+                    return enqueued_levels
                 except Exception as e:
                     logger.error(
                         f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
@@ -503,10 +495,11 @@ async def vectorize_directory_meta(
                         failure_message=f"Failed to enqueue directory L1 vector for {uri}",
                     )
                     if enqueued:
+                        enqueued_levels.add(int(ContextLevel.OVERVIEW.value))
                         logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
                 except TaskWorkRejected:
                     logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
-                    return
+                    return enqueued_levels
                 except Exception as e:
                     logger.error(
                         f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
@@ -522,6 +515,7 @@ async def vectorize_directory_meta(
             exc_info=True,
         )
         raise
+    return enqueued_levels
 
 
 async def vectorize_file(

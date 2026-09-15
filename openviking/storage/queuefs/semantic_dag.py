@@ -262,6 +262,7 @@ class SemanticDagExecutor:
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
         self._root_write_result = AbstractOverviewWriteResult(wrote=False)
+        self._scheduled_vector_record_ids: set[str] = set()
 
     @staticmethod
     def _entry_record_abstract(entry: "SemanticTreeEntry", level: int) -> str:
@@ -851,13 +852,7 @@ class SemanticDagExecutor:
             # assuming the locally derived deterministic id matches legacy or
             # externally written data.
             "_record_id": record.record_id,
-            "type": record.type,
-            "created_at": record.created_at,
-            "active_count": record.active_count,
-            "name": record.name,
-            "description": record.description,
-            "tags": record.tags,
-            "search_tags": list(record.search_tags) if record.search_tags is not None else None,
+            **record.portable_fields(),
         }
         return {key: value for key, value in values.items() if value is not None}
 
@@ -1117,20 +1112,28 @@ class SemanticDagExecutor:
                     and str(summary_dict.get("summary") or "") == old_l2.abstract
                 )
                 if summary_unchanged:
-                    await self._processor._update_file_vector_fields(
+                    scalar_override = self._plan_scalar_override(file_path, 2) or {}
+                    enqueued = await self._processor._update_file_vector_fields(
                         record_id=old_l2.record_id,
                         file_path=file_path,
                         file_md5=file_md5,
                         file_content=file_content,
                         ctx=self._ctx,
+                        scalar_fields={
+                            field: scalar_override[field]
+                            for field in ("tags", "search_tags")
+                            if field in scalar_override
+                        },
                     )
+                    if enqueued:
+                        self._scheduled_vector_record_ids.add(old_l2.record_id)
                 else:
                     if self._semantic_plan is not None:
                         vectorize_kwargs["scalar_override"] = self._plan_scalar_override(
                             file_path, 2
                         )
                         vectorize_kwargs["partial_update"] = False
-                    await self._processor._vectorize_single_file(
+                    enqueued = await self._processor._vectorize_single_file(
                         parent_uri=parent_uri,
                         context_type=self._context_type,
                         file_path=file_path,
@@ -1142,6 +1145,8 @@ class SemanticDagExecutor:
                         file_md5=file_md5,
                         **vectorize_kwargs,
                     )
+                    if enqueued and old_l2 is not None:
+                        self._scheduled_vector_record_ids.add(old_l2.record_id)
             except Exception as e:
                 logger.error(
                     "Failed to schedule vectorization for %s: %s",
@@ -1422,7 +1427,7 @@ class SemanticDagExecutor:
                             },
                             "partial_update": False,
                         }
-                    await self._processor._vectorize_directory(
+                    enqueued_levels = await self._processor._vectorize_directory(
                         dir_uri,
                         context_type=self._context_type,
                         abstract=abstract,
@@ -1432,6 +1437,14 @@ class SemanticDagExecutor:
                         creator_acl_grant=self._creator_acl_grant(dir_uri),
                         **directory_vector_kwargs,
                     )
+                    if self._semantic_plan is not None:
+                        entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
+                        if entry is not None:
+                            self._scheduled_vector_record_ids.update(
+                                record.record_id
+                                for record in entry.indexed_records
+                                if record.level in (enqueued_levels or set())
+                            )
                 except Exception as e:
                     logger.error(
                         "Failed to schedule vectorization for %s: %s",
@@ -1469,6 +1482,10 @@ class SemanticDagExecutor:
         """Visible-body changes produced for the executor root."""
 
         return self._root_write_result
+
+    @property
+    def scheduled_vector_record_ids(self) -> frozenset[str]:
+        return frozenset(self._scheduled_vector_record_ids)
 
 
 if False:  # pragma: no cover - for type checkers only

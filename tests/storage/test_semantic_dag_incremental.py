@@ -154,6 +154,7 @@ class _FakeProcessor:
         self.file_contents[("vector", file_path)] = file_content
         self.file_contents[("partial_update", file_path)] = partial_update
         self.file_contents[("scalar_override", file_path)] = scalar_override
+        return True
 
     async def _vectorize_directory(
         self,
@@ -172,10 +173,17 @@ class _FakeProcessor:
         self.vectorized_dirs.append(uri)
         self.file_contents[("partial_update", uri)] = partial_update
         self.file_contents[("scalar_overrides", uri)] = scalar_overrides
-        return None
+        return {0, 1}
 
     async def _update_file_vector_fields(
-        self, *, record_id, file_path, file_md5, file_content, ctx
+        self,
+        *,
+        record_id,
+        file_path,
+        file_md5,
+        file_content,
+        ctx,
+        scalar_fields=None,
     ):
         self.updated_file_vectors.append(
             {
@@ -184,8 +192,10 @@ class _FakeProcessor:
                 "file_md5": file_md5,
                 "file_content": file_content,
                 "ctx": ctx,
+                "scalar_fields": scalar_fields,
             }
         )
+        return True
 
     async def _sync_topdown_recursive(
         self, root_uri, target_uri, ctx=None, file_change_status=None, lock=None

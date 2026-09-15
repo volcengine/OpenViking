@@ -5,6 +5,7 @@ import pytest
 
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_plan import (
+    PlannedScalarUpdate,
     SemanticPlan,
     SemanticTreeEntry,
     SemanticTreeSnapshot,
@@ -74,6 +75,7 @@ class _FakeDagExecutor:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.stale = False
+        self.scheduled_vector_record_ids = frozenset()
         _FakeDagExecutor.calls.append(kwargs)
 
     async def run(self, root_uri):
@@ -281,6 +283,105 @@ async def test_plan_added_entry_does_not_delete_same_level_stale_record(monkeypa
 
     # No orphan_vector_deletes and no deleted entries => nothing to delete.
     queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_plan_scalar_updates_enqueue_update_fields_without_running_dag(monkeypatch):
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value="queued"))
+    manager = SimpleNamespace(
+        EMBEDDING="embedding",
+        get_queue=lambda *_args, **_kwargs: queue,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: manager,
+    )
+    plan = SemanticPlan(
+        root_uri="viking://resources/repo",
+        context_type="resource",
+        tree=SemanticTreeSnapshot(
+            entries=(SemanticTreeEntry("", "directory", "unchanged"),)
+        ),
+        scalar_updates=(
+            PlannedScalarUpdate(
+                record_id="a-l2",
+                uri="viking://resources/repo/a.py",
+                level=2,
+                fields={"search_tags": ["team=search"]},
+            ),
+        ),
+    )
+    msg = SemanticMsg(
+        uri=plan.root_uri,
+        context_type="resource",
+        plan_version=2,
+        plan=plan,
+    )
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    _FakeDagExecutor.runs = []
+    processor = SemanticProcessor()
+    processor._enqueue_plan_vector_deletes = AsyncMock()
+    processor._cleanup_local_artifact = AsyncMock()
+
+    await processor.on_dequeue(msg.to_dict())
+
+    queued = queue.enqueue.await_args.args[0]
+    assert queued.operation.value == "update_fields"
+    assert queued.record_ids == ["a-l2"]
+    assert queued.update_fields["search_tags"] == ["team=search"]
+    assert queued.update_fields["updated_at"]
+    assert _FakeDagExecutor.runs == []
+
+
+@pytest.mark.asyncio
+async def test_plan_scalar_updates_skip_records_already_handled_by_dag(monkeypatch):
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value="queued"))
+    manager = SimpleNamespace(
+        EMBEDDING="embedding",
+        get_queue=lambda *_args, **_kwargs: queue,
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: manager,
+    )
+    plan = SemanticPlan(
+        root_uri="viking://resources/repo",
+        context_type="resource",
+        tree=SemanticTreeSnapshot(entries=()),
+        scalar_updates=(
+            PlannedScalarUpdate(
+                record_id="a-l2",
+                uri="viking://resources/repo/a.py",
+                level=2,
+                fields={"search_tags": ["team=search"]},
+            ),
+            PlannedScalarUpdate(
+                record_id="b-l2",
+                uri="viking://resources/repo/b.py",
+                level=2,
+                fields={"search_tags": ["team=search"]},
+            ),
+        ),
+    )
+    msg = SemanticMsg(
+        uri=plan.root_uri, context_type="resource", plan_version=2, plan=plan
+    )
+
+    await SemanticProcessor()._enqueue_plan_scalar_updates(
+        msg, plan, exclude_record_ids={"a-l2"}
+    )
+
+    queued = queue.enqueue.await_args_list
+    assert len(queued) == 1
+    assert queued[0].args[0].record_ids == ["b-l2"]
 
 
 @pytest.mark.asyncio

@@ -126,6 +126,11 @@ class Summarizer:
         artifact_files = kwargs.get("artifact_files") or []
         file_abstracts = kwargs.get("file_abstracts") or {}
         semantic_plan = kwargs.get("semantic_plan")
+        plan_has_scalar_updates = bool(
+            semantic_plan.get("scalar_updates")
+            if isinstance(semantic_plan, dict)
+            else getattr(semantic_plan, "scalar_updates", ())
+        )
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -215,7 +220,9 @@ class Summarizer:
                     artifact_ref=artifact_ref,
                     artifact_files=artifact_files,
                     file_abstracts=file_abstracts,
-                    plan_version=1 if semantic_plan is not None else None,
+                    plan_version=(2 if plan_has_scalar_updates else 1)
+                    if semantic_plan is not None
+                    else None,
                     plan=semantic_plan,
                 )
                 if msg.telemetry_id:

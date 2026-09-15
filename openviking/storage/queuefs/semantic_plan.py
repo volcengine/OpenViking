@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Dict, Literal, Mapping
 
+from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils import VikingURI
 
@@ -35,20 +36,29 @@ def _is_within_root(root_uri: str, uri: str) -> bool:
     return candidate == root or candidate.startswith(root + "/")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class IndexedRecordSnapshot:
     record_id: str
     level: int
-    type: str | None = None
-    abstract: str | None = None
-    md5: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
-    active_count: int | None = None
-    name: str | None = None
-    description: str | None = None
-    tags: str | None = None
-    search_tags: tuple[str, ...] | None = None
+    fields: Mapping[str, Any] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        record_id: str,
+        level: int,
+        fields: Mapping[str, Any] | None = None,
+        **legacy_fields: Any,
+    ) -> None:
+        payload = dict(fields or {})
+        payload.update(
+            {key: value for key, value in legacy_fields.items() if value is not None}
+        )
+        if payload.get("search_tags") is not None:
+            payload["search_tags"] = tuple(str(item) for item in payload["search_tags"])
+        object.__setattr__(self, "record_id", record_id)
+        object.__setattr__(self, "level", level)
+        object.__setattr__(self, "fields", payload)
+        self.__post_init__()
 
     def __post_init__(self) -> None:
         if not self.record_id:
@@ -59,10 +69,26 @@ class IndexedRecordSnapshot:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "IndexedRecordSnapshot":
         values = dict(data)
-        raw_tags = values.get("search_tags")
-        if raw_tags is not None:
-            values["search_tags"] = tuple(str(item) for item in raw_tags)
+        known = {"record_id", "level", "fields"}
+        legacy_fields = {key: values.pop(key) for key in list(values) if key not in known}
+        fields = dict(values.get("fields") or {})
+        fields.update({key: value for key, value in legacy_fields.items() if value is not None})
+        values["fields"] = fields
         return cls(**values)
+
+    def __getattr__(self, name: str) -> Any:
+        # Compatibility for existing DAG/readers while the serialized contract
+        # moves from fixed dataclass fields to a dynamic payload.
+        if name in self.fields:
+            return self.fields[name]
+        raise AttributeError(name)
+
+    def portable_fields(self) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in self.fields.items()
+            if key not in NON_PORTABLE_VECTOR_RECORD_FIELDS and not key.startswith("_")
+        }
 
 
 @dataclass(frozen=True)
@@ -133,6 +159,28 @@ class VectorRecordRef:
 
 
 @dataclass(frozen=True)
+class PlannedScalarUpdate:
+    record_id: str
+    uri: str
+    level: int
+    fields: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if not self.record_id:
+            raise ValueError("scalar update record_id must not be empty")
+        if self.level not in {0, 1, 2}:
+            raise ValueError(f"invalid scalar update level: {self.level}")
+        if not self.fields:
+            raise ValueError("scalar update fields must not be empty")
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "PlannedScalarUpdate":
+        values = dict(data)
+        values["fields"] = dict(values.get("fields", {}))
+        return cls(**values)
+
+
+@dataclass(frozen=True)
 class SemanticOutputs:
     vectorize: bool = True
 
@@ -154,6 +202,7 @@ class SemanticPlan:
     context_type: str
     tree: SemanticTreeSnapshot
     orphan_vector_deletes: tuple[VectorRecordRef, ...] = ()
+    scalar_updates: tuple[PlannedScalarUpdate, ...] = ()
     outputs: SemanticOutputs = field(default_factory=SemanticOutputs)
     propagation: ParentPropagation = field(default_factory=ParentPropagation)
     file_vector_source: FileVectorSource = FileVectorSource.CONTENT
@@ -173,6 +222,9 @@ class SemanticPlan:
         for record in self.orphan_vector_deletes:
             if not _is_within_root(root_uri, record.uri):
                 raise ValueError(f"vector record is outside root: {record.uri}")
+        for update in self.scalar_updates:
+            if not _is_within_root(root_uri, update.uri):
+                raise ValueError(f"scalar update is outside root: {update.uri}")
         live_record_ids = {
             record.record_id
             for entry in self.tree.entries
@@ -192,12 +244,27 @@ class SemanticPlan:
             raise ValueError(
                 f"conflicting vector operation for record ids: {sorted(conflicts)}"
             )
+        scalar_record_ids = [update.record_id for update in self.scalar_updates]
+        if len(scalar_record_ids) != len(set(scalar_record_ids)):
+            raise ValueError("duplicate scalar update record id")
+        scalar_delete_conflicts = set(scalar_record_ids) & deleted_record_ids
+        if scalar_delete_conflicts:
+            raise ValueError(
+                f"conflicting scalar/delete operation for record ids: {sorted(scalar_delete_conflicts)}"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         data["file_vector_source"] = self.file_vector_source.value
         data["ingest_options"] = self.ingest_options.to_dict()
         return data
+
+    def is_noop(self) -> bool:
+        return (
+            not any(entry.state != "unchanged" for entry in self.tree.entries)
+            and not self.orphan_vector_deletes
+            and not self.scalar_updates
+        )
 
     def execution_root_uris(self) -> tuple[str, ...]:
         """Return the shallowest directories that contain planned changes."""
@@ -269,6 +336,10 @@ class SemanticPlan:
                 VectorRecordRef.from_dict(item)
                 for item in data.get("orphan_vector_deletes", ())
             ),
+            scalar_updates=tuple(
+                PlannedScalarUpdate.from_dict(item)
+                for item in data.get("scalar_updates", ())
+            ),
             outputs=SemanticOutputs(**dict(data.get("outputs", {}))),
             propagation=ParentPropagation(**dict(data.get("propagation", {}))),
             file_vector_source=FileVectorSource(
@@ -287,6 +358,7 @@ __all__ = [
     "FileVectorSource",
     "IndexedRecordSnapshot",
     "ParentPropagation",
+    "PlannedScalarUpdate",
     "SemanticOutputs",
     "SemanticPlan",
     "SemanticTreeEntry",

@@ -1,9 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Read the N / F / V snapshots that feed the incremental :mod:`DiffPlan`.
+"""Read the R / N / F / V snapshots that feed the incremental :mod:`DiffPlan`.
 
 This module is the IO-facing counterpart to ``viking_fs._diff_plan`` (which is
-pure). It gathers three snapshots into the plain data the planner expects:
+pure). It gathers four snapshots into the typed data the planner expects:
+
+- ``R`` normalized request intent — target, processing mode, and scalar fields
+  such as tags that this request explicitly wants to mutate.
 
 - ``N`` new-artifact manifest — the files a parser produced, read from the
   parse output store. md5 is filled later at the final-bytes upload site, so it
@@ -21,16 +24,25 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Mapping, Tuple
 
 from openviking.core.namespace import uri_parts
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.resource_rnfv import (
+    FormalTreeSnapshot,
+    NewArtifactSnapshot,
+    RequestIntent,
+    RNFVSnapshot,
+    VectorIndexSnapshot,
+    VectorRecordSnapshot,
+)
 from openviking.storage.viking_fs._diff_plan import (
     CONTROL_BASENAMES,
     DiffPlan,
     NewEntry,
     TargetFile,
     TargetVector,
+    apply_request_scalar_intents,
     build_diff_plan,
 )
 from openviking_cli.utils import VikingURI
@@ -40,10 +52,28 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ResourceDiffSnapshot:
-    new: Dict[str, NewEntry]
-    target_files: Dict[str, TargetFile]
-    vector_inventory: Dict[str, Dict[str, Any]]
+    rnfv: RNFVSnapshot
     plan: DiffPlan
+
+    @property
+    def new(self) -> Mapping[str, NewEntry]:
+        return self.rnfv.new.entries
+
+    @property
+    def target_files(self) -> Mapping[str, TargetFile]:
+        return self.rnfv.formal.entries
+
+    @property
+    def vector_inventory(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            record_id: {
+                "id": record.record_id,
+                "uri": record.uri,
+                "level": record.level,
+                **dict(record.fields),
+            }
+            for record_id, record in self.rnfv.vectors.records_by_id.items()
+        }
 
 
 def _is_excluded_rel_path(rel_path: str) -> bool:
@@ -238,33 +268,79 @@ async def build_resource_diff_snapshot(
     ctx: Any,
     doc_rel: str = "",
     require_vectors: bool = True,
+    request_intent: RequestIntent | None = None,
+    root_is_file: bool = False,
 ) -> ResourceDiffSnapshot:
-    """Read a complete directory N/F/V snapshot and build its DiffPlan."""
-    new = await read_new_manifest(store, artifact_ref, doc_rel=doc_rel)
-    target_files, files_complete = await read_target_file_snapshot(viking_fs, target_uri, ctx=ctx)
-    inventory = await vikingdb.get_incremental_inventory_under_uri(target_uri, ctx=ctx)
+    """Read a complete R/N/F/V snapshot and build its DiffPlan."""
+    request = request_intent or RequestIntent(
+        target_uri=target_uri, processing_mode="semantic_and_vectors"
+    )
+    new = await read_new_manifest(
+        store, artifact_ref, doc_rel=doc_rel, root_is_file=root_is_file
+    )
+    target_files, files_complete = await read_target_file_snapshot(
+        viking_fs, target_uri, ctx=ctx, root_is_file=root_is_file
+    )
+    projection = request.required_vector_fields()
+    if root_is_file or request.processing_mode == "vectors_only":
+        projection = projection | {"abstract"}
+    inventory = await vikingdb.get_incremental_inventory_under_uri(
+        target_uri, ctx=ctx, output_fields=sorted(projection)
+    )
     base = target_uri.rstrip("/")
     prefix = base + "/"
+    vector_records: Dict[str, VectorRecordSnapshot] = {}
+    record_ids_by_key: Dict[tuple[str, int], list[str]] = {}
     target_vectors: Dict[str, TargetVector] = {}
-    for record in inventory.values():
-        if int(record.get("level", -1)) != 2:
-            continue
+    for record_id, record in inventory.items():
+        level = int(record.get("level", -1))
         uri = str(record.get("uri") or "")
         rel = "" if uri == base else uri[len(prefix) :] if uri.startswith(prefix) else None
         if rel is None:
             raise RuntimeError(f"Vector inventory returned an out-of-scope URI: {uri}")
-        target_vectors[rel] = TargetVector(md5=str(record.get("md5") or ""))
+        fields = {
+            field: record[field]
+            for field in projection - {"id", "uri", "level"}
+            if field in record
+        }
+        vector_records[record_id] = VectorRecordSnapshot(
+            record_id=record_id,
+            uri=uri,
+            relative_path=rel,
+            level=level,
+            fields=fields,
+        )
+        record_ids_by_key.setdefault((rel, level), []).append(record_id)
+        if level == 2:
+            target_vectors[rel] = TargetVector(md5=str(record.get("md5") or ""))
+    rnfv = RNFVSnapshot(
+        request=request,
+        new=NewArtifactSnapshot(entries=new),
+        formal=FormalTreeSnapshot(entries=target_files, complete=files_complete),
+        vectors=VectorIndexSnapshot(
+            records_by_id=vector_records,
+            record_ids_by_key={
+                key: tuple(record_ids) for key, record_ids in record_ids_by_key.items()
+            },
+            projected_fields=projection,
+        ),
+    )
     if not require_vectors:
         for rel_path, target_file in target_files.items():
             if not target_file.is_dir:
                 target_vectors.setdefault(rel_path, TargetVector())
-    plan = build_diff_plan(
-        new=new,
-        target_files=target_files,
-        target_vectors=target_vectors,
-        target_files_complete=files_complete,
-        target_vectors_complete=True,
-    )
+        plan = build_diff_plan(
+            new=new,
+            target_files=target_files,
+            target_vectors=target_vectors,
+            target_files_complete=files_complete,
+            target_vectors_complete=True,
+        )
+        # Disabling vector creation suppresses missing-index repair, but an
+        # explicit R scalar mutation still applies to records that already exist.
+        apply_request_scalar_intents(rnfv, plan)
+    else:
+        plan = build_diff_plan(rnfv)
     _log_diff_diagnostics(
         target_uri=target_uri,
         new=new,
@@ -274,9 +350,7 @@ async def build_resource_diff_snapshot(
         target_files_complete=files_complete,
     )
     return ResourceDiffSnapshot(
-        new=new,
-        target_files=target_files,
-        vector_inventory=inventory,
+        rnfv=rnfv,
         plan=plan,
     )
 
@@ -325,6 +399,7 @@ def _log_diff_diagnostics(
         "[IncrementalDiff] target=%s N_files=%d F_files=%d V_vectors=%d "
         "plan_added=%d plan_modified=%d plan_unchanged=%d plan_repair=%d "
         "plan_needs_body_compare=%d plan_deleted=%d plan_orphan_vectors=%d "
+        "plan_scalar_updates=%d "
         "md5_equal=%d md5_mismatch=%d md5_missing=%d vector_missing=%d "
         "target_files_complete=%s",
         target_uri,
@@ -338,6 +413,7 @@ def _log_diff_diagnostics(
         len(plan.needs_body_compare),
         len(plan.deleted),
         len(plan.orphan_vectors),
+        len(plan.scalar_updates),
         md5_equal,
         md5_mismatch,
         md5_missing,

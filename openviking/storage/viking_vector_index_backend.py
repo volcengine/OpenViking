@@ -325,6 +325,19 @@ class _SingleAccountBackend:
         """Prepare a batch in one worker-thread handoff."""
         return [self._prepare_upsert_payload(data) for data in data_list]
 
+    def _prepare_update_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare a strict partial update without inventing omitted fields."""
+        payload = self._filter_known_fields(
+            {key: value for key, value in data.items() if value is not None}
+        )
+        if self._adapter.USE_CONTENT_FIELD:
+            content = payload.get("content")
+            if isinstance(content, (str, bytes)):
+                payload["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
+        else:
+            payload.pop("content", None)
+        return payload
+
     def _bind_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Copy a record, enforce its bound account, and apply write defaults."""
         payload = dict(data)
@@ -539,7 +552,7 @@ class _SingleAccountBackend:
                 allowed = sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES)
                 raise ValueError(f"Invalid context_type: {context_type}. Must be one of {allowed}")
 
-            payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
+            payload = await self._async_adapter.run(self._prepare_update_payload, payload)
             ids = await self._async_adapter.call("update_data", [payload])
             normalized_ids = [str(item) for item in (ids or []) if item is not None]
             return UpdateResult(
@@ -1862,8 +1875,17 @@ class VikingVectorIndexBackend:
         *,
         ctx: RequestContext,
         batch_size: int = 100,
+        output_fields: Optional[List[str]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Strictly load lightweight L0/L1/L2 metadata below a resource root."""
+        projection = list(
+            dict.fromkeys(
+                [
+                    *INCREMENTAL_INVENTORY_OUTPUT_FIELDS,
+                    *(output_fields or []),
+                ]
+            )
+        )
         canonical_uri = resolve_uri(uri).uri.rstrip("/")
         scope = And(
             [
@@ -1877,7 +1899,7 @@ class VikingVectorIndexBackend:
         async for record in self._strict_scan(
             ctx,
             scope,
-            output_fields=INCREMENTAL_INVENTORY_OUTPUT_FIELDS,
+            output_fields=projection,
             batch_size=batch_size,
             what=what,
         ):
@@ -1899,11 +1921,16 @@ class VikingVectorIndexBackend:
             if record_id in records:
                 raise RuntimeError(f"{what} returned duplicate record id: {record_id}")
             records[record_id] = {
-                "id": record_id,
-                "uri": record_uri,
-                "level": level,
-                "md5": str(record.get("md5") or ""),
+                field: record[field] for field in projection if field in record
             }
+            records[record_id].update(
+                {
+                    "id": record_id,
+                    "uri": record_uri,
+                    "level": level,
+                    "md5": str(record.get("md5") or ""),
+                }
+            )
         return records
 
     async def hydrate_incremental_records(
@@ -1917,6 +1944,25 @@ class VikingVectorIndexBackend:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         requested_ids = list(expected)
+        output_fields = list(INCREMENTAL_HYDRATION_OUTPUT_FIELDS)
+        try:
+            collection_meta = await self.get_collection_meta(ctx=ctx)
+            schema_fields = [
+                str(item.get("FieldName") or "")
+                for item in (collection_meta or {}).get("Fields", [])
+            ]
+            dynamic_fields = [
+                field
+                for field in schema_fields
+                if field
+                and field not in {"vector", "sparse_vector", "content"}
+            ]
+            if dynamic_fields:
+                output_fields = list(dict.fromkeys(dynamic_fields))
+        except Exception:
+            # Backends without collection metadata retain the known portable
+            # projection; correctness remains fail-closed at identity checks.
+            pass
         hydrated: Dict[str, Dict[str, Any]] = {}
 
         def _accept(record: Mapping[str, Any]) -> None:
@@ -1945,7 +1991,7 @@ class VikingVectorIndexBackend:
                 )
             hydrated[record_id] = {
                 field: record[field]
-                for field in INCREMENTAL_HYDRATION_OUTPUT_FIELDS
+                for field in output_fields
                 if field in record
             }
 
@@ -1959,7 +2005,7 @@ class VikingVectorIndexBackend:
                     In("id", chunk),
                     limit=batch_size,
                     cursor=cursor,
-                    output_fields=INCREMENTAL_HYDRATION_OUTPUT_FIELDS,
+                    output_fields=output_fields,
                 )
                 for record in page:
                     _accept(record)

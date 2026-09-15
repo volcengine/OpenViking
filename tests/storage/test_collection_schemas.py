@@ -175,7 +175,7 @@ async def test_embedding_handler_delete_skips_embedder_and_strictly_deletes_ids(
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_update_fields_reads_merges_and_updates_without_embedding(
+async def test_embedding_handler_update_fields_uses_strict_partial_update_without_embedding(
     monkeypatch,
 ):
     existing = {
@@ -222,12 +222,12 @@ async def test_embedding_handler_update_fields_reads_merges_and_updates_without_
 
     result = await handler.on_dequeue(_build_operation_payload(msg))
 
-    assert vikingdb.reads == [(["l2-id"], "acct")]
+    assert vikingdb.reads == []
     assert len(vikingdb.updates) == 1
     updated, account_id = vikingdb.updates[0]
     assert account_id == "acct"
     assert updated == {
-        **existing,
+        "id": "l2-id",
         "abstract": "new abstract",
         "md5": "new-md5",
     }
@@ -1639,7 +1639,7 @@ async def test_single_account_backend_update_runs_adapter_in_threadpool(monkeypa
     assert result.updated_count == 1
     assert result.error_code is None
     assert result.error_message is None
-    assert [call[0] for call in calls] == ["_prepare_upsert_payload", "update_data"]
+    assert [call[0] for call in calls] == ["_prepare_update_payload", "update_data"]
     assert calls[-1][1] == (
         [
             {
@@ -1650,6 +1650,56 @@ async def test_single_account_backend_update_runs_adapter_in_threadpool(monkeypa
             }
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_single_account_backend_partial_update_does_not_fill_omitted_text_or_vector_fields():
+    calls = []
+
+    class _Collection:
+        def get_meta_data(self):
+            return {
+                "Fields": [
+                    {"FieldName": "id", "FieldType": "string"},
+                    {"FieldName": "abstract", "FieldType": "string"},
+                    {"FieldName": "content", "FieldType": "text"},
+                    {"FieldName": "vector", "FieldType": "vector"},
+                    {"FieldName": "search_tags", "FieldType": "list<string>"},
+                    {"FieldName": "account_id", "FieldType": "string"},
+                ]
+            }
+
+    class _Adapter:
+        mode = "local"
+        USE_CONTENT_FIELD = True
+
+        def get_collection(self):
+            return _Collection()
+
+        def update_data(self, data):
+            calls.append(data)
+            return [data[0]["id"]]
+
+    backend = _SingleAccountBackend(
+        config=VectorDBBackendConfig(backend="local", name="context", dimension=2),
+        bound_account_id="acc1",
+        shared_adapter=_Adapter(),
+    )
+
+    result = await backend.update(
+        {"id": "rec-1", "search_tags": ["team=search"]}
+    )
+
+    assert result.ok is True
+    assert calls == [
+        [
+            {
+                "id": "rec-1",
+                "search_tags": ["team=search"],
+                "account_id": "acc1",
+            }
+        ]
+    ]
 
 
 @pytest.mark.asyncio

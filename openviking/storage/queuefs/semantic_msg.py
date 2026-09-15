@@ -156,8 +156,8 @@ class SemanticMsg:
             if isinstance(plan, dict)
             else None
         )
-        if self.plan is not None and self.plan_version != 1:
-            raise ValueError("semantic plan_version must be 1 when plan is present")
+        if self.plan is not None and self.plan_version not in {1, 2}:
+            raise ValueError("semantic plan_version must be 1 or 2 when plan is present")
         if self.plan is None and self.plan_version is not None:
             raise ValueError("semantic plan is required when plan_version is set")
 

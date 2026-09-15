@@ -16,7 +16,12 @@ comparison logic.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Mapping
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional
+
+from openviking.utils.tags import merge_search_tags, normalize_search_tags
+
+if TYPE_CHECKING:
+    from openviking.storage.resource_rnfv import RNFVSnapshot
 
 # Control sidecars / metadata that are derived outputs, never business files.
 # They must not enter the business diff or they would be classified as deletions.
@@ -50,6 +55,17 @@ class TargetVector:
     abstract: str = ""
 
 
+@dataclass(frozen=True)
+class ScalarUpdate:
+    """One fully-resolved vector scalar update produced from R and V."""
+
+    record_id: str
+    uri: str
+    relative_path: str
+    level: int
+    fields: Mapping[str, Any]
+
+
 @dataclass
 class DiffPlan:
     """Classification of business files for incremental application.
@@ -72,6 +88,28 @@ class DiffPlan:
     new_files: List[str] = field(default_factory=list)
     new_md5s: Mapping[str, str] = field(default_factory=dict)
     file_abstracts: Mapping[str, str] = field(default_factory=dict)
+    scalar_updates: List[ScalarUpdate] = field(default_factory=list)
+    # Final request-owned values keyed by an existing vector record ID. A record
+    # that is rebuilt should carry these values in its upsert rather than rely on
+    # a second scalar-only operation.
+    scalar_overrides: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+
+    def is_noop(self) -> bool:
+        """Whether neither content/index nor request-scalar work remains."""
+        return not any(
+            (
+                self.added,
+                self.added_dirs,
+                self.modified,
+                self.deleted,
+                self.deleted_dirs,
+                self.repair,
+                self.orphan_vectors,
+                self.structural,
+                self.needs_body_compare,
+                self.scalar_updates,
+            )
+        )
 
 
 def _is_control_path(rel_path: str) -> bool:
@@ -79,10 +117,11 @@ def _is_control_path(rel_path: str) -> bool:
 
 
 def build_diff_plan(
+    snapshot: Optional["RNFVSnapshot"] = None,
     *,
-    new: Mapping[str, NewEntry],
-    target_files: Mapping[str, TargetFile],
-    target_vectors: Mapping[str, TargetVector],
+    new: Optional[Mapping[str, NewEntry]] = None,
+    target_files: Optional[Mapping[str, TargetFile]] = None,
+    target_vectors: Optional[Mapping[str, TargetVector]] = None,
     target_files_complete: bool = True,
     target_vectors_complete: bool = True,
 ) -> DiffPlan:
@@ -94,6 +133,23 @@ def build_diff_plan(
     snapshot, this raises ``ValueError`` rather than risk data loss. Pure
     additions never depend on completeness.
     """
+    if snapshot is not None:
+        snapshot.validate_for_planning()
+        new = snapshot.new.entries
+        target_files = snapshot.formal.entries
+        target_files_complete = snapshot.formal.complete
+        target_vectors_complete = snapshot.vectors.complete
+        target_vectors = {
+            record.relative_path: TargetVector(
+                md5=str(record.fields.get("md5") or ""),
+                abstract=str(record.fields.get("abstract") or ""),
+            )
+            for record in snapshot.vectors.records_by_id.values()
+            if record.level == 2
+        }
+    if new is None or target_files is None or target_vectors is None:
+        raise TypeError("build_diff_plan requires an RNFV snapshot or explicit N/F/V mappings")
+
     plan = DiffPlan()
     plan.new_files = sorted(key for key, entry in new.items() if not entry.is_dir)
     plan.new_md5s = {key: entry.md5 for key, entry in new.items() if not entry.is_dir and entry.md5}
@@ -170,7 +226,72 @@ def build_diff_plan(
         raise ValueError(
             "refusing to plan orphan-vector deletions from an incomplete target vector snapshot"
         )
+    if snapshot is not None:
+        apply_request_scalar_intents(snapshot, plan)
     return plan
+
+
+def apply_request_scalar_intents(snapshot: "RNFVSnapshot", plan: DiffPlan) -> None:
+    """Resolve R scalar intent against V into concrete, id-addressed actions."""
+    plan.scalar_updates = []
+    plan.scalar_overrides = {}
+    if not snapshot.request.scalar_intents:
+        return
+
+    current_kinds: dict[str, str] = {"": "directory"}
+    for rel_path, entry in snapshot.new.entries.items():
+        current_kinds[rel_path] = "directory" if entry.is_dir else "file"
+    deleted_or_replaced = (
+        set(plan.deleted)
+        | set(plan.deleted_dirs)
+        | set(plan.structural)
+        | set(plan.orphan_vectors)
+    )
+    updates: list[ScalarUpdate] = []
+    overrides: dict[str, Mapping[str, Any]] = {}
+
+    for record in snapshot.vectors.records_by_id.values():
+        kind = current_kinds.get(record.relative_path)
+        valid_levels = {2} if kind == "file" else {0, 1} if kind == "directory" else set()
+        if (
+            record.relative_path in deleted_or_replaced
+            or record.level not in valid_levels
+        ):
+            continue
+        changed_fields: dict[str, Any] = {}
+        for intent in snapshot.request.scalar_intents:
+            if record.level not in intent.target_levels:
+                continue
+            if intent.field == "search_tags":
+                existing = normalize_search_tags(
+                    record.fields.get("search_tags"), discard_invalid=True
+                )
+                incoming = normalize_search_tags(intent.value, discard_invalid=True)
+                desired = (
+                    merge_search_tags(existing, incoming)
+                    if intent.mode == "append"
+                    else incoming
+                )
+                if sorted(existing) != sorted(desired):
+                    changed_fields[intent.field] = desired
+        if not changed_fields:
+            continue
+        overrides[record.record_id] = changed_fields
+        # Keep the scalar action even when content is expected to rebuild this
+        # record. Execution removes it only after the full upsert is confirmed
+        # enqueued; unsupported/cancelled vectorization can then still apply R.
+        updates.append(
+            ScalarUpdate(
+                record_id=record.record_id,
+                uri=record.uri,
+                relative_path=record.relative_path,
+                level=record.level,
+                fields=changed_fields,
+            )
+        )
+
+    plan.scalar_updates = updates
+    plan.scalar_overrides = overrides
 
 
 def resolve_body_compare(plan: DiffPlan, equal_keys: Mapping[str, bool]) -> None:

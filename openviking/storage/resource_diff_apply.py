@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Sequence
 
 from openviking.parse.output import read_artifact_manifest
-from openviking.storage.viking_fs._diff_plan import CONTROL_BASENAMES, DiffPlan
+from openviking.storage.viking_fs._diff_plan import CONTROL_BASENAMES, DiffPlan, ScalarUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,7 @@ class ApplyResult:
     # rel_path -> md5 of the bytes just uploaded; handed to the embedding stage
     # so the next diff can skip by fingerprint.
     md5_by_rel: Dict[str, str] = field(default_factory=dict)
+    scalar_updates: List[ScalarUpdate] = field(default_factory=list)
 
 
 async def _upload_concurrent(
