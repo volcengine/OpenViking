@@ -1,0 +1,20 @@
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 1338-1340,1375,1377,1426,1468-1470,1504-1506,1522,1524-1525,1529-1540,1561-1566,2029,2035-2036,2090
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 94-100,804,1698,1789-1801,1817-1818,1820-1821,1823-1824,1826-1827,1841-1846
+docs/design/ov-compile-design.md
+  h_b34c679d17e2ac 297,299,352-353
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0468d0ccea8d37e30b6366a430b3e085b4071e01",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
