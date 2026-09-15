@@ -33,6 +33,12 @@ viking://user/{user_id}/skills/
 +-- ...
 ```
 
+### 整包处理与索引
+
+新增 Skill 默认处理整个包，不需要额外开关。主目录 L0 仍来自技能元数据，L1 仍只根据 `SKILL.md` 生成；子目录沿用 resource 的方式生成 L0、L1。目录 L0、L1 和支持的文件 L2 都建立索引，包内嵌套的 `SKILL.md` 作为普通附件处理。
+
+辅助文件会进入已有的摘要和 embedding 处理流程，受现有隐藏文件过滤、长度上限和媒体配置约束。图片使用模型支持的图片或文字输入；音视频使用文字摘要，无法理解时沿用文件名回退。`wait=true` 等待整个包处理完成。升级不会自动重建旧 Skill；首次补齐应使用 `semantic_and_vectors` 重建，仅重建向量不会生成缺失的目录摘要。
+
 ### SKILL.md 格式
 
 技能可以使用带有 YAML frontmatter 的 SKILL.md 文件来定义：
@@ -608,13 +614,31 @@ HTTP 对应查询为 `GET /api/v1/skills/search-web?include_content=true&include
 | 参数 | 默认值 | 含义 |
 |------|--------|------|
 | `query` | 必填 | 检索文本 |
-| `limit` | `10` | 每个检索根请求的候选上限 |
+| `limit` | `10` | 最多返回的不同 Skill 数量，包含私有与共享空间的合并结果 |
 | `score_threshold` | `null` | 最低分数，未指定时使用底层检索默认行为 |
-| `level` | `null` | 层级过滤列表，例如 `[0]`；与读取接口的单个整数不同 |
+| `level` | `null` | 参与匹配的层级列表，例如 `[0]`；未指定时不限制层级，与读取接口的单个整数不同 |
 | `target_uri` | `null` | 限定检索范围；省略时分别检索私有与共享根 |
 | `telemetry` | `false` | 遥测配置 |
 
-双根检索合并后按分数排序，不按名称去重，也不再按 `limit` 截断，因此总结果可能超过 `limit`。`total` 是本次返回数组长度，不是所有匹配项的总数。结果是摘要，不是完整 Skill 包。
+包内命中按完整 Skill 根 URI 合并，使用最高最终得分排序，再截取 `limit` 个 Skill。不同空间的同名 Skill 分别保留。`total` 是本次返回数组长度，不是所有匹配项的总数。
+
+每个 Skill 返回包内最终得分最高的一条命中。`uri`、`level`、`score`、`abstract` 直接使用该命中的原有字段，不增加额外返回字段。按 Skill 合并和补页仅用于专用 `skills/find`；通用 `find/search` 保持按命中内容返回。
+
+| 返回字段 | 含义 |
+| --- | --- |
+| `uri` / `level` | 实际命中地址及层级：L0 指向 `.abstract.md`，L1 指向 `.overview.md`，L2 指向具体文件 |
+| `score` | 该命中的最终得分，也是所属 Skill 的排序得分 |
+| `abstract` | 该命中记录已有的摘要，沿用原搜索规则 |
+| `name` / `description` / `tags` / `allowed_tools` | 专用 `skills/find` 从 Skill 主目录单独读取的元数据 |
+| `root_uri` / `skill_md_uri` | 专用 `skills/find` 返回的 Skill 根目录和主 `SKILL.md` 地址 |
+
+专用 `skills/find` 的 `uri` 从原先的包根地址调整为实际命中地址，列表和按名称读取接口保持原样。`level=[2]` 只让文件参与匹配，返回的 `level` 为 `2`、`uri` 指向包内得分最高的文件。
+
+通用检索中 `read_content=true` 继续读取实际返回的 `uri`。专用 `skills/find` 不支持该参数。
+
+上表的 URI 规则适用于语义检索。通用 `find` 仅按 `filter` 筛选时，仍保留索引记录的 URI、返回 `score=0`，不为 L0、L1 补摘要文件后缀。
+
+搜索范围、层级和权限限制先作用于包内命中，再合并 Skill；根目录也必须可访问。
 
 **Python SDK**：
 
@@ -671,6 +695,8 @@ curl -X POST http://localhost:1933/api/v1/skills/find \
 | `telemetry` | `false` | 遥测配置 |
 
 必须提供新内容/上传包，或设 `from_source=true`。新内容的名称必须与 URL 中的 `skill_name` 一致；更新不是重命名或局部 patch。先解析并检查新包，再备份替换；同步失败会尝试恢复旧包。需保留的辅助文件应随新包一起提交。
+
+更新的文件、隐私配置和任务准备完成后才启动后台。需要恢复旧包时，包括 `wait=true` 超时，先取消本次摘要和索引任务，确认已开始的写入退出，再恢复原文件、索引及隐私配置；恢复失败会明确报告。超时响应可能晚于 `timeout`，但只等待取消收尾，不继续处理完整包。`wait=false` 已成功返回后的后台失败不自动恢复；新增 Skill 的等待超时仍只结束等待。
 
 **Python SDK**：
 

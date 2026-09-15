@@ -63,6 +63,7 @@ _ACTIVE_STATUSES = (TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.CANCELLIN
 
 _CANCELLABLE_TASK_TYPES = {
     "add_resource",
+    "add_skill",
     "compile",
     "session_commit",
     "admin_reindex",
@@ -765,6 +766,8 @@ class TaskTracker:
         task_id: str,
         account_id: Optional[str],
         user_id: Optional[str],
+        *,
+        rollback_skill_update: bool = False,
     ) -> Optional[TaskRecord]:
         cancellation: asyncio.CancelledError | None = None
         cancellation_persisted = False
@@ -772,12 +775,14 @@ class TaskTracker:
             task = await self._load_for_update(task_id, account_id, user_id)
             if task is None:
                 return None
+            if rollback_skill_update and task.task_type != "add_skill":
+                raise ValueError("Only Skill processing can be cancelled for package rollback")
             if task.status == TaskStatus.CANCELLED:
                 return self._copy(task)
             if task.status != TaskStatus.CANCELLING:
                 if task.task_type not in _CANCELLABLE_TASK_TYPES:
                     raise ValueError(f"Task type '{task.task_type}' does not support cancellation")
-                if task.status in _TERMINAL_STATUSES:
+                if task.status in _TERMINAL_STATUSES and not rollback_skill_update:
                     raise ValueError(f"Task is already {task.status.value}")
 
                 updated = deepcopy(task)
@@ -812,6 +817,19 @@ class TaskTracker:
         if cancellation is not None:
             raise cancellation
         return self._copy(task)
+
+    async def cancel_skill_update_for_rollback(
+        self, task_id: str, *, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        """Prevent even a late queue replay from writing into a restored Skill.
+
+        A last ACK can fail after the task appears finished. Persist cancellation
+        for this rolled-back update even if it has reached a terminal state.
+        Normal public cancellation keeps its existing terminal-state rules.
+        """
+        return await self._dispatcher.run(
+            lambda: self._cancel_on_owner(task_id, account_id, user_id, rollback_skill_update=True)
+        )
 
     async def _finalize_task(
         self,

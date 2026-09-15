@@ -33,6 +33,12 @@ viking://user/{user_id}/skills/
 +-- ...
 ```
 
+### Package Processing and Indexing
+
+New Skills process the entire package by default, without an additional flag. Root L0 still comes from Skill metadata, and root L1 still uses only `SKILL.md`. Subdirectories use resource directory summaries. Directory L0/L1 and supported L2 files are indexed; nested `SKILL.md` files remain ordinary attachments.
+
+Auxiliary files now enter the existing summary and embedding pipeline, subject to the current hidden-file filters, input limits, and media settings. Images use supported image or text inputs; audio and video use text summaries with the existing filename fallback. `wait=true` waits for the whole package. Upgrades do not automatically rebuild existing Skills: use `semantic_and_vectors` to populate missing summaries; rebuilding vectors alone does not create them.
+
 ### SKILL.md Format
 
 Skills can be defined using SKILL.md files with YAML frontmatter:
@@ -607,13 +613,31 @@ Search and `get_skill` return content and manifests without executing scripts or
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `query` | Required | Search text |
-| `limit` | `10` | Requested candidate limit per search root |
+| `limit` | `10` | Maximum distinct Skills returned after merging private and shared scopes |
 | `score_threshold` | `null` | Minimum score; omission uses underlying retrieval defaults |
-| `level` | `null` | Level filter list such as `[0]`; unlike the single integer on get |
+| `level` | `null` | Levels allowed to match, such as `[0]`; omission allows all levels, unlike the single integer on get |
 | `target_uri` | `null` | Search scope; omitted searches private and shared roots separately |
 | `telemetry` | `false` | Telemetry configuration |
 
-Merged results are sorted by score, without name deduplication or a final `limit` truncation, so the total can exceed `limit`. `total` is the returned array length, not a count of all possible matches. Results are summaries, not complete packages.
+Package hits are grouped by their full Skill root URI, ranked by their highest final score, then limited to `limit` Skills. Same-named Skills in different scopes remain distinct. `total` is the returned array length, not a count of all possible matches.
+
+Each Skill is represented by its highest-scoring package hit. The existing `uri`, `level`, `score`, and `abstract` fields come directly from that hit, without additional response fields. Package grouping and pagination apply only to dedicated `skills/find`; general `find/search` continues to return individual hits.
+
+| Response field | Meaning |
+| --- | --- |
+| `uri` / `level` | Actual hit URI and level: L0 points to `.abstract.md`, L1 to `.overview.md`, and L2 to the matching file |
+| `score` | The hit's final score, also used to rank its Skill |
+| `abstract` | The hit record's existing summary, following the original search rules |
+| `name` / `description` / `tags` / `allowed_tools` | Metadata read separately from the Skill root by the dedicated `skills/find` endpoint |
+| `root_uri` / `skill_md_uri` | The Skill root and main `SKILL.md` addresses returned by the dedicated `skills/find` endpoint |
+
+The dedicated `skills/find` endpoint now returns the actual hit URI instead of replacing it with the package root. List and get-by-name responses are unchanged. `level=[2]` restricts matching to files and returns `level=2` with the URI of the highest-scoring file in each package.
+
+General search with `read_content=true` continues to read the returned URI. The dedicated `skills/find` endpoint does not accept this option.
+
+The URI rules above apply to semantic search. Filter-only general `find` retains the stored record URI and returns `score=0`, without adding summary-file suffixes for L0 or L1.
+
+Scope, level, and permission filters apply before grouping; the Skill root must also be accessible.
 
 **Python SDK**
 
@@ -669,6 +693,8 @@ Missing names/descriptions and invalid YAML produce errors. Directory/name misma
 | `telemetry` | `false` | Telemetry configuration |
 
 Supply new content/an upload, or set `from_source=true`. The new name must match `skill_name` in the URL; update is neither rename nor a partial patch. The server parses and checks the new package before backing up and replacing the old one, and attempts restoration on synchronous failure. Include all auxiliary files that should remain in the replacement package.
+
+Background processing starts after the update's files, privacy configuration, and task setup are ready. When an update needs restoration, including a `wait=true` timeout, it cancels that update's summary and indexing work, waits for started writes to exit, and restores the original files, index, and privacy configuration. Restoration failures are reported. The timeout response may arrive after `timeout` while cancellation settles; it does not wait for the entire package to finish processing. Background failures after a successful `wait=false` response do not trigger restoration. A timeout when adding a new Skill still only ends the wait.
 
 **Python SDK**
 

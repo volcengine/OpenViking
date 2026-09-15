@@ -174,3 +174,41 @@ class SearchService:
             image_url=resolved_image_url,
         )
         return result
+
+    async def find_skills(
+        self,
+        query: str,
+        ctx: RequestContext,
+        target_uri: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+    ) -> Any:
+        """Find distinct packages for /skills/find; general find/search stay item-based."""
+        from openviking.core.retrieval_targets import resolve_retrieval_targets
+        from openviking.retrieve.skill_package_retriever import SkillPackageRetriever
+        from openviking.retrieve.skill_results import SkillResultResolver
+        from openviking_cli.retrieve import ContextType, FindResult, TypedQuery
+
+        _ensure_non_empty_query(query)
+        fs = self._ensure_initialized()
+        targets = resolve_retrieval_targets(target_uri, ctx).target_directories
+        for target in targets:
+            await fs._ensure_retrieval_scope(target, ctx)
+        storage, embedder = fs._get_vector_store(), fs._get_embedder()
+        if not storage:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+        if not embedder:
+            raise RuntimeError("Embedder not configured.")
+        retriever = SkillPackageRetriever(
+            storage=storage, embedder=embedder, retrieval_config=fs.retrieval_config
+        )
+        result = await retriever.retrieve_skills(
+            TypedQuery(query, ContextType.SKILL, "", target_directories=targets),
+            ctx,
+            skill_resolver=SkillResultResolver(fs, ctx),
+            limit=limit,
+            score_threshold=score_threshold,
+            level=level,
+        )
+        return FindResult(memories=[], resources=[], skills=result.matched_contexts)

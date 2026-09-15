@@ -5,14 +5,19 @@
 import asyncio
 import re
 import threading
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
 
+from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
-from openviking.service.task_work_index import bind_task_context, get_task_context
+from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.service.task_work_index import (
+    bind_task_context,
+    detach_task_context,
+    get_task_context,
+)
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
@@ -68,6 +73,8 @@ class DagStats:
     pending_nodes: int = 0
     in_progress_nodes: int = 0
     done_nodes: int = 0
+    failures: List[str] = field(default_factory=list)
+    indexed_records: int = 0
 
 
 @dataclass(frozen=True)
@@ -215,6 +222,7 @@ class SemanticDagExecutor:
         self._root_done: Optional[asyncio.Event] = None
         self._scheduler: Optional[SemanticNodeScheduler] = None
         self._active_scheduled_work = 0
+        self._skill_node_tasks: Set[asyncio.Task] = set()
         self._active_work_idle = asyncio.Event()
         self._active_work_idle.set()
         self._closed = False
@@ -236,6 +244,10 @@ class SemanticDagExecutor:
                 return CreatorAclGrant.INHERITED
         return CreatorAclGrant.DIRECT if normalized in self._added_paths else None
 
+    def _record_skill_failure(self, uri: str, error: Exception) -> None:
+        if self._context_type == "skill":
+            self._stats.failures.append(f"{uri}: {error}")
+
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""
         self._root_uri = root_uri
@@ -250,12 +262,23 @@ class SemanticDagExecutor:
                 raise self._failure
         except BaseException:
             self._closed = True
+            if self._context_type == "skill":
+                for task in self._skill_node_tasks:
+                    task.cancel()
+                await run_to_completion(
+                    lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
+                )
             await self._active_work_idle.wait()
             raise
         finally:
             self._closed = True
-            await self._active_work_idle.wait()
-            self._unregister_active()
+            try:
+                if self._context_type == "skill":
+                    await run_to_completion(self._active_work_idle.wait)
+                else:
+                    await self._active_work_idle.wait()
+            finally:
+                self._unregister_active()
 
     def _schedule_work(self, work: DagWork) -> None:
         if self._closed:
@@ -336,6 +359,22 @@ class SemanticDagExecutor:
         return stats
 
     async def _run_work(self, work: DagWork) -> None:
+        if self._context_type == "skill":
+            # Shared scheduler workers must not be cancelled with one package.
+            # Each Skill node has its own cancellable task and ownership context.
+            task = asyncio.create_task(self._run_work_with_context(work))
+            self._skill_node_tasks.add(task)
+            try:
+                await task
+            except asyncio.CancelledError:
+                if not self._closed:
+                    raise
+            finally:
+                self._skill_node_tasks.discard(task)
+        else:
+            await self._run_work_with_context(work)
+
+    async def _run_work_with_context(self, work: DagWork) -> None:
         task_context = (
             bind_task_context(
                 self._task_context.task_id,
@@ -343,10 +382,15 @@ class SemanticDagExecutor:
                 self._task_context.user_id,
             )
             if self._task_context is not None
-            else nullcontext()
+            else detach_task_context()
         )
         with bind_telemetry(self._telemetry), task_context:
             await self._run_work_bound(work)
+
+    async def _await_write(self, operation):
+        if self._context_type == "skill":
+            return await run_to_completion(lambda: operation)
+        return await operation
 
     async def _run_work_bound(self, work: DagWork) -> None:
         self._mark_node_started()
@@ -474,6 +518,7 @@ class SemanticDagExecutor:
             return False
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
+            self._record_skill_failure(dir_uri, e)
             if self._generation_trigger == "content_copy":
                 raise
             if parent_uri:
@@ -801,6 +846,7 @@ class SemanticDagExecutor:
                 )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
+            self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}
         finally:
             self._stats.done_nodes += 1
@@ -811,16 +857,20 @@ class SemanticDagExecutor:
         if need_vectorize and not self._skip_vectorization:
             use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
             try:
-                await self._processor._vectorize_single_file(
-                    parent_uri=parent_uri,
-                    context_type=self._context_type,
-                    file_path=file_path,
-                    summary_dict=summary_dict,
-                    ctx=self._ctx,
-                    use_summary=use_summary,
-                    ingest_options=self._ingest_options_for_file(file_path),
-                    creator_acl_grant=self._creator_acl_grant(file_path),
+                enqueued = await self._await_write(
+                    self._processor._vectorize_single_file(
+                        parent_uri=parent_uri,
+                        context_type=self._context_type,
+                        file_path=file_path,
+                        summary_dict=summary_dict,
+                        ctx=self._ctx,
+                        use_summary=use_summary,
+                        ingest_options=self._ingest_options_for_file(file_path),
+                        creator_acl_grant=self._creator_acl_grant(file_path),
+                    )
                 )
+                if enqueued:
+                    self._stats.indexed_records += 1
             except Exception as e:
                 logger.error(
                     "Failed to schedule vectorization for %s: %s",
@@ -828,7 +878,9 @@ class SemanticDagExecutor:
                     e,
                     exc_info=True,
                 )
-                raise
+                if self._context_type != "skill":
+                    raise
+                self._record_skill_failure(file_path, e)
         await self._on_file_done(
             parent_uri,
             file_path,
@@ -975,17 +1027,19 @@ class SemanticDagExecutor:
         }
         if dir_uri == self._root_uri and self._source:
             metadata["source"] = self._source
-        wrote = await write_abstract_overview(
-            viking_fs=self._viking_fs,
-            dir_uri=dir_uri,
-            overview=overview,
-            abstract=abstract,
-            ctx=self._ctx,
-            is_stale=self._is_stale,
-            metadata=metadata,
-            consume_pending=consume_pending,
-            lock=self._lock,
-            log_prefix="[SemanticDag]",
+        wrote = await self._await_write(
+            write_abstract_overview(
+                viking_fs=self._viking_fs,
+                dir_uri=dir_uri,
+                overview=overview,
+                abstract=abstract,
+                ctx=self._ctx,
+                is_stale=self._is_stale,
+                metadata=metadata,
+                consume_pending=consume_pending,
+                lock=self._lock,
+                log_prefix="[SemanticDag]",
+            )
         )
         if not wrote.wrote:
             self._stale = True
@@ -995,7 +1049,12 @@ class SemanticDagExecutor:
         node = self._nodes.get(dir_uri)
         if not node:
             return
-        if not self._aggregate_directory:
+        skill_definition_changed = (
+            self._context_type == "skill"
+            and classify_uri(dir_uri).is_skill_root
+            and f"{dir_uri}/SKILL.md" in self._changed_paths
+        )
+        if not self._aggregate_directory and not skill_definition_changed:
             # Deferred aggregation still ran changed-file work. Finish without
             # touching directory sidecars or their vectors.
             self._stats.done_nodes += 1
@@ -1015,8 +1074,22 @@ class SemanticDagExecutor:
             else len(node.file_paths) + len(node.children_dirs)
         )
         sampled_inputs: List[tuple[str, Dict[str, str]]] = []
+        sampled_entries = 0
         try:
-            if self._generation_trigger == "content_copy" and not node.transfer_inputs_ready:
+            if self._context_type == "skill" and classify_uri(dir_uri).is_skill_root:
+                # The package root describes the skill definition, independently
+                # of the summaries produced for its attachments.
+                definition_changed = f"{dir_uri}/SKILL.md" in self._changed_paths
+                overview, abstract = await self._processor._skill_root_semantics(
+                    dir_uri,
+                    ctx=self._ctx,
+                    regenerate=self._generation_trigger == "reindex" or definition_changed,
+                    lock=self._lock,
+                )
+                should_write = False
+                need_vectorize = not self._incremental_update or definition_changed
+                children_changed = definition_changed
+            elif self._generation_trigger == "content_copy" and not node.transfer_inputs_ready:
                 need_vectorize = False
                 should_write = False
             elif self._incremental_update and self._generation_trigger != "content_copy":
@@ -1081,27 +1154,38 @@ class SemanticDagExecutor:
                         need_vectorize = False
                 except AbstractOverviewFormatError:
                     raise
-                except Exception:
+                except Exception as exc:
                     need_vectorize = False
                     logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+                    self._record_skill_failure(dir_uri, exc)
 
         except AbstractOverviewFormatError:
             raise
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+            self._record_skill_failure(dir_uri, e)
         else:
             if need_vectorize and not self._skip_vectorization:
                 assert overview is not None and abstract is not None
                 try:
-                    await self._processor._vectorize_directory(
-                        dir_uri,
-                        context_type=self._context_type,
-                        abstract=abstract,
-                        overview=overview,
-                        ctx=self._ctx,
-                        ingest_options=self._ingest_options_for_directory(),
-                        creator_acl_grant=self._creator_acl_grant(dir_uri),
+                    await self._await_write(
+                        self._processor._vectorize_directory(
+                            dir_uri,
+                            context_type=self._context_type,
+                            abstract=abstract,
+                            overview=overview,
+                            ctx=self._ctx,
+                            ingest_options=self._ingest_options_for_directory(),
+                            creator_acl_grant=self._creator_acl_grant(dir_uri),
+                            **(
+                                {"skill_source_path": (self._source or {}).get("path", "")}
+                                if self._context_type == "skill"
+                                and classify_uri(dir_uri).is_skill_root
+                                else {}
+                            ),
+                        )
                     )
+                    self._stats.indexed_records += int(bool(abstract)) + int(bool(overview))
                 except Exception as e:
                     logger.error(
                         "Failed to schedule vectorization for %s: %s",
@@ -1109,7 +1193,9 @@ class SemanticDagExecutor:
                         e,
                         exc_info=True,
                     )
-                    raise
+                    if self._context_type != "skill":
+                        raise
+                    self._record_skill_failure(dir_uri, e)
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
@@ -1132,6 +1218,8 @@ class SemanticDagExecutor:
             pending_nodes=self._stats.pending_nodes,
             in_progress_nodes=self._stats.in_progress_nodes,
             done_nodes=self._stats.done_nodes,
+            failures=list(self._stats.failures),
+            indexed_records=self._stats.indexed_records,
         )
 
     @property

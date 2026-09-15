@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
 from openviking.storage.errors import (
     CollectionNotFoundError,
@@ -648,7 +649,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         wait = self._circuit_breaker.retry_after
                         if wait > 0:
                             await asyncio.sleep(wait)
-                        await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                        await self._reenqueue_embedding_msg(embedding_msg)
                         self._merge_request_stats(
                             embedding_msg.telemetry_id,
                             requeue_count=1,
@@ -739,7 +740,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         self._circuit_breaker.record_failure(embed_err)
                         if self._vikingdb.has_queue_manager:
                             try:
-                                await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                                await self._reenqueue_embedding_msg(embedding_msg)
                                 self._merge_request_stats(
                                     embedding_msg.telemetry_id,
                                     requeue_count=1,
@@ -819,11 +820,20 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             embedding_msg,
                             ctx,
                         )
-                    result = await self._vikingdb.upsert(
-                        inserted_data,
-                        ctx=ctx,
-                        options=upsert_options,
-                    )
+                    if inserted_data.get("context_type") == ContextType.SKILL.value:
+                        # Cancelling the waiter cannot stop a threaded DB write.
+                        # Keep this task active until that write has settled.
+                        result = await run_to_completion(
+                            lambda: self._vikingdb.upsert(
+                                inserted_data, ctx=ctx, options=upsert_options
+                            )
+                        )
+                    else:
+                        result = await self._vikingdb.upsert(
+                            inserted_data,
+                            ctx=ctx,
+                            options=upsert_options,
+                        )
                     record_id = result
                     if record_id:
                         logger.debug("Successfully wrote embedding: uri=%s", uri)
@@ -868,6 +878,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self._circuit_breaker.record_success()
                 return ProcessResult.success(inserted_data)
 
+        except asyncio.CancelledError:
+            if (
+                embedding_msg is not None
+                and embedding_msg.context_data.get("context_type") == ContextType.SKILL.value
+            ):
+                # Active cancellation does not call on_cancelled in NamedQueue.
+                # Settle only after any already-started vector write has exited.
+                self._record_request_success(embedding_msg)
+            raise
         except Exception as e:
             error_msg = self._embedding_error_msg(
                 embedding_msg,
@@ -900,6 +919,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         if embedding_msg is not None:
             self._record_request_success(embedding_msg)
         return ProcessResult.cancelled()
+
+    async def _reenqueue_embedding_msg(self, msg: EmbeddingMsg) -> None:
+        if msg.context_data.get("context_type") == ContextType.SKILL.value:
+            await run_to_completion(lambda: self._vikingdb.enqueue_embedding_msg(msg))
+        else:
+            await self._vikingdb.enqueue_embedding_msg(msg)
 
     @staticmethod
     def _record_request_success(

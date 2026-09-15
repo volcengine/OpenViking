@@ -83,6 +83,7 @@ from openviking_cli.exceptions import (
     InternalError,
     InvalidArgumentError,
     NotInitializedError,
+    OpenVikingError,
 )
 from openviking_cli.utils import get_logger
 
@@ -2298,6 +2299,9 @@ class ResourceService:
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
         target_uri: Optional[str] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+        task_id: Optional[str] = None,
+        owner_lease_ref: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -2322,29 +2326,70 @@ class ResourceService:
         telemetry_id = get_current_telemetry().telemetry_id
         request_wait_tracker = get_request_wait_tracker()
         monitor_started = False
+        processing_started = False
+        from openviking.service.task_tracker import get_task_tracker
+        from openviking.service.task_tracker_concurrency import run_to_completion
+        from openviking.service.task_work_index import bind_task_context
+
+        task_tracker = get_task_tracker()
+        task = None
         if telemetry_id:
             request_wait_tracker.register_request(telemetry_id)
 
         try:
-            if isinstance(data, SkillProcessingPreparation):
-                result = await self._skill_processor.process_prepared_skill(
-                    data,
-                    viking_fs=self._viking_fs,
-                    ctx=ctx,
-                    apply_privacy=apply_privacy,
-                    privacy_change_reason=privacy_change_reason,
-                    target_uri=target_uri,
+            # Establish ownership before any queue work can start. Descendant
+            # semantic and embedding messages inherit this same cancellable task.
+            async def create_skill_task() -> None:
+                nonlocal task
+                task = await task_tracker.create(
+                    "add_skill",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    task_id=task_id,
                 )
-            else:
-                result = await self._skill_processor.process_skill(
-                    data=data,
-                    viking_fs=self._viking_fs,
-                    ctx=ctx,
-                    allow_local_path_resolution=allow_local_path_resolution,
-                    source_path_hint=source_path_hint,
-                    apply_privacy=apply_privacy,
-                    privacy_change_reason=privacy_change_reason,
-                    target_uri=target_uri,
+
+            # Keep the returned record before propagating cancellation, so a
+            # committed task can still be settled by the exception handler.
+            await run_to_completion(create_skill_task)
+            await task_tracker.start(
+                task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+            task_tracker.register_running_task(task.task_id)
+            try:
+                with bind_task_context(task.task_id, ctx.account_id, ctx.user.user_id):
+                    if isinstance(data, SkillProcessingPreparation):
+                        result = await self._skill_processor.process_prepared_skill(
+                            data,
+                            viking_fs=self._viking_fs,
+                            ctx=ctx,
+                            apply_privacy=apply_privacy,
+                            privacy_change_reason=privacy_change_reason,
+                            target_uri=target_uri,
+                            source_metadata=source_metadata,
+                            owner_lease_ref=owner_lease_ref,
+                        )
+                    else:
+                        result = await self._skill_processor.process_skill(
+                            data=data,
+                            viking_fs=self._viking_fs,
+                            ctx=ctx,
+                            allow_local_path_resolution=allow_local_path_resolution,
+                            source_path_hint=source_path_hint,
+                            apply_privacy=apply_privacy,
+                            privacy_change_reason=privacy_change_reason,
+                            target_uri=target_uri,
+                            source_metadata=source_metadata,
+                            owner_lease_ref=owner_lease_ref,
+                        )
+            finally:
+                await task_tracker.unregister_running_task(task.task_id)
+            processing_started = True
+            if not wait:
+                monitor_started = True
+                asyncio.create_task(
+                    self._monitor_queue_processing(
+                        task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
+                    )
                 )
             if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                 result["root_uri"] = result["uri"]
@@ -2371,42 +2416,66 @@ class ResourceService:
                 )
                 result["queue_status"] = status
                 self._raise_queue_status_errors(status)
-            else:
-                from openviking.service.task_tracker import get_task_tracker
-
-                task_tracker = get_task_tracker()
-                task = await task_tracker.create(
-                    "add_skill",
+                await task_tracker.complete(
+                    task.task_id,
+                    {"queue_status": status},
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                 )
+                # Cancellation settles queue entries without counting errors.
+                # complete() preserves cancellation, so check it before the
+                # update caller commits the package and discards its backup.
+                if task_tracker.is_cancellation_requested(task.task_id):
+                    raise OpenVikingError(
+                        "Skill processing was cancelled",
+                        code="PROCESSING_ERROR",
+                        details={"task_id": task.task_id, "status": "cancelled"},
+                    )
+            else:
                 result["task_id"] = task.task_id
-                if telemetry_id:
+
+            return result
+        except BaseException as exc:
+            if task is not None and not monitor_started:
+                if processing_started and not request_wait_tracker.is_complete(telemetry_id):
+                    # A standalone add retains its original timeout behavior.
+                    # An update's caller separately cancels before restoring.
                     monitor_started = True
                     asyncio.create_task(
                         self._monitor_queue_processing(
-                            task.task_id,
-                            telemetry_id,
-                            ctx.account_id,
-                            ctx.user.user_id,
+                            task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
                         )
                     )
                 else:
-                    await task_tracker.start(
-                        task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+                    failure_message = str(exc) or "Skill processing cancelled"
+                    await run_to_completion(
+                        lambda: task_tracker.fail(
+                            task.task_id,
+                            failure_message,
+                            account_id=ctx.account_id,
+                            user_id=ctx.user.user_id,
+                        )
                     )
-                    await task_tracker.complete(
-                        task.task_id,
-                        {},
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                    )
-
-            return result
+            raise
         finally:
-            if wait or not telemetry_id or not monitor_started:
+            if not monitor_started:
                 request_wait_tracker.cleanup(telemetry_id)
                 unregister_telemetry(telemetry_id)
+
+    async def cancel_skill_processing(self, task_id: str, ctx: RequestContext) -> None:
+        """Stop one failed update's work before its caller restores the old package."""
+        from openviking.service.task_tracker import get_task_tracker
+
+        tracker = get_task_tracker()
+        task = await tracker.cancel_skill_update_for_rollback(
+            task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
+        )
+        if task is None:
+            return  # Synchronous preparation failed before the task was created.
+        # This includes queued work that must be discarded and active handlers
+        # that must finish their cancellation/write cleanup, not just task status.
+        while tracker.has_work(task_id):
+            await asyncio.sleep(0.05)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs

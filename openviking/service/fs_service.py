@@ -473,9 +473,19 @@ class FSService:
 
     @staticmethod
     def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
-        if context_type != "resource":
+        if context_type not in {"resource", "skill"}:
             return None
         parent = VikingURI(uri).parent
+        if context_type == "skill":
+            if parent is None:
+                return None
+            classification = classify_uri(parent.uri)
+            if (
+                not classification.is_skill
+                or classification.is_skill_root
+                or classification.is_skill_namespace
+            ):
+                return None
         return parent.uri if parent and parent.scope else None
 
     @staticmethod
