@@ -9,6 +9,7 @@ import math
 import random
 import uuid
 from abc import ABC, abstractmethod
+from tempfile import TemporaryFile
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
@@ -554,7 +555,7 @@ class CollectionAdapter(ABC):
         ids: Optional[list[str]] = None,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
     ) -> int:
-        """Delete explicit IDs, or exhaust a filtered scope in bounded batches."""
+        """Submit IDs for deletion in batches, without waiting for index visibility."""
         coll = self.get_collection()
         batch_size = self._DATA_BATCH_SIZE or 100
         if ids is not None:
@@ -564,27 +565,28 @@ class CollectionAdapter(ABC):
         if filter is None:
             return 0
 
-        deleted = 0
-        while True:
-            # Re-read the first remaining page: advancing an offset while
-            # deleting would skip records. Scalar search enumerates records;
-            # approximate vector search cannot establish deletion completeness.
-            matched = self.query(
-                filter=filter,
-                limit=batch_size,
-                output_fields=["id"],
-                order_by="updated_at",
-                order_desc=False,
-            )
-            delete_ids = [record["id"] for record in matched]
-            if not delete_ids:
-                if self.count(filter) != 0:
-                    raise RuntimeError("Vector scan ended with records still in the deletion scope")
-                return deleted
-            self.delete(ids=delete_ids)
-            if self.get(delete_ids):
-                raise RuntimeError("Vector deletion left records in the requested batch")
-            deleted += len(delete_ids)
+        # Enumerate before deleting so our own deletes cannot shift offset pages.
+        # Spool only IDs to disk to keep memory bounded for large accounts.
+        with TemporaryFile(mode="w+t", encoding="utf-8") as pending_ids:
+            offset = 0
+            while True:
+                matched = self.query(
+                    filter=filter,
+                    limit=batch_size,
+                    offset=offset,
+                    output_fields=["id"],
+                    order_by="updated_at",
+                    order_desc=False,
+                )
+                if not matched:
+                    break
+                pending_ids.write(json.dumps([record["id"] for record in matched]) + "\n")
+                offset += len(matched)
+
+            pending_ids.seek(0)
+            for batch in pending_ids:
+                coll.delete_data(json.loads(batch))
+            return offset
 
     @staticmethod
     def _coerce_int(value: Any) -> Optional[int]:

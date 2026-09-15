@@ -507,7 +507,8 @@ Account and user cleanup share one queue with a single consumer. Account tasks c
 - Cleanup failure marks the Task as `failed` and records the error; the account remains `deleting`
 - Repeated requests during cleanup return the same Task; requesting deletion after failure creates a retry Task for remaining data
 - Unfinished work is recovered on restart; the account cannot be recreated or re-enabled during cleanup
-- Vectors are scanned, deleted, and checked until none remain, with at most 100 records per delete request and no former 100,000-record total ceiling
+- Vector IDs are enumerated by account before deletion is submitted in batches of at most 100 records, without the former 100,000-record total ceiling
+- Vector deletion succeeds when the delete requests succeed; it does not require an immediate zero count or empty read-back. Remote indexes may briefly return stale data even after the Task completes
 - Account listings expose `status=active|deleting` and the cleanup `task_id` when deleting
 - Query `GET /api/v1/tasks/{task_id}` as ROOT for status and errors; cleanup uses only `pending`, `running`, `completed`, and `failed`, without separate cleanup stages. Only `completed` confirms cleanup finished
 
@@ -860,6 +861,7 @@ Remove a user from a workspace. The user's API key is revoked immediately, and o
 - ADMIN can only remove users in their own account
 - Cannot delete the last admin user of an account
 - After deletion starts, the user key is invalid and list_users omits the user
+- Vector deletion succeeds when the delete requests succeed, without waiting for remote index synchronization; counts and queries may briefly lag after the Task completes
 
 #### 3. Usage Examples
 

@@ -691,8 +691,11 @@ async def test_identity_settings_without_watcher_use_scoped_registry_reads(
     ]
 
 
-async def test_delete_account(admin_client, admin_service, admin_app, monkeypatch):
-    """Account cleanup is tracked, retryable, tenant-scoped, and exhausts large vector sets."""
+@pytest.mark.parametrize("index_updates_immediately", [True, False])
+async def test_delete_account(
+    admin_client, admin_service, admin_app, monkeypatch, index_updates_immediately
+):
+    """Cleanup submits all IDs without depending on immediate query consistency."""
     from itertools import islice
     from types import SimpleNamespace
 
@@ -723,19 +726,32 @@ async def test_delete_account(admin_client, admin_service, admin_app, monkeypatc
     # Exercise the real filter-deletion loop with bounded in-memory I/O.
     rows = {str(i): {"id": str(i), "account_id": acct} for i in range(100_001)}
     rows["keep"] = {"id": "keep", "account_id": "other"}
+    indexed_rows = rows.copy()
+    deleted_ids = []
     adapter = LocalCollectionAdapter("context", "", "default")
 
     def delete_data(ids):
         assert 0 < len(ids) <= 100
+        deleted_ids.extend(ids)
         for record_id in ids:
             rows.pop(record_id, None)
 
     adapter._collection = SimpleNamespace(delete_data=delete_data)
-    adapter.query = lambda *, filter, limit, **kwargs: list(
-        islice((row for row in rows.values() if row[filter.field] == filter.value), limit)
+    scan_rows = rows if index_updates_immediately else indexed_rows
+    adapter.query = lambda *, filter, limit, offset=0, **kwargs: list(
+        islice(
+            (row for row in scan_rows.values() if row[filter.field] == filter.value),
+            offset,
+            offset + limit,
+        )
     )
-    adapter.get = lambda ids: [rows[record_id] for record_id in ids if record_id in rows]
-    adapter.count = lambda filter: sum(row[filter.field] == filter.value for row in rows.values())
+    # Other read APIs may still expose data after delete requests succeed.
+    adapter.get = lambda ids: [
+        indexed_rows[record_id] for record_id in ids if record_id in indexed_rows
+    ]
+    adapter.count = lambda filter: sum(
+        row[filter.field] == filter.value for row in indexed_rows.values()
+    )
     vectors = admin_service.viking_fs.vector_store
     vectors._root_backend = _SingleAccountBackend(
         vectors._config, bound_account_id=None, shared_adapter=adapter
@@ -794,7 +810,9 @@ async def test_delete_account(admin_client, admin_service, admin_app, monkeypatc
     assert completed["status"] == "completed", completed
     assert completed["result"] == {"deleted": True}
     assert set(rows) == {"keep"}
-    assert adapter.count(Eq("account_id", acct)) == 0
+    assert len(deleted_ids) == len(set(deleted_ids)) == 100_001
+    assert adapter.count(Eq("account_id", acct)) == 100_001
+    assert adapter.get(deleted_ids[:100])
     assert not await _agfs_exists(admin_service, f"/local/{acct}")
     assert await _agfs_exists(admin_service, "/local/other/resources/keep.md")
     assert manager.get_deletion(acct) is None

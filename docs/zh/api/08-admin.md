@@ -498,7 +498,8 @@ ov --sudo admin list-accounts --limit 50 --page 2
 - 清理失败时，Task 标记为 `failed` 并记录错误原因；账号保持 `deleting`
 - 正在删除时重复请求返回同一个 Task；失败后再次请求会创建重试 Task，处理剩余数据
 - 服务重启后恢复未完成任务；删除期间不能重建同名账号，也不能恢复账号使用
-- 向量按账号条件循环扫描、删除和检查，每次删除请求最多 100 条，直到清空，不受原来的单次 10 万条总量上限限制
+- 向量先按账号条件分页枚举 ID，再分批提交删除，每次删除请求最多 100 条，不受原来的单次 10 万条总量上限限制
+- 向量删除以删除接口成功为准，不要求即时 Count 归零或回读为空；即使 Task 已完成，远程索引仍可能因同步延迟短暂返回旧数据
 - 账号列表中的 `status` 为 `active` 或 `deleting`；删除中的账号同时返回 `task_id`
 - 使用 ROOT 调用 `GET /api/v1/tasks/{task_id}` 查看状态和错误；清理任务只使用 `pending`、`running`、`completed`、`failed` 状态，不细分清理阶段，只有 `completed` 表示清理完成
 
@@ -850,6 +851,7 @@ ov admin list-users acme --limit 50 --page 2
 - ADMIN 只能移除自己所属的 account 中的用户
 - 不能删除账户的最后一个 admin 用户
 - 删除开始后，用户 key 立即失效，list_users 不再返回该用户
+- 向量删除以删除接口成功为准，不等待远程索引同步；Task 完成后，Count 或查询结果仍可能短暂滞后
 
 #### 3. 使用示例
 
