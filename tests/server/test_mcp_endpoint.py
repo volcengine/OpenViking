@@ -1720,6 +1720,31 @@ async def test_grep_case_insensitive(service):
     assert isinstance(result, str)
 
 
+async def test_grep_nonexistent_uri_raises_not_found(service):
+    with pytest.raises(NotFoundError):
+        await grep(uri="viking://user/test_user/memories/does_not_exist_dir_xyz", pattern="abc")
+
+
+async def test_grep_invalid_regex_fails_the_call(service):
+    with pytest.raises(Exception) as exc_info:
+        await grep(uri="viking://resources", pattern="(unclosed")
+    assert "No matches found" not in str(exc_info.value)
+
+
+async def test_grep_failed_pattern_not_reported_as_no_matches(service):
+    result = await grep(uri="viking://resources", pattern=["zzz_no_match_xyz_99999", "(unclosed"])
+    assert "No matches found" not in result
+    assert "(unclosed" in result
+    assert "failed" in result
+
+
+async def test_grep_partial_failure_keeps_matches(service, client_with_resource):
+    _, root_uri = client_with_resource
+    result = await grep(uri=root_uri, pattern=[".*", "(unclosed"])
+    assert "Found" in result
+    assert "(unclosed" in result
+
+
 # ---------------------------------------------------------------------------
 # glob tool
 # ---------------------------------------------------------------------------
