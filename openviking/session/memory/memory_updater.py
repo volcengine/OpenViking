@@ -622,7 +622,11 @@ class MessageRange:
             if not current_messages:
                 return
             content = self._format_merged_content(current_messages)
-            formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
+            # A turn carrying no TextPart -- a tool call, say -- merges to "", and a
+            # speaker line with nothing after it is neither readable nor embeddable.
+            # events.yaml embeds this body, so it would otherwise reach the vector too.
+            if content.strip():
+                formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
             current_messages = []
 
         for msg in msg_group:
