@@ -72,10 +72,15 @@ function codingQuotas(limit) {
 
 export function buildRecallEndpointBody(cfg = {}) {
   const limit = Math.max(Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT), 1);
+  // A non-numeric value must not leak NaN into the request: Math.max(NaN, 1000)
+  // stays NaN and JSON.stringify({ max_chars: NaN }) ships `"max_chars":null`.
+  // Fall back to 0 so the 1000-character floor restores the default budget.
+  const contentChars = Number(cfg.recallMaxContentChars || 0);
+  const maxChars = Number.isFinite(contentChars) ? contentChars : 0;
   const body = {
     query: "",
     quotas: legacyMemoryQuotas(limit),
-    max_chars: Math.max(Number(cfg.recallMaxContentChars || 0) * limit, 1000),
+    max_chars: Math.max(maxChars * limit, 1000),
     min_score: Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35,
     render: true,
   };
