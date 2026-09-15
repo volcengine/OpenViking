@@ -3,6 +3,7 @@ import path from "path"
 import {
   extractPartsFromPayload,
   extractTextFromPayload,
+  finalAssistantKeepMask,
   shouldCaptureText,
 } from "./shared/capture-utils.mjs"
 import {
@@ -370,12 +371,14 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!role) return null
     if (role === "assistant" && !config.captureAssistantTurns) return null
 
+    const includeTool = config.captureToolTraffic !== false
     const rawText = partsRaw
-      .map((part) => extractTextFromPayload(part, { toolMaxChars: config.captureToolMaxChars }))
+      .map((part) => extractTextFromPayload(part, { toolMaxChars: config.captureToolMaxChars, includeTool }))
       .filter(Boolean)
       .join("\n\n")
     const captureParts = partsRaw.flatMap((part) => extractPartsFromPayload(part, {
       toolMaxChars: config.captureToolMaxChars,
+      includeTool,
     }))
     const decision = shouldCaptureText(rawText, role, config)
     if (!decision.shouldCapture && captureParts.length === 0) return null
@@ -401,10 +404,29 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     }
     if (toSend.length === 0) return 0
 
+    // `captureAssistantFinalOnly` keeps one assistant reply per user turn. A
+    // superseded reply is marked captured rather than merely skipped, so a later
+    // flush does not pick it up again. Tool parts live inside the assistant
+    // message here, so no entry is tool transport and every real user message
+    // opens a group.
+    let outbound = toSend
+    if (config.captureAssistantFinalOnly === true) {
+      const keep = finalAssistantKeepMask(toSend.map((item) => ({
+        role: item.body.role,
+        isToolTransport: false,
+      })))
+      outbound = []
+      toSend.forEach((item, i) => {
+        if (keep[i]) outbound.push(item)
+        else item.message.captured = true
+      })
+      if (outbound.length === 0) return 0
+    }
+
     let added = 0
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (!health.ok) {
-      for (const item of toSend) {
+      for (const item of outbound) {
         const queued = await enqueue("addMessage", state.ovSessionId, item.body)
         if (!queued.ok) break
         item.message.captured = true
@@ -414,11 +436,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       const res = await sendSessionMessages(
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options }),
         state.ovSessionId,
-        toSend.map((item) => item.body),
+        outbound.map((item) => item.body),
         { enqueueOnRetryable: true },
       )
       added = res.sent + res.queued
-      for (const item of toSend.slice(0, added)) {
+      for (const item of outbound.slice(0, added)) {
         item.message.captured = true
       }
       if (res.failed > 0 || res.enqueueFailed > 0) {

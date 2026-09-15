@@ -4,6 +4,7 @@ import {
   extractCaptureTurns,
   extractPartsFromPayload,
   filterCaptureParts,
+  finalAssistantKeepMask,
   shouldCaptureText,
 } from "./lib/capture-utils.mjs"
 
@@ -159,4 +160,123 @@ test("extractCaptureTurns honours the role scope of a capture rule", () => {
   ]
   const turns = extractCaptureTurns(entries, cfg)
   assert.deepEqual(turns.map((turn) => turn.role), ["user"])
+})
+
+// --- capture scope knobs ----------------------------------------------------
+
+function assistantEntry(text) {
+  return { payload: { role: "assistant", content: [{ type: "output_text", text }] } }
+}
+
+function toolCallEntry(callId = "c1") {
+  return { payload: { type: "function_call", name: "shell", arguments: "{\"cmd\":\"ls\"}", call_id: callId } }
+}
+
+function toolResultEntry(callId = "c1", output = "a.txt b.txt") {
+  return { payload: { type: "function_call_output", call_id: callId, output } }
+}
+
+function codexTurn() {
+  return [
+    userEntry("please fix the failing test"),
+    assistantEntry("let me look at it"),
+    toolCallEntry(),
+    toolResultEntry(),
+    assistantEntry("the fix is in the parser"),
+  ]
+}
+
+test("captureToolTraffic defaults to on, so tool traffic is still captured", () => {
+  const turns = extractCaptureTurns(codexTurn(), { captureAssistantTurns: true })
+  assert.deepEqual(turns.map((turn) => turn.role), ["user", "assistant", "assistant", "user", "assistant"])
+  assert.equal(turns.filter((turn) => toolPart(turn.parts)).length, 2)
+})
+
+test("captureToolTraffic=false drops every tool call and result", () => {
+  const cfg = { captureAssistantTurns: true, captureToolTraffic: false }
+  const turns = extractCaptureTurns(codexTurn(), cfg)
+  assert.deepEqual(turns.map((turn) => turn.role), ["user", "assistant", "assistant"])
+  assert.deepEqual(turns.map((turn) => turn.text), [
+    "please fix the failing test",
+    "let me look at it",
+    "the fix is in the parser",
+  ])
+  assert.equal(turns.some((turn) => toolPart(turn.parts)), false)
+})
+
+test("captureToolTraffic=false keeps the text beside an embedded tool call", () => {
+  const entries = [{
+    payload: {
+      role: "assistant",
+      content: [
+        { type: "output_text", text: "let me check that file" },
+        { type: "tool_use", name: "read", input: { path: "a.txt" } },
+      ],
+    },
+  }]
+  const cfg = { captureAssistantTurns: true, captureToolTraffic: false }
+  assert.deepEqual(extractCaptureTurns(entries, cfg), [{
+    role: "assistant",
+    text: "let me check that file",
+    parts: [{ type: "text", text: "let me check that file" }],
+  }])
+})
+
+test("captureAssistantFinalOnly keeps one assistant reply per user turn", () => {
+  const entries = [
+    userEntry("what did we decide"),
+    assistantEntry("first draft"),
+    assistantEntry("second draft"),
+    assistantEntry("final answer"),
+  ]
+  const cfg = { captureAssistantTurns: true, captureAssistantFinalOnly: true }
+  assert.deepEqual(extractCaptureTurns(entries, cfg).map((turn) => turn.text), [
+    "what did we decide",
+    "final answer",
+  ])
+})
+
+test("captureAssistantFinalOnly does not treat a tool result as a turn boundary", () => {
+  const entries = [
+    userEntry("what did we decide"),
+    assistantEntry("draft"),
+    toolResultEntry("c1", "tool noise"),
+    assistantEntry("final answer"),
+  ]
+  const cfg = { captureAssistantTurns: true, captureAssistantFinalOnly: true }
+  const turns = extractCaptureTurns(entries, cfg)
+  // The tool result normalizes to `user`; it must not open a group of its own, or
+  // "draft" would survive as the last reply of a phantom turn.
+  assert.deepEqual(turns.filter((turn) => turn.role === "assistant").map((turn) => turn.text), ["final answer"])
+  // Final-only narrows assistant replies; it does not remove tool traffic on its own.
+  assert.equal(turns.filter((turn) => toolPart(turn.parts)).length, 1)
+})
+
+test("both capture scope knobs combine", () => {
+  const cfg = { captureAssistantTurns: true, captureToolTraffic: false, captureAssistantFinalOnly: true }
+  assert.deepEqual(extractCaptureTurns(codexTurn(), cfg).map((turn) => [turn.role, turn.text]), [
+    ["user", "please fix the failing test"],
+    ["assistant", "the fix is in the parser"],
+  ])
+})
+
+test("finalAssistantKeepMask keeps the last assistant entry of each user turn", () => {
+  const entries = [
+    { role: "user" },
+    { role: "assistant" },
+    { role: "assistant" },
+    { role: "user" },
+    { role: "assistant" },
+  ]
+  assert.deepEqual(finalAssistantKeepMask(entries), [true, false, true, true, true])
+})
+
+test("finalAssistantKeepMask does not let a tool result open a group", () => {
+  const entries = [
+    { role: "user" },
+    { role: "assistant" },
+    { role: "user", isToolTransport: true },
+    { role: "assistant" },
+  ]
+  assert.deepEqual(finalAssistantKeepMask(entries), [true, false, true, true])
 })

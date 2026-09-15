@@ -302,6 +302,14 @@ export function loadConfig(cwd = process.cwd()) {
     // user-only behavior can set OPENVIKING_CAPTURE_ASSISTANT_TURNS=0 or codex.captureAssistantTurns=false.
     captureAssistantTurns: envBool("OPENVIKING_CAPTURE_ASSISTANT_TURNS") ?? (cx.captureAssistantTurns !== false),
     captureLastAssistantOnStop: envBool("OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP") ?? (cx.captureLastAssistantOnStop !== false),
+    // Default true: tool calls/results are the bulk of a coding session's bytes, but an existing
+    // install should keep capturing exactly what it captured before. Set
+    // OPENVIKING_CAPTURE_TOOL_TRAFFIC=0 or codex.captureToolTraffic=false to drop both the
+    // `[tool-call|result]` text and the structured tool parts from the write path.
+    captureToolTraffic: envBool("OPENVIKING_CAPTURE_TOOL_TRAFFIC") ?? (cx.captureToolTraffic !== false),
+    // Default false: when on, only the last assistant reply of each user turn is captured, so a
+    // reply the model rewrote several times is stored once, in its final shape.
+    captureAssistantFinalOnly: envBool("OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY") ?? (cx.captureAssistantFinalOnly === true),
     commitTokenThreshold: Math.max(1000, Math.floor(num(
       process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD,
       num(cx.commitTokenThreshold, 20000),

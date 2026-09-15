@@ -328,6 +328,7 @@ export const KNOWN_PLUGIN_KEYS = new Set([
   "recallQueryFilters", "captureFilters",
   "captureMode", "captureMaxLength", "captureTimeoutMs", "captureToolMaxChars",
   "captureAssistantTurns", "captureLastAssistantOnStop", "logRankingDetails",
+  "captureToolTraffic", "captureAssistantFinalOnly",
   "commitTokenThreshold", "commitKeepRecentCount", "autoCommitOnCompact",
   "profileTokenBudget", "resumeContextBudget", "resumeArchiveInject",
   "resumeArchiveMaxChars", "resumeArchiveTokenBudget",

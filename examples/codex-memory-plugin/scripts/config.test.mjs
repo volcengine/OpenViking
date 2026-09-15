@@ -21,6 +21,8 @@ const OVERRIDES = [
   "OPENVIKING_BEARER_TOKEN",
   "OPENVIKING_RECALL_QUERY_FILTERS",
   "OPENVIKING_CAPTURE_FILTERS",
+  "OPENVIKING_CAPTURE_TOOL_TRAFFIC",
+  "OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY",
 ];
 
 /**
@@ -204,5 +206,42 @@ test("a comma survives in a configured rule but splits an env one", () => {
     env: { OPENVIKING_CAPTURE_FILTERS: "s/a{2,}/X/" },
   }, () => {
     assert.deepEqual(loadConfig().captureFilters, ["s/a{2", "}/X/"]);
+  });
+});
+
+test("the capture scope knobs default to the previous capture", () => {
+  withConfigs({ ov: { server: { host: "127.0.0.1" } } }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolTraffic, true);
+    assert.equal(cfg.captureAssistantFinalOnly, false);
+  });
+});
+
+test("plugin.codex drops tool traffic and keeps the final assistant reply", () => {
+  withConfigs({
+    cli: {
+      url: "http://127.0.0.1:1933",
+      api_key: "sk-cli",
+      plugin: { codex: { captureToolTraffic: false, captureAssistantFinalOnly: true } },
+    },
+  }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolTraffic, false);
+    assert.equal(cfg.captureAssistantFinalOnly, true);
+  });
+});
+
+test("the capture scope env overrides beat the configured values", () => {
+  withConfigs({
+    cli: {
+      url: "http://127.0.0.1:1933",
+      api_key: "sk-cli",
+      plugin: { codex: { captureToolTraffic: true, captureAssistantFinalOnly: false } },
+    },
+    env: { OPENVIKING_CAPTURE_TOOL_TRAFFIC: "0", OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY: "1" },
+  }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolTraffic, false);
+    assert.equal(cfg.captureAssistantFinalOnly, true);
   });
 });

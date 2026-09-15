@@ -306,6 +306,83 @@ test("OpenCode tool parts preserve completed and error state fields", async () =
   })
 })
 
+test("captureToolTraffic=false drops the tool part and keeps the prose", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-scope-tools-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), captureToolTraffic: false },
+        pluginRoot: dir,
+      })
+      const sessionID = "oc-scope-tools"
+      await manager.init()
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: { info: { id: "msg-scope", sessionID, role: "assistant" } },
+      })
+      for (const part of [
+        { id: "p-text", sessionID, messageID: "msg-scope", type: "text", text: "the fix is in the parser" },
+        {
+          id: "p-tool",
+          sessionID,
+          messageID: "msg-scope",
+          type: "tool",
+          callID: "call-1",
+          tool: "openviking_read",
+          state: { status: "completed", input: { uris: "viking://x" }, output: "tool payload" },
+        },
+      ]) {
+        await manager.handleEvent({ type: "message.part.updated", properties: { part } })
+      }
+      await manager.handleEvent({ type: "session.idle", properties: { sessionID } })
+
+      const batch = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-scope-tools/messages/batch")
+      assert.ok(batch, "session.idle should still capture the prose")
+      // The tool part is gone, so this is a text-only body: `content`, not `parts`.
+      assert.deepEqual(JSON.parse(batch.body).messages, [
+        { role: "assistant", content: "the fix is in the parser" },
+      ])
+      assert.ok(!batch.body.includes("tool"), "no tool payload should reach the wire")
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
+test("captureAssistantFinalOnly keeps the last assistant reply of the turn", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-scope-final-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), captureAssistantFinalOnly: true },
+        pluginRoot: dir,
+      })
+      const sessionID = "oc-scope-final"
+      await manager.init()
+      for (const [id, role, text] of [
+        ["msg-user", "user", "what did we decide"],
+        ["msg-a1", "assistant", "first draft"],
+        ["msg-a2", "assistant", "final answer"],
+      ]) {
+        await manager.handleEvent({
+          type: "message.updated",
+          properties: { info: { id, sessionID, role } },
+        })
+        await manager.handleEvent({
+          type: "message.part.updated",
+          properties: { part: { id: `p-${id}`, sessionID, messageID: id, type: "text", text } },
+        })
+      }
+      await manager.handleEvent({ type: "session.idle", properties: { sessionID } })
+
+      const batch = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-scope-final/messages/batch")
+      assert.ok(batch, "session.idle should capture the surviving messages")
+      assert.deepEqual(JSON.parse(batch.body).messages, [
+        { role: "user", content: "what did we decide" },
+        { role: "assistant", content: "final answer" },
+      ])
+      await manager.flushAll({ commit: false })
+    })
+  })
+})
+
 test("concurrent saves never race the shared state file (#3877)", async (t) => {
   // Widen the race window: concurrent saveState() calls share the same
   // `${statePath}.tmp` temp file. A slow writeFile keeps the shared .tmp

@@ -372,3 +372,37 @@ test("loadConfig keeps env peer over config peerId when ovcli has none", async (
     }
   })
 })
+
+test("the capture scope knobs default to the previous capture", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-scope-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const cfg = loadConfig(dir, join(dir, "project"))
+      assert.equal(cfg.captureToolTraffic, true)
+      assert.equal(cfg.captureAssistantFinalOnly, false)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
+test("the capture scope env overrides flip both knobs", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-scope-env-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      process.env.OPENVIKING_CAPTURE_TOOL_TRAFFIC = "0"
+      process.env.OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY = "1"
+      const cfg = loadConfig(dir, join(dir, "project"))
+      assert.equal(cfg.captureToolTraffic, false)
+      assert.equal(cfg.captureAssistantFinalOnly, true)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})

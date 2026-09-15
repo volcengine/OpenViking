@@ -46,6 +46,8 @@ const DEFAULT_CONFIG = {
   captureMaxLength: 24000,
   captureAssistantTurns: true,
   captureToolMaxChars: 1000000,
+  captureToolTraffic: true,
+  captureAssistantFinalOnly: false,
   commitTokenThreshold: 20000,
   commitKeepRecentCount: 10,
   profileTokenBudget: 10000,
@@ -160,6 +162,8 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "captureMaxLength",
     "captureAssistantTurns",
     "captureToolMaxChars",
+    "captureToolTraffic",
+    "captureAssistantFinalOnly",
     "commitTokenThreshold",
     "commitKeepRecentCount",
     "profileTokenBudget",
@@ -214,6 +218,12 @@ function applyEnv(config) {
   }
   if (process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS) {
     config.captureToolMaxChars = process.env.OPENVIKING_CAPTURE_TOOL_MAX_CHARS
+  }
+  if (process.env.OPENVIKING_CAPTURE_TOOL_TRAFFIC !== undefined) {
+    config.captureToolTraffic = envBool("OPENVIKING_CAPTURE_TOOL_TRAFFIC") ?? config.captureToolTraffic
+  }
+  if (process.env.OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY !== undefined) {
+    config.captureAssistantFinalOnly = envBool("OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY") ?? config.captureAssistantFinalOnly
   }
   if (process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD) {
     config.commitTokenThreshold = process.env.OPENVIKING_COMMIT_TOKEN_THRESHOLD
