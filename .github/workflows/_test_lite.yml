@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: '["3.10"]'
+      test_paths_json:
+        description: 'JSON string of pytest paths'
+        required: false
+        type: string
+        default: '["tests/vectordb/test_cuvs_config.py", "tests/vectordb/test_cuvs_index.py", "tests/vectordb/test_cuvs_collection.py", "tests/vectordb/test_str_to_uint64.py"]'
   workflow_dispatch:
     inputs:
       os_json:
@@ -23,6 +28,10 @@ on:
         description: 'JSON string of Python versions'
         required: false
         default: '["3.10"]'
+      test_paths_json:
+        description: 'JSON string of pytest paths'
+        required: false
+        default: '["tests/vectordb/test_cuvs_config.py", "tests/vectordb/test_cuvs_index.py", "tests/vectordb/test_cuvs_collection.py", "tests/vectordb/test_str_to_uint64.py"]'
 
 jobs:
   test-lite:
@@ -81,10 +90,33 @@ jobs:
     - name: Build C++ extensions
       run: uv run python setup.py build_ext --inplace
 
-    - name: Run cuVS CPU-only regression tests
+    - name: Run configured regression tests
+      env:
+        QDRANT_URL: ''
+        QDRANT_API_KEY: ''
+        TEST_PATHS_JSON: ${{ inputs.test_paths_json }}
+      shell: bash
       run: |
-        uv run pytest -q -o addopts='' \
-          tests/vectordb/test_cuvs_config.py \
-          tests/vectordb/test_cuvs_index.py \
-          tests/vectordb/test_cuvs_collection.py \
-          tests/vectordb/test_str_to_uint64.py
+        uv run python - <<'PY'
+        import json
+        import os
+        import subprocess
+
+        try:
+            paths = json.loads(os.environ["TEST_PATHS_JSON"])
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise SystemExit("test_paths_json must be valid JSON") from exc
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or any(not isinstance(path, str) or not path for path in paths)
+        ):
+            raise SystemExit(
+                "test_paths_json must be a non-empty JSON array of non-empty strings"
+            )
+        subprocess.run(
+            ["uv", "run", "pytest", "-q", "-o", "addopts=", "--", *paths],
+            check=True,
+            shell=False,
+        )
+        PY
