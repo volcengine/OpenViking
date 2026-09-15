@@ -14,6 +14,7 @@ Design decisions:
 """
 
 import asyncio
+import json
 import math
 import re
 import threading
@@ -26,9 +27,12 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.service.task_events import (
-    PROCESS_EVENT_KINDS,
+    PendingTaskEvents,
+    TaskEventBuffer,
     TaskEventHistory,
     append_task_event,
+    make_process_event,
+    trim_task_events,
 )
 from openviking.service.task_store import TaskStore
 from openviking.service.task_tracker_concurrency import (
@@ -91,11 +95,24 @@ class TaskRecord:
     _extra_fields: Dict[str, Any] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
+    _pending_execution_events: Optional[PendingTaskEvents] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
-    def to_dict(self, *, include_events: bool = False) -> Dict[str, Any]:
+    def to_dict(
+        self, *, include_events: bool = False, include_pending_events: bool = False
+    ) -> Dict[str, Any]:
         """Serialize for JSON response."""
         return {
             **({"execution_events": deepcopy(self.execution_events)} if include_events else {}),
+            **(
+                {
+                    "pending_execution_events": deepcopy(self._pending_execution_events)
+                    or {"items": [], "dropped_count": 0}
+                }
+                if include_pending_events
+                else {}
+            ),
             "task_id": self.task_id,
             "task_type": self.task_type,
             "status": self.status.value,
@@ -192,6 +209,10 @@ class TaskTracker:
         self._store = store
         self._tasks: Dict[str, TaskRecord] = {}
         self._lock = threading.Lock()
+        self._event_buffer = TaskEventBuffer()
+        self._closed_event_tasks: set[str] = set()
+        self._event_drops: Dict[str, int] = {}
+        self._reported_event_drops: Dict[str, int] = {}
         # The keyed registries provide process-local ordering. A deployment with
         # multiple TaskTracker writers must add store-level revision/CAS first.
         self._dispatcher = OwnerLoopDispatcher()
@@ -271,6 +292,7 @@ class TaskTracker:
         while True:
             try:
                 await asyncio.sleep(self.CLEANUP_INTERVAL)
+                self._report_event_diagnostics()
                 await self._evict_expired()
             except asyncio.CancelledError:
                 break
@@ -298,6 +320,7 @@ class TaskTracker:
                 excess = len(self._tasks) - self.MAX_TASKS
                 for tid, _ in sorted_tasks[:excess]:
                     self._tasks.pop(tid, None)
+                    self._event_buffer.discard(tid)
 
         if evicted_count:
             logger.debug("[TaskTracker] Evicted %d expired tasks", evicted_count)
@@ -342,6 +365,7 @@ class TaskTracker:
 
             with self._lock:
                 self._tasks.pop(task_id, None)
+                self._event_buffer.discard(task_id)
             return True
 
     @staticmethod
@@ -945,6 +969,7 @@ class TaskTracker:
                 )
                 with self._lock:
                     self._tasks.pop(task.task_id, None)
+                    self._event_buffer.discard(task.task_id)
                 self._work_index.clear_failure(task.task_id)
                 deleted += 1
         return deleted
@@ -954,7 +979,7 @@ class TaskTracker:
         if self._work_index.has_work(task_id, exclude_work_id=current_work_id):
             task = self._cached_task(task_id)
             if task and task.account_id and task.user_id:
-                await self.record_event(
+                self.emit_event(
                     task_id,
                     "waiting_for_descendants",
                     operation=current_work_id,
@@ -972,35 +997,86 @@ class TaskTracker:
         account_id: str,
         user_id: str,
         operation: Optional[str] = None,
+        error: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> None:
-        """Record a registered process event without changing task status or stage.
+        """Compatibility wrapper for best-effort intake; returning does not imply a write."""
+        self.emit_event(
+            task_id,
+            kind,
+            account_id=account_id,
+            user_id=user_id,
+            operation=operation,
+            error=error,
+            reason=reason,
+        )
 
-        Add process event kinds here and their Studio translations when instrumenting
-        new execution points. Callers report facts, not inferred lifecycle transitions.
+    def emit_event(
+        self,
+        task_id: str,
+        kind: str,
+        *,
+        account_id: str,
+        user_id: str,
+        operation: Optional[str] = None,
+        error: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Accept a bounded observation without I/O or affecting business state.
+
+        Known, active task ownership is required; intake never loads missing context
+        from storage. Ordinary instrumentation failures are isolated at this boundary.
         """
-        self._validate_owner(account_id, user_id)
-        if kind not in PROCESS_EVENT_KINDS:
-            raise ValueError(f"Unknown task process event: {kind}")
-        if operation is not None and not re.fullmatch(r"[\w.:-]{1,128}", operation):
-            raise ValueError("operation must be a bounded operation identifier")
+        try:
+            self._validate_owner(account_id, user_id)
+            failure: Optional[str] = None
+            with self._lock:
+                task = self._tasks.get(task_id)
+                if (
+                    task is None
+                    or not self._matches_owner(task, account_id, user_id)
+                    or task.status not in _ACTIVE_STATUSES
+                    or task_id in self._closed_event_tasks
+                ):
+                    failure = "unavailable"
+                else:
+                    try:
+                        event = make_process_event(
+                            kind,
+                            status=task.status.value,
+                            stage=_sanitize_error(task.stage) if task.stage else None,
+                            operation=operation,
+                            error=_sanitize_error(error[:4096]) if error is not None else None,
+                            reason=reason,
+                        )
+                        failure = None if self._event_buffer.add(task_id, event) else "capacity"
+                    except Exception:
+                        self._event_buffer.note_drop(task_id)
+                        failure = "invalid"
+            if failure:
+                self._report_event_drop(failure)
+        except Exception:
+            self._report_event_drop("invalid")
 
-        async def record() -> None:
-            async with self._task_locks.acquire(task_id):
-                task = await self._load_for_update(task_id, account_id, user_id)
-                if task is None or task.status not in _ACTIVE_STATUSES:
-                    return
-                updated = deepcopy(task)
-                updated.execution_events = append_task_event(
-                    updated.execution_events,
-                    kind=kind,
-                    status=task.status.value,
-                    stage=_sanitize_error(task.stage) if task.stage else None,
-                    operation=operation,
-                )
-                updated.updated_at = self._next_updated_at(task)
-                await self._persist_and_publish("update", updated, previous=task)
+    def _report_event_drop(self, reason: str) -> None:
+        # Intake must stay memory-only even when logging uses a blocking handler.
+        try:
+            with self._lock:
+                self._event_drops[reason] = self._event_drops.get(reason, 0) + 1
+        except Exception:
+            pass
 
-        await self._dispatcher.run(record)
+    def _report_event_diagnostics(self) -> None:
+        # Reuse the existing maintenance loop; never send diagnostics back through
+        # the task-event intake or create per-event background work.
+        try:
+            with self._lock:
+                counts = dict(self._event_drops)
+            if counts != self._reported_event_drops:
+                logger.warning("Task event discards: %s", counts)
+                self._reported_event_drops = counts
+        except Exception:
+            pass
 
     def has_work(self, task_id: str) -> bool:
         """Return whether a task still owns durable or active queue work."""
@@ -1024,29 +1100,34 @@ class TaskTracker:
         task_id: str,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        *,
+        include_pending_events: bool = False,
     ) -> Optional[TaskRecord]:
         """Look up a single task. Returns a snapshot copy (None if not found)."""
-        task = self._cached_task(task_id)
+        task = self._cached_task(task_id, include_pending_events=include_pending_events)
         if task is not None:
             if not self._matches_owner(task, account_id, user_id):
                 return None
             return self._copy(task)
         if account_id is None:
             return None
-        return await self._dispatcher.run(lambda: self._get_on_owner(task_id, account_id, user_id))
+        return await self._dispatcher.run(
+            lambda: self._get_on_owner(task_id, account_id, user_id, include_pending_events)
+        )
 
     async def _get_on_owner(
         self,
         task_id: str,
         account_id: str,
         user_id: Optional[str],
+        include_pending_events: bool = False,
     ) -> Optional[TaskRecord]:
-        task = self._cached_task(task_id)
+        task = self._cached_task(task_id, include_pending_events=include_pending_events)
         if task is None:
             task = await self._load_from_store(task_id, account_id, user_id)
             if task is not None:
                 self._merge_loaded_tasks([task])
-                task = self._cached_task(task_id)
+                task = self._cached_task(task_id, include_pending_events=include_pending_events)
         if task is None or not self._matches_owner(task, account_id, user_id):
             return None
         return self._copy(task)
@@ -1202,18 +1283,59 @@ class TaskTracker:
             if task.stage != previous.stage and task.status not in _TERMINAL_STATUSES:
                 kinds.append("stage_changed")
         stage = previous.stage if previous and task.status in _TERMINAL_STATUSES else task.stage
-        recorded_at = datetime.now(timezone.utc).isoformat()
-        for kind in kinds:
-            task.execution_events = append_task_event(
-                task.execution_events,
-                kind=kind,
-                status=task.status.value,
-                stage=_sanitize_error(stage) if stage else None,
-                error=_sanitize_error(task.error)
-                if kind == "error_recorded" and task.error is not None
-                else None,
-                recorded_at=recorded_at,
-            )
+        pending: PendingTaskEvents = {"items": [], "dropped_count": 0}
+        original_history = task.execution_events
+        try:
+            with self._lock:
+                if task.status in _TERMINAL_STATUSES:
+                    self._closed_event_tasks.add(task.task_id)
+                pending = self._event_buffer.snapshot(task.task_id)
+            history = deepcopy(original_history)
+            for event in pending["items"]:
+                history = append_task_event(history, **event)
+            recorded_at = datetime.now(timezone.utc).isoformat()
+            for kind in kinds:
+                history = append_task_event(
+                    history,
+                    kind=kind,
+                    status=task.status.value,
+                    stage=_sanitize_error(stage) if stage else None,
+                    error=_sanitize_error(task.error)
+                    if kind == "error_recorded" and task.error is not None
+                    else None,
+                    recorded_at=recorded_at,
+                )
+            if pending["dropped_count"]:
+                if history is None:
+                    history = {"items": [], "dropped_count": 0, "started_mid_task": True}
+                history["discarded_count"] = (
+                    history.get("discarded_count", 0) + pending["dropped_count"]
+                )
+            if history is not None:
+                trim_task_events(history)
+            json.dumps(history)
+            task.execution_events = history
+        except Exception:
+            # Optional observations must not prevent a valid business snapshot.
+            task.execution_events = original_history
+            try:
+                history = deepcopy(original_history) or {
+                    "items": [],
+                    "dropped_count": 0,
+                    "started_mid_task": True,
+                }
+                history["discarded_count"] = (
+                    history.get("discarded_count", 0)
+                    + pending["dropped_count"]
+                    + len(pending["items"])
+                    + len(kinds)
+                )
+                trim_task_events(history)
+                json.dumps(history)
+                task.execution_events = history
+            except Exception:
+                pass
+            self._report_event_drop("encoding")
         committed = False
 
         async def write_and_publish() -> None:
@@ -1222,7 +1344,7 @@ class TaskTracker:
                 await self._store.create(task)
             else:
                 await self._store.update(task)
-            self._publish_task(task)
+            self._publish_task(task, pending)
             committed = True
 
         # Semaphore/lock waits remain cancellable. Once the store operation is
@@ -1237,21 +1359,42 @@ class TaskTracker:
             if committed:
                 raise _CommittedMutationCancelled() from exc
             raise
+        finally:
+            with self._lock:
+                self._closed_event_tasks.discard(task.task_id)
 
-    def _cached_task(self, task_id: str) -> Optional[TaskRecord]:
+    def _cached_task(
+        self, task_id: str, *, include_pending_events: bool = False
+    ) -> Optional[TaskRecord]:
         with self._lock:
             task = self._tasks.get(task_id)
-        return deepcopy(task) if task is not None else None
+            pending = self._event_buffer.snapshot(task_id) if include_pending_events else None
+        copied = deepcopy(task) if task is not None else None
+        if copied is not None:
+            copied._pending_execution_events = pending
+        return copied
 
     def _cache_snapshot(self) -> List[TaskRecord]:
         with self._lock:
             tasks = list(self._tasks.values())
         return [deepcopy(task) for task in tasks]
 
-    def _publish_task(self, task: TaskRecord) -> None:
+    def _publish_task(
+        self, task: TaskRecord, saved_events: Optional[PendingTaskEvents] = None
+    ) -> None:
         published = deepcopy(task)
+        event_failure = False
         with self._lock:
             self._tasks[task.task_id] = published
+            try:
+                if saved_events is not None:
+                    self._event_buffer.acknowledge(task.task_id, saved_events)
+                if task.status in _TERMINAL_STATUSES:
+                    self._event_buffer.discard(task.task_id)
+            except Exception:
+                event_failure = True
+        if event_failure:
+            self._report_event_drop("acknowledgement")
 
     def _merge_loaded_tasks(self, loaded_tasks: List[TaskRecord]) -> None:
         candidates = [deepcopy(task) for task in loaded_tasks]

@@ -46,7 +46,7 @@ async function fetchTask(taskId: string): Promise<TaskRecord> {
   const result = await getOvResult<unknown>(
     getTaskByTaskId({
       path: { task_id: taskId },
-      query: { include_events: true },
+      query: { include_events: true, include_pending_events: true },
     }),
   )
   const task = normalizeTaskRecord(result)
@@ -276,7 +276,10 @@ export function TaskDetailSheet({
                     )
                   })()}
 
-                  <TaskExecutionEvents task={task} />
+                  <TaskExecutionEvents
+                    task={task}
+                    refreshFailed={detailQuery.isError}
+                  />
 
                   {task.error ? (
                     <DetailSection title={t('detail.error')}>

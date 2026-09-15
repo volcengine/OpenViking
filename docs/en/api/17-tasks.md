@@ -33,6 +33,7 @@ Task records are persisted in AGFS and can be queried after server restart, subj
 |-----------|------|----------|---------|-------------|
 | task_id | str | Yes | - | Task ID returned by a background API |
 | include_events | bool | No | false | Include persisted execution events in the HTTP response |
+| include_pending_events | bool | No | false | Include this server process's buffered execution events in the HTTP response |
 
 #### 3. Usage Examples
 
@@ -145,12 +146,23 @@ Request `GET /api/v1/tasks/{task_id}?include_events=true` to also receive `resul
 | `stage_changed` | An execution path reported a different stage while the task was active |
 | `error_recorded` | TaskTracker accepted the task's first sanitized error |
 | `waiting_for_descendants` | The wait path observed unfinished owned queue work, excluding its own work ID |
+| `operation_started` | Entered a reported logical operation |
+| `operation_completed` | The whole operation returned normally, including its own progress writes; not necessarily new memory or completed downstream indexing |
+| `operation_failed` | The operation failed after its existing retries; includes its own sanitized `error` |
+| `operation_cancelled` | The operation received cancellation, which continues to propagate |
+| `operation_skipped` | An existing execution gate skipped the operation; includes a registered `reason` |
 
-`recorded_at` is the UTC time TaskTracker recorded the event, not browser polling time or necessarily when an underlying exception occurred. Events and task state are written together before publication. `seq` orders events within this task even when timestamps coincide. `stage` is the last reported task stage; parallel work can report errors from other stages. `operation`, when present, identifies the reporting work item. Errors use the existing sanitization and length limit; this history is not the complete component log or Python traceback.
+`recorded_at` is the UTC time TaskTracker recorded the event, not browser polling time or necessarily when an underlying exception occurred. The persisted `execution_events` history and task state are written together before publication; the separate live buffer is described below. `seq` orders persisted events within this task even when timestamps coincide. `stage` is the last reported task stage; parallel work can report errors from other stages. `operation`, when present, identifies the reporting work item. Errors use the existing sanitization and length limit; this history is not the complete component log or Python traceback.
 
 History retains at most 64 events and 32 KiB of serialized event data. Older entries are removed first, `dropped_count` counts removed entries, and retained sequence numbers are not reset. Events expire with the task. Legacy tasks return `execution_events: null`; if an active legacy task later emits an event, `started_mid_task` is true. No earlier events are reconstructed. An older server can omit the field even when requested. Studio explains these cases and retains task metadata, results and errors.
 
-To instrument another execution point, register its kind in `openviking/service/task_events.py`, add Studio translations, and call `await tracker.record_event(task_id, kind, account_id=..., user_id=..., operation=...)`. This internal API records a fact without changing status or stage; it accepts bounded operation identifiers, not arbitrary log payloads. Existing lifecycle methods automatically record their accepted transitions.
+Session commits report `archive_summary` and `long_term_memory_extraction` independently at their actual aggregate operation boundaries. Internal retries and batches do not produce extra operation events. A branch can report failure while its sibling is still running; the final task error and status retain their existing semantics. Skipped operations have no invented start/completion. Reasons are `working_memory_disabled`, `extractor_unavailable`, `extraction_disabled`, `no_eligible_scope`, `no_memory_types`, or `no_pending_messages`.
+
+To instrument another execution point, register its kind in `openviking/service/task_events.py`, add Studio translations, and call `tracker.emit_event(task_id, kind, account_id=..., user_id=..., operation=...)`. This internal, best-effort intake does no I/O and does not change status, stage, error, result or `updated_at`. Operation failures accept an `error`; skips accept a registered `reason`. Ordinary instrumentation errors and capacity limits cannot fail or retry the business operation. The existing async `record_event()` name wraps the same intake; awaiting it no longer implies persistence. Existing lifecycle methods still record accepted transitions with the business snapshot.
+
+For live events, request `GET /api/v1/tasks/{task_id}?include_events=true&include_pending_events=true`. The additional `result.pending_execution_events` object contains `items` and `dropped_count`. Buffered items have a stable `event_id` and `recorded_at`, but no persisted `seq`. Existing task writes include the accepted batch and retain its identity/time, assigning sequence numbers; only successfully written batches are acknowledged. No dedicated event writer or flush is added. A process failure can lose observations since the last business snapshot, including a long operation's buffered history. The default response and task list omit both event fields; `include_events=true` alone still returns persisted history only. Both views require the same task ownership.
+
+The pending buffer is bounded per task to 64 events / 32 KiB, and per tracker to 1,024 buffered tasks / 8 MiB of serialized event payload. On overflow new observations are dropped. Known per-task intake drops are returned separately from history truncation and carried into the next snapshot as optional `execution_events.discarded_count`; global diagnostics do not imply that every task lost events. Memory counters can also be lost on process failure. Studio merges the two sources by event identity without persistence badges or permanent warnings, and reports only known drops, truncation and refresh failures.
 
 Persisted task files now contain `execution_events`. Rolling back requires a version that preserves unknown task fields (commit `a5166386` or later); older readers may reject these files. Rolling back also stops event reporting, so history for tasks active during a downgrade may be incomplete.
 

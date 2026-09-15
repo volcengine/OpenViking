@@ -4,17 +4,34 @@ import { toast } from 'sonner'
 
 import { Button } from '#/components/ui/button'
 import { cn } from '#/lib/utils'
-import { describeTaskEvent, formatTaskEvent } from '../-lib/task-events'
+import {
+  describeTaskEvent,
+  describeTaskOperation,
+  formatTaskEvent,
+  mergeTaskEvents,
+  taskEventKey,
+} from '../-lib/task-events'
 import type { TaskRecord } from '../-lib/task-record'
 
-export function TaskExecutionEvents({ task }: { task: TaskRecord }) {
+export function TaskExecutionEvents({
+  task,
+  refreshFailed = false,
+}: {
+  task: TaskRecord
+  refreshFailed?: boolean
+}) {
   const { t, i18n } = useTranslation('tasksPage')
   const history = task.execution_events
+  const events = mergeTaskEvents(history, task.pending_execution_events)
+  const discarded =
+    (history?.discarded_count ?? 0) +
+    (task.pending_execution_events?.dropped_count ?? 0)
   const notices = [
     history?.started_mid_task ? t('events.partial') : '',
     history?.dropped_count
       ? t('events.truncated', { count: history.dropped_count })
       : '',
+    discarded ? t('events.discarded', { count: discarded }) : '',
   ].filter(Boolean)
 
   async function copyEvents() {
@@ -28,7 +45,8 @@ export function TaskExecutionEvents({ task }: { task: TaskRecord }) {
         [
           `${t('events.context')}: ${JSON.stringify(context)}`,
           ...notices,
-          ...(history?.items.map((event) => formatTaskEvent(event, t)) ?? []),
+          ...(refreshFailed ? [t('events.refreshFailed')] : []),
+          ...events.map((event) => formatTaskEvent(event, t)),
         ].join('\n'),
       )
       toast.success(t('events.copied'))
@@ -44,7 +62,7 @@ export function TaskExecutionEvents({ task }: { task: TaskRecord }) {
         <Button
           variant="ghost"
           size="sm"
-          disabled={!history?.items.length}
+          disabled={!events.length}
           onClick={() => void copyEvents()}
         >
           <CopyIcon />
@@ -57,15 +75,15 @@ export function TaskExecutionEvents({ task }: { task: TaskRecord }) {
           {notice}
         </p>
       ))}
-      {!history?.items.length ? (
+      {!events.length ? (
         <p className="text-sm text-muted-foreground">
           {history === undefined ? t('events.unsupported') : t('events.empty')}
         </p>
       ) : (
         <ol className="max-h-64 space-y-3 overflow-auto rounded-md border bg-muted/30 p-3 font-mono text-xs">
-          {history.items.map((event) => (
+          {events.map((event) => (
             <li
-              key={event.seq}
+              key={taskEventKey(event)}
               className={cn(
                 'grid gap-1',
                 (event.error !== null || event.status === 'failed') &&
@@ -73,7 +91,6 @@ export function TaskExecutionEvents({ task }: { task: TaskRecord }) {
               )}
             >
               <div className="text-muted-foreground">
-                <span>#{event.seq} </span>
                 <time dateTime={event.recorded_at} title={event.recorded_at}>
                   {new Date(event.recorded_at).toLocaleString(
                     i18n.resolvedLanguage,
@@ -94,7 +111,18 @@ export function TaskExecutionEvents({ task }: { task: TaskRecord }) {
                 <p>{t('events.stageContext', { stage: event.stage })}</p>
               )}
               {event.operation && (
-                <p>{t('events.operation', { operation: event.operation })}</p>
+                <p>
+                  {t('events.operation', {
+                    operation: describeTaskOperation(event.operation, t),
+                  })}
+                </p>
+              )}
+              {event.reason && (
+                <p>
+                  {t(`events.skipReasons.${event.reason}`, {
+                    defaultValue: event.reason,
+                  })}
+                </p>
               )}
               {event.error !== null && (
                 <p className="whitespace-pre-wrap break-words">{event.error}</p>

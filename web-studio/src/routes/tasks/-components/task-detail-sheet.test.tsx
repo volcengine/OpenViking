@@ -114,7 +114,7 @@ describe('recorded task execution events', () => {
       const events = await screen.findByRole('region', { name: title })
       expect(api.getTask).toHaveBeenCalledWith({
         path: { task_id: 'task-1' },
-        query: { include_events: true },
+        query: { include_events: true, include_pending_events: true },
       })
       expect(within(events).getAllByRole('listitem')).toHaveLength(1)
       expect(events.querySelector('time')?.dateTime).toBe(
@@ -183,5 +183,87 @@ describe('recorded task execution events', () => {
     await showDetail('en', 'acme/bob', first.client)
     expect(await screen.findByText('NOT_FOUND: task not visible')).toBeDefined()
     expect(screen.queryByText('future_process_event')).toBeNull()
+  })
+
+  it.each(['en', 'zh'])(
+    'merges live and persisted operations without exposing persistence in %s',
+    async (language) => {
+      const event = {
+        event_id: 'operation-1',
+        recorded_at: '2026-09-09T01:00:58.123Z',
+        kind: 'operation_skipped',
+        status: 'running',
+        stage: null,
+        operation: 'archive_summary',
+        error: null,
+        reason: 'working_memory_disabled',
+      }
+      const active = {
+        ...task,
+        status: 'running',
+        execution_events: {
+          items: [],
+          dropped_count: 0,
+          started_mid_task: false,
+        },
+        pending_execution_events: { items: [event], dropped_count: 0 },
+      }
+      api.getTask.mockResolvedValue(active)
+      const { client } = await showDetail(language)
+      const events = await screen.findByRole('region', {
+        name: language === 'en' ? 'Task execution log' : '任务执行日志',
+      })
+      await within(events).findByText(
+        language === 'en' ? 'Operation skipped' : '操作已跳过',
+      )
+      const original = within(events).getByRole('listitem')
+      expect(events.textContent).toContain(
+        language === 'en' ? 'Working memory is disabled.' : '工作记忆已关闭。',
+      )
+      expect(events.textContent).not.toMatch(
+        /尚未保存|已保存|unsaved|persisted|best.effort|重启可能/i,
+      )
+      api.getTask.mockResolvedValue({
+        ...active,
+        execution_events: {
+          ...active.execution_events,
+          items: [{ ...event, seq: 4 }],
+        },
+        // Also tolerate a duplicate from a cached transitional response.
+        pending_execution_events: { items: [event], dropped_count: 0 },
+      })
+      await act(async () => {
+        await client.refetchQueries({ queryKey: ['task-detail'] })
+      })
+      expect(within(events).getAllByRole('listitem')).toHaveLength(1)
+      expect(within(events).getByRole('listitem')).toBe(original)
+      fireEvent.click(
+        within(events).getByRole('button', {
+          name: language === 'en' ? 'Copy events' : '复制事件',
+        }),
+      )
+      await waitFor(() => expect(api.copy).toHaveBeenCalledOnce())
+      expect(api.copy.mock.calls[0][0]).not.toMatch(
+        /尚未保存|已保存|unsaved|persisted|best.effort|重启可能/i,
+      )
+    },
+  )
+
+  it('reports known drops and includes refresh failures when copying', async () => {
+    api.getTask.mockResolvedValue({
+      ...task,
+      pending_execution_events: { items: [], dropped_count: 3 },
+    })
+    const { client } = await showDetail()
+    expect(await screen.findByText('3 task events were dropped.')).toBeDefined()
+    api.getTask.mockRejectedValue(new Error('network unavailable'))
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['task-detail'] })
+    })
+    await screen.findByRole('alert')
+    fireEvent.click(screen.getByRole('button', { name: 'Copy events' }))
+    await waitFor(() => expect(api.copy).toHaveBeenCalledOnce())
+    expect(api.copy.mock.calls[0][0]).toContain('Events could not be refreshed')
+    expect(api.copy.mock.calls[0][0]).toContain('3 task events were dropped.')
   })
 })
