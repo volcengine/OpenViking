@@ -42,7 +42,14 @@ from openviking.service.task_store import (
 from openviking.service.task_tracker import (
     get_task_tracker,
 )
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.account_templates import (
+    EDITABLE_MEMORY_TEMPLATE_FIELDS,
+    default_memory_template,
+    memory_template_result,
+    read_account_memory_template,
+    update_account_memory_template,
+)
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -268,7 +275,7 @@ def _user_settings_result(
         else default_memory_policy
     )
     policy = MemoryPolicy.from_dict(memory_policy_config)
-    known_memory_types = set(MemoryTypeRegistry().list_names(include_disabled=False))
+    known_memory_types = set(get_default_registry().list_names(include_disabled=False))
     policy.validate_memory_types(known_memory_types)
     memory_policy = policy.to_dict()
     if policy.memory_types is None:
@@ -456,6 +463,113 @@ async def patch_account_settings(
     return Response(
         status="ok",
         result=await _account_settings_result(account_id, settings),
+    )
+
+
+# ---- Account memory templates ----
+
+
+async def _memory_template_service(request: Request, ctx: RequestContext, account_id: str):
+    _check_account_access(ctx, account_id)
+    await _check_account_exists(request, account_id)
+    service = get_service()
+    if service.viking_fs is None:
+        raise FailedPreconditionError("OpenViking service is not initialized.")
+    return service
+
+
+@router.get("/accounts/{account_id}/memory-templates")
+@require_auth_root_or_admin
+async def list_memory_templates(
+    request: Request,
+    account_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List full defaults and account overrides for the six editable memory templates."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    names = list(EDITABLE_MEMORY_TEMPLATE_FIELDS)
+    templates = await asyncio.gather(
+        *(read_account_memory_template(service.viking_fs, account_id, name) for name in names)
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "templates": [
+                memory_template_result(registry, template, name)
+                for name, template in zip(names, templates, strict=True)
+            ],
+        },
+    )
+
+
+@router.get("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def get_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Read one template's full defaults and effective account configuration."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    default_memory_template(registry, memory_type)
+    config = await read_account_memory_template(service.viking_fs, account_id, memory_type)
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
+    )
+
+
+@router.put("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def put_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    body: dict = Body(...),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Fill omitted values from deployment defaults and publish a complete YAML template."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    config = await update_account_memory_template(
+        service.viking_fs, account_id, memory_type, body, registry
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
+    )
+
+
+@router.delete("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def reset_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Remove one template override without rewriting existing memories."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    config = await update_account_memory_template(
+        service.viking_fs, account_id, memory_type, None, registry
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
     )
 
 

@@ -9,6 +9,12 @@ const CAPTURE_CONFIG = {
   captureMaxLength: 24000,
 };
 
+function toolParts(turns, toolName) {
+  return turns
+    .flatMap((turn) => turn.parts)
+    .filter((part) => part.type === "tool" && part.tool_name === toolName);
+}
+
 test("pairs current Codex function_call records by call_id", () => {
   const turns = extractCaptureTurns(
     [
@@ -201,6 +207,507 @@ test("deduplicates function records also reported as mcp_tool_call_end", () => {
   assert.deepEqual(parts.map((part) => part.tool_id), ["mcp-call-1", "mcp-call-1"]);
 });
 
+test("keeps outer exec and captures its nested MCP tool by the nested call id", () => {
+  const uri = "viking://user/test/memories/experiences/refund.md";
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          call_id: "call-outer",
+          name: "exec",
+          input: "await tools.mcp__openviking_memory__read(...)",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-outer",
+          output: "nested call completed",
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "code-mode-nested:7:call-outer:exec-read",
+          invocation: {
+            server: "openviking-memory",
+            tool: "read",
+            arguments: { uris: [uri] },
+          },
+          result: {
+            Ok: {
+              content: [{ type: "text", text: JSON.stringify({ uri, content: "refund policy" }) }],
+            },
+          },
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "exec").map((part) => part.tool_status), [
+    "running",
+    "completed",
+  ]);
+  assert.deepEqual(toolParts(turns, "read"), [
+    {
+      type: "tool",
+      tool_id: "code-mode-nested:7:call-outer:exec-read",
+      tool_name: "read",
+      tool_status: "running",
+      tool_input: { uris: [uri] },
+    },
+    {
+      type: "tool",
+      tool_id: "code-mode-nested:7:call-outer:exec-read",
+      tool_name: "read",
+      tool_status: "completed",
+      tool_output: JSON.stringify({ uri, content: "refund policy" }),
+    },
+  ]);
+});
+
+test("keeps outer exec when a nested tool reuses its call id", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          call_id: "shared-call-id",
+          name: "exec",
+          input: "await tools.mcp__openviking_memory__find(...)",
+        },
+      },
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "shared-call-id",
+          output: "nested call completed",
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "shared-call-id",
+          invocation: {
+            server: "openviking-memory",
+            tool: "find",
+            arguments: { query: "refund" },
+          },
+          result: { Ok: { content: [{ type: "text", text: "found" }] } },
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "exec").map((part) => part.tool_status), [
+    "running",
+    "completed",
+  ]);
+  assert.deepEqual(toolParts(turns, "find").map((part) => part.tool_status), [
+    "running",
+    "completed",
+  ]);
+});
+
+test("captures legacy command and patch completion events", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "event_msg",
+        payload: {
+          type: "exec_command_end",
+          call_id: "exec-shell",
+          command: ["pwd"],
+          cwd: "/workspace",
+          aggregated_output: "/workspace\n",
+          exit_code: 0,
+          status: "completed",
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "patch_apply_end",
+          call_id: "exec-patch",
+          changes: { "README.md": { type: "update" } },
+          stdout: "Done!",
+          stderr: "",
+          success: true,
+          status: "completed",
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "exec_command"), [
+    {
+      type: "tool",
+      tool_id: "exec-shell",
+      tool_name: "exec_command",
+      tool_status: "running",
+      tool_input: { command: ["pwd"], cwd: "/workspace" },
+    },
+    {
+      type: "tool",
+      tool_id: "exec-shell",
+      tool_name: "exec_command",
+      tool_status: "completed",
+      tool_output: "/workspace",
+    },
+  ]);
+  assert.deepEqual(toolParts(turns, "apply_patch"), [
+    {
+      type: "tool",
+      tool_id: "exec-patch",
+      tool_name: "apply_patch",
+      tool_status: "running",
+      tool_input: { changes: { "README.md": { type: "update" } } },
+    },
+    {
+      type: "tool",
+      tool_id: "exec-patch",
+      tool_name: "apply_patch",
+      tool_status: "completed",
+      tool_output: "Done!",
+    },
+  ]);
+});
+
+test("falls back to command stdout and stderr when aggregated output is absent", () => {
+  const turns = extractCaptureTurns(
+    [{
+      type: "event_msg",
+      payload: {
+        type: "exec_command_end",
+        call_id: "exec-shell-streams",
+        command: ["check"],
+        stdout: "partial output",
+        stderr: "failure detail",
+        exit_code: 2,
+        status: "failed",
+      },
+    }],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "exec_command").at(-1), {
+    type: "tool",
+    tool_id: "exec-shell-streams",
+    tool_name: "exec_command",
+    tool_status: "error",
+    tool_output: "partial output\nfailure detail",
+  });
+});
+
+test("uses the final legacy command lifecycle event", async (t) => {
+  for (const exitCode of [1, 130]) {
+    await t.test(`records exit ${exitCode} as an error`, () => {
+      const callId = `exec-backgrounded-${exitCode}`;
+      const turns = extractCaptureTurns(
+        [
+          {
+            type: "event_msg",
+            payload: {
+              type: "exec_command_end",
+              call_id: callId,
+              command: ["long-running-command"],
+              aggregated_output: "",
+              exit_code: 0,
+              status: "backgrounded",
+            },
+          },
+          {
+            type: "event_msg",
+            payload: {
+              type: "exec_command_end",
+              call_id: callId,
+              command: ["long-running-command"],
+              aggregated_output: `failed with exit ${exitCode}`,
+              exit_code: exitCode,
+              status: "failed",
+            },
+          },
+        ],
+        CAPTURE_CONFIG,
+      );
+
+      assert.deepEqual(toolParts(turns, "exec_command").map((part) => part.tool_status), [
+        "running",
+        "error",
+      ]);
+      assert.equal(
+        toolParts(turns, "exec_command").at(-1).tool_output,
+        `failed with exit ${exitCode}`,
+      );
+    });
+  }
+});
+
+test("captures completed paginated tools without duplicating legacy events", () => {
+  const experienceUri = "viking://user/test/memories/experiences/refund.md";
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "McpToolCall",
+            id: "nested-find",
+            server: "openviking-memory",
+            tool: "find",
+            arguments: { query: "refund" },
+            status: "completed",
+            result: { content: [{ type: "text", text: "found" }], isError: false },
+          },
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "nested-find",
+          invocation: {
+            server: "openviking-memory",
+            tool: "find",
+            arguments: { query: "refund" },
+          },
+          result: { Ok: { content: [{ type: "text", text: "found" }] } },
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "McpToolCall",
+            id: "nested-read",
+            server: "openviking-memory",
+            tool: "read",
+            arguments: { uris: [experienceUri] },
+            status: "completed",
+            result: {
+              content: [{
+                type: "text",
+                text: JSON.stringify({ uri: experienceUri, content: "refund policy" }),
+              }],
+              isError: false,
+            },
+          },
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "CommandExecution",
+            id: "nested-command",
+            command: ["false"],
+            cwd: "/workspace",
+            parsed_cmd: [],
+            source: "unified_exec_startup",
+            status: "failed",
+            aggregated_output: "command failed",
+            exit_code: 1,
+          },
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "exec_command_end",
+          call_id: "nested-command",
+          command: ["false"],
+          cwd: "/workspace",
+          status: "backgrounded",
+          aggregated_output: "backgrounded",
+          exit_code: 0,
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "FileChange",
+            id: "nested-patch",
+            changes: { "src/a.js": { type: "add" } },
+            status: "completed",
+            stdout: "Done!",
+            stderr: "",
+          },
+        },
+      },
+      {
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "DynamicToolCall",
+            id: "dynamic-1",
+            tool: "lookup",
+            arguments: { id: 7 },
+            status: "completed",
+            success: true,
+            content_items: [{ type: "inputText", text: "record 7" }],
+          },
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "find").map((part) => part.tool_status), [
+    "running",
+    "completed",
+  ]);
+  assert.deepEqual(toolParts(turns, "read"), [
+    {
+      type: "tool",
+      tool_id: "nested-read",
+      tool_name: "read",
+      tool_status: "running",
+      tool_input: { uris: [experienceUri] },
+    },
+    {
+      type: "tool",
+      tool_id: "nested-read",
+      tool_name: "read",
+      tool_status: "completed",
+      tool_output: JSON.stringify({ uri: experienceUri, content: "refund policy" }),
+    },
+  ]);
+  assert.deepEqual(toolParts(turns, "exec_command").map((part) => part.tool_status), [
+    "running",
+    "error",
+  ]);
+  assert.equal(toolParts(turns, "exec_command").at(-1).tool_output, "command failed");
+  assert.deepEqual(toolParts(turns, "apply_patch").map((part) => part.tool_status), [
+    "running",
+    "completed",
+  ]);
+  assert.deepEqual(toolParts(turns, "lookup"), [
+    {
+      type: "tool",
+      tool_id: "dynamic-1",
+      tool_name: "lookup",
+      tool_status: "running",
+      tool_input: { id: 7 },
+    },
+    {
+      type: "tool",
+      tool_id: "dynamic-1",
+      tool_name: "lookup",
+      tool_status: "completed",
+      tool_output: JSON.stringify([{ type: "inputText", text: "record 7" }]),
+    },
+  ]);
+});
+
+test("expands history mutation items and deduplicates matching response items", () => {
+  const call = {
+    type: "function_call",
+    id: "fc-history-1",
+    call_id: "history-call-1",
+    name: "exec",
+    arguments: "await Promise.resolve()",
+  };
+  const output = {
+    type: "function_call_output",
+    id: "fco-history-1",
+    call_id: "history-call-1",
+    output: "done",
+  };
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "history_mutation",
+        payload: {
+          operation: "append",
+          items: [
+            {
+              type: "message",
+              id: "history-message-1",
+              role: "assistant",
+              content: [{ type: "output_text", text: "running a check" }],
+            },
+            call,
+            output,
+          ],
+        },
+      },
+      { type: "response_item", payload: call },
+      { type: "response_item", payload: output },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "exec").map((part) => part.tool_status), [
+    "running",
+    "completed",
+  ]);
+  assert.equal(turns.some((turn) => turn.text === "running a check"), true);
+});
+
+test("deduplicates custom tool calls repeated as history function calls", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          id: "custom-item-1",
+          call_id: "outer-call-1",
+          name: "exec",
+          input: "await Promise.resolve()",
+        },
+      },
+      {
+        type: "history_mutation",
+        payload: {
+          operation: "append",
+          items: [{
+            type: "function_call",
+            id: "function-item-1",
+            call_id: "outer-call-1",
+            name: "exec",
+            arguments: "await Promise.resolve()",
+          }],
+        },
+      },
+      {
+        type: "history_mutation",
+        payload: {
+          operation: "append",
+          items: [{
+            type: "function_call_output",
+            id: "function-output-1",
+            call_id: "outer-call-1",
+            output: "done",
+          }],
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "exec").map((part) => part.tool_status), [
+    "running",
+    "completed",
+  ]);
+});
+
 test("captures Codex subagent messages and activity with identity", () => {
   const turns = extractCaptureTurns(
     [
@@ -358,6 +865,35 @@ test("keeps MCP tool-level errors out of completed generic read tool parts", () 
   const parts = turns.flatMap((turn) => turn.parts);
   assert.deepEqual(parts.map((part) => part.tool_status), ["running", "error"]);
   assert.equal(parts.some((part) => part.tool_status === "completed"), false);
+});
+
+test("marks paginated MCP errors as failed tool parts", () => {
+  const turns = extractCaptureTurns(
+    [
+      {
+        type: "event_msg",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "McpToolCall",
+            id: "nested-read-error",
+            server: "openviking-memory",
+            tool: "read",
+            arguments: { uris: ["viking://user/test/memories/experiences/a.md"] },
+            status: "failed",
+            error: { message: "OpenViking request failed (HTTP 500)" },
+          },
+        },
+      },
+    ],
+    CAPTURE_CONFIG,
+  );
+
+  assert.deepEqual(toolParts(turns, "read").map((part) => part.tool_status), [
+    "running",
+    "error",
+  ]);
+  assert.match(toolParts(turns, "read")[1].tool_output, /HTTP 500/);
 });
 
 test("preserves generic read input when Codex truncates a long MCP result", () => {

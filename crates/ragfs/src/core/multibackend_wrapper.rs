@@ -573,6 +573,11 @@ impl MultiWriteWrappedFSBuilder {
 }
 
 impl MultiWriteWrappedFS {
+    /// Return this wrapper's current background task count without scanning metadata.
+    pub(crate) fn background_task_count(&self) -> usize {
+        self.inner.background_tasks.load(Ordering::SeqCst)
+    }
+
     /// Start building a multi-write wrapper from a primary backend.
     pub fn builder(primary_backend: Arc<dyn FileSystem>) -> MultiWriteWrappedFSBuilder {
         MultiWriteWrappedFSBuilder {

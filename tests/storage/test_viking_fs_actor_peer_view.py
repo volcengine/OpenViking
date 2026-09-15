@@ -233,6 +233,14 @@ async def test_legacy_session_scope_merges_new_and_unmigrated_sessions(fs, actor
     with pytest.raises(NotFoundError):
         await fs.read_file(f"{session_root}/other-owned/messages.jsonl", ctx=actor_ctx)
 
+    for session_id in ("new-session", "legacy-session", "nested-session"):
+        children = await fs.ls(f"{session_root}/{session_id}", ctx=actor_ctx)
+        assert [entry["uri"] for entry in children] == [
+            f"{session_root}/{session_id}/messages.jsonl"
+        ]
+    with pytest.raises(NotFoundError):
+        await fs.ls(f"{session_root}/other-owned", ctx=actor_ctx)
+
 
 @pytest.mark.asyncio
 async def test_actor_peer_view_filters_tree_from_user_root(fs, actor_ctx):

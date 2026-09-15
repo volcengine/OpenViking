@@ -920,8 +920,6 @@ class _AccessMixin:
         raw_count = 0
 
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
             try:
                 entries = await self._ls_entries(
                     path,
@@ -937,6 +935,11 @@ class _AccessMixin:
                     last_not_found = exc
                     continue
                 raise
+
+            # Missing legacy directories need no owner probes. Check visibility
+            # before merging entries from a directory that actually exists.
+            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+                continue
 
             found_path = True
             raw_count += len(entries)

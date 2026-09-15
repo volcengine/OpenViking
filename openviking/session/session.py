@@ -163,9 +163,9 @@ def _wm_debug(msg: str) -> None:
 
 def _enabled_memory_types() -> set[str]:
     """Return enabled memory type names registered for extraction."""
-    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+    from openviking.session.memory.memory_type_registry import get_default_registry
 
-    return set(MemoryTypeRegistry().list_names(include_disabled=False))
+    return set(get_default_registry().list_names(include_disabled=False))
 
 
 def _validate_memory_policy_types(policy: MemoryPolicy) -> None:

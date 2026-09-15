@@ -212,6 +212,7 @@ use ragfs::lock::{
     BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
     PathLockManager, PathLockRequest,
 };
+use ragfs::metrics::{RagfsMetric, RagfsMetricValue};
 
 /// Parse an optional listing sort field and return the matching RagFS value.
 fn parse_list_sort_by(value: Option<&str>) -> PyResult<Option<ListSortBy>> {
@@ -489,12 +490,9 @@ fn pathlock_config_from_value(value: &serde_json::Value) -> Result<PathLockConfi
         }
     }
 
-    let lock_timeout_secs =
-        f64_field(pathlock, "lock_timeout_secs", 0.0)?;
+    let lock_timeout_secs = f64_field(pathlock, "lock_timeout_secs", 0.0)?;
     if !lock_timeout_secs.is_finite() || lock_timeout_secs < 0.0 {
-        return Err(
-            "pathlock.lock_timeout_secs must be a finite non-negative number".to_string(),
-        );
+        return Err("pathlock.lock_timeout_secs must be a finite non-negative number".to_string());
     }
     let lock_expire_secs = f64_field(pathlock, "lock_expire_secs", 30.0)?;
     if !lock_expire_secs.is_finite() || lock_expire_secs < 1.0 {
@@ -532,8 +530,7 @@ fn cache_config_from_ov_conf_with_runtime(
 fn cache_config_from_canonical_ov_conf(
     json: &serde_json::Value,
 ) -> Result<RagfsCacheConfig, String> {
-    let pathlock_uses_cache =
-        pathlock_config_from_canonical_ov_conf(json)?.provider == "cache";
+    let pathlock_uses_cache = pathlock_config_from_canonical_ov_conf(json)?.provider == "cache";
     cache_config_from_canonical_ov_conf_with_runtime(json, pathlock_uses_cache)
 }
 
@@ -1078,14 +1075,54 @@ fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<Py
     Ok(dict.into())
 }
 
-/// Convert OperationStats to a Python dict.
+/// Convert the supplied native statistics into the legacy microsecond Python dict.
 fn operation_stats_to_py_dict(py: Python<'_>, stats: &OperationStats) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("count", stats.count)?;
-    dict.set_item("total_time_us", stats.total_time_us)?;
-    dict.set_item("min_time_us", stats.min_time_us)?;
-    dict.set_item("max_time_us", stats.max_time_us)?;
-    dict.set_item("avg_time_us", stats.avg_time_us())?;
+    dict.set_item("total_time_us", stats.total_time_ns / 1_000)?;
+    dict.set_item(
+        "min_time_us",
+        if stats.count == 0 {
+            u64::MAX
+        } else {
+            stats.min_time_ns / 1_000
+        },
+    )?;
+    dict.set_item("max_time_us", stats.max_time_ns / 1_000)?;
+    dict.set_item("avg_time_us", stats.avg_time_ns() / 1_000.0)?;
+    Ok(dict.into())
+}
+
+/// Convert the supplied native metric into a flat Python dict, preserving integer values.
+fn metric_to_py_dict(py: Python<'_>, metric: &RagfsMetric) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("name", &metric.name)?;
+    dict.set_item("labels", &metric.labels)?;
+    match &metric.value {
+        RagfsMetricValue::Counter { value, scale } => {
+            dict.set_item("type", "counter")?;
+            dict.set_item("value", value)?;
+            dict.set_item("scale", scale)?;
+        }
+        RagfsMetricValue::Gauge(value) => {
+            dict.set_item("type", "gauge")?;
+            dict.set_item("value", value)?;
+        }
+        RagfsMetricValue::Histogram {
+            bucket_bounds,
+            bucket_counts,
+            count,
+            sum,
+            scale,
+        } => {
+            dict.set_item("type", "histogram")?;
+            dict.set_item("bucket_bounds", bucket_bounds)?;
+            dict.set_item("bucket_counts", bucket_counts)?;
+            dict.set_item("count", count)?;
+            dict.set_item("sum", sum)?;
+            dict.set_item("scale", scale)?;
+        }
+    }
     Ok(dict.into())
 }
 
@@ -1523,8 +1560,8 @@ impl RAGFSBindingClient {
             }
             if let Some(pl_obj) = cfg.get("pathlock") {
                 let pl_value = py_to_json_value(pl_obj.bind(py))?;
-                ragfs_cfg.pathlock = pathlock_config_from_value(&pl_value)
-                    .map_err(PyValueError::new_err)?;
+                ragfs_cfg.pathlock =
+                    pathlock_config_from_value(&pl_value).map_err(PyValueError::new_err)?;
             }
         }
 
@@ -2903,6 +2940,20 @@ impl RAGFSBindingClient {
             dict.set_item("conflicts", conflicts)?;
             Ok(dict.into())
         })
+    }
+
+    /// Read all native metrics with no arguments and return a list of flat Python dicts.
+    fn metrics(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let fs = self.mountable.clone();
+        let metrics = py_detach_blocking(py, move || {
+            self.rt.block_on(async move { fs.metrics().await })
+        })
+        .map_err(to_py_err)?;
+        let result = PyList::empty(py);
+        for metric in &metrics {
+            result.append(metric_to_py_dict(py, metric)?)?;
+        }
+        Ok(result.into())
     }
 
     /// Get filesystem statistics.
