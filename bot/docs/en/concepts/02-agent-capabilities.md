@@ -26,7 +26,7 @@ Workspace bootstrap files provide a stable identity and operating rules. Images 
 | **Skill** | Tells the Agent how to complete a class of tasks | `SKILL.md` instructions and resources |
 | **Tool** | Lets the Agent perform a concrete operation | A JSON Schema function registered with the model |
 
-Skills use progressive loading. Every turn includes the full content of Always Skills. Other Skills contribute only their name, description, and path until the Agent reads them with `read_file`. SkillsLoader checks dependencies such as commands and environment variables so unavailable capabilities are not presented as ready.
+Skills use progressive loading. Local Always Skills inject complete instructions each turn; other local Skills provide summaries and load through `read_file` when needed. With OpenViking tools enabled, remote Skills are retrieved for the user query and read and activated through `openviking_multi_read`. Local requirements filter summaries; remote requirements are checked in the execution sandbox. See [Skills](./06-skills.md) for usage and metadata fields.
 
 A Skill may orchestrate several tools, but it does not receive additional permissions automatically. Tool visibility still depends on the runtime mode, channel settings, request parameters, and sandbox.
 
@@ -188,3 +188,4 @@ Custom Hooks can be loaded through `bot.hooks`.
 - [VikingBot Architecture](./01-architecture.md)
 - [Channels, Gateway, and Operations](./03-channels-and-gateway.md)
 - [OpenViking Integration](./04-openviking-integration.md)
+- [Skills](./06-skills.md)

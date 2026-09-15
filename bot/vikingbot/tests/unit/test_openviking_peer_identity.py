@@ -29,10 +29,6 @@ def _client(api_key_type: str = "user") -> VikingClient:
     client.admin_user_id = "bot-user"
     client.agent_id = "agent-1"
     client._request_connection = None
-    client._namespace_policy = {
-        "isolate_user_scope_by_agent": False,
-        "isolate_agent_scope_by_user": False,
-    }
     return client
 
 

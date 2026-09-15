@@ -21,11 +21,12 @@
  *     OPENVIKING_AUTO_RECALL, OPENVIKING_RECALL_LIMIT, OPENVIKING_RECALL_TOKEN_BUDGET,
  *     OPENVIKING_RECALL_MAX_CONTENT_CHARS, OPENVIKING_RECALL_PREFER_ABSTRACT,
  *     OPENVIKING_SCORE_THRESHOLD, OPENVIKING_MIN_QUERY_LENGTH, OPENVIKING_LOG_RANKING_DETAILS,
- *     OPENVIKING_RECALL_PEER_SCOPE, OPENVIKING_RECALL_COMPRESS
+ *     OPENVIKING_RECALL_PEER_SCOPE, OPENVIKING_RECALL_COMPRESS,
+ *     OPENVIKING_RECALL_QUERY_FILTERS (CSV)
  *   Capture tuning:
  *     OPENVIKING_AUTO_CAPTURE, OPENVIKING_CAPTURE_MODE, OPENVIKING_CAPTURE_MAX_LENGTH,
  *     OPENVIKING_CAPTURE_ASSISTANT_TURNS, OPENVIKING_COMMIT_TOKEN_THRESHOLD,
- *     OPENVIKING_RESUME_CONTEXT_BUDGET
+ *     OPENVIKING_RESUME_CONTEXT_BUDGET, OPENVIKING_CAPTURE_FILTERS (CSV)
  *   Lifecycle / behavior:
  *     OPENVIKING_TIMEOUT_MS, OPENVIKING_CAPTURE_TIMEOUT_MS, OPENVIKING_WRITE_PATH_ASYNC,
  *     OPENVIKING_BYPASS_SESSION, OPENVIKING_BYPASS_SESSION_PATTERNS (CSV),
@@ -252,6 +253,18 @@ export function loadConfig(cwd = process.cwd()) {
         ? cc.bypassSessionPatterns.filter((p) => typeof p === "string" && p.trim())
         : []);
 
+  // Input filter rule lists: env CSV overrides the configured array entirely,
+  // same shape as bypassSessionPatterns. Both paths trim, so a rule reads the
+  // same however it was configured — and a rule that needs a literal comma has
+  // to come from the array, since the env value is split on it.
+  const filterList = (envName, configured) => {
+    const raw = str(process.env[envName], null);
+    const list = raw !== null ? raw.split(",") : (Array.isArray(configured) ? configured : []);
+    return list.filter((r) => typeof r === "string").map((r) => r.trim()).filter(Boolean);
+  };
+  const recallQueryFilters = filterList("OPENVIKING_RECALL_QUERY_FILTERS", cc.recallQueryFilters);
+  const captureFilters = filterList("OPENVIKING_CAPTURE_FILTERS", cc.captureFilters);
+
   return {
     configPath,
     credentialSource,
@@ -407,6 +420,11 @@ export function loadConfig(cwd = process.cwd()) {
     // should not contaminate OV.
     bypassSessionPatterns,
     bypassSession: envBool("OPENVIKING_BYPASS_SESSION") ?? false,
+
+    // Ordered sed-style rules over the text the plugin sends: the recall query
+    // on UserPromptSubmit, and every captured turn on the write path.
+    recallQueryFilters,
+    captureFilters,
 
     // Write-path async: auto-capture / session-end / subagent-stop fire-and-
     // forget via a detached child process, so the hook returns to CC instantly.

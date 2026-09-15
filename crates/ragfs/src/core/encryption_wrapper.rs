@@ -16,17 +16,17 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
-use crate::crypto;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
-use crate::lock::{
-    AutoPathLockAction, PathLockKind, PathLockManager, PathLockRequest,
-};
+use crate::crypto;
+use crate::lock::{AutoPathLockAction, PathLockKind, PathLockManager, PathLockRequest};
 use crate::shape::SHAPE_MANIFEST_PATH;
 
 use super::context::FsContextView;
 use super::errors::{Error, Result};
-use super::filesystem::{compile_grep_regex, normalize_prefix_path, FileSystem};
-use super::types::{FileInfo, GlobPage, GrepResult, TreeEntry, WriteFlag};
+use super::filesystem::{
+    apply_read_dir_options, compile_grep_regex, normalize_prefix_path, paginate_entries, FileSystem,
+};
+use super::types::{FileInfo, GlobPage, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag};
 
 const SYSTEM_ACCOUNT_ID: &str = "_system";
 const TEMP_ROOT_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -182,7 +182,10 @@ impl EncryptionWrappedFS {
         } else {
             format!("/{}", path)
         };
-        let parts: Vec<&str> = normalized.split('/').filter(|part| !part.is_empty()).collect();
+        let parts: Vec<&str> = normalized
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
         match parts.as_slice() {
             ["local", account_id, ..] => format!("/local/{}/temp/.encrypt_stage", account_id),
             [mount_root, _, ..] => format!("/{}/temp/.encrypt_stage", mount_root),
@@ -275,7 +278,6 @@ impl EncryptionWrappedFS {
         }
         Ok(written)
     }
-
 }
 
 /// Slice `data` by `(offset, size)` with `size == 0` meaning "to end", matching plugin read semantics.
@@ -379,7 +381,10 @@ impl FileSystem for EncryptionWrappedFS {
             kind: PathLockKind::Exact,
         };
         let requests = vec![
-            PathLockRequest { path: temp_lock_path, kind: PathLockKind::Exact },
+            PathLockRequest {
+                path: temp_lock_path,
+                kind: PathLockKind::Exact,
+            },
             final_request.clone(),
         ];
         let action = self
@@ -389,22 +394,20 @@ impl FileSystem for EncryptionWrappedFS {
             .map_err(|error| {
                 Error::internal(format!("encrypted write lock context error: {error}"))
             })?;
-        let action_name = match &action { AutoPathLockAction::Disabled => "disabled", AutoPathLockAction::Covered(_) => "covered", AutoPathLockAction::Acquire => "acquire" };
+        let action_name = match &action {
+            AutoPathLockAction::Disabled => "disabled",
+            AutoPathLockAction::Covered(_) => "covered",
+            AutoPathLockAction::Acquire => "acquire",
+        };
         debug!(path = %path, temp_path = %temp_path, final_lock_path = %requests[1].path, temp_lock_path = %requests[0].path, action = %action_name, "encrypted write resolved dual-path pathlock action");
         let lock_guard = match action {
             AutoPathLockAction::Disabled => None,
             AutoPathLockAction::Covered(outer) => {
-                let owner_capability = (
-                    outer.lease.lease_ref.as_str(),
-                    outer.ownership_ref.as_str(),
-                );
+                let owner_capability =
+                    (outer.lease.lease_ref.as_str(), outer.ownership_ref.as_str());
                 Some(
                     self.pathlock_manager
-                        .acquire_batch(
-                            &requests,
-                            Duration::from_secs(1),
-                            Some(owner_capability),
-                        )
+                        .acquire_batch(&requests, Duration::from_secs(1), Some(owner_capability))
                         .await
                         .map_err(|error| {
                             Error::internal(format!("encrypted write lock error: {error}"))
@@ -422,7 +425,9 @@ impl FileSystem for EncryptionWrappedFS {
         };
 
         // Release lock on error. On success, release after replace.
-        let result = self.encrypted_write_inner(path, &temp_path, &envelope).await;
+        let result = self
+            .encrypted_write_inner(path, &temp_path, &envelope)
+            .await;
         let replace_result = match result {
             Ok(written) => self.inner.replace(&temp_path, path).await.map(|_| written),
             Err(e) => Err(e),
@@ -512,12 +517,22 @@ impl FileSystem for EncryptionWrappedFS {
         self.inner.remove_all(path).await
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        let entries = self.inner.read_dir(path).await?;
-        Ok(entries
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
+        let entries = self.inner.read_dir(path, None, None, None, None).await?;
+        let entries = entries
             .into_iter()
             .filter(|entry| entry.name != SHAPE_MANIFEST_PATH.trim_start_matches('/'))
-            .collect())
+            .collect();
+        Ok(apply_read_dir_options(
+            entries, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -541,16 +556,28 @@ impl FileSystem for EncryptionWrappedFS {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
         // Metadata only — no content read, so delegate to preserve plugin-native tree optimizations.
         let entries = self
             .inner
-            .tree_directory(path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                sort_by,
+                sort_order,
+            )
             .await?;
-        Ok(entries
+        let entries = entries
             .into_iter()
             .filter(|entry| !Self::is_shape_manifest_path(&entry.path))
-            .collect())
+            .collect();
+        Ok(paginate_entries(entries, offset, node_limit))
     }
 
     async fn glob_directory(
@@ -594,9 +621,7 @@ mod tests {
     use crate::core::context::{FsContextInner, FS_CTX};
     use crate::core::MountableFS;
     use crate::core::PluginConfig;
-    use crate::lock::{
-        MemoryPathLockProvider, PathLockConfig, PathLockManager, PathLockProvider,
-    };
+    use crate::lock::{MemoryPathLockProvider, PathLockConfig, PathLockManager, PathLockProvider};
     use crate::plugins::MemFSPlugin;
 
     /// Build a memfs plugin config for encryption wrapper tests.
@@ -928,12 +953,7 @@ mod tests {
             })
             .await;
 
-        assert!(
-            inner
-                .stat(temp_path)
-                .await
-                .is_err()
-        );
+        assert!(inner.stat(temp_path).await.is_err());
         let raw = inner.read("/mem/a.txt", 0, 0).await.unwrap();
         assert!(crypto::is_encrypted(&raw));
     }
@@ -960,7 +980,10 @@ mod tests {
         ];
 
         for (final_path, temp_path) in cases {
-            assert_eq!(EncryptionWrappedFS::encrypted_temp_path(final_path), temp_path);
+            assert_eq!(
+                EncryptionWrappedFS::encrypted_temp_path(final_path),
+                temp_path
+            );
         }
     }
 }

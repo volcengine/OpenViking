@@ -74,6 +74,7 @@ import type {
 import { copyTextToClipboard } from '#/lib/clipboard'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
+import { UserMemoryPolicyCell } from './-components/user-memory-policy-cell'
 import { AddUserDialog } from './-components/add-user-dialog'
 import { DeleteAccountButton } from './-components/delete-account-button'
 import { getErrorMessage } from './-lib/error'
@@ -336,7 +337,17 @@ function UserManagementRoute() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => void usersQuery.refetch()}
+            onClick={() => {
+              void usersQuery.refetch()
+              void queryClient.invalidateQueries({
+                queryKey: [
+                  'user-memory-settings',
+                  adminConnection.baseUrl,
+                  adminConnection.apiKey,
+                  connection.accountId,
+                ],
+              })
+            }}
             disabled={usersQuery.isFetching}
           >
             <RefreshCwIcon
@@ -422,6 +433,7 @@ function UserManagementRoute() {
                   <TableRow className="bg-muted/20 hover:bg-muted/20">
                     <TableHead>{t('table.user')}</TableHead>
                     <TableHead>{t('table.role')}</TableHead>
+                    <TableHead>{t('memoryPolicy.title')}</TableHead>
                     <TableHead>{t('table.apiKey')}</TableHead>
                     <TableHead className="text-right">
                       {t('table.actions')}
@@ -518,6 +530,12 @@ function UserManagementRoute() {
                               })}
                             </Badge>
                           )}
+                        </TableCell>
+                        <TableCell>
+                          <UserMemoryPolicyCell
+                            connection={adminConnection}
+                            user={user}
+                          />
                         </TableCell>
                         <TableCell>
                           <div className="flex min-w-0 items-center gap-1">

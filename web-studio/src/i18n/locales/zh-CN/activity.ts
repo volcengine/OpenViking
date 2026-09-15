@@ -23,6 +23,8 @@ const activity = {
       shortcut: '⌘ N 新建会话',
     },
     chat: {
+      historyLoadFailed: '会话记录加载失败：{{error}}',
+      sendFailed: '消息发送失败：{{error}}',
       copy: '复制',
       emptyDescription: '探索你的知识库，开始一段对话。',
       placeholder: '输入消息...',
@@ -71,6 +73,7 @@ const activity = {
       loadFailed: '记忆变更加载失败',
       retry: '重试',
       empty: '本次会话提交没有产生记忆变更。',
+      viewExperienceImpact: '查看该经验的应用效果',
     },
     empty: {
       description: '从左侧选择一个会话，或创建新会话。',

@@ -135,6 +135,8 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 #### 3. 使用示例
 
+对于返回后台任务的操作，默认示例优先使用“提交任务 → 查询状态”，尽量不主动设置 `wait`、`timeout`，也不使用全局 `wait_processed()` 代替任务状态。完整参数参考应保留受支持参数及其真实默认值。后续操作依赖异步产物时，应展示按 `task_id` 轮询至 `completed`，并处理 `failed`、`cancelled`；不能仅删除等待参数后立即读取结果。
+
 当一个接口并列展示所有调用方式时，建议按以下顺序提供：
 - Python SDK 示例
 - TypeScript SDK 示例
@@ -210,8 +212,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation",
-    "wait": true
+    "reason": "User guide documentation"
   }'
 ```
 
@@ -226,15 +227,15 @@ result = client.add_resource(
     path="./documents/guide.md",
     options={"reason": "User guide documentation"},
 )
-print(f"Added: {result['root_uri']}")
+print(f"Task ID: {result['task_id']}")
 
-client.wait_processed()
+print(client.get_task(result["task_id"]))
 ```
 
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation" --wait
+openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 **响应示例**
@@ -245,7 +246,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
   "result": {
     "status": "success",
     "root_uri": "viking://resources/documents/guide.md",
-    "source_path": "./documents/guide.md",
+    "task_id": "uuid-xxx",
     "errors": []
   },
   "time": 0.123

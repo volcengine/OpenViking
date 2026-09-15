@@ -3,7 +3,6 @@
 """Durable add-resource queue consumer."""
 
 import asyncio
-import concurrent.futures
 import json
 from contextlib import suppress
 from copy import deepcopy
@@ -12,9 +11,11 @@ from typing import Any, Dict, Optional
 from openviking.observability.context import bind_execution_context
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
+from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
 from openviking.service.task_work_index import bind_task_context, extract_task_metadata
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.telemetry import (
     OperationTelemetry,
     bind_telemetry,
@@ -42,7 +43,7 @@ class AddResourceProcessor(DequeueHandlerBase):
         viking_fs: Any,
     ):
         self._resource_service = resource_service
-        self._service_loop = service_loop
+        self._dispatcher = OwnerLoopDispatcher(service_loop)
         self._queue_name = queue_name
         self._viking_fs = viking_fs
 
@@ -125,11 +126,9 @@ class AddResourceProcessor(DequeueHandlerBase):
             msg.task_id,
             exc,
         )
-        self.report_requeue()
-        self.report_success()
         return True
 
-    async def _process(self, msg: AddResourceMsg, data: Dict[str, Any]) -> None:
+    async def _process(self, msg: AddResourceMsg, data: Dict[str, Any]) -> ProcessResult:
         telemetry_id = msg.telemetry_id or ""
         ctx = RequestContext(
             user=UserIdentifier(msg.account_id, msg.user_id),
@@ -165,8 +164,7 @@ class AddResourceProcessor(DequeueHandlerBase):
             )
             await self._record_watch_execution(msg, status, getattr(task, "error", None))
             unregister_telemetry(telemetry_id)
-            self.report_success()
-            return None
+            return ProcessResult.success()
 
         metadata = extract_task_metadata(data)
         replay_result = getattr(task, "result", None)
@@ -176,7 +174,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 resource_lock = await self._load_lock(msg, ctx)
             except Exception as exc:
                 if await self._requeue_lock_handoff(msg, exc):
-                    return None
+                    return ProcessResult.requeued()
                 await tracker.fail(
                     msg.task_id,
                     f"Invalid lock_handoff: {exc}",
@@ -188,11 +186,10 @@ class AddResourceProcessor(DequeueHandlerBase):
                     "failed",
                     f"Invalid lock_handoff: {exc}",
                 )
-                self.report_error(f"Invalid lock_handoff: {exc}", data)
                 unregister_telemetry(telemetry_id)
                 with suppress(Exception):
                     await self._cleanup_staged_source(msg, ctx)
-                return None
+                return ProcessResult.failed(f"Invalid lock_handoff: {exc}")
 
         telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
         if telemetry is None:
@@ -252,8 +249,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                         )
                         await self._record_watch_execution(msg, "failed", error)
                         terminal = True
-                        self.report_error("resource processing failed", data)
-                        return None
+                        return ProcessResult.failed("resource processing failed")
                     if not msg.watch_task_id:
                         await tracker.complete(
                             msg.task_id,
@@ -302,8 +298,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     resource_id=result.get("root_uri"),
                 )
                 terminal = True
-                self.report_success()
-                return None
+                return ProcessResult.success()
             except asyncio.CancelledError:
                 await self._record_watch_execution(msg, "cancelled")
                 terminal = True
@@ -325,8 +320,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     result=failure_result,
                 )
                 terminal = True
-                self.report_error(str(exc), data)
-                return None
+                return ProcessResult.failed(str(exc))
             finally:
                 request_wait_tracker.cleanup(telemetry_id)
                 unregister_telemetry(telemetry_id)
@@ -337,7 +331,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     with suppress(Exception):
                         await self._cleanup_staged_source(msg, ctx)
 
-    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Release an enqueue-time lock before ACKing cancelled work."""
         try:
             payload = data.get("data", data) if isinstance(data, dict) else data
@@ -345,10 +339,9 @@ class AddResourceProcessor(DequeueHandlerBase):
                 payload = json.loads(payload)
             msg = AddResourceMsg.from_dict(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            self.report_error(str(exc), data)
-            return None
-        future = asyncio.run_coroutine_threadsafe(
-            self._handle_cancelled(
+            return ProcessResult.failed(str(exc))
+        await self._dispatcher.run(
+            lambda: self._handle_cancelled(
                 msg,
                 RequestContext(
                     user=UserIdentifier(msg.account_id, msg.user_id),
@@ -358,16 +351,13 @@ class AddResourceProcessor(DequeueHandlerBase):
                     bypass_acl=msg.bypass_acl,
                 ),
             ),
-            self._service_loop,
         )
-        await asyncio.wrap_future(future)
         unregister_telemetry(msg.telemetry_id or "")
-        self.report_success()
-        return None
+        return ProcessResult.cancelled()
 
-    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         if not data:
-            return None
+            return ProcessResult.success()
         try:
             if not isinstance(data, dict):
                 raise ValueError("Queue message must be an object")
@@ -376,16 +366,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                 payload = json.loads(payload)
             msg = AddResourceMsg.from_dict(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            self.report_error(str(exc), data)
-            return None
+            return ProcessResult.failed(str(exc))
 
-        future: concurrent.futures.Future[None] = asyncio.run_coroutine_threadsafe(
-            self._process(msg, data),
-            self._service_loop,
-        )
-        try:
-            await asyncio.wrap_future(future)
-        except asyncio.CancelledError:
-            future.cancel()
-            raise
-        return None
+        return await self._dispatcher.run(lambda: self._process(msg, data))

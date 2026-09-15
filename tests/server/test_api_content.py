@@ -171,20 +171,28 @@ async def test_read_internal_scope_uri_returns_invalid_uri(client, uri: str):
     assert "frozenset" not in body["error"]["message"]
 
 
-async def test_abstract_content(client_with_resource):
+async def test_abstract_content(client_with_resource, service):
     client, uri = client_with_resource
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(f"{uri}/.abstract.md", "---\n", ctx=ctx)
+
     resp = await client.get("/api/v1/content/abstract", params={"uri": uri})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+    assert body["result"] == f"# {uri} [Directory abstract is not ready]"
 
 
-async def test_overview_content(client_with_resource):
+async def test_overview_content(client_with_resource, service):
     client, uri = client_with_resource
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(f"{uri}/.overview.md", "---\n", ctx=ctx)
+
     resp = await client.get("/api/v1/content/overview", params={"uri": uri})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+    assert body["result"] == f"# {uri}\n\n[Directory overview is not ready]"
 
 
 async def test_abstract_file_uri_returns_failed_precondition(client_with_resource):

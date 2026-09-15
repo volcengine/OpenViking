@@ -4,9 +4,10 @@ from unittest import mock
 import pytest
 from pydantic import ValidationError
 
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from vikingbot.config.loader import _merge_vlm_model_config
 from vikingbot.config.schema import AgentsConfig
-from vikingbot.providers.litellm_provider import LiteLLMProvider
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 
 def _chat_response(content: str = "ok"):
@@ -58,21 +59,25 @@ def test_bot_agents_timeout_overrides_vlm_timeout():
 
 
 @pytest.mark.asyncio
-async def test_litellm_provider_passes_timeout_to_chat_request(monkeypatch):
+async def test_vlm_adapter_passes_litellm_timeout_to_chat_request(monkeypatch):
     captured = {}
 
     async def fake_acompletion(**kwargs):
         captured.update(kwargs)
         return _chat_response()
 
-    monkeypatch.setattr("vikingbot.providers.litellm_provider.acompletion", fake_acompletion)
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", fake_acompletion)
 
-    provider = LiteLLMProvider(
-        api_key="sk-test",
-        api_base="https://example.invalid",
-        default_model="openai/gpt-4o-mini",
-        timeout=75.0,
+    vlm = LiteLLMVLMProvider(
+        {
+            "provider": "litellm",
+            "api_key": "sk-test",
+            "api_base": "https://example.invalid",
+            "model": "openai/gpt-4o-mini",
+            "timeout": 75.0,
+        }
     )
+    provider = VLMProviderAdapter(vlm, default_model="openai/gpt-4o-mini")
     response = await provider.chat(messages=[{"role": "user", "content": "hi"}])
 
     assert response.content == "ok"

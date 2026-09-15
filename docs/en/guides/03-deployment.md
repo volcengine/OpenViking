@@ -184,7 +184,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### Docker
 
-OpenViking provides pre-built Docker images published to GitHub Container Registry. All persistent state — `ov.conf`, `ovcli.conf`, and the workspace data — lives under `/app/.openviking` inside the container, so a single mount is enough:
+OpenViking provides pre-built Docker images published to GitHub Container Registry. The runtime working directory is `/app/.openviking`, so the default `storage.workspace` (`./data`) resolves to `/app/.openviking/data`. The default workspace, `ov.conf`, and `ovcli.conf` therefore share one persistent mount. If you configure an absolute workspace outside this directory, mount that path separately:
 
 ```bash
 docker run -d \
@@ -210,6 +210,8 @@ Since the server binds to `0.0.0.0` inside the container (required for Docker po
 ```
 
 The server will refuse to start without it. You can override the bind address via the `OPENVIKING_SERVER_HOST` environment variable if needed.
+
+**Upgrading from an older image:** images that started in `/app` resolved `./data` to `/app/data`, outside the default mount. Before removing the old container, stop it and back up its configured workspace (for example, `docker cp openviking:/app/data ./openviking-data-backup`). Restore that backup into the mounted host workspace, normally `~/.openviking/data`, before starting the replacement. Do not overwrite an existing workspace without checking which data to retain. Absolute workspace paths are unchanged; other relative paths now resolve from `/app/.openviking`.
 
 Upgrade the container:
 ```bash

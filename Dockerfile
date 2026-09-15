@@ -107,7 +107,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Resolve relative storage paths inside the persistent mount.
+WORKDIR /app/.openviking
 
 COPY --from=py-builder /app/.venv /app/.venv
 # Fail the image build if VikingBot and the separately released SDK drift apart.
@@ -128,7 +129,7 @@ EXPOSE 1933
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD ["openviking-entrypoint", "--healthcheck"]
 
-# All persistent state (ov.conf, ovcli.conf, workspace data) lives under
+# Default persistent state (ov.conf, ovcli.conf, workspace data) lives under
 # /app/.openviking, which mirrors the host's ~/.openviking layout. Mount one
 # volume there to persist everything across container restarts:
 #   docker run -v ~/.openviking:/app/.openviking <image>

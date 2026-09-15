@@ -3,10 +3,12 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 from openviking.service.task_work_index import (
     TaskWorkIndex,
     TaskWorkRejected,
@@ -14,6 +16,7 @@ from openviking.service.task_work_index import (
     get_task_context,
 )
 from openviking.storage.abstract_overview import parse_abstract_overview
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.semantic_dag import (
     DagStats,
@@ -323,7 +326,7 @@ async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monk
 
 
 @pytest.mark.asyncio
-async def test_deferred_aggregation_processes_only_changed_files(monkeypatch):
+async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
     root_uri = "viking://resources/wide"
     changed = f"{root_uri}/file-020.txt"
     tree = {
@@ -332,6 +335,9 @@ async def test_deferred_aggregation_processes_only_changed_files(monkeypatch):
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     _patch_semantic_config(monkeypatch, overview_sample_limit=4)
+    monkeypatch.setattr(
+        fake_fs, "pathlock_acquire_exact_batch", AsyncMock(side_effect=LockAcquisitionError("busy"))
+    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -344,7 +350,7 @@ async def test_deferred_aggregation_processes_only_changed_files(monkeypatch):
         target_uri=root_uri,
         recursive=False,
         changes={"modified": [changed]},
-        aggregate_directory=False,
+        generation_trigger="content_write",
     )
 
     await executor.run(root_uri)
@@ -419,7 +425,7 @@ async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
         None,
         "/queue",
         "Embedding",
-        task_work_index=work_index,
+        middlewares=[TaskWorkQueueMiddleware(work_index)],
     )
     embedding_queue._initialized = True
     unrelated_ran = asyncio.Event()

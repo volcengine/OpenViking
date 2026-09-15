@@ -15,6 +15,7 @@ from openviking.session.memory.experience_lineage import (
 from openviking.session.train.components.trajectory_analyzer import (
     _trajectory_search_tags_by_uri,
 )
+from openviking.utils.tags import build_search_tags_filter, merge_search_tags, normalize_search_tags
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -180,13 +181,27 @@ def test_collect_read_experience_uris_ignores_removed_dedicated_tool():
     assert collect_read_experience_uris(messages, ctx=_ctx()) == []
 
 
-def test_experience_source_tag_uses_experience_uri_as_key():
-    uri = "viking://user/alice/memories/experiences/无订单号换货处理.md"
-
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://user/alice/memories/experiences/cfg_streaming.md",
+        "viking://user/alice/memories/experiences/无订单号换货处理.md",
+        "viking://user/alice/memories/experiences/vikingdb_fe_repo_workflows.md",
+        "viking://user/alice/memories/experiences/" + "nested/" * 40 + "workflow.md",
+    ],
+)
+def test_experience_source_tag_uses_experience_uri_as_key(uri):
     tag = experience_source_tag(uri)
 
     assert tag == f"{uri}=1"
     assert tag.count("=") == 1
+    assert normalize_search_tags([tag], discard_invalid=True) == [tag]
+    assert merge_search_tags([tag], ["env=stg"]) == [tag, "env=stg"]
+    assert build_search_tags_filter([tag]) == {
+        "op": "must",
+        "field": "search_tags",
+        "conds": [tag],
+    }
 
 
 def test_experience_source_tag_preserves_case_and_escapes_equals_without_collisions():
@@ -201,6 +216,7 @@ def test_experience_source_tag_preserves_case_and_escapes_equals_without_collisi
     assert uppercase_tag != lowercase_tag
     assert uppercase_tag.count("=") == 1
     assert lowercase_tag.count("=") == 1
+    assert merge_search_tags([uppercase_tag], [lowercase_tag]) == [uppercase_tag, lowercase_tag]
 
 
 def test_source_experiences_create_transient_tags_for_every_generated_trajectory():

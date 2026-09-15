@@ -3,11 +3,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from typer.testing import CliRunner
 
 from openviking.models.vlm import MultiCredentialVLM
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from vikingbot.config import loader
-from vikingbot.config.schema import Config
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 
@@ -15,7 +15,228 @@ def _write_config(tmp_path, monkeypatch, data):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(json.dumps(data))
     monkeypatch.setattr(loader, "CONFIG_PATH", config_path)
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
     return loader.load_config()
+
+
+@pytest.mark.parametrize("bot_override", [False, True])
+@pytest.mark.parametrize("legacy_providers", [{"openai": {"api_key": "obsolete-secret"}}, {}, None])
+def test_legacy_providers_do_not_change_model_selection_or_persist(
+    tmp_path, monkeypatch, bot_override, legacy_providers
+):
+    data = {
+        "vlm": {"provider": "openai", "model": "root-model", "api_key": "root-secret"},
+        "bot": {"providers": legacy_providers},
+    }
+    if bot_override:
+        data["bot"]["agents"] = {
+            "provider": "openai",
+            "model": "bot-model",
+            "api_key": "bot-secret",
+        }
+    warnings = []
+    monkeypatch.setattr(loader.logger, "warning", warnings.append)
+
+    config = _write_config(tmp_path, monkeypatch, data)
+    from vikingbot.cli.commands import _make_provider
+
+    provider = _make_provider(config)
+    assert provider._vlm.model == ("bot-model" if bot_override else "root-model")
+    assert provider._vlm.api_key == ("bot-secret" if bot_override else "root-secret")
+    assert any("bot.providers" in message and "ignored" in message for message in warnings)
+    assert "obsolete-secret" not in " ".join(warnings)
+    path = tmp_path / "ov.conf"
+    assert json.loads(path.read_text()) == data  # Loading never rewrites the user's file.
+
+    loader.save_config(config, path, include_defaults=True)
+    saved = json.loads(path.read_text())
+    assert "providers" not in saved["bot"]
+    assert saved["vlm"] == data["vlm"]
+    assert loader.load_config().inherits_root_vlm() is (not bot_override)
+
+
+@pytest.mark.parametrize("explicit_key", [None, "channel-secret", ""])
+def test_legacy_groq_key_migrates_to_telegram_without_overriding_channel_config(
+    tmp_path, monkeypatch, explicit_key
+):
+    pytest.importorskip("telegram")
+    from vikingbot.bus.queue import MessageBus
+    from vikingbot.channels.manager import ChannelManager
+
+    channel = {"type": "telegram", "enabled": True, "token": "123:test-token"}
+    if explicit_key is not None:
+        channel["groqApiKey"] = explicit_key
+    data = {
+        "bot": {
+            "providers": {"groq": {"apiKey": "legacy-groq-secret"}},
+            "channels": [channel],
+        }
+    }
+    config = _write_config(tmp_path, monkeypatch, data)
+    manager = ChannelManager(MessageBus())
+
+    manager.load_channels_from_config(config)
+
+    expected_key = "legacy-groq-secret" if explicit_key is None else explicit_key
+    assert manager.channels["telegram__123"].groq_api_key == expected_key
+    assert json.loads((tmp_path / "ov.conf").read_text()) == data
+    loader.save_config(config, tmp_path / "ov.conf")
+    saved = json.loads((tmp_path / "ov.conf").read_text())
+    assert "providers" not in saved["bot"]
+    assert saved["bot"]["channels"][0]["groqApiKey"] == expected_key
+    reloaded = loader.load_config()
+    manager = ChannelManager(MessageBus())
+    manager.load_channels_from_config(reloaded)
+    assert manager.channels["telegram__123"].groq_api_key == expected_key
+
+
+@pytest.mark.parametrize("bot_override", [False, True])
+@pytest.mark.parametrize("credential_chain", [False, True])
+def test_status_shows_selected_model_config_without_exposing_secrets(
+    tmp_path, monkeypatch, bot_override, credential_chain
+):
+    from vikingbot.cli import commands
+
+    selected = {
+        "provider": "openai",
+        "model": "selected-model",
+        "api_key": "selected-secret",
+        "extra_headers": {"Authorization": "header-secret"},
+    }
+    if credential_chain:
+        selected["credentials"] = [
+            {"id": "primary", "model": "first-model", "api_key": "first-secret"},
+            {"id": "backup"},
+        ]
+    data = {"vlm": selected}
+    if bot_override:
+        data = {
+            "vlm": {"provider": "openai", "model": "unused-root", "api_key": "root-secret"},
+            "bot": {"agents": selected},
+        }
+    _write_config(tmp_path, monkeypatch, data)
+
+    def fail_create(*args, **kwargs):
+        raise AssertionError("status must not initialize model backends")
+
+    monkeypatch.setattr("openviking.models.vlm.base.VLMFactory.create", fail_create)
+    result = CliRunner().invoke(commands.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    source = "bot.agents" if bot_override else "vlm (inherited)"
+    assert f"Model config: {source}" in result.output
+    assert "Model: selected-model" in result.output
+    assert "Provider: openai" in result.output
+    assert "API key: configured" in result.output
+    assert "Extra headers: configured" in result.output
+    assert "not set in config" not in result.output
+    assert "not a live health check" in result.output
+    if credential_chain:
+        assert result.output.index("Model: first-model") < result.output.index(
+            "Model: selected-model"
+        )
+        assert result.output.count("API key: configured") == 2
+    for hidden in (
+        "selected-secret",
+        "first-secret",
+        "header-secret",
+        "root-secret",
+        "unused-root",
+    ):
+        assert hidden not in result.output
+
+
+def test_status_handles_bot_credentials_without_parent_model(tmp_path, monkeypatch):
+    from vikingbot.cli import commands
+
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "bot": {
+                "agents": {
+                    "credentials": [
+                        {"provider": "litellm", "model": "ollama/qwen3"},
+                    ]
+                }
+            }
+        },
+    )
+
+    result = CliRunner().invoke(commands.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Model config: bot.agents" in result.output
+    assert "Model: ollama/qwen3" in result.output
+    assert "Provider: litellm" in result.output
+    assert "API key: not set in config" in result.output
+
+
+@pytest.mark.parametrize("parent_provider", ["openai", "OpenAI", " OpenAI \t"])
+@pytest.mark.parametrize("credential_provider", [None, "openai"])
+def test_status_inherits_parent_key_only_for_the_normalized_parent_provider(
+    tmp_path, monkeypatch, parent_provider, credential_provider
+):
+    from vikingbot.cli import commands
+
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "bot": {
+                "agents": {
+                    "provider": parent_provider,
+                    "model": "gpt-4o",
+                    "api_key": "openai-secret",
+                    "credentials": [
+                        {"id": "primary", "provider": credential_provider},
+                        {
+                            "id": "native",
+                            "provider": "litellm",
+                            "model": "vertex_ai/gemini-2.5-pro",
+                        },
+                    ],
+                }
+            }
+        },
+    )
+
+    def fail_create(*args, **kwargs):
+        raise AssertionError("status must not initialize model backends")
+
+    monkeypatch.setattr("openviking.models.vlm.base.VLMFactory.create", fail_create)
+    result = CliRunner().invoke(commands.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "1. Provider: openai | Model: gpt-4o" in result.output
+    assert "2. Provider: litellm | Model: vertex_ai/gemini-2.5-pro" in result.output
+    assert result.output.count("API key: configured") == 1
+    assert "API key: not set in config" in result.output
+    assert "openai-secret" not in result.output
+
+
+def test_status_keeps_root_vlm_providers_support(tmp_path, monkeypatch):
+    from vikingbot.cli import commands
+
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        {
+            "vlm": {
+                "model": "root-model",
+                "default_provider": "openai",
+                "providers": {"openai": {"api_key": "root-secret"}},
+            }
+        },
+    )
+
+    result = CliRunner().invoke(commands.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Model config: vlm (inherited)" in result.output
+    assert "Provider: openai" in result.output
+    assert "API key: configured" in result.output
+    assert "root-secret" not in result.output
 
 
 def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path, monkeypatch):
@@ -391,173 +612,6 @@ def test_saving_inherited_config_does_not_turn_root_model_into_bot_override(tmp_
 
     reloaded = loader.load_config()
     assert reloaded.agents.inherits_root_vlm() is True
-
-
-def test_console_roundtrip_preserves_root_vlm_inheritance(tmp_path, monkeypatch):
-    config = _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "vlm": {
-                "model": "root-primary",
-                "credentials": [
-                    {
-                        "id": "root-primary",
-                        "provider": "openai",
-                        "model": "root-primary",
-                        "api_key": "root-primary-key",
-                    },
-                    {
-                        "id": "root-backup",
-                        "provider": "openai",
-                        "model": "root-backup",
-                        "api_key": "root-backup-key",
-                    },
-                ],
-            }
-        },
-    )
-
-    config_dict = config.model_dump()
-    rebuilt = Config(**config_dict)
-    loader.reconcile_vlm_inheritance_after_edit(config, rebuilt)
-
-    assert config.inherits_root_vlm() is True
-    assert rebuilt.inherits_root_vlm() is True
-    assert rebuilt.agents.inherits_root_vlm() is True
-    assert "inherits_root_vlm_state" not in Config.model_json_schema()["properties"]
-
-    loader.save_config(rebuilt, tmp_path / "ov.conf")
-
-    saved = json.loads((tmp_path / "ov.conf").read_text())
-    assert "inheritsRootVlmState" not in saved.get("bot", {})
-    assert "model" not in saved.get("bot", {}).get("agents", {})
-
-    reloaded = loader.load_config()
-    assert reloaded.inherits_root_vlm() is True
-    assert reloaded.agents.inherits_root_vlm() is True
-    assert [credential.id for credential in reloaded.get_root_vlm_config().credentials] == [
-        "root-primary",
-        "root-backup",
-    ]
-
-
-def test_console_edit_can_switch_from_root_vlm_to_bot_model(tmp_path, monkeypatch):
-    previous = _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "vlm": {
-                "provider": "openai",
-                "model": "root-model",
-                "api_key": "root-key",
-            }
-        },
-    )
-
-    config_dict = previous.model_dump()
-    config_dict["agents"]["model"] = "bot-model"
-    config_dict["agents"]["api_key"] = "bot-key"
-    edited = Config(**config_dict)
-
-    loader.reconcile_vlm_inheritance_after_edit(previous, edited)
-    loader.save_config(edited, tmp_path / "ov.conf")
-
-    saved = json.loads((tmp_path / "ov.conf").read_text())
-    assert saved["bot"]["agents"]["model"] == "bot-model"
-
-    reloaded = loader.load_config()
-    assert reloaded.inherits_root_vlm() is False
-    assert reloaded.agents.model == "bot-model"
-    assert reloaded.agents.api_key == "bot-key"
-
-
-def test_console_credentials_edit_does_not_persist_inherited_model(tmp_path, monkeypatch):
-    previous = _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "vlm": {
-                "provider": "openai",
-                "model": "root-model",
-                "api_key": "root-key",
-                "api_base": "https://root-gateway.example/v1",
-                "extra_headers": {"X-Root-Tenant": "root"},
-            }
-        },
-    )
-
-    config_dict = previous.model_dump()
-    config_dict["agents"]["credentials"] = [
-        {
-            "id": "bot-primary",
-            "provider": "openai",
-            "model": "bot-model",
-            "api_key": "bot-key",
-        }
-    ]
-    edited = Config(**config_dict)
-
-    loader.reconcile_vlm_inheritance_after_edit(previous, edited)
-    loader.save_config(edited, tmp_path / "ov.conf")
-
-    assert edited.inherits_root_vlm() is False
-    saved = json.loads((tmp_path / "ov.conf").read_text())
-    assert "model" not in saved["bot"]["agents"]
-    assert saved["bot"]["agents"]["provider"] == ""
-    assert saved["bot"]["agents"]["apiKey"] == ""
-    assert saved["bot"]["agents"]["apiBase"] == ""
-    assert saved["bot"]["agents"]["extraHeaders"] == {}
-
-    reloaded = loader.load_config()
-    assert reloaded.inherits_root_vlm() is False
-    assert reloaded.agents.model == ""
-    assert reloaded.agents.credentials[0].model == "bot-model"
-
-    from vikingbot.cli.commands import _make_provider
-
-    provider = _make_provider(reloaded)
-    assert provider._vlm.model == "bot-model"
-    assert provider._vlm.api_key == "bot-key"
-    assert provider._vlm.api_base is None
-    assert provider._vlm.extra_headers is None
-
-
-def test_console_bot_credentials_do_not_inherit_root_api_key(tmp_path, monkeypatch):
-    previous = _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "vlm": {
-                "provider": "openai",
-                "model": "root-model",
-                "api_key": "root-key",
-                "api_base": "https://root-gateway.example/v1",
-            }
-        },
-    )
-
-    config_dict = previous.model_dump()
-    config_dict["agents"]["credentials"] = [
-        {
-            "id": "bot-primary",
-            "provider": "openai",
-            "model": "bot-model",
-        }
-    ]
-    edited = Config(**config_dict)
-
-    loader.reconcile_vlm_inheritance_after_edit(previous, edited)
-    loader.save_config(edited, tmp_path / "ov.conf")
-
-    reloaded = loader.load_config()
-    assert reloaded.agents.api_key == ""
-    assert reloaded.agents.api_base == ""
-
-    from vikingbot.cli.commands import _make_provider
-
-    with pytest.raises(ValueError, match="requires 'api_key' to be set"):
-        _make_provider(reloaded)
 
 
 def test_saving_credentials_only_config_keeps_model_omitted(tmp_path, monkeypatch):

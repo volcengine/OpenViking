@@ -1084,14 +1084,69 @@ async def test_patch_merge_policy_optimizer_runs_llm_for_single_patch(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypatch):
+@pytest.mark.parametrize("existing", [False, True], ids=["create", "update"])
+async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypatch, existing):
+    from openviking.core.skill_loader import SkillLoader
     from openviking.session.memory.dataclass import (
         ResolvedOperation,
         ResolvedOperations,
     )
+    from openviking.session.train.components.skill_policy_updater import SkillPolicyUpdater
 
     skill_uri = "viking://user/u/skills/code-review/SKILL.md"
-    policy_set = ExperienceSet(root_uri="viking://user/u/skills", policies=[])
+    old_skill = {
+        "name": "code-review",
+        "description": "Old description",
+        "content": "Old content.",
+    }
+
+    class SkillFS(FakeVikingFS):
+        async def search(self, *args, **kwargs):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(to_dict=lambda: {"memories": [], "resources": [], "skills": []})
+
+        async def read_file(self, uri, ctx=None):
+            if uri not in self.files:
+                raise FileNotFoundError(uri)
+            return self.files[uri]
+
+    fs = SkillFS({skill_uri: SkillLoader.to_skill_md(old_skill)} if existing else {})
+
+    class FakeProcessor:
+        async def process_skill(self, *, data, **kwargs):
+            await fs.write_file(skill_uri, SkillLoader.to_skill_md(data))
+            return {"root_uri": skill_uri.removesuffix("/SKILL.md")}
+
+        async def sanitize_skill_privacy(self, skill, ctx):
+            return skill
+
+    class FakeWriter:
+        def __init__(self, viking_fs):
+            assert viking_fs is fs
+
+        async def write(self, *, uri, content, **kwargs):
+            await fs.write_file(uri, content)
+            return {}
+
+    monkeypatch.setattr(
+        "openviking.session.skill.skill_operation_updater.ContentWriteCoordinator", FakeWriter
+    )
+    policy_set = ExperienceSet(
+        root_uri="viking://user/u/skills",
+        policies=[
+            Experience(
+                name=old_skill["name"],
+                uri=skill_uri,
+                version=1,
+                status="production",
+                content=old_skill["content"],
+                metadata={"description": old_skill["description"]},
+            )
+        ]
+        if existing
+        else [],
+    )
     gradient = PatchSemanticGradient(
         before_file=None,
         after_file=MemoryFile(
@@ -1123,6 +1178,7 @@ async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypa
                             old_memory_file_content=None,
                             memory_fields={
                                 "skill_name": "code-review",
+                                "description": "Review code changes",
                                 "content": "Merged skill content.",
                             },
                             memory_type=SESSION_SKILL_MEMORY_TYPE,
@@ -1141,7 +1197,7 @@ async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypa
     )
 
     plan = await PatchMergePolicyOptimizer(
-        viking_fs=FakeVikingFS({}),
+        viking_fs=fs,
         vlm=object(),
         memory_type=SESSION_SKILL_MEMORY_TYPE,
         memory_registry=load_skill_extract_registry(),
@@ -1157,3 +1213,15 @@ async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypa
     assert plan.items[0].target_name == "code-review"
     assert plan.items[0].target_uri == skill_uri
     assert plan.items[0].after_content == "Merged skill content."
+
+    result = await SkillPolicyUpdater(skill_processor=FakeProcessor(), viking_fs=fs).apply(
+        plan, policy_set, fake_request_context()
+    )
+    assert result.errors == []
+    assert result.written_uris == [skill_uri]
+    saved = SkillLoader.parse(await fs.read_file(skill_uri))
+    assert saved["description"] == "Review code changes"
+    assert saved["content"] == "Merged skill content."
+    assert result.updated_policy_set.policies[0].metadata["description"] == saved["description"]
+    if existing:
+        assert policy_set.policies[0].metadata["description"] == "Old description"

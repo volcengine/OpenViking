@@ -443,7 +443,7 @@ async def test_connector_watch_releases_hold_when_submission_is_cancelled(
 
 
 @pytest.mark.asyncio
-async def test_connector_watch_prechecks_only_active_conflicts(
+async def test_connector_watch_conflicts_with_any_watch_on_target(
     monkeypatch,
     connector_config,
     ctx,
@@ -490,6 +490,7 @@ async def test_connector_watch_prechecks_only_active_conflicts(
     connector_client.submit_doc_add.assert_not_awaited()
     tracker.create.assert_not_awaited()
 
+    # Pausing the watch does not free the target: the paused watch still owns it.
     await watch_manager.update_task(
         task_id=existing.task_id,
         account_id="acct",
@@ -497,37 +498,26 @@ async def test_connector_watch_prechecks_only_active_conflicts(
         role=str(Role.USER),
         is_active=False,
     )
-    release_monitor = asyncio.Event()
+    with pytest.raises(ConflictError, match="already being monitored"):
+        await service.add_resource(
+            path="tos://bucket/new/",
+            ctx=ctx,
+            to=to_uri,
+            watch_interval=5,
+        )
 
-    async def complete_monitor(**kwargs):
-        await release_monitor.wait()
-        await kwargs["on_success"]()
-        return {"status": "completed"}
-
-    monkeypatch.setattr(service._connector, "_monitor", complete_monitor)
-    await service.add_resource(
-        path="tos://bucket/new/",
-        ctx=ctx,
-        to=to_uri,
-        watch_interval=5,
-    )
-
-    # A paused watch on the same target is reactivated at submission, not after
-    # the import finishes.
-    assert existing.is_active is True
-    assert existing.path == "tos://bucket/new/"
-    assert existing.last_status is None
-    release_monitor.set()
-    await asyncio.gather(*list(service._background_tasks))
-    assert existing.is_active is True
-    assert existing.last_status == "completed"
+    connector_client.submit_doc_add.assert_not_awaited()
+    assert existing.is_active is False
+    assert existing.path == "tos://bucket/old/"
 
 
 @pytest.mark.asyncio
-async def test_connector_watch_rejects_overlapping_imports_at_submit(
+async def test_connector_watches_can_share_a_target(
     connector_config,
     ctx,
 ):
+    """Connector sources lay their files out under ``to`` themselves, so several
+    Connector watches may share one target; a native watch never can."""
     watch_manager = WatchManager()
     service = ResourceService(
         vikingdb=object(),
@@ -542,43 +532,43 @@ async def test_connector_watch_rejects_overlapping_imports_at_submit(
     service._connector.submit = AsyncMock(return_value={"status": "accepted"})
     to_uri = "viking://resources/x/y"
 
-    await service.add_resource(
-        path="tos://bucket/first/",
-        ctx=ctx,
-        to=to_uri,
-        watch_interval=5,
-    )
+    await service.add_resource(path="tos://bucket/first/", ctx=ctx, to=to_uri, watch_interval=5)
+    await service.add_resource(path="tos://bucket/second/", ctx=ctx, to=to_uri, watch_interval=5)
+
+    assert service._connector.submit.await_count == 2
+    tasks = await watch_manager.get_all_tasks("acct", "alice", str(Role.USER))
+    assert sorted(t.path for t in tasks if t.to_uri == to_uri) == [
+        "tos://bucket/first/",
+        "tos://bucket/second/",
+    ]
+    # A shared target can no longer be addressed by URI alone.
+    with pytest.raises(ConflictError, match="address one by task_id"):
+        await watch_manager.get_task_by_uri(
+            to_uri, account_id="acct", user_id="alice", role=str(Role.USER)
+        )
+    # A native watch (no Connector auth_state) may not join a shared target.
     with pytest.raises(ConflictError, match="already being monitored"):
-        await service.add_resource(
-            path="tos://bucket/second/",
-            ctx=ctx,
-            to=to_uri,
+        await watch_manager.create_task(
+            path="https://example.com/doc",
+            account_id="acct",
+            user_id="alice",
+            original_role=str(Role.USER),
+            to_uri=to_uri,
             watch_interval=5,
         )
 
-    # The second import never reaches the Connector, so nothing overlapping is written.
-    assert service._connector.submit.await_count == 1
-    task = await watch_manager.get_task_by_uri(
-        to_uri,
-        account_id="acct",
-        user_id="alice",
-        role=str(Role.USER),
-    )
-    assert task is not None
-    assert task.path == "tos://bucket/first/"
-
 
 @pytest.mark.asyncio
-async def test_connector_watch_rejects_same_source_while_first_import_is_running(
+async def test_same_source_connector_watches_are_independently_held(
     connector_config,
     ctx,
     service,
 ):
+    """Repeated imports create separate watches held during their first rounds."""
     scheduler = WatchScheduler(resource_service=service, check_interval=1)
     watch_manager = WatchManager()
     scheduler._watch_manager = watch_manager
     service._watch_scheduler = scheduler
-    service._connector.create_watch_auth_state = AsyncMock(return_value={"provider": "test"})
     service._connector.submit = AsyncMock(return_value={"status": "accepted"})
     to_uri = "viking://resources/x/y"
     path = "tos://bucket/docs/"
@@ -590,25 +580,25 @@ async def test_connector_watch_rejects_same_source_while_first_import_is_running
         reason="first",
         watch_interval=5,
     )
-    with pytest.raises(ConflictError, match="already executing"):
-        await service.add_resource(
-            path=path,
-            ctx=ctx,
-            to=to_uri,
-            reason="second",
-            watch_interval=5,
-        )
+    await service.add_resource(
+        path=path,
+        ctx=ctx,
+        to=to_uri,
+        reason="second",
+        watch_interval=5,
+    )
 
-    task = await watch_manager.get_task_by_uri(
-        to_uri,
+    tasks = await watch_manager.get_all_tasks(
         account_id="acct",
         user_id="alice",
         role=str(Role.USER),
     )
-    assert task is not None
-    assert task.reason == "first"
-    assert service._connector.submit.await_count == 1
-    assert scheduler._executing_tasks == {task.task_id}
+    assert len(tasks) == 2
+    assert {task.path for task in tasks} == {path}
+    assert {task.to_uri for task in tasks} == {to_uri}
+    assert {task.reason for task in tasks} == {"first", "second"}
+    assert service._connector.submit.await_count == 2
+    assert scheduler._executing_tasks == {task.task_id for task in tasks}
 
 
 @pytest.mark.asyncio
@@ -917,7 +907,37 @@ async def test_failed_connector_watch_keeps_previous_stream_states(connector_con
 
 
 @pytest.mark.asyncio
-async def test_connector_watch_deactivates_when_target_is_deleted():
+async def test_one_off_connector_import_leaves_existing_watch_untouched(
+    connector_config,
+    ctx,
+    service,
+):
+    """Many one-off imports share a folder; none of them may pause its watch."""
+    watch_manager = WatchManager()
+    service._watch_scheduler = SimpleNamespace(watch_manager=watch_manager)
+    service._connector.submit = AsyncMock(return_value={"status": "accepted"})
+    to_uri = "viking://resources/x/y"
+    existing = await watch_manager.create_task(
+        path="tos://bucket/watched/",
+        account_id="acct",
+        user_id="alice",
+        original_role=str(Role.USER),
+        to_uri=to_uri,
+        watch_interval=5,
+    )
+
+    await service.add_resource(path="tos://bucket/batch-1/", ctx=ctx, to=to_uri)
+    await service.add_resource(path="tos://bucket/batch-2/", ctx=ctx, to=to_uri, watch_interval=0)
+
+    assert service._connector.submit.await_count == 2
+    assert existing.is_active is True
+    assert existing.path == "tos://bucket/watched/"
+
+
+@pytest.mark.asyncio
+async def test_connector_watch_keeps_running_when_target_is_missing():
+    """A Connector target only exists once the plugin writes into it: an empty
+    first round (or a deleted target) must not deactivate the watch."""
     from openviking_cli.exceptions import NotFoundError
 
     class MissingTargetFS:
@@ -926,6 +946,7 @@ async def test_connector_watch_deactivates_when_target_is_deleted():
 
     service = ResourceService()
     service.refresh_resource = AsyncMock(return_value={"status": "completed"})
+    service._connector.restore_watch_request = AsyncMock(return_value=("secret", "tos", {}))
     scheduler = WatchScheduler(resource_service=service, viking_fs=MissingTargetFS())
     watch_manager = WatchManager()
     scheduler._watch_manager = watch_manager
@@ -942,8 +963,10 @@ async def test_connector_watch_deactivates_when_target_is_deleted():
 
     updated = await watch_manager.get_task(task.task_id)
     assert updated is not None
-    assert updated.is_active is False
-    service.refresh_resource.assert_not_awaited()
+    assert updated.is_active is True
+    assert updated.last_status == "completed"
+    service.refresh_resource.assert_awaited_once()
+    assert service.refresh_resource.await_args.kwargs["to"] == "viking://resources/x/y"
 
 
 @pytest.mark.asyncio

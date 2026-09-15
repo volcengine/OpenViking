@@ -4,7 +4,10 @@
 """Tests for PID-based process lock utility."""
 
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -96,16 +99,48 @@ class TestIsPidAlive:
         """Test that negative PID is not alive."""
         assert _is_pid_alive(-1) is False
 
-    def test_windows_system_error_treated_as_stale(self, monkeypatch):
-        """Windows SystemError from os.kill(pid, 0) should be treated as stale."""
+    @pytest.mark.parametrize(
+        "open_error, wait_result, wait_error, expected",
+        [
+            (None, 258, None, True),  # WAIT_TIMEOUT: still running
+            (None, 0, None, False),  # WAIT_OBJECT_0: exited
+            (87, None, None, False),  # no such PID
+            (5, None, None, True),  # access denied
+            (6, None, None, True),  # unknown query failure
+            (None, None, OSError("wait failed"), True),
+        ],
+    )
+    def test_windows_probe_never_signals(
+        self, monkeypatch, open_error, wait_result, wait_error, expected
+    ):
+        api = SimpleNamespace(
+            SYNCHRONIZE=0x100000,
+            WAIT_OBJECT_0=0,
+            OpenProcess=Mock(return_value=123),
+            WaitForSingleObject=Mock(return_value=wait_result, side_effect=wait_error),
+            CloseHandle=Mock(),
+        )
+        if open_error is not None:
+            error = OSError("open failed")
+            error.winerror = open_error
+            api.OpenProcess.side_effect = error
+        with monkeypatch.context() as patch:
+            patch.setattr(process_lock_module.sys, "platform", "win32")
+            patch.setitem(sys.modules, "_winapi", api)
+            patch.setattr(os, "kill", Mock(side_effect=AssertionError("must not signal")))
+            assert _is_pid_alive(os.getpid()) is expected
+        api.OpenProcess.assert_called_once_with(api.SYNCHRONIZE, False, os.getpid())
+        if open_error is None:
+            api.WaitForSingleObject.assert_called_once_with(123, 0)
+            api.CloseHandle.assert_called_once_with(123)
+        else:
+            api.WaitForSingleObject.assert_not_called()
+            api.CloseHandle.assert_not_called()
 
-        def _raise_system_error(_pid: int, _sig: int) -> None:
-            raise SystemError("win32 wrapper failure")
-
-        monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
-        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
-
-        assert _is_pid_alive(12345) is False
+    @pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows APIs")
+    def test_windows_native_current_pid_never_signals(self, monkeypatch):
+        monkeypatch.setattr(os, "kill", Mock(side_effect=AssertionError("must not signal")))
+        assert _is_pid_alive(os.getpid()) is True
 
     def test_non_windows_system_error_bubbles_up(self, monkeypatch):
         """Non-Windows should not downgrade unexpected SystemError values."""
@@ -219,22 +254,24 @@ class TestAcquireDataDirLock:
         error_msg = str(exc_info.value)
         assert str(tmp_path) in error_msg
 
-    def test_acquire_overwrites_windows_stale_lock_on_system_error(
-        self, tmp_path: Path, monkeypatch
-    ):
-        """Windows stale lock should be reclaimed when os.kill raises SystemError."""
-
-        def _raise_system_error(_pid: int, _sig: int) -> None:
-            raise SystemError("win32 wrapper failure")
-
-        (tmp_path / LOCK_FILENAME).write_text("12345")
-        monkeypatch.setattr(process_lock_module.sys, "platform", "win32")
-        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
-
-        acquire_data_dir_lock(str(tmp_path))
-
-        stored_pid = int((tmp_path / LOCK_FILENAME).read_text().strip())
-        assert stored_pid == os.getpid()
+    @pytest.mark.parametrize("winerror", [87, 5])
+    def test_windows_lock_reclaimed_only_for_missing_pid(self, tmp_path, monkeypatch, winerror):
+        lock_file = tmp_path / LOCK_FILENAME
+        lock_file.write_text("12345")
+        error = OSError("process query failed")
+        error.winerror = winerror
+        api = SimpleNamespace(SYNCHRONIZE=0x100000, OpenProcess=Mock(side_effect=error))
+        with monkeypatch.context() as patch:
+            patch.setattr(process_lock_module.sys, "platform", "win32")
+            patch.setitem(sys.modules, "_winapi", api)
+            patch.setattr(os, "kill", Mock(side_effect=AssertionError("must not signal")))
+            if winerror == 87:
+                acquire_data_dir_lock(str(tmp_path))
+                assert int(lock_file.read_text()) == os.getpid()
+            else:
+                with pytest.raises(DataDirectoryLocked):
+                    acquire_data_dir_lock(str(tmp_path))
+                assert lock_file.read_text() == "12345"
 
 
 class TestAcquireDataDirLockEdgeCases:

@@ -696,3 +696,59 @@ test("the workspace that decides capture is the payload's, not the hook process'
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+test("capture filters rewrite and drop turns without stranding the cursor", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-capture-filters-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const batches = [];
+
+  try {
+    await writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ payload: { message: { role: "user", content: "the token is sk_LIVE_ABCDEF, remember it" } } }),
+        JSON.stringify({ payload: { message: { role: "user", content: "scratch: ignore this throwaway note" } } }),
+        JSON.stringify({ payload: { message: { role: "assistant", content: "noted for future sessions" } } }),
+      ].join("\n"),
+    );
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { ok: true } });
+        return;
+      }
+      writeJson(res, { status: "ok", result: { ok: true } });
+    }, async (baseUrl) => {
+      const env = {
+        OPENVIKING_AUTO_CAPTURE: "1",
+        OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+        OPENVIKING_CODEX_STATE_DIR: stateDir,
+        OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+        OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+        OPENVIKING_CREDENTIAL_SOURCE: "env",
+        OPENVIKING_WRITE_PATH_ASYNC: "0",
+        OPENVIKING_TIMEOUT_MS: "5000",
+        OPENVIKING_URL: baseUrl,
+        OPENVIKING_CAPTURE_FILTERS: "s/sk_[A-Za-z0-9_]+/[redacted]/g,user:d/^scratch:/",
+      };
+      const input = { session_id: "codex:filters", transcript_path: transcriptPath };
+      await runAutoCapture(input, env);
+      // A second run over the same transcript must find nothing new: the
+      // dropped turn still counts against the cursor.
+      await runAutoCapture(input, env);
+    });
+
+    assert.equal(batches.length, 1);
+    const texts = batches[0].messages.flatMap(
+      (message) => (message.parts || []).filter((p) => p.type === "text").map((p) => p.text),
+    );
+    assert.deepEqual(texts, [
+      "the token is [redacted], remember it",
+      "noted for future sessions",
+    ]);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

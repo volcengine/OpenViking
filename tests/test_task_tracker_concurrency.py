@@ -36,6 +36,7 @@ class _ControllableTaskStore:
             "stage": task.stage,
             "result": deepcopy(task.result),
             "error": task.error,
+            "execution_events": deepcopy(task.execution_events),
         }
 
     async def create(self, task: Any) -> None:
@@ -167,6 +168,23 @@ async def test_owner_loop_dispatcher_runs_foreign_loop_work_on_owner_loop():
     result = await asyncio.to_thread(run_from_foreign_loop)
 
     assert result == "done"
+    assert work_loop is owner_loop
+
+
+@pytest.mark.asyncio
+async def test_owner_loop_dispatcher_uses_explicit_owner_loop():
+    from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
+
+    owner_loop = asyncio.get_running_loop()
+    dispatcher = await asyncio.to_thread(OwnerLoopDispatcher, owner_loop)
+    work_loop: asyncio.AbstractEventLoop | None = None
+
+    async def work() -> None:
+        nonlocal work_loop
+        work_loop = asyncio.get_running_loop()
+
+    await asyncio.to_thread(lambda: asyncio.run(dispatcher.run(work)))
+
     assert work_loop is owner_loop
 
 
@@ -562,6 +580,8 @@ async def test_task_tracker_failed_update_does_not_contaminate_cached_snapshot()
     snapshot = await tracker.get(task.task_id)
     assert snapshot is not None
     assert snapshot.status == TaskStatus.PENDING
+    assert snapshot.execution_events == task.execution_events
+    assert store.payloads[task.task_id]["execution_events"] == task.execution_events
 
 
 @pytest.mark.asyncio
@@ -588,6 +608,12 @@ async def test_cancelled_thread_write_settles_before_later_same_task_mutation():
     assert snapshot is not None
     assert snapshot.status == TaskStatus.COMPLETED
     assert store.payloads[task.task_id]["status"] == TaskStatus.COMPLETED.value
+    assert store.payloads[task.task_id]["execution_events"] == snapshot.execution_events
+    assert [event["status"] for event in snapshot.execution_events["items"]] == [
+        "pending",
+        "running",
+        "completed",
+    ]
     assert tracker._task_locks.entry_count == 0
     assert tracker._store_io.inflight == 0
 

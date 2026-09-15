@@ -32,6 +32,7 @@ import {
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
+import { filterCaptureParts } from "./shared/capture-utils.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -240,9 +241,8 @@ async function pushTurns(ovSessionId, turns, { peerId = null, enqueueOnly = fals
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
-    const parts = (turn.parts || []).filter(
-      (p) => p.type !== "text" || (p.text && p.text.trim()),
-    );
+    // Blank text parts are pruned and the configured capture filters applied.
+    const parts = filterCaptureParts(turn.parts, turn.role, cfg).parts;
     if (parts.length === 0) continue;
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;

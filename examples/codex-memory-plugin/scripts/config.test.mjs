@@ -19,6 +19,8 @@ const OVERRIDES = [
   "OPENVIKING_BASE_URL",
   "OPENVIKING_API_KEY",
   "OPENVIKING_BEARER_TOKEN",
+  "OPENVIKING_RECALL_QUERY_FILTERS",
+  "OPENVIKING_CAPTURE_FILTERS",
 ];
 
 /**
@@ -138,5 +140,69 @@ test("an omitted cwd falls back to this process's directory", () => {
     } finally {
       process.chdir(origin);
     }
+  });
+});
+
+test("input filter rules default to empty and read from the legacy ov.conf block", () => {
+  withConfigs({ ov: { server: { host: "127.0.0.1" } } }, () => {
+    assert.deepEqual(loadConfig().recallQueryFilters, []);
+    assert.deepEqual(loadConfig().captureFilters, []);
+  });
+  withConfigs({
+    ov: { server: { host: "127.0.0.1" }, codex: { captureFilters: ["d/^scratch:/"] } },
+  }, () => {
+    assert.deepEqual(loadConfig().captureFilters, ["d/^scratch:/"]);
+  });
+});
+
+test("plugin.codex input filters beat the shared plugin section", () => {
+  withConfigs({
+    ov: { server: { host: "127.0.0.1" } },
+    cli: {
+      url: "http://127.0.0.1:1933",
+      plugin: {
+        recallQueryFilters: ["s/shared//"],
+        captureFilters: ["d/^shared/"],
+        codex: { recallQueryFilters: ["s/harness//"] },
+      },
+    },
+  }, () => {
+    const cfg = loadConfig();
+    assert.deepEqual(cfg.recallQueryFilters, ["s/harness//"]);
+    assert.deepEqual(cfg.captureFilters, ["d/^shared/"]);
+  });
+});
+
+test("an env CSV replaces the configured filter list, trimming every entry", () => {
+  withConfigs({
+    ov: { server: { host: "127.0.0.1" }, codex: { recallQueryFilters: ["s/^hi //"] } },
+    env: { OPENVIKING_RECALL_QUERY_FILTERS: " s/^a// , d/^b/ " },
+  }, () => {
+    assert.deepEqual(loadConfig().recallQueryFilters, ["s/^a//", "d/^b/"]);
+  });
+});
+
+test("configured filter entries are trimmed and non-strings dropped", () => {
+  withConfigs({
+    ov: {
+      server: { host: "127.0.0.1" },
+      codex: { captureFilters: ["  s/^a//  ", "", 7, null, "d/^b/"] },
+    },
+  }, () => {
+    assert.deepEqual(loadConfig().captureFilters, ["s/^a//", "d/^b/"]);
+  });
+});
+
+test("a comma survives in a configured rule but splits an env one", () => {
+  withConfigs({
+    ov: { server: { host: "127.0.0.1" }, codex: { captureFilters: ["s/a{2,}/X/"] } },
+  }, () => {
+    assert.deepEqual(loadConfig().captureFilters, ["s/a{2,}/X/"]);
+  });
+  withConfigs({
+    ov: { server: { host: "127.0.0.1" } },
+    env: { OPENVIKING_CAPTURE_FILTERS: "s/a{2,}/X/" },
+  }, () => {
+    assert.deepEqual(loadConfig().captureFilters, ["s/a{2", "}/X/"]);
   });
 });

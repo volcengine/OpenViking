@@ -1,20 +1,28 @@
 ## 步骤1：安装
 
-```bash
-# TRAE
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae --dist tos
+1. 根据所使用的版本，在终端执行对应的安装命令：
 
-# TRAE CN
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cn --dist tos
-```
+   **Trae 国际版**
 
-选 **火山引擎 OpenViking 云服务**，把 API Key 贴进去：
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae --dist tos
+   ```
 
-{{OPENVIKING_API_KEY_BLOCK}}
+   **Trae 中国版**
+
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness trae-cn --dist tos
+   ```
+
+2. 安装器会依次询问以下信息：语言（English / 中文）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
 ## 步骤2：验证
 
-重启 TRAE。在设置里确认 `openviking` 已连接。
+在「设置 → MCP → 已配置的 MCP Servers」中确认能够看到 `openviking` 条目即表示接入成功。
 
 ## 故障排查
 

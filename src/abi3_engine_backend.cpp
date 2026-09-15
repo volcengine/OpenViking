@@ -1390,18 +1390,53 @@ PyObject* py_index_engine_rebuild_scalar_index(PyObject*, PyObject* args) {
     return nullptr;
   }
 
-  std::vector<vdb::AddDataRequest> requests;
-  if (!parse_request_list(items, parse_add_request, &requests)) {
+  std::unique_ptr<PyObject, decltype(&Py_DecRef)> iterator(PyObject_GetIter(items),
+                                                        Py_DecRef);
+  if (!iterator) {
     return nullptr;
   }
 
   try {
+    // Bound the native input independently of the Store's encoded page size.
+    // A single oversized row is allowed so every nonempty batch makes progress.
+    auto read_batch = [&](std::vector<vdb::AddDataRequest>& batch) {
+      constexpr size_t kMaxRows = 1024;
+      constexpr size_t kMaxBytes = 1024 * 1024;
+      const auto gil = PyGILState_Ensure();
+      try {
+        batch.clear();
+        size_t bytes = 0;
+        while (batch.size() < kMaxRows && bytes < kMaxBytes) {
+          std::unique_ptr<PyObject, decltype(&Py_DecRef)> item(
+              PyIter_Next(iterator.get()), Py_DecRef);
+          if (!item) {
+            if (PyErr_Occurred()) {
+              throw std::runtime_error("Failed to read scalar index rows");
+            }
+            break;
+          }
+          vdb::AddDataRequest request;
+          if (!parse_add_request(item.get(), &request)) {
+            throw std::runtime_error("Invalid scalar index row");
+          }
+          bytes += request.fields_str.size();
+          batch.push_back(std::move(request));
+        }
+      } catch (...) {
+        PyGILState_Release(gil);
+        throw;
+      }
+      PyGILState_Release(gil);
+      return !batch.empty();
+    };
     const int result = call_without_gil([&]() {
-      return engine->rebuild_scalar_index(scalar_index_json, requests);
+      return engine->rebuild_scalar_index(scalar_index_json, read_batch);
     });
     return PyLong_FromLong(result);
   } catch (const std::exception& exc) {
-    raise_runtime_error(exc.what());
+    if (!PyErr_Occurred()) {
+      raise_runtime_error(exc.what());
+    }
     return nullptr;
   }
 }

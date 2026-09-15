@@ -6,20 +6,24 @@ import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Union
+from functools import partial
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, TypeVar, Union
 
 from openviking.pyagfs import AGFSSyncClientProtocol, AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
-from openviking.service.task_work_index import (
-    TaskWorkIndex,
-    TaskWorkRejected,
-    bind_task_context,
-    extract_task_metadata,
-    prepare_task_payload,
+from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
+from openviking.storage.queuefs.queue_middleware import (
+    AckContext,
+    ClearContext,
+    EnqueueContext,
+    ProcessContext,
+    QueueMiddleware,
 )
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_ContextT = TypeVar("_ContextT")
+_ResultT = TypeVar("_ResultT")
 
 
 @dataclass
@@ -51,63 +55,17 @@ class QueueStatus:
         return self.pending == 0 and self.in_progress == 0
 
 
-class EnqueueHookBase(abc.ABC):
-    """Enqueue hook base class.
-
-    All custom enqueue logic should inherit from this base class.
-    Provides on_enqueue method for custom processing before message enqueue.
-    """
-
-    @abc.abstractmethod
-    async def on_enqueue(self, data: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
-        """Called before message enqueue. Can modify data or perform validation."""
-        return data
-
-
 class DequeueHandlerBase(abc.ABC):
-    """Dequeue handler base class, supports callback mechanism to report processing results."""
+    """Return a delivery outcome; queue statistics are never updated by handlers."""
 
-    _success_callback: Optional[Callable[[], None]] = None
-    _requeue_callback: Optional[Callable[[], None]] = None
-    _error_callback: Optional[Callable[[str, Optional[Dict[str, Any]]], None]] = None
-
-    def set_callbacks(
-        self,
-        on_success: Callable[[], None],
-        on_requeue: Callable[[], None],
-        on_error: Callable[[str, Optional[Dict[str, Any]]], None],
-    ) -> None:
-        """Set callback functions."""
-        self._success_callback = on_success
-        self._requeue_callback = on_requeue
-        self._error_callback = on_error
-
-    def report_success(self) -> None:
-        """Report processing success."""
-        if self._success_callback:
-            self._success_callback()
-
-    def report_requeue(self) -> None:
-        """Report that the current message was re-enqueued for later retry."""
-        if self._requeue_callback:
-            self._requeue_callback()
-
-    def report_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
-        """Report processing error."""
-        if self._error_callback:
-            self._error_callback(error_msg, data)
-
-    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Discard task work cancelled before its handler starts."""
-        self.report_success()
-        return None
+        return ProcessResult.cancelled()
 
     @abc.abstractmethod
-    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Called after message dequeue. Returns None to discard message."""
-        if not data:
-            return None
-        return data
+    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
+        """Complete this delivery, or raise to leave it unacknowledged."""
+        raise NotImplementedError
 
 
 class NamedQueue:
@@ -120,64 +78,52 @@ class NamedQueue:
         agfs: AGFSSyncClientProtocol,
         mount_point: str,
         name: str,
-        enqueue_hook: Optional[EnqueueHookBase] = None,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
-        task_work_index: Optional[TaskWorkIndex] = None,
+        middlewares: Sequence[QueueMiddleware] = (),
     ):
         self.name = name
         self.path = f"{mount_point}/{name}"
         self._agfs = agfs
         self._async_agfs = AsyncAGFSClient(agfs)
-        self._enqueue_hook = enqueue_hook
         self._dequeue_handler = dequeue_handler
-        self._task_work_index = task_work_index
+        self._middlewares = tuple(middlewares)
         self._initialized = False
 
         # Status tracking
         self._lock = threading.Lock()
-        self._in_progress = 0
         self._processed = 0
         self._requeue_count = 0
         self._error_count = 0
         self._errors: List[QueueError] = []
 
-        # Inject callbacks to handler
-        if self._dequeue_handler:
-            self.set_dequeue_handler(self._dequeue_handler)
+    async def _run_middleware(
+        self,
+        operation: str,
+        ctx: _ContextT,
+        terminal: Callable[[_ContextT], Awaitable[_ResultT]],
+    ) -> _ResultT:
+        call_next = terminal
+        for middleware in reversed(self._middlewares):
+            call_next = partial(getattr(middleware, operation), call_next=call_next)
+        return await call_next(ctx)
 
     def set_dequeue_handler(self, handler: DequeueHandlerBase) -> None:
         """Bind the consumer after its runtime dependencies are initialized."""
         self._dequeue_handler = handler
-        handler.set_callbacks(
-            on_success=self._on_process_success,
-            on_requeue=self._on_process_requeue,
-            on_error=self._on_process_error,
-        )
 
-    def _on_dequeue_start(self) -> None:
-        """Called on dequeue."""
+    def _record_result(self, result: ProcessResult, data: Dict[str, Any]) -> None:
+        if result.outcome is ProcessOutcome.FAILED:
+            self._record_error(result.error, data)
+            return
         with self._lock:
-            self._in_progress += 1
-
-    def _on_process_success(self) -> None:
-        """Called on processing success."""
-        with self._lock:
-            self._in_progress -= 1
+            # Keep the existing processed count: settled non-error deliveries,
+            # including cancellations and successful re-enqueues.
             self._processed += 1
+            if result.outcome is ProcessOutcome.REQUEUED:
+                self._requeue_count += 1
 
-    def _on_process_requeue(self) -> None:
-        """Called when a dequeued message is re-enqueued for later retry."""
+    def _record_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
-            self._requeue_count += 1
-
-    def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
-        """Called on processing failure."""
-        if self._task_work_index is not None and data is not None:
-            metadata = extract_task_metadata(data)
-            if metadata is not None:
-                self._task_work_index.record_failure(metadata.task_id, error_msg)
-        with self._lock:
-            self._in_progress -= 1
             self._error_count += 1
             self._errors.append(
                 QueueError(
@@ -191,11 +137,11 @@ class NamedQueue:
 
     async def get_status(self) -> QueueStatus:
         """Get queue status."""
-        pending = await self.size()
+        backend_status = await self._read_backend_status()
         with self._lock:
             return QueueStatus(
-                pending=pending,
-                in_progress=self._in_progress,
+                pending=backend_status["pending"],
+                in_progress=backend_status["processing"],
                 processed=self._processed,
                 requeue_count=self._requeue_count,
                 error_count=self._error_count,
@@ -205,7 +151,6 @@ class NamedQueue:
     def reset_status(self) -> None:
         """Reset status counters."""
         with self._lock:
-            self._in_progress = 0
             self._processed = 0
             self._requeue_count = 0
             self._error_count = 0
@@ -227,65 +172,34 @@ class NamedQueue:
     async def enqueue(self, data: Union[str, Dict[str, Any]]) -> str:
         """Send message to queue (enqueue)."""
         await self._ensure_initialized()
-        enqueue_file = f"{self.path}/enqueue"
+        return await self._run_middleware("enqueue", EnqueueContext(self.name, data), self._enqueue)
 
-        # Execute enqueue hook
-        if self._enqueue_hook:
-            data = await self._enqueue_hook.on_enqueue(data)
-
-        if isinstance(data, dict):
-            data, task_metadata = prepare_task_payload(data)
-        else:
-            task_metadata = None
-
-        if self._task_work_index is not None and not self._task_work_index.register(
-            self.name, task_metadata
-        ):
-            logger.info(
-                "[NamedQueue] Skip enqueue for cancelling task %s on %s",
-                task_metadata.task_id,
-                self.name,
-            )
-            raise TaskWorkRejected(
-                f"Task {task_metadata.task_id} is cancelling; rejected work for {self.name}"
-            )
-
-        try:
-            if isinstance(data, dict):
-                data = json.dumps(data)
-
-            msg_id = await self._async_agfs.write(enqueue_file, data.encode("utf-8"))
-        except BaseException:
-            if self._task_work_index is not None and task_metadata is not None:
-                await self._task_work_index.discard(self.name, task_metadata)
-            raise
+    async def _enqueue(self, ctx: EnqueueContext) -> str:
+        data = json.dumps(ctx.payload) if isinstance(ctx.payload, dict) else ctx.payload
+        msg_id = await self._async_agfs.write(f"{self.path}/enqueue", data.encode("utf-8"))
+        ctx.committed = True
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def ack(self, msg_id: str, message: Optional[Dict[str, Any]] = None) -> None:
         """Acknowledge successful processing of a message (deletes it from persistent storage).
 
         Must be called after the dequeue handler finishes processing a message.
-        Task-owned work is provisionally removed from the runtime index first so
-        the last message can persist its task's terminal state before deletion.
+        Middleware can provisionally settle application state before deletion.
         If not called (e.g. process crashes), the message will be automatically
         re-queued on the next startup via RecoverStale.
         """
         if not msg_id:
             return
-        ack_file = f"{self.path}/ack"
-        prepared = None
         try:
-            if self._task_work_index is not None and message is not None:
-                prepared = await self._task_work_index.prepare_ack(self.name, message)
-            await self._async_agfs.write(ack_file, msg_id.encode("utf-8"))
+            await self._run_middleware("ack", AckContext(self.name, msg_id, message), self._ack)
         except asyncio.CancelledError:
-            if self._task_work_index is not None and prepared is not None:
-                self._task_work_index.rollback_ack(self.name, prepared)
             raise
         except Exception as e:
-            if self._task_work_index is not None and prepared is not None:
-                self._task_work_index.rollback_ack(self.name, prepared)
             logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
+
+    async def _ack(self, ctx: AckContext) -> None:
+        await self._async_agfs.write(f"{self.path}/ack", ctx.message_id.encode("utf-8"))
+        ctx.committed = True
 
     async def _read_queue_message(self) -> Optional[Dict[str, Any]]:
         """Read and remove one message from the AGFS queue; return parsed dict or None.
@@ -321,12 +235,11 @@ class NamedQueue:
             data = await self._read_queue_message()
             if data is None:
                 return None
-            # Capture message ID before passing data to handler (handler may modify it)
             msg_id = data.get("id", "") if isinstance(data, dict) else ""
             raw_data = data
             if self._dequeue_handler:
-                self._on_dequeue_start()
-                data = await self.process_dequeued(data)
+                result = await self.process_dequeued(raw_data)
+                data = result.value
             # Ack unconditionally after handler returns (success or handled error).
             # If on_dequeue raises, the exception propagates and ack is skipped —
             # the message will be recovered on next startup.
@@ -345,35 +258,32 @@ class NamedQueue:
             logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
             return None
 
-    async def process_dequeued(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Invoke the dequeue handler on already-fetched raw data.
+    async def process_dequeued(self, data: Dict[str, Any]) -> ProcessResult:
+        """Process one fetched delivery and settle local status exactly once."""
+        handler = self._dequeue_handler
+        if handler is None:
+            return ProcessResult.success(data)
 
-        NOTE: caller must call _on_dequeue_start() before invoking this method
-        so that in_progress is incremented atomically with the dequeue.
-        """
-        if self._dequeue_handler is None:
-            return data
+        async def process(ctx: ProcessContext) -> ProcessResult:
+            return self._validate_result(await handler.on_dequeue(ctx.message))
 
-        metadata = extract_task_metadata(data)
-        if metadata is None or self._task_work_index is None:
-            return await self._dequeue_handler.on_dequeue(data)
+        async def cancel() -> ProcessResult:
+            return self._validate_result(await handler.on_cancelled(ctx.message))
 
-        active_task = asyncio.current_task()
-        with bind_task_context(metadata.task_id, metadata.account_id, metadata.user_id):
-            if self._task_work_index.cancellation_requested(metadata.task_id):
-                return await self._dequeue_handler.on_cancelled(data)
-            if active_task is not None:
-                self._task_work_index.register_active(metadata.task_id, active_task)
-            try:
-                return await self._dequeue_handler.on_dequeue(data)
-            except asyncio.CancelledError:
-                if self._task_work_index.cancellation_requested(metadata.task_id):
-                    self._on_process_success()
-                    return None
-                raise
-            finally:
-                if active_task is not None:
-                    self._task_work_index.unregister_active(metadata.task_id, active_task)
+        ctx = ProcessContext(self.name, data, cancel=cancel)
+        try:
+            result = self._validate_result(await self._run_middleware("process", ctx, process))
+        except Exception as exc:
+            self._record_error(str(exc), data)
+            raise
+        self._record_result(result, data)
+        return result
+
+    @staticmethod
+    def _validate_result(result: ProcessResult) -> ProcessResult:
+        if not isinstance(result, ProcessResult):
+            raise TypeError("queue handlers and process middleware must return ProcessResult")
+        return result
 
     async def peek(self) -> Optional[Dict[str, Any]]:
         """Peek at head message without removing."""
@@ -414,6 +324,19 @@ class NamedQueue:
         except (AGFSNotFoundError, FileNotFoundError):
             return 0
 
+    async def _read_backend_status(self) -> Dict[str, int]:
+        await self._ensure_initialized()
+        content = await self._async_agfs.read(f"{self.path}/status")
+        if isinstance(content, bytes):
+            content = content.decode("utf-8")
+        elif hasattr(content, "content") and content.content is not None:
+            content = content.content.decode("utf-8")
+        status = json.loads(content)
+        return {
+            "pending": int(status["pending"]),
+            "processing": int(status["processing"]),
+        }
+
     async def snapshot(self) -> List[Dict[str, Any]]:
         """Return all unacknowledged messages without changing queue state."""
         await self._ensure_initialized()
@@ -433,26 +356,17 @@ class NamedQueue:
     async def clear(self) -> bool:
         """Clear queue."""
         await self._ensure_initialized()
-        clear_file = f"{self.path}/clear"
-
-        messages = await self.snapshot() if self._task_work_index is not None else []
-        prepared = []
+        messages = await self.snapshot() if self._middlewares else []
+        ctx = ClearContext(self.name, messages)
         try:
-            if self._task_work_index is not None:
-                for message in messages:
-                    metadata = await self._task_work_index.prepare_ack(self.name, message)
-                    if metadata is not None:
-                        prepared.append(metadata)
-            await self._async_agfs.write(clear_file, b"")
-            return True
+            await self._run_middleware("clear", ctx, self._clear)
+            return ctx.committed
         except asyncio.CancelledError:
-            if self._task_work_index is not None:
-                for metadata in prepared:
-                    self._task_work_index.rollback_ack(self.name, metadata)
             raise
         except Exception as e:
-            if self._task_work_index is not None:
-                for metadata in prepared:
-                    self._task_work_index.rollback_ack(self.name, metadata)
             logger.error(f"[NamedQueue] Clear failed for {self.name}: {e}")
             return False
+
+    async def _clear(self, ctx: ClearContext) -> None:
+        await self._async_agfs.write(f"{self.path}/clear", b"")
+        ctx.committed = True

@@ -137,7 +137,7 @@ ov grep "openviking" --uri viking://resources
 - `get` - 下载文件到本地路径。
 
 ```bash
-# 目标父目录必须已存在，目标本身必须不存在。
+# 目标父目录必须已存在；已有文件直接覆盖，已有目录递归合并。
 ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
 ov cp -r viking://resources/docs viking://resources/docs-backup
 ```
@@ -271,6 +271,11 @@ ov find "authentication" --uri viking://resources/project --level 0,1
 
 # 递归列目录
 ov ls viking://resources --recursive
+
+# 按修改时间排序并分页
+ov ls viking://resources --offset 100 --limit 50 \
+  --sort-by mtime --sort-order desc
+ov tree viking://resources --offset 100 --limit 50
 
 # 写入调用方提供的 tags，再按 tags 过滤或回显
 ov write viking://resources/docs/api.md --content "# API" \

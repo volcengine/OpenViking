@@ -280,9 +280,10 @@ async def get_or_head(
     if stat.get("isDir", False):
         return _error(405, "GET is only supported for files")
 
-    body = b"" if request.method == "HEAD" else await service.fs.read_file_bytes(uri, ctx=_ctx)
+    is_head = request.method == "HEAD"
+    body = b"" if is_head else await service.fs.read_file_bytes(uri, ctx=_ctx)
     headers = _webdav_headers()
-    headers["Content-Length"] = str(int(stat.get("size", 0) or 0))
+    headers["Content-Length"] = str(int(stat.get("size", 0) or 0) if is_head else len(body))
     last_modified = _http_last_modified(str(stat.get("modTime", "") or ""))
     if last_modified:
         headers["Last-Modified"] = last_modified

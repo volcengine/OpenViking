@@ -71,8 +71,16 @@ class PersistentTaskStore:
         return json.loads(_decode_bytes(raw))
 
     async def list(self, account_id: str, *, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        if not user_id:
-            return []
+        if user_id is None:
+            try:
+                owners = await self._agfs.ls(self._task_root_dir(account_id))
+            except (AGFSNotFoundError, FileNotFoundError):
+                return []
+            tasks: List[Dict[str, Any]] = []
+            for owner in owners:
+                if owner.get("isDir") and owner.get("name") not in (".", ".."):
+                    tasks.extend(await self.list(account_id, user_id=owner["name"]))
+            return tasks
         directory = self._task_dir(account_id, user_id)
         try:
             items = await self._agfs.ls(directory)
@@ -91,13 +99,17 @@ class PersistentTaskStore:
         return tasks
 
     async def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None:
+        """Delete a task record, succeeding if it has already been removed."""
         if not user_id:
             return
-        await self._agfs.rm(
-            self._task_path(account_id, user_id, task_id),
-            force=True,
-            auto_pathlock=False,
-        )
+        try:
+            await self._agfs.rm(
+                self._task_path(account_id, user_id, task_id),
+                force=True,
+                auto_pathlock=False,
+            )
+        except (AGFSNotFoundError, FileNotFoundError):
+            return
 
     async def _write_task(self, task: Any) -> None:
         account_id = getattr(task, "account_id", None)
@@ -174,6 +186,7 @@ class PersistentTaskStore:
 def _task_to_payload(task: Any) -> Dict[str, Any]:
     status = getattr(task, "status", None)
     return {
+        **deepcopy(getattr(task, "_extra_fields", {})),
         "task_id": task.task_id,
         "task_type": task.task_type,
         "status": status.value if hasattr(status, "value") else status,
@@ -186,6 +199,7 @@ def _task_to_payload(task: Any) -> Dict[str, Any]:
         "stage": task.stage,
         "result": deepcopy(task.result),
         "error": task.error,
+        "execution_events": deepcopy(task.execution_events),
         "auth": deepcopy(task.auth),
     }
 

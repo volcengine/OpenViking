@@ -485,9 +485,7 @@ class LocalCollection(ICollection):
             if scalar_index is not None:
                 if not self.store_mgr:
                     raise RuntimeError("Store manager is not initialized")
-                index.rebuild_scalar_index(
-                    scalar_index, self.store_mgr.get_all_cands_data()
-                )
+                index.rebuild_scalar_index(scalar_index, self.store_mgr.iter_all_cands_fields())
             if description is not None:
                 index.update(None, description)
 
@@ -697,6 +695,7 @@ class LocalCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         dense_vector = [random.uniform(-1, 1) for _ in range(self.meta.vector_dim)]
         return self.search_by_vector(

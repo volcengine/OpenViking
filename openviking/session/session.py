@@ -23,9 +23,16 @@ from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNot
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.session.auto_commit_policy import AutoCommitPolicy
+from openviking.session.extraction_batch import (
+    ExtractionBatchLimits,
+    ExtractionMessageBatch,
+    estimate_extraction_message_tokens,
+    plan_extraction_batches,
+    resolve_extraction_batch_limits,
+)
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
-from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.memory.utils.language import resolve_output_language_from_conversation
+from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
     RetentionPlan,
@@ -106,6 +113,12 @@ def _redact_inline_images(text: str) -> str:
     return _B64_JSON_RE.sub(replace_b64_json, _INLINE_IMAGE_DATA_URL_RE.sub(replace_data_url, text))
 
 
+def _load_render_prompt() -> Callable[..., str]:
+    from openviking.prompts import render_prompt
+
+    return render_prompt
+
+
 def _redact_inline_images_from_tool_outputs(messages: List[Message]) -> List[Message]:
     for message in messages:
         for part in message.parts:
@@ -150,9 +163,9 @@ def _wm_debug(msg: str) -> None:
 
 def _enabled_memory_types() -> set[str]:
     """Return enabled memory type names registered for extraction."""
-    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+    from openviking.session.memory.memory_type_registry import get_default_registry
 
-    return set(MemoryTypeRegistry().list_names(include_disabled=False))
+    return set(get_default_registry().list_names(include_disabled=False))
 
 
 def _validate_memory_policy_types(policy: MemoryPolicy) -> None:
@@ -779,7 +792,6 @@ class Session:
         """Calculate pending tokens without mutating session state."""
         if (
             self._meta.retention_mode == RETENTION_MODE_TURN_BUDGET
-            and self._meta.keep_recent_turn_count > 0
             and self._meta.retained_message_token_budget > 0
         ):
             plan = plan_retention(
@@ -1847,6 +1859,7 @@ class Session:
         persist_keep_recent_count: bool = True,
         record_auto_commit_success: bool = False,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Archive immediately and enqueue restart-safe Phase 2 processing.
 
@@ -1863,6 +1876,8 @@ class Session:
                 behavior of archiving everything. The plugin's afterTurn path
                 typically passes its configured value (default 10); the compact
                 path passes ``0``.
+            reset_context: Archive all live messages, then append an empty completed
+                archive to stop context and future summaries at this boundary.
             persist_keep_recent_count: When ``True`` (default), ``keep_recent_count``
                 is remembered in meta for subsequent add_message() accounting.
                 The idle full-commit path passes ``False`` with
@@ -1882,6 +1897,8 @@ class Session:
         from openviking.storage.queuefs import QueueManager, get_queue_manager
         from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
 
+        if reset_context and (keep_recent_count != 0 or retention_mode is not None):
+            raise ValueError("reset_context requires keep_recent_count=0 and no retention_mode")
         trace_id = tracer.get_trace_id()
         keep_recent_count = max(0, int(keep_recent_count or 0))
         if retention_mode not in (None, RETENTION_MODE_TURN_BUDGET):
@@ -2022,6 +2039,8 @@ class Session:
                     min_raw_tail_steps=effective_min_tail,
                 )
                 await self._save_meta()
+                if reset_context:
+                    await self._append_context_reset_archive()
                 get_current_telemetry().set("memory.extracted", 0)
                 return {
                     "session_id": self.session_id,
@@ -2031,6 +2050,7 @@ class Session:
                     "archived": False,
                     "reason": "no_messages",
                     "trace_id": trace_id,
+                    **({"reset_context": True} if reset_context else {}),
                 }
 
             total = len(self._messages)
@@ -2104,6 +2124,7 @@ class Session:
                 usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
                 record_auto_commit_success=record_auto_commit_success,
                 event_search_tags=list(effective_event_tags),
+                auto_commit_policy=dict(self._meta.auto_commit_policy or {}),
             )
             phase1_stage = "phase1_persist"
             try:
@@ -2210,16 +2231,15 @@ class Session:
                 self._messages = original_messages
                 self._compression.compression_index -= 1
                 raise
+            if reset_context:
+                await self._append_context_reset_archive()
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
         # Lock released; Phase 1 intent, queue item, retained root, metadata and
         # ready metadata are all durable.
 
         self._compression.original_count += len(messages_to_archive)
-        logger.info(
-            f"Archived: {len(messages_to_archive)} messages → "
-            f"history/archive_{self._compression.compression_index:03d}/"
-        )
+        logger.info(f"Archived: {len(messages_to_archive)} messages → {archive_uri}/")
 
         return {
             "session_id": self.session_id,
@@ -2228,11 +2248,48 @@ class Session:
             "archive_uri": archive_uri,
             "archived": True,
             "trace_id": trace_id,
+            **({"reset_context": True} if reset_context else {}),
             "estimated_active_tokens": (
                 retention_plan.estimated_active_tokens if retention_plan else 0
             ),
             "budget_exceeded": retention_plan.budget_exceeded if retention_plan else False,
         }
+
+    async def _is_context_reset_archive(self, archive_uri: str) -> bool:
+        """Return True when the archive's ``.done`` marks a context reset boundary."""
+        try:
+            done = json.loads(await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self.ctx))
+        except Exception:
+            return False
+        return isinstance(done, dict) and done.get("context_reset") is True
+
+    async def _append_context_reset_archive(self) -> None:
+        """Publish a boundary archive while holding the Phase 1 session lock.
+
+        The directory holds only ``.done``: terminal archives never have their
+        ``messages.jsonl`` read, and a missing overview already reads as empty.
+        """
+        # ponytail: reuse archive ordering; no second session identity or context store.
+        newest = f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+        if self._compression.compression_index > 0 and await self._is_context_reset_archive(newest):
+            return  # Context is already empty; no second boundary needed.
+        self._compression.compression_index += 1
+        archive_uri = (
+            f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+        )
+        try:
+            await self._viking_fs.write_file(
+                f"{archive_uri}/.done",
+                json.dumps({"context_reset": True, "working_memory_enabled": False}),
+                ctx=self.ctx,
+            )
+        except Exception as exc:
+            # A directory left without any marker reads as pending and would
+            # block the next Phase 2 forever; no queue owns this archive.
+            await self._write_failed_marker(archive_uri, stage="context_reset", error=str(exc))
+            raise
+        self._meta.commit_count = self._compression.compression_index
+        await self._save_meta()
 
     async def finalize_cancelled_commit(self, archive_uri: str) -> None:
         """Make a cancelled queued commit terminal without discarding its raw archive."""
@@ -2375,6 +2432,7 @@ class Session:
             user_config_error=user_config_error,
             record_auto_commit_success=msg.record_auto_commit_success,
             event_search_tags=list(msg.event_search_tags or []),
+            auto_commit_policy=msg.auto_commit_policy,
         )
         return True
 
@@ -2400,6 +2458,95 @@ class Session:
         )
         return await reporter.extract_and_report(messages=messages, context=context)
 
+    async def _extract_long_term_memories_with_batching(
+        self,
+        *,
+        messages: List[Message],
+        limits: ExtractionBatchLimits,
+        archive_uri: str,
+        extract_batch: Callable[[List[Message]], Awaitable[Any]],
+        record_batch: Callable[
+            [str, str, List[Message], Callable[[], Awaitable[Any]]],
+            Awaitable[Any],
+        ],
+    ) -> Any:
+        batches = plan_extraction_batches(messages, limits)
+        if not batches:
+            return []
+
+        logger.info(
+            "Processing Phase 2 long-term memory extraction in %s planned batches "
+            "for %s estimated tokens",
+            len(batches),
+            estimate_extraction_message_tokens(messages),
+        )
+        contexts: List[Any] = []
+        skills: List[Dict[str, Any]] = []
+        memory_diffs: List[Dict[str, Any]] = []
+        previous_diff_raw = ""
+        if self._viking_fs:
+            try:
+                previous_diff_raw = await self._viking_fs.read_file(
+                    f"{archive_uri}/memory_diff.json",
+                    ctx=self.ctx,
+                )
+                previous_diff = json.loads(previous_diff_raw or "{}")
+                if isinstance(previous_diff, dict):
+                    memory_diffs.append(previous_diff)
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                previous_diff_raw = ""
+
+        for batch_number, batch in enumerate(batches, start=1):
+            batch_messages = list(batch.messages)
+
+            async def _extract_and_merge(
+                batch_messages: List[Message] = batch_messages,
+            ) -> Any:
+                nonlocal previous_diff_raw
+                result = await extract_batch(batch_messages)
+                if not self._viking_fs:
+                    return result
+                try:
+                    current_diff_raw = await self._viking_fs.read_file(
+                        f"{archive_uri}/memory_diff.json",
+                        ctx=self.ctx,
+                    )
+                    if current_diff_raw != previous_diff_raw:
+                        current_diff = json.loads(current_diff_raw or "{}")
+                        if isinstance(current_diff, dict):
+                            memory_diffs.append(current_diff)
+                            await self._session_compressor._write_final_memory_diff(
+                                archive_uri=archive_uri,
+                                ctx=self.ctx,
+                                memory_diffs=memory_diffs,
+                            )
+                            previous_diff_raw = await self._viking_fs.read_file(
+                                f"{archive_uri}/memory_diff.json",
+                                ctx=self.ctx,
+                            )
+                except Exception as exc:
+                    if not _is_storage_not_found(exc):
+                        raise
+                return result
+
+            result = await record_batch(
+                f"long_term_memory_extraction_batch_{batch_number}",
+                "long_term",
+                batch_messages,
+                _extract_and_merge,
+            )
+            if isinstance(result, dict):
+                contexts.extend(result.get("contexts", []))
+                skills.extend(result.get("session_skills", []))
+            else:
+                contexts.extend(result or [])
+
+        if skills:
+            return {"contexts": contexts, "session_skills": skills}
+        return contexts
+
     @tracer("session.commit.phase2", ignore_result=True, ignore_args=True)
     async def _run_memory_extraction(
         self,
@@ -2415,6 +2562,7 @@ class Session:
         user_config_error: Optional[str] = None,
         record_auto_commit_success: bool = False,
         event_search_tags: Optional[List[str]] = None,
+        auto_commit_policy: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -2458,6 +2606,7 @@ class Session:
                 with bind_telemetry(telemetry):
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
+                    extraction_batch_limits = resolve_extraction_batch_limits(auto_commit_policy)
                     working_memory_enabled = effective_policy.working_memory_enabled
                     checkpoint_requests = (
                         await self._collect_checkpoint_requests_for_phase2(
@@ -2497,10 +2646,21 @@ class Session:
                         }
                         if checkpoint_requests:
                             summary_kwargs["checkpoint_requests"] = checkpoint_requests
-                        generated = await self._generate_archive_summary_async(
+                        summary_batches = plan_extraction_batches(
                             extraction_messages,
-                            **summary_kwargs,
+                            extraction_batch_limits,
                         )
+                        if checkpoint_requests or len(summary_batches) <= 1:
+                            generated = await self._generate_archive_summary_async(
+                                extraction_messages,
+                                **summary_kwargs,
+                            )
+                        else:
+                            generated = await self._generate_archive_summary_with_batching(
+                                summary_batches,
+                                limits=extraction_batch_limits,
+                                **summary_kwargs,
+                            )
                         summary_result = (
                             generated
                             if isinstance(generated, _ArchiveSummaryResult)
@@ -2644,13 +2804,15 @@ class Session:
 
                         if self._session_compressor and long_term_has_work:
 
-                            async def _run_long_term_memory_extraction() -> Any:
-                                # strict_extract_errors=True lets transient failures
-                                # surface so _run_retryable_phase2_step can retry them
-                                # (and so a final failure is recorded as a skipped
-                                # archive instead of silently dropping the memory).
+                            async def _run_long_term_memory_extraction(
+                                batch_messages: Optional[List[Message]] = None,
+                            ) -> Any:
                                 return await self._session_compressor.extract_long_term_memories(
-                                    messages=long_term_messages,
+                                    messages=(
+                                        long_term_messages
+                                        if batch_messages is None
+                                        else batch_messages
+                                    ),
                                     user=self.user,
                                     session_id=self.session_id,
                                     ctx=self.ctx,
@@ -2665,14 +2827,25 @@ class Session:
                                     event_search_tags=event_search_tags,
                                 )
 
-                            extraction_tasks.append(
-                                _run_recorded_memory_step(
-                                    "long_term_memory_extraction",
-                                    "long_term",
-                                    long_term_messages,
-                                    _run_long_term_memory_extraction,
+                            if extraction_batch_limits.enabled:
+                                extraction_tasks.append(
+                                    self._extract_long_term_memories_with_batching(
+                                        messages=long_term_messages,
+                                        limits=extraction_batch_limits,
+                                        archive_uri=archive_uri,
+                                        extract_batch=_run_long_term_memory_extraction,
+                                        record_batch=_run_recorded_memory_step,
+                                    )
                                 )
-                            )
+                            else:
+                                extraction_tasks.append(
+                                    _run_recorded_memory_step(
+                                        "long_term_memory_extraction",
+                                        "long_term",
+                                        long_term_messages,
+                                        _run_long_term_memory_extraction,
+                                    )
+                                )
                             extraction_labels.append("long_term")
 
                         _results = await asyncio.gather(
@@ -3121,6 +3294,8 @@ class Session:
                         terminal["archive_uri"], overview
                     ),
                 }
+            elif await self._is_context_reset_archive(terminal["archive_uri"]):
+                terminal = None
             else:
                 # A required overview that is missing or unreadable still keeps
                 # the archive terminal here; the warning is emitted by the full
@@ -3393,6 +3568,7 @@ class Session:
                     "archive_id": state.archive_id,
                     "archive_uri": state.archive_uri,
                     "index": state.index,
+                    "context_reset": state.done.get("context_reset") is True,
                 }
             )
 
@@ -3458,6 +3634,8 @@ class Session:
             exclude_archive_uri,
             before_archive_index,
         ):
+            if archive.get("context_reset"):
+                break
             overview = await self._read_archive_overview(archive["archive_uri"])
             if not overview:
                 continue
@@ -4210,6 +4388,50 @@ class Session:
             )
         return tuple(raw)
 
+    async def _generate_archive_summary_with_batching(
+        self,
+        batches: List[ExtractionMessageBatch],
+        *,
+        latest_archive_overview: str,
+        limits: ExtractionBatchLimits,
+    ) -> str:
+        messages = [message for batch in batches for message in batch.messages]
+        vlm = get_openviking_config().vlm
+        if not (vlm and vlm.is_available()):
+            return await self._generate_archive_summary_async(
+                messages,
+                latest_archive_overview=latest_archive_overview,
+            )
+        try:
+            _load_render_prompt()
+        except Exception:
+            return await self._generate_archive_summary_async(
+                messages,
+                latest_archive_overview=latest_archive_overview,
+            )
+
+        logger.info(
+            "Processing Phase 2 Working Memory extraction in %s planned batches "
+            "using auto-commit limits tokens=%s messages=%s",
+            len(batches),
+            limits.max_message_tokens,
+            limits.max_messages,
+        )
+        current_overview = latest_archive_overview
+
+        for batch in batches:
+            batch_messages = list(batch.messages)
+            generated = await self._generate_archive_summary_async(
+                batch_messages,
+                latest_archive_overview=current_overview,
+            )
+            current_overview = (
+                generated.overview
+                if isinstance(generated, _ArchiveSummaryResult)
+                else str(generated or "")
+            )
+        return current_overview
+
     async def _generate_archive_summary_async(
         self,
         messages: List[Message],
@@ -4262,7 +4484,7 @@ class Session:
             )
 
         try:
-            from openviking.prompts import render_prompt
+            render_prompt = _load_render_prompt()
         except Exception as e:
             if checkpoint_requests:
                 raise RuntimeError("Prompt module is required to generate checkpoints") from e

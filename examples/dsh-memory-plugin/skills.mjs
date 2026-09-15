@@ -10,11 +10,8 @@ export const SKILLS_DIR = fileURLToPath(new URL("./skills", import.meta.url));
 export function buildSkillsConfig() {
   return {
     providerName: SKILL_PROVIDER_NAME,
-    // Isolated: this provider serves only the bundle's own skill, so it never
-    // shadows or duplicates what DSH's default filesystem provider discovers
-    // under the project and user skill roots.
     includeDefaultRoots: false,
-    customSkillDirs: [SKILLS_DIR],
+    bundledSkillDir: SKILLS_DIR,
   };
 }
 

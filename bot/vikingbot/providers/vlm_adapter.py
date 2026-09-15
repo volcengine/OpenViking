@@ -748,7 +748,7 @@ class VLMProviderAdapter(LLMProvider):
         return provider in {"anthropic", "openai-codex"}
 
     # ------------------------------------------------------------------
-    # Langfuse helpers (same pattern as LiteLLMProvider.chat())
+    # Langfuse helpers
     # ------------------------------------------------------------------
 
     def _end_langfuse_observation(self, obs, llm_response: LLMResponse) -> None:

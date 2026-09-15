@@ -141,7 +141,7 @@ async def test_concurrent_pending_marks_do_not_overwrite_each_other():
 async def test_partial_sidecar_baseline_refreshes_immediately():
     dir_uri = "viking://resources/wide"
     files = _files(dir_uri, pending=3)
-    files.pop(f"{dir_uri}/.abstract.md")
+    files[f"{dir_uri}/.abstract.md"] = "---\n"
     fs = _FakeFS(files)
 
     decision = await plan_abstract_overview_refresh(

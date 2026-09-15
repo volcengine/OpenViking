@@ -23,6 +23,7 @@ from openviking.storage.abstract_overview import (
     write_abstract_overview,
 )
 from openviking.storage.acl import CreatorAclGrant
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, get_current_telemetry
 from openviking.utils.ingest_options import IngestOptions
@@ -403,16 +404,21 @@ class SemanticDagExecutor:
             sampled_entries = deterministic_sample(direct_entries, sample_limit)
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
-            pending_snapshot = (
-                await read_abstract_overview_pending_snapshot(
-                    viking_fs=self._viking_fs,
-                    dir_uri=dir_uri,
-                    ctx=self._ctx,
-                    lock=self._lock,
-                )
-                if self._aggregate_directory
-                else 0
-            )
+            pending_snapshot = 0
+            if self._aggregate_directory:
+                try:
+                    pending_snapshot = await read_abstract_overview_pending_snapshot(
+                        viking_fs=self._viking_fs,
+                        dir_uri=dir_uri,
+                        ctx=self._ctx,
+                        lock=self._lock,
+                    )
+                except LockAcquisitionError:
+                    if self._generation_trigger != "content_write":
+                        raise
+                    # Content writes run one directory; retain their file work.
+                    self._aggregate_directory = False
+                    logger.info("Skipping busy parent semantic refresh: %s", dir_uri)
             file_index = {path: idx for idx, path in enumerate(file_paths)}
             child_index = {path: idx for idx, path in enumerate(children_dirs)}
             # Recursive/initial work still maintains every file. Incremental
@@ -698,8 +704,6 @@ class SemanticDagExecutor:
             if file_name in existing_summaries:
                 return {"name": file_name, "summary": existing_summaries[file_name]}
 
-        except AbstractOverviewFormatError:
-            raise
         except Exception as e:
             logger.debug(f"Failed to read existing summary from overview.md for {file_path}: {e}")
 
@@ -754,8 +758,6 @@ class SemanticDagExecutor:
             overview = await self._viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._ctx)
             abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
             return body_for_preview(overview), body_for_preview(abstract)
-        except AbstractOverviewFormatError:
-            raise
         except Exception:
             return None, None
 
@@ -797,11 +799,6 @@ class SemanticDagExecutor:
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, llm_sem=self._llm_sem, ctx=self._ctx
                 )
-        except AbstractOverviewFormatError:
-            # A generated sidecar that opted into OKF must never be treated as
-            # an empty file summary; doing so would silently feed metadata or
-            # corrupted YAML into a later regeneration.
-            raise
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
@@ -1028,9 +1025,11 @@ class SemanticDagExecutor:
                 )
 
                 if not children_changed:
-                    need_vectorize = False
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
                     should_write = overview is None or abstract is None
+                    # Rebuilt sidecars must also replace their stale vectors.
+                    need_vectorize = should_write
+                    children_changed = should_write
             if should_write and (overview is None or abstract is None):
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
@@ -1063,7 +1062,7 @@ class SemanticDagExecutor:
             if self._closed:
                 return
 
-            # Write directly, protected by the outer semantic lock.
+            # Persist sidecars before publishing their directory vectors.
             if should_write:
                 assert overview is not None and abstract is not None
                 try:
@@ -1083,6 +1082,7 @@ class SemanticDagExecutor:
                 except AbstractOverviewFormatError:
                     raise
                 except Exception:
+                    need_vectorize = False
                     logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
         except AbstractOverviewFormatError:

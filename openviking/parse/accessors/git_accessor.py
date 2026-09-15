@@ -200,7 +200,7 @@ class GitAccessor(DataAccessor):
             # Build metadata
             # repo_name is in "org/repo" format (e.g. "volcengine/OpenViking")
             # This is extracted via parse_code_hosting_url() from the original URL
-            meta = {"repo_name": repo_name}
+            meta = {"repo_name": repo_name, "_cleanup_path": temp_local_dir}
             if branch:
                 meta["repo_ref"] = branch
             if commit:

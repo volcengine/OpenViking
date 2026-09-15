@@ -63,8 +63,8 @@ async def run_to_completion(
 class OwnerLoopDispatcher:
     """Run coroutine factories on one event loop, including foreign callers."""
 
-    def __init__(self) -> None:
-        self._owner_loop: asyncio.AbstractEventLoop | None = None
+    def __init__(self, owner_loop: asyncio.AbstractEventLoop | None = None) -> None:
+        self._owner_loop = owner_loop
         self._bind_lock = threading.Lock()
 
     def bind_current_loop(self) -> asyncio.AbstractEventLoop:

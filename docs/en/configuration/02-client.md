@@ -42,7 +42,10 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
   "extra_headers": {
     "X-Tenant": "acme"
   },
-  "gateway_token": "<gateway-token>"
+  "gateway_token": "<gateway-token>",
+  "plugin": {
+    "recallCompress": "off"
+  }
 }
 ```
 
@@ -131,6 +134,30 @@ Command-line options such as `--profile`, `--progress`, `--no-progress`, and `--
 
 Local directory uploads also honor `.gitignore`. Command-line `--include` and `--exclude` rules are merged with the configuration.
 
+## Plugin Settings
+
+Behaviour knobs for the memory plugins live under `plugin`. Keys directly under it apply to every harness; a nested object named after a harness — `claude_code` or `codex` — overrides them for that one.
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<user-or-admin-key>",
+  "plugin": {
+    "recallCompress": "off",
+    "bypassSessionPatterns": ["/tmp/**", "**/scratch/**"],
+    "claude_code": {
+      "captureAssistantTurns": false
+    }
+  }
+}
+```
+
+Each key is the camelCase counterpart of an `OPENVIKING_*` tuning variable — `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. The mapping does not go both ways: a few variables are deliberately environment-only, such as the one-shot `OPENVIKING_BYPASS_SESSION`. The full list lives in the plugin READMEs: [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) and [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
+
+Resolution order, highest first: environment variables → the [workspace layers](#workspace-configuration) → `plugin.<harness>` → `plugin` → the legacy per-harness block in `ov.conf` → built-in defaults. Hook processes read the file on every invocation, so an edit takes effect on the next turn; changing an `OPENVIKING_*` variable instead needs the agent restarted, since hooks inherit its environment.
+
+Only the Claude Code and Codex plugins read this section today, so an entry named after any other harness is inert. `ov-memory-doctor` prints what it resolved and warns about keys it does not recognise, naming the closest real one.
+
 ## Workspace Configuration
 
 A repository can carry its own plugin settings, so the memory behavior of a project travels with the checkout instead of living in each contributor's home directory. Two files sit under the workspace root, and a third layer is kept per machine:
@@ -153,7 +180,7 @@ Highest first:
 | `~/.openviking/workspaces/<slot>.json` | This machine, this workspace |
 | `<repo-root>/.openviking/config.local.json` | This checkout, private |
 | `<repo-root>/.openviking/config.json` | This repository, committed |
-| `ovcli.conf` `plugin.<harness>` | This machine, one harness |
+| `ovcli.conf` [`plugin.<harness>`](#plugin-settings) | This machine, one harness |
 | `ovcli.conf` `plugin` | This machine, every harness |
 | `ov.conf` harness section | Compatibility layer for older deployments |
 | Built-in defaults | |

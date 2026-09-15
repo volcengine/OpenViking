@@ -8,7 +8,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 import asyncio
 from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri, context_type_for_uri, uri_leaf_name
@@ -27,7 +27,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
-from openviking.storage.acl import CreatorAclGrant
+from openviking.storage.acl import AclAction, AclMode, CreatorAclGrant
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -178,6 +178,52 @@ class FSService:
             result_entries.append(entry)
         return result_entries
 
+    async def _collect_tagged_page(
+        self,
+        fetch_page: Callable[[int, Optional[int]], Awaitable[List[Dict[str, Any]]]],
+        ctx: RequestContext,
+        tags: List[str],
+        include_tags: bool,
+        offset: int,
+        node_limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Collect a visible page after tag filtering.
+
+        Args:
+            fetch_page: Loads one pre-tag page by offset and limit.
+            ctx: Request identity used for tag lookup.
+            tags: Required retrieval tags.
+            include_tags: Whether to retain tags in returned entries.
+            offset: Number of matched entries to skip.
+            node_limit: Maximum matched entries to return.
+
+        Returns:
+            The requested page of tag-filtered entries.
+        """
+        if node_limit <= 0:
+            entries = await fetch_page(0, None)
+            entries = await self._attach_and_filter_tags(entries, ctx, tags, include_tags)
+            return entries[offset:]
+
+        batch_size = max(node_limit, 256)
+        source_offset = 0
+        remaining_offset = offset
+        result: List[Dict[str, Any]] = []
+        while len(result) < node_limit:
+            entries = await fetch_page(source_offset, batch_size)
+            filtered = await self._attach_and_filter_tags(entries, ctx, tags, include_tags)
+            if remaining_offset >= len(filtered):
+                remaining_offset -= len(filtered)
+            else:
+                result.extend(
+                    filtered[remaining_offset : remaining_offset + node_limit - len(result)]
+                )
+                remaining_offset = 0
+            if len(entries) < batch_size:
+                break
+            source_offset += len(entries)
+        return result
+
     async def ls(
         self,
         uri: str,
@@ -194,6 +240,7 @@ class FSService:
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
+        offset: int = 0,
     ) -> List[Any]:
         """List directory contents.
 
@@ -211,63 +258,62 @@ class FSService:
         """
         viking_fs = self._ensure_initialized()
         extra_fields = extra_fields or []
-
         use_simple_paths = simple and not extra_fields
 
-        if use_simple_paths:
-            # Only return URIs — skip expensive abstract fetching to save tokens
+        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+            """Fetch and return one pre-tag page."""
             if recursive:
-                entries = await viking_fs.tree(
+                return await viking_fs.tree(
                     uri,
                     ctx=ctx,
-                    output="original",
+                    output="original" if tags or use_simple_paths else output,
+                    abs_limit=abs_limit,
                     show_all_hidden=show_all_hidden,
-                    node_limit=None if tags else node_limit,
+                    node_limit=page_limit,
                     level_limit=level_limit,
-                )
-            else:
-                entries = await viking_fs.ls(
-                    uri,
-                    ctx=ctx,
-                    output="original",
-                    show_all_hidden=show_all_hidden,
-                    node_limit=None if tags else node_limit,
+                    offset=page_offset,
                     sort_by=sort_by,
                     sort_order=sort_order,
+                    extra_fields=None if tags or use_simple_paths else extra_fields,
                 )
-            entries = await self._attach_and_filter_tags(entries, ctx, tags, include_tags=False)
-            if tags and node_limit > 0:
-                entries = entries[:node_limit]
-            return [e.get("uri", "") for e in entries]
-
-        if recursive:
-            entries = await viking_fs.tree(
+            return await viking_fs.ls(
                 uri,
                 ctx=ctx,
-                output=output,
+                output="original" if tags or use_simple_paths else output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
-                node_limit=None if tags else node_limit,
-                level_limit=level_limit,
-                extra_fields=extra_fields,
-            )
-        else:
-            entries = await viking_fs.ls(
-                uri,
-                ctx=ctx,
-                output=output,
-                abs_limit=abs_limit,
-                show_all_hidden=show_all_hidden,
-                node_limit=None if tags else node_limit,
+                node_limit=page_limit,
+                offset=page_offset,
                 sort_by=sort_by,
                 sort_order=sort_order,
-                extra_fields=extra_fields,
+                extra_fields=None if tags or use_simple_paths else extra_fields,
             )
-        entries = await self._attach_and_filter_tags(
-            entries, ctx, tags, include_tags or bool(tags) or "tags" in extra_fields
-        )
-        if tags and node_limit > 0:
-            entries = entries[:node_limit]
+
+        if tags:
+            entries = await self._collect_tagged_page(
+                fetch_page,
+                ctx,
+                tags,
+                False if use_simple_paths else include_tags or bool(tags) or "tags" in extra_fields,
+                offset,
+                node_limit,
+            )
+        else:
+            entries = await fetch_page(offset, node_limit)
+            entries = await self._attach_and_filter_tags(
+                entries, ctx, None, include_tags or "tags" in extra_fields
+            )
+        if use_simple_paths:
+            return [entry.get("uri", "") for entry in entries]
+        if tags and (output != "original" or extra_fields):
+            return await viking_fs._finalize_listing_entries(
+                entries,
+                output,
+                abs_limit,
+                extra_fields,
+                recursive,
+                ctx=ctx,
+            )
         return entries
 
     async def mkdir(
@@ -608,6 +654,8 @@ class FSService:
         ctx: RequestContext,
     ) -> Dict[str, Any]:
         """Copy a resource without exposing a cancellable partial transaction."""
+        from_uri = VikingFS._normalize_transfer_uri(from_uri)
+        to_uri = VikingFS._normalize_transfer_uri(to_uri)
         return await self._finish_transfer_after_caller_cancel(
             self._cp_and_refresh(from_uri, to_uri, recursive=recursive, ctx=ctx),
             operation="copy",
@@ -664,6 +712,8 @@ class FSService:
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move a resource without exposing a cancellable partial transaction."""
+        from_uri = VikingFS._normalize_transfer_uri(from_uri)
+        to_uri = VikingFS._normalize_transfer_uri(to_uri)
         await self._finish_transfer_after_caller_cancel(
             self._mv_and_refresh(from_uri, to_uri, ctx=ctx),
             operation="move",
@@ -834,30 +884,70 @@ class FSService:
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
+        offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
-        result = await viking_fs.tree(
-            uri,
-            ctx=ctx,
-            output=output,
-            abs_limit=abs_limit,
-            show_all_hidden=show_all_hidden,
-            node_limit=None if tags else node_limit,
-            level_limit=level_limit,
-            extra_fields=extra_fields,
-        )
-        result = await self._attach_and_filter_tags(
-            result, ctx, tags, include_tags or bool(tags) or "tags" in (extra_fields or [])
-        )
-        if tags and node_limit > 0:
-            result = result[:node_limit]
-        return result
 
-    async def stat(self, uri: str, ctx: RequestContext, skip_count: bool = False) -> Dict[str, Any]:
+        async def fetch_page(page_offset: int, page_limit: Optional[int]) -> List[Dict[str, Any]]:
+            """Fetch and return one pre-tag tree page."""
+            return await viking_fs.tree(
+                uri,
+                ctx=ctx,
+                output="original" if tags else output,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=page_limit,
+                level_limit=level_limit,
+                extra_fields=None if tags else extra_fields,
+                offset=page_offset,
+            )
+
+        if tags:
+            result = await self._collect_tagged_page(
+                fetch_page,
+                ctx,
+                tags,
+                include_tags or bool(tags) or "tags" in (extra_fields or []),
+                offset,
+                node_limit,
+            )
+            if output != "original" or extra_fields:
+                return await viking_fs._finalize_listing_entries(
+                    result,
+                    output,
+                    abs_limit,
+                    extra_fields,
+                    True,
+                    ctx=ctx,
+                )
+            return result
+
+        result = await fetch_page(offset, node_limit)
+        return await self._attach_and_filter_tags(
+            result, ctx, None, include_tags or "tags" in (extra_fields or [])
+        )
+
+    async def stat(
+        self,
+        uri: str,
+        ctx: RequestContext,
+        skip_count: bool = False,
+        include_lock_status: bool = False,
+    ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.stat(uri, ctx=ctx, skip_count=skip_count)
+        return await viking_fs.stat(
+            uri,
+            ctx=ctx,
+            skip_count=skip_count,
+            include_lock_status=include_lock_status,
+        )
+
+    async def ensure_write_access(self, uri: str, ctx: RequestContext) -> None:
+        """Validate write access without mutating the target."""
+        viking_fs = self._ensure_initialized()
+        await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
     async def system_sync_status(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
         """Return multi-write sync status for one Viking URI subtree."""
@@ -974,15 +1064,21 @@ class FSService:
         viking_fs = self._ensure_initialized()
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         project_tags = bool(normalized_tags) or include_tags
+        tag_filter = None
+        if normalized_tags:
+            from openviking.utils.tags import build_search_tags_filter
+
+            tag_filter = build_search_tags_filter(normalized_tags)
         result = dict(
             await viking_fs.glob(
                 pattern,
                 uri=uri,
-                node_limit=None if normalized_tags else node_limit,
+                node_limit=node_limit,
                 ctx=ctx,
                 extra_fields=extra_fields
                 if extra_fields is not None
                 else ([] if project_tags else None),
+                tag_filter=tag_filter,
             )
         )
         if not project_tags:
@@ -1072,9 +1168,15 @@ class FSService:
         return await self._ensure_initialized().get_acl(uri, ctx=ctx)
 
     async def set_acl(
-        self, uri: str, entries: List[Dict[str, str]], ctx: RequestContext
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]],
+        ctx: RequestContext,
+        acl_mode: Optional[AclMode] = None,
     ) -> Dict[str, Any]:
-        return await self._ensure_initialized().set_acl(uri, entries, ctx=ctx)
+        return await self._ensure_initialized().set_acl(
+            uri, entries, ctx=ctx, acl_mode=acl_mode
+        )
 
     async def grant_acl(
         self, uri: str, principal: str, level: str, ctx: RequestContext

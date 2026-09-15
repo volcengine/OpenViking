@@ -104,6 +104,8 @@ See [Authentication](../guides/04-authentication.md) for details (trusted mode, 
 **Full example (using `user_key`):**
 
 ```python
+import time
+
 import openviking as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
@@ -115,10 +117,19 @@ try:
     result = client.add_resource(
         path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
     )
-    root_uri = result["root_uri"]
 
-    # Wait for processing
-    client.wait_processed()
+    task_id = result["task_id"]
+    print(f"Import task: {task_id}")
+    while True:
+        task = client.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Task {task_id} is no longer available")
+        if task["status"] == "completed":
+            break
+        if task["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(f"Import task {task_id}: {task['status']} ({task.get('error')})")
+        time.sleep(2)
+    root_uri = task["result"]["root_uri"]
 
     # Search
     results = client.find(

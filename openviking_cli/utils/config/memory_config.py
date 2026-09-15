@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -56,6 +56,14 @@ class MemoryConfig(BaseModel):
             "When multiple directories are searched, results are merged and top-N are read."
         ),
     )
+    maintenance_review_tokens: int = Field(
+        default=1000,
+        gt=0,
+        description=(
+            "Estimated token count above which a full memory read includes an LLM maintenance "
+            "notice asking it to choose between coherent splitting and single-file compaction."
+        ),
+    )
     extraction_enabled: bool = Field(
         default=True,
         description=(
@@ -63,6 +71,14 @@ class MemoryConfig(BaseModel):
             "to produce long-term memories. When disabled, sessions are archived "
             "but no memory extraction is performed. Useful for read-only or "
             "stateless deployments."
+        ),
+    )
+    extraction_output_format: Literal["json", "python"] = Field(
+        default="python",
+        description=(
+            "Final model-output protocol used by every memory extraction loop. "
+            "'python' uses the restricted internal memory SDK DSL (default); "
+            "'json' preserves the legacy structured JSON protocol."
         ),
     )
     session_skill_extraction_enabled: bool = Field(

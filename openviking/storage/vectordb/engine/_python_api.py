@@ -475,13 +475,13 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
             )
 
         def rebuild_scalar_index(
-            self, scalar_index_json: str, data_list: list[AddDataRequest]
+            self, scalar_index_json: str, data_list: Iterable[AddDataRequest]
         ) -> int:
             return int(
                 self._backend._index_engine_rebuild_scalar_index(
                     self._handle,
                     scalar_index_json,
-                    _request_list_to_backend(data_list),
+                    data_list,
                 )
             )
 

@@ -444,7 +444,6 @@ jobs:
 
       - name: Run API Tests (Unix)
         if: runner.os != 'Windows'
-        id: run-tests-unix
         run: |
           cd tests/api_test
           export OPENVIKING_API_KEY=test-root-api-key
@@ -474,11 +473,8 @@ jobs:
               --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ \
               --ignore=tasks/slow/ --ignore=skills/slow/
           fi
-        continue-on-error: true
-
       - name: Run API Tests (Windows)
         if: runner.os == 'Windows'
-        id: run-tests-windows
         shell: pwsh
         run: |
           cd tests/api_test
@@ -493,8 +489,6 @@ jobs:
             Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem and slow tests)"
             uv run python -m pytest . -v -n 4 --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_add_resource.py --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ --ignore=scenarios/ --ignore=common/slow/ --ignore=content/slow/ --ignore=resources/slow/ --ignore=sessions/slow/ --ignore=tasks/slow/ --ignore=skills/slow/ -k "not test_observer"
           }
-        continue-on-error: true
-
       - name: Install released OpenViking CLI for compatibility tests (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -515,11 +509,9 @@ jobs:
 
       - name: Run CLI Compatibility Tests (Unix)
         if: runner.os != 'Windows'
-        id: run-cli-compat-tests
         run: |
           if [ -z "$OPENVIKING_COMPAT_CLI_BIN" ]; then
             echo "CLI binary not available, skipping CLI compatibility tests"
-            echo "cli_compat_outcome=skipped" >> $GITHUB_OUTPUT
             exit 0
           fi
           cd tests/cli
@@ -529,8 +521,7 @@ jobs:
           export OPENVIKING_ROOT_API_KEY="test-root-api-key"
 
           echo "Running CLI compatibility tests (serial)..."
-          uv run python -m pytest test_cli_compatibility.py -v --tb=short -m cli_remote || true
-        continue-on-error: true
+          uv run python -m pytest test_cli_compatibility.py -v --tb=short -m cli_remote
 
       - name: Build OpenViking CLI from current source (Unix)
         if: runner.os != 'Windows'
@@ -544,11 +535,9 @@ jobs:
 
       - name: Run CLI Integration Tests (Unix)
         if: runner.os != 'Windows'
-        id: run-cli-tests
         run: |
           if [ -z "$OPENVIKING_CLI_BIN" ]; then
             echo "CLI binary not available, skipping CLI integration tests"
-            echo "cli_tests_outcome=skipped" >> $GITHUB_OUTPUT
             exit 0
           fi
           cd tests/cli
@@ -569,8 +558,6 @@ jobs:
             test_cli_observer.py \
             -v --tb=short -m cli_remote \
             --html=cli-test-report.html --self-contained-html
-        continue-on-error: true
-
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         if: always()
@@ -597,26 +584,3 @@ jobs:
             Stop-Process -Id $env:SERVER_PID -Force -ErrorAction SilentlyContinue
           }
           Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force
-
-      - name: Check test results (Unix)
-        if: runner.os != 'Windows' && (steps.run-tests-unix.outcome != 'success' || steps.run-cli-tests.outcome == 'failure')
-        run: |
-          FAILED=0
-          if [ "${{ steps.run-tests-unix.outcome }}" != "success" ]; then
-            echo "API tests failed!"
-            FAILED=1
-          fi
-          if [ "${{ steps.run-cli-tests.outcome }}" == "failure" ]; then
-            echo "CLI integration tests failed!"
-            FAILED=1
-          fi
-          if [ "$FAILED" -eq 1 ]; then
-            exit 1
-          fi
-
-      - name: Check test results (Windows)
-        if: runner.os == 'Windows' && steps.run-tests-windows.outcome != 'success'
-        shell: pwsh
-        run: |
-          Write-Host "API tests failed!"
-          exit 1

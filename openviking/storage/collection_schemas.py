@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import ACL_GRANT_FIELDS
+from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -27,6 +27,7 @@ from openviking.storage.errors import (
 )
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_vector_index_backend import (
     VIKINGDB_CONTENT_MAX_SIZE,
@@ -120,7 +121,11 @@ class CollectionSchemas:
                 {"FieldName": "content", "FieldType": "text"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_user_id", "FieldType": "string"},
-                {"FieldName": "acl_enabled", "FieldType": "bool", "DefaultValue": False},
+                {
+                    "FieldName": ACL_MODE_FIELD,
+                    "FieldType": "string",
+                    "DefaultValue": AclMode.NONE.value,
+                },
                 *[
                     {
                         "FieldName": field,
@@ -147,7 +152,7 @@ class CollectionSchemas:
                 "search_tags",
                 "account_id",
                 "owner_user_id",
-                "acl_enabled",
+                ACL_MODE_FIELD,
                 *ACL_GRANT_FIELDS,
             ]
         )
@@ -595,14 +600,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             else inserted_data["abstract"][:VIKINGDB_CONTENT_MAX_SIZE]
         )
 
-    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Process dequeued message and add embedding vector(s)."""
         if not data:
-            return None
+            return ProcessResult.success()
 
         embedding_msg: Optional[EmbeddingMsg] = None
-        report_success = False
-        report_error_args: Optional[tuple[str, Optional[Dict[str, Any]]]] = None
         request_failed_message: Optional[str] = None
         try:
             embedding_msg = EmbeddingMsg.from_json(data["data"])
@@ -624,8 +627,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     logger.debug("Skip embedding dequeue during shutdown")
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     self._record_request_success(embedding_msg)
-                    report_success = True
-                    return None
+                    return ProcessResult.success()
 
                 if not isinstance(embedding_msg.message, (str, list)):
                     logger.debug(
@@ -633,8 +635,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     )
                     self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                     self._record_request_success(embedding_msg)
-                    report_success = True
-                    return data
+                    return ProcessResult.success(data)
 
                 # Circuit breaker: if API is known-broken, re-enqueue and wait
                 try:
@@ -655,17 +656,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         get_request_wait_tracker().record_embedding_requeue(
                             embedding_msg.telemetry_id
                         )
-                        self.report_requeue()
-                        report_success = True
-                        return None
+                        return ProcessResult.requeued()
                     # No queue manager — cannot re-enqueue, drop with error
                     error_msg = self._embedding_error_msg(
                         embedding_msg,
                         "Circuit breaker open and no queue manager",
                     )
                     request_failed_message = error_msg
-                    report_error_args = (error_msg, data)
-                    return None
+                    return ProcessResult.failed(error_msg)
 
                 # Initialize embedder if not already initialized
                 if not self._embedder:
@@ -715,16 +713,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             logger.error(error_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
-                            report_error_args = (error_msg, data)
-                            return None
+                            return ProcessResult.failed(error_msg)
 
                         if error_class == ERROR_CLASS_PERMANENT:
                             logger.critical(error_msg)
                             self._circuit_breaker.record_failure(embed_err)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
-                            report_error_args = (error_msg, data)
-                            return None
+                            return ProcessResult.failed(error_msg)
 
                         if error_class == ERROR_CLASS_AUTH:
                             # Bad/expired credential: retrying cannot succeed. Fail
@@ -736,8 +732,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             logger.error(error_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
-                            report_error_args = (error_msg, data)
-                            return None
+                            return ProcessResult.failed(error_msg)
 
                         # Transient or unknown — re-enqueue for retry
                         logger.warning(error_msg)
@@ -752,13 +747,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                                 get_request_wait_tracker().record_embedding_requeue(
                                     embedding_msg.telemetry_id
                                 )
-                                self.report_requeue()
                                 logger.info(
                                     "Re-enqueued embedding message after transient error "
                                     f"({self._embedding_msg_log_context(embedding_msg)})"
                                 )
-                                report_success = True
-                                return None
+                                return ProcessResult.requeued()
                             except Exception as requeue_err:
                                 logger.error(
                                     self._embedding_error_msg(
@@ -769,8 +762,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                         self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                         request_failed_message = error_msg
-                        report_error_args = (error_msg, data)
-                        return None
+                        return ProcessResult.failed(error_msg)
 
                     # Add dense vector
                     if result.dense_vector:
@@ -785,8 +777,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             logger.error(error_msg)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
-                            report_error_args = (error_msg, data)
-                            return None
+                            return ProcessResult.failed(error_msg)
 
                     # Add sparse vector if present
                     if result.sparse_vector:
@@ -808,8 +799,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         pass
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                     request_failed_message = error_msg
-                    report_error_args = (error_msg, data)
-                    return None
+                    return ProcessResult.failed(error_msg)
 
                 # Write to vector database
                 try:
@@ -843,8 +833,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                         self._record_request_success(embedding_msg)
-                        report_success = True
-                        return None
+                        return ProcessResult.success()
                     error_msg = self._embedding_error_msg(
                         embedding_msg,
                         f"Failed to write to vector database: {db_err}",
@@ -855,15 +844,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     traceback.print_exc()
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                     request_failed_message = error_msg
-                    report_error_args = (error_msg, data)
-                    return None
+                    return ProcessResult.failed(error_msg)
                 except Exception as db_err:
                     if self._vikingdb.is_closing:
                         logger.debug(f"Skip embedding write during shutdown: {db_err}")
                         self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                         self._record_request_success(embedding_msg)
-                        report_success = True
-                        return None
+                        return ProcessResult.success()
                     error_msg = self._embedding_error_msg(
                         embedding_msg,
                         f"Failed to write to vector database: {db_err}",
@@ -871,17 +858,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     logger.error(error_msg)
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                     request_failed_message = error_msg
-                    report_error_args = (error_msg, data)
-                    return None
+                    return ProcessResult.failed(error_msg)
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                 self._record_request_success(
                     embedding_msg,
                     vector_written=bool(record_id),
                 )
-                report_success = True
                 self._circuit_breaker.record_success()
-                return inserted_data
+                return ProcessResult.success(inserted_data)
 
         except Exception as e:
             error_msg = self._embedding_error_msg(
@@ -895,17 +880,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             if embedding_msg is not None:
                 self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                 request_failed_message = error_msg
-            report_error_args = (error_msg, data)
-            return None
+            return ProcessResult.failed(error_msg)
         finally:
             if embedding_msg is not None and request_failed_message is not None:
                 self._record_request_failure(embedding_msg, request_failed_message)
-            if report_error_args is not None:
-                self.report_error(*report_error_args)
-            elif report_success:
-                self.report_success()
 
-    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Settle request-scoped waiting when a queued embedding is cancelled."""
         embedding_msg: Optional[EmbeddingMsg] = None
         try:
@@ -915,13 +895,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     payload = json.loads(payload)
                 embedding_msg = EmbeddingMsg.from_dict(payload)
         except (KeyError, TypeError, ValueError) as exc:
-            self.report_error(str(exc), data)
-            return None
+            return ProcessResult.failed(str(exc))
 
         if embedding_msg is not None:
             self._record_request_success(embedding_msg)
-        self.report_success()
-        return None
+        return ProcessResult.cancelled()
 
     @staticmethod
     def _record_request_success(

@@ -23,6 +23,8 @@ const activity = {
       shortcut: '⌘ N to create a new session',
     },
     chat: {
+      historyLoadFailed: 'Could not load conversation history: {{error}}',
+      sendFailed: 'Could not send message: {{error}}',
       copy: 'Copy',
       emptyDescription: 'Explore your knowledge base and start a conversation.',
       placeholder: 'Type a message...',
@@ -71,6 +73,7 @@ const activity = {
       loadFailed: 'Could not load memory changes',
       retry: 'Retry',
       empty: 'This session commit did not produce any memory changes.',
+      viewExperienceImpact: 'View impact for this experience',
     },
     empty: {
       description: 'Select a session from the list or create a new one.',

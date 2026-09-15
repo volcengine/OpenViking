@@ -556,21 +556,38 @@ describe("OpenVikingClient", () => {
 
     await client.list("viking://session", {
       nodeLimit: 200,
+      offset: 4,
+      limit: 5,
       sortBy: "mtime",
       sortOrder: "desc",
     });
-    await client.tree("viking://resources/docs", { levelLimit: 2 });
+    await client.tree("viking://resources/docs", {
+      levelLimit: 2,
+      offset: 6,
+      limit: 7,
+    });
     await client.tree("viking://resources/docs", { levelLimit: 0 });
     await client.tree("viking://resources/docs");
 
     const listUrl = new URL(String(fetcher.mock.calls[0]![0]));
     expect(listUrl.searchParams.get("node_limit")).toBe("200");
+    expect(listUrl.searchParams.get("offset")).toBe("4");
+    expect(listUrl.searchParams.get("limit")).toBe("5");
     expect(listUrl.searchParams.get("sort_by")).toBe("mtime");
     expect(listUrl.searchParams.get("sort_order")).toBe("desc");
-    const treeLimits = fetcher.mock.calls
+    const treeUrls = fetcher.mock.calls
       .slice(1)
-      .map((call) => new URL(String(call[0])).searchParams.get("level_limit"));
+      .map((call) => new URL(String(call[0])));
+    const treeLimits = treeUrls.map((url) =>
+      url.searchParams.get("level_limit"),
+    );
     expect(treeLimits).toEqual(["2", "0", "3"]);
+    expect(treeUrls[0]!.searchParams.get("offset")).toBe("6");
+    expect(treeUrls[0]!.searchParams.get("limit")).toBe("7");
+    expect(treeUrls[1]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[1]!.searchParams.has("limit")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("offset")).toBe(false);
+    expect(treeUrls[2]!.searchParams.has("limit")).toBe(false);
   });
 
   it("sends addResource tags and tagMode to the server", async () => {
@@ -764,9 +781,10 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("uses Go SDK defaults for skill details and returns null for missing tasks", async () => {
+  it("uses public Compile and task routes with SDK-compatible options", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
+      .mockResolvedValueOnce(ok({ task_id: "cmp_1" }))
       .mockResolvedValueOnce(ok({ name: "demo" }))
       .mockResolvedValueOnce(
         new Response(
@@ -782,10 +800,31 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
+    await expect(
+      client.compile(
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+        {
+          instruction: "Keep supporting evidence.",
+          args: { model_name: "endpoint-1" },
+        },
+      ),
+    ).resolves.toEqual({ task_id: "cmp_1" });
     await client.getSkill("demo");
     await expect(client.getTask("missing")).resolves.toBeNull();
 
-    const skillUrl = new URL(String(fetcher.mock.calls[0]![0]));
+    expect(String(fetcher.mock.calls[0]![0])).toBe(
+      "https://example.com/api/v1/compile",
+    );
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      from: ["viking://resources/source"],
+      to: "viking://resources/output",
+      skill: "viking://agent/skills/wiki",
+      instruction: "Keep supporting evidence.",
+      args: { model_name: "endpoint-1" },
+    });
+    const skillUrl = new URL(String(fetcher.mock.calls[1]![0]));
     expect(skillUrl.searchParams.get("include_files")).toBe("true");
     expect(skillUrl.searchParams.get("include_source")).toBe("false");
   });

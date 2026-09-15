@@ -52,6 +52,7 @@ import {
   lintPeerScopeDowngrade,
   WORKSPACE_PEER_HINT,
 } from "./shared/doctor-core.mjs";
+import { describeInputFilters } from "./shared/input-filters.mjs";
 import { isBypassed } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -408,6 +409,20 @@ function checkConfig(report, cfg) {
   if (cfg.bypassSessionPatterns?.length) {
     const hit = isBypassed(cfg, { cwd: process.cwd() });
     report[hit ? "warn" : "info"](`bypass patterns: ${cfg.bypassSessionPatterns.join(", ")}${hit ? " — MATCH the current cwd" : ""}`, hit ? "recall/capture are skipped in this directory" : "", hit ? "narrow OPENVIKING_BYPASS_SESSION_PATTERNS" : "");
+  }
+  for (const filters of describeInputFilters(cfg)) {
+    if (!filters.total) continue;
+    report.info(`${filters.label}  ${filters.summary}`);
+    for (const e of filters.errors) {
+      const where = `${filters.env} or ovcli.conf plugin.claude_code.${filters.key}`;
+      report.warn(
+        `${filters.key}[${e.index}]: ${e.message}`,
+        e.source ? `rule: ${e.source}` : "this rule is skipped, the rest still apply",
+        e.message.startsWith("invalid regular expression")
+          ? `fix the pattern in ${where} (the u flag rejects escapes that are legal without it)`
+          : `fix the rule in ${where}`,
+      );
+    }
   }
   report.info(`debug log ${cfg.debug ? "on" : "off"} → ${homeShort(cfg.debugLogPath)}${cfg.debug ? "" : " (set OPENVIKING_DEBUG=1 in Claude Code's environment to record hook errors)"}`);
 

@@ -31,21 +31,27 @@
 
 ## OpenVikingとは
 
-OpenVikingは、AIエージェントのためのオープンソースのコンテキストデータベースです。メモリ、リソース、スキルを `viking://` プロトコル配下の1つの仮想ファイルシステムとして保存するため、エージェントはブラックボックスのベクトルストアに問い合わせる代わりに、`ls`、`tree`、`find` で自分のコンテキストを閲覧できます。コンテンツは L0（abstract）、L1（overview）、L2（details）の3階層に処理され、必要に応じてロードされます。すべての検索は、観察してデバッグできる軌跡を残します。詳しい紹介はこちら: [Getting started](https://docs.openviking.ai/en/getting-started/01-introduction)。
+OpenVikingは、AIエージェントのためのオープンソースのコンテキストデータベースです。知識やユーザー情報を保存し、セッションをまたいで経験を再利用できます。
 
-[![OpenViking Studio playground](docs/images/studio-playground.png)](https://openviking.ai/studio)
+OpenViking はコンテキストを `viking://` 仮想ファイルシステムとして整理します。エージェントはファイルと同じように、`ls`、`tree`、`read`、`write` などでディレクトリの閲覧、内容の読み取り、作成、編集を行い、ディレクトリ内を検索できます。ディレクトリの要約により、必要に応じて内容を読み込めます。
 
-*[OpenViking Studio](https://openviking.ai/studio) のプレイグラウンド — インストール不要でブラウザから試せるライブデモです。*
+<a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio-playground-dark.png">
+    <img src="docs/images/studio-playground.png" alt="OpenViking Studio：コンテキストの閲覧と意味検索">
+  </picture>
+</a>
+
+[OpenViking Studioを試す](https://openviking.ai/studio)。ブラウザから利用でき、インストールは不要です。 [Web Studioを自分の環境にデプロイ](web-studio/README.md)。
 
 ## OpenVikingを選ぶ理由
 
-- **すべてのコンテキストを1つのファイルシステムに。** メモリ、リソース、スキルにはそれぞれ `viking://` URI が与えられます。エージェントは、ファイルを扱う開発者のように、コンテキストを決定論的に特定・操作できます。→ [Viking URI](https://docs.openviking.ai/en/concepts/04-viking-uri) · [Context types](https://docs.openviking.ai/en/concepts/02-context-types)
-- **階層型ローディングで token 消費を削減。** すべてのエントリは書き込み時に L0（abstract）、L1（overview）、L2（details）へ処理され、タスクが必要とする深さまでだけロードされます。→ [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
-- **ディレクトリ再帰検索。** ベクトル検索でまず最高スコアのディレクトリを特定し、そこから層ごとに掘り下げるため、結果は周辺のコンテキストを保ったまま返ってきます。→ [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
-- **観察可能な検索。** 各クエリはディレクトリ閲覧の軌跡を保存します。結果がおかしいときは、どのパスがその結果を生んだのかを正確に確認できます。→ [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
-- **セッションはメモリになる。** セッションのコミット後、OpenVikingはユーザーの好みとエージェントの経験を非同期に抽出し、長期メモリとして保存します。→ [Session](https://docs.openviking.ai/en/concepts/08-session)
+- **ファイルシステムでコンテキストを整理。** リソースは文書やコード、メモリはユーザーの好みや経験、スキルはタスクの実行方法を保存します。それぞれに `viking://` URI があり、閲覧や検索に使えます。→ [Viking URI](https://docs.openviking.ai/en/concepts/04-viking-uri) · [Context types](https://docs.openviking.ai/en/concepts/02-context-types)
+- **必要なコンテキストを読み込む。** ディレクトリの要約（L0）と概要（L1）を使い、全文（L2）を読むか判断します。→ [Context layers](https://docs.openviking.ai/en/concepts/03-context-layers)
+- **ディレクトリ構造に沿って検索。** ベクトル検索で候補のディレクトリを見つけ、その内容を探索します。`find` はクエリを直接実行し、`search` はセッションのコンテキストを使って検索を計画できます。→ [Retrieval](https://docs.openviking.ai/en/concepts/07-retrieval)
+- **セッションからメモリを抽出。** コミットすると会話をアーカイブし、メモリポリシーに従ってバックグラウンドで抽出します。候補を既存のメモリと比較し、新規作成、統合、スキップを判断します。VikingBot を有効にすると、`ov compile` とスキルで資料を Wiki、知識グラフ、レポートに整理できます。→ [Session](https://docs.openviking.ai/en/concepts/08-session) · [Context compilation](https://docs.openviking.ai/en/context-compilation/01-overview)
 
-各要素がどう組み合わさるか: [Architecture](https://docs.openviking.ai/en/concepts/01-architecture)。設計思想: [The Database Paradigm for Context Engineering](https://blog.openviking.ai/post/openviking-context-database/)。
+[Architecture](https://docs.openviking.ai/en/concepts/01-architecture) · [設計の背景](https://blog.openviking.ai/post/openviking-context-database/)
 
 ```
 viking://
@@ -76,15 +82,15 @@ viking://
 - **L1（Overview）**: 計画立案のためのコア情報と使用シナリオ。
 - **L2（Details）**: 完全なオリジナルデータ。必要な場合にのみ読み込まれます。
 
-各ディレクトリが自身の L0/L1 レイヤーを持つため、ファイル全体を読む前に関連性を判断できます:
+意味処理を終えたディレクトリには L0/L1 の要約があり、全文を読む前に関連性を判断できます。
 
 ```
 viking://resources/my_project/
-├── .abstract               # L0: 〜100 tokens - 迅速な関連性チェック
-├── .overview               # L1: 〜2k tokens - 構造とキーポイント
+├── .abstract.md           # L0: 〜100 tokens - 迅速な関連性チェック
+├── .overview.md           # L1: 〜2k tokens - 構造とキーポイント
 └── docs/
-    ├── .abstract
-    ├── .overview
+    ├── .abstract.md
+    ├── .overview.md
     └── api/
         ├── auth.md         # L2: 完全なコンテンツ、オンデマンドでロード
         └── endpoints.md
@@ -106,70 +112,115 @@ OpenViking 0.3.22 は、長い会話でのユーザーメモリ（LoCoMo）と�
 
 ## クイックスタート
 
-> 💡 **まず動くところを見たい方へ**: [OpenViking Studio](https://openviking.ai/studio) をお試しください。コンテキストプレイグラウンド、セマンティック検索、マルチエージェント Hub を備えたライブホスト版インスタンスで、インストールは不要です。
-
-Python 3.10 以上が必要です。
+Python 3.10+ と、Embedding モデルおよび VLM（クラウドまたはローカル）へのアクセスが必要です。
 
 ```bash
 pip install openviking --upgrade
-openviking-server init      # 対話式ウィザード: プロバイダー、モデル、ov.conf
-openviking-server doctor    # セットアップを検証
-openviking-server           # 起動
+openviking-server init      # プロバイダーとモデルを設定
+openviking-server doctor    # 設定と接続を確認
+openviking-server           # サーバーを起動
 ```
 
-または、サーバーをバックグラウンドで実行します:
+`init` は `~/.openviking/ov.conf` に設定を書き込みます。Volcengine、OpenAI、Codex OAuth、Kimi、GLM、ローカルの Ollama などに対応しています。モデルの設定は[設定ガイド](https://docs.openviking.ai/en/guides/01-configuration)、プラットフォーム別の手順は[クイックスタート文書](https://docs.openviking.ai/en/getting-started/02-quickstart)を参照してください。
 
-```bash
-nohup openviking-server > /data/log/openviking.log 2>&1 &
-```
-
-`init` はプロバイダー設定を対話的に進め、`~/.openviking/ov.conf` を書き出します。Volcengine、OpenAI、Codex OAuth、Kimi、GLM、ローカルの Ollama をサポートし、Ollama についてはランタイムの検出とインストール、ハードウェアに適したモデルの取得も行えます。`doctor` は、サーバーを起動せずに設定ファイル、Python バージョン、プロバイダーへの接続性、ディスク容量をチェックします。
-
-手動で書く `ov.conf` テンプレート、プロバイダーごとの設定例、環境変数、Windows でのセットアップ、CLI/クライアント設定は、[Configuration guide](https://docs.openviking.ai/en/guides/01-configuration) と [Quick start docs](https://docs.openviking.ai/en/getting-started/02-quickstart) にあります。
-
-サーバーが起動したら:
+パッケージには `ov` CLI が含まれます。別のターミナルでリポジトリを取り込み、検索します。
 
 ```bash
 ov status
-ov add-resource https://github.com/volcengine/OpenViking # --wait
+ov add-resource https://github.com/volcengine/OpenViking
+# TASK_ID を返された task_id に置き換え、status が completed になるまで確認
+ov task status TASK_ID
 ov ls viking://resources/
 ov tree viking://resources/volcengine -L 2
-# --wait を付けない場合は、セマンティック処理の完了までしばらく待ちます
 ov find "what is openviking"
 ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/en
 ```
 
-既存インデックスの再構築: `ov reindex <uri> --mode vectors_only` はベクトルのみ更新します。`--mode semantic_and_vectors` はセマンティック生成物（`.abstract.md`、`.overview.md`）を再生成してからベクトルを更新し、`--mode prune_orphans` はソースファイルが存在しないベクトルレコードを削除します（`--dry-run` でプレビュー可能）。`semantic` や `full` というモードエイリアスはありません。
+`ov find` は一致したコンテキストと URI を返します。クライアント設定（`ov config`）、CLI の単体インストール、インデックス管理は [CLI セットアップ](https://docs.openviking.ai/en/getting-started/05-cli-setup)を参照してください。
 
-クライアント設定は `ov config` で対話的に初期化できます。複数のサーバーを運用する場合は `ov config switch` で切り替えます。
-
-Rust CLI は `npm i -g @openviking/cli` でインストールできます。ソースからのビルドは `cargo install --git https://github.com/volcengine/OpenViking ov_cli` を使います — [CLI setup](https://docs.openviking.ai/en/getting-started/05-cli-setup) を参照してください。公式 Docker イメージもあります。[Deployment guide](https://docs.openviking.ai/en/guides/03-deployment) を参照してください。
+独自のアプリには [Python](sdk/python/README.md)、[Go](sdk/go/README.md)、[TypeScript](sdk/typescript/README.md) SDK、または [HTTP API](https://docs.openviking.ai/en/api/01-overview) を使えます。
 
 ## エージェントと組み合わせて使う
 
-統合機能は、OpenViking の recall をエージェントのコンテキストに注入し、セッションメモリを自動的にコミットします:
+OpenViking を接続して、セッションをまたいで記憶を引き継ぎます。ネイティブ統合で自動想起とセッション収集を使うか、MCP で記憶とコンテキストのツールを提供できます。
 
-- [Claude Code](https://docs.openviking.ai/en/agent-integrations/02-claude-code)
-- [Codex](https://docs.openviking.ai/en/agent-integrations/04-codex)
-- [OpenClaw](https://docs.openviking.ai/en/agent-integrations/03-openclaw)
-- [Hermes](https://docs.openviking.ai/en/agent-integrations/05-hermes)
-- [Cursor](https://docs.openviking.ai/en/agent-integrations/12-cursor)
-- [Trae](https://docs.openviking.ai/en/agent-integrations/13-trae)
-- [OpenCode](https://docs.openviking.ai/en/agent-integrations/10-opencode)
-- [pi](https://docs.openviking.ai/en/agent-integrations/11-pi)
-- [Agent Plugins 1.0](https://docs.openviking.ai/en/agent-integrations/15-agent-plugins)
-- [MCP クライアント](https://docs.openviking.ai/en/agent-integrations/06-mcp-clients)
-- [LangChain / LangGraph](https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph)
+<table>
+<tbody>
+<tr>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/02-claude-code"><img src="docs/images/integrations/logos/claude-code.png" width="32" height="32" alt=""><br><strong>Claude</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/04-codex"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/openai-dark.svg"><img src="docs/images/integrations/logos/openai.svg" width="32" height="32" alt=""></picture><br><strong>Codex</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/12-cursor"><img src="docs/images/integrations/logos/cursor.png" width="32" height="32" alt=""><br><strong>Cursor</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/13-trae"><img src="docs/images/integrations/logos/trae.png" width="32" height="32" alt=""><br><strong>TRAE</strong></a><br>
+<sub>Hooks&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/03-openclaw"><img src="docs/images/integrations/logos/openclaw.png" width="32" height="32" alt=""><br><strong>OpenClaw</strong></a><br>
+<sub>コンテキストエンジン</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/05-hermes"><img src="docs/images/integrations/logos/hermes-agent.png" width="32" height="32" alt=""><br><strong>Hermes</strong></a><br>
+<sub>内蔵メモリ</sub>
+</td>
+</tr>
+</tbody>
+<tbody>
+<tr>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/10-opencode"><img src="docs/images/integrations/logos/opencode.png" width="32" height="32" alt=""><br><strong>OpenCode</strong></a><br>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/11-pi"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/pi-dark.svg"><img src="docs/images/integrations/logos/pi.svg" width="32" height="32" alt=""></picture><br><strong>pi</strong></a><br>
+<sub>ネイティブ拡張</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="docs/images/agents/en/deerflow-memory-manager.md"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/deerflow-dark.svg"><img src="docs/images/integrations/logos/deerflow.svg" width="32" height="32" alt=""></picture><br><strong>DeerFlow</strong></a><br>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/17-dsh"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/integrations/logos/dsh-dark.svg"><img src="docs/images/integrations/logos/dsh.svg" width="32" height="32" alt=""></picture><br><strong>DSH</strong></a><br>
+<sub>Plugin&nbsp;+&nbsp;MCP</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="docs/images/agents/en/doubao-work.md"><img src="docs/images/integrations/logos/doubao-work.png" width="32" height="32" alt=""><br><strong>Doubao&nbsp;Work</strong></a><br>
+<sub>コネクタ</sub>
+</td>
+<td align="center" valign="bottom" width="16%">
+<a href="https://docs.openviking.ai/en/agent-integrations/07-langchain-langgraph"><img src="docs/images/integrations/logos/langchain.svg" width="32" height="32" alt=""><br><strong>LangChain</strong></a><br>
+<sub>ツール&nbsp;+&nbsp;ストア</sub>
+</td>
+</tr>
+</tbody>
+</table>
 
-各エージェントのセットアップ手順: [Agent integrations overview](https://docs.openviking.ai/en/agent-integrations/01-overview)。
+**汎用接続**
 
-## OpenViking Helper（Beta）
+<table>
+<tr>
+<td align="center" valign="bottom" width="50%">
+<a href="https://docs.openviking.ai/en/agent-integrations/15-agent-plugins"><img src="docs/images/integrations/logos/agent-plugins.svg" width="32" height="32" alt=""><br><strong>Agent&nbsp;Plugins&nbsp;1.0</strong></a>
+</td>
+<td align="center" valign="bottom" width="50%">
+<a href="https://docs.openviking.ai/en/agent-integrations/06-mcp-clients"><img src="docs/images/integrations/logos/mcp.svg" width="32" height="32" alt=""><br><strong>MCP&nbsp;ク&#8288;ラ&#8288;イ&#8288;ア&#8288;ン&#8288;ト</strong></a>
+</td>
+</tr>
+</table>
 
-OpenViking Helper はデスクトップコンソールで、現在 macOS と Windows x64 向けの Beta 版として提供しています:
+設定方法と統合の詳細は [Integrations](https://openviking.ai/integrations) を参照してください。
 
-- **ローカルエージェント設定の可視化**: OpenViking CLI、Claude Code、Codex、Cursor、Trae、OpenCode を検出し、対応する plugin、MCP、Hook、CLI 統合を設定します。
-- **セッショントレースの確認**: Claude Code、Codex、Trae のセッションを解析し、OpenViking の recall、プロンプト注入、MCP 呼び出し、capture、commit の各イベントを表示します。
-- **ローカルメモリとスキルの管理**: ローカルの memory / rule ファイルと `SKILL.md` スキルを確認し、OpenViking に同期します。
+## デスクトップアプリ（Beta）
+
+デスクトップアプリは macOS と Windows x64 向けのコンソール（Beta）です。対応するローカルエージェントとの連携を設定し、セッションのリコールやキャプチャを確認して、ローカルのメモリとスキルを OpenViking に同期できます。
 
 ダウンロード:
 
@@ -191,13 +242,11 @@ ov chat   # 別のターミナルで実行
 
 ## 本番環境へのデプロイ
 
-本番環境では、OpenViking をスタンドアロンの HTTP サービスとして実行してください — [Server deployment](https://docs.openviking.ai/en/getting-started/03-quickstart-server) と [Deployment guide](https://docs.openviking.ai/en/guides/03-deployment) を参照してください。
+オープンソースのサーバーは [AGPLv3](LICENSE) のもとで自分の環境にデプロイでき、アクティベーションキーは不要です。[サーバー設定](https://docs.openviking.ai/en/getting-started/03-quickstart-server) · [Docker とデプロイのガイド](https://docs.openviking.ai/en/guides/03-deployment)
+
+サーバーは[アカウントとユーザーの分離](https://docs.openviking.ai/en/concepts/11-multi-tenant)に対応し、[リソース ACL](https://docs.openviking.ai/en/concepts/15-acl)を必要に応じて有効にできます。localhost 以外から接続する前に[認証](https://docs.openviking.ai/en/guides/04-authentication)を設定してください。
 
 ## 商用版
-
-**オープンソース版が機能制限されることはありません。** 本リポジトリの OpenViking は AGPLv3 で完全にオープンソースです。機能ロックなし、アカウント登録なし、アクティベーションコードなしで、上記の[本番環境へのデプロイ](#本番環境へのデプロイ)に従って自分で本番運用できます。今後もそれは変わりません。
-
-以下の 2 つの版が解決するのは「誰が運用し、どこで動かすか」であって、「使えるかどうか」ではありません。
 
 <table>
 <tr>
@@ -206,14 +255,7 @@ ov chat   # 別のターミナルで実行
 <img src="docs/images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
 
 <h3>☁️ マネージド SaaS 版</h3>
-<p><b>Volcano Engine</b> 上で公式にホスティングされ、構築も運用も不要です。</p>
-<ul>
-<li><b>Personal</b> — 個人開発者向け。最大 50 ファイルまで無料トライアル、VikingDB によりローカルハードウェアを超えてスケールします。</li>
-<li><b>Enterprise</b> — チーム向けのマルチユーザー管理、権限管理、エンタープライズ SLA とサポート。</li>
-</ul>
-<p>オープンソース版のユーザーは移行ツールでそのまま移行できます。</p>
-<p><a href="https://www.volcengine.com/product/openviking-service"><b>→ Volcano Engine 製品ページ</b></a> · <a href="https://docs.volcengine.com/docs/84313/2374478">ドキュメント</a></p>
-<p><sub>中国以外の地域向けグローバルホスティングは <a href="https://www.byteplus.com">BytePlus</a> で提供予定です。</sub></p>
+<p><a href="https://www.volcengine.com/product/openviking-service">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。中国以外でのホスティングは <a href="https://www.byteplus.com">BytePlus</a> で予定されています。</p>
 
 </td>
 <td width="50%" valign="top">
@@ -221,43 +263,45 @@ ov chat   # 別のターミナルで実行
 <img src="docs/images/commercial-self-hosted.png" alt="プライベートデプロイ版" width="100%" />
 
 <h3>🏢 プライベートデプロイ版</h3>
-<p><b>自社環境内</b>で動作し、データは外部に出ません。</p>
-<ul>
-<li><b>オンライン</b> — 自社のクラウドアカウント / VPC にデプロイ。BYOC 対応、更新とライセンス取得のため外部接続あり。</li>
-<li><b>オフライン</b> — 外部接続のない完全な閉域環境向け。規制産業に対応します。</li>
-</ul>
-<p>オープンソース版に加えて分散デプロイと公式サポートを提供し、アクティベーションコードで有効化します。</p>
-<p><a href="https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform"><b>→ プライベートデプロイのお問い合わせ</b></a></p>
+<p>自社のクラウドアカウント / VPC（BYOC）、またはオフライン環境にデプロイできます。分散デプロイと公式サポートを提供し、ライセンスキーで有効化します。<a href="https://docs.google.com/forms/d/e/1FAIpQLScQqwsm7fvKdjtNiW5rWNXJjoHPtedVzLsKSMJgObtsj2_udA/viewform">チームに問い合わせる</a>。</p>
 
 </td>
 </tr>
 </table>
 
-> オープンソース版を自分で動かしたいだけですか？問題ありません。誰にも連絡する必要はなく、[クイックスタート](#クイックスタート)へどうぞ。
-
 ## 研究
 
-OpenViking は、VikingMem 論文に記載されたコア機能の一部をオープンソースとして公開しています:
+**対話とともに進化するエージェントの記憶。** VikingMem は、イベントを起点に長期記憶を抽出・更新・統合し、状態を持つエージェントが対話を通じて再利用できる経験を蓄積する仕組みを示しています。OpenViking は、そのコア機能の一部をオープンソースとして公開しています。
 
-> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**
-> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.
-> arXiv:2605.29640, 2026. Accepted by VLDB 2026.
-> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640)
+> **VikingMem: A Memory Base Management System for Stateful LLM-based Applications**<br>
+> Jiajie Fu, Junwen Chen, Mengzhao Wang, Aoxiang He, Maojia Sheng, Xiangyu Ke, Yifan Zhu, and Yunjun Gao.<br>
+> arXiv:2605.29640, 2026. 2026 年 9 月に VLDB 2026 で発表済み。<br>
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2605.29640) · [PDF を読む](https://arxiv.org/pdf/2605.29640)
+
+**ディレクトリ構造を検索のコンテキストに。** 本論文は、OpenViking のディレクトリを考慮した検索に形式的基盤、インデックス設計、実験による検証を提供します。ディレクトリ範囲のクエリと構造の保守操作を定義し、TrieHI を提案しています。OpenViking はこれを統合し、ベクトルによる順位付けの前に検索範囲を確定します。エージェントはプロジェクトや記憶のサブツリー内で根拠を探し、周辺のコンテキストを保ちながら、知識の変化に応じてディレクトリを再編できます。
+
+> **Directory-Aware Query and Maintenance in Vector Databases**<br>
+> Mengzhao Wang, Zheng Gong, Jingpei Hu, Jiajie Fu, Maojia Sheng, Junwen Chen, and Yifan Zhu.<br>
+> arXiv:2606.16903, 2026. ICDE 採択済み。<br>
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2606.16903) · [PDF を読む](https://arxiv.org/pdf/2606.16903)
+
+**少ないトークンで回答に必要な根拠を集める。** VikingRAG は意味検索と文書構造を組み合わせ、根拠の不足に応じて関連するディレクトリ部分を取得します。そのコア機構は OpenViking に統合されています。さらに、検索履歴の再利用と必要な場合のみ複数ラウンドの検索へ移行する手法を研究し、回答品質を保ちながら探索の繰り返しを減らします。
+
+> **VikingRAG: Accurate and Token-efficient Retrieval-augmented Generation over Structured Documents**<br>
+> Peiyuan Gao, Gaoyuan Zhang, Haojie Qin, Yahui Sun, Qianyi Zhang, Yunhao Zhang, Zeyu Wang, and Wei Lu.<br>
+> arXiv:2609.11390, 2026. 投稿中。<br>
+> 📄 [arXiv で論文を読む](https://arxiv.org/abs/2609.11390) · [PDF を読む](https://arxiv.org/pdf/2609.11390)
 
 ## パートナープロジェクト
-
-OpenViking は、コンテキストデータエコシステムを構築するために他のオープンソースプロジェクトとのコラボレーションを歓迎します。確認済みのパートナーは以下の通りです:
 
 - [deer-flow](https://github.com/bytedance/deer-flow) - オープンソースの長時間 SuperAgent フレームワーク
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI ネイティブの分散ファイルシステム
 - [loopx](https://github.com/huangruiteng/loopx) - 軽量なループエンジニアリング状態カーネル
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - あなたと共に成長するエージェント
 
-パートナーリストへの参加に興味がありますか？コミュニティに issue を提出して申請してください。
+提携の提案は [issue](https://github.com/volcengine/OpenViking/issues) で受け付けています。
 
 ## コミュニティとコントリビューション
-
-OpenViking はまだ初期段階にあり、作るべきものが数多く残っています。
 
 - **ドキュメント**: [docs.openviking.ai](https://docs.openviking.ai/) · [FAQ](https://docs.openviking.ai/en/faq/faq)
 - **ブログ**: [blog.openviking.ai](https://blog.openviking.ai/)
@@ -265,9 +309,12 @@ OpenViking はまだ初期段階にあり、作るべきものが数多く残っ
 - **チャット**: 📱 [Larkグループ](https://docs.openviking.ai/en/about/01-about-us#lark-group) · 💬 [WeChat](https://docs.openviking.ai/en/about/01-about-us#wechat-group) · 🎮 [Discord](https://discord.com/invite/eHvx8E9XF3) · 🐦 [X](https://x.com/openvikingai)
 - **コントリビュート**: バグ修正も新機能も歓迎します — [CONTRIBUTING_JA.md](CONTRIBUTING_JA.md) を参照してください
 
+<a href="https://github.com/volcengine/OpenViking/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=volcengine/OpenViking&amp;columns=15&amp;max=120" alt="OpenViking contributors" />
+</a>
+
 ## セキュリティとプライバシー
 
-このプロジェクトはセキュリティを重視しています。
 脆弱性の報告方法とサポート対象バージョンについては、[SECURITY.md](SECURITY.md) を参照してください
 
 ## ライセンス

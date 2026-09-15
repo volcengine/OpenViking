@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.telemetry import tracer
+from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -26,6 +27,34 @@ _LLM_HIDDEN_MEMORY_FIELDS = {
     "source_extraction_ids",
     "last_update_trace_id",
 }
+
+
+def memory_maintenance_notice(
+    content: str, *, review_after_tokens: int | None = None
+) -> Optional[Dict[str, Any]]:
+    """Return maintenance metadata only when a memory exceeds the soft size threshold."""
+    if review_after_tokens is None:
+        from openviking_cli.utils.config import get_openviking_config
+
+        review_after_tokens = get_openviking_config().memory.maintenance_review_tokens
+    estimated_tokens = estimate_text_tokens(content)
+    if estimated_tokens <= review_after_tokens:
+        return None
+    guidance = (
+        f"This memory is estimated at {estimated_tokens:,} tokens, above the "
+        f"{review_after_tokens:,}-token readability target, so maintenance is required: do not "
+        "leave it as one broad oversized memory. Preserve every distinct valid fact exactly once. "
+        "For a topic-keyed collection such as preferences, split different behavioral choice "
+        "dimensions into focused same-type memories. For an identity-keyed collection such as "
+        "entities, never invent multiple identities for one object; split only if distinct "
+        "identities were mixed. Compact only duplicate wording, never concrete facts. Aim for the "
+        f"{review_after_tokens:,}-token target, but fact integrity takes priority. Delete or replace "
+        "the oversized source only after every fact has one clear destination."
+    )
+    return {
+        "maintenance_required": True,
+        "guidance": guidance,
+    }
 
 
 def optimize_search_result(result: Any, limit: int = 10) -> Any:
@@ -206,6 +235,9 @@ class MemoryReadTool(MemoryTool):
                 if page_id is not None:
                     llm_result["page_id"] = page_id
             plain_content = mf.plain_content() or ""
+            maintenance_notice = memory_maintenance_notice(plain_content)
+            if maintenance_notice is not None:
+                llm_result["memory_maintenance_notice"] = maintenance_notice
             visible_content = slice_content_lines(plain_content, offset=offset, limit=limit)
             if visible_content:
                 llm_result["content"] = add_line_numbers(visible_content, start_line=offset + 1)

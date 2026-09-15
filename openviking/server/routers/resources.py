@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
+import asyncio
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -19,6 +21,7 @@ from openviking.server.responses import response_from_result
 from openviking.server.skill_source_metadata import persist_skill_source_metadata
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.service.skill_sources import describe_skill_sources, resolve_skill_source
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -66,20 +69,11 @@ class AddResourceRequest(BaseModel):
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             also pass "feishu_refresh_token". The optional "feishu_app_id" and
             "feishu_app_secret" pair overrides the server app for that watch.
-        watch_interval: Watch interval in minutes for automatic resource monitoring.
-            - watch_interval > 0: Creates or updates a watch task. The resource will be
-              automatically re-processed at the specified interval.
-            - watch_interval = 0: No watch task is created. If a watch task exists for
-              this resource, it will be cancelled (deactivated).
-            - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
-            Default is 0 (no monitoring).
-
-            Note: Re-adding the same source to the same target updates its active watch task.
-            A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0. Connector imports create the Watch before
-            the import runs, so it is visible immediately and the conflict is reported at
-            submission; the scheduler does not run it until the first round has recorded
-            its result.
+        watch_interval: Interval in minutes (default: 0). Positive values create a new
+            Watch using explicit ``to`` or the imported ``root_uri``. Nonpositive values
+            create no Watch: native imports with explicit ``to`` pause a single accessible
+            Watch (409 if ambiguous); Connector imports leave Watches untouched.
+            See the endpoint's Watch ownership rules.
         is_active: Initial Watch state for Connector and native Feishu imports. When false,
             requires watch_interval > 0 and an explicit to or parent target and creates the Watch
             paused; it stays paused until updated, regardless of the import result.
@@ -147,8 +141,8 @@ class AddSkillRequest(BaseModel):
     """Request model for add_skill.
 
     Attributes:
-        data: Inline skill content or structured skill data. HTTP requests do not treat
-            string values as host filesystem paths.
+        data: Git skill URL, inline skill content, or structured skill data.
+            HTTP requests do not treat strings as host filesystem paths.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         wait: Whether to wait for skill processing to complete.
         timeout: Timeout in seconds when wait=True.
@@ -158,6 +152,8 @@ class AddSkillRequest(BaseModel):
 
     data: Any = None
     temp_file_id: Optional[str] = None
+    skills: list[str] = Field(default_factory=list)
+    list_only: bool = False
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
@@ -234,7 +230,16 @@ async def add_resource(
     request: AddResourceRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Add resource to OpenViking."""
+    """Add resource to OpenViking.
+
+    Native Watches require an unoccupied resolved target and keep it while paused.
+    Connector Watches may share targets only with other Connector Watches; repeating
+    a source and target creates another independent task. Re-importing never updates
+    or resumes a Watch: use PATCH /api/v1/watches/{task_id}, or delete it first.
+    URI lookups return 409 for multiple accessible Watches; address them by task_id.
+    Connector Watches are visible before the initial import and held by the scheduler
+    until that import records its result.
+    """
     service = get_service()
     to_uri = resolve_path_variables(request.to).strip() if request.to else ""
     if to_uri:
@@ -374,22 +379,46 @@ async def add_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
+
     async def _add() -> dict[str, Any]:
         try:
-            result = await service.resources.add_skill(
-                data=data,
-                ctx=_ctx,
-                wait=request.wait,
-                timeout=request.timeout,
+            async with resolve_skill_source(
+                data,
+                names=request.skills,
                 allow_local_path_resolution=allow_local_path_resolution,
-                source_path_hint=source_path_hint,
-                target_uri=target_uri,
-            )
-            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
-        except Exception:
-            raise
-        else:
-            return result
+                source_metadata=source_metadata,
+            ) as targets:
+                if request.list_only:
+                    return await asyncio.to_thread(describe_skill_sources, targets)
+                installed = []
+                for skill_data, skill_source in targets:
+
+                    async def _install(skill_data=skill_data, skill_source=skill_source):
+                        result = await service.resources.add_skill(
+                            data=skill_data,
+                            ctx=_ctx,
+                            wait=request.wait,
+                            timeout=request.timeout,
+                            allow_local_path_resolution=isinstance(skill_data, Path),
+                            source_path_hint=source_path_hint,
+                            target_uri=target_uri,
+                        )
+                        await persist_skill_source_metadata(service, _ctx, result, skill_source)
+                        return result
+
+                    # Each skill owns its own queue wait tracker and task ID.
+                    if len(targets) == 1:
+                        installed.append(await _install())
+                    else:
+                        execution = await run_operation(
+                            operation="resources.add_skill",
+                            telemetry=request.telemetry,
+                            fn=_install,
+                        )
+                        installed.append(execution.result)
+                if len(installed) == 1:
+                    return installed[0]
+                return {"installed": installed, "total": len(installed)}
         finally:
             if resolved:
                 await resolved.cleanup()

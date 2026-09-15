@@ -37,6 +37,7 @@ import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
+import { filterCaptureParts } from "./shared/capture-utils.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -421,8 +422,10 @@ function formatTurnsAsText(turns) {
 
 // Strip plugin-injected blocks from text parts (tool parts pass through), and
 // drop parts that become empty. Mirrors the old content-path stripInjectedBlocks
-// + trim, but per text part so tool I/O is never collapsed.
-function sanitizePartsForSend(parts) {
+// + trim, but per text part so tool I/O is never collapsed. The configured
+// capture filters run last, here at the send site rather than in the extractor,
+// because the cursor CC advances is an index into the extracted turn list.
+function sanitizePartsForSend(parts, role = "") {
   const out = [];
   for (const p of parts || []) {
     if (p.type === "text") {
@@ -432,7 +435,8 @@ function sanitizePartsForSend(parts) {
       out.push(p);
     }
   }
-  return out;
+  const shaped = filterCaptureParts(out, role, cfg);
+  return shaped.dropped ? [] : shaped.parts;
 }
 
 async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
@@ -440,7 +444,7 @@ async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
-    const parts = sanitizePartsForSend(turn.parts);
+    const parts = sanitizePartsForSend(turn.parts, turn.role);
     if (parts.length === 0) continue;
 
     const payload = { role: turn.role, parts };
@@ -463,7 +467,7 @@ async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {
   let queued = 0;
   let failed = 0;
   for (const turn of turns) {
-    const parts = sanitizePartsForSend(turn.parts);
+    const parts = sanitizePartsForSend(turn.parts, turn.role);
     if (parts.length === 0) continue;
 
     const payload = { role: turn.role, parts };

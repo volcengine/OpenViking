@@ -201,18 +201,12 @@ class IndexEngineProxy:
         self.index_engine.add_data(add_req_list)
 
     def rebuild_scalar_index(
-        self, scalar_index_meta: List[Dict[str, str]], cands_list: List[CandidateData]
+        self, scalar_index_meta: List[Dict[str, str]], requests: Iterable[engine.AddDataRequest]
     ) -> None:
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
 
-        requests = [engine.AddDataRequest() for _ in range(len(cands_list))]
-        for request, data in zip(requests, cands_list, strict=False):
-            request.label = data.label
-            request.fields_str = data.fields
-        result = self.index_engine.rebuild_scalar_index(
-            json.dumps(scalar_index_meta), requests
-        )
+        result = self.index_engine.rebuild_scalar_index(json.dumps(scalar_index_meta), requests)
         if result != 0:
             raise RuntimeError("Failed to rebuild native scalar index")
 
@@ -483,32 +477,31 @@ class LocalIndex(IIndex):
         self.meta.update(meta_data)
 
     def rebuild_scalar_index(
-        self, scalar_index: List[str], cands_list: List[CandidateData]
+        self, scalar_index: List[str], cands_fields: Iterable[Tuple[int, str]]
     ) -> None:
         if not self.engine_proxy:
             raise RuntimeError("Index engine not initialized")
 
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
-        converted_candidates: List[CandidateData] = []
-        vector_key = self.meta.collection_meta.vector_key
-        sparse_vector_key = self.meta.collection_meta.sparse_vector_key
-        for candidate in cands_list:
-            fields = fix_fields_data(
-                json.loads(candidate.fields), self.meta.collection_meta.fields_dict
-            )
-            fields.pop(vector_key, None)
-            if sparse_vector_key:
-                fields.pop(sparse_vector_key, None)
-            converted = CandidateData()
-            converted.label = candidate.label
-            converted.fields = safe_json_dumps(fields, ensure_ascii=False)
-            converted_candidates.append(converted)
+        indexed_fields = {
+            name: self.meta.collection_meta.fields_dict[name] for name in scalar_index
+        }
+
+        def requests() -> Iterator[engine.AddDataRequest]:
+            for label, fields_json in cands_fields:
+                fields = json.loads(fields_json)
+                fields = {name: fields[name] for name in indexed_fields if name in fields}
+                fix_fields_data(fields, indexed_fields)
+                request = engine.AddDataRequest()
+                request.label = label
+                request.fields_str = safe_json_dumps(
+                    self.field_type_converter.convert_fields_dict_for_index(fields),
+                    ensure_ascii=False,
+                )
+                yield request
 
         engine_scalar_meta = self.field_type_converter.build_scalar_index_meta(scalar_index)
-        self.engine_proxy.rebuild_scalar_index(
-            engine_scalar_meta,
-            self._convert_candidate_list_for_index(converted_candidates),
-        )
+        self.engine_proxy.rebuild_scalar_index(engine_scalar_meta, requests())
         if isinstance(self, PersistentIndex) and self.persist() <= 0:
             raise RuntimeError("Failed to persist rebuilt scalar index")
         if not self.meta.update({"ScalarIndex": scalar_index}):

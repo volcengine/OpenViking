@@ -111,9 +111,9 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 
 ## 2.2 memory-plugin-shared 共享层
 
-`examples/memory-plugin-shared/lib/` 下共 23 个 `.mjs` 模块，是 JS 系 harness 的唯一事实源。两种消费形态：
+`examples/memory-plugin-shared/lib/` 下共 24 个 `.mjs` 模块，是 JS 系 harness 的唯一事实源。两种消费形态：
 
-1. **Vendoring（复制）**：由 `sync.mjs` 分发到 7 个目标，每个文件首行加 `// GENERATED FROM ... DO NOT EDIT.`（因此 vendored 副本行号 = lib 源行号 + 1，交叉读行号引用时要换算）。每个目标只发它真正 import 的模块，因此分发清单跟的是 import 图而不是 harness。在每个 hook 型插件都会拿的 12 个 hook 模块（`sync.mjs` 里的 `HOOK_SHARED_FILES`）之上：pi 加 setup-wizard（13 个）；dsh 加 stdio 代理需要的两个 mcp-proxy-*（14 个）；opencode 加 setup-wizard、两个 mcp-proxy-* 与 batch-send（16 个）；zcode 加两个 mcp-proxy-*、batch-send、async-writer、agent-hook-runtime 与 agent-uri-guard（18 个）；claude-code / codex 加 setup-wizard、两个 mcp-proxy-*、batch-send、async-writer、plugin-config、workspace-config、workspace-registry 与 doctor-core（各 21 个）。agent-plugins 没有 hook，因此一个 hook 模块都不拿，只有 credentials、debug-log 与两个 mcp-proxy-*（4 个）。当前 HEAD 各目标与 lib 源零漂移。
+1. **Vendoring（复制）**：由 `sync.mjs` 分发到 7 个目标，每个文件首行加 `// GENERATED FROM ... DO NOT EDIT.`（因此 vendored 副本行号 = lib 源行号 + 1，交叉读行号引用时要换算）。每个目标只发它真正 import 的模块，因此分发清单跟的是 import 图而不是 harness。在每个 hook 型插件都会拿的 13 个 hook 模块（`sync.mjs` 里的 `HOOK_SHARED_FILES`）之上：pi 加 setup-wizard 与 batch-send（15 个）；dsh 加 stdio 代理需要的两个 mcp-proxy-*（15 个）；opencode 加 setup-wizard、两个 mcp-proxy-* 与 batch-send（17 个）；zcode 加两个 mcp-proxy-*、batch-send、async-writer、agent-hook-runtime 与 agent-uri-guard（19 个）；claude-code / codex 加 setup-wizard、两个 mcp-proxy-*、batch-send、async-writer、plugin-config、workspace-config、workspace-registry 与 doctor-core（各 22 个）。agent-plugins 没有 hook，因此一个 hook 模块都不拿，只有 credentials、debug-log 与两个 mcp-proxy-*（4 个）。当前 HEAD 各目标与 lib 源零漂移。
 2. **相对路径直接 import（不复制）**：cursor / trae / trae-cn 直接 `import "../../memory-plugin-shared/lib/..."`；安装器把包与这些 hook 传递 import 到的 15 个共享模块一起复制到 `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`，使相对层级成立。这份安装集合对 import 闭合，不含任何 hook 运行时都够不到的 workspace 配置层。运行期这个共享目录被这几个 harness 共用，任一重装都会整体覆盖。
 
 核心模块速览（细节在各维度章展开）：
@@ -127,7 +127,8 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | `batch-send.mjs` | 100 条/批写入 + 404/405 逐条降级 + 连续前缀入队 | cc / codex / opencode + agent-hook 系 |
 | `profile-inject.mjs` | session-start 的 profile + 可用记忆清单注入 | 9 个 harness（openclaw / hermes 除外） |
 | `recall-compress-core.mjs` | 召回压缩 prompt + URI 编辑距离修复 + 缓存 | claude-code |
-| `capture-utils.mjs` | 消息归一 + 注入回流防护 + 捕获过滤 | codex / opencode / dsh / pi / zcode |
+| `capture-utils.mjs` | 消息归一 + 注入回流防护 + 内置捕获启发式（应答语、slash 命令、信息量下限） | codex / opencode / dsh / pi / zcode |
+| `input-filters.mjs` | 编译并执行操作员自己配的 sed 风格规则 —— `s` 替换、`d` 丢弃、`k` 仅保留，可限定角色 —— 作用于召回 query 与每个被捕获的回合；解析失败的规则会被报告并跳过，不抛异常（[语法](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#输入过滤器)） | 每个 hook 插件都会 vendoring；`recallQueryFilters` / `captureFilters` 两个 knob 目前由 claude-code / codex 提供 |
 | `credentials.mjs` | 凭据解析链（详见 [§3.1.3](#_3-1-3-凭据体系)） | 全部 JS 系 |
 | `session-model.mjs` | 会话 id 前缀派生 + bypass glob | 全部 JS 系 |
 | `async-writer.mjs` | 写路径 detach（drain stdin → spawn → approve → write → unref；spawn 失败回落同步） | cc / codex / zcode |

@@ -99,7 +99,7 @@ async def test_missing_request_id_generates_uuid_for_health_and_cors_exposes_it(
     assert REQUEST_ID_HEADER.lower() in response.headers["Access-Control-Expose-Headers"].lower()
 
 
-async def test_invalid_request_ids_are_rejected_without_logging_raw_values() -> None:
+async def test_invalid_request_ids_are_replaced_without_logging_raw_values() -> None:
     app = _make_test_app()
     records: list[logging.LogRecord] = []
     server_logger = logging.getLogger("openviking")
@@ -117,16 +117,32 @@ async def test_invalid_request_ids_are_rejected_without_logging_raw_values() -> 
     finally:
         server_logger.removeHandler(handler)
 
-    assert all(response.status_code == 400 for response in responses)
-    assert all(response.json()["error"]["code"] == "INVALID_ARGUMENT" for response in responses)
+    assert all(response.status_code == 404 for response in responses)
     for response in responses:
         _assert_generated_request_id(response.headers[REQUEST_ID_HEADER])
     completion_records = [
         record for record in records if record.name == "openviking.observability.http"
     ]
     assert all(record.request_id for record in completion_records)
-    rendered = "\n".join(record.getMessage() for record in completion_records)
+    rendered = "\n".join(record.getMessage() for record in records)
     assert all(raw not in rendered for raw in ("contains spaces", "x" * 129, "first", "second"))
+
+
+async def test_request_id_with_slash_suffix_is_accepted_verbatim() -> None:
+    app = _make_test_app()
+
+    @app.get("/items/{item_id}")
+    async def item(item_id: str):
+        return {"item_id": item_id}
+
+    response = await _request(
+        app,
+        "/items/42",
+        headers={REQUEST_ID_HEADER: "4257d51f-61c7-49d4-b78d-773e19a2c461/g6hr"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers[REQUEST_ID_HEADER] == "4257d51f-61c7-49d4-b78d-773e19a2c461/g6hr"
 
 
 async def test_unhandled_500_keeps_request_id_for_log_and_response(monkeypatch) -> None:

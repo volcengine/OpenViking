@@ -174,6 +174,8 @@ The default local setup does not require an API key. For an authenticated server
 Create `example.py`:
 
 ```python
+import time
+
 from openviking_sdk import SyncHTTPClient
 
 # Connect to the local OpenViking Server
@@ -185,13 +187,22 @@ try:
 
     # Add resource (supports URL, file, or directory)
     # Local directory scans respect .gitignore by default.
-    # Wait until semantic processing completes before inspecting the resource.
-    print("Wait for semantic processing...")
     add_result = client.add_resource(
         path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-        wait=True,
     )
-    root_uri = add_result['root_uri']
+
+    task_id = add_result["task_id"]
+    print(f"Import task: {task_id}")
+    while True:
+        task = client.get_task(task_id)
+        if task is None:
+            raise RuntimeError(f"Task {task_id} is no longer available")
+        if task["status"] == "completed":
+            break
+        if task["status"] in {"failed", "cancelled"}:
+            raise RuntimeError(f"Import task {task_id}: {task['status']} ({task.get('error')})")
+        time.sleep(2)
+    root_uri = task["result"]["root_uri"]
 
     # Explore the resource tree structure
     ls_result = client.ls(uri=root_uri)

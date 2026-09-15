@@ -35,9 +35,11 @@
  *   OPENVIKING_RECALL_TIMEOUT_MS, OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS
  *   OPENVIKING_RECALL_COMPRESS_MODEL, OPENVIKING_RECALL_COMPRESS_THINKING
  *   OPENVIKING_RECALL_COMPRESS_BASE_URL
+ *   OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS
  *   OPENVIKING_RECALL_LIMIT, OPENVIKING_SCORE_THRESHOLD
  *   OPENVIKING_WORKSPACE_PEER, OPENVIKING_RECALL_PEER_SCOPE
  *   OPENVIKING_NO_AUTO_INJECT, OPENVIKING_PROFILE_TOKEN_BUDGET
+ *   OPENVIKING_RECALL_QUERY_FILTERS (CSV), OPENVIKING_CAPTURE_FILTERS (CSV)
  *   OPENVIKING_DEBUG=1, OPENVIKING_DEBUG_LOG
  */
 
@@ -87,6 +89,18 @@ function configBool(value, fallback) {
 
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
+}
+
+/**
+ * A configured list of input filter rules. An env CSV replaces the configured
+ * array entirely; both paths trim, so a rule reads the same however it was
+ * configured — and a rule needing a literal comma has to come from the array,
+ * since the env value is split on one.
+ */
+function filterList(envName, configured) {
+  const raw = str(process.env[envName], null);
+  const list = raw !== null ? raw.split(",") : (Array.isArray(configured) ? configured : []);
+  return list.filter((r) => typeof r === "string").map((r) => r.trim()).filter(Boolean);
 }
 
 function normalizeAuthMode(val) {
@@ -213,6 +227,10 @@ export function loadConfig(cwd = process.cwd()) {
       process.env.OPENVIKING_MIN_QUERY_LENGTH,
       num(cx.minQueryLength, 3),
     ))),
+    // Ordered sed-style rules over the text the plugin sends: the recall query
+    // on the UserPromptSubmit hook, and every captured turn on the write path.
+    recallQueryFilters: filterList("OPENVIKING_RECALL_QUERY_FILTERS", cx.recallQueryFilters),
+    captureFilters: filterList("OPENVIKING_CAPTURE_FILTERS", cx.captureFilters),
     logRankingDetails: envBool("OPENVIKING_LOG_RANKING_DETAILS") ?? (cx.logRankingDetails === true),
     recallPeerScope,
     recallCompress: envBool("OPENVIKING_RECALL_COMPRESS") ?? configBool(cx.recallCompress, true),
@@ -229,6 +247,10 @@ export function loadConfig(cwd = process.cwd()) {
     recallCompressDetectTtlMs: Math.max(0, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_DETECT_TTL_MS,
       num(cx.recallCompressDetectTtlMs, 604800000),
+    ))),
+    recallCompressMinInputChars: Math.max(0, Math.floor(num(
+      process.env.OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS,
+      num(cx.recallCompressMinInputChars, 1500),
     ))),
     recallCompressMaxInputChars: Math.max(1000, Math.floor(num(
       process.env.OPENVIKING_RECALL_COMPRESS_MAX_INPUT_CHARS,

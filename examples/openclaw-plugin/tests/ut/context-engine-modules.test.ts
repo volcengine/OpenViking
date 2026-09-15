@@ -222,6 +222,7 @@ describe("context-engine lifecycle service seam", () => {
     expect(client.commitSession).toHaveBeenCalledWith(ovSessionId, {
       wait: true,
       keepRecentCount: 0,
+      resetContext: true,
     });
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("memories=5"));
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-1"));

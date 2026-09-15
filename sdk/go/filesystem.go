@@ -32,6 +32,12 @@ func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any
 	queryInt(query, "abs_limit", absLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
 	queryInt(query, "node_limit", nodeLimit)
+	if opts.Offset != 0 {
+		queryInt(query, "offset", opts.Offset)
+	}
+	if opts.Limit != 0 {
+		queryInt(query, "limit", opts.Limit)
+	}
 	if opts.Tags != nil {
 		query["tags"] = opts.Tags
 	}
@@ -77,6 +83,12 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
 	queryInt(query, "node_limit", nodeLimit)
 	queryInt(query, "level_limit", levelLimit)
+	if opts.Offset != 0 {
+		queryInt(query, "offset", opts.Offset)
+	}
+	if opts.Limit != 0 {
+		queryInt(query, "limit", opts.Limit)
+	}
 	if opts.Tags != nil {
 		query["tags"] = opts.Tags
 	}

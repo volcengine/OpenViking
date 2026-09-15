@@ -57,6 +57,13 @@ type AddSkillOptions struct {
 	TargetURI any
 }
 
+// CompileOptions controls Compile.
+type CompileOptions struct {
+	Instruction string
+	Args        map[string]any
+	Extra       map[string]any
+}
+
 // AdminCreateAccountOptions controls AdminCreateAccountWithOptions.
 type AdminCreateAccountOptions struct {
 	UserConfig map[string]any
@@ -177,6 +184,8 @@ type ListOptions struct {
 	AbsLimit      int
 	ShowAllHidden bool
 	NodeLimit     int
+	Offset        int
+	Limit         int
 	SortBy        string
 	SortOrder     string
 	Tags          []string
@@ -190,6 +199,8 @@ type TreeOptions struct {
 	ShowAllHidden bool
 	NodeLimit     int
 	LevelLimit    *int
+	Offset        int
+	Limit         int
 	Tags          []string
 	IncludeTags   bool
 }

@@ -80,7 +80,9 @@ async fn test_read_dir_redirect_entries_use_target_stat() {
             )
             .await?;
 
-            let entries = fs.read_dir("/local/acct/docs").await?;
+            let entries = fs
+                .read_dir("/local/acct/docs", None, None, None, None)
+                .await?;
             let report = entries
                 .iter()
                 .find(|entry| entry.name == "report.pdf")
@@ -143,12 +145,14 @@ async fn test_read_dir_redirect_entries_use_target_stat() {
                 )
                 .await?;
 
-            let entries = no_redirect_fs.read_dir("/local/acct/docs").await?;
+            let entries = no_redirect_fs
+                .read_dir("/local/acct/docs", None, None, None, None)
+                .await?;
             let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
             assert_eq!(names, vec!["real.txt"]);
 
             let tree = no_redirect_fs
-                .tree_directory("/local/acct", false, None, Some(3))
+                .tree_directory("/local/acct", false, None, Some(3), None, None, None)
                 .await?;
             let paths: Vec<&str> = tree.iter().map(|entry| entry.path.as_str()).collect();
             assert!(!paths.contains(&"/local/acct/docs/ghost.pdf"));
@@ -201,19 +205,43 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
             .await?;
 
             let shallow = fs
-                .tree_directory("/local/acct/resources", false, None, Some(1))
+                .tree_directory(
+                    "/local/acct/resources",
+                    false,
+                    None,
+                    Some(1),
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
             let shallow_paths: Vec<&str> =
                 shallow.iter().map(|entry| entry.path.as_str()).collect();
             assert_eq!(shallow_paths, vec!["/local/acct/resources/doc-1"]);
 
             let root_only = fs
-                .tree_directory("/local/acct/resources", false, None, Some(0))
+                .tree_directory(
+                    "/local/acct/resources",
+                    false,
+                    None,
+                    Some(0),
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
             assert!(root_only.is_empty());
 
             let deep = fs
-                .tree_directory("/local/acct/resources", false, None, Some(2))
+                .tree_directory(
+                    "/local/acct/resources",
+                    false,
+                    None,
+                    Some(2),
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
             let deep_paths: Vec<&str> = deep.iter().map(|entry| entry.path.as_str()).collect();
             assert_eq!(
@@ -225,7 +253,15 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
             );
 
             let capped = fs
-                .tree_directory("/local/acct/resources", false, Some(1), Some(2))
+                .tree_directory(
+                    "/local/acct/resources",
+                    false,
+                    Some(1),
+                    Some(2),
+                    None,
+                    None,
+                    None,
+                )
                 .await?;
             let capped_paths: Vec<&str> = capped.iter().map(|entry| entry.path.as_str()).collect();
             assert_eq!(capped_paths, vec!["/local/acct/resources/doc-1"]);

@@ -131,6 +131,30 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 本地目录上传还会遵循 `.gitignore`。命令行 `--include`、`--exclude` 会与配置文件中的规则合并。
 
+## 插件配置
+
+记忆插件的行为旋钮写在 `plugin` 段下。直接挂在它下面的键对所有 harness 生效；以 harness 命名的嵌套对象（`claude_code` 或 `codex`）只覆盖那一个。
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<user 或 admin key>",
+  "plugin": {
+    "recallCompress": "off",
+    "bypassSessionPatterns": ["/tmp/**", "**/scratch/**"],
+    "claude_code": {
+      "captureAssistantTurns": false
+    }
+  }
+}
+```
+
+每个键都是某个 `OPENVIKING_*` 调优变量的 camelCase 对应写法——`OPENVIKING_RECALL_LIMIT` 对应 `recallLimit`，`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 对应 `captureAssistantTurns`。反过来不成立：少数变量刻意只认环境变量，比如一次性的 `OPENVIKING_BYPASS_SESSION`。完整列表在插件 README 里：[Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)、[Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。取列表值的旋钮（`bypassSessionPatterns`、`recallQueryFilters`、`captureFilters`）在这里是 JSON 数组，而它们的环境变量对应物是逗号分隔的字符串，所以值里带字面逗号的只能写进数组。
+
+优先级从高到低：环境变量 → [工作区各层](#工作区配置) → `plugin.<harness>` → `plugin` → `ov.conf` 里遗留的按 harness 分块 → 内置默认值。hook 每次触发都会重新读文件，所以改完下一轮就生效；改 `OPENVIKING_*` 变量则需要重启 agent，因为 hook 继承的是它的环境。
+
+目前只有 Claude Code 和 Codex 插件会读这一段，用其它 harness 名字建的条目不会生效。`ov-memory-doctor` 会打印它解析到的结果，并对不认识的键给出告警和最接近的正确键名。
+
 ## 工作区配置
 
 仓库可以自带插件配置，这样项目的记忆行为跟着代码走，而不是散落在每位协作者的 home 目录里。工作区根目录下有两个文件，另有一层按机器保存：
@@ -153,7 +177,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `~/.openviking/workspaces/<slot>.json` | 本机的这个工作区 |
 | `<repo-root>/.openviking/config.local.json` | 本地这份 checkout，私有 |
 | `<repo-root>/.openviking/config.json` | 整个仓库，随代码提交 |
-| `ovcli.conf` `plugin.<harness>` | 本机的单个 harness |
+| `ovcli.conf` [`plugin.<harness>`](#插件配置) | 本机的单个 harness |
 | `ovcli.conf` `plugin` | 本机的所有 harness |
 | `ov.conf` harness 段 | 旧部署的兼容层 |
 | 内置默认值 | |

@@ -54,7 +54,7 @@ class IndexManagerImpl : public IndexManager {
 
   int rebuild_scalar_index(
       const std::string& scalar_index_json,
-      const std::vector<AddDataRequest>& data_list) override;
+      const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) override;
 
   int64_t dump(const std::string& dir) override;
 

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -846,9 +847,26 @@ class ReindexExecutor:
                 )
             return True
 
+        if self._is_hidden_meta_file(uri):
+            return False
+        exists = await self._prune_source_exists(uri, ctx=owner_ctx)
+        if exists.error:
+            self._record_prune_source_error(
+                counters=counters,
+                uri=uri,
+                source_uri=uri,
+                error=exists.error,
+            )
+            return False
+        # A real filename can have the same spelling as a virtual chunk URI.
+        if exists.exists:
+            return False
+
         if "#" in uri:
-            if context_type == ContextType.MEMORY.value and "#chunk_" in uri:
-                base_uri = uri.split("#chunk_", 1)[0]
+            # Generated chunks append a zero-padded index to the full base URI.
+            chunk_match = re.fullmatch(r"(.+)#chunk_[0-9]{4,}", uri)
+            if context_type == ContextType.MEMORY.value and chunk_match:
+                base_uri = chunk_match.group(1)
                 base = await self._read_prune_source(base_uri, ctx=owner_ctx)
                 if base.error:
                     self._record_prune_source_error(
@@ -866,18 +884,7 @@ class ReindexExecutor:
                 return uri not in expected
             return False
 
-        if self._is_hidden_meta_file(uri):
-            return False
-        exists = await self._prune_source_exists(uri, ctx=owner_ctx)
-        if exists.error:
-            self._record_prune_source_error(
-                counters=counters,
-                uri=uri,
-                source_uri=uri,
-                error=exists.error,
-            )
-            return False
-        return not exists.exists
+        return True
 
     async def _read_prune_source(self, uri: str, *, ctx: RequestContext) -> _PruneSourceRead:
         viking_fs = get_viking_fs()

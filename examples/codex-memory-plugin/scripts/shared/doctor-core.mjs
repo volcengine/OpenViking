@@ -326,6 +326,7 @@ export const KNOWN_PLUGIN_KEYS = new Set([
   "recallCompressMinInputChars", "recallCompressBaseUrl", "recallCompressModel",
   "recallCompressThinking", "recallCompressReasoningEffort", "recallCompressTimeoutMs",
   "recallCompressDetectOnStartup", "recallCompressDetectTimeoutMs", "recallCompressDetectTtlMs",
+  "recallQueryFilters", "captureFilters",
   "captureMode", "captureMaxLength", "captureTimeoutMs", "captureToolMaxChars",
   "captureAssistantTurns", "captureLastAssistantOnStop", "logRankingDetails",
   "commitTokenThreshold", "commitKeepRecentCount", "autoCommitOnCompact",

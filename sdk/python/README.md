@@ -225,6 +225,8 @@ print(result)
 
 ### Add a Resource from a Local File
 
+`add_resource` returns a `task_id` by default. Query `client.get_task(result["task_id"])` and use the processed output after the task reaches `completed`.
+
 `add_resource` handles file upload for local paths automatically.
 
 ```python
@@ -236,7 +238,6 @@ client.initialize()
 result = client.add_resource(
     path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    wait=True,
     options={
         "reason": "knowledge import",
     },
@@ -252,7 +253,6 @@ or refresh `.abstract.md` / `.overview.md`.
 result = client.add_resource(
     path="/path/to/notes.md",
     to="viking://resources/demo-notes",
-    wait=True,
     options={
         "processing_mode": "vectors_only",
     },

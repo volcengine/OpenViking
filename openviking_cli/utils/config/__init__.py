@@ -53,9 +53,11 @@ from .consts import (
 )
 from .embedding_config import EmbeddingConfig
 from .git_config import GitConfig, GitLocalConfig, GitS3Config
+from .glob_config import GlobConfig, GlobEngine
 from .grep_config import GrepConfig, GrepEngine
 from .log_config import LogConfig
 from .open_viking_config import (
+    CompileApiConfig,
     OpenVikingConfig,
     OpenVikingConfigSingleton,
     get_openviking_config,
@@ -132,9 +134,12 @@ __all__ = [
     "OPENVIKING_GO_PATH_ENV",
     "OPENVIKING_GOPATH_ENV",
     "OPENVIKING_GOPROXY_ENV",
+    "CompileApiConfig",
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
     "OVCLIConfig",
+    "GlobConfig",
+    "GlobEngine",
     "GrepConfig",
     "GrepEngine",
     "RerankConfig",

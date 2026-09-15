@@ -269,6 +269,43 @@ test("persisted profile delivery survives dispose and re-seed", async () => {
   );
 });
 
+test("profile delivery uses current DSH session-owned history on resume and fork", async () => {
+  const profile = {
+    type: "user/message",
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "stored profile" }],
+      source: { kind: "plugin", plugin: "openviking-memory", form: "instructions" },
+    },
+  };
+  for (const [id, ownEvents, expected] of [
+    ["resumed", [profile], null],
+    ["forked", [], "instructions"],
+    ["forked-resumed", [profile], null],
+  ]) {
+    const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+    let historyReads = 0;
+    const session = {
+      id,
+      header: { cwd: "/workspace", isSeeded: id !== "resumed" },
+      ownEvents() {
+        historyReads += 1;
+        return ownEvents;
+      },
+    };
+    const state = runtime.stateFor(session);
+    state.ready = true;
+    state.profileBlock = "current profile";
+
+    const message = await runtime.profileMessage({ session });
+
+    assert.equal(message?.source?.form ?? null, expected, id);
+    assert.equal(historyReads, 1, id);
+    assert.equal(state.profileDelivered, true, id);
+    assert.equal(await runtime.profileMessage({ session }), null, id);
+  }
+});
+
 test("disposeAll drains every live session", async () => {
   const committed = [];
   const runtime = new OpenVikingRuntime({

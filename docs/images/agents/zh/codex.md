@@ -1,14 +1,36 @@
 ## 步骤1：安装
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness codex --dist tos
-```
+1. 在终端执行如下安装命令：
 
-选 **火山引擎 OpenViking 云服务**，把 API Key 贴进去：
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness codex --dist tos
+   ```
+
+2. 安装器会依次询问以下信息：语言（English / 中文）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
 ## 步骤2：验证
 
-启动 `codex`，用 `/hooks` 审批一次。第一次提交 prompt 时应加载 profile。
+1. 启动 Codex。
+2. 审批 Hooks：输入 `/hooks`，系统将提示类似 `4 hooks need review` 的信息，逐一审批通过。其中 OpenViking 相关的 4 个 Hook 为：
+
+   ```text
+   SessionStart
+   UserPromptSubmit
+   Stop
+   PreCompact
+   ```
+
+3. 验证 Profile 加载：审批完成后，提交第一条 Prompt（内容随意即可）。此时插件应自动加载 Profile——若对话开头出现记忆召回内容，则表明接入成功：
+
+   ```text
+   • UserPromptSubmit hook (completed)
+     hook context: <openviking-context source="auto-recall" format="digest">
+       OpenViking memory digest:
+   ```
 
 ## 故障排查
 

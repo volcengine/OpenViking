@@ -23,8 +23,8 @@ class _PathLockClient:
         self.held = False
         self.releases = 0
 
-    async def pathlock_acquire_tree(self, path):
-        del path
+    async def pathlock_acquire_exact_batch(self, paths):
+        del paths
         self.held = True
         return {"lease_ref": "lock-1"}
 
@@ -156,7 +156,7 @@ async def test_batch_validates_all_modes_before_any_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatch):
+async def test_batch_releases_file_locks_before_one_aggregated_refresh(monkeypatch):
     root = "viking://resources/wiki"
     a = f"{root}/a.md"
     b = f"{root}/b.md"
@@ -230,20 +230,15 @@ async def test_batch_replace_memory_preserves_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypatch):
+async def test_batch_reports_skipped_directory_and_queued_file_vectors(monkeypatch):
     root = "viking://resources/wide"
     page = f"{root}/page.md"
     coordinator = ContentWriteCoordinator(_VFS(root))
 
-    async def resolve_root(uri, **kwargs):
-        del uri, kwargs
-        return root
-
     async def enqueue(**kwargs):
         del kwargs
-        return FreshnessAction.MARK_PENDING
+        return FreshnessAction.NOOP
 
-    monkeypatch.setattr(coordinator, "_resolve_root_uri", resolve_root)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
@@ -260,7 +255,7 @@ async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypa
         wait=False,
     )
 
-    assert result["semantic_status"] == "deferred"
+    assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"
     assert result["queue_status"] is None
 

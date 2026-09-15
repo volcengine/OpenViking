@@ -26,7 +26,7 @@ Bot 身份
 | **Skill** | 告诉 Agent 如何完成一类任务 | `SKILL.md` 指令和资源 |
 | **Tool** | 让 Agent执行具体操作 | 注册给模型的 JSON Schema 函数 |
 
-Skill 采用渐进式加载：Always Skill 每轮注入完整内容，其他 Skill 只注入名称、描述和路径，Agent 需要时再用 `read_file` 读取。SkillsLoader 会检查命令和环境变量等依赖，避免暴露尚不可用的能力。
+Skill 采用渐进式加载：本地 Always Skill 每轮注入完整内容，其他本地 Skill 只注入摘要，需要时用 `read_file` 读取；启用 OpenViking 工具后，远程 Skill 按用户问题召回摘要，再用 `openviking_multi_read` 读取并激活。本地依赖用于过滤摘要，远程依赖在执行沙箱检查。完整用法和元数据字段见 [Skills](./06-skills.md)。
 
 Skill 可以编排多个工具，但不会自动获得额外权限。工具是否可见仍由运行模式、渠道设置、请求参数和沙箱决定。
 
@@ -188,3 +188,4 @@ HookManager 提供运行时扩展点。当前内置 Hook 主要用于：
 - [VikingBot 架构](./01-architecture.md)
 - [渠道、Gateway 与运行管理](./03-channels-and-gateway.md)
 - [与 OpenViking 集成](./04-openviking-integration.md)
+- [Skills](./06-skills.md)

@@ -1,3 +1,5 @@
+import { applyInputFilters, compileInputFilters } from "./input-filters.mjs";
+
 const TEXT_BLOCK_TYPES = new Set(["text", "input_text", "output_text"]);
 const TOOL_CALL_TYPES = new Set([
   "tool_call",
@@ -151,7 +153,7 @@ function toolId(block) {
 
 function toolStatus(block, kind) {
   if (kind === "call") return "running";
-  if (block?.is_error || block?.error || block?.state?.error) return "error";
+  if (block?.is_error || block?.isError || block?.state?.isError || block?.error || block?.state?.error) return "error";
   const status = oneLine(block?.status || block?.state?.status || "");
   return status || "completed";
 }
@@ -353,6 +355,53 @@ export function extractPartsFromPayload(payload, options = {}) {
   return parts;
 }
 
+/**
+ * Prune blank text parts and run `cfg.captureFilters` over the ones that remain.
+ *
+ * One drop verdict is taken per turn, on the aggregate of its text parts; the
+ * individual parts are then rewritten with the substitutions only, so a rule can
+ * never both keep and drop the same turn. Tool call/result parts are carried
+ * through untouched — filters match conversation text, not tool payloads — but a
+ * turn dropped on its text takes its tool parts with it.
+ */
+export function filterCaptureParts(parts, role, cfg = {}) {
+  const kept = [];
+  for (const part of parts || []) {
+    if (!part) continue;
+    if (part.type !== "text") {
+      kept.push(part);
+      continue;
+    }
+    const text = typeof part.text === "string" ? part.text.trim() : "";
+    if (!text) continue;
+    kept.push(text === part.text ? part : { ...part, text });
+  }
+
+  const blank = { parts: kept, dropped: false };
+  const compiled = compileInputFilters(cfg?.captureFilters);
+  if (!compiled.rules.length || kept.length === 0) return blank;
+
+  const textParts = kept.filter((part) => part.type === "text");
+  if (textParts.length === 0) return blank;
+
+  const verdict = applyInputFilters(textParts.map((part) => part.text).join("\n\n"), compiled.rules, {
+    role,
+  });
+  if (verdict.dropped) return { parts: [], dropped: true };
+
+  const out = [];
+  for (const part of kept) {
+    if (part.type !== "text") {
+      out.push(part);
+      continue;
+    }
+    const shaped = applyInputFilters(part.text, compiled.rules, { role, substituteOnly: true });
+    if (!shaped.text) continue;
+    out.push(shaped.text === part.text ? part : { ...part, text: shaped.text });
+  }
+  return { parts: out, dropped: out.length === 0 };
+}
+
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {
   const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
   const turns = [];
@@ -370,10 +419,15 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
       toolMaxChars: cfg.captureToolMaxChars,
       toolNameById,
     });
-    const decision = shouldCaptureText(rawText, role, cfg);
-    if (!decision.shouldCapture && parts.length === 0) continue;
+    const shaped = filterCaptureParts(parts, role, cfg);
+    if (shaped.dropped) continue;
+    // With parts on the wire the drop decision was already taken above, so the
+    // text path only runs the filters for the `content` fallback. That also
+    // keeps `turn.text` faithful for callers that scan it for trigger words.
+    const decision = shouldCaptureText(rawText, role, cfg, { filters: shaped.parts.length === 0 });
+    if (!decision.shouldCapture && shaped.parts.length === 0) continue;
     const text = decision.shouldCapture ? decision.text : "";
-    turns.push({ role, text, parts });
+    turns.push({ role, text, parts: shaped.parts });
   }
   return turns;
 }
@@ -485,12 +539,21 @@ function isPunctuationOnly(text) {
   return !/[a-z0-9\u3400-\u9fff]/i.test(text);
 }
 
-export function shouldCaptureText(text, role, cfg = {}) {
+export function shouldCaptureText(text, role, cfg = {}, { filters = true } = {}) {
   const maxLength = cfg.captureMaxLength || 24000;
   const sanitized = sanitizeCapturedText(text);
   if (!sanitized) return { shouldCapture: false, reason: "empty", text: "" };
 
-  const capped = truncateCaptureText(sanitized, maxLength);
+  let capped = truncateCaptureText(sanitized, maxLength);
+  if (filters) {
+    const compiled = compileInputFilters(cfg?.captureFilters);
+    if (compiled.rules.length) {
+      const verdict = applyInputFilters(capped, compiled.rules, { role });
+      if (verdict.dropped) return { shouldCapture: false, reason: "filtered", text: "" };
+      capped = verdict.text;
+      if (!capped) return { shouldCapture: false, reason: "empty", text: "" };
+    }
+  }
   const compact = oneLine(capped);
   const isToolSummary = /^\[tool-(?:call|result)\b/i.test(compact);
 

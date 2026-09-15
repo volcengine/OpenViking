@@ -1,18 +1,20 @@
 import * as React from 'react'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import {
-  BlocksIcon,
+  MessagesSquareIcon,
   BookOpenIcon,
   BracesIcon,
+  BrainIcon,
   ChevronRightIcon,
-  ClipboardListIcon,
-  Clock3Icon,
+  ListChecksIcon,
+  HistoryIcon,
   HomeIcon,
   GithubIcon,
   KeyRoundIcon,
   MoonIcon,
-  MonitorUpIcon,
-  PlugZapIcon,
+  ActivityIcon,
+  BotIcon,
+  CableIcon,
   ScrollTextIcon,
   SearchIcon,
   SparklesIcon,
@@ -89,7 +91,7 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/home',
   },
   {
-    icon: PlugZapIcon,
+    icon: BotIcon,
     id: 'playground',
     section: 'workspace',
     titleKey: 'navigation.playground.title',
@@ -110,7 +112,14 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/skills',
   },
   {
-    icon: BlocksIcon,
+    icon: BrainIcon,
+    id: 'agentExperience',
+    section: 'workspace',
+    titleKey: 'navigation.agentExperience.title',
+    to: '/agent-experience',
+  },
+  {
+    icon: MessagesSquareIcon,
     id: 'sessions',
     section: 'operations',
     titleKey: 'navigation.sessions.title',
@@ -124,21 +133,21 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/request-logs',
   },
   {
-    icon: ClipboardListIcon,
+    icon: ListChecksIcon,
     id: 'tasks',
     section: 'operations',
     titleKey: 'navigation.tasks.title',
     to: '/tasks',
   },
   {
-    icon: Clock3Icon,
+    icon: HistoryIcon,
     id: 'watches',
     section: 'operations',
     titleKey: 'navigation.watches.title',
     to: '/watches',
   },
   {
-    icon: MonitorUpIcon,
+    icon: ActivityIcon,
     id: 'monitoring',
     section: 'operations',
     titleKey: 'navigation.monitoring.title',
@@ -398,7 +407,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     tooltip={t('footer.connection', { ns: 'appShell' })}
                     className="h-9"
                   >
-                    <PlugZapIcon />
+                    <CableIcon />
                     <span>{t('footer.connection', { ns: 'appShell' })}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -484,7 +493,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     })}
                     className="h-9"
                   >
-                    <PlugZapIcon />
+                    <BotIcon />
                     <span>
                       {t('footer.agentIntegrations', { ns: 'appShell' })}
                     </span>

@@ -40,7 +40,7 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 
 ### 组件 1：PathLockEngine + LockManager + LockContext（路径锁系统）
 
-**PathLockEngine** 实现基于文件的分布式锁，支持 EXACT 和 TREE 两种锁类型，使用 fencing token 防止 TOCTOU 竞争，自动检测并清理过期锁。
+**PathLockEngine** 实现基于 Provider 的分布式锁，支持 EXACT 和 TREE 两种锁类型，使用归属 token 防止 TOCTOU 竞争，并自动检测和清理过期锁。默认 Provider 在 AGFS 中保存锁文件；Cache Provider 在 Redis 中保存 token。
 
 **LockHandle** 是轻量的锁持有者令牌：
 
@@ -48,7 +48,7 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 @dataclass
 class LockHandle:
     id: str          # 唯一标识，用于生成 fencing token
-    locks: list[str] # 已获取的锁文件路径
+    locks: list[str] # Provider handle：锁文件路径或逻辑路径
     created_at: float # handle 创建时间
     last_active_at: float # 最近一次成功 acquire/refresh 的时间
 ```
@@ -268,11 +268,11 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 | **TREE** | 冲突 | 冲突 | 冲突 | 冲突 |
 
 - **EXACT (E)**：锁定一个具体路径本身。文件、目录名、尚未创建的目标路径都可以使用；若祖先目录持有 TreeLock 则阻塞。
-- **TREE (T)**：用于删除目录、移动目录、资源生命周期保护等。逻辑上覆盖整棵子树，但只在根目录写**一个锁文件**。获取前扫描所有后代和祖先目录确认无冲突锁。目标目录不存在时，先做冲突检查；无冲突才创建目录并写锁。若创建后又发现并发冲突，本次加锁失败，但不回滚刚创建出来的空目录。
+- **TREE (T)**：用于删除目录、移动目录、资源生命周期保护等。逻辑上覆盖整棵子树，但只为根路径保存一个 Provider token。冲突检查覆盖 Provider scope 内的后代和持有 Tree 锁的祖先。Filesystem Provider 可能为了写锁文件而创建尚不存在的目标目录。
 
 ## 锁机制
 
-### 锁协议
+### Filesystem Provider 锁协议
 
 锁文件路径：
 
@@ -289,7 +289,30 @@ ExactPathLock(文件或未创建路径) -> {parent}/.exact.ovlock.<name>.<hash>
 
 其中 `lock_type` 为 `E`（EXACT）或 `T`（TREE）。
 
-### 获取锁流程（EXACT 模式）
+### Cache Provider 锁协议
+
+Cache Provider 将相同 token 格式存入 Redis HASH field，并通过 Lua
+原子完成整批冲突检查和写入：
+
+```text
+field = logical_path
+value = owner_id:time_ns:lock_type
+```
+
+HASH key 按路径 scope 隔离：
+
+```text
+ov:pathlock:{namespace}:global:tokens
+ov:pathlock:{namespace}:scope:_system:tokens
+ov:pathlock:{namespace}:scope:account:{account}:tokens
+```
+
+所有 key 都使用 `{namespace}` 作为 Redis Cluster hash tag。Exact 获取使用
+`HMGET` 读取目标和祖先；Tree 获取只对所属 scope 的 HASH 执行
+`HGETALL`。`/` 和 `/local` 的 global 锁不会扫描 account 或 `_system`
+HASH。跨 scope batch 会被拒绝。
+
+### Filesystem 获取锁流程（EXACT 模式）
 
 ```
 循环直到超时（轮询间隔：200ms）：
@@ -311,7 +334,7 @@ ExactPathLock(文件或未创建路径) -> {parent}/.exact.ovlock.<name>.<hash>
 超时（默认 0 = 不等待）抛出 LockAcquisitionError
 ```
 
-### 获取锁流程（TREE 模式）
+### Filesystem 获取锁流程（TREE 模式）
 
 ```
 循环直到超时（轮询间隔：200ms）：
@@ -365,11 +388,11 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 ### 锁过期清理
 
-**陈旧锁检测**：PathLockEngine 检查 fencing token 中的时间戳。超过 `lock_expire`（默认 30s）的锁被视为陈旧锁，在加锁过程中自动移除。
+**陈旧锁检测**：PathLockEngine 检查归属 token 中的时间戳。超过 `lock_expire`（默认 30s）的锁被视为陈旧锁，在加锁过程中自动移除。
 
-**进程内清理**：LockManager 每 60 秒检查活跃的 LockHandle。仍持有锁文件且失活时间超过 `lock_expire` 的 handle 会被强制释放。
+**进程内清理**：LockManager 每 60 秒检查活跃的 LockHandle。仍持有 Provider token 且失活时间超过 `lock_expire` 的 handle 会被强制释放。
 
-**孤儿锁**：进程崩溃后遗留的锁文件，在下次任何操作尝试获取同一路径锁时，通过 stale lock 检测自动移除。
+**孤儿锁**：进程崩溃后遗留的 Provider token，在后续 acquire 检查同一路径或 scope 时通过 stale lock 检测自动移除。
 
 ## 崩溃恢复
 
@@ -378,7 +401,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 | 场景 | 恢复方式 |
 |------|---------|
 | session_memory 提取中途崩溃 | 从 archive 恢复 Phase 2 并继续消费 `session_commit` 任务 |
-| 锁持有期间崩溃 | 锁文件留在 AGFS，下次获取时 stale 检测自动清理（默认 30s 过期）|
+| 锁持有期间崩溃 | Provider token 保留，后续匹配的 acquire 通过 stale 检测自动清理（默认 30s 过期）|
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化，worker 重启后自动拉取 |
 | 孤儿索引 | L2 按需加载时清理 |
 
@@ -394,7 +417,12 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 ## 配置
 
-路径锁默认启用，无需额外配置。推荐通过 `storage.agfs.pathlock` 配置过期时间。运行时等待超时固定为 `0.0` 秒，不再接受外部配置。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射，`redo_recovery_enabled` 已废弃且会被忽略。
+路径锁默认启用，并使用 `filesystem` Provider。多进程通过 Redis 协调时，
+设置 `storage.agfs.pathlock.provider=cache`。Cache PathLock 要求配置顶层
+Redis Cache Provider 和非空 PathLock namespace。运行时等待超时固定为
+`0.0` 秒。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout`
+已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射，
+`redo_recovery_enabled` 已废弃且会被忽略。
 
 推荐写法：
 
@@ -403,12 +431,42 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
   "storage": {
     "agfs": {
       "pathlock": {
+        "provider": "filesystem",
         "lock_expire_secs": 30.0
       }
     }
   }
 }
 ```
+
+Redis 配置：
+
+```json
+{
+  "cache": {
+    "provider": "redis",
+    "params": {
+      "mode": "standalone",
+      "endpoints": ["redis://127.0.0.1:6379"]
+    }
+  },
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "cache",
+        "namespace": "production",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `provider` | str | `filesystem`、`memory` 或 `cache` | `filesystem` |
+| `namespace` | str 或 null | `provider=cache` 时必填，用于标识一个 OpenViking 部署 | `null` |
+| `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数 | `30.0` |
 
 兼容旧写法：
 

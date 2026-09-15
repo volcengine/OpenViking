@@ -382,8 +382,7 @@ openviking-server doctor
 
 ```bash
 openviking write viking://resources/multiwrite-check.txt \
-  --content "multi-write check" \
-  --wait
+  --content "multi-write check"
 
 openviking read viking://resources/multiwrite-check.txt
 ```

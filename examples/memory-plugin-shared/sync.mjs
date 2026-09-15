@@ -15,6 +15,7 @@ export const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
 const HOOK_SHARED_FILES = [
   "credentials.mjs",
   "capture-utils.mjs",
+  "input-filters.mjs",
   "session-model.mjs",
   "pending-queue.mjs",
   "debug-log.mjs",

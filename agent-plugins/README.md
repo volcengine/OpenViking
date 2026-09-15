@@ -13,8 +13,11 @@ servers/mcp-proxy.mjs                # stdio -> streamable-HTTP proxy to the OV 
 servers/config.mjs, debug-log.mjs    # credential/config resolution (adapted from claude-code-memory-plugin)
 servers/shared/                      # generated from examples/memory-plugin-shared/lib (do not edit)
 skills/openviking-memory/SKILL.md    # teaches the model the recall + persist loop
+skills/ov-memory-troubleshoot/       # read-only extraction troubleshooting
 plugin.test.mjs                      # node --test conformance checks
 ```
+
+Use `ov-memory-troubleshoot` to trace backward from a memory file to its archive diff and, when needed, session messages. Diagnosis is read-only.
 
 Zero npm dependencies; the proxy and tests run on the Node.js standard library (Node 18+ for global `fetch`).
 
@@ -23,7 +26,7 @@ Zero npm dependencies; the proxy and tests run on the Node.js standard library (
 1. Have an OpenViking server reachable (see the [quickstart](../docs/en/getting-started/02-quickstart.md)); default local endpoint is `http://127.0.0.1:1933`.
 2. Point your Agent-Plugins-conforming client at this directory (each client has its own install command or plugin directory; consult its docs). The client will:
    - register the `openviking` MCP server from `mcp.json` — it runs `node <plugin>/servers/mcp-proxy.mjs` over stdio;
-   - discover the `openviking-memory` skill from `skills/`.
+   - discover the `openviking-memory` and `ov-memory-troubleshoot` skills from `skills/`.
 3. Configure credentials (next section) and start a session. The model gains `find` / `search` / `read` / `remember` / `write` and the other OpenViking MCP tools. Use `search` with `mode="context"` for server-assembled context.
 
 ## Why a stdio proxy instead of a `streamable-http` entry

@@ -48,6 +48,23 @@ def _is_pid_alive(pid: int) -> bool:
     """Check whether a process with the given PID is still running."""
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        import _winapi
+
+        # Unlike POSIX, os.kill(pid, 0) sends CTRL_C_EVENT on Windows.
+        try:
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+        except OSError as exc:
+            # ERROR_INVALID_PARAMETER confirms there is no such PID. Access
+            # denied and other query failures must not discard a live lock.
+            return exc.winerror != 87
+        try:
+            return _winapi.WaitForSingleObject(handle, 0) != _winapi.WAIT_OBJECT_0
+        except OSError:
+            return True
+        finally:
+            _winapi.CloseHandle(handle)
+
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -55,10 +72,6 @@ def _is_pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it.
         pass
-    except (OSError, SystemError):
-        if sys.platform == "win32":
-            return False
-        raise
 
     # PID exists, but on Linux PIDs are recycled. Verify this is actually
     # an OpenViking process by checking /proc/{pid}/cmdline to avoid false

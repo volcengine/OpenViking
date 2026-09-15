@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking.utils.message_format import format_messages, sanitize_openai_messages
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -178,7 +179,9 @@ class VolcEngineVLM(OpenAIVLM):
     ) -> Union[str, VLMResponse]:
         """Get text completion via Chat Completions API."""
         effective_thinking = self.thinking if thinking is None else thinking
-        kwargs_messages = messages or [{"role": "user", "content": prompt}]
+        kwargs_messages = sanitize_openai_messages(
+            messages or [{"role": "user", "content": prompt}]
+        )
         kwargs = {
             "model": self.model or "doubao-seed-2-0-lite-260428",
             "messages": kwargs_messages,
@@ -206,7 +209,6 @@ class VolcEngineVLM(OpenAIVLM):
             return result
         return self._clean_response(str(result))
 
-    @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -214,10 +216,14 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously via Chat Completions API."""
         effective_thinking = self.thinking if thinking is None else thinking
-        kwargs_messages = messages or [{"role": "user", "content": prompt}]
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        kwargs_messages = sanitize_openai_messages(
+            messages or [{"role": "user", "content": prompt}]
+        )
         kwargs = {
             "model": self.model or "doubao-seed-2-0-lite-260428",
             "messages": kwargs_messages,
@@ -225,16 +231,15 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        if effective_max_tokens is not None:
+            kwargs["max_tokens"] = effective_max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # 用 tracer.info 打印请求
+        # 用 tracer.info 打印请求（人类可读格式）
         tracer.info(
-            "request: "
-            f"{json.dumps(redact_image_data_urls(kwargs_messages), ensure_ascii=False, indent=2)}"
+            "llm_input_messages=" + format_messages(redact_image_data_urls(kwargs_messages))
         )
         if tools:
             tracer.info(
@@ -394,14 +399,14 @@ class VolcEngineVLM(OpenAIVLM):
         """Get vision completion via Chat Completions API."""
         effective_thinking = self.thinking if thinking is None else thinking
         if messages:
-            kwargs_messages = messages
+            kwargs_messages = sanitize_openai_messages(messages)
         else:
             content = []
             if images:
                 content.extend(self._prepare_image(img) for img in images)
             if prompt:
                 content.append({"type": "text", "text": prompt})
-            kwargs_messages = [{"role": "user", "content": content}]
+            kwargs_messages = sanitize_openai_messages([{"role": "user", "content": content}])
 
         kwargs = {
             "model": self.model or "doubao-seed-2-0-lite-260428",
@@ -442,14 +447,14 @@ class VolcEngineVLM(OpenAIVLM):
         """Get vision completion asynchronously via Chat Completions API."""
         effective_thinking = self.thinking if thinking is None else thinking
         if messages:
-            kwargs_messages = messages
+            kwargs_messages = sanitize_openai_messages(messages)
         else:
             content = []
             if images:
                 content.extend(self._prepare_image(img) for img in images)
             if prompt:
                 content.append({"type": "text", "text": prompt})
-            kwargs_messages = [{"role": "user", "content": content}]
+            kwargs_messages = sanitize_openai_messages([{"role": "user", "content": content}])
 
         kwargs = {
             "model": self.model or "doubao-seed-2-0-lite-260428",

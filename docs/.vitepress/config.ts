@@ -246,6 +246,7 @@ const apiReferenceSidebar = {
         items: [
           ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
+          ['23-agent-runtime.md', 'Agent Runtime API'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
       },
@@ -303,6 +304,7 @@ const apiReferenceSidebar = {
         items: [
           ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
+          ['23-agent-runtime.md', 'Agent Runtime API'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
       },
@@ -343,7 +345,8 @@ const conceptsSidebar = {
           ['11-multi-tenant.md', 'Multi-Tenancy'],
           ['12-metrics.md', 'Metrics'],
           ['13-privacy.md', 'Privacy'],
-          ['14-multi-write-storage.md', 'Multi-Write Storage']
+          ['14-multi-write-storage.md', 'Multi-Write Storage'],
+          ['16-queue-lifecycle.md', 'Queue State and Completion']
         ]
       },
       {
@@ -380,7 +383,8 @@ const conceptsSidebar = {
           ['11-multi-tenant.md', '多租户'],
           ['12-metrics.md', '监控指标'],
           ['13-privacy.md', '隐私配置'],
-          ['14-multi-write-storage.md', '多写存储']
+          ['14-multi-write-storage.md', '多写存储'],
+          ['16-queue-lifecycle.md', '队列状态与完成语义']
         ]
       },
       {

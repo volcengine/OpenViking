@@ -7,11 +7,14 @@ These tests target pure/static methods on Session and related helpers,
 so they don't need a running OpenViking server.
 """
 
+import json
+from unittest.mock import AsyncMock
+
 import pytest
 
 from openviking.message.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
-from openviking.session.session import WM_SEVEN_SECTIONS, Session
+from openviking.session.session import WM_SEVEN_SECTIONS, Session, SessionMeta
 
 # -----------------------------------------------------------------------
 # Helpers
@@ -415,7 +418,7 @@ class TestWmRecoverOpsFromRaw:
 
 
 class TestRebuildPendingTokens:
-    """Test the _rebuild_pending_tokens math using _calc_pending_tokens helper."""
+    """Cover legacy count math and the real turn-budget append/load lifecycle."""
 
     def test_no_keep_sums_all(self):
         assert _calc_pending_tokens([100, 200, 300], keep_recent_count=0) == 600
@@ -434,6 +437,42 @@ class TestRebuildPendingTokens:
 
     def test_keep_equals_total(self):
         assert _calc_pending_tokens([100, 200], keep_recent_count=2) == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "keep_turns, budget, expected", [(0, 1000, 600), (1, 1000, 0), (1, 400, 200)]
+    )
+    async def test_turn_budget_pending_tokens_survive_append_and_reload(
+        self, keep_turns, budget, expected
+    ):
+        session = Session(viking_fs=None)
+        session._meta = SessionMeta(
+            retention_mode="turn_budget",
+            keep_recent_count=10,
+            keep_recent_turn_count=keep_turns,
+            retained_message_token_budget=budget,
+        )
+        for role, text in [
+            ("user", "u" * 400),
+            ("assistant", "a" * 800),
+            ("assistant", "b" * 1200),
+        ]:
+            await session.add_message_async(role, [TextPart(text)])
+        # A partial turn duplicates its user anchor into the archive, but it is
+        # still live and must not be counted as pending a second time.
+        assert session._meta.pending_tokens == expected
+
+        # Loading must rebuild the counter from durable messages, not trust a
+        # stale persisted value or fall back to the legacy keep_recent_count.
+        session._meta.pending_tokens = 9999
+        storage = AsyncMock()
+        storage.read_file.side_effect = [
+            "\n".join(message.to_jsonl() for message in session.messages),
+            json.dumps(session._meta.to_dict()),
+        ]
+        reloaded = Session(viking_fs=storage)
+        await reloaded.load()
+        assert reloaded._meta.pending_tokens == expected
 
 
 # =======================================================================

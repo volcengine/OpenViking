@@ -680,7 +680,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
     mode="create",
-    wait=True,
 )
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 
@@ -689,7 +688,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
     mode="replace",
-    wait=True,
 )
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 

@@ -271,8 +271,8 @@ async def test_http_stat_returns_canonical_request_uri(monkeypatch):
     seen = {}
     request_context = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
-    async def fake_stat(uri, ctx=None):
-        seen.update(uri=uri, ctx=ctx)
+    async def fake_stat(uri, ctx=None, include_lock_status=False):
+        seen.update(uri=uri, ctx=ctx, include_lock_status=include_lock_status)
         return {
             "name": "notes.md",
             "size": 12,
@@ -302,6 +302,7 @@ async def test_http_stat_returns_canonical_request_uri(monkeypatch):
     assert response.json()["result"]["uri"] == "viking://user/alice/resources/notes.md"
     assert seen["uri"] == "viking://user/alice/resources/notes.md"
     assert seen["ctx"].user.user_id == "alice"
+    assert seen["include_lock_status"] is True
 
 
 @pytest.mark.asyncio
@@ -310,8 +311,8 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
     resolved_uri = "viking://user/alice/resources/notes.md"
     seen = {}
 
-    async def fake_stat(uri, ctx=None):
-        seen.update(uri=uri, ctx=ctx)
+    async def fake_stat(uri, ctx=None, include_lock_status=False):
+        seen.update(uri=uri, ctx=ctx, include_lock_status=include_lock_status)
         return {
             "uri": resolved_uri,
             "name": "notes.md",
@@ -341,6 +342,7 @@ async def test_http_stat_by_record_id_returns_resolved_uri(monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()["result"]["uri"] == resolved_uri
     assert seen["uri"] == record_id
+    assert seen["include_lock_status"] is True
 
 
 @pytest.mark.asyncio
@@ -369,23 +371,39 @@ async def test_ls_user_container_lists_only_caller_space(app, client, service):
 
 
 @pytest.mark.asyncio
-async def test_ls_forwards_tags_to_filesystem_service(monkeypatch):
-    seen = {}
+async def test_ls_and_tree_forward_pagination_to_filesystem_service(monkeypatch):
+    seen = {"ls": {}, "tree": {}}
 
     async def fake_ls(uri, **kwargs):
-        seen.update(uri=uri, **kwargs)
+        seen["ls"].update(uri=uri, **kwargs)
+        return []
+
+    async def fake_tree(uri, **kwargs):
+        seen["tree"].update(uri=uri, **kwargs)
         return []
 
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(ls=fake_ls)),
+        lambda: SimpleNamespace(fs=SimpleNamespace(ls=fake_ls, tree=fake_tree)),
     )
 
     await filesystem.ls(
         uri="viking://resources",
         tags=["team=search", "env=prod"],
+        offset=4,
+        limit=9,
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+    await filesystem.tree(
+        uri="viking://resources",
+        offset=3,
+        limit=5,
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )
 
-    assert seen["tags"] == ["team=search", "env=prod"]
+    assert seen["ls"]["tags"] == ["team=search", "env=prod"]
+    assert seen["ls"]["offset"] == 4
+    assert seen["ls"]["node_limit"] == 9
+    assert seen["tree"]["offset"] == 3
+    assert seen["tree"]["node_limit"] == 5

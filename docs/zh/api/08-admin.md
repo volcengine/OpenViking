@@ -154,6 +154,194 @@ ov --sudo admin set-account-settings acme --acl-enabled true
 覆盖已有配置前，内核会先备份到
 `/local/{account_id}/_system/setting.backup.json`。
 
+### account_memory_templates
+
+ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普通 User 无权调用。
+权限按管理员角色判断，不按 User 是否叫 `default` 判断。
+
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出六类开放模板、完整默认值及生效值 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个模板 |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个模板 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除该模板覆盖，恢复部署默认值 |
+
+内核接收原有 Memory YAML 结构对应的 JSON 对象，并在接口层强制校验以下白名单。
+仅开放下列六类模板；Experience、Cases、Trajectories 等其他类型不开放查询或编辑，
+不支持通过接口新增、删除或重命名 Memory Type。DELETE 仅移除自定义覆盖，不删除模板类型。
+
+| 模板 | 可编辑项 | 用途 |
+|------|----------|------|
+| `profile` | `description`；`fields.content.description` | 稳定身份、背景和工作方式的抽取说明；正文内容、语言、Markdown 结构、长度和更新时间要求 |
+| `events` | `description`；`fields.event_name.description`、`fields.summary.description`；`content_template` | 事件范围、原子性与排除项；名称语言、粒度和格式；摘要事实、日期和语言；Summary、时间、ChatLog 的标题、顺序和展示方式 |
+| `preferences` | `description`；`fields.topic.description`、`fields.content.description` | 偏好、习惯、反感及与 Profile/Event 的边界；主题粒度、语言和命名；正文语义、条目和 Markdown 要求 |
+| `entities` | `description`；`fields.category.description`、`fields.name.description`、`fields.content.description` | 实体与关系范围；分类法、语言和粒度；实体命名；卡片事实、章节、语言和长度 |
+| `soul` | `description`；`fields.core_truths.description`、`fields.boundaries.description`、`fields.vibe.description`、`fields.continuity.description`；`content_template` | 核心原则、边界、气质和连续性的抽取表达；四个字段的标题、顺序和固定文案 |
+| `identity` | `description`；`fields.creature.description`、`fields.name.description`、`fields.vibe.description`、`fields.avatar.description`、`fields.emoji.description`、`fields.introduction.description`；`content_template` | 身份信息范围；身份、名称、气质、头像、Emoji、自我介绍的字段要求；正文标签、顺序和固定文案 |
+
+表中 `fields.<name>.description` 表示在 `fields` 数组中按 `name` 定位并修改
+`description`，不是替换整个字段。JSON 属性名统一小写（`description`，不是
+`Description`）。Profile 的 `fields.content` 仅开放其 description，不开放字段本身。
+
+除白名单说明文字和三个正文模板外，所有配置均锁定为部署默认值，包括：
+`memory_type`、`enabled`、`operation_mode`、`stage`、`peer_enabled`、
+`directory`、`filename_template`、所有字段的名称/类型/`merge_op`/`init_value`、
+`embedding_template` 和 `overview_template`，以及未开放的字段说明。
+例如 Profile 保留 `profile.md` 和 content 的 `merge_op=patch`；Events 保留
+`add_only` 以及 `goal/ranges` 的说明；Identity 的 Name immutable 规则不变。
+Profile、Preferences、Entities 不开放 `content_template`。
+改写 topic/category/name/event_name 的生成说明仍可能间接影响未来的目录或文件名，
+但不允许修改目录/文件名模板本身。
+
+例如，仅修改类型说明：
+
+```bash
+curl -X PUT "$OV_ENDPOINT/api/v1/admin/accounts/acme/memory-templates/profile" \
+  -H "X-API-Key: $OV_ADMIN_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"只记住业务相关事实，用简洁的中文描述。"}'
+```
+
+PUT 从**部署默认模板**补齐未传入的配置，不从上一次 Account 自定义值补齐，最终保存
+**完整 YAML 模板**。`fields` 按已有字段名合并，只覆盖白名单允许的说明文字，
+未传入的字段和属性全部保留默认值；不能新增、删除或重命名字段，提交空列表不会删除字段。
+完整 GET `effective` 对象可以回传：锁定字段值与默认值相同则接受，任何锁定值变更、
+未知配置项、未知字段或重复字段名均返回 `INVALID_ARGUMENT`，当前生效文件不变。
+若仅调整一个 description 且需保留其他自定义内容，应先 GET，修改 `effective` 对象后
+整体 PUT。空对象会发布一份完整默认配置，状态仍为自定义；恢复系统默认应调用 DELETE。
+DELETE 幂等。
+
+返回包含 `memory_type`、`status`（`system_default` / `custom`）、
+`updated_at`（UTC 发布时间，默认状态为 null），以及完整的 `defaults` / `effective`。
+对象使用 YAML 字段名，例如 `fields[].type`。列表接口返回 `result.account_id` 和
+`result.templates`；单模板操作返回 `result.account_id` 及上述模板结果。
+
+按 Account、按模板独立存储：
+
+```text
+/local/{account_id}/_system/memory_templates/
+  profile.yaml
+  preferences.yaml
+  events.yaml
+  ...
+```
+
+仅发布自定义时创建对应文件。文件包含完整 Schema 和内部 `_updated_at` 时间戳，
+不再使用集中式 `memory_templates.json`。更新前备份至 `{type}.yaml.backup`。
+读写经过 AGFS，沿用当前部署的加密和存储配置，不能直接编辑加密后的底层文件。
+不修改 Account 的 `setting.json` 或 User 的 `user_config.json`。
+个人版使用默认 Account；企业版使用指定 Account，内核不区分两套文件结构。
+
+模板读取不加锁。发布先在同目录写完唯一临时文件，再通过 AGFS 切换到正式路径：
+LocalFS 使用文件重命名，S3 使用完整对象复制替换目标后再删除临时对象，不先删除目标。
+读者允许看到完整旧版或新版；首次发布之前、恢复默认之后读取部署默认值，不读取临时文件。
+这是单文件发布语义，不保证一次列表/Registry 读取中的所有模板来自同一发布时刻。
+发布与 DELETE 仍使用跨进程写锁；发布锁同时覆盖正式路径和临时路径。锁冲突采用零等待尝试和
+协程退避，最多等待 10 秒，避免锁等待占满执行后续 I/O 的默认线程池。
+临时写入失败不修改当前文件；切换后清理失败只记警告，不覆盖回滚已发布版本。
+若切换返回错误，会核验目标内容：确认已发布则保留新版本；无法确认则返回错误且不盲目回滚，调用方可 GET 确认状态。
+取消等待锁的请求会停止重试；已下发的 native 操作不能强行中断，会完成收尾并释放锁后再传播取消。
+因此取消已开始发布的请求不保证撤销发布。进程异常退出或清理失败可能留下 `.tmp` 文件，但读取不会使用它们。
+
+普通 Session 记忆抽取在筛选 Schema 和初始化记忆文件之前读取 Account 模板。
+同一份 Registry 快照贯穿模型抽取、补丁合并和记忆文件更新；发布新模板不改变已开始
+抽取的快照。流式更新直接比较当前记忆类型的 Schema 值（含渲染模式），不比较整个
+Registry；无关类型变更不会触发拆批。不同 Schema 分开合并、渲染；若这些组在补丁
+合并前或合并后指向同一文件，会在应用该合并批次的任何记忆操作前抛出冲突。
+此时需按当前模板和文件内容重新抽取后再重试，不能直接重放旧 patch。
+这是冲突提前报错，不是自动 rebase，也不是整个 Commit 的原子事务；其他记忆类型
+或 append-only 路径可能已经完成写入。排队任务按**抽取开始时**取值，
+不是按 HTTP Commit 受理时间取值。同一 Account 下符合记忆策略的 User/Peer 共用模板，
+不同 Account 不串用，也不修改共享的部署 Registry。发布或恢复默认不会主动重写历史
+记忆，后续 Commit 可按生效规则更新已有记忆。
+
+白名单内提交的说明和正文模板必须是非空字符串；单文件序列化后不超过 1 MiB。
+`description`（类型说明及 `fields[].description`）统一支持受限 Jinja，不因来自部署默认值或账户覆盖而改变规则，不再记录或检查说明来源标志。
+仅开放已有上下文中的 `language`，不开放正文变量、`extract_context` 或任意对象。语法复用下节受限正文的条件、局部变量、有界字面量循环、安全字符串方法及测试；不支持过滤器或任意调用。
+例如已有 Schema 渲染上下文提供 `language=en` 时，<code v-pre>请使用 {{ language.upper() }}。</code> 会展开为 `请使用 EN。`，用户修改文字不会让变量停止展开。
+本次不新增语言传递链路，Python 协议原有的静态字段说明展示路径保持不变。缺失语言时保留原来的 undefined/空字符串行为，可用 `language or '中文'` 提供回退；上下文值中的 Jinja 不会被递归执行。
+越界的自定义表达式在保存前拒绝，已保存说明在抽取加载时重新校验；部署说明渲染也受同样限制，已有部署若使用白名单外语法，需要调整，不能凭来源绕过限制。
+每条说明最多 2048 个 AST 节点，渲染结果最多 1 MiB。正文 `content_template` 的变量、源码大小及默认正文兼容规则仍按下节处理。
+每个可编辑 `description` 最多 50,000 个 Unicode 码点，按提交的原文计数，包含空格、换行和模板样式的文字，不按 UTF-8 字节或渲染后的长度计数。各说明独立计数，不合并计算；整个配置仍受 1 MiB 上限约束。超过上限返回 400，不修改当前配置。
+发布不调用 LLM。存储错误或文件损坏明确报错，不伪装成系统默认。本次不增加公共文件浏览目录、SDK/CLI 命令、草稿或历史版本 UI。
+
+#### content_template 的编辑与执行边界
+
+以下受限规则仅用于与当前部署默认正文不同的账户自定义正文。发布和抽取加载时，
+服务器将完整 `content_template` 字符串与自己加载的部署默认值比较；完全相同时，
+沿用原部署渲染器及其过滤器、helper，不采信客户端或持久化文件中的“可信”标记。
+因此，仅改 description、空 PUT、正文未变的 GET `effective` → PUT 都不要求迁移默认正文。
+账户覆盖仍可显示 `status=custom`，但正文走继承路径。内置 Events YAML 及其原有日期表达式不变。
+
+比较是精确字符串比较，包含空白字符；修改过的正文即使以默认模板为基础，也必须通过受限校验。
+部署默认值后续变更时，下次抽取加载会重新比较，旧账户文件不会永久保留信任。
+不再匹配且超出白名单的正文需重新发布或恢复默认后才能参与提取；已开始的提取仍保留原快照。
+
+正文模板用于将已抽取/合并的字段组织为 Markdown，不是抽取 Prompt。
+允许修改标题、顺序、固定文案，按条件显示/隐藏字段。不要求保留默认标题或输出全部字段；
+但隐藏字段不等于停止抽取/删除该字段，也不会删除原始 Session 或系统保存的字段元数据。
+Events 的默认 embedding 模板引用正文，因此正文变化也可能影响后续检索输入。
+路径、文件名、字段定义、merge_op（包括 Identity name 的 immutable）仍锁定。
+
+| 类型 | 正文中可引用的字段 |
+| --- | --- |
+| events | event_name、goal、summary、ranges |
+| soul | core_truths、boundaries、vibe、continuity |
+| identity | name、creature、vibe、emoji、avatar、introduction |
+
+`language` 属于说明模板的变量，不属于上述正文变量。
+正文不要引用其他 Account/User、请求上下文或任意 Python 对象。
+仅 Events 可调用以下 `extract_context` 只读方法（位置参数）：
+
+- `get_resource_event_content(ranges, summary)`：资源添加事件正文；非资源事件为空。
+- `get_first_message_time_from_ranges(ranges)`：第一条来源消息日期。
+- `get_first_message_time_with_weekday_from_ranges(ranges)`：日期及星期。
+- `get_event_content(ranges, summary[, ratio_threshold])`：按已有逻辑选择 ChatLog/摘要；省略阈值为 0.2，显式 0 表示存在原文时优先原文。
+- `get_year(ranges)`、`get_month(ranges)`、`get_day(ranges)`：来源日期分量。
+
+首个参数直接使用 `ranges`，不能自行构造消息范围；缺失字段会传入空字符串，无需过滤器兜底。
+阈值只能为 0～1 的数字字面量。
+允许去掉 ChatLog 或资源事件分支，但去掉后不再自动展示这些正文/资源链接；原始 Session 仍保留。
+
+支持的 Jinja 子集：
+
+- `if/elif/else`、比较/布尔条件、`set` 局部变量（不能覆盖内置字段、extract_context、loop）。
+- `for` 遍历模板中显式写出的列表/元组，最多 32 项；支持标题/字段二元组和 `loop.index/index0/first/last/length`。不支持嵌套/递归循环、range() 或遍历消息/长字符串。
+- 字符串方法：`.upper()`、`.lower()`、`.strip()`，均不接受位置参数或关键字参数。可用于字符串字段、局部变量、字面量、Events 白名单方法返回的字符串，并支持链式调用，例如 `summary.strip().upper()`。
+- 方法语法与部署模板一致，但账户正文只开放上述少数方法；读取属性前先检查接收者必须是普通字符串，其他对象（包括字符串子类）的同名方法/属性不能借此被调用。也不允许只取出方法引用、保存后再调用。
+- 自定义正文不支持任何过滤器，包括 `| upper`、`| lower`、`| trim`、`| default(...)`、`| length`；该接口尚未上线，不为自定义正文保留过滤器兼容模式。空值回退使用 `summary or '待补充'` 或条件表达式。
+- 测试：`defined`、`undefined`、`none`、`string`。
+- 不支持模板导入/继承、宏、任意函数/对象属性访问、下标访问、算术或字符串倍增/拼接。不能注入系统保留的 `<!-- MEMORY_FIELDS ... -->` 元数据。
+
+模板 UTF-8 大小 ≤ 64 KiB，AST 节点 ≤ 2048，渲染正文 ≤ 1 MiB（不含系统追加元数据）。
+与部署默认值不同的 Account 正文在发布时和抽取加载时验证，运行时使用受限 Jinja 环境，只提供白名单字段/方法。
+受限路径渲染失败会报告错误并停止该次文件写入，不走旧的空正文 fallback。
+原样继承的正文继续使用部署渲染器，包括原有错误/fallback 语义，不受上述受限渲染器的源码、AST、正文输出上限约束；
+完整账户 YAML 仍受 1 MiB 上限约束。
+这些保护不代替 Worker 的 CPU/内存配额，也不评估记忆效果或做前端 Markdown/HTML 安全过滤。
+说明与受限正文复用语法沙箱，但可用变量及源码大小限制不同。
+
+校验失败返回 `INVALID_ARGUMENT`，`error.details` 含 `field=description`、`fields.<name>.description` 或 `content_template`、受控 `reason` 和可用时的 `line`。
+失败不修改当前发布配置。此前保存的、结构有效但使用不支持 Jinja 的模板仍可读取、重新发布或恢复默认；
+不会绕过新规则继续执行，抽取加载时提示修复。损坏 YAML 仍明确报错。
+
+示例：只展示事件名称和摘要，不输出 ChatLog：
+
+```json
+{"content_template": "# {{ event_name.strip() }}\n\n## 事件摘要\n{{ summary.strip() or '待补充' }}"}
+```
+
+示例：Soul 的分节展示：
+
+```jinja
+{% for title, text in [('核心价值', core_truths), ('边界', boundaries), ('气质', vibe), ('连续性', continuity)] %}
+{% if text.strip() %}
+## {{ title }}
+{{ text.strip() }}
+{% endif %}
+{% endfor %}
+```
+
 ### user_settings
 
 ROOT 可管理任意 User，ADMIN 仅可管理所属 account 内的 User。User 配置接口当前
@@ -471,17 +659,18 @@ ov --sudo admin list-accounts --limit 50 --page 2
 
 #### 1. API 实现介绍
 
-删除工作区及其所有关联用户和数据（仅 ROOT）。
+异步删除工作区及其所有关联用户和数据（仅 ROOT）。接口返回 HTTP `202` 和 `task_id`，不等待数据清理完成。
 
 **处理流程：**
-1. 验证请求者具有 ROOT 权限
-2. 级联删除账户下的所有 AGFS 数据（`user/` 和 `resources/`；sessions 位于 `user/` 下）
-3. 级联删除向量数据库中该账户的所有记录
-4. 最后删除账户元数据和所有用户密钥
+1. 验证 ROOT 权限，持久化账号删除标记，立即拒绝账号密钥和普通请求；创建系统作用域的 `account_delete` Task 并持久化入队，返回 `status=deleting` 和 `task_id`
+2. 后台停止该账号的 Watch 和业务任务，清理向量、OAuth 授权、用量审计数据和整个账号 AGFS 目录（包含账号内的任务记录）
+3. 清理成功后移除账号注册记录，将 Task 标记为 `completed`
+
+账号和用户清理共用一个串行消费的数据清理队列。账号任务直接清理整个账号。后续用户清理任务发现目标已删除时，完成并跳过；旧任务也不会清理重建的同名账号或用户。归属该账号的任务记录一并删除，后续消息不会重建这些记录；系统作用域的清理 Task 仍可查询。
 
 **代码入口：**
 - `openviking/server/routers/admin.py:delete_account` - HTTP 路由
-- `openviking/server/api_keys/new.py:APIKeyManager.delete_account` - 核心实现
+- `openviking/service/deletion.py:DeletionService.delete` - 核心实现
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_delete_account` - Python SDK
 
 #### 2. 接口和参数说明
@@ -494,7 +683,13 @@ ov --sudo admin list-accounts --limit 50 --page 2
 
 **说明：**
 - 删除操作是不可逆的，会级联删除该账户下的所有数据
-- 如果部分数据删除失败，会记录警告日志并继续删除其他数据
+- 清理失败时，Task 标记为 `failed` 并记录错误原因；账号保持 `deleting`
+- 正在删除时重复请求返回同一个 Task；失败后再次请求会创建重试 Task，处理剩余数据
+- 服务重启后恢复未完成任务；删除期间不能重建同名账号，也不能恢复账号使用
+- 向量先按账号条件分页枚举 ID，再分批提交删除，每次删除请求最多 100 条，不受原来的单次 10 万条总量上限限制
+- 向量删除以删除接口成功为准，不要求即时 Count 归零或回读为空；即使 Task 已完成，远程索引仍可能因同步延迟短暂返回旧数据
+- 账号列表中的 `status` 为 `active` 或 `deleting`；删除中的账号同时返回 `task_id`
+- 使用 ROOT 调用 `GET /api/v1/tasks/{task_id}` 查看状态和错误；清理任务只使用 `pending`、`running`、`completed`、`failed` 状态，不细分清理阶段，只有 `completed` 表示清理完成
 
 #### 3. 使用示例
 
@@ -518,7 +713,7 @@ client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
 result = client.admin_delete_account(account_id="acme")
-print(f"Account deleted: {result['deleted']}")
+print(f"Cleanup task: {result['task_id']}")
 ```
 
 **TypeScript SDK**
@@ -534,7 +729,7 @@ result, err := client.AdminDeleteAccount(ctx, "acme")
 if err != nil {
     return err
 }
-fmt.Println(result["deleted"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -542,6 +737,7 @@ fmt.Println(result["deleted"])
 ```bash
 # 需要 ROOT 权限，使用 --sudo
 ov --sudo admin delete-account acme
+ov --sudo task status <task_id>
 ```
 
 **响应示例**
@@ -550,7 +746,9 @@ ov --sudo admin delete-account acme
 {
   "status": "ok",
   "result": {
-    "deleted": true
+    "account_id": "acme",
+    "status": "deleting",
+    "task_id": "550e8400-e29b-41d4-a716-446655440000"
   },
   "time": 0.1
 }
@@ -825,7 +1023,7 @@ ov admin list-users acme --limit 50 --page 2
 
 **代码入口：**
 - `openviking/server/routers/admin.py:remove_user` - HTTP 路由
-- `openviking/service/user_deletion.py:UserDeletionService.delete_user` - 核心实现
+- `openviking/service/deletion.py:DeletionService.delete` - 核心实现
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_remove_user` - Python SDK
 
 #### 2. 接口和参数说明
@@ -841,6 +1039,7 @@ ov admin list-users acme --limit 50 --page 2
 - ADMIN 只能移除自己所属的 account 中的用户
 - 不能删除账户的最后一个 admin 用户
 - 删除开始后，用户 key 立即失效，list_users 不再返回该用户
+- 向量删除以删除接口成功为准，不等待远程索引同步；Task 完成后，Count 或查询结果仍可能短暂滞后
 
 #### 3. 使用示例
 

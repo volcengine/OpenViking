@@ -478,7 +478,9 @@ Once the CLI is configured, use `ov --help` and `ov <command> --help` to learn t
 Adding a resource writes data into the active OpenViking server. If you want a small demo, use a resource you are comfortable storing. Agents must ask the user for permission before running this kind of demo command.
 
 ```bash
-ov add-resource https://github.com/volcengine/OpenViking --wait
+ov add-resource https://github.com/volcengine/OpenViking
+# Use the returned task_id; search after its status reaches completed
+ov task status TASK_ID
 ov find "what is OpenViking"
 ov tree viking://resources/ -L 2
 ```

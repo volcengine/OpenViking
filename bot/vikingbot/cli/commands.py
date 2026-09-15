@@ -1251,6 +1251,8 @@ def cron_run(
 def status():
     """Show vikingbot status."""
 
+    from openviking_cli.utils.config.vlm_config import _normalize_provider_name
+
     config_path = get_config_path()
     config = load_config()
     workspace = config.workspace_path
@@ -1265,26 +1267,35 @@ def status():
     )
 
     if config_path.exists():
-        from vikingbot.providers.registry import PROVIDERS
+        inherited = config.inherits_root_vlm()
+        model_config = config.get_root_vlm_config() if inherited else config.agents
+        console.print(f"Model config: {'vlm (inherited)' if inherited else 'bot.agents'}")
+        if model_config is None:
+            console.print("Model configuration unavailable")
+            return
 
-        console.print(f"Model: {config.agents.model}")
-
-        # Check API keys from registry
-        for spec in PROVIDERS:
-            p = getattr(config.providers, spec.name, None)
-            if p is None:
-                continue
-            if spec.is_local:
-                # Local deployments show api_base instead of api_key
-                if p.api_base:
-                    console.print(f"{spec.label}: [green]✓ {p.api_base}[/green]")
-                else:
-                    console.print(f"{spec.label}: [dim]not set[/dim]")
-            else:
-                has_key = bool(p.api_key)
-                console.print(
-                    f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
-                )
+        parent_provider = _normalize_provider_name(model_config.provider)
+        console.print("Credentials (configured order; not a live health check):")
+        for index, credential in enumerate(model_config.credentials or [model_config], 1):
+            provider = credential.provider or parent_provider or "not set"
+            model = credential.model or model_config.model or "not set"
+            # Root credentials are already normalized by VLMConfig. Bot-owned
+            # credentials match the normalized parent provider for key inheritance;
+            # VLMConfig leaves explicitly set credential provider names unchanged.
+            has_key = bool(credential.api_key)
+            if not inherited and provider == parent_provider:
+                has_key = has_key or bool(model_config.api_key)
+            has_headers = bool(
+                credential.extra_headers
+                or model_config.extra_headers
+                or config.agents.extra_headers
+            )
+            console.print(f"  {index}. Provider: {provider} | Model: {model}", markup=False)
+            console.print(
+                f"     API key: {'configured' if has_key else 'not set in config'}; "
+                f"Extra headers: {'configured' if has_headers else 'not set in config'}",
+                markup=False,
+            )
 
 
 @app.command("feedback-stats")

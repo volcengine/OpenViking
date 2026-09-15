@@ -47,7 +47,7 @@ class SemanticMsg:
     uri: str  # Directory URI
     context_type: str  # resource, memory, skill, session
     status: str = "pending"  # pending/processing/completed
-    timestamp: int = int(datetime.now().timestamp())
+    timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
@@ -102,6 +102,7 @@ class SemanticMsg:
         copy_source_uri: str = "",
     ):
         self.id = str(uuid4())
+        self.timestamp = int(datetime.now().timestamp())
         self.uri = uri
         self.context_type = context_type
         self.recursive = recursive

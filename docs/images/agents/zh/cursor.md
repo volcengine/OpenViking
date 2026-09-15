@@ -1,18 +1,21 @@
 ## 步骤1：安装
 
-```bash
-bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --harness cursor --dist tos
-```
+1. 在终端执行如下安装命令：
 
-选 **火山引擎 OpenViking 云服务**，把 API Key 贴进去：
+   ```bash
+   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
+   ```
 
-{{OPENVIKING_API_KEY_BLOCK}}
+2. 安装器会依次询问以下信息：语言（English / 中文）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
+
+   ```text
+   {{OPENVIKING_API_KEY}}
+   ```
 
 ## 步骤2：验证
 
-1. 重启 Cursor，新建 Agent 会话。
-2. **Cursor Settings → Hooks**：生命周期 Hook 执行 `cursor-hook.mjs`。
-3. **Cursor Settings → Tools & MCPs**：`openviking` 已连接。
+1. 点击「Customize → MCPs」，确认可以看到「openviking User」和「openviking Plugin」两项。
+2. 点击「Customize → Hooks」，确认可以看到「openviking-memory」条目。
 
 ## 故障排查
 

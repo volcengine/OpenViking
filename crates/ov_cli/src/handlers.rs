@@ -1,4 +1,3 @@
-use crate::CliContext;
 use crate::PrivacyCommands;
 use crate::client;
 use crate::commands;
@@ -10,6 +9,7 @@ use crate::terminal_ui::{
 };
 use crate::theme;
 use crate::tui;
+use crate::{CliContext, SkillAddArgs, UploadCliOptions};
 use colored::Colorize;
 use serde_json::{Map, Value};
 
@@ -320,23 +320,27 @@ mod add_resource_args_tests {
 }
 
 pub async fn handle_add_skill(
-    data: String,
-    wait: bool,
-    timeout: Option<f64>,
-    parent: Option<String>,
+    args: SkillAddArgs,
+    legacy_upload_options: UploadCliOptions,
     ctx: CliContext,
 ) -> Result<()> {
+    let ctx = ctx.with_upload_options(
+        args.upload_options
+            .merged_with_legacy(legacy_upload_options),
+    );
     let client = ctx.get_client();
-    commands::resources::add_skill(
+    commands::skills::add(
         &client,
-        &data,
-        wait,
-        timeout,
-        parent.as_deref(),
+        &args.source,
+        args.skills,
+        args.list,
+        args.wait,
+        args.yes,
         ctx.should_show_progress(),
         ctx.is_verbose(),
         ctx.output_format,
         ctx.compact,
+        args.parent.as_deref(),
     )
     .await
 }
@@ -1644,6 +1648,10 @@ pub async fn handle_ls(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    offset: i32,
+    limit: Option<i32>,
+    sort_by: Option<String>,
+    sort_order: Option<String>,
     fields: Option<Vec<String>>,
     tags: Vec<String>,
     ctx: CliContext,
@@ -1661,6 +1669,18 @@ pub async fn handle_ls(
     }
     if show_all_hidden {
         params.push("-a".to_string());
+    }
+    if offset != 0 {
+        params.push(format!("--offset {}", offset));
+    }
+    if let Some(limit) = limit {
+        params.push(format!("--limit {}", limit));
+    }
+    if let Some(sort_by) = &sort_by {
+        params.push(format!("--sort-by {}", sort_by));
+    }
+    if let Some(sort_order) = &sort_order {
+        params.push(format!("--sort-order {}", sort_order));
     }
     if !tags.is_empty() {
         params.push(format!("--tags {}", tags.join(",")));
@@ -1685,6 +1705,10 @@ pub async fn handle_ls(
         abs_limit,
         show_all_hidden,
         node_limit,
+        offset,
+        limit,
+        sort_by.as_deref(),
+        sort_order.as_deref(),
         ctx.output_format,
         ctx.compact,
         fields,
@@ -1698,6 +1722,8 @@ pub async fn handle_tree(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    offset: i32,
+    limit: Option<i32>,
     level_limit: i32,
     simple: bool,
     fields: Option<Vec<String>>,
@@ -1715,6 +1741,12 @@ pub async fn handle_tree(
     }
     if simple {
         params.push("-s".to_string());
+    }
+    if offset != 0 {
+        params.push(format!("--offset {}", offset));
+    }
+    if let Some(limit) = limit {
+        params.push(format!("--limit {}", limit));
     }
     if !tags.is_empty() {
         params.push(format!("--tags {}", tags.join(",")));
@@ -1738,6 +1770,8 @@ pub async fn handle_tree(
         show_all_hidden,
         node_limit,
         level_limit,
+        offset,
+        limit,
         ctx.output_format,
         ctx.compact,
         simple,
@@ -1825,8 +1859,20 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
         crate::AclCommands::Get { uri } => {
             commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
         }
-        crate::AclCommands::Set { uri, entries } => {
-            commands::acl::set(&client, &uri, entries, ctx.output_format, ctx.compact).await
+        crate::AclCommands::Set {
+            uri,
+            entries,
+            acl_mode,
+        } => {
+            commands::acl::set(
+                &client,
+                &uri,
+                entries,
+                acl_mode,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         crate::AclCommands::Grant {
             uri,

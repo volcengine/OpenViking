@@ -8,7 +8,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from setuptools import Extension, setup
+from setuptools import Distribution, Extension, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
 
@@ -33,6 +33,7 @@ C_COMPILER_PATH = os.environ.get("CC") or shutil.which("gcc") or "gcc"
 CXX_COMPILER_PATH = os.environ.get("CXX") or shutil.which("g++") or "g++"
 ENGINE_SOURCE_DIR = "src/"
 ENGINE_BUILD_CONFIG = get_host_engine_build_config(platform.machine())
+SKIP_CPP_BUILD = os.environ.get("OV_SKIP_CPP_BUILD") == "1"
 
 
 def _sanitize_native_build_env(env):
@@ -111,8 +112,11 @@ class OpenVikingBuildExt(build_ext):
         self.build_ragfs_python_artifact()
         self.cmake_executable = CMAKE_PATH
 
-        for ext in self.extensions:
-            self.build_extension(ext)
+        if SKIP_CPP_BUILD:
+            print("[SKIP] C++ vector engine build disabled by OV_SKIP_CPP_BUILD=1")
+        else:
+            for ext in self.extensions:
+                self.build_extension(ext)
 
     def _copy_artifact(self, src, dst):
         """Copy a build artifact into the package tree and preserve executability."""
@@ -175,6 +179,10 @@ class OpenVikingBuildExt(build_ext):
 
     def build_ov_cli_artifact(self):
         """Build or reuse the ov Rust CLI binary."""
+        if os.environ.get("OV_SKIP_OV_BUILD") == "1":
+            print("[SKIP] ov CLI build disabled by OV_SKIP_OV_BUILD=1")
+            return
+
         binary_name = "ov.exe" if sys.platform == "win32" else "ov"
         ov_cli_dir = Path("crates/ov_cli").resolve()
         ov_target_binary = Path("openviking/bin").resolve() / binary_name
@@ -195,12 +203,6 @@ class OpenVikingBuildExt(build_ext):
             if src_bin.exists():
                 self._copy_artifact(src_bin, ov_target_binary)
                 return
-
-        if os.environ.get("OV_SKIP_OV_BUILD") == "1":
-            if ov_target_binary.exists():
-                print("[OK] Skipping ov CLI build, using existing binary")
-                return
-            print("[Warning] OV_SKIP_OV_BUILD=1 but binary is missing. Will try to build.")
 
         if ov_cli_dir.exists() and shutil.which("cargo"):
             print("Building ov CLI from source...")
@@ -541,6 +543,13 @@ else:
     OpenVikingBdistWheel = None
 
 
+class OpenVikingDistribution(Distribution):
+    """Keep wheels platform-specific because ragfs-python is a native artifact."""
+
+    def has_ext_modules(self):
+        return True
+
+
 cmdclass = {
     "build_ext": OpenVikingBuildExt,
     "build_py": OpenVikingBuildPy,
@@ -550,13 +559,18 @@ if OpenVikingBdistWheel is not None:
 
 
 setup(
-    ext_modules=[
-        Extension(
-            name=ENGINE_BUILD_CONFIG.primary_extension,
-            sources=[],
-            py_limited_api=True,
-        )
-    ],
+    distclass=OpenVikingDistribution,
+    ext_modules=(
+        []
+        if SKIP_CPP_BUILD
+        else [
+            Extension(
+                name=ENGINE_BUILD_CONFIG.primary_extension,
+                sources=[],
+                py_limited_api=True,
+            )
+        ]
+    ),
     cmdclass=cmdclass,
     package_data={
         "openviking": [
