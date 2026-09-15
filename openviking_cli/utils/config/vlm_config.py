@@ -64,6 +64,11 @@ class VLMCredential(BaseModel):
         default=None,
         description="Reasoning effort for OpenAI-compatible reasoning models",
     )
+    keepalive_expiry: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Idle HTTP connection lifetime for OpenAI-compatible providers",
+    )
     max_tokens: Optional[int] = Field(
         default=None,
         gt=0,
@@ -135,6 +140,14 @@ class VLMConfig(BaseModel):
             "Per-request HTTP timeout in seconds for VLM API calls. Applied to "
             "the underlying OpenAI/Azure/LiteLLM clients. Increase for slow or "
             "high-latency endpoints (e.g., DashScope, local inference servers)."
+        ),
+    )
+    keepalive_expiry: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "Idle HTTP connection lifetime in seconds for OpenAI-compatible VLM clients. "
+            "Set to 0 to disable connection reuse; None uses the provider SDK default."
         ),
     )
 
@@ -312,6 +325,7 @@ class VLMConfig(BaseModel):
             or self.extra_headers
             or self.extra_request_body
             or self.reasoning_effort
+            or self.keepalive_expiry is not None
             or self.forward_api_key is not None
         ):
             if self.provider not in self.providers:
@@ -334,6 +348,11 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["extra_request_body"] = self.extra_request_body
             if self.reasoning_effort and "reasoning_effort" not in self.providers[self.provider]:
                 self.providers[self.provider]["reasoning_effort"] = self.reasoning_effort
+            if (
+                self.keepalive_expiry is not None
+                and "keepalive_expiry" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["keepalive_expiry"] = self.keepalive_expiry
 
     def _normalize_credentials(self):
         """Normalize credentials configuration:
@@ -368,6 +387,11 @@ class VLMConfig(BaseModel):
                     primary_cfg.get("extra_request_body") or self.extra_request_body
                 ),
                 reasoning_effort=(primary_cfg.get("reasoning_effort") or self.reasoning_effort),
+                keepalive_expiry=(
+                    primary_cfg.get("keepalive_expiry")
+                    if primary_cfg.get("keepalive_expiry") is not None
+                    else self.keepalive_expiry
+                ),
                 max_tokens=self.max_tokens,
             )
             migrated_credentials.append(primary_cred)
@@ -394,6 +418,11 @@ class VLMConfig(BaseModel):
                 ),
                 reasoning_effort=(
                     backup_cfg.get("reasoning_effort") or self.backup.reasoning_effort
+                ),
+                keepalive_expiry=(
+                    backup_cfg.get("keepalive_expiry")
+                    if backup_cfg.get("keepalive_expiry") is not None
+                    else self.backup.keepalive_expiry
                 ),
                 max_tokens=self.backup.max_tokens,
             )
@@ -433,6 +462,11 @@ class VLMConfig(BaseModel):
                         reasoning_effort=(
                             provider_cfg.get("reasoning_effort") or self.reasoning_effort
                         ),
+                        keepalive_expiry=(
+                            provider_cfg.get("keepalive_expiry")
+                            if provider_cfg.get("keepalive_expiry") is not None
+                            else self.keepalive_expiry
+                        ),
                     )
                 )
 
@@ -463,6 +497,8 @@ class VLMConfig(BaseModel):
                 cred.extra_request_body = self.extra_request_body
             if not cred.reasoning_effort:
                 cred.reasoning_effort = self.reasoning_effort
+            if cred.keepalive_expiry is None:
+                cred.keepalive_expiry = self.keepalive_expiry
 
     def _has_legacy_provider_config(self) -> bool:
         """Check if there's legacy provider config (not credentials-based)."""
@@ -516,6 +552,8 @@ class VLMConfig(BaseModel):
             config["extra_request_body"] = self.extra_request_body
         if self.reasoning_effort and "reasoning_effort" not in config:
             config["reasoning_effort"] = self.reasoning_effort
+        if self.keepalive_expiry is not None and "keepalive_expiry" not in config:
+            config["keepalive_expiry"] = self.keepalive_expiry
         return config
 
     def _provider_has_usable_credentials(self, provider_name: str, config: Dict[str, Any]) -> bool:
@@ -545,6 +583,8 @@ class VLMConfig(BaseModel):
             config["extra_request_body"] = cred.extra_request_body
         if cred.reasoning_effort:
             config["reasoning_effort"] = cred.reasoning_effort
+        if cred.keepalive_expiry is not None:
+            config["keepalive_expiry"] = cred.keepalive_expiry
         return config
 
     def _match_provider(self, model: str | None = None) -> tuple[Dict[str, Any] | None, str | None]:
@@ -631,6 +671,13 @@ class VLMConfig(BaseModel):
 
         return self._vlm_instance
 
+    def close(self) -> None:
+        """Close and clear the cached VLM instance."""
+        instance = self._vlm_instance
+        self._vlm_instance = None
+        if instance is not None:
+            instance.close()
+
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""
         result = {
@@ -638,6 +685,7 @@ class VLMConfig(BaseModel):
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "timeout": self.timeout,
+            "keepalive_expiry": credential.keepalive_expiry,
             "provider": credential.provider,
             "thinking": self.thinking,
             "max_tokens": (
@@ -671,6 +719,11 @@ class VLMConfig(BaseModel):
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "timeout": self.timeout,
+            "keepalive_expiry": (
+                config.get("keepalive_expiry")
+                if config and config.get("keepalive_expiry") is not None
+                else self.keepalive_expiry
+            ),
             "provider": name,
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
