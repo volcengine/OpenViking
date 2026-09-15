@@ -840,7 +840,9 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 ### pdf
 
-PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+PDF 解析配置。支持四种策略：`local`（本地 pdfplumber）、`anydoc`（本地 anydoc）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+
+`anydoc` 比 `local` 快很多，但只抽取文本——不提取图片和表格，因此适合纯文本书籍，不适合幻灯片或图表密集的文档。此外只要有任意一页需要 OCR 就会直接报错，因此没有完整文本层的 PDF 应改用 `local`（或走离线 OCR）。
 
 ```json
 {
@@ -859,7 +861,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
+| `strategy` | str | 解析策略：`local` / `anydoc` / `mineru` / `auto`（默认 `auto`） |
 | `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
 | `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
 | `mineru_bodys` | dict | MinerU API multipart form 参数 |

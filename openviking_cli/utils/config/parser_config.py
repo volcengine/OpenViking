@@ -139,19 +139,21 @@ class PDFConfig(ParserConfig):
     """
     Configuration for PDF parsing.
 
-    Supports three strategies:
+    Supports four strategies:
     - "local": Use pdfplumber for local PDF→Markdown conversion
+    - "anydoc": Use anydoc for local PDF→Markdown conversion (much faster, but
+      drops images and most tables; text-heavy books only)
     - "mineru": Use MinerU API for remote PDF→Markdown conversion
     - "auto": Try local first, fallback to MinerU if available
 
     Attributes:
-        strategy: Parsing strategy ("local" | "mineru" | "auto")
+        strategy: Parsing strategy ("local" | "anydoc" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
         mineru_timeout: MinerU request timeout in seconds
         mineru_bodys: Additional MinerU API multipart form fields
     """
 
-    strategy: str = "auto"  # "local" | "mineru" | "auto"
+    strategy: str = "auto"  # "local" | "anydoc" | "mineru" | "auto"
 
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
@@ -166,6 +168,12 @@ class PDFConfig(ParserConfig):
     # Image extraction configuration
     image_resolution: int = 300  # Rendering DPI for extracted image regions
 
+    # Scanned-PDF detection. Scanned PDFs have no text layer, so local
+    # extraction yields nothing; without this they were silently stored as
+    # empty resources. Detected scans are rejected instead (never stored).
+    scan_detection: bool = True
+    scan_mixed_ratio: float = 0.5  # mixed PDFs: OCR-page ratio above this = scanned
+
     def validate(self) -> None:
         """
         Validate configuration.
@@ -177,9 +185,10 @@ class PDFConfig(ParserConfig):
         super().validate()
 
         # Validate PDF-specific fields
-        if self.strategy not in ("local", "mineru", "auto"):
+        if self.strategy not in ("local", "anydoc", "mineru", "auto"):
             raise ValueError(
-                f"Invalid strategy '{self.strategy}'. Must be 'local', 'mineru', or 'auto'"
+                f"Invalid strategy '{self.strategy}'. "
+                "Must be 'local', 'anydoc', 'mineru', or 'auto'"
             )
 
         if self.strategy == "mineru":
@@ -194,6 +203,9 @@ class PDFConfig(ParserConfig):
 
         if self.font_heading_min_delta <= 0:
             raise ValueError("font_heading_min_delta must be positive")
+
+        if not 0.0 <= self.scan_mixed_ratio <= 1.0:
+            raise ValueError("scan_mixed_ratio must be between 0.0 and 1.0")
 
 
 @dataclass

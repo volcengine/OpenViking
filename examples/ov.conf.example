@@ -295,6 +295,8 @@
                 "lang_list": ["ch"],
                 "parse_method": "auto"
             },
+            "scan_detection": true,
+            "scan_mixed_ratio": 0.5,
         },
         "code": {
             "github_raw_domain": "raw.githubusercontent.com",

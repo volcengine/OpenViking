@@ -872,7 +872,9 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 ### pdf
 
-PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+PDF parsing configuration. Four strategies are supported: `local` (local pdfplumber), `anydoc` (local anydoc), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+
+`anydoc` is much faster than `local` but extracts text only — no images and no tables — so it suits text-heavy books and not slide decks or chart-heavy documents. It also raises a conversion error when any page needs OCR, so PDFs without a full text layer should use `local` (or offline OCR) instead.
 
 ```json
 {
@@ -891,7 +893,7 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
+| `strategy` | str | Parsing strategy: `local` / `anydoc` / `mineru` / `auto` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
 | `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
 | `mineru_bodys` | dict | MinerU API multipart form fields |
