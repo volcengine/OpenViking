@@ -45,7 +45,7 @@ export const TARGETS = [
   {
     root: join(ROOT, "examples", "dsh-memory-plugin"),
     dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"),
-    committed: false,
+    committed: true,
   },
   {
     root: join(ROOT, "examples", "pi-coding-agent-extension"),

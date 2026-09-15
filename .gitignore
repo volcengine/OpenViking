@@ -246,6 +246,5 @@ node_modules/
 # the way out; only the plugins a host installs by pointing at a directory in
 # this repository keep their copies in git.
 examples/opencode-plugin/lib/shared/
-examples/dsh-memory-plugin/shared/
 examples/pi-coding-agent-extension/shared/
 examples/openclaw-plugin/shared/
