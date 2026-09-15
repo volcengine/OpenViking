@@ -90,6 +90,8 @@ class OpenAIRerankClient(RerankBase):
                 },
                 "parameters": {
                     "return_documents": False,
+                    # Same top_n contract as the flat OpenAI-compatible body (#4040).
+                    "top_n": len(documents),
                 },
             }
         return {

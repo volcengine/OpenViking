@@ -52,6 +52,9 @@ class TestBuildRequestBody:
         assert body["input"]["query"] == "hello"
         assert body["input"]["documents"] == ["doc1", "doc2"]
         assert body["parameters"]["return_documents"] is False
+        assert body["parameters"]["top_n"] == 2
+        body3 = client._build_request_body("hello", ["d1", "d2", "d3"])
+        assert body3["parameters"]["top_n"] == 3
         assert body["model"] == "gte-rerank-v2"
         # flat keys should NOT be present at top level
         assert "query" not in body
@@ -180,6 +183,7 @@ class TestRerankBatch:
         assert "input" in sent_body
         assert sent_body["input"]["query"] == "hello"
         assert sent_body["input"]["documents"] == ["doc1", "doc2"]
+        assert sent_body["parameters"]["top_n"] == 2
 
     def test_compatible_api_full_flow(self):
         """DashScope compatible-api end-to-end: flat request, flat response.
