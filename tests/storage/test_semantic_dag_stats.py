@@ -101,6 +101,7 @@ class _FakeProcessor:
         ctx=None,
         ingest_options=None,
         creator_acl_grant=None,
+        telemetry_id="",
     ):
         self.vectorized_dirs.append(uri)
 
@@ -114,6 +115,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        telemetry_id="",
     ):
         if self.verify_streaming:
             assert summary_dict["content"]
@@ -122,6 +124,7 @@ class _FakeProcessor:
         self.vectorized_contexts[file_path] = (
             task_context.task_id if task_context is not None else None,
             get_current_telemetry().telemetry_id,
+            telemetry_id,
         )
 
     async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
@@ -402,6 +405,7 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
             context_type="resource",
             max_concurrent_llm=1,
             ctx=ctx,
+            telemetry_id="request-a",
         )
     with (
         bind_task_context("task-b", "acc1", "user1"),
@@ -412,6 +416,7 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
             context_type="resource",
             max_concurrent_llm=1,
             ctx=ctx,
+            telemetry_id="request-b",
         )
 
     await asyncio.gather(executor_a.run(root_a), executor_b.run(root_b))
@@ -420,10 +425,10 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
     assert executor_a.get_stats().done_nodes == 21
     assert executor_b.get_stats().done_nodes == 21
     assert {processor.vectorized_contexts[f"{root_a}/a-{idx}.txt"] for idx in range(20)} == {
-        ("task-a", telemetry_a.telemetry_id)
+        ("task-a", telemetry_a.telemetry_id, "request-a")
     }
     assert {processor.vectorized_contexts[f"{root_b}/b-{idx}.txt"] for idx in range(20)} == {
-        ("task-b", telemetry_b.telemetry_id)
+        ("task-b", telemetry_b.telemetry_id, "request-b")
     }
 
 

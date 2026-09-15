@@ -3,15 +3,14 @@
 
 """Tests for request-scoped wait behavior on write APIs."""
 
-from types import SimpleNamespace
+import asyncio
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
-from openviking_cli.session.user_id import UserIdentifier
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 
 
 class _FakeRequestWaitTracker:
@@ -40,45 +39,6 @@ class _FakeRequestWaitTracker:
 class _ExplodingQueueManager:
     async def wait_complete(self, *args, **kwargs):
         raise AssertionError("global queue wait should not be used")
-
-
-class _FakeVikingFS:
-    def __init__(self, file_uri: str, root_uri: str):
-        self._file_uri = file_uri
-        self._root_uri = root_uri
-        self.content = {file_uri: "original"}
-        self._async_agfs = SimpleNamespace(
-            pathlock_acquire_exact=lambda lock_path: SimpleNamespace(id="lock-1"),
-            pathlock_release=lambda lease: None,
-        )
-
-    async def stat(self, uri: str, ctx=None):
-        del ctx
-        if uri == self._file_uri:
-            return {"isDir": False}
-        if uri == self._root_uri:
-            return {"isDir": True}
-        raise AssertionError(f"unexpected stat uri: {uri}")
-
-    def _uri_to_path(self, uri: str, ctx=None):
-        del ctx
-        return f"/fake/{uri.replace('://', '/').strip('/')}"
-
-    async def delete_temp(self, temp_uri: str, ctx=None):
-        del temp_uri, ctx
-        return None
-
-    async def read_file(self, uri: str, ctx=None):
-        del ctx
-        return self.content[uri]
-
-    async def write_file(self, uri: str, content: str, ctx=None, lease_ref=None):
-        del ctx, lease_ref
-        self.content[uri] = content
-
-    async def rm(self, uri: str, ctx=None, lock_handle=None, lease_ref=None):
-        del ctx, lock_handle, lease_ref
-        self.content.pop(uri, None)
 
 
 @pytest.mark.asyncio
@@ -165,112 +125,68 @@ async def test_add_skill_wait_uses_request_tracker_when_telemetry_disabled(servi
 
 
 @pytest.mark.asyncio
-async def test_content_write_wait_uses_request_tracker(monkeypatch):
+@pytest.mark.parametrize("telemetry_enabled", [False, True])
+@pytest.mark.parametrize("embedding_fails", [False, True])
+async def test_content_write_wait_uses_request_tracker(
+    service, monkeypatch, telemetry_enabled, embedding_fails
+):
+    """wait=True includes downstream indexing even without a registered collector."""
     file_uri = "viking://resources/demo/doc.md"
     root_uri = "viking://resources/demo"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    telemetry = OperationTelemetry(operation="content.write", enabled=True)
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 0, "error_count": 0, "errors": []},
-        }
-    )
-    coordinator = ContentWriteCoordinator(
-        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
-    )
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    await service.viking_fs.mkdir(root_uri, ctx=ctx)
+    telemetry = OperationTelemetry(operation="content.write", enabled=telemetry_enabled)
+    tracker = get_request_wait_tracker()
+    embedding_started = asyncio.Event()
+    release_embedding = asyncio.Event()
+    semantic_finished = asyncio.Event()
+    materialize = service.viking_fs.acl_manager.materialize_context_records
+    mark_semantic_done = tracker.mark_semantic_done
+
+    async def delayed_materialize(records, ctx):
+        if any(record.get("uri") == file_uri for record in records):
+            embedding_started.set()
+            await release_embedding.wait()
+            if embedding_fails:
+                raise RuntimeError("test index write failed")
+        return await materialize(records, ctx)
+
+    def record_semantic_done(telemetry_id, root_id, processed_delta=1):
+        mark_semantic_done(telemetry_id, root_id, processed_delta)
+        if telemetry_id == telemetry.telemetry_id:
+            semantic_finished.set()
 
     monkeypatch.setattr(
-        "openviking.storage.content_write.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
+        service.viking_fs.acl_manager, "materialize_context_records", delayed_materialize
     )
-
-    async def _fake_enqueue_semantic_refresh(**kwargs):
-        del kwargs
-        return None
-
-    async def _explode_wait_for_queues(*, timeout):
-        del timeout
-        raise AssertionError("global queue wait should not be used")
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_queues", _explode_wait_for_queues)
+    monkeypatch.setattr(tracker, "mark_semantic_done", record_semantic_done)
 
     with bind_telemetry(telemetry):
-        result = await coordinator.write(
-            uri=file_uri,
-            content="updated",
-            ctx=ctx,
-            wait=True,
-            timeout=5.0,
+        write_task = asyncio.create_task(
+            service.fs.write(
+                uri=file_uri,
+                content="Request-scoped indexing wait",
+                mode="create",
+                ctx=ctx,
+                wait=True,
+                timeout=10.0,
+            )
         )
 
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 5.0)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
-    assert result["semantic_status"] == "complete"
-    assert result["vector_status"] == "complete"
-
-
-@pytest.mark.asyncio
-async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(monkeypatch):
-    file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    telemetry = OperationTelemetry(operation="content.write", enabled=False)
-    tracker = _FakeRequestWaitTracker(
-        {
-            "Semantic": {"processed": 1, "error_count": 0, "errors": []},
-            "Embedding": {"processed": 0, "error_count": 0, "errors": []},
-        }
-    )
-    coordinator = ContentWriteCoordinator(
-        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
-    )
-
-    monkeypatch.setattr(
-        "openviking.storage.content_write.get_request_wait_tracker",
-        lambda: tracker,
-        raising=False,
-    )
-
-    async def _fake_enqueue_semantic_refresh(**kwargs):
-        del kwargs
-        return None
-
-    async def _explode_wait_for_queues(*, timeout):
-        del timeout
-        raise AssertionError("global queue wait should not be used")
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_queues", _explode_wait_for_queues)
-
-    with bind_telemetry(telemetry):
-        result = await coordinator.write(
-            uri=file_uri,
-            content="updated",
-            ctx=ctx,
-            wait=True,
-            timeout=5.0,
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(embedding_started.wait(), semantic_finished.wait()), timeout=10.0
         )
+        assert not tracker.is_complete(telemetry.telemetry_id)
+        assert not write_task.done()
+        release_embedding.set()
+        result = await asyncio.wait_for(write_task, timeout=10.0)
+    finally:
+        release_embedding.set()
+        if not write_task.done():
+            await asyncio.wait_for(write_task, timeout=10.0)
 
-    assert result["queue_status"] == tracker.queue_status
-    assert tracker.registered_requests == [telemetry.telemetry_id]
-    assert tracker.wait_calls == [(telemetry.telemetry_id, 5.0)]
-    assert tracker.build_calls == [telemetry.telemetry_id]
-    assert tracker.cleaned == [telemetry.telemetry_id]
     assert result["semantic_status"] == "complete"
-    assert result["vector_status"] == "complete"
-
-
-async def _return_true(handle, path):
-    del handle, path
-    return True
-
-
-async def _return_none(handle):
-    del handle
-    return None
+    assert result["vector_status"] == ("failed" if embedding_fails else "complete")
+    assert result["queue_status"]["Embedding"]["error_count"] == int(embedding_fails)
+    assert result["queue_status"]["Embedding"]["processed"] >= (2 if embedding_fails else 3)
