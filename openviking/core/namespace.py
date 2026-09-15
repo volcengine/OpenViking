@@ -338,6 +338,14 @@ def is_accessible(uri: str, ctx: RequestContext) -> bool:
             return False
         return True
     if target.scope == "agent":
+        # AGENT_SHARED_ROOTS are account-shared public scopes whose first segment
+        # (e.g. "skills") is a fixed name, not an agent id. The actor-peer view
+        # filters agent-owned content, so it must not be applied here: comparing
+        # that segment against the peer id denies the shared root itself.
+        if any(
+            target.uri == root or target.uri.startswith(root + "/") for root in AGENT_SHARED_ROOTS
+        ):
+            return True
         parts = uri_parts(target.uri)
         if ctx.actor_peer_id and len(parts) >= 2 and parts[1] != ctx.actor_peer_id:
             return False
