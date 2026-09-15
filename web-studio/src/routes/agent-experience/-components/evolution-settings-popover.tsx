@@ -3,6 +3,7 @@ import { LoaderCircleIcon, SettingsIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import {
   Popover,
@@ -92,6 +93,33 @@ export function EvolutionSettingsPopover() {
         <SettingsIcon className="size-3.5" />
         {t('settings.title')}
       </PopoverTrigger>
+      <span
+        role="status"
+        className="inline-flex items-center text-xs text-muted-foreground"
+      >
+        {statusQuery.isError ? (
+          t('settings.loadFailed')
+        ) : statusQuery.isPending ? (
+          t('settings.loading')
+        ) : !matchesCurrentAccount ? (
+          t('settings.scopeMismatch')
+        ) : toggleMutation.isPending ? (
+          t('settings.pending')
+        ) : (
+          <Badge
+            variant="secondary"
+            className={
+              statusQuery.data.enabled
+                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                : undefined
+            }
+          >
+            {statusQuery.data.enabled
+              ? t('settings.statusEnabled')
+              : t('settings.statusDisabled')}
+          </Badge>
+        )}
+      </span>
       <PopoverContent align="end" className="w-80">
         <PopoverHeader>
           <PopoverTitle>{t('settings.title')}</PopoverTitle>

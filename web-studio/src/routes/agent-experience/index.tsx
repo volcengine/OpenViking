@@ -43,7 +43,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { isOvClientError } from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
 
-import { EvolutionSettingsPopover } from './-components/evolution-settings-popover'
+import { ExperienceSetupGuide } from './-components/experience-setup-guide'
 import { ExperiencePreviewSheet } from './-components/experience-preview-sheet'
 import { fetchExperiences } from './-lib/api'
 import {
@@ -291,7 +291,6 @@ function AgentExperienceRoute() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <EvolutionSettingsPopover />
           <Button
             type="button"
             variant="outline"
@@ -308,6 +307,8 @@ function AgentExperienceRoute() {
           </Button>
         </div>
       </header>
+
+      <ExperienceSetupGuide />
 
       {experiencesQuery.isLoading ? (
         <Card className="min-h-56 items-center justify-center">

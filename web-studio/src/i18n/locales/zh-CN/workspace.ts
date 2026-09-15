@@ -207,6 +207,21 @@ const workspace = {
     },
   },
   agentExperiencePage: {
+    setup: {
+      expand: '展开步骤',
+      collapse: '收起',
+      title: '让你的 Agent 获得经验与进化能力',
+      connect: '将 OpenViking 接入你的 Agent',
+      docs: '查看接入指南',
+      install: '为你的 Agent 安装经验 Skill',
+      hint: '在终端运行以下命令，并按提示选择你使用的 Agent。',
+      copy: '复制安装命令',
+      view: '查看命令',
+      copied: '安装命令已复制',
+      copyFailed: '复制失败，请展开命令后手动复制。',
+      enable: '启用 Agent 进化',
+      enableHint: '由账号管理员开启 Agent 进化，让后续会话提交生成经验。',
+    },
     title: 'Agent 经验',
     description:
       '跟踪从会话提交中沉淀的经验资产，以及经验被应用后的执行轨迹与结果分布。',

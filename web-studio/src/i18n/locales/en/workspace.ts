@@ -208,6 +208,22 @@ const workspace = {
     },
   },
   agentExperiencePage: {
+    setup: {
+      expand: 'Expand steps',
+      collapse: 'Collapse',
+      title: 'Give your Agent experience and evolution capabilities',
+      connect: 'Connect OpenViking to your Agent',
+      docs: 'View integration guide',
+      install: 'Install the experience Skill for your Agent',
+      hint: 'Run this command in your terminal and select your Agent when prompted.',
+      copy: 'Copy install command',
+      view: 'View command',
+      copied: 'Install command copied',
+      copyFailed: 'Copy failed. Expand the command and copy it manually.',
+      enable: 'Enable Agent Evolution',
+      enableHint:
+        'Ask an account administrator to enable Agent Evolution so future session commits can generate experiences.',
+    },
     title: 'Agent Experience',
     description:
       'Track experiences distilled from committed sessions, along with the trajectories and outcomes produced after they are applied.',
