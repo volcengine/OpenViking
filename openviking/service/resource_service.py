@@ -1551,7 +1551,7 @@ class ResourceService:
                 or the imported ``root_uri``. Nonpositive values create no Watch:
                 native imports with explicit ``to`` pause a single accessible Watch
                 (ConflictError if ambiguous); Connector imports leave Watches untouched.
-            is_active: When false, the Connector or native Feishu Watch is created paused.
+            is_active: When false, the Connector, native Feishu, or native Git Watch is created paused.
                 Requires watch_interval > 0 and an explicit to or parent target.
             enforce_public_remote_targets: When True, reject non-public remote hosts and
                 validate each outbound HTTP request URL during fetch.
@@ -1787,9 +1787,11 @@ class ResourceService:
 
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 
-        if is_active is False and not FeishuAccessor._is_feishu_url(path):
+        if is_active is False and not (
+            FeishuAccessor._is_feishu_url(path) or is_git_repo_url(path)
+        ):
             raise InvalidArgumentError(
-                "is_active=false is only supported for Connector or native Feishu imports."
+                "is_active=false is only supported for Connector, native Feishu, or native Git imports."
             )
         if enforce_public_remote_targets and is_remote_resource_source(path):
             path = require_remote_resource_source(path)

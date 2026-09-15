@@ -664,11 +664,21 @@ class TestAddResourceArgs:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("target", "is_active"),
+        [
+            ({"to": "viking://resources/git_private_watch"}, True),
+            ({"to": "viking://resources/git_private_watch"}, False),
+            ({"parent": "viking://resources"}, False),
+        ],
+    )
     async def test_git_token_watch_stores_private_auth_state(
         self,
         monkeypatch: pytest.MonkeyPatch,
         resource_service: ResourceService,
         request_context: RequestContext,
+        target,
+        is_active,
     ):
         monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
         disable_task_tracker(monkeypatch)
@@ -688,7 +698,8 @@ class TestAddResourceArgs:
         await resource_service.add_resource(
             path=repo_url,
             ctx=request_context,
-            to=to_uri,
+            **target,
+            is_active=is_active,
             watch_interval=30,
             args={
                 "branch": "main",
@@ -701,6 +712,7 @@ class TestAddResourceArgs:
 
         enqueue_call = resource_service._enqueue_add_resource_job.await_args
         message = enqueue_call.args[0]
+        assert AddResourceMsg.from_dict(message.to_dict()).is_active is is_active
         task_auth = enqueue_call.kwargs["task_auth"]
         assert "git-secret" not in str(message.to_dict())
         assert task_auth == {
@@ -725,6 +737,10 @@ class TestAddResourceArgs:
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
+        assert len(processor.calls) == 1
+        assert task.is_active is is_active
+        assert (task.next_execution_time is not None) is is_active
+        assert message.watch_task_id == task.task_id
         assert task.source_type == "git"
         assert task.processor_kwargs == {
             "branch": "main",
