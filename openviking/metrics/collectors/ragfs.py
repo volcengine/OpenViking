@@ -19,7 +19,7 @@ class RagfsMetricCollector(DomainStatsMetricCollector):
     """Replace native metric values without computing increments or retaining previous values."""
 
     data_source: RagfsMetricDataSource
-    config: CollectorConfig = CollectorConfig(ttl_seconds=5.0, timeout_seconds=1.0)
+    config: CollectorConfig = CollectorConfig(ttl_seconds=None, timeout_seconds=1.0)
     _collect_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _tracked_series: set[tuple[str, str, tuple[tuple[str, str], ...]]] = field(
         default_factory=set, init=False, repr=False
