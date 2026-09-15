@@ -21,6 +21,11 @@ except ImportError:
     openai = None
 
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.models.vlm.request_session import (
+    OPENCODE_SESSION_HEADER,
+    get_or_create_vlm_session_id,
+    header_name_ci_match,
+)
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
@@ -114,6 +119,20 @@ class OpenAIVLM(VLMBase):
     def get_async_client(self):
         """Get an async client scoped to the current event loop."""
         return self._async_client_cache.get(self._build_async_client)
+
+    def _request_extra_headers(self) -> Dict[str, str] | None:
+        """Per-call headers for OpenAI-compatible gateways (e.g. OpenCode Go).
+
+        Explicit ``extra_headers`` / ``x-opencode-session`` from config win and
+        stay on the client ``default_headers``. Otherwise mint/reuse a sticky
+        per-context session id so extract/summarize loops share one value.
+        """
+        if self.provider == "azure":
+            return None
+        configured = dict(self.extra_headers or {})
+        if header_name_ci_match(configured, OPENCODE_SESSION_HEADER):
+            return None
+        return {OPENCODE_SESSION_HEADER: get_or_create_vlm_session_id()}
 
     def _supports_enable_thinking(self) -> bool:
         """Return True for OpenAI-compatible DashScope endpoints that accept enable_thinking."""
@@ -302,7 +321,11 @@ class OpenAIVLM(VLMBase):
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = client.chat.completions.create(**kwargs)
+            call_kwargs = dict(kwargs)
+            extra_headers = self._request_extra_headers()
+            if extra_headers:
+                call_kwargs["extra_headers"] = extra_headers
+            response = client.chat.completions.create(**call_kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -334,7 +357,11 @@ class OpenAIVLM(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
+            call_kwargs = dict(kwargs)
+            extra_headers = self._request_extra_headers()
+            if extra_headers:
+                call_kwargs["extra_headers"] = extra_headers
+            response = await client.chat.completions.create(**call_kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -423,7 +450,11 @@ class OpenAIVLM(VLMBase):
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = client.chat.completions.create(**kwargs)
+            call_kwargs = dict(kwargs)
+            extra_headers = self._request_extra_headers()
+            if extra_headers:
+                call_kwargs["extra_headers"] = extra_headers
+            response = client.chat.completions.create(**call_kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -455,7 +486,11 @@ class OpenAIVLM(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await client.chat.completions.create(**kwargs)
+            call_kwargs = dict(kwargs)
+            extra_headers = self._request_extra_headers()
+            if extra_headers:
+                call_kwargs["extra_headers"] = extra_headers
+            response = await client.chat.completions.create(**call_kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)

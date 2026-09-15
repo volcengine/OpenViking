@@ -19,6 +19,11 @@ from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
 from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.multimodal import redact_image_data_urls
+from openviking.models.vlm.request_session import (
+    OPENCODE_SESSION_HEADER,
+    get_or_create_vlm_session_id,
+    header_name_ci_match,
+)
 from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
@@ -303,8 +308,13 @@ class LiteLLMVLMProvider(VLMBase):
             is_google_endpoint = _is_google_generate_language_endpoint(self.api_base)
             if not is_google_endpoint:
                 kwargs["api_base"] = self.api_base
-        if self._extra_headers:
-            kwargs["extra_headers"] = self._extra_headers
+        headers = dict(self._extra_headers or {})
+        # Same OpenCode Go MissingSessionID gap as OpenAIVLM (#4782): inject a
+        # sticky per-context session id unless the caller already set one.
+        if not header_name_ci_match(headers, OPENCODE_SESSION_HEADER):
+            headers[OPENCODE_SESSION_HEADER] = get_or_create_vlm_session_id()
+        if headers:
+            kwargs["extra_headers"] = headers
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
