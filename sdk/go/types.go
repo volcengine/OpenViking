@@ -271,6 +271,7 @@ type FindOptions struct {
 	Filter            map[string]any
 	ContextType       any
 	IncludeProvenance *bool
+	IncludeTimestamps *bool
 	ReadContent       *bool
 	Telemetry         any
 	Since             string
@@ -292,6 +293,7 @@ type SearchOptions struct {
 	Filter            map[string]any
 	ContextType       any
 	IncludeProvenance *bool
+	IncludeTimestamps *bool
 	ReadContent       *bool
 	Telemetry         any
 	Since             string
@@ -517,6 +519,8 @@ type MatchedContext struct {
 	Category    string   `json:"category,omitempty"`
 	Score       float64  `json:"score,omitempty"`
 	MatchReason string   `json:"match_reason,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 }
 

@@ -137,6 +137,8 @@ def build_matched_context_from_record(record: Dict[str, Any]) -> Any:
         category=record.get("category", "") or "",
         score=0.0,
         match_reason="filter",
+        created_at=record.get("created_at"),
+        updated_at=record.get("updated_at"),
         search_tags=normalize_search_tags(record.get("search_tags"), discard_invalid=True),
     )
 

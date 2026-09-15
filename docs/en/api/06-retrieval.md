@@ -67,6 +67,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
+| include_timestamps | bool | No | False | Include the indexed `created_at` and `updated_at` values on each matched result |
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
@@ -82,7 +83,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 
 **FindResult Structure**
 
-When `read_content=true`, each successfully read hit additionally contains `content`. This is a full file read, so use `limit` to bound response size. `search(mode="context")` rejects `read_content` because context assembly already enforces its own token budget.
+When `include_timestamps=true`, each hit contains its indexed `created_at` and `updated_at` values. The default result shape is unchanged. When `read_content=true`, each successfully read hit additionally contains `content`. This is a full file read, so use `limit` to bound response size. `search(mode="context")` rejects both options because context assembly has a separate result contract.
 
 ```python
 class FindResult:
@@ -106,6 +107,8 @@ class MatchedContext:
     category: str                    # Category
     score: float                     # Relevance score (0-1)
     match_reason: str                # Why this matched
+    created_at: Optional[str]        # Indexed creation time
+    updated_at: Optional[str]        # Indexed update time
 ```
 
 #### 3. Usage Examples
@@ -405,6 +408,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | time_field | "updated_at" \| "created_at" | No | "updated_at" | Metadata time field used by `since` / `until` |
 | level | str | No | None | Limit results to specific level(s), e.g., `0`, `1`, `2`, or `0,1,2`. CLI `--level`/`-L` maps to this field |
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
+| include_timestamps | bool | No | False | Include the indexed `created_at` and `updated_at` values on each matched result. Only supported by `mode="list"` |
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 

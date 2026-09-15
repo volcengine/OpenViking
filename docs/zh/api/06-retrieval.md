@@ -68,6 +68,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
 | level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
+| include_timestamps | bool | 否 | False | 在每个命中结果中附带索引记录的 `created_at` 和 `updated_at` 值 |
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
@@ -83,7 +84,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 
 **FindResult 结构**
 
-设置 `read_content=true` 后，每个成功读取的命中都会额外包含 `content`。这是完整文件读取，请用 `limit` 控制响应大小。`search(mode="context")` 会拒绝该参数，因为 context 组装已有自己的 token 预算。
+设置 `include_timestamps=true` 后，每个命中都会包含索引记录的 `created_at` 和 `updated_at` 值。默认结果结构不变。设置 `read_content=true` 后，每个成功读取的命中都会额外包含 `content`。这是完整文件读取，请用 `limit` 控制响应大小。`search(mode="context")` 会拒绝这两个参数，因为 context 组装使用独立的结果结构。
 
 ```python
 class FindResult:
@@ -107,6 +108,8 @@ class MatchedContext:
     category: str                    # 分类
     score: float                     # 相关性分数 (0-1)
     match_reason: str                # 匹配原因
+    created_at: Optional[str]        # 索引记录的创建时间
+    updated_at: Optional[str]        # 索引记录的更新时间
 ```
 
 #### 3. 使用示例
@@ -407,6 +410,7 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 | time_field | "updated_at" \| "created_at" | 否 | "updated_at" | since/until 使用的元数据时间字段 |
 | level | str | 否 | None | 限定结果的层级范围，例如 `0`、`1`、`2` 或 `0,1,2`。CLI `--level`/`-L` 会映射到这个字段 |
 | include_provenance | bool | 否 | False | 在序列化结果中附带 provenance / query-plan 细节 |
+| include_timestamps | bool | 否 | False | 在每个命中结果中附带索引记录的 `created_at` 和 `updated_at` 值；仅 `mode="list"` 支持 |
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容；仅支持 `mode="list"`。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
