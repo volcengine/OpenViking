@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import cast
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.acl import AclManager
+from openviking.storage.acl import AclManager, AclMode
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -43,6 +45,125 @@ def _tenant_filter(ctx: RequestContext):
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
     return backend._tenant_filter(ctx)
+
+
+class _AclScanStore:
+    def __init__(self, records, pages, expected_count):
+        self.records = records
+        self.pages = list(pages)
+        self.expected_count = expected_count
+        self.upserted = []
+
+    async def scroll(self, **kwargs):
+        raise AssertionError(f"unstable scroll used: {kwargs}")
+
+    async def _strict_transfer_count(self, ctx, filter):
+        del ctx
+        return self.expected_count if isinstance(filter, PathScope) else 0
+
+    async def _strict_transfer_page(self, ctx, filter, **kwargs):
+        del ctx, kwargs
+        if not isinstance(filter, PathScope):
+            return [], None
+        return self.pages.pop(0)
+
+    async def get_strict(self, ids, *, ctx):
+        del ctx
+        return [dict(self.records[record_id]) for record_id in ids]
+
+    async def _upsert_many_raw(self, records, *, ctx):
+        del ctx
+        ids = [str(record["id"]) for record in records]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate record id")
+        self.upserted = list(records)
+        return ids
+
+
+@pytest.mark.asyncio
+async def test_set_acl_updates_every_record_beyond_first_page():
+    ctx = _ctx()
+    root = "viking://resources/large-tree"
+    refs = [{"id": f"record-{index:03d}"} for index in range(501)]
+    records = {
+        ref["id"]: {
+            "id": ref["id"],
+            "uri": root if index == 0 else f"{root}/file-{index:03d}.md",
+        }
+        for index, ref in enumerate(refs)
+    }
+    pages = [
+        (refs[:500], "500"),
+        (refs[500:], None),
+    ]
+    store = _AclScanStore(records, pages, len(refs))
+
+    manager = AclManager(cast(VikingVectorIndexBackend, store))
+
+    result = await manager.set_acl(root, [], ctx, acl_mode=AclMode.RESTRICTED)
+
+    assert result.mode == AclMode.RESTRICTED
+    assert [record["id"] for record in store.upserted] == [ref["id"] for ref in refs]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("expected_count", "pages", "error"),
+    [
+        pytest.param(
+            501,
+            [
+                ([{"id": f"record-{index:03d}"} for index in range(500)], "500"),
+                ([{"id": "record-499"}, {"id": "record-500"}], None),
+            ],
+            "duplicate vector record record-499",
+            id="duplicate-id",
+        ),
+        pytest.param(
+            501,
+            [([{"id": f"record-{index:03d}"} for index in range(500)], None)],
+            "cursor ended after 500 of 501 records",
+            id="early-cursor-end",
+        ),
+        pytest.param(
+            1,
+            [([], None)],
+            "scan ended after 0 of 1 records",
+            id="empty-page",
+        ),
+        pytest.param(
+            501,
+            [
+                ([{"id": f"record-{index:03d}"} for index in range(250)], "250"),
+                ([{"id": f"record-{index:03d}"} for index in range(250, 500)], "250"),
+            ],
+            "scroll cursor repeated: 250",
+            id="repeated-cursor",
+        ),
+        pytest.param(
+            1,
+            [([{"uri": "viking://resources/large-tree/file.md"}], None)],
+            "record without an ID",
+            id="missing-id",
+        ),
+        pytest.param(
+            1,
+            [([{"id": "record-000"}, {"id": "record-001"}], None)],
+            "returned 2 records but count was 1",
+            id="more-records-than-count",
+        ),
+    ],
+)
+async def test_set_acl_rejects_incomplete_subtree_pagination(expected_count, pages, error):
+    ctx = _ctx()
+    root = "viking://resources/large-tree"
+    store = _AclScanStore({}, pages, expected_count)
+    manager = AclManager(cast(VikingVectorIndexBackend, store))
+
+    with pytest.raises(RuntimeError, match=error):
+        await manager.set_acl(root, [], ctx, acl_mode=AclMode.RESTRICTED)
+
+    assert store.upserted == []
 
 
 def test_descendant_target_elides_only_visible_root_path_filter():

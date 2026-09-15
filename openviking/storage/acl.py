@@ -320,19 +320,50 @@ class AclManager:
         output_fields: list[str],
         ctx: RequestContext,
     ) -> list[dict[str, Any]]:
+        expected_count = await self._context_store._strict_transfer_count(ctx, filter_expr)
+        requested_fields = list(dict.fromkeys([*output_fields, "id"]))
         records: list[dict[str, Any]] = []
         cursor: str | None = None
+        seen_cursors: set[str] = set()
+        seen_ids: set[str] = set()
         while True:
-            page, cursor = await self._context_store.scroll(
-                filter=filter_expr,
+            page, next_cursor = await self._context_store._strict_transfer_page(
+                ctx,
+                filter_expr,
                 limit=500,
                 cursor=cursor,
-                output_fields=output_fields,
-                ctx=ctx,
+                output_fields=requested_fields,
             )
+            if not page and len(records) < expected_count:
+                raise RuntimeError(
+                    f"ACL vector scan ended after {len(records)} of {expected_count} records"
+                )
+            for record in page:
+                record_id = record.get("id")
+                if not record_id:
+                    raise RuntimeError("ACL vector scan returned a record without an ID")
+                normalized_id = str(record_id)
+                if normalized_id in seen_ids:
+                    raise RuntimeError(
+                        f"ACL vector scan returned duplicate vector record {normalized_id}"
+                    )
+                seen_ids.add(normalized_id)
             records.extend(page)
-            if cursor is None:
+            if len(records) == expected_count:
                 return records
+            if len(records) > expected_count:
+                raise RuntimeError(
+                    f"ACL vector scan returned {len(records)} records but count was "
+                    f"{expected_count}"
+                )
+            if next_cursor is None:
+                raise RuntimeError(
+                    f"ACL vector scan cursor ended after {len(records)} of {expected_count} records"
+                )
+            if next_cursor in seen_cursors:
+                raise RuntimeError(f"ACL vector scroll cursor repeated: {next_cursor}")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
 
     async def _subtree_records(self, uri: str, ctx: RequestContext) -> list[dict[str, Any]]:
         refs = await self._scroll_all(PathScope("uri", uri, depth=-1), ["id"], ctx)
