@@ -10,6 +10,7 @@ import {
   DEFAULT_PROXY_TIMEOUT_MS,
   defaultCredentialPaths,
   normalizeConfigPath,
+  parseExtraHeaders,
   resolveMcpActorPeerId,
   trimSlash,
 } from "./lib/mcp-proxy-config.mjs";
@@ -292,4 +293,81 @@ test("an api_key deployment keeps the operator's identity off the wire", async (
   } finally {
     await rm(files.dir, { recursive: true, force: true });
   }
+});
+
+test("OPENVIKING_EXTRA_HEADERS parses a JSON object of scalar values", () => {
+  const headers = parseExtraHeaders(
+    JSON.stringify({ "X-Tenant": "acme", "X-Region": "cn", "X-Retries": 3 }),
+  );
+  assert.deepEqual(headers, { "X-Tenant": "acme", "X-Region": "cn", "X-Retries": "3" });
+});
+
+test("OPENVIKING_EXTRA_HEADERS drops reserved names and warns rather than throwing", () => {
+  const warnings = [];
+  const headers = parseExtraHeaders(
+    JSON.stringify({
+      Authorization: "Bearer sneaky",
+      "content-type": "text/plain",
+      "MCP-Protocol-Version": "0000-00-00",
+      "X-Vault": "primary",
+    }),
+    { onWarn: (m) => warnings.push(m) },
+  );
+  assert.deepEqual(headers, { "X-Vault": "primary" });
+  assert.equal(warnings.length, 3);
+  for (const w of warnings) assert.match(w, /reserved header/);
+});
+
+test("OPENVIKING_EXTRA_HEADERS ignores malformed JSON without taking the proxy down", () => {
+  const warnings = [];
+  assert.deepEqual(parseExtraHeaders("not json", { onWarn: (m) => warnings.push(m) }), {});
+  assert.deepEqual(parseExtraHeaders("[1,2,3]", { onWarn: (m) => warnings.push(m) }), {});
+  assert.deepEqual(parseExtraHeaders("", { onWarn: (m) => warnings.push(m) }), {});
+  assert.equal(warnings.length, 2, "empty is silent, malformed and non-object each warn once");
+});
+
+test("buildMcpProxyConfig reads OPENVIKING_EXTRA_HEADERS from the env by default", () => {
+  const cfg = buildMcpProxyConfig({
+    env: { OPENVIKING_EXTRA_HEADERS: JSON.stringify({ "X-Tenant": "acme" }) },
+  });
+  assert.deepEqual(cfg.extraHeaders, { "X-Tenant": "acme" });
+});
+
+test("buildMcpProxyConfig lets an explicit extraHeaders override the env", () => {
+  const cfg = buildMcpProxyConfig({
+    extraHeaders: { "X-Explicit": "yes" },
+    env: { OPENVIKING_EXTRA_HEADERS: JSON.stringify({ "X-Tenant": "acme" }) },
+  });
+  assert.deepEqual(cfg.extraHeaders, { "X-Explicit": "yes" });
+});
+
+test("operator-supplied extras cannot override proxy-owned headers on the wire", async () => {
+  const sent = [];
+  const proxy = createOpenVikingMcpProxy({
+    stdout: { write(_line, cb) { if (cb) cb(); return true; } },
+    fetchImpl: (_url, init) => {
+      sent.push(init.headers);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      });
+    },
+    readConfig: () => buildMcpProxyConfig({
+      mcpUrl: "http://127.0.0.1:1933/mcp",
+      apiKey: "real-key",
+      extraHeaders: {
+        "X-Tenant": "acme",
+        "openviking_name": "primary",
+        Authorization: "Bearer stolen",
+      },
+    }),
+    loggerFactory: () => ({ log() {}, logError() {} }),
+  });
+  await proxy.handleMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  assert.equal(sent[0]["X-Tenant"], "acme");
+  assert.equal(sent[0]["openviking_name"], "primary");
+  assert.equal(sent[0].Authorization, "Bearer real-key", "the real api key still wins");
 });

@@ -161,6 +161,16 @@ export OPENVIKING_DEBUG=1
 
 Full list: see the `Misc env vars` block in `scripts/config.mjs`. Tuning fields have `OPENVIKING_*` counterparts and env vars win for those tuning fields.
 
+#### Private-gateway extra headers
+
+Some private OpenViking deployments sit behind a gateway that requires custom headers on every request — a tenant name, a vault id, a region hint. The stdio MCP proxy reads those from `OPENVIKING_EXTRA_HEADERS`, a JSON object of scalar values:
+
+```sh
+export OPENVIKING_EXTRA_HEADERS='{"openviking_name":"acme-vault","X-Region":"cn"}'
+```
+
+Reserved headers (`Content-Type`, `Accept`, `MCP-Protocol-Version`, `Mcp-Session-Id`, `Authorization`) are dropped with a stderr warning: the proxy owns those and letting an env var override them would break session negotiation or expose the wrong credential. Bad JSON is ignored with a warning rather than crashing the proxy. This env var is scoped to the stdio MCP proxy; hooks read credentials through the ovcli chain and do not consult it.
+
 #### Input filters
 
 Two knobs put an ordered list of regex rules in front of the text the plugin sends: `recallQueryFilters` / `OPENVIKING_RECALL_QUERY_FILTERS` shapes the prompt before it becomes a search query, and `captureFilters` / `OPENVIKING_CAPTURE_FILTERS` shapes every turn on the write path before it is stored.
