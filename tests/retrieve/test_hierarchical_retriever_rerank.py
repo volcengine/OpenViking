@@ -12,6 +12,7 @@ import pytest
 
 from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
+from openviking.retrieve.query_embedding_cache import QueryEmbeddingCache
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -47,6 +48,16 @@ class DummyEmbedder:
 
     async def embed_async(self, text: str, is_query: bool = False) -> DummyEmbedResult:
         return self.embed(text, is_query=is_query)
+
+
+class CountingEmbedder(DummyEmbedder):
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def embed_async(self, text: str, is_query: bool = False) -> DummyEmbedResult:
+        self.calls.append((text, is_query))
+        await asyncio.sleep(0)
+        return DummyEmbedResult()
 
 
 class DummyStorage:
@@ -468,6 +479,45 @@ async def test_quick_mode_uses_single_vector_search_without_rerank_or_recursion(
     assert storage.search_calls[0]["level"] is None
     assert storage.child_search_calls == []
     assert fake_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_request_cache_shares_query_embedding_across_retrievers():
+    embedder = CountingEmbedder()
+    cache = QueryEmbeddingCache()
+    retrievers = [
+        HierarchicalRetriever(
+            storage=QuickSearchStorage([]),
+            embedder=embedder,
+            rerank_config=None,
+        )
+        for _ in range(3)
+    ]
+
+    await asyncio.gather(
+        *[
+            retriever.retrieve(
+                _query(),
+                ctx=_ctx(),
+                mode=RetrieverMode.QUICK,
+                query_embedding_cache=cache,
+            )
+            for retriever in retrievers
+        ]
+    )
+
+    assert embedder.calls == [("hello", True)]
+    assert cache.size == 1
+
+    await retrievers[0].retrieve(
+        TypedQuery(query="goodbye", context_type=ContextType.RESOURCE, intent=""),
+        ctx=_ctx(),
+        mode=RetrieverMode.QUICK,
+        query_embedding_cache=cache,
+    )
+
+    assert embedder.calls == [("hello", True), ("goodbye", True)]
+    assert cache.size == 2
 
 
 @pytest.mark.asyncio
