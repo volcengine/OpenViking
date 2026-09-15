@@ -163,10 +163,10 @@ Full list: see the `Misc env vars` block in `scripts/config.mjs`. Tuning fields 
 
 #### Private-gateway extra headers
 
-Some private OpenViking deployments sit behind a gateway that requires custom headers on every request — a tenant name, a vault id, a region hint. The stdio MCP proxy reads those from `OPENVIKING_EXTRA_HEADERS`, a JSON object of scalar values:
+Some private OpenViking deployments sit behind a gateway that requires custom headers on every request. The stdio MCP proxy reads those from `OPENVIKING_EXTRA_HEADERS`, a JSON object of scalar values (header name → header value) — see your deployment's gateway docs for the exact header names it expects.
 
 ```sh
-export OPENVIKING_EXTRA_HEADERS='{"openviking_name":"acme-vault","X-Region":"cn"}'
+export OPENVIKING_EXTRA_HEADERS='{"<header-name>":"<header-value>"}'
 ```
 
 Reserved headers (`Content-Type`, `Accept`, `MCP-Protocol-Version`, `Mcp-Session-Id`, `Authorization`) are dropped with a stderr warning: the proxy owns those and letting an env var override them would break session negotiation or expose the wrong credential. Bad JSON is ignored with a warning rather than crashing the proxy. This env var is scoped to the stdio MCP proxy; hooks read credentials through the ovcli chain and do not consult it.
