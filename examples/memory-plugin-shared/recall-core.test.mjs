@@ -284,6 +284,143 @@ test("buildRecallBlock falls back to find when neither context endpoint works", 
   assert.match(block, /\[memory 90%\]/);
 });
 
+function findFallbackFixture(uris, { preferAbstract = false } = {}) {
+  const memories = uris.map((uri, i) => ({
+    uri,
+    score: 0.9 - i * 0.05,
+    abstract: "",
+    level: 2,
+    category: "events",
+  }));
+  return {
+    searchResult: { memories, skills: [] },
+    cfg: {
+      recallLimit: uris.length,
+      recallMaxContentChars: 500,
+      recallTokenBudget: 200,
+      scoreThreshold: 0.35,
+      recallPreferAbstract: preferAbstract,
+    },
+  };
+}
+
+test("fallback body reads for injected items are prefetched concurrently", { timeout: 5000 }, async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const uris = [
+    "viking://user/default/memories/events/one.md",
+    "viking://user/default/memories/events/two.md",
+    "viking://user/default/memories/events/three.md",
+  ];
+  const { searchResult, cfg } = findFallbackFixture(uris);
+  const reads = { started: [], finished: 0 };
+
+  // Barrier: no /content/read may settle until all of them have been started.
+  // A serial implementation deadlocks on the first read and trips the timeout.
+  const pendingReads = [];
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/find") return { ok: true, result: searchResult };
+    if (path.startsWith("/api/v1/content/read")) {
+      reads.started.push(path);
+      return new Promise((resolve) => {
+        pendingReads.push(() => {
+          reads.finished++;
+          resolve({ ok: true, result: `body of ${path}` });
+        });
+        if (pendingReads.length === uris.length) pendingReads.splice(0).forEach((release) => release());
+      });
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, cfg, "what happened yesterday", { legacyCachePath });
+
+  assert.equal(reads.started.length, uris.length);
+  assert.equal(reads.finished, uris.length);
+  for (const uri of uris) {
+    assert.ok(block.includes(`body of /api/v1/content/read?uri=${encodeURIComponent(uri)}`), uri);
+  }
+});
+
+test("prefetch keeps the token-budget hint fallback intact", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const uris = [
+    "viking://user/default/memories/events/one.md",
+    "viking://user/default/memories/events/two.md",
+    "viking://user/default/memories/events/three.md",
+  ];
+  const { searchResult, cfg } = findFallbackFixture(uris);
+  const reads = [];
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/find") return { ok: true, result: searchResult };
+    if (path.startsWith("/api/v1/content/read")) {
+      reads.push(path);
+      return { ok: true, result: "x".repeat(500) };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, cfg, "what happened yesterday", { legacyCachePath });
+
+  // Every body is ~130 estimated tokens; the budget floor is 200, so item one
+  // spends it and items two and three must degrade to URI hints.
+  const bodyLines = block.split("\n").filter((line) => line.startsWith("- ["));
+  assert.equal(bodyLines.length, 3);
+  assert.match(bodyLines[0], /x{500}/);
+  assert.doesNotMatch(bodyLines[1], /x{500}/);
+  assert.equal(bodyLines[1], "- [memory 85%] viking://user/default/memories/events/two.md");
+  assert.equal(bodyLines[2], "- [memory 80%] viking://user/default/memories/events/three.md");
+});
+
+test("prefetch reads every body even when the budget floor is already spent", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const uris = [
+    "viking://user/default/memories/events/one.md",
+    "viking://user/default/memories/events/two.md",
+    "viking://user/default/memories/events/three.md",
+    "viking://user/default/memories/events/four.md",
+  ];
+  const memories = uris.map((uri, i) => ({
+    uri, score: 0.9 - i * 0.05, abstract: "", level: 2, category: "events",
+  }));
+  const reads = [];
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/system/status") return { ok: true, result: { user: "default" } };
+    if (path.startsWith("/api/v1/fs/ls")) return { ok: true, result: [] };
+    if (path === "/api/v1/search/find") return { ok: true, result: { memories, skills: [] } };
+    if (path.startsWith("/api/v1/content/read")) {
+      reads.push(path);
+      return { ok: true, result: "x".repeat(900) };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, {
+    recallLimit: 4,
+    recallMaxContentChars: 1000,
+    recallTokenBudget: 200,
+    scoreThreshold: 0.35,
+    recallPreferAbstract: false,
+  }, "what happened yesterday", { legacyCachePath });
+
+  // The first body alone (~229 estimated tokens) overshoots the 200-token
+  // floor, so items two through four degrade to URI hints — but their bodies
+  // were still prefetched in one concurrent batch instead of being skipped.
+  assert.equal(reads.length, 4);
+  const bodyLines = block.split("\n").filter((line) => line.startsWith("- ["));
+  assert.match(bodyLines[0], /x{900}/);
+  for (const line of bodyLines.slice(1)) assert.doesNotMatch(line, /x{900}/);
+});
+
 function recordingFetch(responses) {
   const sent = [];
   const queue = [...responses];
