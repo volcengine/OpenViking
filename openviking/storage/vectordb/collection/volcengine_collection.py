@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
+from openviking.storage.vectordb.collection.diversity import VectorDiversityOptions
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
@@ -484,7 +485,12 @@ class VolcengineCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        diversity: Optional[VectorDiversityOptions] = None,
     ) -> SearchResult:
+        if diversity is not None:
+            raise NotImplementedError(
+                "vector diversity is only supported by the built-in vector index"
+            )
         path = "/api/vikingdb/data/search/vector"
         data = {
             "project": self.project_name,
