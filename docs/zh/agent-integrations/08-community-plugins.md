@@ -47,6 +47,29 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/zcode-memory-plugin/DESIGN.md)。
 
+## Kimi Code CLI 记忆集成
+
+源码：[examples/kimicode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin)
+
+对应 [#3442](https://github.com/volcengine/OpenViking/issues/3442) 的 Kimicode 半边。布局对齐 ZCode 适配器（[PR #3678](https://github.com/volcengine/OpenViking/pull/3678)），但映射的是 Kimi Code 自己的接口：
+
+- Hook 写在 `~/.kimi-code/config.toml` 的 `[[hooks]]`（不是 JSON `hooks.events`）。
+- MCP 写在 `~/.kimi-code/mcp.json`。
+- `UserPromptSubmit` 注入**纯文本**（JSON 包装会被当成上下文追加）。
+- `SessionStart` 是观察事件，profile 在第一次提问时注入。
+- 有 `SessionEnd`、`PreCompact`、`Interrupt`；捕获以 `session_index.jsonl` 指向的 `wire.jsonl` 为准。
+
+### 安装
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness kimicode
+```
+
+安装器识别 `kimi` 或 `~/.kimi-code/`，把运行时放到 `~/.openviking/agent-integrations/kimicode/`，合并 OpenViking hook 块时不会删掉 Herdr/Orca 的 hook。
+
+细节见插件 [README](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimicode-memory-plugin/DESIGN.md)。
+
 ## AstrBot 插件
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 是一个多平台 IM Bot 框架，支持 QQ、Telegram、Discord、飞书等 20+ 平台。
