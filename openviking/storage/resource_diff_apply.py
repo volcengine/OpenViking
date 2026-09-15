@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence
 
 from openviking.parse.output import read_artifact_manifest
 from openviking.storage.viking_fs._diff_plan import CONTROL_BASENAMES, DiffPlan
@@ -93,17 +93,6 @@ class ApplyResult:
     md5_by_rel: Dict[str, str] = field(default_factory=dict)
 
 
-async def _upload(rel_path: str, *, store, artifact_ref, target) -> None:
-    """Read one file from the store and write it to the target.
-
-    Runs as an independent task so callers can fan out uploads concurrently. md5
-    is not derived here — it comes from the artifact manifest (source of truth),
-    so this only moves bytes and never mutates shared state.
-    """
-    data = await store.read_bytes(artifact_ref, rel_path)
-    await target.write_file(rel_path, data)
-
-
 async def _upload_concurrent(
     rel_paths: Sequence[str],
     *,
@@ -116,21 +105,63 @@ async def _upload_concurrent(
     """Upload ``rel_paths`` with bounded concurrency, recording each uploaded path.
 
     Each file is an independent remote write, so uploads fan out under a
-    semaphore instead of one serial await. The first failure propagates (via
-    ``gather``) so the caller still marks the task failed rather than reporting
-    partial success as done. md5 is sourced from the manifest by the caller.
+    semaphore instead of one serial await. On the first failure, work that has
+    not entered ``target.write_file`` is cancelled, while writes already in
+    flight are allowed to finish. The function waits for every sibling task to
+    settle before re-raising the original failure, so cleanup and lock release
+    cannot race with a late write. md5 is sourced from the manifest by the caller.
     """
     if not rel_paths:
         return
     sem = asyncio.Semaphore(concurrency if concurrency is not None else _upload_concurrency())
+    failed = asyncio.Event()
+    writing_tasks: set[asyncio.Task[Any]] = set()
 
-    async def _one(rel_path: str) -> str:
+    async def _one(rel_path: str) -> str | None:
         async with sem:
-            await _upload(rel_path, store=store, artifact_ref=artifact_ref, target=target)
+            # A sibling may have failed while this task was waiting for capacity.
+            # Do not start another remote write after that failure is known.
+            if failed.is_set():
+                return None
+            try:
+                data = await store.read_bytes(artifact_ref, rel_path)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                failed.set()
+                raise RuntimeError(f"failed to upload {rel_path}: {exc}") from exc
+            if failed.is_set():
+                return None
+            task = asyncio.current_task()
+            if task is not None:
+                writing_tasks.add(task)
+            try:
+                await target.write_file(rel_path, data)
+            except asyncio.CancelledError:
+                failed.set()
+                raise
+            except Exception as exc:
+                failed.set()
+                raise RuntimeError(f"failed to upload {rel_path}: {exc}") from exc
+            finally:
+                if task is not None:
+                    writing_tasks.discard(task)
         return rel_path
 
-    for rel_path in await asyncio.gather(*(_one(rel) for rel in rel_paths)):
-        result.uploaded.append(rel_path)
+    tasks = [asyncio.create_task(_one(rel_path)) for rel_path in rel_paths]
+    try:
+        uploaded = await asyncio.gather(*tasks)
+    except BaseException:
+        failed.set()
+        # Cancelling an already-issued backend write does not guarantee the
+        # remote operation itself is cancelled. Leave active writes alone and
+        # wait for them; only cancel work that has not entered the write call.
+        for task in tasks:
+            if not task.done() and task not in writing_tasks:
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    result.uploaded.extend(rel_path for rel_path in uploaded if rel_path is not None)
 
 
 async def apply_diff_plan(
@@ -283,7 +314,7 @@ async def apply_full_artifact_upload(
         )
     if root_is_file:
         data = await store.read_bytes(artifact_ref, base)
-        written = await target.write_file("", data)
+        await target.write_file("", data)
         result.uploaded.append("")
         result.added.append("")
         result.files.append("")

@@ -8,9 +8,9 @@ and orphan vectors, and leaves unchanged files untouched. It is pure w.r.t. the
 store/target interfaces so both AGFS and local backends reuse it.
 """
 
-import pytest
-
 import asyncio
+
+import pytest
 
 from openviking.parse.output import ParseArtifactRef
 from openviking.storage.resource_diff_apply import apply_diff_plan
@@ -233,8 +233,65 @@ class TestApplyDiffPlan:
         store = _FakeStore({"a.py": b"a"})
         target = _FailingTarget()
 
-        with pytest.raises(IOError, match="boom"):
+        with pytest.raises(RuntimeError, match=r"failed to upload a\.py: upload boom"):
             await apply_diff_plan(plan, store=store, artifact_ref=_REF, target=target)
+
+    async def test_failed_upload_waits_for_active_writes_and_preserves_error(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "openviking.parse.parsers.upload_utils._UPLOAD_CONCURRENCY", 2
+        )
+        healthy_started = asyncio.Event()
+        healthy_release = asyncio.Event()
+        failure_raised = asyncio.Event()
+        writes = []
+        failure = IOError("upload boom: bad.py")
+
+        class _CoordinatedTarget(_FakeTarget):
+            async def write_file(self, rel_path, data):
+                if rel_path == "bad.py":
+                    await healthy_started.wait()
+                    failure_raised.set()
+                    raise failure
+                if rel_path == "active.py":
+                    healthy_started.set()
+                    await healthy_release.wait()
+                    writes.append(rel_path)
+                    return
+                writes.append(rel_path)
+
+        task = asyncio.create_task(
+            apply_diff_plan(
+                DiffPlan(added=["bad.py", "active.py", "pending.py"]),
+                store=_FakeStore(
+                    {"bad.py": b"bad", "active.py": b"active", "pending.py": b"pending"}
+                ),
+                artifact_ref=_REF,
+                target=_CoordinatedTarget(),
+            )
+        )
+
+        await asyncio.wait_for(failure_raised.wait(), timeout=1)
+        # The first error is known, but the caller must not regain control until
+        # the write that was already issued has settled. The queued third write
+        # must never start.
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert writes == []
+
+        healthy_release.set()
+        with pytest.raises(
+            RuntimeError, match=r"failed to upload bad\.py: upload boom: bad\.py"
+        ) as exc_info:
+            await task
+        assert exc_info.value.__cause__ is failure
+        assert writes == ["active.py"]
+
+        # Once the exception reaches the caller, no sibling remains that can
+        # mutate the target after cleanup or pathlock release.
+        await asyncio.sleep(0.05)
+        assert writes == ["active.py"]
 
     async def test_added_modified_uploads_run_concurrently(self) -> None:
         # added/modified are independent remote writes and must overlap; a barrier
