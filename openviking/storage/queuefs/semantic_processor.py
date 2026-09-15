@@ -323,6 +323,37 @@ class SemanticProcessor(DequeueHandlerBase):
             await semantic_queue.enqueue(parent_msg)
         logger.info("Enqueued parent semantic refresh: %s", parent_uri)
 
+    def _llm_failure_result(
+        self, msg: SemanticMsg, attempted: int, failed: int
+    ) -> Optional[ProcessResult]:
+        """Surface swallowed summary/overview generation failures (issue #5032).
+
+        Partial failures keep the delivery successful — cached summaries and
+        unaffected nodes still landed — but a run where every generation fell
+        back to an empty summary produced no semantic output at all, so count
+        it in the queue Errors column instead of reporting a healthy pipeline.
+        """
+        if failed == 0:
+            return None
+        logger.warning(
+            "Semantic generation for %s completed with %d/%d summary/overview "
+            "generations falling back to empty",
+            msg.uri,
+            failed,
+            attempted,
+        )
+        if failed >= attempted:
+            self._merge_request_stats(msg.telemetry_id, error_count=1)
+            get_request_wait_tracker().mark_semantic_failed(
+                msg.telemetry_id,
+                msg.id,
+                f"{failed} summary/overview generations failed for {msg.uri}",
+            )
+            return ProcessResult.failed(
+                f"all {failed} summary/overview generations failed for {msg.uri}"
+            )
+        return None
+
     async def on_dequeue(
         self,
         data: Optional[Dict[str, Any]],
@@ -427,11 +458,16 @@ class SemanticProcessor(DequeueHandlerBase):
                         # Callers must explicitly opt into directory aggregation; the
                         # trigger remains descriptive metadata, not an algorithm switch.
                         if msg.context_type == "memory" and not msg.use_hierarchical_aggregation:
-                            await self._process_memory_directory(
+                            llm_attempted, llm_failed = await self._process_memory_directory(
                                 msg,
                                 ctx=current_ctx,
                                 lock=semantic_lock.lock,
                             )
+                            failure_result = self._llm_failure_result(
+                                msg, llm_attempted, llm_failed
+                            )
+                            if failure_result is not None:
+                                return failure_result
                         else:
                             is_incremental = False
                             target_uri = msg.target_uri
@@ -504,6 +540,11 @@ class SemanticProcessor(DequeueHandlerBase):
                                 run_uri,
                                 executor.get_stats(),
                             )
+                            failure_result = self._llm_failure_result(
+                                msg, executor.llm_attempt_count, executor.llm_failure_count
+                            )
+                            if failure_result is not None:
+                                return failure_result
                             if not executor.stale and msg.aggregate_directory:
                                 write_result = getattr(
                                     executor,
@@ -605,7 +646,7 @@ class SemanticProcessor(DequeueHandlerBase):
         msg: SemanticMsg,
         ctx: Optional[RequestContext] = None,
         lock: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> tuple[int, int]:
         """Process a memory directory with special handling.
 
         For memory directories:
@@ -616,9 +657,14 @@ class SemanticProcessor(DequeueHandlerBase):
 
         Args:
             msg: The semantic message containing directory info and changes
+
+        Returns:
+            (attempted, failed) summary generations in this run; failures are
+            the ones that fell back to an empty summary (issue #5032).
         """
         viking_fs = get_viking_fs()
         dir_uri = msg.uri
+        llm_stats = {"attempted": 0, "failed": 0}
         ctx = ctx or self._default_ctx
         llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
 
@@ -639,7 +685,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
-            return
+            return llm_stats["attempted"], llm_stats["failed"]
 
         existing_summaries: Dict[str, str] = {}
         if msg.changes:
@@ -705,11 +751,13 @@ class SemanticProcessor(DequeueHandlerBase):
             async def _gen(idx: int, file_path: str) -> None:
                 file_name = file_path.split("/")[-1]
                 try:
+                    llm_stats["attempted"] += 1
                     summary_dict = await self._generate_single_file_summary(
                         file_path, llm_sem=llm_sem, ctx=ctx
                     )
                     logger.debug(f"Generated summary for {file_name}")
                 except Exception as e:
+                    llm_stats["failed"] += 1
                     logger.warning(f"Failed to generate summary for {file_path}: {e}")
                     summary_dict = {"name": file_name, "summary": ""}
 
@@ -770,18 +818,18 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception as e:
             raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
         if not wrote_semantics.wrote:
-            return
+            return llm_stats["attempted"], llm_stats["failed"]
         logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
 
         if msg.skip_vectorization:
             logger.info(f"Skipping vectorization for {dir_uri} (requested via SemanticMsg)")
-            return
+            return llm_stats["attempted"], llm_stats["failed"]
         if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
             logger.info(
                 "Skipping directory vectorization for %s (visible semantics unchanged)",
                 dir_uri,
             )
-            return
+            return llm_stats["attempted"], llm_stats["failed"]
         await self._vectorize_directory(
             uri=dir_uri,
             context_type="memory",
@@ -790,6 +838,7 @@ class SemanticProcessor(DequeueHandlerBase):
             ctx=ctx,
         )
         logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
+        return llm_stats["attempted"], llm_stats["failed"]
 
     async def _write_memory_directory_semantics(
         self,
