@@ -41,6 +41,10 @@ const DEFAULT_CONFIG = {
     tokenBudget: 2000,
     minQueryLength: 3,
   },
+  // Skillset visibility filtering (see lib/shared/skillset-filter.mjs).
+  // Allowlist is fail-closed: unclassified skills are blocked while set.
+  skillsetsOnly: [],
+  skillsetsExclude: [],
   autoCapture: true,
   captureMode: "semantic",
   captureMaxLength: 24000,
@@ -172,6 +176,8 @@ function applyBehaviorConfig(config, fileConfig = {}) {
     "workspacePeer",
     "recallPeerScope",
     "recallQueryExpansion",
+    "skillsetsOnly",
+    "skillsetsExclude",
   ]) {
     if (fileConfig[key] !== undefined) config[key] = fileConfig[key]
   }
@@ -231,6 +237,18 @@ function applyEnv(config) {
   }
   if (process.env.OPENVIKING_BYPASS_SESSION_PATTERNS) {
     config.bypassSessionPatterns = process.env.OPENVIKING_BYPASS_SESSION_PATTERNS
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  if (process.env.OPENVIKING_SKILLSETS_ONLY) {
+    config.skillsetsOnly = process.env.OPENVIKING_SKILLSETS_ONLY
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  if (process.env.OPENVIKING_SKILLSETS_EXCLUDE) {
+    config.skillsetsExclude = process.env.OPENVIKING_SKILLSETS_EXCLUDE
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean)

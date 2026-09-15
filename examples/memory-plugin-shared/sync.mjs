@@ -21,6 +21,7 @@ const HOOK_SHARED_FILES = [
   "debug-log.mjs",
   "recall-compress-core.mjs",
   "recall-core.mjs",
+  "skillset-filter.mjs",
   "retryable.mjs",
   "workspace-peer.mjs",
   "workspace-identity.mjs",
@@ -30,7 +31,7 @@ const HOOK_SHARED_FILES = [
 /** The interactive installer, for the plugins that ship a `scripts/setup.mjs`. */
 const SETUP_WIZARD_SHARED_FILES = ["setup-wizard.mjs"];
 /** The stdio MCP proxy, for the plugins that bundle one. */
-const MCP_PROXY_SHARED_FILES = ["mcp-proxy-core.mjs", "mcp-proxy-config.mjs"];
+const MCP_PROXY_SHARED_FILES = ["mcp-proxy-core.mjs", "mcp-proxy-config.mjs", "skillset-filter.mjs"];
 /** Batched session sends, for the plugins that flush off the hook's hot path. */
 const BATCH_SHARED_FILES = ["batch-send.mjs"];
 /** The detached write path, for the plugins whose hooks are short-lived subprocesses. */
@@ -57,7 +58,7 @@ const PI_SHARED_FILES = [...HOOK_SHARED_FILES, ...SETUP_WIZARD_SHARED_FILES, ...
 // Agent Plugins 1.0 has no hooks: it is the proxy and nothing else.
 const AGENT_PLUGINS_SHARED_FILES = ["credentials.mjs", "debug-log.mjs", ...MCP_PROXY_SHARED_FILES];
 // openclaw assembles recall server-side, so it takes the recall pair alone.
-const OPENCLAW_SHARED_FILES = ["recall-compress-core.mjs", "recall-core.mjs"];
+const OPENCLAW_SHARED_FILES = ["recall-compress-core.mjs", "recall-core.mjs", "skillset-filter.mjs"];
 export const TARGETS = [
   { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
   { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
