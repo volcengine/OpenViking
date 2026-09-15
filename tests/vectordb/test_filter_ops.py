@@ -714,6 +714,22 @@ class TestFilterOpsPath(unittest.TestCase):
             self._search({"op": "must_not", "field": "file_path", "conds": ["/a"]}), [4, 5]
         )
 
+    def test_path_must_not_after_another_condition(self):
+        """Test MustNot excluding path prefix when it is not the first condition of an and"""
+        # OpenViking always puts the tenant filter first and a caller's filter after it.
+        every_record = {"op": "must", "field": "id", "conds": [1, 2, 3, 4, 5]}
+
+        def after_every_record(condition):
+            return {"op": "and", "conds": [every_record, condition]}
+
+        # MustNot /a/b -> exclude 1, 2 -> remaining 3, 4, 5
+        must_not_ab = {"op": "must_not", "field": "file_path", "conds": ["/a/b"]}
+        self.assertEqual(self._search(after_every_record(must_not_ab)), [3, 4, 5])
+        # MustNot /a with depth=1 -> exclude 3 -> remaining 1, 2, 4, 5
+        must_not_a_d1 = {"op": "must_not", "field": "file_path", "conds": ["/a"], "para": "-d=1"}
+        self.assertEqual(self._search(must_not_a_d1), [1, 2, 4, 5])
+        self.assertEqual(self._search(after_every_record(must_not_a_d1)), [1, 2, 4, 5])
+
     def test_path_must_normalize_leading_slash(self):
         """Test Must/MustNot when path values are missing leading '/'"""
         data = [

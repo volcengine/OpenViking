@@ -35,4 +35,4 @@
 ## 参考
 
 - 手动配置文档：[TRAE](https://docs.openviking.net/zh/agent-integrations/13-trae)
-- 源码：[examples/trae-memory-hooks](https://github.com/volcengine/OpenViking/tree/main/examples/trae-memory-hooks)
+- 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)

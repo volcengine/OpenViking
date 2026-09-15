@@ -31,7 +31,7 @@ Quit Cursor completely and restart it after installation.
 ## Verify
 
 1. Restart Cursor and create a new Agent session.
-2. Open **Cursor Settings → Hooks** and confirm that the OpenViking lifecycle Hooks execute `cursor-hook.mjs` and its URI protection Hooks execute `uri-guard.mjs`.
+2. Open **Cursor Settings → Hooks** and confirm that the OpenViking lifecycle Hooks execute `scripts/hook.mjs` and its URI protection Hooks execute `scripts/uri-guard.mjs`.
 3. Check that the `beforeSubmitPrompt` output contains `additional_context`. This confirms that recall reaches the Agent without requiring an MCP call first.
 4. Open **Cursor Settings → Tools & MCPs** and confirm that `openviking` is connected.
 5. Tell Cursor a temporary preference, wait for the response to finish, then create a new session and ask for that preference to verify capture and cross-session recall.

@@ -97,28 +97,31 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 node examples/opencode-plugin/scripts/setup.mjs
 ```
 
-`~/.config/opencode/openviking-config.json` 现在只放行为旋钮：
+行为旋钮写在 `~/.openviking/ovcli.conf` 的 `plugin` 段，与向导写入的连接字段同一个文件。共享键对所有记忆插件生效；`plugin.opencode` 下的键只对本插件生效，并覆盖共享键：
 
 ```json
 {
-  "enabled": true,
-  "timeoutMs": 30000,
-  "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoRecall": {
-    "enabled": true,
-    "limit": 6,
+  "plugin": {
+    "recallLimit": 6,
     "scoreThreshold": 0.35,
-    "maxContentChars": 500,
-    "preferAbstract": true,
-    "tokenBudget": 2000,
-    "minQueryLength": 3
-  },
-  "commitTokenThreshold": 20000,
-  "commitKeepRecentCount": 10,
-  "profileTokenBudget": 10000,
-  "resumeContextBudget": 32000
+    "recallMaxContentChars": 500,
+    "recallPreferAbstract": true,
+    "recallTokenBudget": 2000,
+    "minQueryLength": 3,
+    "commitTokenThreshold": 20000,
+    "commitKeepRecentCount": 10,
+    "profileTokenBudget": 10000,
+    "resumeContextBudget": 32000,
+    "opencode": {
+      "timeoutMs": 30000,
+      "repoContext": true,
+      "repoContextCacheTtlMs": 60000
+    }
+  }
 }
 ```
+
+配置项按优先级从高到低解析：`OPENVIKING_*` 环境变量、工作区的 `.openviking/config.json` 与 `config.local.json`、`plugin.opencode`、`plugin`，最后是内置默认值。`autoRecall: false` 关闭自动召回，`autoCapture: false` 让插件不再回写对话。
 
 环境变量优先级高于 `ovcli.conf`：
 
@@ -129,7 +132,7 @@ export OPENVIKING_USER="opencode"     # 可选，仅 trusted-mode 部署需要
 export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
 ```
 
-API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`account` 和 `user` 是 trusted-mode headers；`peerId` 会作为 `X-OpenViking-Actor-Peer` 和捕获 session message 的 `peer_id` 使用。旧版 `openviking-config.json` 里的凭据字段仍会作为迁移 fallback 读取，但新安装建议使用 `ovcli.conf` 或环境变量。
+API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`account` 和 `user` 是 trusted-mode headers；`peerId` 会作为 `X-OpenViking-Actor-Peer` 和捕获 session message 的 `peer_id` 使用。
 
 ## 验证
 
@@ -152,9 +155,9 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 | 问题 | 排查方向 |
 |------|----------|
 | 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `@openviking/opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
-| MCP tools 连到了错误的 server | 检查 `~/.openviking/ovcli.conf`，或用 `OPENVIKING_*` 环境变量 / `OPENVIKING_PLUGIN_CONFIG` 指向正确配置 |
+| MCP tools 连到了错误的 server | 检查 `~/.openviking/ovcli.conf`，或用 `OPENVIKING_*` 环境变量；`OPENVIKING_CLI_CONFIG_FILE` 可让插件改读另一份 ovcli.conf |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
-| recall 为空 | 确认 OpenViking server 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |
+| recall 为空 | 确认 OpenViking server 中已有 memories/resources，且 `autoRecall` 没有被设成 `false` |
 | 本地 `openviking_add_resource` 失败 | 传入文件路径而不是目录；目前还不支持自动上传本地目录 |
 
 完整 tools、配置字段和运行时文件说明见 [插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)。

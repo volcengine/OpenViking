@@ -1,0 +1,54 @@
+name: Plugin Shared Runtime Sync
+
+# The plugins a host installs by pointing at a directory in this repository —
+# Claude Code, Codex, and the Agent Plugins package — can only load files git
+# holds, so their copies of the shared runtime have to be committed. Generating
+# them by hand is what let a copy go stale on main while the pull request that
+# changed the library looked complete. This regenerates them after the merge.
+#
+# The plugins published as an npm package or assembled into a tarball build
+# their copies at pack time and keep none in git; nothing here touches them.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/memory-plugin-shared/lib/**"
+      - "examples/memory-plugin-shared/sync.mjs"
+      - "examples/skills/**"
+      - "examples/claude-code-memory-plugin/**"
+      - "examples/codex-memory-plugin/**"
+      - "agent-plugins/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: plugin-shared-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Regenerate the committed shared copies
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - run: node examples/memory-plugin-shared/sync.mjs
+
+      - name: Commit what changed
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "the committed copies already match the library"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(plugins): regenerate the committed shared runtime copies"
+          git push

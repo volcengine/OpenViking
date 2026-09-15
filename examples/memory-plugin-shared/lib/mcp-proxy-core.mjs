@@ -8,6 +8,8 @@
 import { statSync } from "node:fs";
 import { createInterface } from "node:readline";
 
+import { buildOvHeaders } from "./ov-http.mjs";
+
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const DELETE_TIMEOUT_MS = 2000;
 const MAX_CONCURRENT_REQUESTS = 16;
@@ -239,21 +241,17 @@ export function createOpenVikingMcpProxy({
   }
 
   function headersForRequest(includeSession = true) {
-    const headers = {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-      // Always the proxy's current version (default, then server-negotiated) —
-      // never the client's un-negotiated ask, which strict upstreams reject
-      // with HTTP 400 before initialize negotiation can run.
-      "MCP-Protocol-Version": protocolVersion,
-    };
-    if (includeSession && sessionId) headers["Mcp-Session-Id"] = sessionId;
-    if (proxyConfig.apiKey) headers.Authorization = `Bearer ${proxyConfig.apiKey}`;
-    if (proxyConfig.account) headers["X-OpenViking-Account"] = proxyConfig.account;
-    if (proxyConfig.user) headers["X-OpenViking-User"] = proxyConfig.user;
-    if (proxyConfig.peerId) headers["X-OpenViking-Actor-Peer"] = proxyConfig.peerId;
-    if (proxyConfig.userAgent) headers["User-Agent"] = proxyConfig.userAgent;
-    return headers;
+    return buildOvHeaders(proxyConfig, {
+      actorPeerId: proxyConfig.peerId,
+      extraHeaders: {
+        "Accept": "application/json, text/event-stream",
+        // Always the proxy's current version (default, then server-negotiated) —
+        // never the client's un-negotiated ask, which strict upstreams reject
+        // with HTTP 400 before initialize negotiation can run.
+        "MCP-Protocol-Version": protocolVersion,
+        ...(includeSession && sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+      },
+    });
   }
 
   function writeMessage(obj) {

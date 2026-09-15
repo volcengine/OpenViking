@@ -125,7 +125,10 @@ const gettingStartedSidebar = {
 const agentIntegrationSidebar = {
   en: {
     overview: 'Integration Overview',
-    topItems: [['16-capability-reference.md', 'Capability Reference']],
+    topItems: [
+      ['16-capability-reference.md', 'Capability Reference'],
+      ['18-plugin-development.md', 'Plugin Development']
+    ],
     groups: [
       {
         text: 'Developer Tools',
@@ -161,7 +164,10 @@ const agentIntegrationSidebar = {
   },
   zh: {
     overview: '集成概览',
-    topItems: [['16-capability-reference.md', '集成能力参考']],
+    topItems: [
+      ['16-capability-reference.md', '集成能力参考'],
+      ['18-plugin-development.md', '插件开发与维护']
+    ],
     groups: [
       {
         text: '开发工具',

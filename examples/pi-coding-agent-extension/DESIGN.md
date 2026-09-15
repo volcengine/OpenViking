@@ -1,911 +1,209 @@
-# Pi OpenViking Extension — Implementation Spec
+# Pi OpenViking Extension — Design
 
-> Current implementation note: this historical design has been superseded by the Claude Code/Codex-aligned SPEC retrofit. Legacy sections below are retained as background, not as current behavior.
+The extension gives a [pi](https://github.com/earendil-works/pi) session long-term memory and, when takeover is on, lets OpenViking own the session's committed history. It is a directory of TypeScript modules loaded directly by pi's `jiti` transpiler: no build step, no dependencies beyond what pi already provides, no MCP server. Everything reaches OpenViking over its REST API.
 
-## Design Philosophy
+README.md is the operator's document — installation, every configuration knob, the tool list. This one is the maintainer's: what each module is responsible for, how the pieces meet at pi's event boundaries, and the reasons behind the choices that the code cannot state for itself.
 
-**Informed by all three existing OV plugins** — OpenClaw, Claude Code, and Hermes. The Claude Code plugin is the most mature and production-hardened; its patterns take precedence where they differ from OpenClaw. Key design ancestors:
+## Design ancestry
 
-- **OpenClaw**: Synchronous recall, threshold commit, memory stripping, dual-scope search
-- **Claude Code plugin** (newest, most mature): Pre-compact commit, subagent isolation, comprehensive stripping, session-resume rehydration, score threshold, bypass patterns
-- **Hermes** (anti-pattern): Stale prefetch, session-end-only commit, no stripping
+Three earlier OpenViking integrations shaped this one. OpenClaw contributed synchronous recall against the current turn and threshold-triggered commits. The Claude Code plugin, the most production-hardened of the three, contributed the capture pipeline — sanitize injected blocks before capture, keep tool inputs, drop raw tool output — along with score-thresholded ranking, the pre-compact commit and session-resume rehydration. Hermes contributed the anti-pattern: it prefetched recall for the *previous* turn's query, so the first turn of a session got nothing and a topic switch got the wrong memories.
 
-Design comparison:
+| Concern | Hermes | OpenClaw | Claude Code | This extension |
+|---|---|---|---|---|
+| Recall query | previous turn | current turn | current turn | current turn |
+| Injection point | user message | user message | user message | `context` hook, newest user message |
+| Commit trigger | session end | token threshold | threshold + pre-compact + session end | threshold + pre-compact + session end |
+| Capture sanitization | none | its own recall block | every injected block | shared `capture-utils` |
+| Committed history | owned by the agent | replaced by OV archives | owned by the agent | replaced by OV archives (default on) |
 
-| Concern | Hermes (rejected) | OpenClaw (adopted) | This extension |
-|---------|-------------------|--------------------|----|
-| Recall timing | Stale prefetch (N-1 turn) | Synchronous current-turn | ✅ Synchronous via `context` event |
-| Recall relevance | Wrong topic | Right topic | ✅ Right topic |
-| First turn | Gets nothing | Gets relevant context | ✅ Gets relevant context |
-| Injection target | User message (stale cache) | User message (fresh search) | ✅ User message via `context` event |
-| Commit trigger | Session-end only | Token threshold mid-session | Token threshold mid-session + session-end + pre-compact | ✅ Threshold + session-end |
-| Memory stripping | None | Strip injected blocks before sync | Strip `<relevant-memories>` + `<system-reminder>` + `<openviking-context>` + `[Subagent Context]` + null bytes | ✅ Strip all 5 + null bytes |
-| History compression | None | OV archives replace transcript | Pi compaction (pre-compact commit preserves content in OV) | ❌ Pi has its own compaction |
-| Tools | 5 | 8 | 9 (via MCP) | 7 (no `add_skill` — pi has its own skill system) |
-| Profile injection | None | None | ✅ profile.md + preferences + entities at session start | ✅ Same |
+What the Claude Code plugin proved is no longer copied here — it is imported. `shared/` is a generated copy of `examples/memory-plugin-shared/lib`, produced by that directory's `sync.mjs`. Recall assembly, capture sanitization, profile building, the disk pending queue, batched sending, credential and settings resolution, and bypass matching all live there and behave identically in every harness. What stays local is the pi-shaped part: how a pi branch becomes capture payloads, how the `context` hook is rewritten, and how state survives `pi -c`.
 
-## Architecture
+## Layout
 
 ```
-~/.pi/agent/extensions/openviking/
-├── index.ts      # Entry point — registers events, tools, commands
-├── client.ts     # HTTP client for OV REST API (zero npm deps)
-├── index_builder.ts # Build memory index (viking:// tree + archive abstracts)
-├── recall.ts     # Synchronous search, reranking, <relevant-memories> formatting
-├── sync.ts       # Turn archival, memory stripping, commit management
-└── tools.ts      # 7 tool schemas + handlers
+pi-coding-agent-extension/
+├── config.ts     # settings, credentials, peer resolution
+├── client.ts     # HTTP client for the OpenViking REST API
+├── recall.ts     # per-prompt recall search and injection
+├── sync.ts       # capture, delivery, pending queue, commit
+├── takeover.ts   # binds the takeover state machine to pi
+├── tools.ts      # the seven model-facing viking_* tools
+├── index.ts      # entry point: event handlers and the /viking command
+├── package.json  # name and version; pi loads index.ts regardless
+├── lib/          # pi-specific logic kept out of the event handlers
+├── shared/       # generated copy of memory-plugin-shared/lib
+├── scripts/      # live e2e harness
+└── tests/        # node --test suites
 ```
 
-6 files. ~1000-1200 lines total.
+## Modules
 
-## Config
+### config.ts
 
-Inline in `index.ts`. Loaded from `~/.pi/agent/extensions/openviking/config.json`.
+Defines `OVConfig` and resolves it once at load time. Knobs come from `resolveSettings("pi", { cwd })`: every one of them is declared in `shared/config-schema.mjs` and resolved through the same layers as every other harness — environment, the workspace's `.openviking/config.json` and machine registry entry, `ovcli.conf`'s `plugin.pi`, `ovcli.conf`'s `plugin`, then the schema default. The extension has no configuration file of its own. It used to ship one holding exactly the code defaults, which made an operator's choice indistinguishable from a factory setting.
 
-```typescript
-interface OVConfig {
-  enabled: boolean;              // Master switch (default: true)
-  endpoint: string;              // OV server URL (default: "http://127.0.0.1:1933")
-  apiKey: string;                // API key (default: "" — dev mode)
-  account: string;               // Multi-tenant account (default: "")
-  user: string;                  // Multi-tenant user (default: "")
-  peerId: string;                // Actor peer identity for X-OpenViking-Actor-Peer
-  syncTurns: boolean;            // Auto-sync conversation turns (default: true)
-  recallBudget: number;          // Max tokens for <relevant-memories> block (default: 2000)
-  recallMaxContentChars: number; // Max chars per recall result before truncation (default: 500)
-  recallPreferAbstract: boolean; // Prefer abstract/overview over full content (default: true)
-  recallLimit: number;          // Legacy input scaled into six coding quotas (default: 10)
-  recallScoreThreshold: number;  // Min relevance score for recall results (default: 0.35)
-  recallMinQueryLength: number;  // Skip recall for queries shorter than this (default: 3)
-  profileBudget: number;        // Max tokens for user profile injection at session start (default: 10000)
-  resumeContextBudget: number;   // Max tokens for archive overview on resume/compact (default: 2000)
-  indexBudget: number;           // Max tokens for memory index in system prompt (default: 2000)
-  captureToolResults: boolean;   // Include tool result output in capture (default: false — agent inputs kept, results dropped)
-  captureMode: "semantic" | "keyword"; // "semantic" = always capture, "keyword" = only when trigger phrases match (default: "semantic")
-  captureMaxLength: number;     // Max sanitized text length for capture decision (default: 24000)
-  captureAssistantTurns: boolean; // Include assistant turns in capture (default: true — memory extraction needs both sides)
-  commitTokenThreshold: number;  // Commit after N pending tokens synced (default: 20000, 0 = session-end only)
-  commitOnShutdown: boolean;     // Commit session on session_shutdown (default: true)
-  mirrorMemoryWrites: boolean;   // Mirror MEMORY.md to OV at commit time (default: true)
-  writeQueueFlushInterval: number; // Write queue flush interval in ms (default: 5000)
-  writeQueueFlushThreshold: number; // Write queue flush after N queued turns (default: 5)
-  bypassPatterns: string[];      // Glob patterns for cwd to skip (default: [])
-  logLevel: "silent" | "error" | "info";  // default: "error"
-}
+Credentials — server URL, API key, account, user — come from `resolveOpenVikingCredentials(process.env, "pi")`, and `resolveAuthMode` decides between `trusted` and `api_key`, which is what gates whether identity headers go on the wire at all. The peer identity is resolved twice on purpose: `resolvePluginPeerId` picks the id from the configured layers, then `resolveEffectivePeerId` maps it onto the workspace and also returns `legacyPeerId`, the pre-git workspace id that recall still has to reach.
+
+Two older spellings are kept alive because setups depend on them: `bypassPatterns` holds the same list as the shared `bypassSessionPatterns`, and `OV_DEBUG_LOG` is read alongside the shared `OPENVIKING_DEBUG_LOG`. `EXTENSION_VERSION` reads `package.json`, the same manifest the release gate watches for a bump, and feeds the shared `User-Agent` builder.
+
+### client.ts
+
+The transport is built once in the constructor by `createOvHttp` from `shared/ov-http.mjs`, and `fetchJSON(path, init, timeoutMs)` is the thin call into it. Nothing throws: callers branch on `ok` over the same `{ ok, result, status, error, traceId }` envelope every harness reads, and a transport failure arrives as `status: 0`. The trace id is lifted out of whichever place the server put it so that failures can be correlated in the server's own logs.
+
+Headers are built per request: `Authorization: Bearer` when a key is configured, `X-OpenViking-Actor-Peer` for peer scoping, the shared `User-Agent`, and `X-OpenViking-Account` / `X-OpenViking-User` only when `sendIdentityHeaders` says the deployment is in trusted mode. Timeouts follow the class of call — 5s for health and session metadata, 10s for reads and message writes, 30s for commit and resource ingestion.
+
+Above that sit thin methods for the endpoints this extension and its tools need: health, session metadata, session context, message append, commit, `search/find`, the three content tiers (abstract, overview, read), `fs/ls`, `fs/stat`, delete, and resource ingestion. Commit is exposed twice because two callers need different things from it: `commitSessionResponse` returns the whole envelope so a failure can be logged with its status and trace id, `commitSession` returns just the result.
+
+### recall.ts
+
+`RecallManager` runs one search per prompt and injects its block into the provider's view of the conversation.
+
+The split between queueing and searching is what keeps recall off the UI path. `queueSearch(prompt)` runs in `before_agent_start` and only records the text. The first `context` hook of the turn calls `searchPending()`, which performs the search — by then pi has already rendered the user's message, so recall latency delays the model request but never the screen. Later LLM iterations within the same turn reuse the cached block, and `agent_end` invalidates it.
+
+The search itself is `buildRecallBlock` from the shared `recall-core.mjs`; quotas, scopes, budgeting and formatting are shared with every other harness. The extension supplies three things of its own: the actor peer id, the legacy peer id (under `actor` scope the effective peer is the only one asked, so a workspace whose id changed would otherwise lose everything written before the change), and the OV session id, which is what turns on server-side query expansion and the cross-turn dedup ledger. A query shorter than `minQueryLength` skips the round trip entirely.
+
+Injection is two-pass, and that is the interesting part. Historical user messages get back the exact block the recall ledger says was sent with them; only the newest user message receives this turn's fresh block, which is then recorded. The result is a request prefix that stays byte-identical across turns, so the provider's prompt cache keeps hitting instead of being invalidated by every new memory. The ledger keys on pi's entry id plus the message's original text — entry ids survive compaction and branch navigation, where an ordinal would not. When the host does not expose entry ids the pass fails closed: fresh recall still reaches the newest message, but nothing historical is replayed or recorded under an unstable key. A message that already contains `<openviking-context` is never injected into twice.
+
+### sync.ts
+
+`SyncManager` owns the OV session id, the capture watermark, and everything between a pi branch and a committed archive.
+
+The OV session id is `pi-<pi session id>`, derived locally by the shared `deriveHarnessSessionId`. Nothing round-trips to open a session: the id is deterministic, so the first write can carry it.
+
+**Capture.** `turn_end` hands the whole branch to `extractBranchCapturePayloads` (`lib/capture-adapter.mjs`), which takes the entries past `syncedEntryCount`, normalizes roles, renders tool parts with bounded input and output, and decides entry by entry whether to capture. There are two decision modes. Normally it is the shared `shouldCaptureText` heuristic. Under takeover it is a faithful mode that drops only empty text, slash commands and OpenViking's own status messages: once the boundary advances, a short acknowledgement may be represented to the model *only* through the archive overview, so discarding it as low-signal would lose it outright. A branch shorter than the watermark means pi navigated to a different branch, so the watermark resets to zero and the branch is re-extracted from the start.
+
+**Delivery.** Payloads leave in one batched request through the shared `sendSessionMessages`. Retryable failures are written to the shared disk pending queue and replayed later. A non-retryable rejection counts as accepted, so the watermark advances past payloads the server will never take rather than re-sending them every turn. The watermark only moves when the whole extraction was accepted.
+
+**Backlog drain.** `flushForTakeover` is the barrier takeover waits on, and it needs the queue empty for this session. The shared `replayPending` sends one request per entry and stops after a single replay window, which is what let a large offline backlog hold the barrier closed for many turns, so sync drains this session's own queued `addMessage` entries through the batch endpoint, `BATCH_LIMIT` per request, claiming one batch at a time so a failed batch costs only the retries of the entries it held. The drain is bounded by wall time (`OPENVIKING_PENDING_DRAIN_BUDGET_MS`, 60s by default) and optionally by batch count, so a huge backlog cannot block `turn_end` indefinitely; the remainder drains on later turns.
+
+**Commit.** Outside takeover, sync asks the server for `pending_tokens` after each accepted turn and commits when it crosses `commitTokenThreshold` — server-side accounting, not a local estimate. A failed commit is queued for replay unless the caller passes `queueOnFailure: false`, which takeover always does, because a commit that lands later cannot justify a boundary that moved now.
+
+### takeover.ts
+
+A binding, not a mechanism. The state machine lives in `lib/takeover-core.mjs`, which is pure and unit-tested; `takeover.ts` supplies its I/O: flush and commit go to `SyncManager`, the archive overview comes from the session context endpoint, state is persisted through `pi.appendEntry`, and the watermark is read back from sync.
+
+Context takeover makes OpenViking the authoritative long-term store for a pi session. Pi still keeps recent turns locally; committed history is represented to the model by OpenViking's archive overview through pi's `context` hook.
+
+#### Model
+
+| Field | Meaning |
+|---|---|
+| `coveredUserTurns` | Real user turns already covered by the archive overview |
+| `overview` | Latest archive overview returned by the session context endpoint |
+| `fingerprint` | Fingerprint of the last covered message, for branch-mismatch detection |
+| `pendingTokens` | Estimated synced token pressure since the last successful advance |
+| `lastSeenUserTurns` | User turns counted in the most recent `context` hook |
+| `syncedEntryCount` | Pi branch watermark, restored across `pi -p` / `pi -c` processes |
+
+State is persisted as a pi custom entry:
+
+```ts
+pi.appendEntry("ov-takeover", state)
 ```
 
-`recallLimit` is not a final result cap. Explicit values from 1 through 5 yield
-an effective total quota of 6 because every coding category keeps one slot.
-Callers that require exact category ceilings should use Context `quotas`.
-
-Config resolution: `config.json` → env vars (`OPENVIKING_URL`, `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_AGENT_ID`, etc.) → defaults. Follows the Claude Code plugin's priority chain.
-
-## File Details
-
-### client.ts (~250 lines)
-
-HTTP client for the OpenViking REST API. Uses Node.js built-in `fetch`. Zero npm dependencies.
-
-Wraps these endpoints:
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/health` | Health check |
-| POST | `/api/v1/sessions` | Create session |
-| GET | `/api/v1/sessions/{id}` | Get session metadata (including pending_tokens) |
-| POST | `/api/v1/sessions/{id}/messages` | Add message |
-| POST | `/api/v1/sessions/{id}/commit` | Commit (triggers memory extraction) |
-| POST | `/api/v1/search/find` | Quick retrieval (accepts `target_uri` for scope, `top_k`, `score_threshold`) |
-| GET | `/api/v1/content/read` | Read full content (L2) |
-| GET | `/api/v1/content/abstract` | Read abstract (L0) |
-| GET | `/api/v1/content/overview` | Read overview (L1) |
-| GET | `/api/v1/fs/ls` | List directory |
-| GET | `/api/v1/fs/stat` | Stat entry |
-| DELETE | `/api/v1/content` | Delete by URI |
-| POST | `/api/v1/resources` | Add resource |
-
-All methods are async. All catch errors internally and return `null`/empty on failure. Timeouts: 5s health, 10s reads, 30s writes.
-
-Headers include `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Actor-Peer` for multi-tenant routing and peer scope.
-
-```typescript
-class OVClient {
-  private baseUrl: string;
-  private apiKey: string;
-  private account: string;
-  private user: string;
-  private agent: string;  // always "pi"
-  private connected: boolean;
-
-  constructor(config: OVConfig);
-
-  async health(): Promise<boolean>;
-  async createSession(sessionId: string): Promise<boolean>;
-  async addMessage(sessionId: string, role: string, content: string): Promise<boolean>;
-  async getSession(sessionId: string): Promise<OVSessionMeta | null>;
-  async commitSession(sessionId: string, wait?: boolean): Promise<string | null>;
-  async find(query: string, opts?: { targetUri?: string; topK?: number; scoreThreshold?: number }): Promise<OVSearchResult[]>;
-  async readContent(uri: string): Promise<string | null>;
-  async abstract(uri: string): Promise<string | null>;
-  async overview(uri: string): Promise<string | null>;
-  async ls(uri: string): Promise<OVDirEntry[]>;
-  async stat(uri: string): Promise<OVEntryInfo | null>;
-  async deleteByUri(uri: string): Promise<boolean>;
-  async addResource(path: string, opts?: { to?: string }): Promise<any>;
-
-  // URI space resolution (from Claude Code plugin's resolveScopeSpace/resolveTargetUri)
-  // Multi-tenant OV deployments namespace memories under viking://user/<space>/memories/.
-  // The space is NOT always "default" — it's the first non-reserved, non-hidden directory
-  // under viking://user/ that matches the configured user identity.
-  private resolvedSpaces: Map<string, string>;  // cache: scope → space name
-
-  // Discover the actual namespace for a given scope ("user" or "agent").
-  // Probes /api/v1/system/status for the user identity, then ls viking://<scope>
-  // to find a matching space. Falls back to "default".
-  async resolveScopeSpace(scope: "user" | "agent"): Promise<string>;
-
-  // Expand a bare viking:// URI (e.g., viking://user/memories) to its fully-qualified
-  // form with the resolved space inserted (e.g., viking://user/alice/memories).
-  // Reserved directory names (memories, skills, instructions, workspaces) trigger space
-  // insertion; non-reserved paths pass through unchanged.
-  async resolveTargetUri(targetUri: string): Promise<string>;
-}
-```
-
-### index_builder.ts (~80 lines)
-
-**The table of contents.** Builds a browsable memory index that tells the model *what OV knows*, so it can make informed decisions about when to search deeper. Inspired by OpenClaw's preflight `assemble()` which provides `latest_archive_overview` and `pre_archive_abstracts` to the model.
-
-Without this index, the model is flying blind — it can only retrieve what it thinks to ask for, with no topical overview to guide its queries. The index is the map; recall is the flashlight.
-
-#### What goes into the index
-
-The index has three parts, built from OV's filesystem and session APIs:
-
-1. **Directory listing**: `client.ls("viking://")` → visible resources, the current user's namespace, and optional account-shared skills. Shows *what categories of knowledge exist*.
-2. **Abstract summaries**: For each leaf memory in `viking://user/memories/`, fetch L0 abstracts. These are ~100 tokens each and give the model a one-line summary of each stored memory.
-3. **Archive overview**: If the current session has a previous archive, its L1 overview (~2k tokens) is included as `[Session History Summary]`.
-
-#### When the index is built
-
-- **Session start** (`session_start`): build once, cache in memory.
-- **After commit** (threshold or shutdown): rebuild if new memories were extracted. The commit callback triggers a rebuild.
-
-The index is NOT rebuilt on every prompt — that would be wasteful. It's a relatively stable snapshot that refreshes only when the knowledge base actually changes (after commits).
-
-#### Index format
-
-The index is injected into the system prompt (via `before_agent_start`'s `systemPrompt` return). Capped at `indexBudget` tokens (~2000 default).
-
-```
-## OpenViking Knowledge Index
-[Showing what's in your long-term memory]
-
-### viking://user/memories/ (12 memories)
-- Prefers local/self-hosted solutions over cloud services
-- Project X uses SQLite, not PostgreSQL, pool size 5
-- Chrome DevTools MCP gets stuck on closed tabs; pkill to fix
-- pip "Successfully installed" can lie — verify with import
-- (8 more — use viking_search to find specific memories)
-
-### viking://resources/ (3 resources)
-- OpenViking reference doc (viking://resources/openviking-reference)
-- Project X architecture diagram (viking://resources/projx-arch)
-- (1 more — use viking_browse to explore)
-
-### viking://user/sessions/{session_id}/history/ (2 archives)
-- Archive 2026-05-25: 15-turn session about pi extension design
-- (1 more — use viking_archive_expand for detail)
-
-Tools: viking_search | viking_read | viking_browse | viking_remember | viking_forget | viking_add_resource | viking_archive_expand
-```
-
-#### Why not include full memory content
-
-The index is intentionally a *table of contents*, not the full encyclopedia. Reasons:
-- Token budget: full content of all memories would blow past system prompt limits.
-- Relevance: most memories are irrelevant to the current task — that's what recall is for.
-- Freshness: the index refreshes after commits, but recall is always current-turn.
-
-The model sees the index and knows "OV knows about X, Y, Z." When a task touches those topics, it uses `viking_search` for depth or relies on automatic `<relevant-memories>` injection.
-
-```typescript
-class IndexBuilder {
-  private client: OVClient;
-  private cachedIndex: string | null;
-
-  constructor(client: OVClient);
-
-  // Build index from scratch — called at session_start and after commits
-  async buildIndex(): Promise<string>;
-
-  // Get cached index (returns empty string if not built or OV is down)
-  getIndex(): string;
-}
-```
-
-### recall.ts (~150 lines)
-
-Synchronous recall that runs on every user prompt, injecting relevant OV context into the user message before the LLM sees it. This is the *flashlight* — targeted retrieval for the current query. The *index* (from `index_builder.ts`) is the *map* that helps the model know when to use it.
-
-#### How it works
-
-1. Extract query text from the user's prompt (plain text, no tool calls/images)
-2. **Short-circuit**: if query length < `recallMinQueryLength` (default 3), skip recall — queries like "y", "ok", "go" don't carry enough signal for useful retrieval (from Claude Code plugin)
-3. **Server-side context assembly**: call `/api/v1/search/search` with
-   `mode="context"` and `purpose="coding"`. The server applies the six-domain
-   preset (`events/entities/preferences/experiences/resources/skills`), ownership
-   scopes, budgeting and dedup. On older servers the extension falls back to
-   `/recall`, then to the legacy memory/skill `find` path.
-4. **Query profiling**: analyze the query for intent signals before ranking (from Claude Code plugin):
-   ```typescript
-   function buildQueryProfile(query: string): QueryProfile {
-     return {
-       tokens: extractContentTokens(query),  // content words minus stopwords
-       wantsPreference: /prefer|favorite|like|want|usually|always|never/i.test(query),
-       wantsTemporal:   /when|yesterday|last |recent|ago|last week/i.test(query),
-     };
-   }
-   ```
-   This gates the category boosts — preference memories only get boosted when the query has preference intent, event memories only when the query has temporal intent. Without this, boosting everything on every query dilutes the signal.
-5. **Score filter**: discard any results below `recallScoreThreshold` (default 0.35) — irrelevant results are worse than no results (from Claude Code plugin). Filtering is client-side, not server-side.
-6. **Deduplication** with category-specific strategies (from Claude Code plugin):
-   - Events/cases → dedupe by URI (same event can appear with different abstracts)
-   - Everything else → dedupe by abstract text (lowercased), fall back to URI
-   
-   Without this, vector search can return near-duplicate results that waste the token budget.
-7. **Rerank** beyond pure vector score using the query profile:
-   - Leaf preference boost (+0.12): item level == 2 or URI ends in `.md`
-   - Event boost (+0.10): query has temporal intent AND item is in events/cases category
-   - Preference boost (+0.08): query has preference intent AND item is in preferences category
-   - Lexical overlap boost (up to +0.20): query tokens found in item URI + abstract, normalized by min(tokens.length, 4)
-8. **Content resolution** for each ranked item (from Claude Code plugin):
-   - If `recallPreferAbstract` is true (default): use abstract/overview text from search results
-   - If level is 2 (full content): fetch full body from `/api/v1/content/read`
-   - Content capped per-item to `recallMaxContentChars` (default 500 chars) — prevents a single verbose memory from consuming the entire budget
-9. **Token-budgeted formatting with graceful degradation** (from Claude Code plugin):
-   - Process items in ranked order
-   - Items within the total `recallBudget` (default 2000 tokens) get full content lines
-   - Items beyond the budget are **degraded to URI + score hints** rather than dropped — the model can call `viking_read` to expand them
-   - The first item is always included even if it exceeds the remaining budget
-10. Format as `<relevant-memories>` block
-
-#### Reranking
-
-See step 7 above for exact boost values. The boosts are gated by the query profile — preference/event boosts only fire when the query has matching intent. This prevents diluting the ranking with irrelevant boosts.
-
-The OpenClaw plugin uses a similar approach. Start with vector-score-only during initial development, add the full reranking pipeline once the extension is stable.
-
-#### Injection via `context` event
-
-The `context` event fires before each LLM call with a mutable deep copy of messages. This is pi's equivalent of OpenClaw's `assemble()`. On each call:
-
-1. Find the user message that started this prompt (scan backwards for first `role: "user"`)
-2. Check if `<relevant-memories>` already injected (idempotency — the `context` event fires per LLM iteration, not per prompt)
-3. If not injected: prepend `<relevant-memories>` block to the user message content
-4. If already injected: skip (cached from first context call for this prompt)
-
-The recall search itself only runs once per prompt. `before_agent_start` queues the current prompt without network I/O; the first `context` call consumes it and performs the synchronous search after Pi has rendered the user message. Later LLM iterations reuse the cached block.
-
-```typescript
-class RecallManager {
-  private client: OVClient;
-  private cachedBlock: string | null;
-  private promptId: string | null;  // track which prompt this cache is for
-
-  constructor(client: OVClient);
-
-  // Called in before_agent_start — records the current prompt without I/O
-  queueSearch(userQuery: string): void;
-
-  // Called on the first context event — runs search and caches the result
-  async searchPending(): Promise<string | null>;
-
-  // Called in context event — injects cached block into messages
-  injectRecall(messages: Message[]): Message[];
-
-  // Invalidate cache (called at agent_end)
-  invalidate(): void;
-}
-```
-
-**`<relevant-memories>` format (with degradation example):**
-```
-<relevant-memories>
-[System note: The following is recalled memory from OpenViking, NOT new user input. Treat as informational background data.]
-- [memory 0.87] User prefers local/self-hosted solutions over cloud services
-- [memory 0.82] Project uses SQLite for local dev, pool size 5
-- [skill 0.73] Use viking_read to expand: viking://user/skills/deployment-checklist.md
-</relevant-memories>
-```
-
-The third line shows a degraded hint — the item was beyond the content budget but still relevant. The model can expand it with `viking_read` if needed.
-
-### sync.ts (~250 lines)
-
-Handles turn archival, memory stripping, commit management, and compaction safety.
-
-#### Session ID strategy
-
-Use pi's session ID prefixed with `pi-` as the OV session ID. Prevents collisions with Hermes sessions (which use unprefixed UUIDs).
-
-**Subagent isolation is natural, not managed.** Pi extensions don't have SubagentStart/SubagentStop events (those are Claude Code-specific hooks). Instead, when `task-tool` spawns a subagent, it's a separate pi process that loads extensions normally. The subagent's OV extension instance creates its own session with `pi-<subagentSessionId>` — inherently isolated because each pi process gets a unique session ID via `getSessionId()`. No parent management or special prefix needed. This is actually *better* than CC's approach: process-level isolation with zero coordination overhead, vs explicit hook-based session management.
-
-The only requirement: subagents spawned for internal extension work (e.g., the learning extension's reviewer) pass `--no-extensions`, which prevents the OV extension from loading in the reviewer subprocess.
-
-#### Turn archival
-
-On each `turn_end`:
-1. Extract user text + assistant text from the turn
-2. **Strip all injected blocks** from both before sending to OV (see Memory Stripping below)
-3. **Preserve tool USE inputs, drop tool RESULTS** (from Claude Code plugin): format each turn's tool interactions as `[tool: <name>]\n<input>`. Tool use inputs are agent-authored and carry signal ("the agent chose to read file X, run command Y"). Tool results are typically noise for memory extraction (file contents, command stdout). If `captureToolResults` is true, include tool results up to a reasonable cap.
-4. **Add tool summary line** to assistant turn: `[assistant used tools: read, edit, bash]`. This gives OV's memory extractor context about what the agent *did* beyond prose — "ran bash, edited a file, then read another file" is more signal than just the assistant's text response (from Claude Code plugin).
-5. Estimate token count for the stripped content (using CJK-aware estimator — see Token Estimation below)
-6. Fire-and-forget batch add to OV session (non-blocking)
-7. Track cumulative `pendingTokens`; check against threshold
-
-#### Capture filtering (from Claude Code plugin)
-
-Not every turn should be archived. One-word acknowledgments, slash commands, pure questions without substance, and punctuation-only turns carry zero signal for memory extraction and pollute the OV session. The Claude Code plugin's `shouldCapture()` filter pipeline prevents this noise from reaching OV (ported from `auto-capture.mjs`).
-
-**Filter pipeline** (applied to each user turn before syncing):
-
-1. **Empty check**: strip + trim → skip if empty.
-2. **Length bounds**: skip if compact text < 4 chars (CJK) / 10 chars (Latin) or > `captureMaxLength` (default 24000). CJK uses a higher min-density because CJK chars carry more meaning per character.
-3. **Command detection**: skip if text starts with `/` followed by a command name (e.g., `/help`, `/compact`). These are framework directives, not conversational content.
-4. **Non-content detection**: skip if text is entirely punctuation/symbols/whitespace (no semantic content).
-5. **Question-only detection**: skip if text matches the pattern `/^(who|what|when|where|why|how|...)...?[?？]$/i` — pure interrogatives with no substance beyond the question itself.
-6. **Keyword/semantic mode gate**: in `"keyword"` mode, skip unless at least one user turn matches a `MEMORY_TRIGGERS` regex. In `"semantic"` mode (default), skip this gate — always capture.
-
-```typescript
-const MEMORY_TRIGGERS = [
-  /remember|preference|prefer|important|decision|decided|always|never/i,
-  /[\w.-]+@[\w.-]+\.\w+/,                                       // email patterns
-  /(?:my)\s*(?:name|live|from|birthday|phone|email)/i,         // identity signals
-  /(?:i)\s*(?:like|hate|love|want|need|think|believe)/i,       // preference signals
-  /(?:favorite|favourite|love|hate|enjoy|dislike)/i,
-];
-
-function shouldCapture(text: string, mode: "semantic" | "keyword"): { capture: boolean; reason: string } {
-  const normalized = stripAndTrim(text);
-  if (!normalized) return { capture: false, reason: "empty" };
-
-  const compact = normalized.replace(/\s+/g, "");
-  const isCJK = /[぀-ヿ㐀-鿿豈-﫿가-힯]/.test(compact);
-  const minLen = isCJK ? 4 : 10;
-  if (compact.length < minLen || normalized.length > config.captureMaxLength)
-    return { capture: false, reason: "length_out_of_range" };
-
-  if (/^\/[a-z0-9_-]{1,64}\b/i.test(normalized))
-    return { capture: false, reason: "command" };
-
-  if (/^[\p{P}\p{S}\s]+$/u.test(normalized))
-    return { capture: false, reason: "non_content" };
-
-  if (/^(who|what|when|where|why|how|is|are|does|did|can|could|would|should)\b.{0,200}[?？]$/i.test(normalized))
-    return { capture: false, reason: "question_only" };
-
-  if (mode === "keyword") {
-    const hasTrigger = MEMORY_TRIGGERS.some(re => re.test(normalized));
-    return { capture: hasTrigger, reason: hasTrigger ? "trigger_matched" : "no_trigger" };
+At startup the extension scans the branch from the end for the newest such entry and restores both the boundary and `SyncManager`'s watermark, so a `pi -c` continuation does not resend branch entries OpenViking already has.
+
+#### Runtime flow
+
+1. `turn_end` captures new branch entries into the OpenViking session, falling back to the disk pending queue when the server is unreachable.
+2. When `pendingTokens` reaches `takeoverTokenThreshold`, and there are more user turns than `takeoverKeepRecentTurns`, takeover tries to advance.
+3. Advancing requires the flush barrier: every `addMessage` entry queued for *this* session must be delivered. Queued `commitSession` entries and entries belonging to other sessions do not hold it closed.
+4. The commit runs with `queueOnFailure: false`.
+5. The session context endpoint is polled until `latest_archive_overview` is available — `takeoverOverviewPollMax` attempts, `takeoverOverviewPollMs` apart. An empty overview is never injected; the boundary stays where it is and the token pressure resets so the next threshold crossing retries instead of re-committing every turn.
+6. On success the boundary advances to `lastSeenUserTurns - takeoverKeepRecentTurns`.
+7. The `context` hook then replaces every covered message with one synthetic user message beginning `[OpenViking Session Context]`, keeps the recent tail verbatim, and recall is injected into the newest kept user turn as usual.
+
+The overview message's timestamp is derived from the first kept message, so the provider payload stays byte-stable between commits and can benefit from prompt caching.
+
+#### Compaction
+
+When pi emits `session_before_compact`, takeover runs the same flush → commit → overview sequence. On success it hands pi the overview as the compaction summary and resets the boundary, because pi's own compaction has absorbed it:
+
+```ts
+{
+  compaction: {
+    summary: "[OpenViking Session Context]\n...",
+    firstKeptEntryId,
+    tokensBefore,
+    details: { source: "openviking" },
   }
-
-  // semantic mode — always capture (default)
-  return { capture: true, reason: "semantic" };
 }
 ```
 
-**Batch-level caveat** (from CC plugin): `shouldCapture()` is designed for single user messages. When applied to a concatenated multi-turn batch, it misfires (combined text exceeds max length → entire batch dropped, or a leading `/cmd` flips the whole batch to "command"). For pi's `turn_end` event, each turn is evaluated individually, so this problem doesn't arise. The filter runs per-turn before the dedup guard.
+If any step fails the handler returns nothing and pi's default compaction runs. Fail-open is deliberate: a failed takeover must never leave the session without a compaction.
 
-**Integration into turn archival**: `shouldCapture()` runs on the user's stripped text after step 2 (strip injected blocks). If the decision is `capture: false`, the turn is skipped entirely — no OV message push, no token count. The `syncedTurnCount` still advances so the dedup guard stays correct.
+#### Failure modes
 
-#### Memory stripping (critical)
+| Failure | Behavior |
+|---|---|
+| Health check fails | Extension stays disconnected; pi runs normally |
+| Pending `addMessage` replay incomplete | Barrier stays closed, boundary is not advanced, full local history remains visible |
+| Commit fails | Boundary is not advanced; pending token pressure is retained |
+| Overview not ready | Boundary is not advanced; retried at the next threshold or by `/viking commit` |
+| Branch fingerprint mismatch | Boundary resets to 0 and full history is shown until the next successful advance |
+| Compaction takeover fails | Returns nothing; pi's default compaction proceeds |
 
-Before syncing any content to OV, strip **all** injected/synthetic blocks — not just `<relevant-memories>`. The Claude Code plugin strips `<openviking-context>`, `<system-reminder>`, `<relevant-memories>`, and `[Subagent Context]` blocks. Without comprehensive stripping, OV indexes injected context as conversation, creating a feedback loop that pollutes future recall quality.
+#### Live gate
 
-```typescript
-function stripInjectedBlocks(text: string): string {
-  // Strip all blocks that OV or the agent framework injects
-  text = text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/g, "");
-  text = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
-  text = text.replace(/<openviking-context>[\s\S]*?<\/openviking-context>/g, "");
-  text = text.replace(/\[Subagent Context\][\s\S]*?(?=\n\n|$)/g, "");
-  text = text.replace(/\x00/g, "");  // null bytes from encoding issues
-  return text.trim();
-}
-```
+`scripts/e2e-live.sh` drives a real pi binary, a real OpenViking server and a real LLM endpoint (its required and optional environment variables are documented at the top of `scripts/e2e-live.mjs`). It runs three `pi -p` / `pi -c` turns with a tiny takeover threshold and asserts that the third provider payload carries `[OpenViking Session Context]` while the padding from the first turn is gone from the raw conversation history. Nothing in the unit suites covers that end to end, so it stays a manual gate.
 
-#### Token estimation (CJK-aware)
+### tools.ts
 
-All token budgets in the spec use a CJK-aware estimator, not flat chars/4. The Claude Code plugin discovered that chars/4 silently undercounts CJK content by 4-6× — a "5000 token budget" with chars/4 becomes ~500 real tokens for Chinese text (from `profile-inject.mjs`).
+Seven tools registered on pi's model, all sharing the one `OVClient`. Each handler answers "OpenViking server is not reachable." when the startup health check never succeeded, so a down server degrades to a message rather than an error.
 
-```typescript
-function estimateTokens(text: string): number {
-  if (!text) return 0;
-  let cjk = 0;
-  for (let i = 0; i < text.length; i++) {
-    if (text.charCodeAt(i) >= 0x3000) cjk++;
-  }
-  const other = text.length - cjk;
-  return Math.ceil(cjk * 1.5 + other / 4);
-}
-```
+| Tool | Purpose |
+|---|---|
+| `viking_search` | Semantic search, optionally scoped to a `viking://` prefix |
+| `viking_read` | Read one URI at `abstract`, `overview` or `full` detail |
+| `viking_browse` | List a directory or stat an entry |
+| `viking_remember` | Store a fact for cross-session persistence |
+| `viking_forget` | Delete by URI, or by query when the match is strong |
+| `viking_add_resource` | Ingest a URL into the knowledge base |
+| `viking_archive_expand` | Expand an archived session back into detail |
 
-Rule: codepoint >= 0x3000 (CJK / Hiragana / Katakana / Hangul / fullwidth) counts at 1.5 tokens/char. Everything else at chars/4. Errs on the side of overcounting CJK by ~10-20% — safe direction for budget enforcement.
+Two of them are less direct than they look. `viking_remember` does not write a memory: it appends a `[Remember — <category>]` message to the live OV session, so extraction treats it like any other turn and the fact goes through the same pipeline as everything else. `viking_forget` by query deletes only when the top match scores above 0.8; below that it reports no strong match rather than guessing which memory to destroy. There is no `add_skill` tool — pi has a skill system of its own.
 
-This affects: recall budget (`recallBudget`), profile budget (`profileBudget`), index budget (`indexBudget`), and per-item content cap (`recallMaxContentChars`). The per-item cap is in chars but should be validated against the CJK-aware estimator for content known to be CJK-heavy.
+### index.ts
 
-#### Commit management
+The entry point. It loads the config, returns immediately when disabled, constructs the modules, and registers handlers.
 
-Three commit triggers (matching Claude Code plugin's three-way approach):
+| Event | Action |
+|---|---|
+| `session_start` | Kick off startup without awaiting it |
+| `before_agent_start` | Await startup, queue the prompt for recall, compose system-prompt additions |
+| `context` | Run the pending recall, apply the takeover transform, inject recall |
+| `tool_call` | Redirect host file tools that were handed a `viking://` URI |
+| `turn_end` | Sync the branch, feed the token estimate to takeover, update the status line |
+| `session_before_compact` | Takeover compaction, or a commit plus a fresh overview |
+| `session_shutdown` | Persist takeover state, or a final commit |
+| `agent_end` | Invalidate the recall cache |
 
-1. **Threshold commit**: When cumulative `pendingTokens` crosses `commitTokenThreshold` (default 20000), trigger `commit(wait=false)`. Token-based is more accurate than turn-based — a 1-line ack and a 10-tool-call turn are very different content volumes. Archive generation and memory extraction happen asynchronously on the OV server. If the session crashes at turn 80, memories from turns 1-70 are already committed.
+**Two guards.** The bypass check runs the shared `isBypassed` against the cwd, so a scratch directory never pollutes long-term memory; the pattern syntax is the shared one, identical across harnesses. The health check runs once — if the server is unreachable the extension stays disconnected for the whole session, every handler returns early, and the tools say so. No retries, no repeated warnings.
 
-2. **Pre-compact commit**: When pi fires `compaction` event (before it rewrites the transcript), trigger `commit(wait=true)`. This is critical — without it, content that gets compacted away is lost to OV forever. The Claude Code plugin's `PreCompact` hook does the same thing.
+**Startup is memoized, not awaited.** The startup chain — health check, session derivation, pending replay, profile build, takeover restore, tool registration — costs a couple of seconds against a remote server, and `session_start` does not await it, because that delay would land on every pi launch. `before_agent_start` awaits the same in-flight promise, so the first turn still gets its profile and recall. That is also the only startup path a `pi -c` continuation has: pi does not fire `session_start` for one.
 
-3. **Shutdown commit**: On `session_shutdown`, trigger `commit(wait=true)`. Blocks until extraction completes (with timeout). The safety net for the final turns.
+**System prompt.** `before_agent_start` appends the profile block built by the shared `profile-inject.mjs` and capped at `profileTokenBudget`; outside takeover, the archive overview cached at resume or after a pre-compact commit; and one line naming the seven tools. Under takeover the overview reaches the model through the `context` hook instead, so it is not appended twice.
 
-```typescript
-class SyncManager {
-  private client: OVClient;
-  private ovSessionId: string | null;
-  private pendingTokens: number;
-  private commitTokenThreshold: number;
-  private syncedTurnCount: number;  // incremental counter — prevents duplicate pushes
-  private writeQueue: WriteQueue;   // batches turns for efficient OV delivery
-  private initialized: boolean;
+**Tool guard.** `guardVikingUriToolCall` (`lib/uri-guard-adapter.mjs`) watches for a `viking://` URI handed to a host tool that cannot read one — `read`, `grep`, `find`, `ls`, `bash` — and blocks the call with the equivalent `viking_*` invocation spelled out. Without it the model burns turns on a file path that does not exist on disk.
 
-  constructor(client: OVConfig, piSessionId: string, commitTokenThreshold: number);
+**Surface.** The status line reports connection, entries added on the last turn, and either takeover coverage against its threshold or the plain commit threshold. `/viking` prints that same state; `/viking commit` forces a flush and commit, which under takeover also advances the boundary.
 
-  async ensureSession(): Promise<boolean>;
-  async syncTurn(userMsg: string, assistantMsg: string, turnIndex: number): Promise<void>;
-  // syncTurn runs shouldCapture() on userMsg, enqueues to writeQueue if passing,
-  // checks turnIndex > syncedTurnCount before enqueuing (dedup guard),
-  // estimates tokens (CJK-aware), adds to pendingTokens, checks threshold
-  async commit(wait?: boolean): Promise<string | null>;  // returns archive ID if committed
-  async getPendingTokens(): Promise<number>;  // fetches pending_tokens from session metadata
-  async flushQueue(): Promise<void>;  // flush write queue + check commit threshold
-}
+## Event flow
 
-The `syncedTurnCount` counter prevents duplicate pushes if `turn_end` fires multiple times for the same turn (retries, errors). Each call checks `turnIndex > syncedTurnCount` before enqueuing; after successful enqueue, advances the counter. Persisted to a state file alongside the OV session so it survives across compactions within a session.
-```
+**Session start.** Bypass check, then health check; on failure everything after this is a no-op. Open the recall ledger, derive the OV session id, replay anything the pending queue still holds. Build the profile block. With takeover on, restore the boundary from the branch and hand `SyncManager` its watermark; with takeover off, fetch the archive overview for resume rehydration instead. Register the tools.
 
-#### Write queue (async batching)
+**Per prompt.** `before_agent_start` awaits startup, records the prompt for recall without any I/O, and returns the composed system prompt. Pi renders the user message. Then, for each LLM iteration, the `context` hook fires: the first one runs the search, the takeover transform replaces covered history with the overview message, and recall is injected — fresh into the newest user message, replayed from the ledger into the older ones. `agent_end` clears the cache.
 
-**Why pi doesn't need CC's detached-worker pattern.** CC hooks have strict timeouts (Stop = 45s, SessionEnd = 30s). If an HTTP call takes 20s, the user waits 20s. CC's `async-writer.mjs` solves this by draining stdin, approving immediately, and spawning a detached child process to do the HTTP work.
+**Per turn.** `turn_end` extracts everything past the watermark from the branch, sanitizes and filters it, sends it as one batch (or queues it), advances the watermark, and estimates the tokens it just synced. Outside takeover, that is followed by a threshold check against the server's `pending_tokens`. Under takeover, the estimate is added to the pending pressure, which may trigger a flush, commit and boundary advance.
 
-Pi extensions don't have this problem — event handlers are naturally async. `turn_end` handlers return promises; pi's event loop doesn't block the user on them. The spec already says "fire-and-forget" for turn additions.
+**Pre-compact.** Under takeover, pi is handed the OV overview as its compaction summary, or nothing at all if any step failed. Outside takeover, the extension commits so that content pi is about to rewrite is preserved as an archive, then caches the new overview for the next system prompt.
 
-**But pi benefits from batching.** Instead of one HTTP call per turn (CC's approach — `addMessage()` in a loop), a write queue accumulates turns locally and flushes them in a single batch. This reduces HTTP overhead from N round-trips to 1 per flush.
+**Shutdown.** Flush, then persist takeover state, or commit one last time when takeover is off.
 
-```typescript
-class WriteQueue {
-  private client: OVClient;
-  private ovSessionId: string;
-  private queue: { role: string; content: string }[];
-  private flushTimer: NodeJS.Timeout | null;
-  private flushIntervalMs: number;    // default: 5000 (5 seconds)
-  private flushThreshold: number;     // default: 5 turns
-  private flushing: boolean;          // guard against concurrent flushes
+## Two decisions worth recording
 
-  constructor(client: OVClient, ovSessionId: string);
+**The memory index was superseded, the reasoning behind it was not.** An earlier draft of this design specified an `index_builder.ts` that would keep a browsable table of contents of `viking://` in the system prompt; it was superseded by `shared/profile-inject.mjs`, whose profile block is folded into `systemPrompt` instead. The block stays a listing rather than memory content for the reasons the index was a listing: a map costs a fixed, small token budget, stays relevant to every turn instead of one, and is never stale in the way a copied memory is. Recall is the flashlight that fetches content for the turn at hand; the block is the map that tells the model what there is to fetch.
 
-  // Add a turn to the queue. Triggers flush if threshold reached.
-  enqueue(role: string, content: string): void;
+**Capture works on whole turns, not on individual tool calls.** `turn_end` hands `sync.ts` the finished branch, and that is what gets mirrored; `tool_call` is only ever consulted by the URI guard. A turn carries the user's intent and the assistant's conclusion together, which is what a memory needs, while a single tool call carries neither, so intercepting them one by one would have produced many fragments and no memories.
 
-  // Flush all queued turns to OV in a single batch. Called automatically
-  // at threshold or interval, and manually at pre-compact/shutdown.
-  async flush(): Promise<void>;
-
-  // Cancel any pending timer (called at shutdown).
-  cancelPending(): void;
-}
-```
-
-**Flush triggers:**
-1. **Threshold**: when `queue.length >= flushThreshold` (default 5 turns), flush immediately.
-2. **Interval**: a `setInterval` timer flushes every `flushIntervalMs` (default 5000ms). Catches the case where the user sends a few turns then pauses.
-3. **Pre-compact**: `session_before_compact` calls `queue.flush()` synchronously before commit.
-4. **Shutdown**: `session_shutdown` calls `queue.flush()` before final commit.
-
-**Error handling**: if a flush fails (OV unreachable), the turns stay in the queue. The next flush attempt will retry them. This is a deliberate improvement over CC's approach, which advances the turn counter regardless of per-turn failures.
-
-**Config additions for write queue:**
-```typescript
-writeQueueFlushInterval: number;   // Flush interval in ms (default: 5000)
-writeQueueFlushThreshold: number;  // Flush after N queued turns (default: 5)
-```
-
-### tools.ts (~200 lines)
-
-7 tools for agent-initiated OV operations. All tools use the shared `OVClient` instance.
-
-#### `viking_search`
-```typescript
-{
-  name: "viking_search",
-  description: "Semantic search over the OpenViking knowledge base. Returns ranked results with viking:// URIs and abstracts. Use when you need to recall past decisions, user preferences, or project-specific knowledge not in current context.",
-  promptSnippet: "Search OpenViking knowledge base for past decisions, preferences, and project knowledge",
-  promptGuidelines: [
-    "Use viking_search when you need information from previous sessions that may not be in MEMORY.md.",
-    "Use viking_search before making decisions that might conflict with established patterns or past decisions.",
-  ],
-  parameters: Type.Object({
-    query: Type.String({ description: "Search query" }),
-    scope: Type.Optional(Type.String({ description: "Viking URI prefix to scope search (e.g., 'viking://resources/')" })),
-    limit: Type.Optional(Type.Number({ description: "Max results (default: 10)" })),
-  }),
-}
-```
-
-#### `viking_read`
-```typescript
-{
-  name: "viking_read",
-  description: "Read content at a viking:// URI. Three detail levels: 'abstract' (~100 tokens), 'overview' (~2k tokens), 'full' (complete). Start with abstract, escalate to overview/full when needed.",
-  promptSnippet: "Read OpenViking content at a viking:// URI with tiered detail levels",
-  parameters: Type.Object({
-    uri: Type.String({ description: "viking:// URI to read" }),
-    level: StringEnum(["abstract", "overview", "full"] as const),
-  }),
-}
-```
-
-#### `viking_browse`
-```typescript
-{
-  name: "viking_browse",
-  description: "Browse the OpenViking knowledge store like a filesystem. List directory contents, get metadata, or view the hierarchy tree.",
-  promptSnippet: "Browse the viking:// directory tree in OpenViking",
-  parameters: Type.Object({
-    action: StringEnum(["list", "stat"] as const),
-    uri: Type.Optional(Type.String({ description: "viking:// URI (default: 'viking://')" })),
-  }),
-}
-```
-
-#### `viking_remember`
-```typescript
-{
-  name: "viking_remember",
-  description: "Store a fact or memory in OpenViking. Stored as a session message and extracted into long-term memory on commit. Use for important information the agent should remember: preferences, decisions, gotchas, lessons learned.",
-  promptSnippet: "Store a fact in OpenViking for cross-session persistence",
-  promptGuidelines: [
-    "Use viking_remember for facts that should survive across sessions but don't belong in MEMORY.md.",
-    "Good for: user preferences, architectural decisions, gotchas, environment details.",
-  ],
-  parameters: Type.Object({
-    content: Type.String({ description: "The fact or observation to store" }),
-    category: Type.Optional(Type.String({ description: "Category hint: 'preference', 'entity', 'event', 'case', 'pattern'" })),
-  }),
-}
-```
-
-#### `viking_forget`
-```typescript
-{
-  name: "viking_forget",
-  description: "Delete a memory by URI or search for a specific memory and remove it. Use to correct outdated or wrong information in the knowledge base.",
-  promptSnippet: "Delete a memory from OpenViking by URI or query",
-  parameters: Type.Object({
-    uri: Type.Optional(Type.String({ description: "Exact viking:// URI to delete" })),
-    query: Type.Optional(Type.String({ description: "Search query — deletes the strongest match if score > 0.8" })),
-  }),
-}
-```
-
-#### `viking_add_resource`
-```typescript
-{
-  name: "viking_add_resource",
-  description: "Ingest a URL, file path, or document into the OpenViking knowledge base. OV auto-processes it into L0/L1/L2 tiers and indexes it for semantic search. Use for bootstrapping knowledge or adding reference documentation.",
-  promptSnippet: "Ingest a URL or document into OpenViking for indexed retrieval",
-  parameters: Type.Object({
-    url: Type.String({ description: "URL or file path to ingest" }),
-    reason: Type.Optional(Type.String({ description: "Why this resource is relevant (improves indexing)" })),
-  }),
-}
-```
-
-#### `viking_archive_expand`
-```typescript
-{
-  name: "viking_archive_expand",
-  description: "Expand an archived session back into raw messages. Use when the archive summary is too coarse and you need the detailed conversation history. Returns the full message transcript for that archive.",
-  promptSnippet: "Expand an archived session to see raw conversation messages",
-  parameters: Type.Object({
-    archive_id: Type.Optional(Type.String({ description: "Archive ID to expand (from session context)" })),
-    session_id: Type.Optional(Type.String({ description: "OV session ID to expand" })),
-  }),
-}
-```
-
-### index.ts (~200 lines)
-
-Main entry point. Wires everything together.
-
-#### Event registrations
-
-| Event | Handler | What it does |
-|-------|---------|-------------|
-| `session_start` | Init + Resume + Profile | Health check OV, check bypass, create/reuse session, **inject user profile** (profile.md + preferences/ + entities/ listing, capped at `profileBudget`), on resume: fetch archive overview, build memory index, register tools |
-| `before_agent_start` | Recall queue + System prompt | Queue current prompt without I/O, inject memory index + tool ad into system prompt |
-| `context` | Recall search + injection | Search after user-message rendering, then prepend `<relevant-memories>` (reuse cached block on later LLM iterations) |
-| `turn_end` | Sync | Strip all injected blocks, **capture filter (shouldCapture)**, **preserve tool USE inputs + tool summary line**, drop tool RESULTS, **enqueue to write queue** (auto-flushes at threshold/interval), track pending tokens, check commit threshold |
-| `session_before_compact` | Pre-compact commit + rehydration | Synchronous `commit(wait=true)` before pi rewrites the transcript, then fetch new archive overview and cache for next `before_agent_start` injection — content about to be compacted is preserved in OV and rehydrated after compaction |
-| `session_shutdown` | Final commit | Commit OV session (blocking), rebuild index, optionally mirror MEMORY.md |
-| `agent_end` | Cleanup | Invalidate recall cache |
-
-#### Guard pattern
-
-Two-level guard:
-
-1. **Health check**: At `session_start`, ping OV health. If unreachable: set `connected = false`, log once, all subsequent operations become no-ops. No retrying, no spamming. Tools return "OpenViking server is not reachable."
-
-2. **Bypass check**: Before any OV operation, check `config.bypassPatterns` against `process.cwd()`. If the cwd matches any pattern (e.g., `/tmp/**`, `**/scratch/**`), skip all OV operations for this session. This prevents throwaway experiments from polluting long-term memory (from Claude Code plugin's `OPENVIKING_BYPASS_SESSION_PATTERNS`).
-
-#### Session resume rehydration
-
-When `session_start` fires with `reason: "resume"`, the session may have previous OV archives from a prior run. Fetch the latest archive overview (L1, ~2k tokens) and inject it alongside the memory index. This rehydrates the model's context with "what happened in the previous session" (from Claude Code plugin's SessionStart resume behavior).
-
-#### System prompt injection
-
-Via `before_agent_start`'s `systemPrompt` return field. Composes up to four things:
-
-1. **Profile block** (from session_start cache) — user identity + preferences + entities. Capped at `profileBudget`. Only present if OV has a user profile.
-2. **Archive overview** (from session_start resume OR pre-compact rehydration) — "what happened in previous sessions" or "what happened before compaction". Capped at `resumeContextBudget` tokens.
-3. **Memory index** (from `index_builder.ts`) — a browsable table of contents showing what OV knows. Refreshed at session start and after commits.
-4. **Tool advertisement** — the standard tool usage instructions.
-
-```
-## OpenViking Context
-<openviking-context source="session-start">
-<user-profile uri="viking://user/default/memories/profile.md">
-User prefers local/self-hosted solutions...
-</user-profile>
-<available-memories>
-  viking://user/default/memories/preferences/
-    - dark_mode.md — prefers dark mode in all editors
-  viking://user/default/memories/entities/
-    - project_x.md — Project X uses SQLite
-</available-memories>
-</openviking-context>
-
-[Session History Summary]
-Archive 2026-05-27: 15-turn session about pi extension design...
-
-## OpenViking Knowledge Index
-[Showing what's in your long-term memory]
-
-### viking://user/memories/ (12 memories)
-- Prefers local/self-hosted solutions over cloud services
-- ...
-
-### viking://resources/ (3 resources)
-- ...
-
-Tools: viking_search | viking_read | viking_browse | viking_remember | viking_forget | viking_add_resource | viking_archive_expand
-```
-
-This is a key difference from Hermes (tool ad only, model is blind) and closer to OpenClaw's preflight `assemble()` (model sees archive overview + abstract index before deciding to search).
-
-#### Memory mirroring at commit time
-
-Don't intercept individual `write`/`edit` tool calls (fragile, complex). Instead, at `session_shutdown` commit time:
-1. Read `.memory/MEMORY.md` if it exists
-2. Write it to OV as `viking://user/memories/memory-md` (or append as a session message tagged `[Memory mirror]`)
-3. OV's extraction picks it up during commit
-
-Simple, correct, handles all edge cases (external edits, multiple writes, etc.).
-
-#### Manual commit command
-
-A `/viking commit` command (or a `viking_commit` tool) triggers a synchronous `commit(wait=true)`. This is the equivalent of OpenClaw's `compact()` — the user or agent can force a memory extraction mid-session without waiting for the token threshold. Useful when the user says "remember this" and wants immediate assurance that the memory was archived.
-
-## Event Flow (Detailed)
-
-### Session Start
-```
-1. session_start fires
-2. Load config
-3. Check bypassPatterns against cwd
-   └── MATCH → set bypassed = true, skip all OV ops, return
-4. client.health()
-   ├── OK → connected = true, continue
-   └── FAIL → connected = false, log once, return
-5. sync.ensureSession() → create or reuse OV session "pi-{sessionId}"
-6. **Profile injection** (all sessions, from Claude Code plugin):
-   a. Resolve user space: `client.resolveScopeSpace("user")` → discover namespace via /api/v1/system/status + fs/ls
-   b. Read profile.md from viking://user/<space>/memories/profile.md
-   c. List preferences/ and entities/ directories with abstracts
-   d. **Profile elision** (from Claude Code plugin): if profile exceeds `profileBudget` tokens, keep head (identity block, first 8 lines) + tail (most-recent events, fits remaining budget), drop noisy middle. Preserves both stable identity facts (top of file) and recent activity (bottom of file) — only the noisy middle timeline is sacrificed. Falls back to head-only truncate when file is too short to elide.
-   e. Compose <openviking-context> block with user-profile + available-memories
-   f. Capped at profileBudget tokens (default 10000) using CJK-aware estimator
-   g. Cached for system prompt injection in before_agent_start
-7. If event.reason == "resume":
-   a. Fetch latest archive overview from OV (L1)
-   b. Inject as [Session History Summary] alongside memory index
-8. index_builder.buildIndex() → build memory index (viking:// tree + abstracts)
-9. Register 7 tools
-```
-
-### Per Prompt (User sends message)
-```
-1. before_agent_start fires
-   a. Extract user prompt text
-   b. recall.queueSearch(prompt)  ← no network I/O
-   c. Compose system prompt: event.systemPrompt + profileBlock + archiveOverview + indexBuilder.getIndex() + toolAdBlock
-      - Profile block: cached from session_start (or empty if OV has no profile)
-      - Archive overview: cached from session_start resume, or from pre-compact rehydration
-   d. Return { systemPrompt: composed }
-
-2. Pi renders the submitted user message.
-
-3. [For each LLM iteration within this prompt:]
-   a. context event fires
-   b. recall.searchPending()  ← first iteration only; synchronous OV search for the current prompt
-   c. recall.injectRecall(event.messages)  ← prepend cached <relevant-memories> to user message
-   d. Return { messages: modified }
-
-4. [Turns execute — LLM may call viking_search, etc.]
-
-5. agent_end fires
-   a. recall.invalidate()  ← clear cached block
-```
-
-### Per Turn
-```
-1. turn_end fires
-2. Extract user text + assistant text from event
-3. Strip ALL injected blocks (<relevant-memories>, <system-reminder>, <openviking-context>, [Subagent Context], null bytes) from both
-4. Preserve tool USE inputs as [tool: <name>]\n<input> — drop tool RESULTS (unless captureToolResults is true)
-5. Add tool summary line to assistant turn: `[assistant used tools: read, edit, bash]`
-6. **Capture filter**: shouldCapture(strippedUserText, captureMode)
-   └── SKIP → advance syncedTurnCount, return (no OV push)
-7. If captureAssistantTurns is false: only push user message, skip assistant
-8. sync.syncTurn(strippedUser, strippedAssistant, turnIndex)
-   a. Dedup guard: if turnIndex <= syncedTurnCount, skip (prevents duplicate pushes on retries)
-   b. Enqueue turn to write queue (queue auto-flushes at threshold or interval)
-   c. Estimate token count for stripped content (CJK-aware)
-   d. pendingTokens += estimatedTokens
-   e. If pendingTokens >= commitTokenThreshold: writeQueue.flush() then sync.commit(wait=false)
-   f. syncedTurnCount = turnIndex + 1
-```
-
-### Pre-Compact
-```
-1. session_before_compact event fires (pi is about to rewrite the transcript)
-2. writeQueue.flush()  ← flush any queued turns before committing
-3. sync.commit(wait=true)  ← BLOCKING: archive all pending content before pi mutates it
-3. Content about to be compacted away is now preserved in OV as an archive
-4. **Post-compact rehydration**: fetch the newly-committed archive overview (L1) and cache it
-5. On the next before_agent_start, inject the cached archive overview alongside the memory index
-   → The model gets rehydrated with "what happened before compaction" from OV's long-term record
-   → This mirrors CC's SessionStart(source="compact") dual injection pattern
-```
-
-### Session Shutdown
-```
-1. session_shutdown fires
-2. writeQueue.cancelPending()  ← cancel any pending flush timer
-3. writeQueue.flush()  ← flush remaining queued turns
-4. If mirrorMemoryWrites: read .memory/MEMORY.md → send to OV as session message
-5. sync.commit(wait=true)  ← blocking, with timeout
-6. index_builder.buildIndex()  ← refresh index after commit (new memories extracted)
-7. Cleanup
-```
-
-## Comparison: Hermes vs OpenClaw vs Claude Code vs This Extension
-
-| Aspect | Hermes | OpenClaw | Claude Code | Pi Extension |
-|--------|--------|----------|-------------|------------- |
-| Plugin type | Built-in memory provider | Context engine plugin | CC hooks + MCP | pi extension |
-| Recall mechanism | Stale background prefetch | Synchronous `assemble()` | Synchronous `UserPromptSubmit` hook | Synchronous `context` event |
-| Recall timing | N-1 turn (wrong topic) | Current turn | Current turn | Current turn |
-| First turn recall | Nothing | Relevant context | Relevant context | Relevant context + user profile |
-| Search scope | Unscoped | Dual (user + agent) | Triple (user + agent + skills) | ✅ Triple (user + agent + skills) |
-| Query profiling | None | None | ✅ Intent detection (preference/temporal) | ✅ Intent detection (preference/temporal) |
-| Score threshold | None | None | 0.35 | ✅ 0.35 |
-| Min query filter | None | None | 3 chars | ✅ 3 chars |
-| Deduplication | None | None | ✅ By URI (events) + by abstract (others) | ✅ By URI (events) + by abstract (others) |
-| Content resolution | None (abstracts only) | None | ✅ Tiered (abstract → overview → full) | ✅ Tiered (abstract preferred, full on demand) |
-| Result degradation | None | None | ✅ URI hints beyond budget | ✅ URI hints beyond budget |
-| Per-item content cap | None | None | ✅ 500 chars | ✅ 500 chars |
-| Memory index in prompt | None (model blind) | Archive overview + abstracts | Archive overview on resume | ✅ viking:// tree + memory abstracts |
-| Profile injection | None | None | ✅ profile.md + preferences + entities | ✅ profile.md + preferences + entities |
-| Commit trigger | Session-end only | Token threshold | Token threshold + pre-compact + session-end | ✅ Token threshold + pre-compact + session-end |
-| Memory stripping | None | Strip `<relevant-memories>` | Strip all injected blocks (5+ tag types + null bytes) | ✅ Strip all injected blocks (5+ tag types + null bytes) |
-| Capture: tool use inputs | Not captured | Not captured | ✅ Preserved verbatim | ✅ Preserved verbatim |
-| Capture: tool results | Not captured | Not captured | ✅ Dropped by default | ✅ Dropped by default (configurable) |
-| Capture dedup | None | None | ✅ Incremental turn counter | ✅ Incremental turn counter |
-| Pre-compact commit | N/A | N/A | ✅ `PreCompact` hook | ✅ `session_before_compact` event |
-| Post-compact rehydration | N/A | N/A | ✅ SessionStart(source="compact") | ✅ Archive overview cached at pre-compact, injected at next before_agent_start |
-| Token estimation | N/A | N/A | ✅ CJK-aware (1.5 tokens/char for CJK, chars/4 otherwise) | ✅ CJK-aware |
-| Subagent isolation | None | None | ✅ Isolated OV sessions via hooks | ✅ Natural process-level isolation (separate pi process = separate session) |
-| Session resume | N/A | Archive overview | ✅ Archive overview rehydration | ✅ Archive overview rehydration |
-| Bypass patterns | None | None | ✅ Glob on cwd/session | ✅ Glob on cwd |
-| Capture filtering | None | None | ✅ shouldCapture (length, command, question-only, keyword/semantic modes) | ✅ shouldCapture (length, command, question-only, keyword/semantic modes) |
-| URI space resolution | None | None | ✅ resolveScopeSpace + resolveTargetUri | ✅ resolveScopeSpace + resolveTargetUri |
-| Async write path | None | None | ✅ Detached-worker (hook timeout avoidance) | ✅ Write queue (batching, not timeout avoidance — pi events are async) |
-| Tools | 5 | 8 | 9 (via MCP) | 7 |
-| Dependencies | httpx (Python) | Pure HTTP client | Plain .mjs scripts, no deps | Zero npm deps (built-in `fetch`) |
-
-## Why a Memory Index?
-
-The spec has two complementary context mechanisms:
-
-1. **Memory index** (from `index_builder.ts`) — a *map*. "Here's what OV knows about." Injected into the system prompt. Rebuilt at session start and after commits. Always visible to the model. ~2000 tokens.
-
-2. **Recall** (from `recall.ts`) — a *flashlight*. "Here's what's relevant to the current query." Injected into the user message per-turn. Always current. ~2000 tokens.
-
-Without the index, the model has no idea what categories of knowledge exist in OV. It can only retrieve what it thinks to ask for — the Hermes problem. With the index, the model sees "OV knows about my preferences, project X architecture, and debugging gotchas" and can proactively decide to search deeper when a task touches those topics.
-
-This mirrors OpenClaw's preflight `assemble()` which provides `latest_archive_overview` (archive summary) and `pre_archive_abstracts` (memory abstracts) to the model. The index is the pi equivalent.
-
-## Dependencies
-
-**Zero npm dependencies.** Uses:
-- Node.js built-in `fetch` (Node 18+, pi requires 18+)
-- `@mariozechner/pi-coding-agent` (types, `isToolCallEventType`, `StringEnum`, `truncateHead`)
-- `typebox` (tool parameter schemas)
-- `@mariozechner/pi-ai` (`StringEnum` for Google-compatible enums)
-
-## Implementation Order
-
-1. **client.ts** — HTTP wrapper, testable independently against running OV
-2. **sync.ts** — depends on client
-3. **index_builder.ts** — depends on client
-4. **recall.ts** — depends on client
-5. **tools.ts** — depends on client
-6. **index.ts** — wires everything, registers tools and events
-
-## Testing Strategy
-
-- **Unit test `client.ts`**: Run against live OV server at `127.0.0.1:1933`
-- **Integration**: Start pi with extension, have a conversation, verify in OV studio that messages synced, recall blocks stripped, commit triggered
-- **Recall accuracy**: Ask a question about a topic from a previous session, verify `<relevant-memories>` appears in context
-- **Index visibility**: Start a new session, verify the system prompt contains the memory index with correct counts and abstracts
-- **Tool test**: Call each of the 7 tools manually in a pi session
-- **Pre-compact commit**: Have a 20+ turn conversation (triggering threshold commits), then trigger compaction. Verify that pre-compact commit fires and content is archived before compaction mutates the transcript.
-- **Bypass**: Start pi in `/tmp`, verify no OV operations fire.
-- **Session resume**: End a session with committed content, start new session with resume, verify archive overview appears in context.
-- **Post-compact rehydration**: Trigger compaction in a long session (after threshold commit fires), verify that pre-compact commit archives content, and the next before_agent_start includes the new archive overview.
-- **Capture filtering**: Send one-word turns ("ok", "y", "/help"), pure questions ("what is X?"), and substantive turns. Verify that noise turns are skipped and only substantive turns reach OV.
-- **Keyword mode**: Set captureMode to "keyword", send turns with and without trigger phrases, verify only triggered turns are captured.
-- **URI space resolution**: On a multi-user OV setup, verify that viking://user/memories resolves to viking://user/<alice>/memories correctly.
-- **Write queue batching**: Send 3 turns quickly, verify they're queued and flushed as a batch at the threshold. Verify the flush timer fires after the interval if threshold isn't reached.
-
-## Config File
-
-Default: `~/.pi/agent/extensions/openviking/config.json`
-
-```json
-{
-  "enabled": true,
-  "endpoint": "http://127.0.0.1:1933",
-  "apiKey": "",
-  "account": "",
-  "user": "",
-  "peerId": "",
-  "syncTurns": true,
-  "recallBudget": 2000,
-  "recallMaxContentChars": 500,
-  "recallPreferAbstract": true,
-  "recallScoreThreshold": 0.35,
-  "recallMinQueryLength": 3,
-  "profileBudget": 10000,
-  "resumeContextBudget": 2000,
-  "indexBudget": 2000,
-  "commitTokenThreshold": 20000,
-  "commitOnShutdown": true,
-  "captureToolResults": false,
-  "captureMode": "semantic",
-  "captureMaxLength": 24000,
-  "captureAssistantTurns": true,
-  "mirrorMemoryWrites": true,
-  "writeQueueFlushInterval": 5000,
-  "writeQueueFlushThreshold": 5,
-  "bypassPatterns": [],
-  "logLevel": "error"
-}
-```
+**Token estimates are CJK-aware.** `estimateTokens` counts codepoints at or above U+3000 as 1.5 tokens and everything else at a quarter of a token. Flat chars/4 undercounts CJK by four to six times, which silently turns a 3000-token overview budget into a few hundred real tokens of Chinese. It overcounts CJK slightly, which is the safe direction for a budget.

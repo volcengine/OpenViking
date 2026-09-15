@@ -135,7 +135,7 @@ async function main() {
     : "default";
   // Taken from loadConfig() so this line and the MCP proxy always name the
   // same file.
-  const keySrc = cfg.credentialSource === "env" ? "env"
+  const keySrc = cfg.apiKeySource === "env" ? "env"
     : cfg.credentialPath ? homeShort(cfg.credentialPath)
     : "(none)";
   console.log(`Auth: url from ${urlSrc}, api_key from ${keySrc}`);

@@ -81,37 +81,44 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 
 ## 配置
 
-创建用户级配置文件：
+行为旋钮写在共享的客户端配置文件里：
 
 ```bash
-~/.config/opencode/openviking-config.json
+~/.openviking/ovcli.conf
 ```
 
 示例配置：
 
 ```json
 {
-  "enabled": true,
-  "mcp": { "enabled": true },
-  "timeoutMs": 30000,
-  "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoRecall": {
-    "enabled": true,
-    "limit": 6,
-    "scoreThreshold": 0.35,
-    "maxContentChars": 500,
-    "preferAbstract": true,
-    "tokenBudget": 2000,
-    "minQueryLength": 3
-  },
-  "commitTokenThreshold": 20000,
-  "commitKeepRecentCount": 10,
-  "profileTokenBudget": 10000,
-  "resumeContextBudget": 32000
+  "url": "http://127.0.0.1:1933",
+  "api_key": "your-api-key-here",
+  "plugin": {
+    "recallLimit": 6,
+    "opencode": {
+      "enabled": true,
+      "mcpEnabled": true,
+      "timeoutMs": 30000,
+      "repoContext": true,
+      "repoContextCacheTtlMs": 60000,
+      "autoRecall": true,
+      "scoreThreshold": 0.35,
+      "recallMaxContentChars": 500,
+      "recallPreferAbstract": true,
+      "recallTokenBudget": 2000,
+      "minQueryLength": 3,
+      "commitTokenThreshold": 20000,
+      "commitKeepRecentCount": 10,
+      "profileTokenBudget": 10000,
+      "resumeContextBudget": 32000
+    }
+  }
 }
 ```
 
-`autoRecall.limit` 是遗留的配额缩放输入，不是最终结果上限。显式设置为
+`plugin` 里的键对所有 harness 生效；`plugin.opencode` 里的键只对本插件生效，并覆盖前者。解析顺序是 `OPENVIKING_*` 环境变量 → 工作区的 `.openviking/config.json`、`.openviking/config.local.json` 和本机 registry 条目 → `plugin.opencode` → `plugin` → 内置默认值。每个旋钮的类型、默认值、取值范围、环境变量名和兼容的旧拼写都声明在 [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs)。
+
+`recallLimit` 是遗留的配额缩放输入，不是最终结果上限。显式设置为
 1 到 5 时，有效总配额仍为 6，因为六个 coding 分类会各保留一个检索槽位。
 
 推荐通过环境变量提供 API Key，而不是写入配置文件：
@@ -121,15 +128,15 @@ export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
 API key 会从环境变量或 `~/.openviking/ovcli.conf` 读取，并由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送。`account` 和 `user` 是 trusted mode
-身份头，会作为 `X-OpenViking-Account`、`X-OpenViking-User` 发送；使用
-user/admin API key 的 API_KEY mode 时应留空。
+身份头，会作为 `X-OpenViking-Account`、`X-OpenViking-User` 发送；`api_key`
+模式的服务端从 key 里取身份，插件在那里不发这两个头。
 `peerId` 会作为 `X-OpenViking-Actor-Peer` 用于数据面的 memory/resource 请求；捕获 session message 时仍写入 body `peer_id`。需要 peer 维度路由时请显式配置。
 
 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、
 `OPENVIKING_PEER_ID`
-优先级高于 `openviking-config.json` 里的同名配置。
+优先级高于 `ovcli.conf` 里的同名配置。
 
-高级场景可以用 `OPENVIKING_PLUGIN_CONFIG` 指向其他配置文件路径。
+高级场景可以用 `OPENVIKING_CLI_CONFIG_FILE` 指向其他路径的 `ovcli.conf`。
 
 ### 仅 Hooks 模式
 
@@ -137,7 +144,9 @@ user/admin API key 的 API_KEY mode 时应留空。
 
 ```json
 {
-  "mcp": { "enabled": false }
+  "plugin": {
+    "opencode": { "mcpEnabled": false }
+  }
 }
 ```
 
@@ -229,7 +238,7 @@ openviking_add_resource(path="file:///home/alice/project/notes.md", description=
 - `openviking-memory.log`
 - `openviking-session-state.json`
 
-可以通过配置里的 `runtime.dataDir` 修改这个目录。
+可以通过 `plugin.opencode` 里的 `dataDir` 修改这个目录。
 
 这些是本地运行时文件，不建议提交到版本库。
 
@@ -238,7 +247,7 @@ openviking_add_resource(path="file:///home/alice/project/notes.md", description=
 | 问题 | 排查方向 |
 |------|----------|
 | 插件没有加载 | package 安装检查 `~/.config/opencode/opencode.json` 是否包含 `@openviking/opencode-plugin`；源码安装检查 `~/.config/opencode/plugins/openviking.js` 是否存在 |
-| MCP tools 连到了错误的 server | 检查 `~/.openviking/ovcli.conf`，或用 `OPENVIKING_*` 环境变量 / `OPENVIKING_PLUGIN_CONFIG` 指向正确配置 |
+| MCP tools 连到了错误的 server | 检查 `~/.openviking/ovcli.conf`，或用 `OPENVIKING_*` 环境变量 / `OPENVIKING_CLI_CONFIG_FILE` 指向正确配置 |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
-| recall 为空 | 确认 OpenViking 中已有 memories/resources，并且 `autoRecall.enabled` 为 `true` |
+| recall 为空 | 确认 OpenViking 中已有 memories/resources，并且 `autoRecall` 为 `true` |
 | 本地 `openviking_add_resource` 失败 | 传入文件路径而不是目录；目前还不支持自动上传本地目录 |
