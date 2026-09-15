@@ -118,6 +118,7 @@ class SkillProcessor:
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
         target_uri: Optional[str] = None,
+        lease_ref: Any = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -154,6 +155,7 @@ class SkillProcessor:
             apply_privacy=apply_privacy,
             privacy_change_reason=privacy_change_reason,
             target_uri=target_uri,
+            lease_ref=lease_ref,
         )
 
     async def process_prepared_skill(
@@ -165,6 +167,7 @@ class SkillProcessor:
         apply_privacy: bool = True,
         privacy_change_reason: str = "auto-extracted from add_skill",
         target_uri: Optional[str] = None,
+        lease_ref: Any = None,
     ) -> Dict[str, Any]:
         cleanup_path = preparation.cleanup_path
         skill_dict = preparation.skill_dict
@@ -212,6 +215,7 @@ class SkillProcessor:
                 abstract=skill_abstract,
                 overview=skill_dict.get("content", ""),
                 ctx=ctx,
+                lease_ref=lease_ref,
             )
 
             await self._write_auxiliary_files(
@@ -220,6 +224,7 @@ class SkillProcessor:
                 base_path=base_path,
                 skill_dir_uri=skill_dir_uri,
                 ctx=ctx,
+                lease_ref=lease_ref,
             )
             telemetry.set(
                 "skill.write.duration_ms", round((time.perf_counter() - write_start) * 1000, 3)
@@ -530,6 +535,7 @@ class SkillProcessor:
         abstract: str,
         overview: str,
         ctx: RequestContext,
+        lease_ref: Any = None,
     ):
         """Write main skill content to VikingFS."""
         await viking_fs.write_context(
@@ -540,6 +546,7 @@ class SkillProcessor:
             content_filename="SKILL.md",
             is_leaf=False,
             ctx=ctx,
+            lease_ref=lease_ref,
         )
 
     async def _write_auxiliary_files(
@@ -549,6 +556,7 @@ class SkillProcessor:
         base_path: Optional[Path],
         skill_dir_uri: str,
         ctx: RequestContext,
+        lease_ref: Any = None,
     ):
         """Write auxiliary files to VikingFS."""
         for aux_file in auxiliary_files:
@@ -567,9 +575,11 @@ class SkillProcessor:
                 is_text = False
 
             if is_text:
-                await viking_fs.write_file(aux_uri, file_bytes.decode("utf-8"), ctx=ctx)
+                await viking_fs.write_file(
+                    aux_uri, file_bytes.decode("utf-8"), ctx=ctx, lease_ref=lease_ref
+                )
             else:
-                await viking_fs.write_file_bytes(aux_uri, file_bytes, ctx=ctx)
+                await viking_fs.write_file_bytes(aux_uri, file_bytes, ctx=ctx, lease_ref=lease_ref)
 
     async def _index_skill(self, context: Context, skill_dir_uri: str):
         """Write skill directory vector via async queue as L0."""
