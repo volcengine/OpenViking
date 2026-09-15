@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -122,6 +123,96 @@ class TestWatchSchedulerExecutionHold:
 
 
 class TestWatchSchedulerResourceExistence:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "source,failed_token,code,http_status,recursive,deactivate",
+        [
+            ("https://team.feishu.cn/wiki/root", "root", 131005, 400, False, True),
+            ("https://team.larkoffice.com/wiki/root", "root", 131005, 400, True, True),
+            ("https://team.feishu.cn/wiki/root", "root", 131006, 400, True, False),
+            ("https://team.feishu.cn/wiki/root", "root", 999, 500, True, False),
+            ("https://team.feishu.cn/wiki/root", "root", 999, 404, True, False),
+            ("https://team.feishu.cn/wiki/root", "child", 131005, 400, True, False),
+            ("https://team.feishu.cn/docx/root", "root", 131005, 400, False, False),
+            ("https://example.com/wiki/root", "root", 131005, 400, False, False),
+        ],
+        ids=[
+            "deleted",
+            "deleted-recursive",
+            "permission",
+            "transient",
+            "http404",
+            "child",
+            "document",
+            "other-host",
+        ],
+    )
+    async def test_feishu_deleted_root_watch_stays_inactive_after_reload(
+        self, monkeypatch, source, failed_token, code, http_status, recursive, deactivate
+    ):
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+        from openviking_cli.exceptions import NotFoundError
+
+        accessor = FeishuAccessor()
+
+        def get_node(request):
+            assert request.token == failed_token
+            return SimpleNamespace(
+                code=code,
+                msg="provider error",
+                raw=SimpleNamespace(status_code=http_status),
+                success=lambda: False,
+            )
+
+        client = SimpleNamespace(
+            wiki=SimpleNamespace(v2=SimpleNamespace(space=SimpleNamespace(get_node=get_node)))
+        )
+        monkeypatch.setattr(accessor, "_get_client", lambda **kwargs: client)
+
+        class FakeResourceService(ResourceService):
+            async def refresh_resource(self, *args, **kwargs):
+                if failed_token == "root" and "/wiki/" in source:
+                    return await accessor.preflight_source(
+                        kwargs["path"], feishu_recursive=recursive
+                    )
+                # A child disappearing must not deactivate the root watch.
+                return accessor._fetch_wiki_node(failed_token)
+
+        class FakeVikingFS:
+            def __init__(self):
+                self.files: dict[str, str] = {}
+
+            async def read_file(self, uri, ctx=None):
+                if uri not in self.files:
+                    raise NotFoundError(uri)
+                return self.files[uri]
+
+            async def write_file(self, uri, content, ctx=None):
+                self.files[uri] = content
+
+        storage = FakeVikingFS()
+        manager = WatchManager(viking_fs=storage)
+        await manager.initialize()
+        scheduler = WatchScheduler(resource_service=FakeResourceService(), check_interval=1)
+        scheduler._watch_manager = manager
+        task = await manager.create_task(
+            path=source, to_uri="viking://resources/wiki", watch_interval=60
+        )
+
+        await scheduler._execute_task(task)
+
+        reloaded = WatchManager(viking_fs=storage)
+        await reloaded.initialize()
+        updated = await reloaded.get_task(task.task_id)
+        assert updated is not None
+        assert updated.is_active is not deactivate
+        assert updated.last_status == "failed"
+        assert updated.last_error is not None
+        assert f"code={code}" in updated.last_error
+        assert (updated.next_execution_time is None) is deactivate
+        updated.next_execution_time = datetime.now() - timedelta(minutes=1)
+        assert bool(await reloaded.get_due_tasks()) is not deactivate
+
     def test_url_like_sources_are_treated_as_existing(self):
         rs = ResourceService()
         scheduler = WatchScheduler(resource_service=rs, check_interval=1)

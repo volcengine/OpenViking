@@ -8,6 +8,8 @@ The Watch API manages periodic resource checks, pausing, resuming, and manual tr
 
 List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add_resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
 
+When Feishu reports that the watched wiki root has been deleted (`131005` during root resolution), the scheduler deactivates that watch and preserves the failure in `last_error`. The watch remains inactive after a restart. Permission errors, temporary failures, generic HTTP 404 responses, and missing child nodes do not deactivate the root watch. After restoring the source, use the update API or `ov task watch resume` to resume checks.
+
 #### 1. API Implementation Overview
 
 This control plane wraps the `WatchManager` primitives without changing any server-side behavior. Every endpoint and CLI command resolves the target task by either its `task_id` (path) or its `to_uri` (query). The two keys are interchangeable; if both are supplied they must refer to the same task, otherwise the request is rejected with 400.
