@@ -1629,3 +1629,104 @@ local 模式没有出现内存峰值回退：其最大 RSS 为 331.59 MiB，低�
 - 当前 local：`.scratch/ingest-profile/semantic-plan-full-local-resources-20260914`
 
 benchmark runner 和测试仍只保留在本地工作区，不纳入正式提交。
+
+### 18.15 867 文件最终修复版 local 与远程 main 三轮验收
+
+在 642 文件评测之后，又使用真实的 `third_rank_service` 仓库完成了三轮最终验收。该结果替代早期 optimized 样本，作为本轮优化的最终性能与正确性结论。optimized 使用已经补齐资源内最小祖先闭包的最终代码 `ad465f97101e27f13197bf88b29472532b43a4f1`，main 基线使用远程 main 的 `192b813e7e3106680a5534e2d4c9bcf6d2390abd`；两组均由 wrapper `c91e914b727e6944e487b951fc2d735789c15fbc` 启动。
+
+实验通过 HTTP 调用 `add_resources`，不使用 Rust CLI。每轮创建新的 account 和独立服务环境，并在同一进程内依次执行 initial、no-op、edit-one、edit-10%。三轮使用同一份冻结输入：
+
+- 867 个文件，10,635,180 bytes，199,807 行。
+- manifest SHA-256 为 `bf9d835a1c635e08c4cd1dbb824875e549834ff5ddbde0baa8190653ab339d16`。
+- edit-one 修改 `BASE_BUILD.py`；edit-10% 累计修改 87 个文件。
+- 每个场景都校验正式文件 URI、逐文件正文、L2 URI、向量 identity 以及向量记录中的 MD5。`NOT_FILLED` 计入 MD5 missing，不计入非空错误 MD5。
+- 阶段耗时均来自本次优化专用探针的 `wall_union_s`；阶段可嵌套或并行，不能相加还原端到端耗时。
+- RSS 每 0.1 秒采样 benchmark/server 进程树，本地磁盘每 1 秒采样当前实验目录及本轮产生的临时目录；远程 S3/AGFS 空间不包含在内。
+
+#### 端到端耗时与优化收益
+
+| 场景 | 最终 local 三轮 | local 中位数 | main 三轮 | main 中位数 | local 相对 main |
+|---|---:|---:|---:|---:|---:|
+| initial | 1281.956 / 1159.608 / 1234.737s | 1234.737s | 1772.045 / 1797.871 / 1915.498s | 1797.871s | 1.46x，减少 31.3% |
+| no-op | 178.218 / 355.679 / 177.027s | 178.218s | 1572.042 / 1653.903 / 1742.917s | 1653.903s | 9.28x，减少 89.2% |
+| edit-one | 219.084 / 233.918 / 239.519s | 233.918s | 1575.083 / 1696.052 / 1738.261s | 1696.052s | 7.25x，减少 86.2% |
+| edit-10% | 373.421 / 395.633 / 407.972s | 395.633s | 1713.327 / 1862.750 / 2129.230s | 1862.750s | 4.71x，减少 78.8% |
+
+no-op 的 local 中位数没有被第二轮 355.679 秒异常样本拉高，因为另外两轮分别为 178.218 秒和 177.027 秒。即使保留该异常样本而不挑选重跑，三轮中位数仍比 main 快 9.28 倍。edit-one 和 edit-10% 的收益来自 local artifact、基于 manifest MD5 的增量提交和最小 Semantic DAG 的共同作用；initial 仍需全量正式树提交和全量语义生成，因此加速比低于增量场景。
+
+#### 服务端主要阶段中位数
+
+| 模式 / 场景 | 解析 | 正式树提交或快照/同步 | SemanticPlan | Semantic DAG | file summary 调用 | overview 调用 | embedding/upsert 调用 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| final local / initial | 42.776s | local persist 729.684s | 0.030s | 355.074s | 867 | 174 | 1215 / 1215 |
+| final local / no-op | 43.699s | snapshot 34.860s | 0.030s | 0s | 0 | 0 | 0 / 0 |
+| final local / edit-one | 41.466s | snapshot 30.071s | 0.047s | 54.776s | 1 | 2 | 3 / 3 |
+| final local / edit-10% | 41.606s | snapshot 28.740s | 11.625s | 185.901s | 87 | 12 | 107 / 107 |
+| main / initial | 1121.273s | persist 100.641s | — | 323.256s | 867 | 174 | 1215 / 1215 |
+| main / no-op | 1103.945s | sync tree 177.401s | — | 291.014s | 866 | 93 | 742 / 742 |
+| main / edit-one | 1142.379s | sync tree 157.336s | — | 309.905s | 867 | 90 | 734 / 734 |
+| main / edit-10% | 1120.365s | sync tree 341.007s | — | 307.640s | 866 | 105 | 797 / 797 |
+
+这里的调用数同样取三轮中位数；final local 第二轮 no-op 的异常工作量在下一节单独展开。正常 local no-op 不进入 Semantic DAG，edit-one 只重新处理一个文件；edit-10% 每轮都准确产生 87 次 file summary，而 main 在所有增量场景中仍近似全量解析和重做语义工作。
+
+#### CPU、RSS 与本地磁盘
+
+以下均为三轮中位数。CPU 利用率按 `cpu_seconds / elapsed_s` 计算；略高于 100% 表示采样进程树存在少量并行 CPU 时间。RSS 和磁盘同时给出绝对峰值与相对场景开始时的峰值增量。
+
+| 模式 / 场景 | CPU 时间 | CPU 利用率 | RSS 峰值 / 增量 | 本地磁盘峰值 / 增量 |
+|---|---:|---:|---:|---:|
+| final local / initial | 1253.70s | 101.54% | 788.54 / 278.04 MiB | 33.38 / 21.04 MiB |
+| final local / no-op | 177.81s | 99.45% | 858.93 / 19.04 MiB | 42.87 / 20.53 MiB |
+| final local / edit-one | 232.28s | 99.64% | 868.86 / 6.50 MiB | 43.94 / 20.53 MiB |
+| final local / edit-10% | 393.92s | 99.78% | 912.70 / 36.51 MiB | 46.71 / 21.14 MiB |
+| main / initial | 1832.17s | 101.96% | 807.11 / 299.03 MiB | 24.41 / 12.06 MiB |
+| main / no-op | 1685.86s | 101.93% | 948.25 / 92.59 MiB | 37.84 / 12.06 MiB |
+| main / edit-one | 1728.75s | 101.86% | 1040.92 / 18.76 MiB | 51.61 / 12.06 MiB |
+| main / edit-10% | 1898.73s | 101.93% | 1081.37 / 15.20 MiB | 64.35 / 12.07 MiB |
+
+local 以约 8–9 MiB 的场景磁盘峰值增量换取本地 parse artifact 和 manifest，从而消除 main 每轮约 1100 秒的远程 AGFS 解析产物写入。其 RSS 绝对峰值在四个场景中均低于对应 main；磁盘绝对值会随同一进程内保留的 ZIP、结果和本地向量库逐轮增长，因此模式间应结合峰值增量理解。
+
+#### 正确性对比
+
+| 模式 / 场景 | 有效轮次 | 正式文件 | L2 | 正文错误 | 向量缺失 | identity 错误 | MD5 missing | 非空错误 MD5 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| final local / initial | 3/3 | 每轮 867/867 | 每轮 867/867 | 0 | 0 | 0 | 0 | 0 |
+| final local / no-op | 3/3 | 每轮 867/867 | 每轮 867/867 | 0 | 0 | 0 | 0 | 0 |
+| final local / edit-one | 3/3 | 每轮 867/867 | 每轮 867/867 | 0 | 0 | 0 | 0 | 0 |
+| final local / edit-10% | 3/3 | 每轮 867/867 | 每轮 867/867 | 0 | 0 | 0 | 0 | 0 |
+| main / initial | 3/3 | 每轮 867/867 | 每轮 867/867 | 0 | 0 | 0 | 2601 | 0 |
+| main / no-op | 1/3 | 合计缺 3 个 | 合计缺 3 个 | 0 | 3 | 0 | 2598 | 0 |
+| main / edit-one | 2/3 | 合计缺 2 个 | 合计缺 2 个 | 0 | 2 | 0 | 2599 | 0 |
+| main / edit-10% | 1/3 | 合计缺 2 个 | 合计缺 2 个 | 0 | 2 | 0 | 2599 | 0 |
+
+final local 共 12/12 场景通过：每场景均为 867/867 正式文件、867/867 正文和 867/867 L2，且正文、identity、MD5 均无错误。特别是三轮 edit-10% 均为 87 次 file summary，最终 MD5 mismatch 为 0，说明资源内最小祖先闭包修复消除了早期稳定出现的 14/87 深层文件旧 MD5 问题。
+
+main 的失败表现为偶发少 1–2 个正式文件及其 L2，不是“查到非空错误 MD5”。main 不写入该字段，因此可见记录中的 MD5 均被归类为 `NOT_FILLED`/missing；表内 2601、2598、2599 是三轮逐记录 missing 数量之和。两类失败需要区分：main 是缺失，早期 optimized 缺祖先闭包时则会返回存在但非空且错误的旧 MD5；后者不能被 missing 语义掩盖。
+
+#### 第二轮 no-op 为何是 355.679 秒
+
+第二轮 initial 的严格逐 ID 校验已经读到 867/867 条 L2；紧接着的 no-op 在按 URI/level 做范围扫描时却只得到 `V_vectors=862`。diff 因此将 862 个文件判为 unchanged，将另外 5 个正式文件判为 `vector_missing` 并进入 repair：
+
+```text
+N_files=867 F_files=867 V_vectors=862
+plan_unchanged=862 plan_repair=5 vector_missing=5
+```
+
+这 5 个 repair 触发了 5 次 file summary、18 个目录节点、16 次 overview LLM，以及 31 次 embedding/upsert。对应阶段为 SemanticPlan 5.830 秒、Semantic DAG 167.481 秒，最终把端到端耗时推高到 355.679 秒。该轮结束后的强校验仍为 867/867，MD5 missing 和 mismatch 都为 0；随后 edit-one 的同类范围扫描也恢复为 867。
+
+现有证据说明这是向量库两个读取路径的短暂可见性差异：逐 ID `get` 已经可见 867 条，但 URI/level 范围索引在该次扫描中只返回 862 条。当前 strict count 与范围扫描仍依赖同一份范围结果，无法提前识别这 5 条“已可 get、暂不可 scan”的记录，所以实现选择了保守 repair，而不是错误地当作 no-op。它造成额外耗时，但没有产生错误 MD5 或错误终态。后续若要稳定 no-op 延迟，应让缺项在 repair 前按稳定 ID 做二次 `get`，或为范围索引增加可见性屏障/有界重试。
+
+#### 结论与适用边界
+
+1. 最终 local 方案在三轮健康路径上同时满足性能和正确性要求：四个场景中位数分别比 main 快 1.46x、9.28x、7.25x 和 4.71x，12/12 场景没有非空错误 MD5。
+2. 完整的资源内最小祖先闭包是 edit-10% 正确性的必要条件。active ancestor 目录携带 L0+L1，未变化 sibling 目录只携带当前父目录聚合所需的 L0，文件携带 L2；整个资源从一个连通 execution root 自底向上执行。
+3. 第二轮 no-op 是范围索引短暂少返回 5 条导致的保守 repair，不是内容或 MD5 错误；它说明 no-op 的尾延迟仍受向量范围索引可见性影响。
+4. 本节验证的是串行、成功完成的健康路径，以及实验中实际出现的索引可见性波动。它不能证明并发覆盖、异步写晚到、部分写失败或异常取消窗口已经安全；这些故障模型需要单独的 generation fencing、失败注入和并发测试，不能由 12/12 健康样本替代。
+
+原始证据目录：
+
+- 最终 local：`/tmp/third-rank-benchmark-v4/optimized-round-1`、`optimized-round-2-final`、`optimized-round-3-final`。
+- main：`/tmp/third-rank-benchmark-v3/baseline-round-1`、`baseline-round-2`、`baseline-round-3`。
+- 24 个场景汇总：`/tmp/third-rank-final-all.tsv`。
+
+这些 `/tmp` 路径是本机实验留存位置，不随仓库提交；每个场景的 JSON、服务日志、环境与 manifest 信息均保存在相应证据目录中。
