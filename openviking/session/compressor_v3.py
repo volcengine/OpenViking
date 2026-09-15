@@ -499,6 +499,29 @@ class SessionCompressorV3:
                         else "memory_types_filtered"
                     ),
                 }
+            # Empty-cases training returns before skill extraction. Compensate
+            # only then; a swallowed training error keeps case_count > 0 and
+            # must not re-submit skills that may already be on disk.
+            if (
+                agent_evolution_enabled
+                and session_skills_enabled
+                and allow_self_memory
+                and train_result.get("case_count") == 0
+                and "skill_uris" not in train_result
+            ):
+                skill_result = await self.extract_session_skills(
+                    messages=message_list,
+                    ctx=ctx,
+                    archive_uri=archive_uri or "",
+                    strict_extract_errors=strict_extract_errors,
+                )
+                train_result = {
+                    **train_result,
+                    "skill_submitted": skill_result.get("skill_submitted", 0),
+                    "skill_uris": list(skill_result.get("skill_uris") or []),
+                }
+                if skill_result.get("memory_diff") is not None:
+                    train_result["memory_diff"] = skill_result["memory_diff"]
             await self._write_final_memory_diff(
                 archive_uri=archive_uri or "",
                 ctx=ctx,
