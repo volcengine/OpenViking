@@ -442,9 +442,48 @@ export async function markPeerScopeDowngrade(scope, status, path = peerScopeMemo
   });
 }
 
-function looksLikeUnknownField(res) {
-  const text = JSON.stringify(res?.error ?? res?.result ?? res?.detail ?? "").toLowerCase();
-  return text.includes("extra") || text.includes("mode") || text.includes("unexpected");
+// The phrases a schema rejection actually comes in: FastAPI/Pydantic v2
+// (extra_forbidden, "Extra inputs are not permitted"), Pydantic v1
+// ("extra fields not permitted", value_error.extra), and the plain-Python
+// or older-server wordings ("Extra inputs: mode", "unexpected keyword
+// argument", "unknown field").
+const UNKNOWN_FIELD_ERROR_PATTERNS = [
+  /extra_forbidden/i,
+  /extra inputs are not permitted/i,
+  /extra fields not permitted/i,
+  /value_error\.extra/i,
+  /extra inputs?\s*[:=]/i,
+  /unexpected keyword arguments?/i,
+  /(?:unknown|unrecognized|unexpected) (?:input|field|parameter)s?/i,
+];
+// Where those same messages carry the offending field name: inline after the
+// phrase, or as the last segment of a FastAPI detail's loc array.
+const NAMED_FIELD_PATTERNS = [
+  /extra inputs?\s*[:=]\s*['"`]?([a-z_][a-z0-9_]*)/i,
+  /unexpected keyword arguments?\s*['"`]?\s*([a-z_][a-z0-9_]*)/i,
+  /(?:unknown|unrecognized|unexpected) (?:input|field|parameter)s?\s*[:'"`]?\s*([a-z_][a-z0-9_]*)/i,
+  /"loc"\s*:\s*\[[^\]]*"([a-z_][a-z0-9_]*)"\s*\]/,
+];
+
+/**
+ * Whether a 400/422 means "this server predates a field we sent". Deciding
+ * this from bare substrings ("extra", "mode", "unexpected") let any error
+ * that merely contained one of those words — a value rejection of a field we
+ * did send ("invalid mode parameter", a FastAPI literal_error whose loc names
+ * the field), or a generic "unexpected server error" — pin a six-hour legacy
+ * downgrade and silently degrade recall. So the message must read like a
+ * schema rejection, and when it names the offending field, that name must be
+ * one the caller actually sent.
+ */
+function looksLikeUnknownField(res, sentKeys = []) {
+  const text = String(JSON.stringify(res?.error ?? res?.result ?? res?.detail ?? ""));
+  if (!UNKNOWN_FIELD_ERROR_PATTERNS.some((pattern) => pattern.test(text))) return false;
+  const keys = new Set(sentKeys.filter(Boolean));
+  const named = NAMED_FIELD_PATTERNS
+    .map((pattern) => text.match(pattern)?.[1])
+    .filter(Boolean);
+  if (!named.length) return true;
+  return named.some((name) => keys.has(name));
 }
 
 function wrapContext(body) {
@@ -490,7 +529,7 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   if (!res.ok) {
     const status = res.status || 0;
-    if ((status === 400 || status === 422) && looksLikeUnknownField(res)) {
+    if ((status === 400 || status === 422) && looksLikeUnknownField(res, Object.keys(body))) {
       await markContextFaceLegacy(options.legacyCachePath);
       log("recall_context_face_unsupported", { status });
     } else {
@@ -602,7 +641,7 @@ export async function postRecall(fetchJSON, body, opts = {}) {
   // Only an unknown-field rejection means "this server predates peer_scope".
   // Retrying every other 400/422 without it silently widens the search from
   // the caller's own peer to the whole user root.
-  if (!looksLikeUnknownField(res)) {
+  if (!looksLikeUnknownField(res, Object.keys(request))) {
     log("recall_peer_scope_error", { status: res.status || 0 });
     return res;
   }

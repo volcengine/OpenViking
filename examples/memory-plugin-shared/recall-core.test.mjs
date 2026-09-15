@@ -244,6 +244,70 @@ test("unrelated request errors do not mark the server as legacy", async () => {
   assert.equal(await isContextFaceLegacy(legacyCachePath), false);
 });
 
+test("a value rejection of a sent field does not mark the context face as legacy", async () => {
+  // FastAPI validates a field we DID send (its name appears in loc) and
+  // rejects the value: schema drift is not the diagnosis, so pinning a 6h
+  // legacy downgrade would silently degrade recall to the /recall preset.
+  const legacyCachePath = await tempPath("context-face.json");
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") {
+      return {
+        ok: false,
+        status: 422,
+        detail: [{
+          type: "literal_error",
+          loc: ["body", "mode"],
+          msg: "Input should be 'context' or 'list'",
+        }],
+      };
+    }
+    if (path === "/api/v1/search/recall") return { ok: true, result: { rendered: "ok" } };
+    return { ok: false, status: 404 };
+  };
+
+  await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
+
+  assert.equal(await isContextFaceLegacy(legacyCachePath), false);
+});
+
+test("an 'invalid mode parameter' message does not mark the context face as legacy", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") {
+      return { ok: false, status: 400, error: { message: "invalid mode parameter: expected 'context'" } };
+    }
+    if (path === "/api/v1/search/recall") return { ok: true, result: { rendered: "ok" } };
+    return { ok: false, status: 404 };
+  };
+
+  await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
+
+  assert.equal(await isContextFaceLegacy(legacyCachePath), false);
+});
+
+test("a Pydantic v2 extra_forbidden on a sent field still marks the server as legacy", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const fetchJSON = async (path) => {
+    if (path === "/api/v1/search/search") {
+      return {
+        ok: false,
+        status: 422,
+        detail: [{
+          type: "extra_forbidden",
+          loc: ["body", "purpose"],
+          msg: "Extra inputs are not permitted",
+        }],
+      };
+    }
+    if (path === "/api/v1/search/recall") return { ok: true, result: { rendered: "ok" } };
+    return { ok: false, status: 404 };
+  };
+
+  await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
+
+  assert.equal(await isContextFaceLegacy(legacyCachePath), true);
+});
+
 test("buildRecallBlock falls back to find when neither context endpoint works", async () => {
   const calls = [];
   const legacyCachePath = await tempPath("context-face.json");
@@ -325,6 +389,19 @@ test("postRecall keeps peer_scope when a 400 is about something else", async () 
 
   assert.equal(res.ok, false);
   assert.equal(sent.length, 1, "an unrelated 400 must not be retried at a wider scope");
+  assert.equal(await readPeerScopeDowngrade(memoPath), null);
+});
+
+test("postRecall keeps peer_scope when the 422 is a generic unexpected error", async () => {
+  const memoPath = await tempPath("peer-scope.json");
+  const { sent, fetchJSON } = recordingFetch([
+    { ok: false, status: 422, error: "unexpected server error" },
+  ]);
+
+  const res = await postRecall(fetchJSON, { query: "q", peer_scope: "actor" }, { peerScopeMemoPath: memoPath });
+
+  assert.equal(res.ok, false);
+  assert.equal(sent.length, 1, "a generic error must not be retried at a wider scope");
   assert.equal(await readPeerScopeDowngrade(memoPath), null);
 });
 
