@@ -164,7 +164,9 @@ export async function fetchDirectorySidecarContent(
   uri: string,
   level: 'abstract' | 'overview',
 ): Promise<string> {
-  const sidecarUri = `${normalizeDirUri(uri)}.${level}.md`
+  const directoryUri = normalizeDirUri(uri)
+  if (directoryUri === 'viking://') return ''
+  const sidecarUri = `${directoryUri}.${level}.md`
   const result = await fetchFileContent(sidecarUri, {
     limit: -1,
     raw: true,
