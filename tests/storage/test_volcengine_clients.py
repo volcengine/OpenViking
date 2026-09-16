@@ -1,3 +1,4 @@
+import pytest
 import requests
 from volcengine.base.Request import Request
 
@@ -7,6 +8,11 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApiWithApiKey,
 )
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
+from openviking.storage.vectordb_adapters.base import VIKINGDB_STRING_FIELD_BYTE_LIMIT
+from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
+from openviking.storage.vectordb_adapters.vikingdb_private_adapter import (
+    VikingDBPrivateCollectionAdapter,
+)
 from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
 from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
@@ -658,6 +664,84 @@ def test_volcengine_adapter_update_data_returns_ids():
     result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
 
     assert result == ["doc-1"]
+
+
+@pytest.mark.parametrize("operation", ["upsert", "update_data"])
+def test_volcengine_adapter_truncates_abstract_at_remote_string_limit(operation):
+    adapter = VolcengineCollectionAdapter(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        session_token=None,
+        api_key=None,
+        host=None,
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    captured = {}
+
+    class _Collection:
+        def upsert_data(self, data_list, ttl=0):
+            captured["data"] = data_list
+            return None
+
+        def update_data(self, data_list):
+            captured["data"] = data_list
+            return {"updated": 1, "primary_keys": ["doc-1"]}
+
+    adapter._collection = _Collection()
+    abstract = "a" * (VIKINGDB_STRING_FIELD_BYTE_LIMIT - 3) + "你好"
+
+    getattr(adapter, operation)([{"id": "doc-1", "abstract": abstract}])
+
+    stored = captured["data"][0]["abstract"]
+    assert len(stored.encode("utf-8")) <= VIKINGDB_STRING_FIELD_BYTE_LIMIT
+    assert abstract.startswith(stored)
+    assert stored.endswith("你")
+
+
+def test_private_vikingdb_update_normalizes_remote_fields():
+    adapter = VikingDBPrivateCollectionAdapter(
+        host="unused.invalid",
+        headers=None,
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    captured = {}
+
+    class _Collection:
+        def update_data(self, data_list):
+            captured["data"] = data_list
+            return {"updated": 1, "primary_keys": ["doc-1"]}
+
+    adapter._collection = _Collection()
+    result = adapter.update_data(
+        [
+            {
+                "id": "doc-1",
+                "uri": "viking://resources/sample",
+                "abstract": "😀" * VIKINGDB_STRING_FIELD_BYTE_LIMIT,
+            }
+        ]
+    )
+
+    stored = captured["data"][0]
+    assert stored["uri"] == "/resources/sample"
+    assert len(stored["abstract"].encode("utf-8")) <= VIKINGDB_STRING_FIELD_BYTE_LIMIT
+    assert result == ["doc-1"]
+
+
+def test_local_adapter_does_not_apply_remote_abstract_limit():
+    adapter = LocalCollectionAdapter(
+        collection_name="context", project_path="", index_name="default"
+    )
+    abstract = "😀" * VIKINGDB_STRING_FIELD_BYTE_LIMIT
+
+    normalized = adapter._normalize_record_for_write({"abstract": abstract})
+
+    assert normalized["abstract"] == abstract
 
 
 def test_volcengine_adapter_update_data_returns_batch_primary_keys():
