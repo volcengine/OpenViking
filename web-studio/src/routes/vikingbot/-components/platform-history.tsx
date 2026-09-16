@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { UsersIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
 import { getConversations, getMessages } from '../-api'
@@ -9,8 +10,10 @@ export function PlatformConversationList({
   scope,
   onSelect,
   search,
+  selected,
 }: {
   connection: Connection
+  selected?: string
   search: string
   scope: string
   onSelect: (connection: string, conversation: string) => void
@@ -40,11 +43,33 @@ export function PlatformConversationList({
         .map((item, index) => (
           <button
             type="button"
-            className="w-full rounded-lg p-3 text-left text-sm hover:bg-muted"
+            className={`mt-1 w-full rounded-lg p-3 text-left text-sm hover:bg-muted ${selected === item.conversation ? 'bg-muted' : ''}`}
             key={item.conversation}
             onClick={() => onSelect(connection.id, item.conversation)}
           >
-            {item.title || `${t('group')} ${index + 1}`}
+            <span className="flex items-center gap-2">
+              <UsersIcon className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {item.title || `${t('group')} ${index + 1}`}
+              </span>
+            </span>
+            <span className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="min-w-0 flex-1 truncate">
+                {item.preview || t('noHistory')}
+              </span>
+              {item.time && !Number.isNaN(Date.parse(item.time)) && (
+                <time
+                  className="shrink-0"
+                  dateTime={item.time}
+                  title={new Date(item.time).toLocaleString()}
+                >
+                  {new Date(item.time).toLocaleDateString(undefined, {
+                    month: 'numeric',
+                    day: 'numeric',
+                  })}
+                </time>
+              )}
+            </span>
           </button>
         ))}
     </div>
@@ -61,6 +86,14 @@ export function PlatformHistory({
   scope: string
 }) {
   const { t } = useTranslation('vikingbot')
+  const conversations = useQuery({
+    queryKey: ['vikingbot', scope, connection, 'conversations'],
+    queryFn: () => getConversations(connection),
+    refetchInterval: 5000,
+  })
+  const title = conversations.data?.find(
+    (item) => item.conversation === conversation,
+  )?.title
   const query = useInfiniteQuery({
     queryKey: ['vikingbot', scope, connection, conversation, 'messages'],
     initialPageParam: 0,
@@ -75,7 +108,10 @@ export function PlatformHistory({
   return (
     <section className="flex h-full flex-col">
       <div className="border-b p-4">
-        <h2 className="font-medium">{t('group')}</h2>
+        <h2 className="flex items-center gap-2 font-medium">
+          <UsersIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="truncate">{title || t('group')}</span>
+        </h2>
         <p className="mt-1 text-xs text-muted-foreground">{t('historyHint')}</p>
       </div>
       <div className="flex-1 space-y-5 overflow-auto p-4 md:p-8">

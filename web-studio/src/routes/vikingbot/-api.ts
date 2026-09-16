@@ -68,7 +68,13 @@ export function updateConnection(
 }
 export function getConversations(id: string) {
   return getOvResult<
-    Array<{ conversation: string; latest: number; title: string }>
+    Array<{
+      conversation: string
+      latest: number
+      title: string
+      preview?: string
+      time?: string
+    }>
   >(ovClient.client.get({ url: `${base}/connections/${id}/conversations` }))
 }
 export function getMessages(id: string, conversation: string, before = 0) {

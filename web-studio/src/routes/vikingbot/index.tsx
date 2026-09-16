@@ -242,6 +242,9 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                   <PlatformConversationList
                     key={c.id}
                     connection={c}
+                    selected={
+                      selected?.connection === c.id ? selected.id : undefined
+                    }
                     search={search}
                     scope={scope}
                     onSelect={(connection, id) => select(id, connection)}

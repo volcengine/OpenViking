@@ -88,7 +88,15 @@ class StudioStore:
                 "ORDER BY id LIMIT 1",
                 (connection, row["conversation"]),
             ).fetchone()
-            result.append(dict(row) | {"title": json.loads(first[0]).get("title", "")})
+            last = self.db.execute(
+                "SELECT value FROM messages WHERE id=?", (row["latest"],)
+            ).fetchone()
+            message = json.loads(last[0])
+            result.append(dict(row) | {
+                "title": json.loads(first[0]).get("title", ""),
+                "preview": str(message.get("content", ""))[:160],
+                "time": message.get("time", ""),
+            })
         return result
 
     def onboarding_runs(self, account=None):

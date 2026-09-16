@@ -248,3 +248,16 @@ async def test_delete_connection_stops_runtime_and_cleans_owned_data(tmp_path):
     assert service.store.connections("a") == []
     assert len(service.store.connections("b")) == 1
     assert service.store.history(item["id"]) == []
+
+
+def test_conversations_show_latest_preview_and_time(tmp_path):
+    store = StudioStore(tmp_path / "preview.db")
+    store.append("bot", "group", "1", {"title": "Team", "content": "first"})
+    store.append("bot", "group", "2", {
+        "content": "latest reply", "time": "2026-09-16T12:00:00+00:00",
+    })
+    item = store.conversations("bot")[0]
+    assert item["title"] == "Team"
+    assert item["preview"] == "latest reply"
+    assert item["time"] == "2026-09-16T12:00:00+00:00"
+    assert store.conversations("another") == []
