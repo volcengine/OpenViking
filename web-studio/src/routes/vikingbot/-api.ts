@@ -57,12 +57,11 @@ export function createConnection(body: {
 export function updateConnection(
   connection: Connection,
   action: string,
-  step?: number,
 ) {
   return getOvResult<Connection>(
     ovClient.client.patch({
       url: `${base}/connections/${connection.id}`,
-      body: { action, step, revision: connection.revision },
+      body: { action, revision: connection.revision },
     }),
   )
 }
@@ -108,31 +107,4 @@ export function getBotUsers() {
   return getOvResult<Array<{ user_id: string; available: boolean }>>(
     ovClient.client.get({ url: `${base}/users` }),
   )
-}
-
-export type ScheduledJob = {
-  id: string
-  name: string
-  enabled: boolean
-  message: string
-  deliver: boolean
-  schedule: {
-    kind: 'at' | 'every' | 'cron'
-    at_ms: number | null
-    every_ms: number | null
-    expr: string | null
-    tz: string | null
-  }
-  state: {
-    next_run_at_ms: number | null
-    last_run_at_ms: number | null
-    last_status: 'ok' | 'error' | 'skipped' | null
-  }
-}
-export function getSchedules() {
-  return getOvResult<{
-    available: boolean
-    running: boolean
-    jobs: ScheduledJob[]
-  }>(ovClient.client.get({ url: `${base}/schedules` }))
 }

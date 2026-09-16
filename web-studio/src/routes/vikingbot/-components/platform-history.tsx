@@ -1,57 +1,7 @@
-import { ConversationRow } from './conversation-row'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { UsersIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
 import { getConversations, getMessages } from '../-api'
-import type { Connection } from '../-api'
-
-export function PlatformConversationList({
-  connection,
-  scope,
-  onSelect,
-  search,
-  selected,
-}: {
-  connection: Connection
-  selected?: string
-  search: string
-  scope: string
-  onSelect: (connection: string, conversation: string) => void
-}) {
-  const { t } = useTranslation('vikingbot')
-  const query = useQuery({
-    queryKey: ['vikingbot', scope, connection.id, 'conversations'],
-    queryFn: () => getConversations(connection.id),
-    refetchInterval: 5000,
-  })
-  return (
-    <div>
-      {query.error && (
-        <p role="alert" className="p-3 text-xs text-destructive">
-          {t('operationFailed')} {query.error.message}
-        </p>
-      )}
-      {query.data
-        ?.filter((item) =>
-          `${connection.bot_name} ${item.title}`
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-        )
-        .map((item) => (
-          <ConversationRow
-            key={item.conversation}
-            title={item.title || t('newChat')}
-            subtitle={t('feishu')}
-            time={item.time}
-            icon={<UsersIcon className="size-4" />}
-            selected={selected === item.conversation}
-            onSelect={() => onSelect(connection.id, item.conversation)}
-          />
-        ))}
-    </div>
-  )
-}
 
 export function PlatformHistory({
   connection,

@@ -11,35 +11,6 @@ export default {
   noConnectedBots: 'No bots yet. Select “Add bot” to get started.',
   dingtalk: 'DingTalk',
 
-  schedules: 'Scheduled tasks',
-  schedule: {
-    adminOnly: 'Only server administrators can view scheduled tasks.',
-    scope:
-      'All scheduled tasks on this server, across accounts. Refreshes every 15 seconds.',
-    running: 'Scheduler running',
-    stopped: 'Scheduler stopped',
-    refresh: 'Refresh',
-    unavailable: 'The scheduler is not connected to this Bot.',
-    empty: 'No scheduled tasks',
-    guide:
-      'Create tasks with VikingBot CLI cron add, or request a reminder in a Bot conversation with the cron tool enabled.',
-    enabled: 'Enabled',
-    disabled: 'Disabled',
-    rule: 'Schedule',
-    once: 'Once · {{time}}',
-    every: 'Every {{seconds}} seconds',
-    serverTimezone: 'Server timezone',
-    next: 'Next run',
-    last: 'Last run',
-    result: 'Last result',
-    ok: 'Succeeded',
-    error: 'Failed',
-    skipped: 'Skipped',
-    pending: 'Not run yet',
-    deliver: 'Send results to the original conversation',
-    noDeliver: 'Do not send results to a conversation',
-    note: 'Read-only view of the latest execution state. Success does not confirm message delivery. Task creation is not yet enabled in Studio-managed Feishu groups. One-time tasks configured to delete after execution disappear from this list.',
-  },
   qr: {
     manualRecovery: 'Continue with manual setup',
     intro:

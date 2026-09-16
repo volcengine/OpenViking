@@ -107,16 +107,7 @@ class FeishuProvider:
 
     def onboarding(self, record, runtime, body):
         action = body.get("action")
-        if action == "step":
-            step = body.get("step")
-            if not isinstance(step, int) or not 2 <= step <= 5:
-                raise HTTPException(400, "Invalid onboarding step")
-            if step == 5 and not (
-                runtime and runtime.verification and runtime.verification.get("sent")
-            ):
-                raise HTTPException(409, "Complete the group verification first")
-            record["step"] = step
-        elif action == "verify":
+        if action == "verify":
             if not record["enabled"] or not runtime:
                 raise HTTPException(409, "Resume the connection first")
             runtime.verification = {

@@ -198,12 +198,12 @@ async def test_failed_secret_rotation_preserves_old_connection(tmp_path, monkeyp
     assert service.get("a", "connection")["enabled"]
 
 
-async def test_cannot_mark_setup_complete_before_reply_is_accepted(tmp_path):
+async def test_obsolete_setup_step_action_is_rejected(tmp_path):
     service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
     service.store.save(record())
     with pytest.raises(HTTPException) as exc:
         await service.update("a", "connection", {"revision": 1, "action": "step", "step": 5})
-    assert exc.value.status_code == 409
+    assert exc.value.status_code == 400
 
 
 def test_managed_group_tools_deny_local_and_unregistered_capabilities():
