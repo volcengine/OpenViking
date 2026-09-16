@@ -964,6 +964,7 @@ Retrieval ranking configuration for final search scores.
   "retrieval": {
     "hotness_alpha": 0.0,
     "score_propagation_alpha": 1.0,
+    "recall_min_score": 0.35,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -974,6 +975,7 @@ Retrieval ranking configuration for final search scores.
 |-----------|------|-------------|---------|
 | `hotness_alpha` | float | Weight for blending hotness into final retrieval scores. `0.0` disables the hotness boost and keeps scores equal to semantic similarity; `1.0` uses only hotness. Valid range: `0.0` to `1.0`. | `0.0` |
 | `score_propagation_alpha` | float | Weight for each child result's own score when blending with its parent score during hierarchical retrieval. `1.0` ignores the parent score (semantic similarity only); `0.5` is an equal blend with the parent score; `0.0` uses only the parent score. Valid range: `0.0` to `1.0`. | `1.0` |
+| `recall_min_score` | float | Default recall score threshold applied on the MCP `find` and `search` (list mode) tools when the caller omits `min_score`. A per-call `min_score` always wins. Lower it when recall misses expected content; raise it to suppress weak matches. Valid range: `0.0` to `1.0`. The `/recall` endpoint's own `0.1` preset default is separate and unchanged. | `0.35` |
 
 Keep `hotness_alpha` at `0.0` when you need scores to reflect pure vector similarity. Set it above `0.0` only when frequently accessed or recently updated contexts should receive a ranking boost.
 

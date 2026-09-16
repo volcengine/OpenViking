@@ -31,6 +31,16 @@ class RetrievalConfig(BaseModel):
         gt=0.0,
         description="Timeout in seconds for optional context query expansion.",
     )
+    recall_min_score: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Default recall score threshold used when a caller omits min_score "
+            "(MCP find and search list mode). Per-call values always win. Lower it "
+            "when recall misses expected content; raise it to suppress weak matches."
+        ),
+    )
     recall_rewrite_timeout_s: float = Field(
         default=30.0,
         gt=0.0,

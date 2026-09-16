@@ -247,12 +247,23 @@ def _resolve_context_type_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
+def _recall_min_score(min_score: Optional[float]) -> float:
+    """Resolve the recall score threshold: a per-call value wins, otherwise
+    fall back to ``retrieval.recall_min_score`` from ov.conf (0.35 by default),
+    so deployments can tune the recall/precision tradeoff without patching."""
+    if min_score is not None:
+        return min_score
+    from openviking_cli.utils.config import get_openviking_config
+
+    return float(get_openviking_config().retrieval.recall_min_score)
+
+
 @mcp.tool()
 async def find(
     query: str,
     target_uri: str = "",
     limit: int = 10,
-    min_score: float = 0.35,
+    min_score: Optional[float] = None,
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
@@ -267,7 +278,7 @@ async def find(
         ctx=ctx,
         target_uri=target_uri,
         limit=limit,
-        score_threshold=min_score,
+        score_threshold=_recall_min_score(min_score),
         filter=_resolve_context_type_filter(context_type),
         level=level,
     )
@@ -411,7 +422,7 @@ async def search(
         target_uri=target_uri,
         session=session,
         limit=limit,
-        score_threshold=0.35 if min_score is None else min_score,
+        score_threshold=_recall_min_score(min_score),
         filter=context_filter,
         level=level,
     )
