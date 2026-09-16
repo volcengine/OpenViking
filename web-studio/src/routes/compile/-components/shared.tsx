@@ -29,7 +29,7 @@ export function CompileShell({
     location.state.__TSR_index,
   )
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-8">
+    <main className="flex w-full min-w-0 flex-col gap-6">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div className="min-w-0 flex-1 space-y-2">
           {back && (

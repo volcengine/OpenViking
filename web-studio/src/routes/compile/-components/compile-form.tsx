@@ -335,7 +335,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
           e.preventDefault()
           void submit()
         }}
-        className="w-full max-w-3xl space-y-5"
+        className="w-full min-w-0 space-y-5"
       >
         <p className="text-sm text-muted-foreground">{t('formIntro')}</p>
         <fieldset
