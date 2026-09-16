@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.ingest.models import NormalizedMessage, SessionRef, iso_from_epoch_ms
 from openviking.ingest.registry import register_source
@@ -60,14 +60,25 @@ _HOST_BLOCK_RE = re.compile(
 )
 _USER_QUERY_RE = re.compile(r"<user_query\s*>(.*?)</user_query\s*>", re.DOTALL | re.IGNORECASE)
 
-# ``session_ref_for_file`` wants the title, and WorkBuddy appends the ``ai-title``
-# record wherever the titler happens to run -- observed anywhere from line 2 to line
-# ~1500 of a session. Discovery runs on every poll, so the head of the file is walked
-# under a line/byte budget and the result is cached on (mtime, size).
+# Discovery runs on every poll, so the metadata is cached on (mtime, size). It is read
+# from two bounded windows rather than one, because the fields do not live in the same
+# place: ``sessionId`` / ``cwd`` / ``timestamp`` ride along on every record (always
+# line 1), while the title is *appended* -- see ``_TITLE_TAIL_BYTES``.
 _PEEK_MAX_LINES = 2000
 _PEEK_MAX_BYTES = 4 * 1024 * 1024
 _PEEK_CACHE_MAX_ENTRIES = 4096
 _PEEK_CACHE: Dict[str, Tuple[Tuple[float, int], Dict[str, Any]]] = {}
+
+# WorkBuddy re-emits an ``ai-title`` record every time it re-titles the session, so a log
+# can hold several and only the **last** is the settled name -- the earlier ones are the
+# name the session carried before it found its topic. On a real corpus the newest title sat
+# at a 7.3 MB / 8.2 MB offset of a 9 MB log, far outside the head budget above, so the
+# title is read from a second bounded window at the *tail*: the log is append-only, so the
+# newest title is the last one written. Neither window alone suffices -- of 40 titled
+# sessions, 36 had the settled title inside both, 2 only in the head (never re-titled), and
+# 2 only in the tail -- hence the tail result wins and the head result stands as fallback.
+# Logs smaller than the window are covered whole.
+_TITLE_TAIL_BYTES = 4 * 1024 * 1024
 
 
 def _blocks_text(content: Any) -> str:
@@ -127,7 +138,7 @@ class WorkBuddySource(JsonlLogSource):
 
     @staticmethod
     def _peek_meta(path: Path) -> Dict[str, Any]:
-        """Best-effort session metadata from the head of the log (cached)."""
+        """Best-effort session metadata, cached on ``(mtime, size)``."""
         try:
             st = path.stat()
         except OSError:
@@ -162,9 +173,10 @@ class WorkBuddySource(JsonlLogSource):
                     if meta.get("started_at") is None and obj.get("timestamp") is not None:
                         meta["started_at"] = iso_from_epoch_ms(obj.get("timestamp"))
                     if meta.get("title") is None and obj.get("type") == "ai-title":
-                        title = obj.get("aiTitle")
-                        if isinstance(title, str) and title.strip():
-                            meta["title"] = title.strip()
+                        # Provisional: superseded below if the log holds a newer title.
+                        candidate = obj.get("aiTitle")
+                        if isinstance(candidate, str) and candidate.strip():
+                            meta["title"] = candidate.strip()
                     if meta.get("model") is None and obj.get("role") == "assistant":
                         provider_data = obj.get("providerData")
                         if isinstance(provider_data, dict) and provider_data.get("model"):
@@ -177,10 +189,43 @@ class WorkBuddySource(JsonlLogSource):
         except OSError:
             return {}
 
+        tail_title = WorkBuddySource._peek_title(path, signature[1])
+        if tail_title is not None:
+            meta["title"] = tail_title
+
         if len(_PEEK_CACHE) >= _PEEK_CACHE_MAX_ENTRIES:
             _PEEK_CACHE.clear()
         _PEEK_CACHE[key] = (signature, meta)
         return meta
+
+    @staticmethod
+    def _peek_title(path: Path, size: int) -> Optional[str]:
+        """The last non-empty ``ai-title`` in a bounded window at the tail of the log."""
+        start = max(0, size - _TITLE_TAIL_BYTES)
+        title: Optional[str] = None
+        try:
+            with open(path, "rb") as handle:
+                if start:
+                    handle.seek(start)
+                    # The window can open in the middle of a record, so drop that first
+                    # partial line instead of trying to salvage it.
+                    handle.readline()
+                for raw in handle:
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        obj = json.loads(stripped)
+                    except ValueError:
+                        continue
+                    if not isinstance(obj, dict) or obj.get("type") != "ai-title":
+                        continue
+                    candidate = obj.get("aiTitle")
+                    if isinstance(candidate, str) and candidate.strip():
+                        title = candidate.strip()
+        except OSError:
+            return None
+        return title
 
     def parse_line(self, obj: Dict[str, Any], ref: SessionRef) -> List[NormalizedMessage]:
         if obj.get("type") != "message":

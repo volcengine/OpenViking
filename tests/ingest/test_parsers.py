@@ -240,6 +240,25 @@ def test_workbuddy_finds_title_beyond_the_head(tmp_path):
     assert [r.title for r in refs] == ["Late title"]
 
 
+def test_workbuddy_latest_ai_title_wins(tmp_path):
+    """The host re-emits ``ai-title`` when it re-titles a session; the last one is the name."""
+    root = tmp_path / "projects"
+    _write_jsonl(
+        root / "proj" / "wb-session.jsonl",
+        [
+            {"timestamp": 1757000000000, "type": "ai-title", "aiTitle": "First guess"},
+            _workbuddy_turn(
+                "user", "<user_query>look at the installer</user_query>", 1757000001000
+            ),
+            _workbuddy_turn("assistant", "on it", 1757000002000, model="hy3"),
+            {"timestamp": 1757000003000, "type": "ai-title", "aiTitle": "Settled name"},
+        ],
+    )
+    src = WorkBuddySource(_cfg(root), fallback_user="tester")
+    refs = list(src.discover_sessions())
+    assert [r.title for r in refs] == ["Settled name"]
+
+
 def test_hermes_group_username(tmp_path):
     root = tmp_path / "sessions"
     _write_jsonl(
