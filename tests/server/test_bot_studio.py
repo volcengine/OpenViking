@@ -64,9 +64,10 @@ async def test_update_scope_comes_from_authenticated_context(app, monkeypatch):
     assert dispatch.call_args.args[0].account_id == "a"
 
 
+@pytest.mark.parametrize("include_summary", [True, False])
 @pytest.mark.parametrize("include_credentials", [True, False])
 async def test_reused_admin_users_support_safe_credential_status(
-    app, monkeypatch, include_credentials
+    app, monkeypatch, include_credentials, include_summary
 ):
     app.dependency_overrides[get_request_context] = lambda: RequestContext(
         user=UserIdentifier("a", "root"),
@@ -74,10 +75,16 @@ async def test_reused_admin_users_support_safe_credential_status(
     )
     registry = SimpleNamespace(
         refresh_account_users_from_store=AsyncMock(),
-        get_users=lambda *args, **kwargs: [
-            {"user_id": "bot", "role": "user", "api_key": "private"},
-            {"user_id": "hashed", "role": "user", "key_prefix": "prefix"},
-        ],
+        get_users_page=lambda *args, **kwargs: {
+            "users": [
+                {"user_id": "bot", "role": "user", "api_key": "private"},
+                {"user_id": "hashed", "role": "user", "key_prefix": "prefix"},
+            ],
+            "total": 2,
+            "account_total": 2,
+            "manager_count": 0,
+            "key_count": 2,
+        },
     )
     app.state.api_key_manager = registry
     monkeypatch.setattr(admin, "_get_api_key_manager", lambda request: registry)
@@ -89,14 +96,20 @@ async def test_reused_admin_users_support_safe_credential_status(
             params={
                 "role": "user",
                 "include_credentials": str(include_credentials).lower(),
+                "include_summary": str(include_summary).lower(),
             },
         )
     assert response.status_code == 200
+    result = response.json()["result"]
+    if include_summary:
+        assert result["total"] == result["account_total"] == 2
+        assert result["manager_count"] == 0
+        result = result["users"]
     if include_credentials:
-        assert response.json()["result"][0]["api_key"] == "private"
+        assert result[0]["api_key"] == "private"
     else:
         assert "private" not in response.text and "prefix" not in response.text
-        assert response.json()["result"] == [
+        assert result == [
             {"user_id": "bot", "role": "user", "api_key_available": True},
             {"user_id": "hashed", "role": "user", "api_key_available": False},
         ]

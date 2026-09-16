@@ -88,7 +88,7 @@ read user:carol on viking://resources/A/B/C/report.md
 
 | 操作 | 所需能力 |
 |------|----------|
-| read、stat、list、tree、find、search、grep、glob、relations | read |
+| read、stat、list、tree、find、search、grep、glob | read |
 | write、create、mkdir、set tags | write |
 | 删除或移动文件 | write |
 | 删除或移动目录 | 目录及完整子树的 manage |
