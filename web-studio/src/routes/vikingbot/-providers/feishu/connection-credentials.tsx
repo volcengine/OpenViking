@@ -49,7 +49,7 @@ export function ConnectionCredentials({
         </Button>
         {mutation.error && (
           <p role="alert" className="text-sm text-destructive">
-            {mutation.error.message}
+            {t('operationFailed')} {mutation.error.message}
           </p>
         )}
         {mutation.isSuccess && (

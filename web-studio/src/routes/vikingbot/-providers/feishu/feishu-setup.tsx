@@ -119,7 +119,7 @@ export function FeishuSetup({
           </p>
           {users.error && (
             <p role="alert" className="text-sm text-destructive">
-              {users.error.message}{' '}
+              {t('operationFailed')} {users.error.message}{' '}
               <Button
                 variant="ghost"
                 size="sm"
@@ -171,7 +171,7 @@ export function FeishuSetup({
           </details>
           {mutation.error && (
             <p role="alert" className="text-sm text-destructive">
-              {mutation.error.message}
+              {t('operationFailed')} {mutation.error.message}
             </p>
           )}
           <Button

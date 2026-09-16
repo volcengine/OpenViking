@@ -1,4 +1,6 @@
 export default {
+  operationFailed:
+    'The operation could not be completed. Please retry. Details:',
   viewSetup: 'View configuration',
   chooseBotChannel: 'Choose a platform for your bot.',
   channelFilter: 'Channel',

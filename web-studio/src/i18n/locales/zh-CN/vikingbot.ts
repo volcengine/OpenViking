@@ -1,4 +1,5 @@
 export default {
+  operationFailed: '操作未完成，请重试。错误详情：',
   viewSetup: '查看配置',
   chooseBotChannel: '选择机器人接入的平台。',
   channelFilter: '渠道',

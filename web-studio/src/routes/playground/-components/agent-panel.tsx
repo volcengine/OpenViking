@@ -42,7 +42,6 @@ import {
   getErrorMessage,
   readPlaygroundAgentSessionIds,
   registerPlaygroundAgentSessionId,
-  withTimeout,
 } from '../-lib/utils'
 
 export function AgentPanel({
@@ -78,7 +77,7 @@ export function AgentPanel({
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } =
     useSessionListByRecency()
-  const { getTitle, setTitle, removeTitle } = useSessionTitles(identityScopeKey)
+  const { getTitle, removeTitle } = useSessionTitles(identityScopeKey)
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(identityScopeKey),
   )
@@ -98,51 +97,19 @@ export function AgentPanel({
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  const handleNewSession = useCallback(async () => {
+  const handleNewSession = useCallback(() => {
     if (isCreatingSession) return
-
-    const generation = ++creationGenerationRef.current
+    creationGenerationRef.current += 1
     chat.abort()
     chat.setMessages([])
-    creationStartedRef.current = true
-    setIsCreatingSession(true)
+    creationStartedRef.current = false
     setSessionError(null)
-
-    try {
-      const result = await withTimeout(
-        createSession.mutateAsync(createVikingBotWebSessionId()),
-        12_000,
-        t('agent.createTimeout'),
-      )
-      if (generation !== creationGenerationRef.current) return
-      setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(result.session_id, identityScopeKey),
-      )
-      setTitle(result.session_id, t('agent.newSessionTitle'))
-      setHistorySessionId(undefined)
-      setPersistedSessionId(result.session_id)
-      setSessionId(result.session_id)
-      onSessionChange(result.session_id)
-      setHistoryOpen(false)
-    } catch (error) {
-      if (generation !== creationGenerationRef.current) return
-      creationStartedRef.current = false
-      setSessionError(error instanceof Error ? error.message : String(error))
-    } finally {
-      if (generation === creationGenerationRef.current) {
-        creationStartedRef.current = false
-        setIsCreatingSession(false)
-      }
-    }
-  }, [
-    chat,
-    createSession,
-    identityScopeKey,
-    isCreatingSession,
-    onSessionChange,
-    setTitle,
-    t,
-  ])
+    setHistorySessionId(undefined)
+    setPersistedSessionId(undefined)
+    setSessionId(createVikingBotWebSessionId())
+    onSessionChange('')
+    setHistoryOpen(false)
+  }, [chat, isCreatingSession, onSessionChange])
 
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {

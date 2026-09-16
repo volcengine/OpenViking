@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { OvClientError } from '#/lib/ov-client'
 
-import { fetchSessionMessages, serializeParts } from './api'
+import {
+  fetchSessionFirstTitle,
+  fetchSessionMessages,
+  serializeParts,
+} from './api'
 
 const {
   getSessionBySessionIdMock,
@@ -154,5 +158,50 @@ describe('serializeParts', () => {
       }),
       { type: 'text', text: 'done' },
     ])
+  })
+})
+
+describe('fetchSessionFirstTitle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('stops at the first archived user message without reading later history', async () => {
+    getSessionBySessionIdMock.mockReturnValue(response({ commit_count: 20 }))
+    getSessionIdArchiveByArchiveIdMock.mockReturnValue(
+      response({ messages: [message('first', 'First\n question')] }),
+    )
+    expect(await fetchSessionFirstTitle('s')).toBe('First question')
+    expect(getSessionIdArchiveByArchiveIdMock).toHaveBeenCalledExactlyOnceWith({
+      path: { session_id: 's', archive_id: 'archive_001' },
+    })
+    expect(getSessionIdContextMock).not.toHaveBeenCalled()
+  })
+
+  it('reads current context when there are no archives', async () => {
+    getSessionBySessionIdMock.mockReturnValue(response({ commit_count: 0 }))
+    getSessionIdContextMock.mockReturnValue(
+      response({ messages: [message('1', 'Hello')] }),
+    )
+    expect(await fetchSessionFirstTitle('s')).toBe('Hello')
+    expect(getSessionIdArchiveByArchiveIdMock).not.toHaveBeenCalled()
+  })
+
+  it('limits simultaneous title lookups to four and releases slots after errors', async () => {
+    let active = 0
+    let peak = 0
+    getSessionBySessionIdMock.mockImplementation(async () => {
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      active -= 1
+      throw new Error('unavailable')
+    })
+    const results = await Promise.allSettled(
+      Array.from({ length: 12 }, (_, i) => fetchSessionFirstTitle(String(i))),
+    )
+    expect(peak).toBe(4)
+    expect(results.every((result) => result.status === 'rejected')).toBe(true)
+    expect(getSessionBySessionIdMock).toHaveBeenCalledTimes(12)
   })
 })

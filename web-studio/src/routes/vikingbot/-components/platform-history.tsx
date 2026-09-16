@@ -29,7 +29,7 @@ export function PlatformConversationList({
     <div>
       {query.error && (
         <p role="alert" className="p-3 text-xs text-destructive">
-          {query.error.message}
+          {t('operationFailed')} {query.error.message}
         </p>
       )}
       {query.data
@@ -104,7 +104,7 @@ export function PlatformHistory({
         {query.isPending && <p role="status">{t('loading')}</p>}
         {query.error && (
           <p role="alert" className="text-destructive">
-            {query.error.message}
+            {t('operationFailed')} {query.error.message}
           </p>
         )}
         {!query.isPending && !messages.length && (

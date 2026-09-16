@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useQueries } from '@tanstack/react-query'
-import { fetchSessionMessages } from './api'
+import { fetchSessionFirstTitle } from './api'
 import { useSessionTitles } from './use-session-titles'
 
 const PLACEHOLDERS = new Set([
@@ -18,24 +18,7 @@ export function useDefaultConversationTitles(scope: string, ids: string[]) {
   const queries = useQueries({
     queries: missing.map((id) => ({
       queryKey: ['conversation-first-message', scope, id],
-      queryFn: async () => {
-        const messages = await fetchSessionMessages(id)
-        const first = messages.find(
-          (message) =>
-            message.role === 'user' &&
-            message.parts.some(
-              (part) => part.type === 'text' && part.text.trim(),
-            ),
-        )
-        return (
-          first?.parts
-            .flatMap((part) => (part.type === 'text' ? [part.text] : []))
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 60) || ''
-        )
-      },
+      queryFn: () => fetchSessionFirstTitle(id),
       staleTime: 60_000,
       retry: false,
     })),

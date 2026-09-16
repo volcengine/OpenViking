@@ -1,7 +1,7 @@
 import { useDefaultConversationTitles } from '#/lib/sessions/use-default-conversation-titles'
 import { ConversationRow } from './-components/conversation-row'
 import { readPlaygroundAgentSessionIds } from '#/routes/playground/-lib/utils'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import {
@@ -17,7 +17,6 @@ import { Input } from '#/components/ui/input'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   useBotHealth,
-  useCreateSession,
   useSessionListByRecency,
 } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
@@ -49,18 +48,10 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
   const [selected, setSelected] = useState<{
     id: string
     connection?: string
+    draft?: boolean
   }>()
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
-  const [error, setError] = useState('')
-  const creating = useRef(false)
-  const mountedGeneration = useRef(0)
-  useEffect(
-    () => () => {
-      mountedGeneration.current += 1
-    },
-    [],
-  )
   const capabilities = useQuery({
     queryKey: ['vikingbot', scope, 'capabilities'],
     queryFn: getCapabilities,
@@ -81,8 +72,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
   const sourceFilters = hasFeishu ? (['all', 'web', 'feishu'] as const) : []
   const activeFilter = hasFeishu ? filter : 'all'
   const sessions = useSessionListByRecency()
-  const createSession = useCreateSession()
-  const { getTitle, setTitle, removeTitle } = useSessionTitles(scope)
+  const { getTitle, removeTitle } = useSessionTitles(scope)
   useDefaultConversationTitles(
     scope,
     sessions.data
@@ -133,26 +123,10 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
       (a, b) =>
         (Date.parse(b.time ?? '') || 0) - (Date.parse(a.time ?? '') || 0),
     )
-  async function create() {
-    if (creating.current) return
-    creating.current = true
-    const generation = ++mountedGeneration.current
-    setError('')
-    try {
-      const session = await createSession.mutateAsync(
-        createVikingBotWebSessionId(),
-      )
-      if (generation !== mountedGeneration.current) return
-      setTitle(session.session_id, t('newChat'))
-      setSelected({ id: session.session_id })
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      creating.current = false
-    }
+  function create() {
+    setSelected({ id: createVikingBotWebSessionId(), draft: true })
   }
   function select(id: string, connection?: string) {
-    mountedGeneration.current += 1
     setSelected({ id, connection })
   }
   return (
@@ -215,7 +189,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
             <div className="space-y-3 border-b p-3">
               <Button
                 className="w-full"
-                disabled={createSession.isPending || health.isError}
+                disabled={health.isError}
                 onClick={() => void create()}
               >
                 <PlusIcon className="size-4" />
@@ -243,11 +217,6 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
               )}
             </div>
             <div className="flex-1 overflow-auto p-2">
-              {error && (
-                <p role="alert" className="p-2 text-sm text-destructive">
-                  {error}
-                </p>
-              )}
               {platformQueries.map(
                 (query, index) =>
                   query.error && (
@@ -341,7 +310,11 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                     conversation={selected.id}
                   />
                 ) : (
-                  <Thread key={selected.id} sessionId={selected.id} />
+                  <Thread
+                    key={selected.id}
+                    sessionId={selected.id}
+                    draft={selected.draft}
+                  />
                 )
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">

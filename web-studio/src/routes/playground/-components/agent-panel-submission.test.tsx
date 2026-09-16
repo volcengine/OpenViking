@@ -172,3 +172,11 @@ it('deletes the active history session only after confirmation and returns to a 
   expect(pending.url).toHaveBeenLastCalledWith('')
   expect(m.create).not.toHaveBeenCalled()
 })
+
+it('opens a new draft without persisting an empty conversation', () => {
+  const pending = setup()
+  fireEvent.click(screen.getByTitle('agent.newSession'))
+  expect(m.create).not.toHaveBeenCalled()
+  expect(m.history).toHaveBeenLastCalledWith(undefined)
+  expect(pending.url).toHaveBeenCalledWith('')
+})
