@@ -86,12 +86,7 @@ New configuration should use `sender`; existing `peer_role=person` configuration
 
 The plugin occupies OpenClaw's `contextEngine` slot. It handles session history, long-term memory recall, and the pending user input separately; `assemble()` does not capture conversation messages.
 
-| Call shape | Input | Plugin behavior |
-| --- | --- | --- |
-| Main assemble | At least one of `prompt`, `availableTools`, or `citationsMode` is present | Fetch OV session context and build history; recall from the separate `prompt` and return matches through `systemPromptAddition` |
-| transformContext assemble | None of those fields is present; messages belong to the current model call | Preserve the message sequence; attempt recall only for a user tail and prepend matches to that user's text |
-
-These are two call shapes of the same `assemble()` method. A tool loop usually ends in a tool result or assistant message, which transformContext passes through. The host controls invocation frequency; there is no fixed two-calls-per-turn rule.
+Main assemble prepares history at the start of each new turn. The plugin identifies this call by the presence of at least one of `prompt`, `availableTools`, or `citationsMode`.
 
 ### Main assemble: history and pending input
 
@@ -110,9 +105,9 @@ The plugin reserves output headroom, subtracts estimated guide and summary token
 
 The history branch falls back to host messages when OV has no data, has fewer messages than the host without an archive, produces an empty converted history, or fails to load. Main-branch recall can still run with a valid `prompt` and `autoRecall` enabled even when history passes through. Missing recall results or recall failures do not stop the conversation.
 
-### transformContext: preserve the current tool loop
+### transformContext
 
-This branch does not rebuild history from OV. It cleans the latest user text and limits the recall query to 4000 characters. It passes through when recall is already injected, the query is shorter than five characters, `autoRecall` is disabled, or `bypassSessionPatterns` matches. Tool results therefore remain in the current message sequence instead of being replaced by OV history that has not captured this turn yet.
+`transformContext` runs before each LLM call, whether the last message is a user message or a tool response. The best use of this hook in the OV integration has not yet been determined.
 
 ### Capture and compaction
 

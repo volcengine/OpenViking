@@ -86,12 +86,7 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 
 插件占用 OpenClaw 的 `contextEngine` 槽位。会话历史、长期记忆召回和本轮新输入分别处理；`assemble()` 本身不写入对话。
 
-| 调用形态 | 输入特征 | 插件行为 |
-| --- | --- | --- |
-| 主 assemble | 参数带有 `prompt`、`availableTools`、`citationsMode` 中任一字段 | 从 OV 读取会话上下文，组装历史；以单独传入的 `prompt` 召回长期记忆，通过 `systemPromptAddition` 返回 |
-| transformContext assemble | 不带上述字段，接收当次模型调用的 messages | 保留消息序列；仅当最后一条是 user 时尝试召回，把结果前置到该 user 消息的文本中 |
-
-这两个分支是同一个 `assemble()` 的调用形态。工具循环中尾消息通常是 tool result 或 assistant，此时 transformContext 直接透传。调用次数由宿主决定，不能按“每轮固定调用两次”理解。
+主 assemble 在每轮新输入开始执行时准备历史上下文。插件通过参数中是否包含 `prompt`、`availableTools`、`citationsMode` 中任一字段识别该调用。
 
 ### 主 assemble：历史和当前输入分开
 
@@ -110,9 +105,9 @@ overview 由 OV 服务端的工作记忆流程生成，插件读取结果。服�
 
 OV 无数据、无归档且消息数少于宿主输入、转换后为空或读取失败时，历史分支回退到宿主 messages。即使历史透传，只要有合法 `prompt` 且启用了 `autoRecall`，主分支仍可尝试召回。召回无命中或失败不会阻止对话。
 
-### transformContext：保留当前工具循环
+### transformContext
 
-此分支不从 OV 重建历史。它从最新 user 消息提取查询，清洗并截取最多 4000 个字符；已注入召回块、查询不足 5 个字符、关闭 `autoRecall` 或命中 `bypassSessionPatterns` 时透传。这样不会在工具结果到达后，用尚未捕获本轮消息的 OV 历史覆盖当前工具循环。
+`transformContext` 在每次 LLM 调用前执行，无论最后一条消息是 user message 还是 tool response。该 hook 在 OV 集成中的最佳使用方式暂未明确。
 
 ### 捕获和压缩
 
