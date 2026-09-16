@@ -19,7 +19,7 @@ import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
 } from '#/lib/sessions/vikingbot-sessions'
-import { DeleteConversation } from './-components/delete-conversation'
+import { DeleteConversation } from '#/components/sessions/delete-conversation'
 import { Channels } from './-components/channels'
 import {
   PlatformConversationList,

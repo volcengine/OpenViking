@@ -195,6 +195,13 @@ export default {
     '在飞书群设置中添加此应用，然后在群里 @它即可开始对话。无需发送测试码。',
   noActivity: '暂无记录',
   connectionHelp: '排查连接问题（可选）',
+  deleteConnection: '删除连接',
+  deleteConnectionHint:
+    '确定删除“{{title}}”的连接吗？这将停止机器人连接，并删除此连接在 Studio 中的聊天记录，无法恢复。飞书平台上的应用和群消息不会删除。',
+  deleteFailed: '删除失败：{{error}}',
+  cancelDelete: '取消',
+  deletingConnection: '删除中…',
+  confirmDeleteConnection: '确认删除',
   finish: '完成',
   continueSetup: '继续配置',
   pause: '暂停',

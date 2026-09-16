@@ -220,3 +220,31 @@ def test_provider_registry_preserves_legacy_and_rejects_unknown():
     with pytest.raises(HTTPException) as error:
         get_provider({"type": "slack"})
     assert error.value.status_code == 400
+
+
+async def test_delete_connection_stops_runtime_and_cleans_owned_data(tmp_path):
+    service = StudioService(
+        SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={})
+    )
+    item = record()
+    service.store.save(item)
+    service.store.save({**item, "id": "other", "account": "b"})
+    service.store.append(item["id"], "group", "event", {"content": "hello"})
+    runtime = SimpleNamespace(stop=AsyncMock())
+    key = get_provider(item).runtime_key(item)
+    service.manager.channels[key] = runtime
+    with pytest.raises(HTTPException) as error:
+        await service.update("b", item["id"], {"action": "delete", "revision": 1})
+    assert error.value.status_code == 404
+    with pytest.raises(HTTPException) as error:
+        await service.update("a", item["id"], {"action": "delete", "revision": 0})
+    assert error.value.status_code == 409
+    runtime.stop.assert_not_awaited()
+    assert await service.update("a", item["id"], {"action": "delete", "revision": 1}) == {
+        "deleted": True
+    }
+    runtime.stop.assert_awaited_once()
+    assert key not in service.manager.channels
+    assert service.store.connections("a") == []
+    assert len(service.store.connections("b")) == 1
+    assert service.store.history(item["id"]) == []

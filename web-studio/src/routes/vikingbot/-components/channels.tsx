@@ -10,6 +10,7 @@ import {
   providers,
   upcomingProviders,
 } from '../-providers/registry'
+import { DeleteConnection } from './delete-connection'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CableIcon, PlusIcon } from 'lucide-react'
@@ -234,6 +235,18 @@ export function Channels({
                 >
                   {t(connection.enabled ? 'pause' : 'resume')}
                 </Button>
+                <DeleteConnection
+                  connection={connection}
+                  title={connection.bot_name}
+                  onDeleted={() => {
+                    client.setQueryData<Connection[]>(key, (old) =>
+                      (old ?? []).filter((item) => item.id !== connection.id),
+                    )
+                    void client.invalidateQueries({
+                      queryKey: ['vikingbot', scope],
+                    })
+                  }}
+                />
               </div>
               {Credentials && (
                 <Credentials

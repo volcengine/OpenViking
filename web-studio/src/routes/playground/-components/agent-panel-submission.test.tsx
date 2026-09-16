@@ -6,6 +6,7 @@ import { registerPlaygroundAgentSessionId } from '../-lib/utils'
 
 const m = vi.hoisted(() => ({
   create: vi.fn(),
+  remove: vi.fn(),
   stream: vi.fn(),
   history: vi.fn(),
 }))
@@ -16,11 +17,20 @@ vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
 }))
 vi.mock('#/lib/sessions/use-session-titles', () => ({
-  useSessionTitles: () => ({ getTitle: (id: string) => id, setTitle: vi.fn() }),
+  useSessionTitles: () => ({
+    getTitle: (id: string) => id,
+    setTitle: vi.fn(),
+    removeTitle: vi.fn(),
+  }),
   setSessionTitle: vi.fn(),
 }))
 vi.mock('#/lib/sessions/use-sessions', () => ({
   useBotHealth: () => ({ isLoading: true }),
+  useDeleteSession: () => ({
+    mutateAsync: m.remove,
+    reset: vi.fn(),
+    isPending: false,
+  }),
   useCreateSession: () => ({ mutateAsync: m.create }),
   useSessionListByRecency: () => ({
     data: [{ session_id: 'B' }],
@@ -36,6 +46,7 @@ vi.mock('#/lib/sessions/api', () => ({
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   window.localStorage.clear()
+  m.remove.mockReset().mockResolvedValue(undefined)
   m.create.mockReset()
   m.history.mockReset().mockReturnValue({ data: undefined })
   m.stream.mockReset().mockImplementation(() => new Promise(() => {}))
@@ -138,4 +149,23 @@ it('does not send or publish after the panel unmounts', async () => {
   })
   expect(pending.url).not.toHaveBeenCalled()
   expect(m.stream).not.toHaveBeenCalled()
+})
+
+it('deletes the active history session only after confirmation and returns to a draft', async () => {
+  const pending = setup()
+  fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
+  fireEvent.click(screen.getByRole('button', { name: 'BB' }))
+  fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
+  fireEvent.click(
+    screen.getByRole('button', { name: 'threadList.deleteSession' }),
+  )
+  expect(m.remove).not.toHaveBeenCalled()
+  await act(async () => {
+    fireEvent.click(
+      screen.getByRole('button', { name: 'threadList.confirmDelete' }),
+    )
+  })
+  expect(m.remove).toHaveBeenCalledWith('B')
+  expect(pending.url).toHaveBeenLastCalledWith('')
+  expect(m.create).not.toHaveBeenCalled()
 })

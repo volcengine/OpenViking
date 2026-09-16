@@ -10,6 +10,7 @@ import {
   SquarePenIcon,
 } from 'lucide-react'
 
+import { DeleteConversation } from '#/components/sessions/delete-conversation'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -76,7 +77,7 @@ export function AgentPanel({
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } =
     useSessionListByRecency()
-  const { getTitle, setTitle } = useSessionTitles(identityScopeKey)
+  const { getTitle, setTitle, removeTitle } = useSessionTitles(identityScopeKey)
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(identityScopeKey),
   )
@@ -319,30 +320,57 @@ export function AgentPanel({
                   const title = getTitle(session.session_id)
 
                   return (
-                    <button
+                    <div
                       key={session.session_id}
-                      type="button"
-                      className={cn(
-                        'flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors hover:border-primary/45 hover:bg-muted/45',
-                        active
-                          ? 'border-primary/60 bg-primary/10'
-                          : 'border-border bg-background',
-                      )}
-                      onClick={() => handleSwitchSession(session.session_id)}
+                      className="flex items-center gap-1"
                     >
-                      <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-foreground">
-                          {title}
+                      <button
+                        type="button"
+                        className={cn(
+                          'flex min-w-0 flex-1 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors hover:border-primary/45 hover:bg-muted/45',
+                          active
+                            ? 'border-primary/60 bg-primary/10'
+                            : 'border-border bg-background',
+                        )}
+                        onClick={() => handleSwitchSession(session.session_id)}
+                      >
+                        <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-foreground">
+                            {title}
+                          </span>
+                          <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                            {session.session_id}
+                          </span>
                         </span>
-                        <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                          {session.session_id}
-                        </span>
-                      </span>
-                      {active ? (
-                        <CheckCircle2Icon className="size-4 shrink-0 text-primary" />
-                      ) : null}
-                    </button>
+                        {active ? (
+                          <CheckCircle2Icon className="size-4 shrink-0 text-primary" />
+                        ) : null}
+                      </button>
+                      <DeleteConversation
+                        id={session.session_id}
+                        title={title}
+                        onDeleted={() => {
+                          removeTitle(session.session_id)
+                          setPlaygroundSessionIds((ids) =>
+                            ids.filter((id) => id !== session.session_id),
+                          )
+                          if (session.session_id === sessionId) {
+                            creationGenerationRef.current += 1
+                            chat.abort()
+                            chat.setMessages([])
+                            creationStartedRef.current = false
+                            setIsCreatingSession(false)
+                            setSessionError(null)
+                            setHistorySessionId(undefined)
+                            setPersistedSessionId(undefined)
+                            setSessionId(createVikingBotWebSessionId())
+                            onSessionChange('')
+                            setHistoryOpen(false)
+                          }
+                        }}
+                      />
+                    </div>
                   )
                 })}
               </div>

@@ -206,6 +206,13 @@ export default {
     'Add this app in your Feishu group settings, then @mention it to start chatting. No test code is required.',
   noActivity: 'No activity yet',
   connectionHelp: 'Troubleshoot connection (optional)',
+  deleteConnection: 'Delete connection',
+  deleteConnectionHint:
+    'Delete the connection for “{{title}}”? This stops the bot connection and permanently removes its Studio chat history. The Feishu app and group messages remain unchanged.',
+  deleteFailed: 'Deletion failed: {{error}}',
+  cancelDelete: 'Cancel',
+  deletingConnection: 'Deleting…',
+  confirmDeleteConnection: 'Delete',
   finish: 'Done',
   continueSetup: 'Continue setup',
   pause: 'Pause',

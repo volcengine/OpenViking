@@ -84,6 +84,22 @@ class StudioService:
                 raise HTTPException(409, "Configuration changed; refresh before saving")
             action = body.get("action")
             runtime = self.runtime(record)
+            if action == "delete":
+                if any(
+                    run.get("connection_id") == connection_id
+                    and run["id"] in self.onboarding.tasks
+                    for run in self.store.onboarding_runs(account)
+                ):
+                    raise HTTPException(409, "Setup is running; finish or cancel it before deleting")
+                if runtime:
+                    await runtime.stop()
+                task = self.tasks.pop(connection_id, None)
+                if task:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                self.manager.channels.pop(get_provider(record).runtime_key(record), None)
+                self.store.delete_connection(record)
+                return {"deleted": True}
             if action == "pause":
                 if runtime:
                     await runtime.stop()

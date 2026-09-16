@@ -39,6 +39,17 @@ class StudioStore:
                 (record["id"], record["account"], json.dumps(record)),
             )
 
+    def delete_connection(self, record):
+        with self.db:
+            self.db.execute("DELETE FROM messages WHERE connection_id=?", (record["id"],))
+            for run in self.onboarding_runs(record["account"]):
+                if run.get("connection_id") == record["id"]:
+                    self.db.execute("DELETE FROM onboarding WHERE id=?", (run["id"],))
+            self.db.execute(
+                "DELETE FROM connections WHERE id=? AND account=?",
+                (record["id"], record["account"]),
+            )
+
     def append(self, connection: str, conversation: str, event_id: str, value: dict):
         with self.db:
             cursor = self.db.execute(
