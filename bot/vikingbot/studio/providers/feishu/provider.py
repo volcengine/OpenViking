@@ -12,6 +12,27 @@ from vikingbot.config.schema import FeishuChannelConfig
 class FeishuProvider:
     type = "feishu"
 
+    def validate_settings(self, value):
+        if not isinstance(value, dict) or set(value) - {"thread_require_mention"}:
+            raise HTTPException(400, "Unsupported Feishu settings")
+        required = value.get("thread_require_mention", True)
+        if type(required) is not bool:
+            raise HTTPException(400, "thread_require_mention must be boolean")
+        return {"thread_require_mention": required}
+
+    def apply_settings(self, service, record):
+        required = self.validate_settings(record.get("settings", {}))["thread_require_mention"]
+        runtime = service.runtime(record)
+        if runtime:
+            runtime.config.thread_require_mention = required
+        for config in service.config.channels:
+            if (
+                isinstance(config, dict)
+                and config.get("type", "feishu") == "feishu"
+                and config.get("app_id") == record["app_id"]
+            ):
+                config["thread_require_mention"] = required
+
     async def run_onboarding(self, jobs, run):
         from .onboarding import run_onboarding
 
@@ -46,7 +67,9 @@ class FeishuProvider:
         return {**record, "app_secret": secret}
 
     def public_fields(self, record):
-        return {key: record.get(key) for key in ("app_id", "step", "setup_mode", "onboarding_id")}
+        return {
+            key: record.get(key) for key in ("app_id", "step", "setup_mode", "onboarding_id")
+        } | {"settings": self.validate_settings(record.get("settings", {}))}
 
     def install(self, service, record):
         from vikingbot.studio.providers.feishu.channel import StudioFeishuChannel
@@ -55,7 +78,9 @@ class FeishuProvider:
             app_id=record["app_id"],
             app_secret=record["app_secret"],
             bot_name=record["bot_name"],
-            thread_require_mention=True,
+            thread_require_mention=self.validate_settings(record.get("settings", {}))[
+                "thread_require_mention"
+            ],
             memory_peer=[],
             memory_user=[],
         )

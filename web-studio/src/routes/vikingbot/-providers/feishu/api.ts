@@ -45,6 +45,7 @@ export function startOnboarding(body: {
   user_id: string
   name: string
   request_id: string
+  settings: { thread_require_mention: boolean }
 }) {
   return getOvResult<OnboardingRun>(
     ovClient.client.post({ url: base(), body: { ...body, type: 'feishu' } }),

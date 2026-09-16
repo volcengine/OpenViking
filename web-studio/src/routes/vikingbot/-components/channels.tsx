@@ -197,7 +197,8 @@ export function Channels({
                 </span>
               </div>
               <p className="text-sm text-muted-foreground">
-                {entry ? t(entry.label) : connection.type} · {t('onlyMention')}
+                {entry ? t(entry.label) : connection.type}
+                {entry && <> · {t(entry.summary(connection))}</>}
               </p>
               {connection.status.last_received && (
                 <p className="text-xs text-muted-foreground">
@@ -249,6 +250,15 @@ export function Channels({
                   }}
                 />
               </div>
+              {entry && (
+                <entry.Settings
+                  key={`${connection.id}:${connection.revision}`}
+                  connection={connection}
+                  onSaved={() => {
+                    void client.invalidateQueries({ queryKey: key })
+                  }}
+                />
+              )}
               {Credentials && (
                 <Credentials
                   connection={connection}

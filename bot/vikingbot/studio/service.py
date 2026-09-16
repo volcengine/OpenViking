@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import HTTPException
 
-from vikingbot.studio.providers.registry import get_provider
+from vikingbot.studio.providers.registry import get_provider, validate_settings
 from vikingbot.studio.store import StudioStore
 
 
@@ -54,6 +54,7 @@ class StudioService:
 
     async def create(self, account, body, identity):
         provider = get_provider(body)
+        settings = validate_settings(provider, body.get("settings", {}))
         async with self.lock:
             fields = await provider.prepare(body.get("credentials", body))
             candidate = {**fields, "type": provider.type}
@@ -68,6 +69,7 @@ class StudioService:
                 "account": account,
                 **candidate,
                 "identity": identity,
+                "settings": settings,
                 "enabled": True,
                 "revision": 1,
             }
@@ -85,11 +87,12 @@ class StudioService:
             runtime = self.runtime(record)
             if action == "delete":
                 if any(
-                    run.get("connection_id") == connection_id
-                    and run["id"] in self.onboarding.tasks
+                    run.get("connection_id") == connection_id and run["id"] in self.onboarding.tasks
                     for run in self.store.onboarding_runs(account)
                 ):
-                    raise HTTPException(409, "Setup is running; finish or cancel it before deleting")
+                    raise HTTPException(
+                        409, "Setup is running; finish or cancel it before deleting"
+                    )
                 if runtime:
                     await runtime.stop()
                 task = self.tasks.pop(connection_id, None)
@@ -99,6 +102,15 @@ class StudioService:
                 self.manager.channels.pop(get_provider(record).runtime_key(record), None)
                 self.store.delete_connection(record)
                 return {"deleted": True}
+            if action == "settings":
+                provider = get_provider(record)
+                if not hasattr(provider, "apply_settings"):
+                    raise HTTPException(400, "Settings are unavailable for this platform")
+                record["settings"] = validate_settings(provider, body["settings"])
+                record["revision"] += 1
+                self.store.save(record)
+                provider.apply_settings(self, record)
+                return self.public(record)
             if action == "pause":
                 if runtime:
                     await runtime.stop()
@@ -112,7 +124,9 @@ class StudioService:
                     self.tasks[connection_id] = asyncio.create_task(runtime.start())
                     record["enabled"] = True
             elif action == "credentials":
-                candidate = await get_provider(record).credentials(record, body.get("credentials", body))
+                candidate = await get_provider(record).credentials(
+                    record, body.get("credentials", body)
+                )
                 if body.get("identity"):
                     if body["identity"]["user_id"] != record["identity"]["user_id"]:
                         raise HTTPException(409, "Rotate the key for the same Bot user")

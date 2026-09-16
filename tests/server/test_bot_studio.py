@@ -291,3 +291,37 @@ async def test_platform_credentials_are_opaque_to_http_router(app, monkeypatch):
             },
         )
         assert response.status_code == 422
+
+
+async def test_settings_patch_reuses_connection_endpoint(app, monkeypatch):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"),
+        role=Role.ROOT,
+    )
+    dispatch = AsyncMock(return_value={"status": "ok", "result": {}})
+    monkeypatch.setattr(bot_studio, "dispatch", dispatch)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.patch(
+            "/api/v1/admin/accounts/a/bot/connections/id",
+            json={
+                "revision": 2,
+                "settings": {"thread_require_mention": False},
+            },
+        )
+        assert response.status_code == 200
+        assert dispatch.call_args.args[2] == {
+            "action": "settings",
+            "revision": 2,
+            "settings": {"thread_require_mention": False},
+        }
+        response = await client.patch(
+            "/api/v1/admin/accounts/a/bot/connections/id",
+            json={
+                "revision": 2,
+                "enabled": True,
+                "settings": {},
+            },
+        )
+        assert response.status_code == 422

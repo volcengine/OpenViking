@@ -10,6 +10,7 @@ export type Connection = {
   enabled: boolean
   step: number
   revision: number
+  settings?: Record<string, unknown>
   identity_user: string
   status: {
     state: string
@@ -51,6 +52,7 @@ export function getConnections() {
 export function createConnection(body: {
   type: string
   credentials: Record<string, string>
+  settings?: Record<string, unknown>
   user_id: string
 }) {
   return getOvResult<Connection>(
@@ -140,4 +142,16 @@ export async function getBotUsers() {
     user_id: user.user_id,
     available: user.api_key_available,
   }))
+}
+
+export function updateConnectionSettings(
+  connection: Connection,
+  settings: Record<string, unknown>,
+) {
+  return getOvResult<Connection>(
+    ovClient.client.patch({
+      url: `${botAccountBase()}/connections/${encodeURIComponent(connection.id)}`,
+      body: { settings, revision: connection.revision },
+    }),
+  )
 }

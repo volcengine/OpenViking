@@ -90,6 +90,7 @@ it('selects the sole user and starts without app credentials', async () => {
       user_id: 'bot',
       name: 'VikingBot',
       request_id: expect.any(String),
+      settings: { thread_require_mention: true },
     }),
   )
   expect(screen.getByTitle(zh.qr.scan)).toBeTruthy()
@@ -157,5 +158,22 @@ it('works on HTTP dev hosts without crypto.randomUUID', async () => {
   await waitFor(() => expect(api.start).toHaveBeenCalledTimes(1))
   expect(api.start.mock.calls[0][0].request_id).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  )
+})
+
+it('passes the selected group reply mode to QR onboarding', async () => {
+  show()
+  const button = await screen.findByRole('button', { name: zh.qr.start })
+  await waitFor(() =>
+    expect((button as HTMLButtonElement).disabled).toBe(false),
+  )
+  fireEvent.change(screen.getByLabelText(zh.replyMode), {
+    target: { value: 'false' },
+  })
+  fireEvent.click(button)
+  await waitFor(() =>
+    expect(api.start).toHaveBeenCalledWith(
+      expect.objectContaining({ settings: { thread_require_mention: false } }),
+    ),
   )
 })

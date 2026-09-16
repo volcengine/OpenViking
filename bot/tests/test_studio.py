@@ -223,9 +223,7 @@ def test_provider_registry_preserves_legacy_and_rejects_unknown():
 
 
 async def test_delete_connection_stops_runtime_and_cleans_owned_data(tmp_path):
-    service = StudioService(
-        SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={})
-    )
+    service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
     item = record()
     service.store.save(item)
     service.store.save({**item, "id": "other", "account": "b"})
@@ -253,9 +251,15 @@ async def test_delete_connection_stops_runtime_and_cleans_owned_data(tmp_path):
 def test_conversations_show_latest_preview_and_time(tmp_path):
     store = StudioStore(tmp_path / "preview.db")
     store.append("bot", "group", "1", {"title": "Team", "content": "first"})
-    store.append("bot", "group", "2", {
-        "content": "latest reply", "time": "2026-09-16T12:00:00+00:00",
-    })
+    store.append(
+        "bot",
+        "group",
+        "2",
+        {
+            "content": "latest reply",
+            "time": "2026-09-16T12:00:00+00:00",
+        },
+    )
     item = store.conversations("bot")[0]
     assert item["title"] == "first"
     assert item["preview"] == "latest reply"
@@ -272,12 +276,27 @@ def test_conversation_title_keeps_first_message_when_group_name_resolves(tmp_pat
 
 
 async def test_history_backfills_names_only_when_sender_identity_is_known(channel, monkeypatch):
-    channel.store.append("connection", "group", "known", {
-        "role": "user", "sender": "", "sender_id": "ou_person", "content": "hello",
-    })
-    channel.store.append("connection", "group", "legacy", {
-        "role": "user", "sender": "", "content": "old",
-    })
+    channel.store.append(
+        "connection",
+        "group",
+        "known",
+        {
+            "role": "user",
+            "sender": "",
+            "sender_id": "ou_person",
+            "content": "hello",
+        },
+    )
+    channel.store.append(
+        "connection",
+        "group",
+        "legacy",
+        {
+            "role": "user",
+            "sender": "",
+            "content": "old",
+        },
+    )
     lookup = AsyncMock(return_value="张三")
     monkeypatch.setattr(channel, "_get_group_member_name", lookup)
     messages = await channel.history_with_names("group")
@@ -288,9 +307,17 @@ async def test_history_backfills_names_only_when_sender_identity_is_known(channe
 
 
 async def test_history_name_lookup_failure_keeps_messages(channel, monkeypatch):
-    channel.store.append("connection", "group", "known", {
-        "role": "user", "sender": "", "sender_id": "ou_person", "content": "hello",
-    })
+    channel.store.append(
+        "connection",
+        "group",
+        "known",
+        {
+            "role": "user",
+            "sender": "",
+            "sender_id": "ou_person",
+            "content": "hello",
+        },
+    )
     monkeypatch.setattr(channel, "_get_group_member_name", AsyncMock(side_effect=RuntimeError()))
     messages = await channel.history_with_names("group")
     assert messages[0]["content"] == "hello"
@@ -320,12 +347,73 @@ async def test_platform_provider_receives_generic_credentials(tmp_path, monkeypa
 
     monkeypatch.setitem(PROVIDERS, "future-platform", FutureProvider())
     service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
-    result = await service.create("a", {
-        "type": "future-platform",
-        "credentials": {"client_id": "app", "client_secret": "secret"},
-    }, {"user_id": "bot"})
+    result = await service.create(
+        "a",
+        {
+            "type": "future-platform",
+            "credentials": {"client_id": "app", "client_secret": "secret"},
+        },
+        {"user_id": "bot"},
+    )
     await asyncio.gather(*service.tasks.values())
     assert result["type"] == "future-platform"
     assert result["client_id"] == "app"
     assert "secret" not in str(result)
     assert service.get("a", result["id"])["account"] == "a"
+
+
+@pytest.mark.parametrize("value", ["false", 0, None, {"unexpected": True}])
+def test_feishu_settings_reject_invalid_values(value):
+    provider = get_provider({"type": "feishu"})
+    with pytest.raises(HTTPException):
+        provider.validate_settings(
+            value if isinstance(value, dict) else {"thread_require_mention": value}
+        )
+
+
+async def test_reply_settings_persist_apply_immediately_and_keep_revision_guard(
+    tmp_path, channel, monkeypatch
+):
+    provider = get_provider({"type": "feishu"})
+    service = StudioService(
+        SimpleNamespace(
+            bot_data_path=tmp_path, channels=[{"type": "feishu", "app_id": "cli_test"}]
+        ),
+        SimpleNamespace(channels={provider.runtime_key(record()): channel}),
+    )
+    service.store.save(record())
+    assert service.public(record())["settings"] == {"thread_require_mention": True}
+    monkeypatch.setattr(channel, "_get_chat_mode", AsyncMock(return_value="group"))
+    assert not await channel._check_should_process("group", "g", SimpleNamespace(), False)
+    updated = await service.update(
+        "a",
+        "connection",
+        {
+            "revision": 1,
+            "action": "settings",
+            "settings": {"thread_require_mention": False},
+        },
+    )
+    assert updated["revision"] == 2
+    assert await channel._check_should_process("group", "g", SimpleNamespace(), False)
+    assert service.config.channels[0]["thread_require_mention"] is False
+    persisted = StudioStore(tmp_path / "studio.sqlite3").connections("a")[0]
+    assert persisted["settings"] == {"thread_require_mention": False}
+    with pytest.raises(HTTPException) as error:
+        await service.update(
+            "a", "connection", {"revision": 1, "action": "settings", "settings": {}}
+        )
+    assert error.value.status_code == 409
+    assert channel.config.thread_require_mention is False
+    captured = []
+
+    def restored(config, *args, **kwargs):
+        captured.append(config.thread_require_mention)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("vikingbot.studio.providers.feishu.channel.StudioFeishuChannel", restored)
+    service.manager.bus = None
+    service.manager.add_channel = lambda channel: None
+    service.config.workspace_path = tmp_path
+    provider.install(service, persisted)
+    assert captured == [False]

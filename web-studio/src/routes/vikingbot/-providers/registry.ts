@@ -1,3 +1,5 @@
+import { ReplySettings } from './feishu/reply-settings'
+import type { Connection } from '../-api'
 import { FeishuConnect } from './feishu/connect'
 import { ConnectionCredentials } from './feishu/connection-credentials'
 
@@ -8,6 +10,11 @@ export const providers = {
     addLabel: 'addFeishu' as const,
     Setup: FeishuConnect,
     Credentials: ConnectionCredentials,
+    Settings: ReplySettings,
+    summary: (connection: Connection) =>
+      connection.settings?.thread_require_mention === false
+        ? ('withoutMention' as const)
+        : ('onlyMention' as const),
   },
 }
 export const upcomingProviders = ['Slack', 'DingTalk', 'Discord', 'Telegram']

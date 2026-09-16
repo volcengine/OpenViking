@@ -120,10 +120,16 @@ it('preserves credentials after validation failure and blocks duplicate submissi
   fireEvent.change(screen.getByLabelText<HTMLSelectElement>(zh.runtimeUser), {
     target: { value: 'bot-user' },
   })
+  fireEvent.change(screen.getByLabelText(zh.replyMode), {
+    target: { value: 'false' },
+  })
   fireEvent.click(
     screen.getByRole<HTMLButtonElement>('button', { name: zh.connect }),
   )
   await waitFor(() => expect(api.create).toHaveBeenCalledTimes(1))
+  expect(api.create).toHaveBeenCalledWith(
+    expect.objectContaining({ settings: { thread_require_mention: false } }),
+  )
   expect(
     screen.getByRole<HTMLButtonElement>('button', { name: zh.connect })
       .disabled,

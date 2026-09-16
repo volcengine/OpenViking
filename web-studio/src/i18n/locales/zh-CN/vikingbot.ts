@@ -1,4 +1,14 @@
 export default {
+  replyMode: '群聊回复方式',
+  withoutMention: '无需 @ 即可回复',
+  mentionModeHint: '群聊中仅在被 @ 时回复，私聊不受影响。',
+  withoutMentionHint:
+    '普通群无需 @；话题群首条消息无需 @，后续回复仍需 @（DEBUG 模式除外）。私聊不受影响。',
+  groupMessagePermission:
+    '需要飞书“获取群组中所有消息”权限。扫码新建时会申请；手动接入或后续切换时，请在飞书开放平台补充权限并发布应用。',
+  saveReplyMode: '保存回复方式',
+  savingReplyMode: '保存中…',
+
   operationFailed: '操作未完成，请重试。错误详情：',
   viewSetup: '查看配置',
   chooseBotChannel: '选择机器人接入的平台。',

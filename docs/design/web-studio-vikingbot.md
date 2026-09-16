@@ -294,6 +294,12 @@ Conversation 索引保存：权限作用域、来源、连接、原始会话引�
 新增 Slack 等平台时，新增对应 provider 目录并注册，复用连接生命周期和历史存储。平台特有权限、扫码或 OAuth 状态不进入公共服务。当前仅飞书可接入，其他平台保持“开发中”。扫码初始化已通过真实飞书接口验证；登录后建应用、审批和群收发仍需真实账号验收。
 
 
-### 扫码任务接口
+### 扫码任务与回复配置
 
-`POST /bot/v1/studio/onboarding` 创建幂等接入任务（`request_id`、`type`、`user_id`、`name`）；`GET /onboarding?type=feishu` 恢复当前任务；`GET /onboarding/{id}` 查询状态；`PATCH /onboarding/{id}` 执行 `retry`、`cancel` 或转为 `manual`。所有接口复用 root 管理认证和 account 隔离；返回状态白名单不含凭证、Cookie 或原始上游错误。
+浏览器使用 `/api/v1/admin/accounts/{account_id}/bot` 下的 `onboarding-runs` 创建任务，`onboarding-runs/current?type=feishu` 恢复任务，`onboarding-runs/{id}` 查询状态，以及对应的 `/retry`、`/cancel`、`/manual` 动作。所有接口复用 root 管理认证和 account 隔离；返回状态白名单不含凭证、Cookie 或原始上游错误。
+
+扫码和手动创建均提供“群聊回复方式”，通过已有创建接口的 `settings.thread_require_mention` 保存，默认为 `true`。已创建连接通过已有 `PATCH connections/{id}` 提交 `settings` 和 `revision` 修改；一次请求只能修改 `enabled` 或 `settings` 之一。设置立即更新运行中的渠道，并持久化供重启或恢复时加载，旧记录保持原默认行为。
+
+关闭该设置后，普通群消息无需 @；话题首条消息无需 @，后续话题回复仍需 @（DEBUG 模式例外），私聊不受影响。扫码创建按选项申请 `im:message.group_msg` 权限；手动接入或创建后切换时，用户需在飞书开放平台补充接收未 @ 群消息的权限并发布应用。保存本地设置不代表飞书权限已生效。
+
+`settings` 由对应平台 provider 校验和应用，飞书仅接受布尔型 `thread_require_mention`。未来钉钉等平台可扩展自己的设置而无需增加平台专属路由。

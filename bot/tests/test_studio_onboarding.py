@@ -247,9 +247,11 @@ async def test_job_failure_never_returns_upstream_secrets(tmp_path, monkeypatch)
     session.close.assert_awaited_once()
 
 
-async def test_complete_scan_configure_publish_flow(tmp_path, monkeypatch):
+@pytest.mark.parametrize("require_mention", [True, False])
+async def test_complete_scan_configure_publish_flow(tmp_path, monkeypatch, require_mention):
     jobs = make_jobs(tmp_path)
     run = run_record(state="initializing")
+    run["settings"] = {"thread_require_mention": require_mention}
     jobs.live["run"] = {}
     owner = {"user_id": "owner", "tenant_id": "tenant", "user_name": "User", "tenant_name": "Team"}
     session = SimpleNamespace(
@@ -279,6 +281,7 @@ async def test_complete_scan_configure_publish_flow(tmp_path, monkeypatch):
 
     async def install(account, body, identity):
         assert body["app_secret"] == "secret" and identity["user_id"] == "bot"
+        assert body["settings"] == {"thread_require_mention": require_mention}
         jobs.service.store.save(record)
         return record
 
@@ -290,7 +293,7 @@ async def test_complete_scan_configure_publish_flow(tmp_path, monkeypatch):
     assert run["connection_id"] == "connection"
     assert record["setup_mode"] == "qr" and record["step"] == 4
     assert "qr" not in jobs.public(run)
-    configure.assert_awaited_once_with(session, "cli_new")
+    configure.assert_awaited_once_with(session, "cli_new", require_mention=require_mention)
     session.close.assert_awaited_once()
 
 
@@ -445,9 +448,14 @@ async def test_rejected_agent_template_never_falls_back_to_ordinary_bot():
 async def test_onboarding_idempotency_is_scoped_to_platform(tmp_path, monkeypatch):
     from vikingbot.studio.providers.registry import PROVIDERS
 
-    monkeypatch.setitem(PROVIDERS, "future-platform", SimpleNamespace(
-        type="future-platform", run_onboarding=AsyncMock(),
-    ))
+    monkeypatch.setitem(
+        PROVIDERS,
+        "future-platform",
+        SimpleNamespace(
+            type="future-platform",
+            run_onboarding=AsyncMock(),
+        ),
+    )
     jobs = make_jobs(tmp_path)
     monkeypatch.setattr(jobs, "launch", jobs.service.store.save_onboarding)
     request_id = str(uuid.uuid4())
@@ -457,3 +465,36 @@ async def test_onboarding_idempotency_is_scoped_to_platform(tmp_path, monkeypatc
     assert feishu["id"] != other["id"]
     assert jobs.current("a", "feishu")["id"] == feishu["id"]
     assert jobs.current("a", "future-platform")["id"] == other["id"]
+
+
+async def test_setup_preserves_reply_settings(tmp_path, monkeypatch):
+    jobs = make_jobs(tmp_path)
+    monkeypatch.setattr(jobs, "launch", jobs.service.store.save_onboarding)
+    run = await jobs.start(
+        "a",
+        {
+            "type": "feishu",
+            "request_id": str(uuid.uuid4()),
+            "settings": {"thread_require_mention": False},
+        },
+        {"user_id": "bot"},
+    )
+    assert jobs.get("a", run["id"])["settings"] == {"thread_require_mention": False}
+
+
+@pytest.mark.parametrize("require_mention", [True, False])
+async def test_setup_requests_all_group_messages_only_when_selected(require_mention):
+    all_scopes = console.SCOPES | {"im:message.group_msg"}
+    calls = []
+
+    async def post(path, body=None):
+        calls.append((path, body))
+        if "/scope/all/" in path:
+            return [{"name": name, "id": name} for name in all_scopes]
+        return {"eventMode": 4, "appEvents": [console.EVENT]}
+
+    await console.configure_app(
+        SimpleNamespace(post=post), "cli_test", require_mention=require_mention
+    )
+    requested = next(body["appScopeIDs"] for path, body in calls if "/scope/update/" in path)
+    assert ("im:message.group_msg" in requested) is (not require_mention)

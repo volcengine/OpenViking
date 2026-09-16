@@ -1,4 +1,15 @@
 export default {
+  replyMode: 'Group reply mode',
+  withoutMention: 'Reply without @mention',
+  mentionModeHint:
+    'Reply only when mentioned in group chats. Direct messages are unaffected.',
+  withoutMentionHint:
+    'No mention required in regular groups or the first message of a topic. Later topic replies still require a mention, except in DEBUG mode. Direct messages are unaffected.',
+  groupMessagePermission:
+    'Requires Feishu permission to receive all group messages. QR setup requests it automatically; for manual connections or later changes, enable the permission and publish the app in the Feishu developer console.',
+  saveReplyMode: 'Save reply mode',
+  savingReplyMode: 'Saving…',
+
   operationFailed:
     'The operation could not be completed. Please retry. Details:',
   viewSetup: 'View configuration',

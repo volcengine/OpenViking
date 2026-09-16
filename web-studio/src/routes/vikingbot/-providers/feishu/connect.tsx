@@ -1,3 +1,4 @@
+import { ReplyMode } from './reply-settings'
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -66,6 +67,7 @@ function ScanSetup({
   const { identityScopeKey: scope } = useAppConnection()
   const client = useQueryClient()
   const [userId, setUserId] = useState('')
+  const [requireMention, setRequireMention] = useState(true)
   const [name, setName] = useState('VikingBot')
   const [jobId, setJobId] = useState(connection?.onboarding_id)
   const busy = useRef(false)
@@ -112,6 +114,7 @@ function ScanSetup({
       action === 'start'
         ? startOnboarding({
             user_id: selectedUser,
+            settings: { thread_require_mention: requireMention },
             name,
             request_id: requestId.current,
           })
@@ -200,6 +203,11 @@ function ScanSetup({
             <p className="text-xs leading-6 text-muted-foreground">
               {t('runtimeUserHint')}
             </p>
+            <ReplyMode
+              value={requireMention}
+              onChange={setRequireMention}
+              disabled={mutation.isPending}
+            />
             {users.isSuccess && available.length === 0 && (
               <p className="text-sm">
                 {t('noUsers')}{' '}

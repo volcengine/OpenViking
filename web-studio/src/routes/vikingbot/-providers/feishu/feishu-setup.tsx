@@ -1,3 +1,4 @@
+import { ReplyMode } from './reply-settings'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ExternalLinkIcon, Loader2Icon } from 'lucide-react'
@@ -23,6 +24,7 @@ export function FeishuSetup({
   const [appId, setAppId] = useState('')
   const [secret, setSecret] = useState('')
   const [userId, setUserId] = useState('')
+  const [requireMention, setRequireMention] = useState(true)
   const [created, setCreated] = useState<Connection>()
   const current = connection ?? created
   const users = useQuery({
@@ -40,6 +42,7 @@ export function FeishuSetup({
         type: 'feishu',
         credentials: { app_id: appId.trim(), app_secret: secret.trim() },
         user_id: selectedUser,
+        settings: { thread_require_mention: requireMention },
       }),
     onSuccess: (value) => {
       setSecret('')
@@ -149,6 +152,11 @@ export function FeishuSetup({
             </p>
           )}
 
+          <ReplyMode
+            value={requireMention}
+            onChange={setRequireMention}
+            disabled={mutation.isPending}
+          />
           <details className="rounded-lg border p-4">
             <summary className="cursor-pointer text-sm font-medium">
               {t('manualInstructions')}

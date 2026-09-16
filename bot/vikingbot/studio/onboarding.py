@@ -10,7 +10,7 @@ from contextlib import suppress
 
 from fastapi import HTTPException
 
-from .providers.registry import get_provider
+from .providers.registry import get_provider, validate_settings
 
 TERMINAL = {"ready", "cancelled", "failed", "expired", "interrupted"}
 
@@ -79,6 +79,7 @@ class OnboardingJobs:
         provider = get_provider(body)
         if not hasattr(provider, "run_onboarding"):
             raise HTTPException(400, "Automatic onboarding is unavailable for this platform")
+        settings = validate_settings(provider, body.get("settings", {}))
         request_id = body.get("request_id")
         try:
             uuid.UUID(request_id)
@@ -107,6 +108,7 @@ class OnboardingJobs:
                 "account": account,
                 "type": provider.type,
                 "identity": identity,
+                "settings": settings,
                 "name": name,
                 "state": "initializing",
             }
@@ -158,7 +160,9 @@ class OnboardingJobs:
                 self.checkpoint(run, archived=True)
             elif action == "retry":
                 if not self.public(run)["can_retry"]:
-                    raise HTTPException(409, "Check the application on its platform before continuing")
+                    raise HTTPException(
+                        409, "Check the application on its platform before continuing"
+                    )
                 previous = self.tasks.get(identifier)
                 if previous:
                     # Terminal state can be persisted before its HTTP session

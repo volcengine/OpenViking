@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.server.auth import get_api_key_manager_or_raise, get_request_context
 from openviking.server.config import get_server_url_from_server_data
@@ -23,7 +23,14 @@ class RevisionRequest(BaseModel):
 
 
 class UpdateConnectionRequest(RevisionRequest):
-    enabled: bool
+    enabled: bool | None = None
+    settings: dict | None = None
+
+    @model_validator(mode="after")
+    def one_change(self):
+        if (self.enabled is None) == (self.settings is None):
+            raise ValueError("Provide either enabled or settings")
+        return self
 
 
 class CredentialsRequest(RevisionRequest):
@@ -36,6 +43,7 @@ class CreateConnectionRequest(BaseModel):
     type: str
     user_id: str
     credentials: dict[str, str]
+    settings: dict = Field(default_factory=dict)
 
 
 class StartOnboardingRequest(BaseModel):
@@ -44,6 +52,7 @@ class StartOnboardingRequest(BaseModel):
     user_id: str
     name: str = "VikingBot"
     request_id: str
+    settings: dict = Field(default_factory=dict)
 
 
 async def manager(
@@ -142,8 +151,11 @@ async def update(
         ctx,
         "update",
         {
-            "action": "resume" if body.enabled else "pause",
+            "action": "settings"
+            if body.settings is not None
+            else ("resume" if body.enabled else "pause"),
             "revision": body.revision,
+            **({"settings": body.settings} if body.settings is not None else {}),
         },
         connection_id,
     )

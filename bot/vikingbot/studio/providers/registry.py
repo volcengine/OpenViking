@@ -13,3 +13,11 @@ def get_provider(record):
     if platform not in PROVIDERS:
         raise HTTPException(400, "Unsupported IM type")
     return PROVIDERS[platform]
+
+
+def validate_settings(provider, value):
+    if hasattr(provider, "validate_settings"):
+        return provider.validate_settings(value)
+    if value:
+        raise HTTPException(400, "Settings are unavailable for this platform")
+    return {}

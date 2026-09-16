@@ -11,15 +11,20 @@ from loguru import logger
 
 from .web_session import SetupError, data, field
 
-SCOPES = {"im:message.group_at_msg:readonly", "im:message:send_as_bot", "im:chat:read", "im:chat.members:read"}
+SCOPES = {
+    "im:message.group_at_msg:readonly",
+    "im:message:send_as_bot",
+    "im:chat:read",
+    "im:chat.members:read",
+}
 EVENT = "im.message.receive_v1"
 
 
-def scope_ids(value, bucket=None):
+def scope_ids(value, bucket=None, required=SCOPES):
     found = {}
     if isinstance(value, list):
         for item in value:
-            found.update(scope_ids(item, bucket))
+            found.update(scope_ids(item, bucket, required))
     elif isinstance(value, dict):
         name = field(value, "scope_name", "scopeName", "name", "key", "scopeKey")
         identifier = None
@@ -31,14 +36,14 @@ def scope_ids(value, bucket=None):
             if isinstance(raw, int) and not isinstance(raw, bool):
                 identifier = str(raw)
                 break
-        if name in SCOPES and identifier and bucket != "user":
+        if name in required and identifier and bucket != "user":
             found[name] = identifier
         for key, child in value.items():
             next_bucket = "user" if "user" in key.lower() else bucket
             if any(word in key.lower() for word in ("app", "tenant", "client")):
                 next_bucket = "tenant"
             if isinstance(child, (dict, list)):
-                found.update(scope_ids(child, next_bucket))
+                found.update(scope_ids(child, next_bucket, required))
     return found
 
 
@@ -108,9 +113,10 @@ async def prepare_app(session, app_id):
     return secret
 
 
-async def configure_app(session, app_id):
-    catalog = scope_ids(await session.post(f"/developers/v1/scope/all/{app_id}"))
-    if missing := SCOPES - catalog.keys():
+async def configure_app(session, app_id, require_mention=True):
+    required = SCOPES if require_mention else SCOPES | {"im:message.group_msg"}
+    catalog = scope_ids(await session.post(f"/developers/v1/scope/all/{app_id}"), required=required)
+    if missing := required - catalog.keys():
         logger.warning(
             "Feishu permission catalog missing required scope names: {}", sorted(missing)
         )

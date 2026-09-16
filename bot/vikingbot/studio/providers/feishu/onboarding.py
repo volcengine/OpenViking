@@ -59,6 +59,7 @@ async def run_onboarding(jobs, run):
                         run["account"],
                         {
                             "type": "feishu",
+                            "settings": run.get("settings", {}),
                             "app_id": app_id,
                             "app_secret": secret,
                         },
@@ -76,7 +77,11 @@ async def run_onboarding(jobs, run):
                 await asyncio.sleep(1)
             else:
                 raise SetupError("connection_unavailable")
-            await configure_app(session, app_id)
+            await configure_app(
+                session,
+                app_id,
+                require_mention=run.get("settings", {}).get("thread_require_mention", True),
+            )
             checkpoint(configured=True)
         checkpoint(state="publishing")
         await publish_and_wait(session, run, checkpoint)
