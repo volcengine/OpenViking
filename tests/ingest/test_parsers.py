@@ -10,6 +10,7 @@ from openviking.ingest.sources.codex import CodexSource
 from openviking.ingest.sources.hermes import HermesSource
 from openviking.ingest.sources.openclaw import OpenClawSource
 from openviking.ingest.sources.opencode import OpenCodeSource
+from openviking.ingest.sources.workbuddy import WorkBuddySource, user_turn_text
 from openviking_cli.utils.config.ingest_config import IngestHarnessConfig
 
 
@@ -115,6 +116,128 @@ def test_codex(tmp_path):
     assert ref.native_session_id == "codex-sess"
     assert [(m.role, m.text) for m in msgs] == [("user", "fix the bug"), ("assistant", "done")]
     assert msgs[1].peer_id == "codex__openai"
+
+
+def _workbuddy_turn(role, text, ts_ms, model=None):
+    record = {
+        "id": f"m-{ts_ms}",
+        "timestamp": ts_ms,
+        "type": "message",
+        "role": role,
+        "content": [{"type": "input_text" if role == "user" else "output_text", "text": text}],
+        "sessionId": "wb-session",
+        "cwd": "/tmp/wb-project",
+    }
+    if model:
+        record["providerData"] = {"model": model}
+    return record
+
+
+def test_workbuddy_keeps_only_the_user_query(tmp_path):
+    """Host-injected context and quoted history must not become memories."""
+    root = tmp_path / "projects"
+    _write_jsonl(
+        root / "proj" / "wb-session.jsonl",
+        [
+            {"timestamp": 1757000000000, "type": "file-history-snapshot", "cwd": "/tmp/wb-project"},
+            {"timestamp": 1757000001000, "type": "ai-title", "aiTitle": "Refactor the parser"},
+            _workbuddy_turn(
+                "user",
+                '<system-reminder data-role="user-context">\n'
+                "You are a coding agent. Project Context: ... <user_query>example</user_query>\n"
+                "</system-reminder>\n"
+                "<memory_and_skills_reminder>prefer the repo skill</memory_and_skills_reminder>\n"
+                "<previous_user_message><user_query>an older ask</user_query></previous_user_message>\n"
+                "<current_time>2026-09-05T10:00:00Z</current_time>\n"
+                "<user_query>rename the ingest cursor helper</user_query>",
+                1757000002000,
+            ),
+            _workbuddy_turn("assistant", "Done — renamed it.", 1757000003000, model="glm-5.2"),
+        ],
+    )
+    src = WorkBuddySource(_cfg(root), fallback_user="tester")
+    ref, msgs, _ = _read_all(src)
+    assert ref.native_session_id == "wb-session"
+    assert ref.title == "Refactor the parser"
+    assert ref.meta["cwd"] == "/tmp/wb-project"
+    assert [(m.role, m.text) for m in msgs] == [
+        ("user", "rename the ingest cursor helper"),
+        ("assistant", "Done — renamed it."),
+    ]
+    # epoch milliseconds are converted to ISO-8601 UTC
+    assert msgs[0].created_at == "2025-09-04T15:33:22+00:00"
+    assert msgs[1].peer_id == "workbuddy__glm-5.2"
+
+
+def test_workbuddy_drops_host_generated_turns(tmp_path):
+    """A turn with no <user_query> carries no human text and must be dropped."""
+    root = tmp_path / "projects"
+    _write_jsonl(
+        root / "proj" / "wb-session.jsonl",
+        [
+            _workbuddy_turn(
+                "user",
+                "<conversation_history_summary>Summary of the conversation so far.</conversation_history_summary>"
+                "<additional_data>noise</additional_data>",
+                1757000000000,
+            ),
+            _workbuddy_turn(
+                "user",
+                "Please continue with the conversation based on the summarized context above.",
+                1757000001000,
+            ),
+            _workbuddy_turn("user", "<user_query>the real ask</user_query>", 1757000002000),
+        ],
+    )
+    src = WorkBuddySource(_cfg(root), fallback_user="tester")
+    _, msgs, _ = _read_all(src)
+    assert [(m.role, m.text) for m in msgs] == [("user", "the real ask")]
+
+
+def test_workbuddy_quoted_user_query_does_not_win():
+    """A quoted <user_query> inside <previous_user_message> is history, not the ask."""
+    quoted = "<previous_user_message><user_query>the first thing I ever asked</user_query></previous_user_message>"
+    assert user_turn_text(f"{quoted}<user_query>the current ask</user_query>") == "the current ask"
+    # nothing but injected blocks -> no human text at all
+    assert user_turn_text("<system-reminder>ctx</system-reminder>") == ""
+    assert user_turn_text("") == ""
+
+
+def test_workbuddy_unknown_records_are_ignored(tmp_path):
+    root = tmp_path / "projects"
+    _write_jsonl(
+        root / "proj" / "wb-session.jsonl",
+        [
+            {"timestamp": 1757000000000, "type": "reasoning", "content": "thinking"},
+            {"timestamp": 1757000001000, "type": "function_call", "name": "read_file"},
+            {
+                "timestamp": 1757000002000,
+                "type": "function_call_result",
+                "name": "read_file",
+                "output": "file body",
+            },
+            _workbuddy_turn("user", "<user_query>ship it</user_query>", 1757000003000),
+        ],
+    )
+    src = WorkBuddySource(_cfg(root), fallback_user="tester")
+    _, msgs, _ = _read_all(src)
+    assert [(m.role, m.text) for m in msgs] == [("user", "ship it")]
+
+
+def test_workbuddy_finds_title_beyond_the_head(tmp_path):
+    """``ai-title`` can be written far into the file, not just in the first record."""
+    root = tmp_path / "projects"
+    filler = [
+        _workbuddy_turn("assistant", f"filler {i}", 1757000000000 + i, model="hy3")
+        for i in range(600)
+    ]
+    _write_jsonl(
+        root / "proj" / "wb-session.jsonl",
+        filler + [{"timestamp": 1757009999999, "type": "ai-title", "aiTitle": "Late title"}],
+    )
+    src = WorkBuddySource(_cfg(root), fallback_user="tester")
+    refs = list(src.discover_sessions())
+    assert [r.title for r in refs] == ["Late title"]
 
 
 def test_hermes_group_username(tmp_path):

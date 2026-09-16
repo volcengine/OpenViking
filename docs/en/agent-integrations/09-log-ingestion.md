@@ -1,6 +1,6 @@
 # Import Local Agent Logs (openviking-server ingest)
 
-`openviking-server ingest` parses the conversation logs that AI coding / agent harnesses (Claude Code, Codex, OpenCode, Hermes, OpenClaw) already leave on your machine, then "replays" them through OpenViking's existing session pipeline (`create session → batch add messages → commit`, where commit triggers memory extraction). This turns both your historical and newly written conversations into long-term memory. It complements the per-harness memory plugins: a plugin captures **while a conversation is happening**, whereas this tool is for **importing existing logs** and **watching for new logs offline** — no plugin required and no change to the harness itself.
+`openviking-server ingest` parses the conversation logs that AI coding / agent harnesses (Claude Code, Codex, WorkBuddy, OpenCode, Hermes, OpenClaw) already leave on your machine, then "replays" them through OpenViking's existing session pipeline (`create session → batch add messages → commit`, where commit triggers memory extraction). This turns both your historical and newly written conversations into long-term memory. It complements the per-harness memory plugins: a plugin captures **while a conversation is happening**, whereas this tool is for **importing existing logs** and **watching for new logs offline** — no plugin required and no change to the harness itself.
 
 Key difference from the plugins: this tool is an OpenViking **client**. It runs where the logs live and points at a local or remote server via the SDK, and it is **off by default** — installing OpenViking does not silently scan your local files.
 
@@ -20,6 +20,7 @@ The feature is doubly disabled and must be turned on explicitly:
 |---|---|---|---|
 | `claude_code` | Supported | `~/.claude/projects/*/*.jsonl` | append-only JSONL, byte-offset cursor |
 | `codex` | Supported | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | append-only JSONL |
+| `workbuddy` | Supported | `~/.workbuddy/projects/*/*.jsonl` | append-only JSONL; injects system reminders into user turns — the adapter strips them and keeps only `<user_query>` |
 | `hermes` | Supported | `~/.hermes/sessions/*.jsonl` | group-chat agent; user peer = original username |
 | `openclaw` | Supported | `~/.openclaw/agents/*/sessions/*.jsonl` | group-chat agent; user peer = original username |
 | `opencode` | Experimental | `~/.local/share/opencode/opencode.db` | SQLite, polled by `(time, id)`; the legacy file-store is not supported |
@@ -42,6 +43,7 @@ Add an `ingest` section to `ov.conf`, listing the harnesses to import and their 
     "harnesses": {
       "claude_code": { "enabled": true, "mode": "both" },
       "codex":       { "enabled": true, "mode": "backfill" },
+      "workbuddy":   { "enabled": true, "mode": "both" },
       "opencode":    { "enabled": false, "mode": "watch", "experimental": true },
       "hermes":      { "enabled": false, "mode": "both", "user_field": "sender" },
       "openclaw":    { "enabled": false, "mode": "both", "user_field": "sender" }

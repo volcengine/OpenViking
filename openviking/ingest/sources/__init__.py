@@ -10,6 +10,7 @@ from openviking.ingest.sources import (  # noqa: F401
     hermes,
     openclaw,
     opencode,
+    workbuddy,
 )
 
-__all__ = ["claude_code", "codex", "cursor", "hermes", "opencode", "openclaw"]
+__all__ = ["claude_code", "codex", "cursor", "hermes", "opencode", "openclaw", "workbuddy"]
