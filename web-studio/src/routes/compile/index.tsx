@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  Link,
+  useNavigate,
+  useLocation,
+} from '@tanstack/react-router'
 import {
   PlusIcon,
   RefreshCwIcon,
@@ -43,6 +48,7 @@ export const Route = createFileRoute('/compile/')({
 function CompileList() {
   const { t, i18n } = useTranslation('compile')
   const { identityScopeKey } = useAppConnection()
+  const location = useLocation()
   const search = Route.useSearch(),
     navigate = useNavigate()
   const [input, setInput] = useState(search.q || '')
@@ -194,6 +200,13 @@ function CompileList() {
                 key={task.task_id}
                 to="/compile/tasks/$taskId"
                 params={{ taskId: task.task_id }}
+                state={{
+                  compileListOrigin: {
+                    scope: identityScopeKey,
+                    index: location.state.__TSR_index,
+                    search,
+                  },
+                }}
                 className="group grid gap-4 border-b bg-card px-5 py-5 transition-colors last:border-b-0 hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-[-2px] lg:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_150px_16px] lg:items-center lg:gap-5"
               >
                 <div className="min-w-0 space-y-2">

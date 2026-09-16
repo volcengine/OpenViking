@@ -1,5 +1,24 @@
 import type { CompileRequest } from './api'
 
+export class CompileCommandError extends Error {
+  constructor(
+    readonly code:
+      | 'shellSyntax'
+      | 'unclosedQuote'
+      | 'invalidArgument'
+      | 'duplicateArgument'
+      | 'required'
+      | 'argsObject'
+      | 'unknownCommand'
+      | 'taskUsage'
+      | 'missingValue'
+      | 'listUsage',
+  ) {
+    super(code)
+    this.name = 'CompileCommandError'
+  }
+}
+
 /** Tokenize the documented CLI subset, without executing shell syntax. */
 export function tokenize(input: string): string[] {
   const tokens: string[] = []
@@ -35,11 +54,11 @@ export function tokenize(input: string): string[] {
       continue
     }
     if ('|;&<>`'.includes(c) || c === '$')
-      throw new Error('Unsupported shell syntax')
+      throw new CompileCommandError('shellSyntax')
     value += c
     started = true
   }
-  if (quote || escaped) throw new Error('Unclosed quote or escape')
+  if (quote || escaped) throw new CompileCommandError('unclosedQuote')
   if (started) tokens.push(value)
   const result = tokens[0] === 'ov' ? tokens.slice(1) : tokens
   if (result[0]?.startsWith('/')) result[0] = result[0].slice(1)
@@ -55,9 +74,9 @@ export function parseCompile(tokens: string[]): CompileRequest {
       !['--from', '--to', '--skill', '--instruction', '--args'].includes(key) ||
       i + 1 >= tokens.length
     )
-      throw new Error(`Invalid argument: ${key}`)
+      throw new CompileCommandError('invalidArgument')
     if (key !== '--from' && seen.has(key))
-      throw new Error(`Duplicate argument: ${key}`)
+      throw new CompileCommandError('duplicateArgument')
     seen.add(key)
     if (key === '--from') result.from.push(...value.split(','))
     else if (key === '--args') result.args = parseArgs(value)
@@ -71,7 +90,7 @@ export function parseCompile(tokens: string[]): CompileRequest {
     !result.to ||
     !result.skill
   )
-    throw new Error('Required: --from, --to, --skill')
+    throw new CompileCommandError('required')
   result.from = [...new Set(result.from.map((v) => v.trim()))]
   return result
 }
@@ -81,10 +100,10 @@ export function parseArgs(value: string): Record<string, unknown> | undefined {
   try {
     parsed = JSON.parse(value)
   } catch {
-    throw new Error('--args must be a JSON object')
+    throw new CompileCommandError('argsObject')
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-    throw new Error('--args must be a JSON object')
+    throw new CompileCommandError('argsObject')
   return parsed as Record<string, unknown>
 }
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`

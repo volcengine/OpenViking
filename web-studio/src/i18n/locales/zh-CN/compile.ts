@@ -1,4 +1,17 @@
 export default {
+  commandErrors: {
+    shellSyntax: '不支持 Shell 运算符。',
+    unclosedQuote: '请补全引号或转义字符后再执行命令。',
+    invalidArgument: '参数无效。请使用支持的参数名，并以空格分隔参数名和值。',
+    duplicateArgument: '只有 --from 可以重复指定。',
+    required: '请填写必填参数：--from、--to、--skill。',
+    argsObject: '--args 必须是合法的 JSON 对象。',
+    unknownCommand: '未知命令，请使用 compile 或 task。',
+    taskUsage: '请使用 task status <id>、task cancel <id> 或 task list。',
+    missingValue: '命令参数缺少对应的值。',
+    listUsage:
+      '支持的选项：--task-type compile、--status <status>、--cursor <cursor>。',
+  },
   argMode: '参数编辑方式',
   argFields: '表单模式',
   argRaw: 'JSON 模式',

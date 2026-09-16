@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from '@tanstack/react-router'
+import { Link, useLocation, useRouter } from '@tanstack/react-router'
 import { AlertCircleIcon, ArrowLeftIcon, LoaderCircleIcon } from 'lucide-react'
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import { useAppConnection } from '#/hooks/use-app-connection'
+import { compileListReturn } from '../-lib/navigation'
 import { errorText } from '../-lib/api'
 
 export function CompileShell({
@@ -18,6 +20,14 @@ export function CompileShell({
   back?: boolean
 }) {
   const { t } = useTranslation('compile')
+  const location = useLocation()
+  const router = useRouter()
+  const { identityScopeKey } = useAppConnection()
+  const returnTo = compileListReturn(
+    location.state.compileListOrigin,
+    identityScopeKey,
+    location.state.__TSR_index,
+  )
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-8">
       <header className="flex flex-wrap items-center justify-between gap-4">
@@ -25,6 +35,20 @@ export function CompileShell({
           {back && (
             <Link
               to="/compile"
+              search={returnTo.search}
+              onClick={(event) => {
+                if (
+                  returnTo.restoreHistory &&
+                  event.button === 0 &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  !event.shiftKey &&
+                  !event.altKey
+                ) {
+                  event.preventDefault()
+                  router.history.back()
+                }
+              }}
               className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
             >
               <ArrowLeftIcon className="size-4" />

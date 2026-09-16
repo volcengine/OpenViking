@@ -1,4 +1,19 @@
 export default {
+  commandErrors: {
+    shellSyntax: 'Shell operators are not supported.',
+    unclosedQuote:
+      'Close all quotes and escape sequences before running the command.',
+    invalidArgument:
+      'Invalid argument. Use a supported flag followed by its value, separated by a space.',
+    duplicateArgument: 'Only --from may be specified more than once.',
+    required: 'Required arguments: --from, --to, --skill.',
+    argsObject: '--args must contain a valid JSON object.',
+    unknownCommand: 'Unknown command. Use compile or task.',
+    taskUsage: 'Use task status <id>, task cancel <id>, or task list.',
+    missingValue: 'A command flag is missing its value.',
+    listUsage:
+      'Supported options: --task-type compile, --status <status>, --cursor <cursor>.',
+  },
   argMode: 'Parameter editor mode',
   argFields: 'Fields',
   argRaw: 'JSON',

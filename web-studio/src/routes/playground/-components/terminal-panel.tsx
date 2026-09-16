@@ -3,7 +3,10 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchCompileSkills } from '#/routes/compile/-lib/api'
 import { compileSuggestions } from '#/routes/compile/-lib/suggestions'
 import { Link } from '@tanstack/react-router'
-import { isCompileCommand } from '#/routes/compile/-lib/commands'
+import {
+  CompileCommandError,
+  isCompileCommand,
+} from '#/routes/compile/-lib/commands'
 import { runCompileCommand } from '#/routes/compile/-lib/terminal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -891,6 +894,8 @@ export function TerminalPanel({
           const result = await runCompileCommand(
             trimmed,
             compileSubmission.current.key,
+            (status) =>
+              t(`compile:statuses.${status}`, { defaultValue: status }),
           )
           if (createsTask) {
             try {
@@ -1380,7 +1385,10 @@ export function TerminalPanel({
         }
       } catch (error) {
         append({
-          body: getErrorMessage(error),
+          body:
+            error instanceof CompileCommandError
+              ? t(`compile:commandErrors.${error.code}`)
+              : getErrorMessage(error),
           kind: 'error',
           title: t('terminal.commandFailed'),
         })
