@@ -1,3 +1,4 @@
+import { ConversationRow } from './conversation-row'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { UsersIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -41,36 +42,15 @@ export function PlatformConversationList({
             .includes(search.toLowerCase()),
         )
         .map((item, index) => (
-          <button
-            type="button"
-            className={`mt-1 w-full rounded-lg p-3 text-left text-sm hover:bg-muted ${selected === item.conversation ? 'bg-muted' : ''}`}
+          <ConversationRow
             key={item.conversation}
-            onClick={() => onSelect(connection.id, item.conversation)}
-          >
-            <span className="flex items-center gap-2">
-              <UsersIcon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate font-medium">
-                {item.title || `${t('group')} ${index + 1}`}
-              </span>
-            </span>
-            <span className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="min-w-0 flex-1 truncate">
-                {item.preview || t('noHistory')}
-              </span>
-              {item.time && !Number.isNaN(Date.parse(item.time)) && (
-                <time
-                  className="shrink-0"
-                  dateTime={item.time}
-                  title={new Date(item.time).toLocaleString()}
-                >
-                  {new Date(item.time).toLocaleDateString(undefined, {
-                    month: 'numeric',
-                    day: 'numeric',
-                  })}
-                </time>
-              )}
-            </span>
-          </button>
+            title={item.title || `${t('group')} ${index + 1}`}
+            subtitle={item.preview || t('noHistory')}
+            time={item.time}
+            icon={<UsersIcon className="size-4" />}
+            selected={selected === item.conversation}
+            onSelect={() => onSelect(connection.id, item.conversation)}
+          />
         ))}
     </div>
   )

@@ -1,8 +1,14 @@
+import { ConversationRow } from './-components/conversation-row'
 import { readPlaygroundAgentSessionIds } from '#/routes/playground/-lib/utils'
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeftIcon, BotIcon, PlusIcon } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  BotIcon,
+  PlusIcon,
+  MessageSquareIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -207,53 +213,32 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                       .includes(search.toLowerCase()),
                   )
                   .map((s) => (
-                    <div
+                    <ConversationRow
                       key={s.session_id}
-                      className={`group/conversation flex items-center rounded-lg hover:bg-muted ${selected?.id === s.session_id ? 'bg-muted' : ''}`}
-                    >
-                      <button
-                        type="button"
-                        className="min-w-0 flex-1 p-3 text-left text-sm"
-                        onClick={() => select(s.session_id)}
-                      >
-                        <span className="block truncate">
-                          {getTitle(s.session_id) || t('newChat')}
-                        </span>
-                        <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                          <span>{t('web')}</span>
-                          {s.mod_time &&
-                            !Number.isNaN(Date.parse(s.mod_time)) && (
-                              <time
-                                className="shrink-0"
-                                dateTime={s.mod_time}
-                                title={new Date(s.mod_time).toLocaleString()}
-                              >
-                                {new Date(s.mod_time).toLocaleString(
-                                  undefined,
-                                  {
-                                    month: 'numeric',
-                                    day: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  },
-                                )}
-                              </time>
-                            )}
-                        </span>
-                      </button>
-                      <DeleteConversation
-                        id={s.session_id}
-                        title={getTitle(s.session_id) || t('newChat')}
-                        onDeleted={() => {
-                          removeTitle(s.session_id)
-                          setSelected((current) =>
-                            current?.id === s.session_id && !current.connection
-                              ? undefined
-                              : current,
-                          )
-                        }}
-                      />
-                    </div>
+                      title={getTitle(s.session_id) || t('newChat')}
+                      subtitle={t('web')}
+                      time={s.mod_time}
+                      icon={<MessageSquareIcon className="size-4" />}
+                      selected={
+                        selected?.id === s.session_id && !selected.connection
+                      }
+                      onSelect={() => select(s.session_id)}
+                      action={
+                        <DeleteConversation
+                          id={s.session_id}
+                          title={getTitle(s.session_id) || t('newChat')}
+                          onDeleted={() => {
+                            removeTitle(s.session_id)
+                            setSelected((current) =>
+                              current?.id === s.session_id &&
+                              !current.connection
+                                ? undefined
+                                : current,
+                            )
+                          }}
+                        />
+                      }
+                    />
                   ))}
               {activeFilter !== 'web' &&
                 connections.data?.map((c) => (
