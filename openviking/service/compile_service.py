@@ -312,6 +312,14 @@ class CompileService:
         ctx: RequestContext,
         idempotency_key: str | None = None,
     ) -> TaskRecord:
+        request = self._normalize_request_uris(request, ctx)
+        if idempotency_key:
+            payload, private_payload = self._split_payload(request)
+            existing = await self._tasks.recover_submission(
+                self.task_type, payload, private_payload, ctx, idempotency_key
+            )
+            if existing is not None:
+                return existing
         endpoint = self._endpoint()
         if not endpoint.local and not str(connection.get("api_key") or "").strip():
             raise UnauthenticatedError("Compile requires a forwardable OpenViking API key")
@@ -398,62 +406,53 @@ class CompileService:
             **(private_args if isinstance(private_args, dict) else {}),
         }
 
-    async def _normalize_request(
-        self,
-        request: CompileRequest,
-        ctx: RequestContext,
+    def _normalize_request_uris(
+        self, request: CompileRequest, ctx: RequestContext
     ) -> CompileRequest:
-        sources: list[str] = []
-        for index, source in enumerate(request.from_):
-            uri = validate_request_viking_uri(
-                resolve_path_variables(source),
-                ctx,
-                field_name=f"from[{index}]",
-            ).rstrip("/")
-            stat = await self._fs.stat(uri, ctx)
-            if not stat.get("isDir"):
-                raise InvalidArgumentError(f"Compile source must be a directory: {uri}")
-            canonical = str(stat.get("uri") or uri).rstrip("/")
-            if canonical not in sources:
-                sources.append(canonical)
-
-        skill = request.skill
-        if skill.endswith("/SKILL.md"):
-            skill = skill[: -len("/SKILL.md")]
+        """Normalize identity-bound names without requiring live resources."""
+        sources = list(
+            dict.fromkeys(
+                validate_request_viking_uri(
+                    resolve_path_variables(source), ctx, field_name=f"from[{index}]"
+                ).rstrip("/")
+                for index, source in enumerate(request.from_)
+            )
+        )
+        skill = request.skill.removesuffix("/SKILL.md")
         skill = validate_request_viking_uri(
-            resolve_path_variables(skill),
-            ctx,
-            field_name="skill",
+            resolve_path_variables(skill), ctx, field_name="skill"
         ).rstrip("/")
         if not classify_uri(skill).is_skill_root:
             raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
-        skill_stat = await self._fs.stat(skill, ctx)
-        if not skill_stat.get("isDir"):
-            raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
-        skill = str(skill_stat.get("uri") or skill).rstrip("/")
-        skill_file = await self._fs.stat(f"{skill}/SKILL.md", ctx)
-        if skill_file.get("isDir"):
-            raise InvalidArgumentError("Skill directory must contain a SKILL.md file")
-
         target = validate_request_viking_uri(
-            resolve_path_variables(request.to),
-            ctx,
-            field_name="to",
+            resolve_path_variables(request.to), ctx, field_name="to"
         ).rstrip("/")
         self._validate_target(target)
-        await self._fs.ensure_write_access(target, ctx)
+        return request.model_copy(update={"from_": sources, "to": target, "skill": skill})
+
+    async def _normalize_request(
+        self, request: CompileRequest, ctx: RequestContext
+    ) -> CompileRequest:
+        request = self._normalize_request_uris(request, ctx)
+        for uri in request.from_:
+            stat = await self._fs.stat(uri, ctx)
+            if not stat.get("isDir"):
+                raise InvalidArgumentError(f"Compile source must be a directory: {uri}")
+        skill_stat = await self._fs.stat(request.skill, ctx)
+        if not skill_stat.get("isDir"):
+            raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
+        skill_file = await self._fs.stat(f"{request.skill}/SKILL.md", ctx)
+        if skill_file.get("isDir"):
+            raise InvalidArgumentError("Skill directory must contain a SKILL.md file")
+        await self._fs.ensure_write_access(request.to, ctx)
         try:
-            target_stat = await self._fs.stat(target, ctx)
+            target_stat = await self._fs.stat(request.to, ctx)
         except NotFoundError:
             pass
         else:
             if not target_stat.get("isDir"):
                 raise InvalidArgumentError("Compile target must be a directory")
-            target = str(target_stat.get("uri") or target).rstrip("/")
-
-        return request.model_copy(
-            update={"from_": sources, "to": target, "skill": skill},
-        )
+        return request
 
     @staticmethod
     def _validate_target(target: str) -> None:

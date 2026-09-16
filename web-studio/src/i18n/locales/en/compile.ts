@@ -1,5 +1,18 @@
 export default {
+  errors: {
+    generic: 'The request could not be completed.',
+    invalidArgument: 'Check the request parameters and try again.',
+    notFound: 'The requested resource or task was not found.',
+    permissionDenied: 'You do not have permission to perform this action.',
+    unauthenticated: 'Check your connection credentials and try again.',
+    conflict: 'This submission conflicts with an existing request.',
+    network: 'Unable to reach the server. Check your connection and try again.',
+    upgrade: 'Update OpenViking to use paginated task history.',
+    details: 'Technical details',
+  },
   commandErrors: {
+    pendingSubmission:
+      'Resolve the previous submission before changing the command. Retry the original command or open the Compile form to look up its result.',
     shellSyntax: 'Shell operators are not supported.',
     unclosedQuote:
       'Close all quotes and escape sequences before running the command.',

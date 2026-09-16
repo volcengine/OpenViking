@@ -1,6 +1,7 @@
 """Studio task pagination and submission retry contracts."""
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,7 +11,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskTracker
+from openviking.service.task_tracker import TaskStatus, TaskTracker
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
@@ -143,6 +144,7 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         "from": ["viking://resources/source"],
         "to": "viking://resources/wiki",
         "skill": "viking://agent/skills/wiki",
+        "args": {"api_key": "synthetic-private-key", "mode": "summary"},
     }
     headers = {"Idempotency-Key": "http-retry-key-123"}
     async with httpx.AsyncClient(
@@ -172,11 +174,112 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         assert retry_after_cancel.json()["result"]["task_id"] == task_id
         assert "submission_hash" not in retry_after_cancel.json()["result"]["meta"]
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ROOT)
+        tracker = TaskTracker(store)
         root_page = await client.get(
             "/api/v1/tasks", params={"pagination": "cursor", "task_type": "compile"}
         )
         assert root_page.json()["result"]["items"][0]["task_id"] == task_id
+        assert tracker.count() == 0
+        detail = await client.get(f"/api/v1/tasks/{task_id}")
+        assert detail.status_code == 200
+        assert detail.json()["result"]["task_id"] == task_id
+
+        # Recovery must not need the old resources or a currently configured backend.
+        from openviking_cli.exceptions import NotFoundError
+
+        fs.stat.side_effect = NotFoundError("deleted-source", "resource")
+        compile_service._local_endpoint = None
+        restored = await client.post("/api/v1/compile", json=payload, headers=headers)
+        assert restored.status_code == 202, restored.text
+        assert restored.json()["result"]["task_id"] == task_id
+        changed = await client.post(
+            "/api/v1/compile", json={**payload, "args": {"api_key": "different"}}, headers=headers
+        )
+        assert changed.status_code == 409
+        compile_service.configure_local_backend("http://localhost:1", "")
+        rejected = await client.post(
+            "/api/v1/compile", json=payload, headers={"Idempotency-Key": "new-invalid-request-key"}
+        )
+        assert rejected.status_code != 202
         ctx = RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER)
         assert (await client.get("/api/v1/tasks", params={"pagination": "cursor"})).json()[
             "result"
         ]["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_cursor_prunes_cold_expired_records_without_loading_cache():
+    store = PersistentTaskStore(_FakeAgfs())
+    tracker = TaskTracker(store)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    for task_id, status, days in [
+        ("expired-complete", TaskStatus.COMPLETED, 2),
+        ("expired-cancelled", TaskStatus.CANCELLED, 2),
+        ("expired-failed", TaskStatus.FAILED, 8),
+        ("recent-failed", TaskStatus.FAILED, 2),
+        ("active", TaskStatus.RUNNING, 8),
+    ]:
+        task = await tracker.create("compile", task_id=task_id, **owner)
+        task.status = status
+        task.updated_at = time.time() - days * 86400
+        await store.update(task)
+    tracker = TaskTracker(store, max_concurrent_store_io=1)
+    page = await asyncio.wait_for(
+        tracker.list_page(
+            **owner,
+            limit=30,
+            task_type="compile",
+            status=None,
+            resource_id=None,
+            include_internal=False,
+            q=None,
+        ),
+        timeout=3,
+    )
+    assert {task.task_id for task in page} == {"recent-failed", "active"}
+    assert tracker.count() == 0
+    assert {task["task_id"] for task in await store.list("acme", user_id="alice")} == {
+        "recent-failed",
+        "active",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cursor_cleanup_rechecks_task_updated_after_scan(monkeypatch):
+    store = PersistentTaskStore(_FakeAgfs())
+    tracker = TaskTracker(store, max_concurrent_store_io=1)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    task = await tracker.create("compile", task_id="updated-after-scan", **owner)
+    task.status = TaskStatus.COMPLETED
+    task.updated_at = time.time() - 2 * 86400
+    await store.update(task)
+    tracker = TaskTracker(store, max_concurrent_store_io=1)
+    prune = tracker._prune_persisted_expired
+    scanned = asyncio.Event()
+
+    async def signal_before_prune(payload):
+        scanned.set()
+        return await prune(payload)
+
+    monkeypatch.setattr(tracker, "_prune_persisted_expired", signal_before_prune)
+    async with tracker._task_locks.acquire(task.task_id):
+        reading = asyncio.create_task(
+            tracker.list_page(
+                **owner,
+                limit=30,
+                task_type="compile",
+                status=None,
+                resource_id=None,
+                include_internal=False,
+                q=None,
+            )
+        )
+        await asyncio.wait_for(scanned.wait(), timeout=3)
+        task.updated_at = time.time()
+        # A scan waiting for this task lock must not hold the sole I/O slot.
+        await asyncio.wait_for(
+            tracker._store_io.run("update", lambda: store.update(task)), timeout=3
+        )
+    page = await asyncio.wait_for(reading, timeout=3)
+    assert [record.task_id for record in page] == [task.task_id]
+    assert await store.get(task.task_id, **owner) is not None

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { compileCommand, parseArgs, parseCompile, tokenize } from './commands'
+import {
+  compileCommand,
+  compileHistory,
+  parseArgs,
+  parseCompile,
+  tokenize,
+} from './commands'
 
 import { compileSuggestions } from './suggestions'
 import {
@@ -60,4 +66,22 @@ it('completes a Skill URI and keeps handoff scoped to the identity', () => {
   })
   clearCompileHandoff()
   expect(readCompileHandoff('alice')).toBeUndefined()
+})
+
+it.each(['--args', "'--args'", '"--args"', String.raw`--ar\gs`])(
+  'omits private args from history for %s',
+  (flag) => {
+    const command = `compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s ${flag} '{"api_key":"synthetic-secret"}'`
+    expect(parseCompile(tokenize(command)).args).toEqual({
+      api_key: 'synthetic-secret',
+    })
+    const history = compileHistory(command)
+    expect(JSON.stringify(history)).not.toContain('synthetic-secret')
+    expect(history.remember).toBe(false)
+  },
+)
+it('does not persist malformed commands containing private args', () => {
+  expect(
+    compileHistory(`compile --args '{"api_key":"synthetic-secret"}`),
+  ).toEqual({ title: 'compile / task', remember: false })
 })

@@ -12,7 +12,8 @@ export class CompileCommandError extends Error {
       | 'unknownCommand'
       | 'taskUsage'
       | 'missingValue'
-      | 'listUsage',
+      | 'listUsage'
+      | 'pendingSubmission',
   ) {
     super(code)
     this.name = 'CompileCommandError'
@@ -120,3 +121,28 @@ export function compileCommand(request: CompileRequest): string {
 }
 export const isCompileCommand = (input: string) =>
   /^(?:ov\s+)?(?:\/?compile|\/?task)(?:\s|$)/.test(input.trim())
+
+/** Persist only parsed public fields; malformed input must never echo raw args. */
+export function compileHistory(input: string): {
+  title: string
+  remember: boolean
+} {
+  try {
+    const tokens = tokenize(input)
+    if (tokens[0] === 'compile') {
+      const request = parseCompile(tokens)
+      return {
+        title: compileCommand(request),
+        remember: !tokens.includes('--args'),
+      }
+    }
+    if (
+      tokens[0] === 'task' &&
+      !tokens.some((token) => token.startsWith('--args'))
+    )
+      return { title: input, remember: true }
+    return { title: 'task', remember: false }
+  } catch {
+    return { title: 'compile / task', remember: false }
+  }
+}

@@ -1,5 +1,18 @@
 export default {
+  errors: {
+    generic: '请求未能完成。',
+    invalidArgument: '请检查请求参数后重试。',
+    notFound: '未找到请求的资源或任务。',
+    permissionDenied: '当前身份没有执行此操作的权限。',
+    unauthenticated: '请检查连接凭据后重试。',
+    conflict: '本次提交与已有请求冲突。',
+    network: '无法连接服务器，请检查网络后重试。',
+    upgrade: '请升级 OpenViking 后使用任务历史分页。',
+    details: '技术详情',
+  },
   commandErrors: {
+    pendingSubmission:
+      '上次提交结果尚未确认。请重试原命令，或打开编译表单查询结果后再更改命令。',
     shellSyntax: '不支持 Shell 运算符。',
     unclosedQuote: '请补全引号或转义字符后再执行命令。',
     invalidArgument: '参数无效。请使用支持的参数名，并以空格分隔参数名和值。',

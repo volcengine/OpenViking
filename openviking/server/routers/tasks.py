@@ -36,6 +36,8 @@ async def get_task(
     if _ctx.role == Role.ROOT:
         task = await tracker.get(task_id)
         if task is None:
+            task = await tracker.get(task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id)
+        if task is None:
             task = await tracker.get(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,

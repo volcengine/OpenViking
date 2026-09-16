@@ -1054,6 +1054,40 @@ class TaskTracker:
             return None
         return self._copy(task)
 
+    async def _prune_persisted_expired(self, payload: Dict[str, Any]) -> bool:
+        """Prune cold records under the same lock and I/O budget as mutations."""
+        candidate = self._record_from_payload(payload)
+        now = time.time()
+        if not self._is_expired(candidate, now):
+            return False
+        async with self._task_locks.acquire(candidate.task_id):
+            # The scan may race with a lifecycle write. Re-read under the same
+            # lock used by mutations before removing any durable state.
+            current = await self._store_io.run(
+                "get",
+                lambda: self._store.get(
+                    candidate.task_id, account_id=candidate.account_id, user_id=candidate.user_id
+                ),
+            )
+            if current is None:
+                return True
+            task = self._record_from_payload(current)
+            if not self._is_expired(task, now) or self._work_index.has_work(task.task_id):
+                payload.clear()
+                payload.update(current)
+                return False
+            await self._store_io.run(
+                "delete",
+                lambda: run_to_completion(
+                    lambda: self._store.delete(
+                        task.task_id, account_id=task.account_id, user_id=task.user_id
+                    )
+                ),
+            )
+            with self._lock:
+                self._tasks.pop(task.task_id, None)
+            return True
+
     async def list_page(
         self,
         *,
@@ -1073,13 +1107,14 @@ class TaskTracker:
                 owners.add(additional_owner)
             records = []
             for account, user in owners:
-                page = await self._store_io.run(
-                    "list_page",
-                    lambda account=account, user=user: run_to_completion(
-                        lambda: self._store.list_page(
-                            account, user_id=user, limit=limit, before=before, **filters
-                        )
-                    ),
+                page = await self._store.list_page(
+                    account,
+                    user_id=user,
+                    limit=limit,
+                    before=before,
+                    prune_expired=self._prune_persisted_expired,
+                    io_limiter=self._store_io,
+                    **filters,
                 )
                 records.extend(self._record_from_payload(record) for record in page)
             if include_cached:

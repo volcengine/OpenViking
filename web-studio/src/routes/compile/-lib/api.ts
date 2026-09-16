@@ -1,4 +1,4 @@
-import { getOvResult, ovClient } from '#/lib/ov-client'
+import { getOvResult, ovClient, OvClientError } from '#/lib/ov-client'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 
 export type CompileRequest = {
@@ -48,9 +48,11 @@ export async function fetchCompileTasks(
     }),
   )
   if (!Array.isArray(page.items))
-    throw new Error(
-      'The server does not support paginated tasks. Update OpenViking and retry.',
-    )
+    throw new OvClientError({
+      code: 'PAGINATION_UNSUPPORTED',
+      message:
+        'The server does not support paginated tasks. Update OpenViking and retry.',
+    })
   return page
 }
 export function fetchCompileTask(id: string, signal?: AbortSignal) {

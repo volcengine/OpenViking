@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createInstance } from 'i18next'
-import { runCompileCommand } from './terminal'
+import { OvClientError } from '#/lib/ov-client'
+import { runCompileCommand, runCompileSubmission } from './terminal'
 import { CompileCommandError } from './commands'
 import en from '#/i18n/locales/en/compile'
 import zh from '#/i18n/locales/zh-CN/compile'
@@ -64,4 +65,58 @@ describe('Compile terminal regressions', () => {
       expect(api.createCompile).not.toHaveBeenCalled()
     },
   )
+})
+
+it('retains the creation key across response loss and task queries', async () => {
+  const pending = { current: null }
+  const saveKey = vi.fn()
+  const status = (value: string) => value
+  const command =
+    'compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s'
+  const tasks = new Map<string, string>()
+  api.createCompile.mockImplementation(async (_body, key: string) => {
+    if (!tasks.has(key)) tasks.set(key, `task-${tasks.size + 1}`)
+    if (api.createCompile.mock.calls.length === 1)
+      throw new Error('response lost')
+    return { task_id: tasks.get(key), status: 'pending' }
+  })
+  api.fetchCompileTasks.mockResolvedValue({ items: [], next_cursor: null })
+  await expect(
+    runCompileSubmission(command, pending, status, saveKey),
+  ).rejects.toThrow('response lost')
+  await runCompileSubmission('task list', pending, status, saveKey)
+  await expect(
+    runCompileSubmission(
+      command + ' --instruction changed',
+      pending,
+      status,
+      saveKey,
+    ),
+  ).rejects.toThrow('pendingSubmission')
+  const recovered = await runCompileSubmission(
+    command,
+    pending,
+    status,
+    saveKey,
+  )
+  expect(recovered.taskId).toBe('task-1')
+  expect(tasks.size).toBe(1)
+  expect(api.createCompile.mock.calls[0][1]).toBe(
+    api.createCompile.mock.calls[1][1],
+  )
+  expect(pending.current).toBeNull()
+  expect(saveKey).toHaveBeenLastCalledWith(null)
+})
+
+it('releases a rejected submission so its parameters can be corrected', async () => {
+  const pending = { current: null }
+  api.createCompile.mockRejectedValueOnce(
+    new OvClientError({ code: 'INVALID_ARGUMENT', message: 'Invalid URI' }),
+  )
+  const command =
+    'compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s'
+  await expect(
+    runCompileSubmission(command, pending, String, vi.fn()),
+  ).rejects.toThrow('Invalid URI')
+  expect(pending.current).toBeNull()
 })

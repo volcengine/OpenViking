@@ -1,3 +1,4 @@
+import { isOvClientError } from '#/lib/ov-client'
 import {
   cancelCompile,
   createCompile,
@@ -55,4 +56,55 @@ export async function runCompileCommand(
     }
   }
   throw new CompileCommandError('taskUsage')
+}
+
+export type PendingCompileSubmission = { raw: string; key: string }
+
+/** Task queries must not consume an unresolved creation's idempotency key. */
+export async function runCompileSubmission(
+  input: string,
+  pending: { current: PendingCompileSubmission | null },
+  localizeStatus: (status: string) => string,
+  saveKey: (key: string | null) => void,
+) {
+  const tokens = tokenize(input)
+  if (tokens[0] !== 'compile')
+    return runCompileCommand(input, '', localizeStatus)
+  parseCompile(tokens)
+  if (pending.current && pending.current.raw !== input)
+    throw new CompileCommandError('pendingSubmission')
+  const submission = pending.current ?? {
+    raw: input,
+    key: `${Date.now()}:${crypto.randomUUID()}`,
+  }
+  pending.current = submission
+  saveKey(submission.key)
+  try {
+    const result = await runCompileCommand(
+      input,
+      submission.key,
+      localizeStatus,
+    )
+    if (pending.current === submission) {
+      pending.current = null
+      saveKey(null)
+    }
+    return result
+  } catch (error) {
+    if (
+      pending.current === submission &&
+      isOvClientError(error) &&
+      [
+        'INVALID_ARGUMENT',
+        'NOT_FOUND',
+        'PERMISSION_DENIED',
+        'UNAUTHENTICATED',
+        'CONFLICT',
+      ].includes(error.code)
+    ) {
+      pending.current = null
+      saveKey(null)
+    }
+    throw error
+  }
 }

@@ -6,8 +6,9 @@ import { Link } from '@tanstack/react-router'
 import {
   CompileCommandError,
   isCompileCommand,
+  compileHistory,
 } from '#/routes/compile/-lib/commands'
-import { runCompileCommand } from '#/routes/compile/-lib/terminal'
+import { runCompileSubmission } from '#/routes/compile/-lib/terminal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -856,12 +857,11 @@ export function TerminalPanel({
       if (!trimmed || running) return
 
       const isCompile = isCompileCommand(trimmed)
-      const safeCommand = isCompile
-        ? trimmed.replace(/--args(?:\s|=)[\s\S]*/, '--args [omitted]')
-        : trimmed
-      append({ kind: 'command', title: safeCommand })
-      if (!isCompile || !trimmed.includes('--args'))
-        rememberCommand(safeCommand)
+      const safeHistory = isCompile
+        ? compileHistory(trimmed)
+        : { title: trimmed, remember: true }
+      append({ kind: 'command', title: safeHistory.title })
+      if (safeHistory.remember) rememberCommand(safeHistory.title)
       setCommand('')
       setSuggestionsOpen(false)
       setRunning(true)
@@ -877,34 +877,22 @@ export function TerminalPanel({
             })
             return
           }
-          if (compileSubmission.current?.raw !== trimmed)
-            compileSubmission.current = {
-              raw: trimmed,
-              key: `${Date.now()}:${crypto.randomUUID()}`,
-            }
-          const createsTask = /^(?:ov\s+)?\/?compile\s/.test(trimmed)
           const recoveryKey = `compile-submission:${identityScopeKey}`
-          if (createsTask) {
-            try {
-              sessionStorage.setItem(recoveryKey, compileSubmission.current.key)
-            } catch {
-              /* optional recovery */
-            }
-          }
-          const result = await runCompileCommand(
+          const result = await runCompileSubmission(
             trimmed,
-            compileSubmission.current.key,
+            compileSubmission,
             (status) =>
               t(`compile:statuses.${status}`, { defaultValue: status }),
+            (key) => {
+              if (identityRef.current !== identityScopeKey) return
+              try {
+                if (key) sessionStorage.setItem(recoveryKey, key)
+                else sessionStorage.removeItem(recoveryKey)
+              } catch {
+                /* optional recovery */
+              }
+            },
           )
-          if (createsTask) {
-            try {
-              sessionStorage.removeItem(recoveryKey)
-            } catch {
-              /* optional recovery */
-            }
-          }
-          compileSubmission.current = null
           if (identityRef.current !== identityScopeKey) return
           append({
             kind: 'success',

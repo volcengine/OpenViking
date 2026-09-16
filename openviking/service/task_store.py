@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import heapq
 import json
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
+from openviking.service.task_tracker_concurrency import StoreIOLimiter, run_to_completion
 
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
@@ -40,6 +42,8 @@ class TaskStore(Protocol):
         user_id: str,
         limit: int,
         before: tuple[float, str] | None = None,
+        prune_expired: Callable[[Dict[str, Any]], Awaitable[bool]] | None = None,
+        io_limiter: StoreIOLimiter | None = None,
         **filters: Any,
     ) -> List[Dict[str, Any]]: ...
 
@@ -108,6 +112,8 @@ class PersistentTaskStore:
         user_id: str,
         limit: int,
         before: tuple[float, str] | None = None,
+        prune_expired: Callable[[Dict[str, Any]], Awaitable[bool]] | None = None,
+        io_limiter: StoreIOLimiter | None = None,
         **filters: Any,
     ) -> List[Dict[str, Any]]:
         """Scan durable records, retaining only the requested page in memory.
@@ -117,9 +123,14 @@ class PersistentTaskStore:
         """
         from openviking.service.task_pagination import matches
 
+        async def read(operation: str, factory: Callable[[], Awaitable[Any]]) -> Any:
+            if io_limiter is None:
+                return await factory()
+            return await io_limiter.run(operation, lambda: run_to_completion(factory))
+
         directory = self._task_dir(account_id, user_id)
         try:
-            entries = await self._agfs.ls(directory)
+            entries = await read("list_page_ls", lambda: self._agfs.ls(directory))
         except (AGFSNotFoundError, FileNotFoundError):
             return []
         heap: list = []
@@ -128,10 +139,16 @@ class PersistentTaskStore:
             if not path.endswith(".json"):
                 continue
             try:
-                task = json.loads(_decode_bytes(await self._agfs.read(path)))
+                task = json.loads(
+                    _decode_bytes(
+                        await read("list_page_read", lambda path=path: self._agfs.read(path))
+                    )
+                )
             except (AGFSNotFoundError, FileNotFoundError):
                 continue
             if task.get("account_id") != account_id or task.get("user_id") != user_id:
+                continue
+            if prune_expired is not None and await prune_expired(task):
                 continue
             key = (float(task["created_at"]), str(task["task_id"]))
             if before is not None and key >= before:

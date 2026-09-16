@@ -6,6 +6,7 @@ import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { compileListReturn } from '../-lib/navigation'
+import { compileErrorKey } from '../-lib/errors'
 import { errorText } from '../-lib/api'
 
 export function CompileShell({
@@ -82,7 +83,13 @@ export function CompileError({
       className="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm"
     >
       <AlertCircleIcon className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 break-words">{errorText(error)}</span>
+      <div className="min-w-0 flex-1 break-words">
+        <p>{t(compileErrorKey(error))}</p>
+        <details className="mt-2">
+          <summary className="cursor-pointer">{t('errors.details')}</summary>
+          <p className="mt-1 whitespace-pre-wrap">{errorText(error)}</p>
+        </details>
+      </div>
       {retry && (
         <Button variant="outline" size="sm" onClick={retry}>
           {t('retry')}

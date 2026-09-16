@@ -189,14 +189,7 @@ class ExternalTaskService:
     ) -> TaskRecord:
         provider = self._provider(task_type)
         tracker = get_task_tracker()
-        request_hash = hashlib.sha256(
-            json.dumps(
-                {"payload": dict(payload), "private": dict(private_payload or {})},
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+        request_hash = submission_request_hash(payload, private_payload)
         token = uuid4().hex
         task_id = (
             submission_task_id(ctx, task_type, provider.task_id_prefix, idempotency_key)
@@ -227,15 +220,7 @@ class ExternalTaskService:
         if idempotency_key and task.meta.get("submission_token") != token:
             # Recover a creation interrupted before queue delivery. Duplicate
             # deliveries are safe: execute claims each task before submitting.
-            if task.status == TaskStatus.PENDING:
-                await get_queue_manager().enqueue(
-                    QueueManager.EXTERNAL_TASK,
-                    {
-                        "task_id": task.task_id,
-                        "account_id": ctx.account_id,
-                        "user_id": ctx.user.user_id,
-                    },
-                )
+            await self._resume_submission(task, ctx)
             return task
         enqueued = False
         try:
@@ -271,6 +256,47 @@ class ExternalTaskService:
                 )
             raise
         return task
+
+    async def recover_submission(
+        self,
+        task_type: str,
+        payload: Mapping[str, Any],
+        private_payload: Mapping[str, Any],
+        ctx: RequestContext,
+        key: str,
+    ) -> TaskRecord | None:
+        async def recover():
+            provider = self._provider(task_type)
+            task = await get_task_tracker().get(
+                submission_task_id(ctx, task_type, provider.task_id_prefix, key),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            if task is None:
+                return None
+            if task.meta.get("submission_hash") != submission_request_hash(
+                payload, private_payload
+            ):
+                raise ConflictError("Idempotency-Key was already used with different parameters")
+            await self._resume_submission(task, ctx)
+            return task
+
+        async def serialized():
+            async with self._submission_locks.acquire(submission_task_id(ctx, task_type, "", key)):
+                return await run_to_completion(recover)
+
+        return await self._submission_dispatcher.run(serialized)
+
+    async def _resume_submission(self, task: TaskRecord, ctx: RequestContext) -> None:
+        if task.status == TaskStatus.PENDING:
+            await get_queue_manager().enqueue(
+                QueueManager.EXTERNAL_TASK,
+                {
+                    "task_id": task.task_id,
+                    "account_id": ctx.account_id,
+                    "user_id": ctx.user.user_id,
+                },
+            )
 
     async def execute(self, task_id: str, account_id: str, user_id: str) -> bool:
         """Return False when this delivery must rotate behind other target work."""
@@ -613,3 +639,16 @@ __all__ = [
 def submission_task_id(ctx: RequestContext, task_type: str, prefix: str, key: str) -> str:
     scope = json.dumps([ctx.account_id, ctx.user.user_id, task_type, key])
     return prefix + hashlib.sha256(scope.encode()).hexdigest()
+
+
+def submission_request_hash(
+    payload: Mapping[str, Any], private_payload: Mapping[str, Any] | None
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {"payload": dict(payload), "private": dict(private_payload or {})},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
