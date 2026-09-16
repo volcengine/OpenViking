@@ -3,6 +3,7 @@ import { cleanup, renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import { useDefaultConversationTitles } from './use-default-conversation-titles'
+
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), save: vi.fn() }))
 vi.mock('./api', () => ({ fetchSessionMessages: mocks.fetch }))
 vi.mock('./use-session-titles', () => ({
