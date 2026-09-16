@@ -166,3 +166,9 @@ async def update_onboarding(
     return await dispatch(
         ctx, "onboarding_update", {"id": identifier, "action": body.get("action")}
     )
+
+
+@router.get("/schedules")
+async def schedules(ctx: RequestContext = Depends(manager)):
+    """Server-wide scheduler inventory; legacy jobs have no account ownership."""
+    return await dispatch(ctx, "schedules")

@@ -30,6 +30,7 @@ async def test_management_rejects_non_root(app, role, monkeypatch):
     ) as client:
         for method, url in [
             ("GET", "/studio/connections"),
+            ("GET", "/studio/schedules"),
             ("POST", "/studio/connections"),
             ("POST", "/studio/onboarding"),
             ("GET", "/studio/onboarding"),
@@ -184,3 +185,17 @@ async def test_root_studio_account_selector_does_not_use_data_identity_headers(a
     assert result.status_code == 200
     assert dispatch.call_args.args[0].account_id == "team"
     assert ctx.account_id == "default"
+
+
+async def test_root_can_read_server_scheduler(app, monkeypatch):
+    app.dependency_overrides[get_request_context] = lambda: SimpleNamespace(
+        role="root", account_id="a"
+    )
+    dispatch = AsyncMock(return_value={"status": "ok", "result": {"jobs": []}})
+    monkeypatch.setattr(bot_studio, "dispatch", dispatch)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        result = await client.get("/studio/schedules")
+    assert result.status_code == 200
+    assert dispatch.call_args.args[1] == "schedules"

@@ -10,7 +10,8 @@ from vikingbot.studio.store import StudioStore
 
 
 class StudioService:
-    def __init__(self, config, manager):
+    def __init__(self, config, manager, cron_service=None):
+        self.cron_service = cron_service
         self.config = config
         self.manager = manager
         self.store = StudioStore(config.bot_data_path / "studio.sqlite3")

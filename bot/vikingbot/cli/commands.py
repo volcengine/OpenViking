@@ -505,6 +505,7 @@ def gateway(
         enable_openapi=True,
         openapi_port=effective_port,
         compile_service=compile_service,
+        cron_service=cron,
     )
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
@@ -658,6 +659,7 @@ def prepare_channel(
     enable_openapi: bool = False,
     openapi_port: int = 18790,
     compile_service=None,
+    cron_service=None,
 ):
     """Prepare channels for the bot.
 
@@ -687,7 +689,7 @@ def prepare_channel(
         )
         from vikingbot.studio.service import StudioService
 
-        openapi_channel._studio_service = StudioService(config, channels)
+        openapi_channel._studio_service = StudioService(config, channels, cron_service=cron_service)
         channels.add_channel(openapi_channel)
         logger.info(f"OpenAPI channel enabled on port {openapi_port}")
 

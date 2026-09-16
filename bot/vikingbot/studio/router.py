@@ -24,6 +24,10 @@ def create_router(channel, service):
         account = body["account"]
         action = body["action"]
         payload = body.get("payload", {})
+        if action == "schedules":
+            from vikingbot.studio.schedules import snapshot
+
+            return snapshot(service.cron_service)
         if action == "onboarding_start":
             return await service.onboarding.start(account, payload, body["identity"])
         if action == "onboarding_current":
