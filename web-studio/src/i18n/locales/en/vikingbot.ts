@@ -213,6 +213,12 @@ export default {
   cancelDelete: 'Cancel',
   deletingConnection: 'Deleting…',
   confirmDeleteConnection: 'Delete',
+  manualTitle: 'Connect an existing app',
+  manualHint: 'Enter your Feishu app credentials and select its runtime user.',
+  manualInstructions: 'Configuration: permissions, events and publication',
+  manualConnected: 'App credentials verified',
+  manualConnectedHint:
+    'Connection saved. Configure message permissions and long-connection events, then publish the app before using it in a group.',
   finish: 'Done',
   continueSetup: 'Continue setup',
   pause: 'Pause',

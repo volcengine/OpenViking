@@ -61,14 +61,13 @@ const connection: Connection = {
   identity_user: 'bot',
   status: { state: 'connected' },
 }
-it('does not allow completion based only on a connected socket', () => {
+it('allows closing a saved connection without claiming publication', () => {
   show(connection)
   expect(
-    screen.getByRole<HTMLButtonElement>('button', { name: zh.visible })
-      .disabled,
-  ).toBe(true)
+    screen.getByRole<HTMLButtonElement>('button', { name: zh.finish }).disabled,
+  ).toBe(false)
 })
-it('received messages without successful outbound delivery do not finish onboarding', () => {
+it('does not require outbound verification to close setup', () => {
   show({
     ...connection,
     status: {
@@ -82,11 +81,10 @@ it('received messages without successful outbound delivery do not finish onboard
     },
   })
   expect(
-    screen.getByRole<HTMLButtonElement>('button', { name: zh.visible })
-      .disabled,
-  ).toBe(true)
+    screen.getByRole<HTMLButtonElement>('button', { name: zh.finish }).disabled,
+  ).toBe(false)
 })
-it('allows user confirmation after platform delivery succeeds', () => {
+it('keeps completion available after successful delivery', () => {
   show({
     ...connection,
     status: {
@@ -100,8 +98,7 @@ it('allows user confirmation after platform delivery succeeds', () => {
     },
   })
   expect(
-    screen.getByRole<HTMLButtonElement>('button', { name: zh.visible })
-      .disabled,
+    screen.getByRole<HTMLButtonElement>('button', { name: zh.finish }).disabled,
   ).toBe(false)
 })
 it('preserves credentials after validation failure and blocks duplicate submission', async () => {
@@ -113,9 +110,6 @@ it('preserves credentials after validation failure and blocks duplicate submissi
       }),
   )
   const changed = show()
-  fireEvent.click(
-    screen.getByRole<HTMLButtonElement>('button', { name: zh.next }),
-  )
   fireEvent.change(screen.getByLabelText<HTMLInputElement>(zh.appId), {
     target: { value: 'cli_test' },
   })

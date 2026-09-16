@@ -202,6 +202,12 @@ export default {
   cancelDelete: '取消',
   deletingConnection: '删除中…',
   confirmDeleteConnection: '确认删除',
+  manualTitle: '连接已有应用',
+  manualHint: '填写已有飞书应用的凭证，绑定运行用户。',
+  manualInstructions: '配置说明：权限、事件与发布',
+  manualConnected: '应用凭证已验证',
+  manualConnectedHint:
+    '连接已保存。请确保已在飞书配置消息权限、长连接事件并发布应用，即可添加到群使用。',
   finish: '完成',
   continueSetup: '继续配置',
   pause: '暂停',

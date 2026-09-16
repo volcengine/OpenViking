@@ -14,7 +14,9 @@ export function GroupSetup({
   connection,
   onChange,
   onClose,
+  manual = false,
 }: {
+  manual?: boolean
   connection: Connection
   onChange: (connection: Connection) => void
   onClose: () => void
@@ -31,7 +33,14 @@ export function GroupSetup({
   return (
     <div className="space-y-4">
       <CheckCircle2Icon className="size-9 text-green-600" />
-      <h3 className="font-semibold">{t('setupComplete')}</h3>
+      <h3 className="font-semibold">
+        {t(manual ? 'manualConnected' : 'setupComplete')}
+      </h3>
+      {manual && (
+        <p className="text-sm text-muted-foreground">
+          {t('manualConnectedHint')}
+        </p>
+      )}
       <p className="text-sm">
         {t('connectedAs', {
           name: connection.bot_name,
