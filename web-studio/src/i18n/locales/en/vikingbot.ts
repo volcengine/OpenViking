@@ -1,7 +1,11 @@
 export default {
+  chooseBotChannel: 'Choose a platform for your bot.',
+  channelFilter: 'Channel',
+  addBot: 'Add bot',
+  botsHint: 'Manage your bots and filter by channel.',
   platformReady: 'Scan to connect, then add your bot to Feishu groups.',
   connectedBots: 'Connected bots',
-  noConnectedBots: 'No bots connected yet. Select Feishu above to get started.',
+  noConnectedBots: 'No bots yet. Select “Add bot” to get started.',
   dingtalk: 'DingTalk',
 
   schedules: 'Scheduled tasks',
@@ -120,7 +124,7 @@ export default {
   credentialsSaved: 'Credentials updated',
   title: 'VikingBot',
   conversations: 'Conversations',
-  channels: 'Channels',
+  channels: 'Bots',
   intro: 'Talk to VikingBot here, or bring it into your team’s Feishu groups.',
   newChat: 'New conversation',
   web: 'Web',

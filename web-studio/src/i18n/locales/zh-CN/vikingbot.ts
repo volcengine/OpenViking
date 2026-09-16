@@ -1,7 +1,11 @@
 export default {
+  chooseBotChannel: '选择机器人接入的平台。',
+  channelFilter: '渠道',
+  addBot: '添加机器人',
+  botsHint: '管理已添加的机器人，按渠道筛选。',
   platformReady: '扫码连接，将机器人添加到飞书群。',
   connectedBots: '已连接的机器人',
-  noConnectedBots: '还没有连接机器人，从上方选择飞书开始。',
+  noConnectedBots: '暂无机器人，点击“添加机器人”开始。',
   dingtalk: '钉钉',
 
   schedules: '定时任务',
@@ -112,7 +116,7 @@ export default {
   credentialsSaved: '凭证已更新',
   title: 'VikingBot',
   conversations: '对话',
-  channels: '渠道',
+  channels: '机器人',
   intro: '在这里与 VikingBot 对话，也可以将它加入团队的飞书群。',
   newChat: '新建对话',
   web: '网页',
