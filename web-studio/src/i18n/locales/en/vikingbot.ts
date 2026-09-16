@@ -88,7 +88,7 @@ export default {
       approval_pending:
         'Approval is still pending. Once approved, scan again to check the release without creating another app.',
       permissions_unavailable:
-        'Required permissions are unavailable. Check organization policies or connect manually.',
+        'Required permissions could not be matched in the Feishu catalog. Scan again to retry, or use manual setup if it persists.',
       events_not_ready:
         'Message events are not ready. Scan again to continue configuration.',
       connection_unavailable:

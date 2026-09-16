@@ -6,6 +6,8 @@ non-idempotent create/publish calls. Checkpoints are saved before every such cal
 
 from pathlib import Path
 
+from loguru import logger
+
 from .web_session import SetupError, data, field
 
 SCOPES = {"im:message.group_at_msg:readonly", "im:message:send_as_bot", "im:chat:readonly"}
@@ -19,7 +21,15 @@ def scope_ids(value, bucket=None):
             found.update(scope_ids(item, bucket))
     elif isinstance(value, dict):
         name = field(value, "scope_name", "scopeName", "name", "key", "scopeKey")
-        identifier = field(value, "id", "scope_id", "scopeId", "scopeID")
+        identifier = None
+        for key in ("id", "scope_id", "scopeId", "scopeID"):
+            raw = value.get(key)
+            if isinstance(raw, str) and raw:
+                identifier = raw
+                break
+            if isinstance(raw, int) and not isinstance(raw, bool):
+                identifier = str(raw)
+                break
         if name in SCOPES and identifier and bucket != "user":
             found[name] = identifier
         for key, child in value.items():
@@ -89,7 +99,10 @@ async def prepare_app(session, app_id):
 
 async def configure_app(session, app_id):
     catalog = scope_ids(await session.post(f"/developers/v1/scope/all/{app_id}"))
-    if SCOPES - catalog.keys():
+    if missing := SCOPES - catalog.keys():
+        logger.warning(
+            "Feishu permission catalog missing required scope names: {}", sorted(missing)
+        )
         raise SetupError("permissions_unavailable")
     await session.post(
         f"/developers/v1/scope/update/{app_id}",

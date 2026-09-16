@@ -83,7 +83,7 @@ export default {
       approval_pending:
         '企业审批尚未完成。审批后重新扫码检查发布状态，不会重复创建应用。',
       permissions_unavailable:
-        '飞书未提供所需权限，请检查企业策略或改用手动连接。',
+        '未能从飞书权限目录匹配所需权限。请重新扫码重试；若仍失败，可改用手动配置。',
       events_not_ready: '消息事件尚未配置成功，请重新扫码继续配置。',
       connection_unavailable:
         '机器人长连接尚未建立，请检查服务器网络后重新扫码。',

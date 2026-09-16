@@ -336,3 +336,35 @@ async def test_retry_waits_for_previous_session_cleanup(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "launch", launch)
     result = await jobs.update("a", "run", "retry")
     assert result["state"] == "initializing"
+
+
+async def test_numeric_permission_ids_are_sent_as_strings():
+    scopes = sorted(console.SCOPES)
+    calls = []
+
+    async def post(path, body=None):
+        calls.append((path, body))
+        if "/scope/all/" in path:
+            return {
+                "data": {
+                    "appScopeList": [
+                        {"name": name, "id": index + 101} for index, name in enumerate(scopes)
+                    ],
+                    "userScopeList": [
+                        {"name": name, "id": index + 201} for index, name in enumerate(scopes)
+                    ],
+                }
+            }
+        if path == "/developers/v1/event/cli_test":
+            return {"data": {"eventMode": 4, "appEvents": [console.EVENT]}}
+        return {"code": 0}
+
+    await console.configure_app(SimpleNamespace(post=post), "cli_test")
+    update = next(body for path, body in calls if "/scope/update/" in path)
+    assert update["appScopeIDs"] == ["101", "102", "103"]
+    assert update["userScopeIDs"] == []
+
+
+def test_invalid_permission_ids_are_not_accepted():
+    for value in (True, False, None, {}, []):
+        assert console.scope_ids({"name": next(iter(console.SCOPES)), "id": value}) == {}
