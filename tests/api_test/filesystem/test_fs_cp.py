@@ -57,7 +57,7 @@ class TestFsCp:
             )
 
             without_recursive = api_client.fs_cp(source, target)
-            assert without_recursive.status_code == 412, without_recursive.text
+            assert without_recursive.status_code == 400, without_recursive.text
 
             copied = api_client.fs_cp(source, target, recursive=True)
             assert copied.status_code == 200, copied.text

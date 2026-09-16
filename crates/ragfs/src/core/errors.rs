@@ -92,6 +92,10 @@ pub enum Error {
     #[error("operation would block: {0}")]
     WouldBlock(String),
 
+    /// Preserve acquisition failures so callers can distinguish contention from corruption.
+    #[error(transparent)]
+    PathLock(#[from] crate::lock::types::PathLockError),
+
     /// Multi-write synchronous fanout failed to reach the required acknowledgement quorum
     #[error(
         "sync write quorum failed: {succeeded}/{attempted} backups succeeded (required {required}); failures: {failures:?}"
@@ -193,6 +197,7 @@ impl Error {
             Self::Network(_) => "network",
             Self::Timeout(_) => "timeout",
             Self::WouldBlock(_) => "would_block",
+            Self::PathLock(_) => "path_lock",
             Self::SyncWriteQuorum { .. } => "sync_write_quorum",
             Self::ContextMissing(_) => "context_missing",
             Self::Internal(_) => "internal",

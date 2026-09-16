@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for HTTPAccessor."""
 
+import socket
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import httpx
-
 import pytest
 
 from openviking.parse.accessors import AccessorRegistry, GitAccessor, HTTPAccessor
 from openviking.parse.accessors.http_accessor import URLType
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
+from openviking_cli.exceptions import OpenVikingError
 
 
 def _mock_config():
@@ -45,9 +47,39 @@ class TestHTTPAccessor:
         """Create a HTTPAccessor instance."""
         return HTTPAccessor()
 
-    def test_priority(self, accessor: HTTPAccessor) -> None:
-        """HTTPAccessor should have correct priority."""
-        assert accessor.priority == 50
+    @pytest.mark.parametrize(
+        ("failure", "expected_code", "expected_status"),
+        [
+            (socket.gaierror(socket.EAI_NONAME, "host does not exist"), "INVALID_ARGUMENT", 400),
+            (socket.gaierror(socket.EAI_AGAIN, "temporary DNS failure"), "UNAVAILABLE", 503),
+            (httpx.ConnectError("connection refused"), "UNAVAILABLE", 503),
+            (httpx.ReadTimeout("read timed out"), "DEADLINE_EXCEEDED", 504),
+            (httpx.InvalidURL("invalid host"), "INVALID_ARGUMENT", 400),
+            (403, "PERMISSION_DENIED", 403),
+            (500, "UNAVAILABLE", 503),
+        ],
+    )
+    async def test_source_fetch_errors_preserve_cause(
+        self, accessor: HTTPAccessor, monkeypatch, failure, expected_code, expected_status
+    ) -> None:
+        async def handler(request):
+            if isinstance(failure, socket.gaierror):
+                raise httpx.ConnectError(str(failure)) from failure
+            if isinstance(failure, Exception):
+                raise failure
+            return httpx.Response(failure, request=request)
+
+        client_type = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda **kwargs: client_type(transport=httpx.MockTransport(handler), **kwargs),
+        )
+        with pytest.raises(OpenVikingError) as caught:
+            await accessor.access("https://source.example/data.txt")
+
+        assert caught.value.code == expected_code
+        assert ERROR_CODE_TO_HTTP_STATUS[caught.value.code] == expected_status
 
     @pytest.mark.parametrize(
         "source",

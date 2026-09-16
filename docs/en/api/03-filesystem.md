@@ -709,7 +709,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 `semantic_status: "queued"` means the copy has already committed and the destination parent's overview and abstract will be rebuilt asynchronously from summaries available at the destination. The API does not wait for that refresh. A refresh enqueue failure may return `semantic_status: "failed"` and `semantic_error`; it does not roll back the completed file and vector copy.
 
-Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when a path lock is busy, `FAILED_PRECONDITION` when a directory is copied without `recursive=true`, and `INVALID_ARGUMENT` for invalid source/destination relationships or file/directory type conflicts.
+Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when a path lock is busy, and `INVALID_ARGUMENT` (HTTP 400) when a directory is copied or removed without `recursive=true`, a directory operation targets a file, or the source/destination relationship or file/directory types are invalid.
 
 ---
 

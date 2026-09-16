@@ -333,6 +333,8 @@ JSON output - error:
 | `SESSION_EXPIRED` | 410 | Session no longer exists |
 | `NOT_INITIALIZED` | - | Service or component not initialized (need to call initialize() first) |
 
+File/directory type misuse, copying or removing a directory without `recursive=true`, and a definitively nonexistent HTTP source hostname return `INVALID_ARGUMENT` (400). Path-lock contention, including encrypted writes, returns `CONFLICT` (409); corrupt lock tokens, lock I/O failures, and stored-data decryption failures return `INTERNAL` (500). An unavailable HTTP source or temporary network failure returns `UNAVAILABLE` (503), while a fetch timeout returns `DEADLINE_EXCEEDED` (504).
+
 ---
 
 ## API Endpoints

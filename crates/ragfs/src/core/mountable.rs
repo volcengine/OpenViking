@@ -697,8 +697,7 @@ impl MountableFS {
             Ok(AutoPathLockAction::Acquire) => Some(
                 manager
                     .acquire_exact(dst_path, Duration::ZERO, None)
-                    .await
-                    .map_err(|error| Error::internal(format!("lock error: {error}")))?,
+                    .await?,
             ),
             Err(error) => {
                 return Err(Error::internal(format!("lock lease error: {error}")));

@@ -408,19 +408,13 @@ impl FileSystem for EncryptionWrappedFS {
                 Some(
                     self.pathlock_manager
                         .acquire_batch(&requests, Duration::from_secs(1), Some(owner_capability))
-                        .await
-                        .map_err(|error| {
-                            Error::internal(format!("encrypted write lock error: {error}"))
-                        })?,
+                        .await?,
                 )
             }
             AutoPathLockAction::Acquire => Some(
                 self.pathlock_manager
                     .acquire_batch(&requests, Duration::from_secs(1), None)
-                    .await
-                    .map_err(|error| {
-                        Error::internal(format!("encrypted write lock error: {error}"))
-                    })?,
+                    .await?,
             ),
         };
 
