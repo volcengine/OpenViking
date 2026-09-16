@@ -1,10 +1,11 @@
 """Minimal console automation for newly created VikingBot apps only.
 
-No template with broad permissions, existing-app mutation, or automatic replay of
-non-idempotent create/publish calls. Checkpoints are saved before every such call.
+Uses the Feishu developer-console agent template for new apps. No automatic replay
+of non-idempotent create/publish calls. Checkpoints are saved before every such call.
 """
 
 from pathlib import Path
+from uuid import uuid4
 
 from loguru import logger
 
@@ -65,16 +66,26 @@ async def create_app(session, run, checkpoint):
     avatar = field(uploaded, "url")
     if not avatar:
         raise SetupError("icon_upload_failed")
-    checkpoint(create_started=True)
+    # Persist the request identity before creation; an uncertain result must never
+    # fall back to app/create and silently create a second, ordinary bot.
+    request_id = run.get("template_request_id") or str(uuid4())
+    checkpoint(create_started=True, template_request_id=request_id)
     created = await session.post(
-        "/developers/v1/app/create",
+        "/developers/v1/manifest/upsert_by_template",
         {
-            "appSceneType": 0,
-            "name": run["name"],
-            "desc": "OpenViking group assistant",
-            "avatar": avatar,
-            "primaryLang": "zh_cn",
-            "i18n": {"zh_cn": {"name": run["name"], "description": "OpenViking group assistant"}},
+            "appManifestTemplateID": "developer_console",
+            "createAppUserCustomField": {
+                "i18n": {
+                    "zh_cn": {
+                        "name": run["name"],
+                        "description": "OpenViking AI assistant",
+                    }
+                },
+                "avatar": avatar,
+                "primaryLang": "zh_cn",
+            },
+            "cid": request_id,
+            "HTTPHead": {},
         },
     )
     app_id = field(created, "ClientID", "clientID", "clientId", "appId")

@@ -393,3 +393,49 @@ async def test_current_feishu_catalog_uses_chat_read_permission():
     body = next(body for path, body in calls if "/scope/update/" in path)
     assert set(body["appScopeIDs"]) == {"101", "102", "103"}
     assert body["userScopeIDs"] == []
+
+
+async def test_new_app_uses_agent_template_and_persists_request_identity():
+    run = run_record()
+    calls = []
+
+    async def post(path, body, **kwargs):
+        calls.append(path)
+        if path.endswith("upload/image"):
+            return {"data": {"url": "avatar"}}
+        assert path == "/developers/v1/manifest/upsert_by_template"
+        assert body["appManifestTemplateID"] == "developer_console"
+        assert body["cid"] == run["template_request_id"]
+        assert run["create_started"]
+        assert body["createAppUserCustomField"]["i18n"]["zh_cn"]["name"] == run["name"]
+        return {"data": {"ClientID": "cli_agent"}}
+
+    assert (
+        await console.create_app(SimpleNamespace(post=post), run, lambda **kw: run.update(kw))
+        == "cli_agent"
+    )
+    assert run["app_id"] == "cli_agent"
+    assert "/developers/v1/app/create" not in calls
+
+
+async def test_existing_app_is_preserved_without_attempting_template_conversion():
+    session = SimpleNamespace(post=AsyncMock())
+    run = run_record(app_id="cli_existing")
+    assert await console.create_app(session, run, lambda **kw: run.update(kw)) == "cli_existing"
+    session.post.assert_not_called()
+
+
+async def test_rejected_agent_template_never_falls_back_to_ordinary_bot():
+    session = SimpleNamespace(
+        post=AsyncMock(
+            side_effect=[
+                {"data": {"url": "avatar"}},
+                SetupError("platform_rejected"),
+            ]
+        )
+    )
+    run = run_record()
+    with pytest.raises(SetupError, match="platform_rejected"):
+        await console.create_app(session, run, lambda **kw: run.update(kw))
+    assert session.post.call_count == 2
+    assert run["create_started"]
