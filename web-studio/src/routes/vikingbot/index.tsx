@@ -27,7 +27,6 @@ import {
 } from './-components/platform-history'
 
 const PAGE_TABS = ['conversations', 'channels', 'schedules'] as const
-const SOURCE_FILTERS = ['all', 'web', 'feishu'] as const
 const START_COMMAND = 'openviking-server --with-bot'
 
 export const Route = createFileRoute('/vikingbot/')({
@@ -69,6 +68,13 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
     queryFn: getConnections,
     enabled: canManage,
   })
+  const hasFeishu =
+    canManage &&
+    connections.data?.some(
+      (connection) => (connection.type ?? 'feishu') === 'feishu',
+    )
+  const sourceFilters = hasFeishu ? (['all', 'web', 'feishu'] as const) : []
+  const activeFilter = hasFeishu ? filter : 'all'
   const sessions = useSessionListByRecency()
   const createSession = useCreateSession()
   const { getTitle, setTitle } = useSessionTitles(scope)
@@ -168,18 +174,20 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-              <div className="flex gap-1">
-                {SOURCE_FILTERS.map((value) => (
-                  <Button
-                    size="sm"
-                    variant={filter === value ? 'secondary' : 'ghost'}
-                    key={value}
-                    onClick={() => setFilter(value)}
-                  >
-                    {t(value)}
-                  </Button>
-                ))}
-              </div>
+              {sourceFilters.length > 0 && (
+                <div className="flex gap-1">
+                  {sourceFilters.map((value) => (
+                    <Button
+                      size="sm"
+                      variant={activeFilter === value ? 'secondary' : 'ghost'}
+                      key={value}
+                      onClick={() => setFilter(value)}
+                    >
+                      {t(value)}
+                    </Button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="flex-1 overflow-auto p-2">
               {error && (
@@ -187,7 +195,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                   {error}
                 </p>
               )}
-              {filter !== 'feishu' &&
+              {activeFilter !== 'feishu' &&
                 sessions.data
                   .filter((session) =>
                     isVikingBotWebSession(
@@ -215,7 +223,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                       </span>
                     </button>
                   ))}
-              {filter !== 'web' &&
+              {activeFilter !== 'web' &&
                 connections.data?.map((c) => (
                   <PlatformConversationList
                     key={c.id}
@@ -225,7 +233,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                     onSelect={(connection, id) => select(id, connection)}
                   />
                 ))}
-              {filter === 'feishu' && !canManage && (
+              {activeFilter === 'feishu' && !canManage && (
                 <p className="p-3 text-sm text-muted-foreground">
                   {t('adminOnly')}
                 </p>
