@@ -466,6 +466,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/compile` | Create an OV-owned Compile task |
+| GET | `/api/v1/compile/capabilities` | Check Compile availability |
+| GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/api/v1/tasks/{task_id}` | Get a background task |
 | POST | `/api/v1/tasks/{task_id}/cancel` | Cancel a background task |
 | GET | `/api/v1/tasks` | List background tasks |
@@ -525,6 +527,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| GET | `/api/v1/compile/capabilities` | Check Compile availability |
+| GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/bot/v1/health` | VikingBot health check |
 | POST | `/bot/v1/chat` | Non-streaming VikingBot chat |
 | POST | `/bot/v1/chat/stream` | Streaming VikingBot chat |

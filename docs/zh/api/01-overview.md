@@ -461,6 +461,8 @@ JSON 输出 - 错误：
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/compile` | 创建由 OV 托管的 Compile 任务 |
+| GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
+| GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/api/v1/tasks/{task_id}` | 获取后台任务 |
 | POST | `/api/v1/tasks/{task_id}/cancel` | 取消后台任务 |
 | GET | `/api/v1/tasks` | 列出后台任务 |
@@ -520,6 +522,8 @@ JSON 输出 - 错误：
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
+| GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/bot/v1/health` | VikingBot 健康检查 |
 | POST | `/bot/v1/chat` | VikingBot 非流式对话 |
 | POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |
