@@ -71,8 +71,16 @@ class PersistentTaskStore:
         return json.loads(_decode_bytes(raw))
 
     async def list(self, account_id: str, *, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        if not user_id:
-            return []
+        if user_id is None:
+            try:
+                owners = await self._agfs.ls(self._task_root_dir(account_id))
+            except (AGFSNotFoundError, FileNotFoundError):
+                return []
+            tasks: List[Dict[str, Any]] = []
+            for owner in owners:
+                if owner.get("isDir") and owner.get("name") not in (".", ".."):
+                    tasks.extend(await self.list(account_id, user_id=owner["name"]))
+            return tasks
         directory = self._task_dir(account_id, user_id)
         try:
             items = await self._agfs.ls(directory)

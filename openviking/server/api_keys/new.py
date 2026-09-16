@@ -164,7 +164,7 @@ class NewAPIKeyManager:
 
                 # Verify the user exists in the account using legacy's data
                 account = self._legacy._accounts.get(account_id)
-                if account and user_id in account.users:
+                if account and account.deletion is None and user_id in account.users:
                     user_info = account.users[user_id]
                     stored_key_or_hash = user_info.get("key", "")
 
@@ -330,6 +330,7 @@ class NewAPIKeyManager:
             raise InvalidArgumentError(verr)
 
         # Check account exists first
+        self._legacy.ensure_account_active(account_id)
         account = self._legacy._accounts.get(account_id)
         if account is None:
             from openviking_cli.exceptions import NotFoundError
@@ -384,17 +385,17 @@ class NewAPIKeyManager:
             raise
         return key
 
-    async def begin_user_deletion(
+    async def begin_deletion(
         self,
         account_id: str,
-        user_id: str,
+        user_id: str | None,
         *,
         task_id: str,
         owner_account_id: str,
         owner_user_id: str,
     ) -> tuple[dict, bool]:
         async with self._legacy.mutation_lock:
-            return await self._legacy.begin_user_deletion(
+            return await self._legacy.begin_deletion(
                 account_id,
                 user_id,
                 task_id=task_id,
@@ -402,10 +403,10 @@ class NewAPIKeyManager:
                 owner_user_id=owner_user_id,
             )
 
-    async def replace_user_deletion_task(
+    async def replace_deletion_task(
         self,
         account_id: str,
-        user_id: str,
+        user_id: str | None,
         *,
         expected_task_id: str,
         task_id: str,
@@ -413,7 +414,7 @@ class NewAPIKeyManager:
         owner_user_id: str,
     ) -> dict:
         async with self._legacy.mutation_lock:
-            return await self._legacy.replace_user_deletion_task(
+            return await self._legacy.replace_deletion_task(
                 account_id,
                 user_id,
                 expected_task_id=expected_task_id,
@@ -422,18 +423,21 @@ class NewAPIKeyManager:
                 owner_user_id=owner_user_id,
             )
 
-    async def finish_user_deletion(self, account_id: str, user_id: str, task_id: str) -> bool:
+    async def finish_deletion(self, account_id: str, user_id: str | None, task_id: str) -> bool:
         async with self._legacy.mutation_lock:
-            return await self._legacy.finish_user_deletion(account_id, user_id, task_id)
+            return await self._legacy.finish_deletion(account_id, user_id, task_id)
 
-    def get_user_deletion(self, account_id: str, user_id: str) -> Optional[dict]:
-        return self._legacy.get_user_deletion(account_id, user_id)
+    def get_deletion(self, account_id: str, user_id: str | None = None) -> Optional[dict]:
+        return self._legacy.get_deletion(account_id, user_id)
 
-    def iter_user_deletions(self) -> list[tuple[str, str, dict]]:
-        return self._legacy.iter_user_deletions()
+    def iter_deletions(self) -> list[tuple[str, str | None, dict]]:
+        return self._legacy.iter_deletions()
 
-    def is_user_deleting(self, account_id: str, user_id: str) -> bool:
-        return self._legacy.is_user_deleting(account_id, user_id)
+    def is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
+        return self._legacy.is_deleting(account_id, user_id)
+
+    def ensure_account_active(self, account_id: str) -> None:
+        self._legacy.ensure_account_active(account_id)
 
     async def regenerate_key(
         self,
@@ -455,6 +459,7 @@ class NewAPIKeyManager:
         Generates new format key regardless of original format.
         """
         # Check account and user exist
+        self._legacy.ensure_account_active(account_id)
         account = self._legacy._accounts.get(account_id)
         if account is None:
             from openviking_cli.exceptions import NotFoundError

@@ -59,7 +59,16 @@ export function AgentPanel({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
+  const [historySessionId, setHistorySessionId] = useState(initialSessionId)
+  const [persistedSessionId, setPersistedSessionId] = useState(initialSessionId)
   const creationStartedRef = useRef(false)
+  const creationGenerationRef = useRef(0)
+  useEffect(
+    () => () => {
+      creationGenerationRef.current += 1
+    },
+    [],
+  )
   const botHealth = useBotHealth()
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } =
@@ -68,7 +77,7 @@ export function AgentPanel({
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(identityScopeKey),
   )
-  const { data: historyMessages } = useSessionMessages(sessionId)
+  const { data: historyMessages } = useSessionMessages(historySessionId)
   const chat = useChat({
     identityScopeKey,
     initialMessages: historyMessages,
@@ -81,6 +90,7 @@ export function AgentPanel({
   const handleNewSession = useCallback(async () => {
     if (isCreatingSession) return
 
+    const generation = ++creationGenerationRef.current
     chat.abort()
     chat.setMessages([])
     creationStartedRef.current = true
@@ -93,18 +103,25 @@ export function AgentPanel({
         12_000,
         t('agent.createTimeout'),
       )
+      if (generation !== creationGenerationRef.current) return
       setPlaygroundSessionIds(
         registerPlaygroundAgentSessionId(result.session_id, identityScopeKey),
       )
       setTitle(result.session_id, t('agent.newSessionTitle'))
+      setHistorySessionId(undefined)
+      setPersistedSessionId(result.session_id)
       setSessionId(result.session_id)
       onSessionChange(result.session_id)
       setHistoryOpen(false)
     } catch (error) {
+      if (generation !== creationGenerationRef.current) return
       creationStartedRef.current = false
       setSessionError(error instanceof Error ? error.message : String(error))
     } finally {
-      setIsCreatingSession(false)
+      if (generation === creationGenerationRef.current) {
+        creationStartedRef.current = false
+        setIsCreatingSession(false)
+      }
     }
   }, [
     chat,
@@ -118,13 +135,16 @@ export function AgentPanel({
 
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
+      creationGenerationRef.current += 1
       chat.abort()
-      creationStartedRef.current = true
+      creationStartedRef.current = false
       setSessionError(null)
       setIsCreatingSession(false)
       setPlaygroundSessionIds(
         registerPlaygroundAgentSessionId(nextSessionId, identityScopeKey),
       )
+      setHistorySessionId(nextSessionId)
+      setPersistedSessionId(nextSessionId)
       setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
       setHistoryOpen(false)
@@ -132,21 +152,14 @@ export function AgentPanel({
     [chat, identityScopeKey, onSessionChange],
   )
 
-  // Notify parent of the initial sessionId so the URL stays in sync.
-  // The session is lazily created on the backend by the first addMessage call.
+  // Only publish IDs that exist on the server; drafts must not survive in the URL.
   useEffect(() => {
-    if (sessionId) {
-      onSessionChange(sessionId)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (sessionId) {
+    if (persistedSessionId) {
       setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(sessionId, identityScopeKey),
+        registerPlaygroundAgentSessionId(persistedSessionId, identityScopeKey),
       )
     }
-  }, [identityScopeKey, sessionId])
+  }, [identityScopeKey, persistedSessionId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -158,10 +171,34 @@ export function AgentPanel({
   ])
 
   const send = useCallback(
-    (message: string) => {
+    async (message: string) => {
+      if (creationStartedRef.current) return false
+      if (!persistedSessionId) {
+        const generation = ++creationGenerationRef.current
+        creationStartedRef.current = true
+        setIsCreatingSession(true)
+        setSessionError(null)
+        try {
+          const result = await createSession.mutateAsync(sessionId)
+          if (generation !== creationGenerationRef.current) return false
+          setPersistedSessionId(result.session_id)
+          onSessionChange(result.session_id)
+        } catch (error) {
+          if (generation === creationGenerationRef.current) {
+            setSessionError(getErrorMessage(error))
+          }
+          return false
+        } finally {
+          if (generation === creationGenerationRef.current) {
+            creationStartedRef.current = false
+            setIsCreatingSession(false)
+          }
+        }
+      }
       void chat.send(message)
+      return true
     },
-    [chat],
+    [chat, createSession, onSessionChange, persistedSessionId, sessionId],
   )
 
   const isStreaming = chat.status === 'streaming'
@@ -252,6 +289,7 @@ export function AgentPanel({
         ) : (
           <div className="border-t bg-background/80">
             <Composer
+              key={sessionId}
               variant="compact"
               isStreaming={isStreaming}
               onCancel={chat.abort}

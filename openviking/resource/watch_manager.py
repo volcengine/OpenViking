@@ -897,7 +897,12 @@ class WatchManager:
                     self._tasks.pop(task_id, None)
                     self._index_remove(task.account_id, task.to_uri, task_id)
 
-                    await self._save_tasks()
+                    try:
+                        await self._save_tasks()
+                    except Exception:
+                        self._tasks[task_id] = task
+                        self._index_add(task.account_id, task.to_uri, task_id)
+                        raise
                     logger.info(
                         f"[WatchManager] Deleted task {task_id} by user {account_id}/{user_id}"
                     )

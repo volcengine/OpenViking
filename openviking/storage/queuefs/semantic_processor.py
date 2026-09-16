@@ -406,6 +406,15 @@ class SemanticProcessor(DequeueHandlerBase):
 
                     logger.info(f"Processing semantic generation for: {msg})")
 
+                    # Resolving the lock scope for a root that was deleted
+                    # after enqueue would recreate it (lock metadata needs a
+                    # parent directory). There is nothing to summarize; ack.
+                    if not await get_viking_fs().exists(msg.uri, ctx=current_ctx):
+                        logger.info("Skipping semantic message for missing root: uri=%s", msg.uri)
+                        if msg.telemetry_id and msg.id:
+                            get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+                        return ProcessResult.success()
+
                     semantic_lock = await SemanticLockScope.resolve(
                         msg.lock_handoff,
                         caller_lock=lock,

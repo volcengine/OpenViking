@@ -91,7 +91,9 @@ class QueueManager:
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
     EXTERNAL_TASK = "ExternalTask"
-    USER_DELETION = "UserDeletion"
+    # Account and user cleanup share one consumer. Retain the persisted name
+    # so user cleanup messages queued before this change resume in place.
+    DATA_CLEANUP = "UserDeletion"
     # Deferred work re-enqueues itself; throttle the next scheduling round.
     _REQUEUE_POLL_INTERVAL = 1.0
 
@@ -214,7 +216,7 @@ class QueueManager:
 
     def _max_concurrent_for_queue(self, queue_name: str) -> int:
         """Return the worker concurrency limit for a named queue."""
-        if queue_name == self.USER_DELETION:
+        if queue_name == self.DATA_CLEANUP:
             return 1
         if queue_name == self.EMBEDDING:
             return self._max_concurrent_embedding

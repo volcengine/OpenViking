@@ -117,7 +117,7 @@ export const postAdminAccounts = <ThrowOnError extends boolean = false>(options:
 /**
  * Delete Account
  *
- * Delete an account and cascade-clean its storage (AGFS + VectorDB).
+ * Revoke an account and submit durable cleanup of its data.
  */
 export const deleteAdminAccountByAccountId = <ThrowOnError extends boolean = false>(options: Options<DeleteAdminAccountByAccountIdData, ThrowOnError>) => (options.client ?? client).delete<DeleteAdminAccountByAccountIdResponses, DeleteAdminAccountByAccountIdErrors, ThrowOnError>({
     responseType: 'json',

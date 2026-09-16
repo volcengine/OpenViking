@@ -9,6 +9,7 @@ import math
 import random
 import uuid
 from abc import ABC, abstractmethod
+from tempfile import TemporaryFile
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
@@ -553,28 +554,39 @@ class CollectionAdapter(ABC):
         *,
         ids: Optional[list[str]] = None,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
-        limit: int = 100000,
     ) -> int:
+        """Submit IDs for deletion in batches, without waiting for index visibility."""
         coll = self.get_collection()
-        delete_ids = list(ids or [])
-        if not delete_ids and filter is not None:
-            matched = self.query(
-                filter=filter,
-                limit=limit,
-                output_fields=["id"],
-            )
-            delete_ids = [record["id"] for record in matched if record.get("id")]
-
-        if not delete_ids:
+        batch_size = self._DATA_BATCH_SIZE or 100
+        if ids is not None:
+            for start in range(0, len(ids), batch_size):
+                coll.delete_data(ids[start : start + batch_size])
+            return len(ids)
+        if filter is None:
             return 0
 
-        batch_size = self._DATA_BATCH_SIZE
-        if batch_size and len(delete_ids) > batch_size:
-            for i in range(0, len(delete_ids), batch_size):
-                coll.delete_data(delete_ids[i : i + batch_size])
-        else:
-            coll.delete_data(delete_ids)
-        return len(delete_ids)
+        # Enumerate before deleting so our own deletes cannot shift offset pages.
+        # Spool only IDs to disk to keep memory bounded for large accounts.
+        with TemporaryFile(mode="w+t", encoding="utf-8") as pending_ids:
+            offset = 0
+            while True:
+                matched = self.query(
+                    filter=filter,
+                    limit=batch_size,
+                    offset=offset,
+                    output_fields=["id"],
+                    order_by="updated_at",
+                    order_desc=False,
+                )
+                if not matched:
+                    break
+                pending_ids.write(json.dumps([record["id"] for record in matched]) + "\n")
+                offset += len(matched)
+
+            pending_ids.seek(0)
+            for batch in pending_ids:
+                coll.delete_data(json.loads(batch))
+            return offset
 
     @staticmethod
     def _coerce_int(value: Any) -> Optional[int]:
@@ -611,7 +623,7 @@ class CollectionAdapter(ABC):
         if parsed_total is not None:
             return parsed_total
 
-        return 0
+        raise RuntimeError("Vector backend returned an invalid count result")
 
     def search_by_keywords(
         self,

@@ -669,19 +669,28 @@ async def read_abstract_overview_pending_snapshot(
         f"{dir_uri.rstrip('/')}/.overview.md",
         f"{dir_uri.rstrip('/')}/.abstract.md",
     ]
-    owns_lease = lock is None
-    snapshot_lease = lock
-    if owns_lease:
-        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
-        snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
-    try:
+
+    def _pending_of(documents: Sequence[Optional[AbstractOverviewDocument]]) -> int:
         pending_values = []
-        for uri in uris:
-            document = await _read_existing_document(viking_fs, uri, ctx)
+        for document in documents:
             freshness = document.metadata.get("freshness") if document else None
             if document is not None and not document.legacy and isinstance(freshness, Mapping):
                 pending_values.append(int(freshness["pending_child_changes"]))
         return max(pending_values, default=0)
+
+    owns_lease = lock is None
+    snapshot_lease = lock
+    if owns_lease:
+        # Read-only: when neither sidecar exists there is no counter to
+        # snapshot, and acquiring exact locks there would create the parent
+        # directory just to hold lock metadata (a deleted directory reappears).
+        preliminary = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
+        if all(document is None for document in preliminary):
+            return 0
+        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
+        snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+    try:
+        return _pending_of([await _read_existing_document(viking_fs, uri, ctx) for uri in uris])
     finally:
         if owns_lease:
             await viking_fs._async_agfs.pathlock_release(snapshot_lease)

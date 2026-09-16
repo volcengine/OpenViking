@@ -110,7 +110,7 @@ class LegacyAPIKeyManager:
         # Serializes all mutations made by the unified manager in this process.
         # File locks remain responsible for inter-instance coordination.
         self._mutation_lock = asyncio.Lock()
-        self._user_deletion_lock = asyncio.Lock()
+        self._deletion_lock = asyncio.Lock()
 
     @property
     def mutation_lock(self) -> asyncio.Lock:
@@ -240,9 +240,11 @@ class LegacyAPIKeyManager:
                 self._accounts[account_id] = AccountInfo(
                     created_at=created_at,
                     groups_loaded=False,
+                    deletion=info.get("deletion"),
                 )
             else:
                 account.created_at = created_at
+                account.deletion = info.get("deletion")
 
     async def refresh_account_users_from_store(self, account_id: str) -> None:
         """Refresh one account's users without reading unrelated registries."""
@@ -340,6 +342,7 @@ class LegacyAPIKeyManager:
                 created_at=info.get("created_at", ""),
                 users=users,
                 groups=groups,
+                deletion=info.get("deletion"),
             )
             user_group_ids.update({
                 (account_id, user_id): group_ids
@@ -435,6 +438,8 @@ class LegacyAPIKeyManager:
         candidates = self._prefix_index.get(key_prefix, [])
 
         for entry in candidates:
+            if self.get_deletion(entry.account_id) is not None:
+                continue
             if entry.is_hashed:
                 # Verify hashed key
                 if self._verify_api_key(api_key, entry.key_or_hash):
@@ -541,9 +546,8 @@ class LegacyAPIKeyManager:
         if account_id not in self._accounts:
             raise NotFoundError(account_id, "account")
 
-        self._discard_account_state(account_id)
-
         await self._save_accounts_json(delete_account_ids={account_id})
+        self._discard_account_state(account_id)
 
     async def register_user(
         self,
@@ -559,6 +563,7 @@ class LegacyAPIKeyManager:
         if verr:
             raise InvalidArgumentError(verr)
 
+        self.ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
@@ -621,7 +626,11 @@ class LegacyAPIKeyManager:
     async def _ensure_trusted_identities_unlocked(
         self, identities: Dict[str, set[str]]
     ) -> dict[str, int]:
-        normalized = {account_id: set(user_ids) for account_id, user_ids in identities.items() if user_ids}
+        normalized = {
+            account_id: set(user_ids)
+            for account_id, user_ids in identities.items()
+            if user_ids and self.get_deletion(account_id) is None
+        }
         if not normalized:
             return {"created_accounts": 0, "created_users": 0}
 
@@ -706,20 +715,35 @@ class LegacyAPIKeyManager:
         await self._update_identity_registry_signatures(set(normalized))
         return {"created_accounts": created_accounts, "created_users": created_users}
 
-    async def begin_user_deletion(
+    async def begin_deletion(
         self,
         account_id: str,
-        user_id: str,
+        user_id: str | None,
         *,
         task_id: str,
         owner_account_id: str,
         owner_user_id: str,
     ) -> tuple[dict, bool]:
-        """Revoke the user key and persist the deletion task fence."""
-        async with self._reload_lock, self._user_deletion_lock:
+        """Revoke an account or user and persist its cleanup task fence."""
+        async with self._reload_lock, self._deletion_lock:
             account = self._accounts.get(account_id)
             if account is None:
                 raise NotFoundError(account_id, "account")
+            if user_id is None:
+                if account.deletion is not None:
+                    return dict(account.deletion), False
+                account.deletion = {
+                    "task_id": task_id,
+                    "owner_account_id": owner_account_id,
+                    "owner_user_id": owner_user_id,
+                }
+                try:
+                    await self._save_accounts_json(updated_account_ids={account_id})
+                except BaseException:
+                    account.deletion = None
+                    raise
+                return dict(account.deletion), True
+            self.ensure_account_active(account_id)
             user_info = account.users.get(user_id)
             if user_info is None:
                 raise NotFoundError(user_id, "user")
@@ -753,10 +777,10 @@ class LegacyAPIKeyManager:
             self._remove_key_index_entry(account_id, user_id, original)
             return dict(deletion), True
 
-    async def replace_user_deletion_task(
+    async def replace_deletion_task(
         self,
         account_id: str,
-        user_id: str,
+        user_id: str | None,
         *,
         expected_task_id: str,
         task_id: str,
@@ -764,10 +788,26 @@ class LegacyAPIKeyManager:
         owner_user_id: str,
     ) -> dict:
         """Replace the task that owns an existing deletion fence."""
-        async with self._reload_lock, self._user_deletion_lock:
+        async with self._reload_lock, self._deletion_lock:
             account = self._accounts.get(account_id)
             if account is None:
                 raise NotFoundError(account_id, "account")
+            if user_id is None:
+                current = account.deletion
+                if current is None or current["task_id"] != expected_task_id:
+                    return dict(current) if current else {}
+                account.deletion = {
+                    "task_id": task_id,
+                    "owner_account_id": owner_account_id,
+                    "owner_user_id": owner_user_id,
+                }
+                try:
+                    await self._save_accounts_json(updated_account_ids={account_id})
+                except BaseException:
+                    account.deletion = current
+                    raise
+                return dict(account.deletion)
+            self.ensure_account_active(account_id)
             user_info = account.users.get(user_id)
             if user_info is None:
                 raise NotFoundError(user_id, "user")
@@ -788,12 +828,17 @@ class LegacyAPIKeyManager:
                 raise
             return dict(replacement)
 
-    async def finish_user_deletion(self, account_id: str, user_id: str, task_id: str) -> bool:
-        """Remove the user only when this task still owns the deletion fence."""
-        async with self._reload_lock, self._user_deletion_lock:
+    async def finish_deletion(self, account_id: str, user_id: str | None, task_id: str) -> bool:
+        """Remove the identity only when this task still owns its deletion fence."""
+        async with self._reload_lock, self._deletion_lock:
             account = self._accounts.get(account_id)
             if account is None:
                 return False
+            if user_id is None:
+                if account.deletion is None or account.deletion["task_id"] != task_id:
+                    return False
+                await self.delete_account(account_id)
+                return True
             user_info = account.users.get(user_id)
             if user_info is None:
                 return False
@@ -823,30 +868,39 @@ class LegacyAPIKeyManager:
                 self._rebuild_account_group_index(account_id)
             return True
 
-    def get_user_deletion(self, account_id: str, user_id: str) -> Optional[dict]:
+    def get_deletion(self, account_id: str, user_id: str | None = None) -> Optional[dict]:
         account = self._accounts.get(account_id)
         if account is None:
             return None
+        if user_id is None:
+            return dict(account.deletion) if account.deletion is not None else None
         user_info = account.users.get(user_id)
         deletion = user_info.get("deletion") if user_info else None
         return dict(deletion) if isinstance(deletion, dict) else None
 
-    def iter_user_deletions(self) -> list[tuple[str, str, dict]]:
+    def iter_deletions(self) -> list[tuple[str, str | None, dict]]:
         return [
             (account_id, user_id, dict(deletion))
             for account_id, account in self._accounts.items()
             for user_id, user_info in account.users.items()
-            if isinstance((deletion := user_info.get("deletion")), dict)
-            and deletion.get("task_id")
+            if isinstance((deletion := user_info.get("deletion")), dict) and deletion.get("task_id")
+        ] + [
+            (account_id, None, dict(account.deletion))
+            for account_id, account in self._accounts.items()
+            if account.deletion is not None
         ]
 
-    def is_user_deleting(self, account_id: str, user_id: str) -> bool:
-        return self.get_user_deletion(account_id, user_id) is not None
+    def is_deleting(self, account_id: str, user_id: str | None = None) -> bool:
+        return (
+            self.get_deletion(account_id) is not None
+            or self.get_deletion(account_id, user_id) is not None
+        )
 
     async def regenerate_key(
         self, account_id: str, user_id: str, seed: Optional[str] = None
     ) -> str:
         """Regenerate a user's API key. Old key is immediately invalidated."""
+        self.ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
@@ -918,6 +972,7 @@ class LegacyAPIKeyManager:
     async def set_role(self, account_id: str, user_id: str, role: str) -> None:
         """Update a user's role."""
         resolved_role = validate_account_user_role(role)
+        self.ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
@@ -969,6 +1024,8 @@ class LegacyAPIKeyManager:
                     "account_id": account_id,
                     "created_at": info.created_at,
                     "user_count": len(info.users),
+                    "status": "deleting" if info.deletion else "active",
+                    **({"task_id": info.deletion["task_id"]} if info.deletion else {}),
                 }
             )
         return _paginate(result, limit, page)
@@ -1133,7 +1190,7 @@ class LegacyAPIKeyManager:
         stored value is empty (no fingerprint to bind to).
         """
         account = self._accounts.get(account_id)
-        if account is None:
+        if account is None or account.deletion is not None:
             return None
         user = account.users.get(user_id)
         if user is None:
@@ -1145,7 +1202,16 @@ class LegacyAPIKeyManager:
 
     # ---- internal helpers ----
 
+    def ensure_account_active(self, account_id: str) -> None:
+        deletion = self.get_deletion(account_id)
+        if deletion is not None:
+            raise FailedPreconditionError(
+                "Account deletion is in progress",
+                details={"task_id": deletion["task_id"]},
+            )
+
     def _require_account(self, account_id: str) -> AccountInfo:
+        self.ensure_account_active(account_id)
         account = self._accounts.get(account_id)
         if account is None:
             raise NotFoundError(account_id, "account")
@@ -1366,6 +1432,8 @@ class LegacyAPIKeyManager:
                 if account_id not in accounts:
                     created_account_ids.add(account_id)
                 accounts[account_id] = {"created_at": info.created_at}
+                if info.deletion is not None:
+                    accounts[account_id]["deletion"] = dict(info.deletion)
             for account_id in delete_account_ids or set():
                 accounts.pop(account_id, None)
             await self._write_json(ACCOUNTS_PATH, data, lease_ref=lease)

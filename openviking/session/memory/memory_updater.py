@@ -1196,6 +1196,9 @@ class MemoryUpdater:
             new_full_content = MemoryFileUtils.write(
                 mf,
                 content_template=schema.content_template,
+                account_content_template_type=(
+                    schema.memory_type if schema._account_content_template else None
+                ),
                 extract_context=extract_context,
             )
             await viking_fs.write_file(

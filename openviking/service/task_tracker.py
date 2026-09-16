@@ -902,6 +902,17 @@ class TaskTracker:
 
         return await self._dispatcher.run(load)
 
+    def forget_account_tasks(self, account_id: str) -> None:
+        """Invalidate snapshots after executions settle and account storage is removed."""
+        with self._lock:
+            task_ids = [
+                task_id for task_id, task in self._tasks.items() if task.account_id == account_id
+            ]
+            for task_id in task_ids:
+                del self._tasks[task_id]
+        for task_id in task_ids:
+            self._work_index.clear_failure(task_id)
+
     async def delete_user_tasks(self, account_id: str, user_id: str) -> int:
         """Delete terminal task records for one user from storage and cache."""
         self._validate_owner(account_id, user_id)
@@ -1056,7 +1067,7 @@ class TaskTracker:
         task_type: Optional[str] = None,
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
         include_internal: bool = True,
@@ -1079,7 +1090,7 @@ class TaskTracker:
         task_type: Optional[str],
         status: Optional[str],
         resource_id: Optional[str],
-        limit: int,
+        limit: Optional[int],
         account_id: Optional[str],
         user_id: Optional[str],
         include_internal: bool,
@@ -1087,7 +1098,7 @@ class TaskTracker:
         if account_id is not None:
             self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
         source = self._cache_snapshot()
-        tasks = [self._copy(t) for t in source if self._matches_owner(t, account_id, user_id)]
+        tasks = [t for t in source if self._matches_owner(t, account_id, user_id)]
         if not include_internal:
             tasks = [t for t in tasks if t.meta.get("internal") is not True]
         if task_type:
@@ -1097,7 +1108,7 @@ class TaskTracker:
         if resource_id:
             tasks = [t for t in tasks if t.resource_id == resource_id]
         tasks.sort(key=lambda t: t.created_at, reverse=True)
-        return tasks[:limit]
+        return [self._copy(t) for t in tasks[:limit]]
 
     async def has_running(
         self,
@@ -1244,9 +1255,10 @@ class TaskTracker:
         return deepcopy(task) if task is not None else None
 
     def _cache_snapshot(self) -> List[TaskRecord]:
+        # Published records are replaced, never mutated. Internal readers may
+        # share them; public callers receive defensive copies via _copy().
         with self._lock:
-            tasks = list(self._tasks.values())
-        return [deepcopy(task) for task in tasks]
+            return list(self._tasks.values())
 
     def _publish_task(self, task: TaskRecord) -> None:
         published = deepcopy(task)

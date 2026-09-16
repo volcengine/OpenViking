@@ -1074,7 +1074,7 @@ export type DeleteAdminAccountByAccountIdResponses = {
     /**
      * Successful Response
      */
-    200: unknown;
+    202: unknown;
 };
 
 export type GetAdminAccountIdUsersData = {

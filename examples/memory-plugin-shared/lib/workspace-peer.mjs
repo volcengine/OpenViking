@@ -39,6 +39,69 @@ export const DEFAULT_PEER_SOURCE = "git";
 
 const VARIABLE_RE = /\{([a-z_]+)\}/g;
 
+/**
+ * Layers `resolvePluginPeerId` must not read off the merged settings, because
+ * each has a rank of its own: the environment ranks above every file, and
+ * ov.conf's harness block ranks below all of them.
+ */
+const PEER_LAYERS_RANKED_SEPARATELY = new Set(["env", "ov.conf"]);
+
+function trimmed(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * The peer some layer named, in the one order every harness follows.
+ *
+ * Both halves of a loader's configuration carry a peer: `resolveSettings()`
+ * reads the workspace file, the machine registry and ovcli.conf's `plugin`
+ * section, while the credential chain ends in ovcli.conf's `actor_peer_id`. The
+ * more specific layer wins, so a `peerId` written for this harness outranks the
+ * account-wide actor peer — codex resolved it that way and opencode and pi
+ * resolved it the other way round, which meant one ovcli.conf produced two
+ * different peers depending on which host read it.
+ *
+ * ov.conf's harness block, where this tuning used to live, stays at the bottom.
+ * It gets its own rank rather than riding the credential chain, which drops it
+ * entirely once the credentials are pinned to ovcli.conf.
+ *
+ * `OPENVIKING_PEER_ID` still outranks every file, except when the credentials
+ * are pinned to ovcli.conf, where the environment is meant not to apply at all.
+ * A host that names a peer itself (dsh's cordis patch) outranks all of them.
+ *
+ * Returns "" when nobody named one, which is what makes
+ * `resolveEffectivePeerId()` derive one from `peer.source`.
+ */
+export function resolvePluginPeerId({
+  settings = {},
+  configured = null,
+  sources = {},
+  credentials = {},
+  hostInput = "",
+  env = process.env,
+  credentialSource = credentials?.credentialSource || "",
+} = {}) {
+  const host = trimmed(hostInput);
+  if (host) return host;
+
+  if (credentialSource !== "ovcli") {
+    const fromEnv = trimmed(env?.OPENVIKING_PEER_ID);
+    if (fromEnv) return fromEnv;
+  }
+
+  if (configured?.has?.("peerId") && !PEER_LAYERS_RANKED_SEPARATELY.has(sources?.peerId)) {
+    const named = trimmed(settings?.peerId);
+    if (named) return named;
+  }
+
+  const fromCredentials = trimmed(credentials?.peerId);
+  if (fromCredentials) return fromCredentials;
+
+  if (sources?.peerId === "ov.conf") return trimmed(settings?.peerId);
+
+  return "";
+}
+
 export function deriveWorkspacePeerId(cwd) {
   return legacySanitize(cwd);
 }

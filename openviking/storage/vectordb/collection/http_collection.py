@@ -635,8 +635,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"SearchByScalar response: {response.text}")
-        if response.status_code != 200:
-            return SearchResult()
+        response.raise_for_status()
 
         data = json.loads(response.text).get("data", {})
         result = SearchResult()
@@ -675,8 +674,7 @@ class HttpCollection(ICollection):
             },
             timeout=DEFAULT_TIMEOUT,
         )
-        if response.status_code != 200:
-            return AggregateResult(agg={}, op=op, field=field)
+        response.raise_for_status()
         result = json.loads(response.text)
         data = result.get("data", {})
         return self._parse_aggregate_result(data, op, field)

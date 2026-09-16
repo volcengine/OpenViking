@@ -298,7 +298,7 @@ export async function probeStudioConnection(
 }
 
 function normalizeAccount(value: unknown): AdminAccount | null {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || value.status === 'deleting') {
     return null
   }
 
@@ -397,8 +397,8 @@ export async function createAdminAccount(
 export async function deleteAdminAccount(
   connection: AdminConnection,
   accountId: string,
-): Promise<void> {
-  await getOvResult<unknown>(
+): Promise<string> {
+  const result = await getOvResult<{ task_id: string }>(
     deleteAdminAccountByAccountId({
       client: createAdminClient(connection),
       path: {
@@ -406,6 +406,7 @@ export async function deleteAdminAccount(
       },
     }),
   )
+  return result.task_id
 }
 
 export async function createAdminUser(

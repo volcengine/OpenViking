@@ -571,26 +571,32 @@ async def test_reindex_prune_existing_file_uses_exact_lock(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reindex_prune_missing_target_keeps_tree_lock(monkeypatch):
+@pytest.mark.parametrize("locked", [False, True])
+async def test_reindex_prune_missing_target_does_not_lock(monkeypatch, locked):
+    """A missing prune target must not acquire a lock: doing so creates the directory."""
     from types import SimpleNamespace
 
     from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.storage.errors import ResourceBusyError
 
     calls = []
 
     class FakeAGFS:
         async def pathlock_acquire_exact(self, path):
-            raise AssertionError("missing target must retain tree lock scope")
+            raise AssertionError("missing target must not acquire a lock")
 
         async def pathlock_acquire_tree(self, path):
-            calls.append(("tree", path))
-            return {"id": "lease-1"}
+            raise AssertionError("missing target must not acquire a lock")
+
+        async def pathlock_is_locked(self, path):
+            calls.append(("is_locked", path))
+            return locked
 
         async def pathlock_as_borrowed(self, lease):
-            return lease
+            raise AssertionError("no lease to borrow")
 
         async def pathlock_release(self, lease):
-            calls.append(("release", lease["id"]))
+            raise AssertionError("no lease to release")
 
     class FakeFS:
         _async_agfs = FakeAGFS()
@@ -619,19 +625,19 @@ async def test_reindex_prune_missing_target_keeps_tree_lock(monkeypatch):
         role=Role.ROOT,
     )
 
-    result = await executor._run(
+    run = executor._run(
         uri="viking://resources/missing",
         object_type="resource",
         mode="prune_orphans",
         dry_run=True,
         ctx=ctx,
     )
-
-    assert result["status"] == "completed"
-    assert calls == [
-        ("tree", "/local/default/resources/missing"),
-        ("release", "lease-1"),
-    ]
+    if locked:
+        with pytest.raises(ResourceBusyError):
+            await run
+    else:
+        assert (await run)["status"] == "completed"
+    assert calls == [("is_locked", "/local/default/resources/missing")]
 
 
 @pytest.mark.asyncio
@@ -1632,12 +1638,15 @@ async def test_reindex_executor_infers_user_namespace_root():
 
 
 @pytest.mark.asyncio
-async def test_reindex_executor_rejects_deprecated_agent_namespace_root():
+async def test_reindex_executor_infers_shared_agent_content():
     from openviking.service.reindex_executor import ReindexExecutor
 
     service = ReindexExecutor()
 
-    with pytest.raises(OpenVikingError, match="no longer supported"):
+    assert service._infer_target_type("viking://agent/skills") == "skill_namespace"
+    assert service._infer_target_type("viking://agent/skills/demo") == "skill"
+    assert service._infer_target_type("viking://agent/workflows/daily.md") == "resource"
+    with pytest.raises(OpenVikingError, match="Unsupported reindex URI"):
         service._infer_target_type("viking://agent/")
 
 

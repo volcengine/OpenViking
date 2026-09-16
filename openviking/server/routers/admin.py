@@ -42,9 +42,15 @@ from openviking.service.task_store import (
 from openviking.service.task_tracker import (
     get_task_tracker,
 )
+from openviking.session.memory.account_templates import (
+    EDITABLE_MEMORY_TEMPLATE_FIELDS,
+    default_memory_template,
+    memory_template_result,
+    read_account_memory_template,
+    update_account_memory_template,
+)
 from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -185,6 +191,7 @@ async def _check_account_exists(
     accounts = manager.get_accounts()
     if not any(item.get("account_id") == account_id for item in accounts):
         raise NotFoundError(account_id, "account")
+    manager.ensure_account_active(account_id)
     if refresh_scope is not None and not watcher_running:
         await manager.refresh_account_users_from_store(refresh_scope)
     return manager
@@ -360,7 +367,7 @@ async def migrate_legacy_data(
     body: MigrateLegacyDataRequest | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Preflight and enqueue legacy agent/session data migration or cleanup."""
+    """Preflight and enqueue legacy session data migration or cleanup."""
     manager = _get_api_key_manager(request)
     service = get_service()
     if service.viking_fs is None:
@@ -403,37 +410,19 @@ async def migrate_legacy_data(
     return Response(status="ok", result={"task_id": task.task_id})
 
 
-@router.delete("/accounts/{account_id}")
+@router.delete("/accounts/{account_id}", status_code=202)
 @require_auth_root
 async def delete_account(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Delete an account and cascade-clean its storage (AGFS + VectorDB)."""
-    manager = _get_api_key_manager(request)
-
-    # Cascade: remove AGFS data for the account.
-    # Use the raw AGFS path to bypass the VikingFS namespace guard
-    # (viking://user is a protected namespace root, not a real directory).
-    viking_fs = get_viking_fs()
-    try:
-        await viking_fs._async_agfs.rm(f"/local/{account_id}", recursive=True)
-    except Exception as e:
-        logger.warning(f"AGFS cleanup for account {account_id}: {e}")
-
-    # Cascade: remove VectorDB records for the account
-    try:
-        storage = viking_fs._get_vector_store()
-        if storage:
-            deleted = await storage.delete_account_data(account_id, ctx=ctx)
-            logger.info(f"VectorDB cascade delete for account {account_id}: {deleted} records")
-    except Exception as e:
-        logger.warning(f"VectorDB cleanup for account {account_id}: {e}")
-
-    # Finally delete the account metadata
-    await manager.delete_account(account_id)
-    return Response(status="ok", result={"deleted": True})
+    """Revoke an account and submit durable cleanup of its data."""
+    deletion_service = request.app.state.deletion_service
+    if deletion_service is None:
+        raise FailedPreconditionError("Deletion service is not initialized.")
+    result = await deletion_service.delete(account_id, actor=ctx)
+    return Response(status="ok", result=result)
 
 
 @router.get("/accounts/{account_id}/settings")
@@ -474,6 +463,113 @@ async def patch_account_settings(
     return Response(
         status="ok",
         result=await _account_settings_result(account_id, settings),
+    )
+
+
+# ---- Account memory templates ----
+
+
+async def _memory_template_service(request: Request, ctx: RequestContext, account_id: str):
+    _check_account_access(ctx, account_id)
+    await _check_account_exists(request, account_id)
+    service = get_service()
+    if service.viking_fs is None:
+        raise FailedPreconditionError("OpenViking service is not initialized.")
+    return service
+
+
+@router.get("/accounts/{account_id}/memory-templates")
+@require_auth_root_or_admin
+async def list_memory_templates(
+    request: Request,
+    account_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List full defaults and account overrides for the six editable memory templates."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    names = list(EDITABLE_MEMORY_TEMPLATE_FIELDS)
+    templates = await asyncio.gather(
+        *(read_account_memory_template(service.viking_fs, account_id, name) for name in names)
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "templates": [
+                memory_template_result(registry, template, name)
+                for name, template in zip(names, templates, strict=True)
+            ],
+        },
+    )
+
+
+@router.get("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def get_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Read one template's full defaults and effective account configuration."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    default_memory_template(registry, memory_type)
+    config = await read_account_memory_template(service.viking_fs, account_id, memory_type)
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
+    )
+
+
+@router.put("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def put_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    body: dict = Body(...),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Fill omitted values from deployment defaults and publish a complete YAML template."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    config = await update_account_memory_template(
+        service.viking_fs, account_id, memory_type, body, registry
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
+    )
+
+
+@router.delete("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def reset_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Remove one template override without rewriting existing memories."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    config = await update_account_memory_template(
+        service.viking_fs, account_id, memory_type, None, registry
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
     )
 
 
@@ -617,10 +713,10 @@ async def remove_user(
 ):
     """Revoke a user and start durable cleanup of their owned data."""
     _check_account_access(ctx, account_id)
-    deletion_service = request.app.state.user_deletion_service
+    deletion_service = request.app.state.deletion_service
     if deletion_service is None:
-        raise FailedPreconditionError("User deletion service is not initialized.")
-    result = await deletion_service.delete_user(account_id, user_id, actor=ctx)
+        raise FailedPreconditionError("Deletion service is not initialized.")
+    result = await deletion_service.delete(account_id, user_id, actor=ctx)
     return Response(status="ok", result=result)
 
 

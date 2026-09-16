@@ -23,7 +23,7 @@ from openviking.resource.git_watch_auth import (
     is_git_http_auth_state,
 )
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
-from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -79,7 +79,7 @@ class WatchScheduler:
         self._running = False
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
-        self._execution_tasks: Set[asyncio.Task[None]] = set()
+        self._execution_tasks: Dict[asyncio.Task, WatchTask] = {}
         self._lock = asyncio.Lock()
 
     @property
@@ -165,12 +165,35 @@ class WatchScheduler:
             logger.info(f"[WatchScheduler] Task {task_id} is already executing, skipping")
             return False
 
+        execution = asyncio.current_task()
+        self._execution_tasks[execution] = task
         try:
             async with self._semaphore:
                 await self._execute_task(task)
             return True
         finally:
+            self._execution_tasks.pop(execution, None)
             await asyncio.shield(self._discard_executing(task_id))
+
+    async def delete_tasks(self, account_id: str, user_id: str | None = None) -> None:
+        """Remove an identity's watches and settle their current executions."""
+        manager = self._watch_manager
+        if manager is None:
+            return
+        actor_user_id = user_id or "root"
+        for watch in await manager.get_all_tasks(account_id, actor_user_id, Role.ROOT):
+            if watch.account_id == account_id and (user_id is None or watch.user_id == user_id):
+                await manager.delete_task(watch.task_id, account_id, actor_user_id, Role.ROOT)
+
+        executions = [
+            execution
+            for execution, watch in self._execution_tasks.items()
+            if watch.account_id == account_id and (user_id is None or watch.user_id == user_id)
+        ]
+        for execution in executions:
+            execution.cancel()
+        if executions:
+            await asyncio.gather(*executions, return_exceptions=True)
 
     async def _run_scheduler(self) -> None:
         """Background task loop that periodically checks and executes due tasks.
@@ -234,11 +257,11 @@ class WatchScheduler:
 
         for due_task in tasks_to_run:
             execution = asyncio.create_task(run_one(due_task))
-            self._execution_tasks.add(execution)
+            self._execution_tasks[execution] = due_task
             execution.add_done_callback(self._on_execution_done)
 
     def _on_execution_done(self, task: asyncio.Task[None]) -> None:
-        self._execution_tasks.discard(task)
+        self._execution_tasks.pop(task, None)
         if task.cancelled():
             return
         error = task.exception()

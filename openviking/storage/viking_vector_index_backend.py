@@ -17,6 +17,7 @@ from openviking.core.namespace import (
     visible_roots,
 )
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
     ACL_MODE_FIELD,
@@ -151,7 +152,9 @@ class _AsyncVectorAdapter:
         self._adapter = adapter
 
     async def call(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
-        return await asyncio.to_thread(getattr(self._adapter, method_name), *args, **kwargs)
+        return await run_to_completion(
+            lambda: asyncio.to_thread(getattr(self._adapter, method_name), *args, **kwargs)
+        )
 
     async def run(self, func: Any, /, *args: Any, **kwargs: Any) -> Any:
         return await asyncio.to_thread(func, *args, **kwargs)

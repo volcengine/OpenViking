@@ -209,7 +209,13 @@ and appends each new user/assistant turn to the OV session for this codex
 State is updated:
 `{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`.
 
-After a successful append, Stop reads session meta and commits when
+The transcript and persisted cursor own retries. Failed messages are not also
+put in the shared pending queue: replaying both sources would duplicate them.
+A partial append advances only past confirmed messages; subsequent hooks or
+the SessionStart sweep retry the remaining tail. The transcript must remain
+available until that catch-up succeeds.
+
+After a complete append, Stop reads session meta and commits when
 `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 20000).
 The threshold commit passes
 `keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default 10) so

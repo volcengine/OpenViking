@@ -521,12 +521,9 @@ class OpenVikingService:
                 allow_create=True,
             )
             # Auth state is initialized by the HTTP server after the core service.
-            # Register the durable queue now so task tracking can rebuild its work;
-            # the user-deletion service binds the handler once auth is ready.
-            self._queue_manager.get_queue(
-                self._queue_manager.USER_DELETION,
-                allow_create=True,
-            )
+            # Register durable cleanup work before restoring tracked tasks;
+            # the deletion service binds consumers once auth is ready.
+            self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
             restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
             await self._external_task_service.restore_tasks(restored_tasks)
 

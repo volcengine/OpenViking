@@ -57,3 +57,34 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
     )
 
     assert pathlock.release_calls == []
+
+
+@pytest.mark.asyncio
+async def test_missing_root_is_acked_before_lock_scope_is_resolved(monkeypatch):
+    """Resolving the lock for a deleted root would recreate it to hold lock metadata."""
+    processor = SemanticProcessor()
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeVikingFS(),
+    )
+
+    async def fail_resolve(*args, **kwargs):
+        raise AssertionError("lock scope must not be resolved for a missing root")
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        fail_resolve,
+    )
+
+    msg = SemanticMsg(
+        uri="viking://resources/deleted-parent",
+        context_type="resource",
+        recursive=False,
+        account_id="default",
+        user_id="alice",
+        changes={"deleted": ["viking://resources/deleted-parent/a.md"]},
+        generation_trigger="content_delete",
+    )
+    result = await processor.on_dequeue(msg.to_dict())
+    assert result.success

@@ -29,6 +29,8 @@ be a real package. Linking a source checkout (`dsh plugin --profile web add
 ./examples/dsh-memory-plugin`) only works when that checkout has its own
 `node_modules`, because Node resolves the bundle's dsh peers from the source
 tree's realpath rather than from the profile.
+It also needs `node examples/memory-plugin-shared/sync.mjs` run first: the
+`shared/` modules the bundle imports are generated, not committed.
 
 ## Requirements
 

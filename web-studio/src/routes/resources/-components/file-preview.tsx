@@ -228,7 +228,9 @@ function directoryLevelPreview(
 }
 
 function useDirectoryPreview(file: VikingFsEntry | null) {
-  const enabled = Boolean(file?.isDir)
+  const enabled = Boolean(
+    file?.isDir && normalizeDirUri(file.uri) !== 'viking://',
+  )
   const abstractQuery = useQuery({
     enabled,
     queryKey: ['viking-directory-sidecar', file?.uri, 'abstract'],

@@ -914,9 +914,9 @@ const workspace = {
     },
     toast: {
       accountCreated: 'Account created',
-      accountDeleted: '{{account}} deleted',
-      accountDeletedRecoveryFailed:
-        'The account was deleted, but the remaining account list could not be loaded: {{error}}',
+      accountDeletionStarted: '{{account}} disabled. Cleanup task: {{taskId}}',
+      accountDeletionRecoveryFailed:
+        'Account cleanup was submitted, but the remaining account list could not be loaded: {{error}}',
       connectionSaved: 'Connection saved',
       copyFailed: 'Copy failed',
       copied: 'Copied',

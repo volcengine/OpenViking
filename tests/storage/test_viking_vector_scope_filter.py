@@ -103,7 +103,7 @@ def test_all_targets_may_be_under_different_visible_roots():
     targets = [
         "viking://resources/wiki/physics",
         "viking://user/alice/resources/private-notes",
-        "viking://agent/skills/research",
+        "viking://agent/tools/search",
     ]
 
     result = _build(ctx, targets)
@@ -116,7 +116,7 @@ def test_all_targets_may_be_under_different_visible_roots():
                 [
                     PathScope("uri", "viking://resources/wiki/physics", depth=-1),
                     PathScope("uri", "viking://user/alice/resources/private-notes", depth=-1),
-                    PathScope("uri", "viking://agent/skills/research", depth=-1),
+                    PathScope("uri", "viking://agent/tools/search", depth=-1),
                 ]
             ),
         ]
@@ -160,7 +160,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
         {
             **legacy_mode,
             "id": "legacy-shared",
-            "uri": "viking://resources/legacy.md",
+            "uri": "viking://agent/workflows/daily.md",
             "account_id": "acct",
             "context_type": "resource",
         },
@@ -305,7 +305,7 @@ def test_segment_prefix_and_visible_root_ancestor_do_not_elide_tenant_filter():
     ctx = _ctx()
 
     segment_prefix = _build(ctx, ["viking://resources-other/wiki"])
-    ancestor = _build(ctx, ["viking://agent"])
+    ancestor = _build(ctx, ["viking://user"])
 
     assert segment_prefix == And(
         [
@@ -318,7 +318,7 @@ def test_segment_prefix_and_visible_root_ancestor_do_not_elide_tenant_filter():
         [
             Eq("context_type", "resource"),
             _tenant_filter(ctx),
-            Or([PathScope("uri", "viking://agent", depth=-1)]),
+            Or([PathScope("uri", "viking://user", depth=-1)]),
         ]
     )
 

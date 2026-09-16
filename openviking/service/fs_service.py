@@ -394,6 +394,11 @@ class FSService:
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
         result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
+        # A refresh on a parent that no longer exists would lock its sidecar
+        # paths and thereby recreate the deleted directory. Nothing to
+        # summarize there; skip it.
+        if refresh_parent_uri and not await viking_fs.exists(refresh_parent_uri, ctx=ctx):
+            refresh_parent_uri = None
         queue_status = None
         refresh_action: Optional[FreshnessAction] = None
         request_registered = False
@@ -1174,9 +1179,7 @@ class FSService:
         ctx: RequestContext,
         acl_mode: Optional[AclMode] = None,
     ) -> Dict[str, Any]:
-        return await self._ensure_initialized().set_acl(
-            uri, entries, ctx=ctx, acl_mode=acl_mode
-        )
+        return await self._ensure_initialized().set_acl(uri, entries, ctx=ctx, acl_mode=acl_mode)
 
     async def grant_acl(
         self, uri: str, principal: str, level: str, ctx: RequestContext

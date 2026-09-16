@@ -13,24 +13,36 @@
  * The CC session_id is preserved verbatim so the OV id is human-readable and
  * the parent/subagent lineage is visible at a glance.
  *
- * Works with endpoints in openviking/server/routers/sessions.py:
- *   - POST   /api/v1/sessions/{id}/messages           (auto_create=true by default)
- *   - POST   /api/v1/sessions/{id}/commit
- *   - GET    /api/v1/sessions/{id}?auto_create=true
- *   - GET    /api/v1/sessions/{id}/context?token_budget=N
+ * Everything past that derivation is the shared hook runtime under the names
+ * these scripts already call it by.
  */
 
+import {
+  addAgentMessage,
+  commitAgentSession,
+  enqueueAgentPending,
+  getAgentSession,
+  getAgentSessionContext,
+  makeAgentFetchJSON,
+} from "../shared/agent-hook-runtime.mjs";
+import { isRetryableFailure } from "../shared/retryable.mjs";
 import {
   deriveHarnessSessionId,
   isBypassed,
 } from "../shared/session-model.mjs";
-import { isRetryableFailure as isSharedRetryableFailure } from "../shared/retryable.mjs";
 
 /**
  * Check whether a CC session_id or cwd matches any bypass pattern.
  * Also honours OPENVIKING_BYPASS_SESSION env var (via cfg.bypassSession).
  */
-export { isBypassed };
+export { isBypassed, isRetryableFailure };
+
+export {
+  addAgentMessage as addMessage,
+  enqueueAgentPending as enqueuePendingDirectly,
+  getAgentSession as getSession,
+  getAgentSessionContext as getSessionContext,
+};
 
 /**
  * Derive a stable OV session ID from a CC session_id.
@@ -43,134 +55,23 @@ export function deriveOvSessionId(ccSessionId, suffix = "") {
   return deriveHarnessSessionId("cc-", ccSessionId, suffix);
 }
 
-function responseTraceId(body) {
-  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
-}
-
 /**
  * Build a fetchJSON closure tied to a given config. Callers pass their own cfg
  * (from scripts/config.mjs loadConfig()) so the timeout can vary per hook.
  */
 export function makeFetchJSON(cfg, timeoutKey = "timeoutMs") {
-  const defaultTimeoutMs = Math.max(1000, cfg[timeoutKey] || cfg.timeoutMs || 10000);
-  return async function fetchJSON(path, init = {}, options = {}) {
-    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || defaultTimeoutMs);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const headers = { "Content-Type": "application/json" };
-      if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-      if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
-      if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
-      const actorPeerId = options.actorPeerId ?? "";
-      if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
-      if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
-      const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-      const body = await res.json().catch(() => ({}));
-      const traceId = responseTraceId(body);
-      if (!res.ok || body.status === "error") {
-        return {
-          ok: false,
-          status: res.status,
-          error: body.error || { message: `HTTP ${res.status}` },
-          traceId,
-        };
-      }
-      return { ok: true, result: body.result ?? body, traceId };
-    } catch (err) {
-      return { ok: false, error: { message: err?.message || String(err) } };
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-}
-
-export function isRetryableFailure(res) {
-  return isSharedRetryableFailure(res);
-}
-
-function warnNonRetryable(operation, res) {
-  const status = res?.status || "unknown";
-  const msg = res?.error?.message || res?.error?.code || "";
-  process.stderr.write(
-    `[ov] ${operation} failed with non-retryable status ${status}; not enqueuing pending retry` +
-      (msg ? ` (${msg})` : "") +
-      "\n",
-  );
-}
-
-export async function enqueuePendingDirectly(type, sessionId, payload = {}) {
-  try {
-    const { enqueue } = await import("./pending-queue.mjs");
-    return await enqueue(type, sessionId, payload);
-  } catch {
-    return { ok: false };
-  }
-}
-
-/**
- * Add a message to the persistent OV session. The server auto-creates the
- * session on first message via /sessions/{id}/messages (see add_message in
- * openviking/server/routers/sessions.py).
- *
- * `payload` accepts either { role, content } (simple string) or
- * { role, parts: [...] } (parts-mode, for tier-1 structured capture).
- */
-export async function addMessage(fetchJSON, sessionId, payload) {
-  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    if (isRetryableFailure(res)) {
-      const queued = await enqueuePendingDirectly("addMessage", sessionId, payload);
-      if (queued.ok) res.pendingQueued = true;
-      else res.pendingEnqueueFailed = true;
-    } else {
-      warnNonRetryable("addMessage", res);
-    }
-  }
-  return res;
+  return makeAgentFetchJSON(cfg, process.cwd(), {
+    defaultTimeoutMs: cfg[timeoutKey] || cfg.timeoutMs || 10000,
+    // Every call on this stack names the peer it wants, so nothing here may put
+    // one on a request that asked for none.
+    getActorPeerId: () => "",
+  }).fetchJSON;
 }
 
 /**
  * Commit the persistent OV session (archive + background extract). Safe to
  * call repeatedly: if there are no pending messages the server is a no-op.
  */
-export async function commitSession(fetchJSON, sessionId, payload = {}) {
-  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
-    method: "POST",
-    body: JSON.stringify(payload || {}),
-  });
-  if (!res.ok) {
-    if (isRetryableFailure(res)) {
-      const queued = await enqueuePendingDirectly("commitSession", sessionId, payload || {});
-      if (queued.ok) res.pendingQueued = true;
-      else res.pendingEnqueueFailed = true;
-    } else {
-      warnNonRetryable("commitSession", res);
-    }
-  }
-  return res;
-}
-
-/**
- * Get assembled session context (includes latest_archive_overview).
- * Returns null when the session does not exist or the request fails.
- */
-export async function getSessionContext(fetchJSON, sessionId, tokenBudget = 128000) {
-  const res = await fetchJSON(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
-  );
-  return res.ok ? res.result : null;
-}
-
-/**
- * Fetch session meta. Returns null if the session does not exist (unless
- * autoCreate=true).
- */
-export async function getSession(fetchJSON, sessionId, { autoCreate = false } = {}) {
-  const q = autoCreate ? "?auto_create=true" : "";
-  const res = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}${q}`);
-  return res.ok ? res.result : null;
+export function commitSession(fetchJSON, sessionId, payload = {}) {
+  return commitAgentSession(fetchJSON, sessionId, undefined, payload);
 }

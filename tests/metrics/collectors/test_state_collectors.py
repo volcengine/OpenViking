@@ -3,6 +3,12 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from types import SimpleNamespace
+
+import pytest
+
 from openviking.metrics.collectors.observer_health import ObserverHealthCollector
 from openviking.metrics.collectors.queue import QueueCollector
 from openviking.metrics.collectors.task_tracker import TaskTrackerCollector
@@ -249,3 +255,111 @@ def test_vikingdb_collector_exports_health_and_count(monkeypatch):
     assert (
         'openviking_vikingdb_collection_vectors{collection="my_collection",valid="1"} 123.0' in text
     )
+
+
+def test_ragfs_collector_replaces_recovers_and_deletes(monkeypatch):
+    """Drive real registry writes through controlled native batches and faults; return None."""
+    from openviking.metrics.collectors.ragfs import RagfsMetricCollector
+    from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
+
+    records = []
+    service = SimpleNamespace(_agfs_client=SimpleNamespace(metrics=lambda: records))
+    collector = RagfsMetricCollector(data_source=RagfsMetricDataSource(service=service))
+    registry = MetricRegistry()
+    for count in (4, 2, 0):
+        records[:] = [
+            {
+                "name": "ragfs_calls_total",
+                "labels": {},
+                "type": "counter",
+                "value": count,
+                "scale": 1.0,
+            },
+            {"name": "ragfs_tasks", "labels": {}, "type": "gauge", "value": float(count)},
+            {
+                "name": "ragfs_latency_seconds",
+                "labels": {},
+                "type": "histogram",
+                "bucket_bounds": [1000],
+                "bucket_counts": [count, 0],
+                "count": count,
+                "sum": 123 * count,
+                "scale": 1e-9,
+            },
+        ]
+        collector.collect(registry)
+        assert dict(registry.iter_counters())["openviking_ragfs_calls_total"] == [((), count)]
+        assert registry.gauge_get("openviking_ragfs_tasks") == count
+        hist = list(registry.iter_histograms())[0]
+        assert hist[2] == pytest.approx((1e-6,))
+        assert hist[3][0][1:3] == ((count, 0), count)
+        assert hist[3][0][3] == pytest.approx(123e-9 * count)
+        assert "account_id" not in PrometheusExporter(registry=registry).render()
+    previous = PrometheusExporter(registry=registry).render()
+    records.append({"broken": True})
+    with pytest.raises(RuntimeError):
+        collector.collect(registry)
+    assert PrometheusExporter(registry=registry).render() == previous
+
+    def fail(*args, **kwargs):
+        """Raise an injected storage error for supplied write or delete arguments."""
+        raise RuntimeError("injected")
+
+    records[:] = [
+        {
+            "name": "ragfs_partial_total",
+            "labels": {},
+            "type": "counter",
+            "value": 9,
+            "scale": 1.0,
+        },
+        {"name": "ragfs_tasks", "labels": {}, "type": "gauge", "value": 1.0},
+    ]
+    with monkeypatch.context() as patch:
+        patch.setattr(registry, "set_gauge", fail)
+        with pytest.raises(RuntimeError, match="injected"):
+            collector.collect(registry)
+    assert dict(registry.iter_counters())["openviking_ragfs_partial_total"] == [((), 9)]
+    records.clear()
+    with monkeypatch.context() as patch:
+        patch.setattr(registry, "counter_delete_matching", fail)
+        with pytest.raises(RuntimeError, match="injected"):
+            collector.collect(registry)
+    collector.collect(registry)
+    assert list(registry.iter_counters()) == []
+    assert list(registry.iter_gauges()) == []
+    assert list(registry.iter_histograms()) == []
+    assert "openviking_ragfs_" not in PrometheusExporter(registry=registry).render()
+
+
+def test_ragfs_collector_serializes_whole_refresh():
+    """Hold a native read with Events and verify concurrent refresh cannot overwrite it."""
+    from openviking.metrics.collectors.ragfs import RagfsMetricCollector
+    from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
+
+    entered, release = Event(), Event()
+    calls = []
+
+    def metrics():
+        """Block one native read until released and return a gauge record."""
+        calls.append(1)
+        entered.set()
+        assert release.wait(5)
+        return [{"name": "ragfs_tasks", "labels": {}, "type": "gauge", "value": 3.0}]
+
+    collector = RagfsMetricCollector(
+        data_source=RagfsMetricDataSource(
+            service=SimpleNamespace(_agfs_client=SimpleNamespace(metrics=metrics))
+        )
+    )
+    registry = MetricRegistry()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(collector.collect, registry)
+        try:
+            assert entered.wait(5)
+            pool.submit(collector.collect, registry).result(timeout=2)
+            assert len(calls) == 1
+        finally:
+            release.set()
+        first.result(timeout=5)
+    assert registry.gauge_get("openviking_ragfs_tasks") == 3

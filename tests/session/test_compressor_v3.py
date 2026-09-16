@@ -48,6 +48,7 @@ from openviking.session.train import (
 )
 from openviking.session.train.components.session_commit import _case_spec_message_to_request
 from openviking.telemetry import OperationTelemetry, bind_telemetry
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -88,6 +89,26 @@ def _case_operation() -> ResolvedOperation:
 def test_factory_defaults_to_v3():
     compressor = create_session_compressor(vikingdb=None)
     assert isinstance(compressor, SessionCompressorV3)
+
+
+@pytest.mark.asyncio
+async def test_commit_extraction_propagates_template_conflict():
+    compressor = SessionCompressorV3(vikingdb=None, rollout_analyzer=SimpleNamespace())
+    conflict = ConflictError("Conflicting memory template snapshots; Re-extract before retrying")
+    compressor._extract_user_memories = AsyncMock(side_effect=conflict)
+    compressor._write_final_memory_diff = AsyncMock()
+
+    with pytest.raises(ConflictError) as raised:
+        await compressor.extract_long_term_memories(
+            messages=_messages(),
+            ctx=_ctx(),
+            allowed_memory_types={"profile"},
+            # The Session commit worker uses this mode: a conflict must reach it,
+            # not turn into an empty successful extraction or memory diff.
+            strict_extract_errors=True,
+        )
+    assert raised.value is conflict
+    compressor._write_final_memory_diff.assert_not_awaited()
 
 
 def test_factory_ignores_deprecated_memory_version():

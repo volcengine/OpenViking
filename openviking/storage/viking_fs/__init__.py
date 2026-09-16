@@ -155,7 +155,7 @@ class VikingFS(
             "vikingfs_bound_ctx", default=None
         )
         self._background_tasks: set = set()
-        self._user_deletion_guard: Optional[Callable[[str, str], bool]] = None
+        self._deletion_guard: Optional[Callable[[str, str], bool]] = None
 
 
 VikingFS.__module__ = __name__

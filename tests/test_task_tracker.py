@@ -347,9 +347,20 @@ async def test_list_tasks_filters_by_owner(tracker: TaskTracker):
 
 async def test_list_limit(tracker: TaskTracker):
     for i in range(10):
-        await tracker.create("session_commit", resource_id=f"s{i}", **_owner_kwargs())
+        await tracker.create(
+            "session_commit",
+            resource_id=f"s{i}",
+            meta={"nested": {"values": [i]}},
+            **_owner_kwargs(),
+        )
     tasks = await tracker.list_tasks(limit=3)
-    assert len(tasks) == 3
+    assert [task.resource_id for task in tasks] == ["s9", "s8", "s7"]
+    tasks[0].meta["nested"]["values"].append("changed")
+    await tracker.start(tasks[0].task_id)
+    current = await tracker.list_tasks(limit=1)
+    assert current[0].meta["nested"]["values"] == [9]
+    assert current[0].status == TaskStatus.RUNNING
+    assert tasks[0].status == TaskStatus.PENDING
 
 
 async def test_list_can_hide_internal_tasks_before_limit(tracker: TaskTracker):

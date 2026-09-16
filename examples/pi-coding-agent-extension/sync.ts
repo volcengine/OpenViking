@@ -55,7 +55,7 @@ export class SyncManager {
   async replayPending(): Promise<void> {
     if (!this.client.connected) return;
     await replayPending(
-      (path: string, init?: any) => this.client.fetchJSON(path, init, 10000),
+      (path: string, init?: any) => this.client.fetchJSON(path, init),
       (stage: string, data: unknown) => this.logger.log(stage, data),
     );
   }
@@ -143,7 +143,7 @@ export class SyncManager {
     }
   }
 
-  private fetchJSON = (path: string, init?: any) => this.client.fetchJSON(path, init, 10000);
+  private fetchJSON = (path: string, init?: any) => this.client.fetchJSON(path, init);
 
   async syncBranch(branch: any[]): Promise<SyncBranchResult> {
     if (!this.ovSessionId) return { added: 0, tokens: 0, allDelivered: true };

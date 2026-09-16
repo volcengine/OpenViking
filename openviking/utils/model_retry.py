@@ -89,6 +89,13 @@ INPUT_TOO_LARGE_PATTERNS = (
     "exceeds the max input length",
     "is too large to process",
     "expected maxlength",
+    # SiliconFlow reports an oversized embedding input as a generic 400 whose
+    # payload carries code 20015 ("The parameter is invalid") with no size
+    # keyword in the message. Match the structured code field (both the dict
+    # repr and the JSON string form) so the message is skipped instead of
+    # arming the circuit breaker for the whole queue (#4676).
+    "code': 20015",
+    'code": 20015',
 )
 
 PERMANENT_API_ERROR_PATTERNS = ("400",)

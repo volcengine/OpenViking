@@ -874,9 +874,9 @@ const workspace = {
     },
     toast: {
       accountCreated: '账号已创建',
-      accountDeleted: '{{account}} 已删除',
-      accountDeletedRecoveryFailed:
-        '账号已删除，但无法加载剩余账号列表：{{error}}',
+      accountDeletionStarted: '{{account}} 已停用，后台清理任务：{{taskId}}',
+      accountDeletionRecoveryFailed:
+        '账号清理已提交，但无法加载剩余账号列表：{{error}}',
       connectionSaved: '连接已保存',
       copyFailed: '复制失败',
       copied: '已复制',

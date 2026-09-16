@@ -486,7 +486,7 @@ pub struct PathLockManager {
     config: PathLockConfig,
     metrics: Arc<RwLock<LockMetrics>>,
     waiting_lock_count: AtomicUsize,
-    wait_duration_ms: AtomicU64,
+    wait_duration_ns: AtomicU64,
 }
 
 impl PathLockManager {
@@ -588,7 +588,7 @@ impl PathLockManager {
             config,
             metrics,
             waiting_lock_count: AtomicUsize::new(0),
-            wait_duration_ms: AtomicU64::new(0),
+            wait_duration_ns: AtomicU64::new(0),
         }
     }
 
@@ -984,8 +984,12 @@ impl PathLockManager {
 
         match result {
             Ok(owned) => {
-                self.wait_duration_ms
-                    .fetch_add(start.elapsed().as_millis() as u64, AtomicOrdering::Relaxed);
+                let elapsed_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                let _ = self.wait_duration_ns.fetch_update(
+                    AtomicOrdering::Relaxed,
+                    AtomicOrdering::Relaxed,
+                    |total| Some(total.saturating_add(elapsed_ns)),
+                );
                 if waiting.0.is_some() {
                     info!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, covered_paths = ?owned.lease.covered_paths, wait_ms = start.elapsed().as_millis() as u64, "pathlock acquire batch succeeded after waiting");
                 }
@@ -1282,7 +1286,9 @@ impl PathLockManager {
 
         let mut metrics = self.metrics.write().await;
         metrics.descendant_scan_count += 1;
-        metrics.descendant_scan_duration_ms += scan_start.elapsed().as_millis() as u64;
+        metrics.descendant_scan_duration_ns = metrics
+            .descendant_scan_duration_ns
+            .saturating_add(u64::try_from(scan_start.elapsed().as_nanos()).unwrap_or(u64::MAX));
         drop(metrics);
         debug!(path = %path, descendant_count = descendants.len(), scan_ms = scan_start.elapsed().as_millis() as u64, "scanned descendant pathlock tokens");
 
@@ -2109,7 +2115,7 @@ impl PathLockManager {
         let mut metrics = self.metrics.read().await.clone();
         metrics.active_lock_count = self.lease_registry.active_count();
         metrics.waiting_lock_count = self.waiting_lock_count.load(AtomicOrdering::Relaxed);
-        metrics.wait_duration_ms = self.wait_duration_ms.load(AtomicOrdering::Relaxed);
+        metrics.wait_duration_ns = self.wait_duration_ns.load(AtomicOrdering::Relaxed);
         metrics
     }
 }

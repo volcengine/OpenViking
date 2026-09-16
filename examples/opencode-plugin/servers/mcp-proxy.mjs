@@ -8,15 +8,12 @@
  * requests to the server's /mcp endpoint, and keeps stdout protocol-clean.
  */
 
-import { homedir } from "node:os"
-import { join, resolve as resolvePath } from "node:path"
+import { resolve as resolvePath } from "node:path"
 import { fileURLToPath } from "node:url"
 import { loadConfig } from "../lib/config.mjs"
 import { createLogger } from "../lib/shared/debug-log.mjs"
 import { buildMcpProxyConfig, resolveMcpActorPeerId } from "../lib/shared/mcp-proxy-config.mjs"
 import { createOpenVikingMcpProxy } from "../lib/shared/mcp-proxy-core.mjs"
-
-export { createOpenVikingMcpProxy } from "../lib/shared/mcp-proxy-core.mjs"
 
 function readProxyConfig() {
   const cfg = loadConfig(resolvePath(fileURLToPath(import.meta.url), "..", ".."))
@@ -26,6 +23,7 @@ function readProxyConfig() {
     apiKey: cfg.apiKey,
     account: cfg.account,
     user: cfg.user,
+    sendIdentityHeaders: cfg.sendIdentityHeaders,
     peerId: resolveMcpActorPeerId(cfg),
     userAgent: cfg.userAgent,
     timeoutMs: cfg.timeoutMs,
@@ -33,11 +31,7 @@ function readProxyConfig() {
     debugLogPath: cfg.debugLogPath,
     credentialSource: cfg.credentialSource,
     credentialPath: cfg.credentialPath || cfg.configPath,
-    watchedPaths: [
-      cfg.credentialPath,
-      cfg.configPath,
-      join(homedir(), ".config", "opencode", "openviking-config.json"),
-    ],
+    watchedPaths: [cfg.credentialPath, cfg.configPath],
   })
 }
 
