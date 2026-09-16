@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useBlocker } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { isOvClientError } from '#/lib/ov-client'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -234,20 +235,32 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
   async function submit() {
     if (busy) return
     setError(null)
-    if (!submission.current && !validate()) return
+    const restoredKey = submission.current ? null : recoverKey
+    setBusy(true)
     try {
-      if (recoverKey && !submission.current) {
-        const submittedAt = Number(recoverKey.split(':')[0])
-        if (Number.isFinite(submittedAt) && Date.now() - submittedAt > 86400000)
+      if (restoredKey) {
+        try {
+          const task = await lookupSubmission(restoredKey)
+          await finish(task)
+          return
+        } catch (cause) {
+          if (!isOvClientError(cause) || cause.code !== 'NOT_FOUND') throw cause
+        }
+        if (!mounted.current) return
+        const submittedAt = Number(restoredKey.split(':')[0])
+        if (
+          !Number.isFinite(submittedAt) ||
+          Date.now() - submittedAt > 86400000
+        )
           throw new Error(t('expiredSubmission'))
       }
+      if (!submission.current && !validate()) return
       const body = submission.current?.request || request()
       if (!submission.current)
         submission.current = {
           key: recoverKey || `${Date.now()}:${crypto.randomUUID()}`,
           request: body,
         }
-      setBusy(true)
       const key = submission.current.key
       try {
         sessionStorage.setItem(submissionKey, key)
@@ -259,7 +272,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
     } catch (cause) {
       if (mounted.current) {
         const definite = isRejectedCompileSubmission(cause)
-        if (definite) {
+        if (definite && !restoredKey) {
           submission.current = null
           setRecoverKey(null)
           try {
@@ -268,6 +281,9 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
             /* optional */
           }
         }
+        // After reload the original args are unavailable. A rejection of the
+        // reconstructed request does not prove the original was never created.
+        if (restoredKey) submission.current = null
         setError(cause)
         setUncertain(!definite && !!submission.current)
       }
