@@ -10,7 +10,7 @@
 
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { evaluateAgentUriGuard } from "./shared/agent-uri-guard.mjs";
+import { evaluateUriGuard } from "./shared/uri-guard.mjs";
 
 function readInput() {
   try {
@@ -24,7 +24,9 @@ function readInput() {
 export function evaluateKimicodeUriGuard(input = {}) {
   const toolName = input.tool_name ?? input.toolName ?? input.name ?? input.tool;
   const toolInput = input.tool_input ?? input.toolInput ?? input.input ?? {};
-  const decision = evaluateAgentUriGuard(toolName, toolInput);
+  const decision = evaluateUriGuard(toolName, toolInput, {
+    guarded: new Set(["read", "glob", "grep"]),
+  });
   if (!decision) return {};
   return {
     hookSpecificOutput: {

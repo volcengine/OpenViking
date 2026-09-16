@@ -2,7 +2,7 @@
 
 Thin Kimi Code CLI adapter for OpenViking long-term memory. Reuses `memory-plugin-shared` — no memory logic is duplicated.
 
-This follows the ZCode plugin layout ([PR #3678](https://github.com/volcengine/OpenViking/pull/3678)) but is **not** a rename. Kimi Code uses TOML `[[hooks]]`, `mcp.json`, `wire.jsonl` transcripts, and extra lifecycle events that ZCode does not have. See [DESIGN.md](./DESIGN.md).
+This follows the ZCode plugin layout ([PR #3678](https://github.com/volcengine/OpenViking/pull/3678)) but is **not** a rename. Kimi Code has its own native plugin manifest, hook lifecycle, MCP declarations, and `wire.jsonl` transcripts. See [DESIGN.md](./DESIGN.md).
 
 > **Requires an OpenViking server with `viking://~` home-alias support.**
 
@@ -20,7 +20,7 @@ This follows the ZCode plugin layout ([PR #3678](https://github.com/volcengine/O
 bash examples/memory-plugin-shared/install.sh --harness kimicode
 ```
 
-The installer detects `kimi` on `PATH` or `~/.kimi-code/`, copies the runtime to `~/.openviking/agent-integrations/kimicode/`, merges an OpenViking `[[hooks]]` block into `~/.kimi-code/config.toml`, and upserts `mcpServers.openviking` in `~/.kimi-code/mcp.json`. Existing hooks (for example Herdr or Orca) are left in place.
+The installer registers this directory through `kimi plugin install`. Kimi then reads `kimi.plugin.json` and owns the hook and MCP lifecycle. Existing `config.toml` and `mcp.json` entries are not modified.
 
 Alternatively, from a Kimi Code session:
 

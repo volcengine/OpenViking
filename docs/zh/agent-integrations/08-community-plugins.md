@@ -53,8 +53,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 对应 [#3442](https://github.com/volcengine/OpenViking/issues/3442) 的 Kimicode 半边。布局对齐 ZCode 适配器（[PR #3678](https://github.com/volcengine/OpenViking/pull/3678)），但映射的是 Kimi Code 自己的接口：
 
-- Hook 写在 `~/.kimi-code/config.toml` 的 `[[hooks]]`（不是 JSON `hooks.events`）。
-- MCP 写在 `~/.kimi-code/mcp.json`。
+- Hook 和 MCP 都声明在插件自己的 `kimi.plugin.json` manifest 中。
 - `UserPromptSubmit` 注入**纯文本**（JSON 包装会被当成上下文追加）。
 - `SessionStart` 是观察事件，profile 在第一次提问时注入。
 - 有 `SessionEnd`、`PreCompact`、`Interrupt`；捕获以 `session_index.jsonl` 指向的 `wire.jsonl` 为准。
@@ -66,7 +65,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
   --harness kimicode
 ```
 
-安装器识别 `kimi` 或 `~/.kimi-code/`，把运行时放到 `~/.openviking/agent-integrations/kimicode/`，合并 OpenViking hook 块时不会删掉 Herdr/Orca 的 hook。
+安装器通过 `kimi plugin install` 安装原生插件，不修改用户已有的 `config.toml` 或 `mcp.json`。
 
 细节见插件 [README](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimicode-memory-plugin/DESIGN.md)。
 

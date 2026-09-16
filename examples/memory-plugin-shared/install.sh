@@ -2116,7 +2116,11 @@ CLEAN_NODE
     info "$(t 'Removed ZCode OpenViking hooks and MCP config.' '已移除 ZCode OpenViking hooks 与 MCP 配置。')"
   fi
   if contains_harness kimicode; then
-    kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+    local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimi_bin
+    kimi_bin="$(command -v kimi || true)"
+    if [ -n "$kimi_bin" ]; then
+      "$kimi_bin" plugin remove openviking-memory >/dev/null 2>&1 || true
+    fi
     if [ -f "$kimi_home/config.toml" ]; then
       "$NODE_BIN" - "$kimi_home/config.toml" <<'CLEAN_TOML' 2>/dev/null || true
 const fs = require("node:fs");
@@ -2147,7 +2151,7 @@ if (owned) {
 CLEAN_MCP
     fi
     rm -rf "$OV_HOME/agent-integrations/kimicode"
-    info "$(t 'Removed Kimi Code OpenViking hooks and MCP config.' '已移除 Kimi Code OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed the native Kimi Code plugin and cleaned up legacy config entries.' '已移除 Kimi Code 原生插件，并清理旧配置项。')"
   fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
@@ -2243,15 +2247,24 @@ install_zcode() {
 
 install_kimicode() {
   heading "$(t 'Kimi Code CLI integration' 'Kimi Code CLI 集成')"
-  local root kimi_home
-  kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
-  root="$(assemble_agent_integration kimicode-memory-plugin kimicode)" || return 1
-  mkdir -p "$kimi_home"
-  "$NODE_BIN" "$root/scripts/merge-config.mjs" \
-    "$kimi_home/config.toml" "$kimi_home/mcp.json" "$root" "$NODE_BIN" \
-    || { warn "$(t 'Failed to merge Kimi Code config' 'Kimi Code 配置合并失败')"; return 1; }
-  info "$(t 'Kimi Code hooks installed:' 'Kimi Code hooks 已安装：') $kimi_home/config.toml"
-  info "$(t 'Kimi Code MCP installed:' 'Kimi Code MCP 已安装：') $kimi_home/mcp.json"
+  local plugin_dir kimi_bin
+  plugin_dir="$(plugin_dir_on_disk kimicode-memory-plugin)" || {
+    err "$(t 'Kimi Code plugin sources not found.' '未找到 Kimi Code 插件源码。')"
+    return 1
+  }
+  kimi_bin="$(command -v kimi || true)"
+  [ -n "$kimi_bin" ] || {
+    err "$(t 'kimi command not found.' '未找到 kimi 命令。')"
+    return 1
+  }
+  "$kimi_bin" plugin --help >/dev/null 2>&1 || {
+    err "$(t 'This Kimi Code version does not support native plugins; upgrade Kimi Code first.' '当前 Kimi Code 版本不支持原生插件，请先升级 Kimi Code。')"
+    return 1
+  }
+  "$kimi_bin" plugin install "$plugin_dir" \
+    || { warn "$(t 'Failed to install the native Kimi Code plugin' '原生 Kimi Code 插件安装失败')"; return 1; }
+  info "$(t 'Kimi Code native plugin installed:' 'Kimi Code 原生插件已安装：') openviking-memory"
+  info "$(t 'Run /reload or start a new session to activate its hooks and MCP.' '请运行 /reload 或新建会话以启用 hooks 和 MCP。')"
 }
 
 install_trae_variant() { # install_trae_variant <trae|trae-cn>
@@ -2599,20 +2612,16 @@ EOF
   fi
   if contains_harness kimicode; then
     kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
-    if grep -q "openviking kimicode integration" "$kimi_home/config.toml" 2>/dev/null \
-      && grep -q "kimicode-hook.mjs" "$kimi_home/config.toml" 2>/dev/null \
-      && grep -q "mcp-proxy.mjs" "$kimi_home/mcp.json" 2>/dev/null \
-      && [ -f "$OV_HOME/agent-integrations/kimicode/scripts/kimicode-hook.mjs" ] \
-      && [ -f "$OV_HOME/agent-integrations/kimicode/scripts/uri-guard.mjs" ]; then
-      if "$NODE_BIN" --check "$OV_HOME/agent-integrations/kimicode/scripts/kimicode-hook.mjs" \
-        && "$NODE_BIN" --check "$OV_HOME/agent-integrations/kimicode/scripts/uri-guard.mjs"; then
-        info "kimicode: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
+    if [ -f "$kimi_home/plugins/managed/openviking-memory/kimi.plugin.json" ]; then
+      if "$NODE_BIN" --check "$kimi_home/plugins/managed/openviking-memory/scripts/kimicode-hook.mjs" \
+        && "$NODE_BIN" --check "$kimi_home/plugins/managed/openviking-memory/scripts/uri-guard.mjs"; then
+        info "kimicode: $(t 'native plugin is installed' '原生插件已安装')"
       else
-        warn "kimicode: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+        warn "kimicode: $(t 'installed native plugin failed its smoke test' '已安装的原生插件 smoke test 失败')"
         ok=0; agent_fatal=1
       fi
     else
-      warn "kimicode: $(t 'OpenViking hook or MCP config is incomplete' 'OpenViking hook 或 MCP 配置不完整')"
+      warn "kimicode: $(t 'native plugin is not installed' '原生插件未安装')"
       ok=0; agent_fatal=1
     fi
   fi
@@ -2774,7 +2783,7 @@ if contains_harness cursor; then info "Cursor: Hooks + MCP + Rule + Skill"; fi
 if contains_harness trae; then info "TRAE: ~/.trae/hooks.json + MCP"; fi
 if contains_harness trae-cn; then info "TRAE CN: ~/.trae-cn/hooks.json + MCP"; fi
 if contains_harness zcode; then info "ZCode: ~/.zcode/cli/config.json (hooks + MCP)"; fi
-if contains_harness kimicode; then info "Kimi Code: ~/.kimi-code/config.toml (hooks) + ~/.kimi-code/mcp.json"; fi
+if contains_harness kimicode; then info "Kimi Code: native plugin openviking-memory"; fi
 if contains_harness opencode; then info "OpenCode: @openviking/opencode-plugin"; fi
 if contains_harness pi; then info "pi: ~/.pi/agent/extensions/openviking"; fi
 if contains_harness dsh; then info "DeepSeek Harness: $DSH_PACKAGE ($(t 'profile' '配置档') ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT})"; fi

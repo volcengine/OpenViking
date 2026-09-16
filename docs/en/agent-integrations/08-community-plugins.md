@@ -53,8 +53,7 @@ Source: [examples/kimicode-memory-plugin](https://github.com/volcengine/OpenViki
 
 Closes the Kimicode half of [#3442](https://github.com/volcengine/OpenViking/issues/3442). Layout follows the ZCode adapter ([PR #3678](https://github.com/volcengine/OpenViking/pull/3678)) but maps Kimi Code's own surface:
 
-- Hooks live in `~/.kimi-code/config.toml` as `[[hooks]]` (not JSON `hooks.events`).
-- MCP lives in `~/.kimi-code/mcp.json`.
+- Hooks and MCP are declared in the plugin's `kimi.plugin.json` manifest.
 - `UserPromptSubmit` injects **plain text** (JSON wrappers would be appended as context).
 - `SessionStart` is observation-only, so profile injection happens on the first prompt.
 - `SessionEnd`, `PreCompact`, and `Interrupt` exist; capture uses `wire.jsonl` via `session_index.jsonl`.
@@ -66,7 +65,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
   --harness kimicode
 ```
 
-The installer detects `kimi` or `~/.kimi-code/`, installs the runtime under `~/.openviking/agent-integrations/kimicode/`, and merges an OpenViking hook block without removing Herdr/Orca hooks.
+The installer runs `kimi plugin install` for the native plugin. It does not modify the user's `config.toml` or `mcp.json`.
 
 Details: plugin [README](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimicode-memory-plugin/DESIGN.md).
 

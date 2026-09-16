@@ -80,13 +80,76 @@ function uniq(values) {
 }
 
 /**
+ * Parse `OPENVIKING_EXTRA_HEADERS` into a plain string→string map.
+ *
+ * Some private deployments sit behind gateways that require custom headers
+ * (a tenant/vault name, a signed token, a region hint) on every request. The
+ * proxy has no other seam to inject those: the credential file's own
+ * `extra_headers` field is intentionally not exported to MCP callers (see
+ * `workspace-config.mjs` `FORBIDDEN_KEYS`), so this env-only escape hatch keeps
+ * that boundary while letting an operator unblock a strict upstream.
+ *
+ * The value is a JSON object; anything else is ignored with a stderr warning
+ * rather than crashing the proxy — a bad env var must not take down the whole
+ * memory tool surface. Reserved names (`Content-Type`, `Accept`,
+ * `MCP-Protocol-Version`, `Mcp-Session-Id`, `Authorization`) are dropped: they
+ * are set by the proxy itself and letting the env override them would break
+ * session negotiation or expose the wrong credential.
+ */
+const RESERVED_HEADER_NAMES = new Set([
+  "content-type",
+  "accept",
+  "mcp-protocol-version",
+  "mcp-session-id",
+  "authorization",
+]);
+
+export function parseExtraHeaders(raw, { onWarn = null } = {}) {
+  const source = String(raw || "").trim();
+  if (!source) return {};
+  const warn = (message) => {
+    if (typeof onWarn === "function") onWarn(message);
+    else process.stderr.write(`${message}\n`);
+  };
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch (err) {
+    warn(`OPENVIKING_EXTRA_HEADERS is not valid JSON; ignoring (${err.message})`);
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    warn("OPENVIKING_EXTRA_HEADERS must be a JSON object of string values; ignoring");
+    return {};
+  }
+  const out = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    const name = String(key || "").trim();
+    if (!name) continue;
+    if (RESERVED_HEADER_NAMES.has(name.toLowerCase())) {
+      warn(`OPENVIKING_EXTRA_HEADERS: ignoring reserved header "${name}"`);
+      continue;
+    }
+    if (value === null || value === undefined) continue;
+    if (typeof value === "object") {
+      warn(`OPENVIKING_EXTRA_HEADERS: header "${name}" must be a scalar; ignoring`);
+      continue;
+    }
+    out[name] = String(value);
+  }
+  return out;
+}
+
+/**
  * Shape a harness's loaded config into the object `createOpenVikingMcpProxy`
  * expects.
  *
  * `mcpUrl` wins over `baseUrl` when both are given, so a harness that lets the
  * user pin an explicit MCP URL keeps that behavior. `watchedPaths` are the
  * harness's own extra files; the shared defaults are appended and the result
- * deduplicated.
+ * deduplicated. `sendIdentityHeaders` carries the harness's resolved auth mode
+ * so an `api_key` server, which reads the identity out of the key and ignores
+ * the headers, never sees the operator's account and user on the wire.
  */
 export function buildMcpProxyConfig({
   baseUrl = "",
@@ -94,6 +157,7 @@ export function buildMcpProxyConfig({
   apiKey = "",
   account = "",
   user = "",
+  sendIdentityHeaders = false,
   peerId = "",
   userAgent = "",
   timeoutMs,
@@ -102,13 +166,18 @@ export function buildMcpProxyConfig({
   credentialSource = "auto",
   credentialPath = "",
   watchedPaths = [],
+  extraHeaders = null,
   env = process.env,
 } = {}) {
+  const resolvedExtraHeaders = extraHeaders && typeof extraHeaders === "object" && !Array.isArray(extraHeaders)
+    ? { ...extraHeaders }
+    : parseExtraHeaders(env.OPENVIKING_EXTRA_HEADERS);
   return {
     mcpUrl: mcpUrl || `${trimSlash(baseUrl)}/mcp`,
     apiKey: apiKey || "",
     account: account || "",
     user: user || "",
+    sendIdentityHeaders: sendIdentityHeaders === true,
     peerId: peerId || "",
     userAgent: userAgent || "",
     timeoutMs: Math.max(
@@ -120,5 +189,6 @@ export function buildMcpProxyConfig({
     credentialSource: credentialSource || "auto",
     credentialPath: credentialPath || "",
     watchedPaths: uniq([...watchedPaths, ...defaultCredentialPaths(env)]),
+    extraHeaders: resolvedExtraHeaders,
   };
 }

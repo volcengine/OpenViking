@@ -2,7 +2,7 @@
 
 Kimi Code CLI 的薄适配层，复用 `memory-plugin-shared`，不复制记忆逻辑。
 
-布局对齐 ZCode 插件（[PR #3678](https://github.com/volcengine/OpenViking/pull/3678)），但**不是**改名拷贝。Kimi Code 用 TOML `[[hooks]]`、`mcp.json`、`wire.jsonl` 会话日志，并且有 ZCode 没有的 `SessionEnd` / `PreCompact` / `Interrupt`。细节见 [DESIGN.md](./DESIGN.md)。
+布局对齐 ZCode 插件（[PR #3678](https://github.com/volcengine/OpenViking/pull/3678)），但**不是**改名拷贝。Kimi Code 使用自己的原生插件 manifest、hook 生命周期、MCP 声明和 `wire.jsonl` 会话日志，并且有 ZCode 没有的 `SessionEnd` / `PreCompact` / `Interrupt`。细节见 [DESIGN.md](./DESIGN.md)。
 
 > **需要支持 `viking://~` 主目录别名的 OpenViking 服务。**
 
@@ -20,7 +20,7 @@ Kimi Code CLI 的薄适配层，复用 `memory-plugin-shared`，不复制记忆�
 bash examples/memory-plugin-shared/install.sh --harness kimicode
 ```
 
-安装器识别 `kimi` 或 `~/.kimi-code/`，把运行时放到 `~/.openviking/agent-integrations/kimicode/`，把 OpenViking 的 `[[hooks]]` 块合并进 `~/.kimi-code/config.toml`，并写入 `~/.kimi-code/mcp.json` 的 `mcpServers.openviking`。已有 Herdr / Orca hook 不会被删掉。
+安装器通过 `kimi plugin install` 注册插件目录。之后由 Kimi 读取 `kimi.plugin.json` 并管理 hook 和 MCP 生命周期，不修改已有的 `config.toml` 与 `mcp.json` 配置。
 
 也可以在 Kimi Code 里：
 
