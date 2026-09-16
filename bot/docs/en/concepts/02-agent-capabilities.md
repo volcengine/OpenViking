@@ -40,7 +40,7 @@ A Skill may orchestrate several tools, but it does not receive additional permis
 | OpenViking | `openviking_list/search/grep/glob/multi_read` | Browse, retrieve, and read context |
 | OpenViking | `openviking_add_resource`, `openviking_memory_commit` | Add resources and commit memory |
 | Delivery | `message`, `generate_image` | Send messages proactively or generate images |
-| Automation | `cron` | Manage scheduled Agent tasks |
+| Automation | `cron` | Manage scheduled Agent tasks; disabled by default |
 | Parallel work | `spawn` | Start a background subagent |
 
 ToolRegistry handles registration, argument validation, execution, and Hooks. ToolContext gives each call the current SessionKey, sender identity, channel metadata, sandbox, and authenticated OpenViking connection.
@@ -158,7 +158,23 @@ Both proactive execution mechanisms ultimately call AgentLoop:
 | Cron | `at`, `every`, or a cron expression | Timed reminders and recurring jobs |
 | Heartbeat | Periodically reads `HEARTBEAT.md` from the workspace | Continuously check a changing set of tasks |
 
-Cron jobs are persisted in `cron/jobs.json` and retain the original SessionKey and channel metadata. When `deliver=true`, the result is sent back to the originating channel.
+The `cron` tool lets the Agent add, list, and remove scheduled tasks. For example, a user can say “Remind me to check the daily report at 9 AM every day,” and the Agent can create a job that the scheduler invokes the Agent to execute when due. It supports one-time execution, fixed intervals, and cron expressions.
+
+**Scheduled tasks are disabled by default.** Add the following configuration to `ov.conf` and restart the Bot to enable both the `cron` tool and scheduler in Gateway and local Chat modes:
+
+```json
+{
+  "bot": {
+    "tools": {
+      "cron": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+When set to `false` or omitted, the tool is not registered and the scheduler does not start. Jobs are persisted in `cron/jobs.json`; disabling Cron preserves them but stops automatic execution. Jobs retain the original SessionKey and channel metadata. When `deliver=true`, the result is sent back to the originating channel.
 
 Heartbeat skips empty files, Sessions that explicitly disable heartbeat, and long-inactive Sessions. The Agent returns `HEARTBEAT_OK` when no work is required.
 

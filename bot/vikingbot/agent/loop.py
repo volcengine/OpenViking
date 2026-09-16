@@ -1674,7 +1674,7 @@ class AgentLoop:
                         result_text if isinstance(result, MultimodalToolResult) else result
                     )
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"[RESULT]: {result_text[:600]}")
+                    logger.info(f"[RESULT]: {result_text[:200]}")
 
                     if publish_events:
                         await self.bus.publish_outbound(
