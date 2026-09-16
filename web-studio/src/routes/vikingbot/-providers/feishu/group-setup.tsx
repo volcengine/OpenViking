@@ -7,6 +7,7 @@ import { copyTextToClipboard } from '#/lib/clipboard'
 import { updateConnection } from '../../-api'
 import type { Connection } from '../../-api'
 
+const ACTIVITY_FIELDS = ['last_received', 'last_sent'] as const
 const VERIFICATION_STAGES = ['received', 'sent'] as const
 
 export function GroupSetup({
@@ -22,23 +23,15 @@ export function GroupSetup({
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
   const mutation = useMutation({
-    mutationFn: (action: 'verify' | 'step') =>
-      updateConnection(connection, action, action === 'step' ? 5 : undefined),
+    mutationFn: () => updateConnection(connection, 'verify'),
     onSuccess: onChange,
   })
   const verification = connection.status.verification
-  if (connection.step === 5)
-    return (
-      <div className="space-y-4">
-        <CheckCircle2Icon className="size-9 text-green-600" />
-        <h3 className="font-semibold">{t('done')}</h3>
-        <p className="text-sm text-muted-foreground">{t('doneHint')}</p>
-        <Button onClick={onClose}>{t('finish')}</Button>
-      </div>
-    )
+
   return (
     <div className="space-y-4">
-      <h3 className="font-semibold">{t('qr.addGroup')}</h3>
+      <CheckCircle2Icon className="size-9 text-green-600" />
+      <h3 className="font-semibold">{t('setupComplete')}</h3>
       <p className="text-sm">
         {t('connectedAs', {
           name: connection.bot_name,
@@ -46,60 +39,78 @@ export function GroupSetup({
         })}
       </p>
       <p className="text-sm leading-7 text-muted-foreground">
-        {t('groupHint')}
+        {t('startUsingHint')}
       </p>
       <p className="text-xs text-muted-foreground">{t('qr.visibilityHint')}</p>
       {!connection.enabled && <p role="alert">{t('qr.resumeFirst')}</p>}
-      <Button
-        variant="outline"
-        disabled={mutation.isPending || !connection.enabled}
-        onClick={() => mutation.mutate('verify')}
-      >
-        {t('test')}
-      </Button>
-      {verification && (
-        <div className="space-y-3 rounded-lg bg-muted p-4">
-          <p className="break-words font-mono text-sm">
-            {t('testText', { code: verification.code })}
-          </p>
+      <dl className="grid gap-4 rounded-lg bg-muted/50 p-4 sm:grid-cols-2">
+        {ACTIVITY_FIELDS.map((key) => (
+          <div key={key} className="space-y-1">
+            <dt className="text-xs text-muted-foreground">
+              {t(key === 'last_received' ? 'lastReceived' : 'sent')}
+            </dt>
+            <dd className="text-sm">
+              {connection.status[key]
+                ? new Date(connection.status[key]).toLocaleString()
+                : t('noActivity')}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <Button onClick={onClose}>{t('finish')}</Button>
+      <details className="rounded-lg border p-4">
+        <summary className="cursor-pointer text-sm font-medium">
+          {t('connectionHelp')}
+        </summary>
+        <div className="mt-4 space-y-4">
+          <p className="text-sm text-muted-foreground">{t('troubleshoot')}</p>
+          <p className="text-sm text-muted-foreground">{t('groupHint')}</p>
           <Button
-            size="sm"
             variant="outline"
-            onClick={async () => {
-              try {
-                await copyTextToClipboard(
-                  t('testText', { code: verification.code }),
-                )
-                setCopied(true)
-                setCopyError(false)
-              } catch {
-                setCopyError(true)
-              }
-            }}
+            disabled={mutation.isPending || !connection.enabled}
+            onClick={() => mutation.mutate()}
           >
-            {t(copied ? 'copied' : 'copy')}
+            {t('test')}
           </Button>
-          {copyError && <p role="alert">{t('qr.copyFailed')}</p>}
-          {VERIFICATION_STAGES.map((stage) => (
-            <p key={stage} role="status" className="text-sm">
-              {t(stage)} · {t(verification[stage] ? 'verified' : 'waiting')}
+          {verification && (
+            <div className="space-y-3 rounded-lg bg-muted p-4">
+              <p className="break-words font-mono text-sm">
+                {t('testText', { code: verification.code })}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    await copyTextToClipboard(
+                      t('testText', { code: verification.code }),
+                    )
+                    setCopied(true)
+                    setCopyError(false)
+                  } catch {
+                    setCopyError(true)
+                  }
+                }}
+              >
+                {t(copied ? 'copied' : 'copy')}
+              </Button>
+              {copyError && <p role="alert">{t('qr.copyFailed')}</p>}
+              {VERIFICATION_STAGES.map((stage) => (
+                <p key={stage} role="status" className="text-sm">
+                  {t(stage)} · {t(verification[stage] ? 'verified' : 'waiting')}
+                </p>
+              ))}
+              {verification.expires_at * 1000 < Date.now() &&
+                !verification.sent && <p role="alert">{t('expired')}</p>}
+            </div>
+          )}
+          {mutation.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutation.error.message}
             </p>
-          ))}
-          {verification.expires_at * 1000 < Date.now() &&
-            !verification.sent && <p role="alert">{t('expired')}</p>}
+          )}
         </div>
-      )}
-      {mutation.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {mutation.error.message}
-        </p>
-      )}
-      <Button
-        disabled={!verification?.sent || mutation.isPending}
-        onClick={() => mutation.mutate('step')}
-      >
-        {t('visible')}
-      </Button>
+      </details>
     </div>
   )
 }

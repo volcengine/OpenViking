@@ -190,6 +190,11 @@ export default {
   done: '飞书已接通',
   doneHint:
     '现在可以在群里 @机器人提出真实问题。连接测试不会调用模型；若正常对话失败，请检查模型配置。',
+  setupComplete: '飞书配置已完成',
+  startUsingHint:
+    '在飞书群设置中添加此应用，然后在群里 @它即可开始对话。无需发送测试码。',
+  noActivity: '暂无记录',
+  connectionHelp: '排查连接问题（可选）',
   finish: '完成',
   continueSetup: '继续配置',
   pause: '暂停',

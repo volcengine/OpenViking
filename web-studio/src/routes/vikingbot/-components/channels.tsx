@@ -216,11 +216,10 @@ export function Channels({
                   onClick={() => setEditing(connection.id)}
                 >
                   {t(
-                    connection.step >= 5
+                    connection.step >= 5 ||
+                      (connection.setup_mode === 'qr' && connection.step === 4)
                       ? 'viewSetup'
-                      : connection.setup_mode === 'qr' && connection.step === 4
-                        ? 'qr.addGroup'
-                        : 'continueSetup',
+                      : 'continueSetup',
                   )}
                 </Button>
                 <Button

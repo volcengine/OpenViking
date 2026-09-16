@@ -201,6 +201,11 @@ export default {
   done: 'Feishu is connected',
   doneHint:
     'Now @ the bot with a real question. The connection test does not call the model. If normal chat fails, check the model configuration.',
+  setupComplete: 'Feishu setup complete',
+  startUsingHint:
+    'Add this app in your Feishu group settings, then @mention it to start chatting. No test code is required.',
+  noActivity: 'No activity yet',
+  connectionHelp: 'Troubleshoot connection (optional)',
   finish: 'Done',
   continueSetup: 'Continue setup',
   pause: 'Pause',
