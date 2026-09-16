@@ -33,35 +33,54 @@ export type PlatformMessage = {
   status: string
   conversation: string
 }
-const base = '/bot/v1/studio'
+export function botAccountBase() {
+  const { accountId } = ovClient.getConnection()
+  if (!accountId) throw new Error('Select an account before managing bots')
+  return `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/bot`
+}
 export function getCapabilities() {
   return getOvResult<{ enabled: boolean; can_manage: boolean }>(
-    ovClient.client.get({ url: `${base}/capabilities` }),
+    ovClient.client.get({ url: '/api/v1/admin/bot/capabilities' }),
   )
 }
 export function getConnections() {
   return getOvResult<Connection[]>(
-    ovClient.client.get({ url: `${base}/connections` }),
+    ovClient.client.get({ url: `${botAccountBase()}/connections` }),
   )
 }
 export function createConnection(body: {
-  type?: string
-  app_id: string
-  app_secret: string
+  type: string
+  credentials: Record<string, string>
   user_id: string
 }) {
   return getOvResult<Connection>(
-    ovClient.client.post({ url: `${base}/connections`, body }),
+    ovClient.client.post({ url: `${botAccountBase()}/connections`, body }),
   )
 }
 export function updateConnection(
   connection: Connection,
-  action: string,
+  action: 'pause' | 'resume',
 ) {
   return getOvResult<Connection>(
     ovClient.client.patch({
-      url: `${base}/connections/${connection.id}`,
-      body: { action, revision: connection.revision },
+      url: `${botAccountBase()}/connections/${encodeURIComponent(connection.id)}`,
+      body: { enabled: action === 'resume', revision: connection.revision },
+    }),
+  )
+}
+export function deleteConnection(connection: Connection) {
+  return getOvResult<{ deleted: boolean }>(
+    ovClient.client.delete({
+      url: `${botAccountBase()}/connections/${encodeURIComponent(connection.id)}`,
+      query: { revision: connection.revision },
+    }),
+  )
+}
+export function verifyConnection(connection: Connection) {
+  return getOvResult<Connection>(
+    ovClient.client.post({
+      url: `${botAccountBase()}/connections/${encodeURIComponent(connection.id)}/verifications`,
+      body: { revision: connection.revision },
     }),
   )
 }
@@ -74,12 +93,16 @@ export function getConversations(id: string) {
       preview?: string
       time?: string
     }>
-  >(ovClient.client.get({ url: `${base}/connections/${id}/conversations` }))
+  >(
+    ovClient.client.get({
+      url: `${botAccountBase()}/connections/${encodeURIComponent(id)}/conversations`,
+    }),
+  )
 }
 export function getMessages(id: string, conversation: string, before = 0) {
   return getOvResult<PlatformMessage[]>(
     ovClient.client.get({
-      url: `${base}/connections/${id}/messages`,
+      url: `${botAccountBase()}/connections/${encodeURIComponent(id)}/messages`,
       query: { conversation, before },
     }),
   )
@@ -87,24 +110,34 @@ export function getMessages(id: string, conversation: string, before = 0) {
 
 export function rotateCredentials(
   connection: Connection,
-  appSecret: string,
+  credentials: Record<string, string>,
   userId: string,
 ) {
   return getOvResult<Connection>(
-    ovClient.client.patch({
-      url: `${base}/connections/${connection.id}`,
+    ovClient.client.post({
+      url: `${botAccountBase()}/connections/${encodeURIComponent(connection.id)}/credentials`,
       body: {
-        action: 'credentials',
         revision: connection.revision,
-        app_secret: appSecret,
+        credentials,
         user_id: userId,
       },
     }),
   )
 }
 
-export function getBotUsers() {
-  return getOvResult<Array<{ user_id: string; available: boolean }>>(
-    ovClient.client.get({ url: `${base}/users` }),
+export async function getBotUsers() {
+  const { accountId } = ovClient.getConnection()
+  if (!accountId) throw new Error('Select an account before managing bots')
+  const users = await getOvResult<
+    Array<{ user_id: string; api_key_available: boolean }>
+  >(
+    ovClient.client.get({
+      url: `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/users`,
+      query: { role: 'user', include_credentials: false },
+    }),
   )
+  return users.map((user) => ({
+    user_id: user.user_id,
+    available: user.api_key_available,
+  }))
 }

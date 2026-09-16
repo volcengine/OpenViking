@@ -3,9 +3,9 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import { GroupSetup } from './group-setup'
-import { updateConnection } from '../../-api'
+import { verifyConnection } from '../../-api'
 
-vi.mock('../../-api', () => ({ updateConnection: vi.fn() }))
+vi.mock('../../-api', () => ({ verifyConnection: vi.fn() }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
@@ -37,5 +37,5 @@ it('finishes published setup without a test or a verification mutation', () => {
   )
   fireEvent.click(screen.getByRole('button', { name: 'finish' }))
   expect(close).toHaveBeenCalledOnce()
-  expect(updateConnection).not.toHaveBeenCalled()
+  expect(verifyConnection).not.toHaveBeenCalled()
 })

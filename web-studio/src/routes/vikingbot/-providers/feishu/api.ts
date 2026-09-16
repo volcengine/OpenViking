@@ -1,4 +1,5 @@
 import { getOvResult, ovClient } from '#/lib/ov-client'
+import { botAccountBase } from '../../-api'
 
 export type OnboardingRun = {
   id: string
@@ -26,15 +27,18 @@ export type OnboardingRun = {
   connection_id?: string
   owner?: { user_name: string; tenant_name: string }
 }
-const base = '/bot/v1/studio/onboarding'
+const base = () => `${botAccountBase()}/onboarding-runs`
 export function currentOnboarding() {
   return getOvResult<OnboardingRun | null>(
-    ovClient.client.get({ url: base, query: { type: 'feishu' } }),
+    ovClient.client.get({
+      url: `${base()}/current`,
+      query: { type: 'feishu' },
+    }),
   )
 }
 export function getOnboarding(id: string) {
   return getOvResult<OnboardingRun>(
-    ovClient.client.get({ url: `${base}/${id}` }),
+    ovClient.client.get({ url: `${base()}/${encodeURIComponent(id)}` }),
   )
 }
 export function startOnboarding(body: {
@@ -43,7 +47,7 @@ export function startOnboarding(body: {
   request_id: string
 }) {
   return getOvResult<OnboardingRun>(
-    ovClient.client.post({ url: base, body: { ...body, type: 'feishu' } }),
+    ovClient.client.post({ url: base(), body: { ...body, type: 'feishu' } }),
   )
 }
 export function updateOnboarding(
@@ -51,6 +55,8 @@ export function updateOnboarding(
   action: 'retry' | 'cancel' | 'manual',
 ) {
   return getOvResult<OnboardingRun>(
-    ovClient.client.patch({ url: `${base}/${id}`, body: { action } }),
+    ovClient.client.post({
+      url: `${base()}/${encodeURIComponent(id)}/${action}`,
+    }),
   )
 }

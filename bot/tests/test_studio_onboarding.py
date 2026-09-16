@@ -440,3 +440,20 @@ async def test_rejected_agent_template_never_falls_back_to_ordinary_bot():
         await console.create_app(session, run, lambda **kw: run.update(kw))
     assert session.post.call_count == 2
     assert run["create_started"]
+
+
+async def test_onboarding_idempotency_is_scoped_to_platform(tmp_path, monkeypatch):
+    from vikingbot.studio.providers.registry import PROVIDERS
+
+    monkeypatch.setitem(PROVIDERS, "future-platform", SimpleNamespace(
+        type="future-platform", run_onboarding=AsyncMock(),
+    ))
+    jobs = make_jobs(tmp_path)
+    monkeypatch.setattr(jobs, "launch", jobs.service.store.save_onboarding)
+    request_id = str(uuid.uuid4())
+    identity = {"user_id": "bot"}
+    feishu = await jobs.start("a", {"type": "feishu", "request_id": request_id}, identity)
+    other = await jobs.start("a", {"type": "future-platform", "request_id": request_id}, identity)
+    assert feishu["id"] != other["id"]
+    assert jobs.current("a", "feishu")["id"] == feishu["id"]
+    assert jobs.current("a", "future-platform")["id"] == other["id"]

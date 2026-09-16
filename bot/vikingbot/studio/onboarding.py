@@ -78,7 +78,7 @@ class OnboardingJobs:
     async def start(self, account, body, identity):
         provider = get_provider(body)
         if not hasattr(provider, "run_onboarding"):
-            raise HTTPException(400, "Scan onboarding is unavailable for this platform")
+            raise HTTPException(400, "Automatic onboarding is unavailable for this platform")
         request_id = body.get("request_id")
         try:
             uuid.UUID(request_id)
@@ -89,7 +89,7 @@ class OnboardingJobs:
                 (
                     r
                     for r in self.service.store.onboarding_runs(account)
-                    if r["request_id"] == request_id
+                    if r["request_id"] == request_id and r["type"] == provider.type
                 ),
                 None,
             )
@@ -158,7 +158,7 @@ class OnboardingJobs:
                 self.checkpoint(run, archived=True)
             elif action == "retry":
                 if not self.public(run)["can_retry"]:
-                    raise HTTPException(409, "Check the application in Feishu before continuing")
+                    raise HTTPException(409, "Check the application on its platform before continuing")
                 previous = self.tasks.get(identifier)
                 if previous:
                     # Terminal state can be persisted before its HTTP session

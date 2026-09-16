@@ -4,7 +4,7 @@
 
 ## 当前分支实现说明
 
-- 页面入口 `/vikingbot`；新增管理接口集中在 `/bot/v1/studio`，网页聊天继续复用原有接口。
+- 页面入口 `/vikingbot`；新增管理接口集中在 `/api/v1/admin`，网页聊天继续复用原有接口。
 - 飞书连接和收发时间线持久化到 Bot 数据目录的 `studio.sqlite3`，文件权限 0600。它含应用与专用用户凭证，备份需按服务端配置处理。
 - Studio 管理的飞书会话仅开放带绑定身份的 OpenViking 查询与记忆工具；Shell、本地文件、定时任务及未显式批准的 MCP 工具默认不可用。
 - 首期仅服务管理员可管理渠道；按当前 account 隔离连接及飞书历史。接入时选择同账户普通用户，由服务端绑定现有凭证；浏览器无需接收或输入用户 API Key。管理员身份不可选，仅存储哈希而无法自动绑定凭证的用户显示不可用。
@@ -17,25 +17,43 @@
 
 ## 接口范围与复用依据
 
-网页会话创建、列表、历史、删除，以及 Bot 聊天流式响应和健康状态继续复用现有接口。Studio 新增 11 个浏览器管理接口，均有当前页面调用；另有 1 个仅供服务端调用的 Gateway dispatch 接口。
+路由遵循仓库管理接口约定：`/api/v1/admin` 为管理前缀，账号在 URL 中指定，router 自身声明 prefix/tags，并由 `routers/__init__.py` 导出、`app.py` 统一挂载。业务管理仍仅允许 ROOT，不能因挂入 admin 前缀而放宽为账号 ADMIN。
 
-| 新增接口（前缀 `/bot/v1/studio`） | 当前调用场景 | 复用边界 |
-| --- | --- | --- |
-| `GET /capabilities` | VikingBot 页面判断管理入口是否可用 | 现有 `/bot/v1/health` 只报告运行状态，不能判断 ROOT 管理权限和内部管理令牌是否可用。 |
-| `GET /users` | 扫码、手动接入选择运行用户 | 复用用户 registry，只返回普通用户及凭证可绑定状态。现有管理用户列表在部分模式返回原始密钥，在 trusted 模式隐藏密钥，不能直接用于判断可绑定性。 |
-| `GET /connections` | 渠道列表、会话来源、扫码完成后加载连接 | 现有 Bot API 没有 Studio 托管连接列表。 |
-| `POST /connections` | 已有飞书应用手动接入 | 创建运行连接并在服务端绑定身份，不等同于创建聊天会话。 |
-| `PATCH /connections/{id}` | 暂停、恢复、凭证更新、删除、可选群验证 | 这些操作属于同一个连接的生命周期；已删除无人调用的旧 `step` 操作。 |
-| `GET /connections/{id}/conversations` | 混合会话列表、飞书历史标题 | 读取按连接隔离的飞书收发时间线，不是 OpenViking 上下文会话列表。 |
-| `GET /connections/{id}/messages` | 飞书历史分页 | 返回接入后捕获的消息、发送状态和发送人；现有上下文消息接口不能等价替代。 |
-| `POST /onboarding` | 启动扫码授权及自动配置 | 现有 API 没有飞书授权任务。 |
-| `GET /onboarding` | 重新进入页面时恢复当前授权任务 | 此时浏览器可能还没有任务 ID。 |
-| `GET /onboarding/{id}` | 轮询指定授权任务 | 与恢复当前任务分别承担定位和轮询职责。 |
-| `PATCH /onboarding/{id}` | 取消、重试、转手动恢复 | 修改已有授权任务，不创建重复任务。 |
+以下表格用 `B` 代表 `/api/v1/admin/accounts/{account_id}/bot`：
 
-`POST /bot/v1/studio/dispatch` 在 Bot Gateway 内部统一分发上述管理操作，要求内部令牌和 loopback 请求。浏览器仍通过 OpenViking 服务端做权限、账号和绑定用户校验。
+| HTTP 路由 | 调用场景与契约 |
+| --- | --- |
+| `GET /api/v1/admin/bot/capabilities` | 判断 Bot 启用及 ROOT 管理能力；与运行健康检查职责不同。 |
+| `GET /api/v1/admin/accounts/{account_id}/users?role=user&include_credentials=false` | **复用现有接口**。返回 `user_id`、`role`、`api_key_available`，不返回密钥或前缀。默认参数保持原有接口行为。 |
+| `GET B/connections` | 渠道列表、混合会话来源、扫码完成后加载连接。 |
+| `POST B/connections` | 手动连接；请求包含 `type`、`user_id`、平台自有的 `credentials` 对象。 |
+| `PATCH B/connections/{id}` | 更新 `enabled`；提交 `revision` 保留并发保护。 |
+| `DELETE B/connections/{id}?revision=N` | 删除连接及其本地记录；不删除外部平台应用。 |
+| `POST B/connections/{id}/credentials` | 更新平台凭证，包含 `credentials`、`user_id`、`revision`；服务端重新绑定身份。 |
+| `POST B/connections/{id}/verifications` | 发起可选群验证，提交 `revision`。 |
+| `GET B/connections/{id}/conversations` | 连接下的收发会话列表。 |
+| `GET B/connections/{id}/messages?conversation=...&before=...` | 捕获消息及发送状态；平台会话标识保留在查询参数中。 |
+| `POST B/onboarding-runs` | 创建自动接入任务，显式传 `type`、`user_id`、`request_id` 和可选 `name`。 |
+| `GET B/onboarding-runs/current?type=...` | 查询指定平台当前未完成任务；没有任务时返回 null。不是全量任务列表。 |
+| `GET B/onboarding-runs/{id}` | 轮询指定任务。 |
+| `POST B/onboarding-runs/{id}/retry` | 重试符合条件的任务。 |
+| `POST B/onboarding-runs/{id}/cancel` | 取消符合条件的任务。 |
+| `POST B/onboarding-runs/{id}/manual` | 将失败或中断任务转为手动接入。 |
 
-未挂载的定时任务 UI、`GET /schedules`、Gateway 调度快照分支、调度器注入和配套文案均已删除；VikingBot 原有 CLI/Agent 定时任务功能不受影响。旧的独立飞书会话列表组件也已删除，当前使用跨渠道统一列表。
+浏览器管理接口共 15 个，加上复用的用户列表接口。操作方法拆开后 HTTP 路由数量增加，但没有增加业务能力。旧的 `PATCH {action: ...}` 和 `X-OpenViking-Studio-Account` 已移除。该变更调整当前未发布 PR 内的接口，前后端需一起更新；不为旧的临时浏览器接口保留兼容入口。
+
+网页会话创建、列表、历史、删除、Bot 聊天流式响应和健康状态继续复用既有 API。平台收发记录按连接归属并保存发送状态，不能直接替换为 OpenViking 上下文会话历史。
+
+`POST /bot/v1/studio/dispatch` 仅在 Bot Gateway 内部保留，用内部令牌及 loopback 限制服务端调用。浏览器不直接调用；账号和绑定用户仍在 OpenViking 服务端校验。
+
+### 后续接入钉钉等平台
+
+- URL 按连接和接入任务组织，不含飞书或钉钉名称。平台由显式 `type` 决定；未知平台由 provider registry 拒绝，不能默认为飞书。
+- 平台凭证放入 `credentials` 对象，例如飞书使用 `app_id/app_secret`，后续平台可以使用自己的字段。具体校验、连接运行、凭证更新及公开配置字段由 provider 负责；浏览器不能借凭证字段替换服务端身份。
+- 暂停、恢复、删除、收发记录和任务查询共享资源接口。各平台的授权实现与前端表单放入 provider 目录；平台特有能力不应直接加入全局路径或假设所有平台支持扫码/群验证。
+- 当前仍只注册飞书 provider。新增钉钉需要实现它的鉴权、连接、消息转换和 UI，并验证其接入状态流；通用路由不是钉钉功能已完成的证明。
+
+未使用的定时任务接口及 UI、旧独立飞书会话列表、旧 `step` 操作已删除，既有 CLI/Agent 定时任务功能不受影响。
 
 ## 1. 用户目标与首期范围
 
@@ -223,14 +241,7 @@ VikingBot                         Bot 运行正常
 | `GET /bot/v1/capabilities` | 当前用户权限、Bot 状态、支持的渠道与管理能力 |
 | `GET /bot/v1/conversations` | 按来源、关键词及游标列出有权限的持久会话 |
 | `GET /bot/v1/conversations/{id}/messages` | 分页读取统一时间线 |
-| `GET/POST /bot/v1/connections` | 列出连接、创建配置草稿 |
-| `PATCH /bot/v1/connections/{id}` | 修改非敏感配置、替换密钥；使用版本号防止并发覆盖 |
-| `POST /bot/v1/connections/{id}/validate` | 验证凭证与可验证能力 |
-| `POST /bot/v1/connections/{id}/apply` | 持久化并受控应用配置，返回 operation ID |
-| `GET /bot/v1/connections/{id}/status` | 查询连接状态、配置版本、最近收发和具体错误 |
-| `POST /bot/v1/connections/{id}/verification` | 创建一次短期群内验证，返回测试文字与过期时间 |
-| `GET /bot/v1/connections/{id}/verification/{verification_id}` | 获取分阶段测试证据 |
-| `POST /bot/v1/connections/{id}/pause`、`/resume` | 控制单个连接 |
+| 当前管理接口 | 以本文“接口范围与复用依据”的表格为准；不存在独立的 validate/apply/status HTTP 接口。 |
 
 网页发送继续复用现有 chat/stream 接口；统一 conversation ID 必须能映射到原 Session ID。飞书会话不提供网页发送接口。
 

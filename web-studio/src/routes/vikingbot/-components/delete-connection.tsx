@@ -13,7 +13,7 @@ import {
   AlertDialogTitle,
 } from '#/components/ui/alert-dialog'
 import { useMutation } from '@tanstack/react-query'
-import { updateConnection } from '../-api'
+import { deleteConnection } from '../-api'
 import type { Connection } from '../-api'
 
 export function DeleteConnection({
@@ -28,7 +28,7 @@ export function DeleteConnection({
   const { t } = useTranslation('vikingbot')
   const [open, setOpen] = useState(false)
   const mutation = useMutation({
-    mutationFn: () => updateConnection(connection, 'delete'),
+    mutationFn: () => deleteConnection(connection),
   })
   return (
     <>

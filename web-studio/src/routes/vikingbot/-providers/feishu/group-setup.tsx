@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { CheckCircle2Icon } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { copyTextToClipboard } from '#/lib/clipboard'
-import { updateConnection } from '../../-api'
+import { verifyConnection } from '../../-api'
 import type { Connection } from '../../-api'
 
 const ACTIVITY_FIELDS = ['last_received', 'last_sent'] as const
@@ -25,7 +25,7 @@ export function GroupSetup({
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
   const mutation = useMutation({
-    mutationFn: () => updateConnection(connection, 'verify'),
+    mutationFn: () => verifyConnection(connection),
     onSuccess: onChange,
   })
   const verification = connection.status.verification

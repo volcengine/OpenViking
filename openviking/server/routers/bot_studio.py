@@ -4,7 +4,8 @@ import os
 from dataclasses import replace
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 from openviking.server.auth import get_api_key_manager_or_raise, get_request_context
 from openviking.server.config import get_server_url_from_server_data
@@ -12,23 +13,50 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import bot
 from openviking_cli.session.user_id import UserIdentifier
 
-router = APIRouter()
+router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+ACCOUNT_BOT = "/accounts/{account_id}/bot"
+
+
+class RevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1)
+
+
+class UpdateConnectionRequest(RevisionRequest):
+    enabled: bool
+
+
+class CredentialsRequest(RevisionRequest):
+    credentials: dict[str, str]
+    user_id: str
+
+
+class CreateConnectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: str
+    user_id: str
+    credentials: dict[str, str]
+
+
+class StartOnboardingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: str
+    user_id: str
+    name: str = "VikingBot"
+    request_id: str
 
 
 async def manager(
+    account_id: str,
     ctx: RequestContext = Depends(get_request_context),
-    studio_account: str | None = Header(None, alias="X-OpenViking-Studio-Account"),
 ):
     # App installations are process-wide. Account admins cannot mutate host credentials.
     if ctx.role != Role.ROOT:
         raise HTTPException(403, "Only the server administrator can manage Bot connections")
-    if studio_account:
-        # This is a root-only control-plane selector, not a data-plane identity assertion.
-        try:
-            ctx = replace(ctx, user=UserIdentifier(studio_account, ctx.user.user_id))
-        except ValueError as exc:
-            raise HTTPException(400, "Invalid Studio account") from exc
-    return ctx
+    try:
+        return replace(ctx, user=UserIdentifier(account_id, ctx.user.user_id))
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid account ID") from exc
 
 
 async def dispatch(ctx, action, payload=None, connection_id=None, identity=None):
@@ -57,7 +85,7 @@ async def dispatch(ctx, action, payload=None, connection_id=None, identity=None)
         raise HTTPException(502, "Cannot reach the managed Bot gateway") from exc
 
 
-@router.get("/capabilities")
+@router.get("/bot/capabilities")
 async def capabilities(ctx: RequestContext = Depends(get_request_context)):
     return {
         "status": "ok",
@@ -65,12 +93,11 @@ async def capabilities(ctx: RequestContext = Depends(get_request_context)):
             "enabled": bot.BOT_API_URL is not None,
             "can_manage": ctx.role == Role.ROOT
             and bool(os.environ.get("OPENVIKING_BOT_STUDIO_TOKEN") or bot.BOT_API_KEY),
-            "channels": ["feishu"],
         },
     }
 
 
-@router.get("/connections")
+@router.get(ACCOUNT_BOT + "/connections")
 async def connections(ctx: RequestContext = Depends(manager)):
     return await dispatch(ctx, "list")
 
@@ -79,17 +106,6 @@ async def account_users(request, ctx):
     registry = get_api_key_manager_or_raise(request)
     await registry.refresh_account_users_from_store(ctx.account_id)
     return registry.get_users(ctx.account_id, limit=None, role_filter="user", expose_key=True)
-
-
-@router.get("/users")
-async def users(request: Request, ctx: RequestContext = Depends(manager)):
-    rows = await account_users(request, ctx)
-    return {
-        "status": "ok",
-        "result": [
-            {"user_id": row["user_id"], "available": bool(row.get("api_key"))} for row in rows
-        ],
-    }
 
 
 async def selected_identity(request, ctx, user_id):
@@ -110,29 +126,80 @@ async def selected_identity(request, ctx, user_id):
     }
 
 
-@router.post("/connections")
-async def create(request: Request, ctx: RequestContext = Depends(manager)):
-    body = await request.json()
-    connection = await selected_identity(request, ctx, body.get("user_id"))
-    return await dispatch(ctx, "create", body, identity=connection)
+@router.post(ACCOUNT_BOT + "/connections")
+async def create(
+    request: Request, body: CreateConnectionRequest, ctx: RequestContext = Depends(manager)
+):
+    connection = await selected_identity(request, ctx, body.user_id)
+    return await dispatch(ctx, "create", body.model_dump(), identity=connection)
 
 
-@router.patch("/connections/{connection_id}")
-async def update(connection_id: str, request: Request, ctx: RequestContext = Depends(manager)):
-    body = await request.json()
-    body.pop("identity", None)
-    if body.get("action") == "credentials":
-        user_id = body.pop("user_id", None)
-        body["identity"] = await selected_identity(request, ctx, user_id)
-    return await dispatch(ctx, "update", body, connection_id)
+@router.patch(ACCOUNT_BOT + "/connections/{connection_id}")
+async def update(
+    connection_id: str, body: UpdateConnectionRequest, ctx: RequestContext = Depends(manager)
+):
+    return await dispatch(
+        ctx,
+        "update",
+        {
+            "action": "resume" if body.enabled else "pause",
+            "revision": body.revision,
+        },
+        connection_id,
+    )
 
 
-@router.get("/connections/{connection_id}/conversations")
+@router.delete(ACCOUNT_BOT + "/connections/{connection_id}")
+async def delete_connection(
+    connection_id: str,
+    revision: int = Query(..., ge=1),
+    ctx: RequestContext = Depends(manager),
+):
+    return await dispatch(ctx, "update", {"action": "delete", "revision": revision}, connection_id)
+
+
+@router.post(ACCOUNT_BOT + "/connections/{connection_id}/credentials")
+async def update_credentials(
+    connection_id: str,
+    body: CredentialsRequest,
+    request: Request,
+    ctx: RequestContext = Depends(manager),
+):
+    identity = await selected_identity(request, ctx, body.user_id)
+    return await dispatch(
+        ctx,
+        "update",
+        {
+            "action": "credentials",
+            "revision": body.revision,
+            "credentials": body.credentials,
+            "identity": identity,
+        },
+        connection_id,
+    )
+
+
+@router.post(ACCOUNT_BOT + "/connections/{connection_id}/verifications")
+async def verify_connection(
+    connection_id: str, body: RevisionRequest, ctx: RequestContext = Depends(manager)
+):
+    return await dispatch(
+        ctx,
+        "update",
+        {
+            "action": "verify",
+            "revision": body.revision,
+        },
+        connection_id,
+    )
+
+
+@router.get(ACCOUNT_BOT + "/connections/{connection_id}/conversations")
 async def conversations(connection_id: str, ctx: RequestContext = Depends(manager)):
     return await dispatch(ctx, "conversations", connection_id=connection_id)
 
 
-@router.get("/connections/{connection_id}/messages")
+@router.get(ACCOUNT_BOT + "/connections/{connection_id}/messages")
 async def messages(
     connection_id: str, conversation: str, before: int = 0, ctx: RequestContext = Depends(manager)
 ):
@@ -141,28 +208,34 @@ async def messages(
     )
 
 
-@router.post("/onboarding")
-async def start_onboarding(request: Request, ctx: RequestContext = Depends(manager)):
-    body = await request.json()
-    identity = await selected_identity(request, ctx, body.get("user_id"))
-    return await dispatch(ctx, "onboarding_start", body, identity=identity)
+@router.post(ACCOUNT_BOT + "/onboarding-runs")
+async def start_onboarding(
+    request: Request, body: StartOnboardingRequest, ctx: RequestContext = Depends(manager)
+):
+    identity = await selected_identity(request, ctx, body.user_id)
+    return await dispatch(ctx, "onboarding_start", body.model_dump(), identity=identity)
 
 
-@router.get("/onboarding")
-async def current_onboarding(type: str = "feishu", ctx: RequestContext = Depends(manager)):
+@router.get(ACCOUNT_BOT + "/onboarding-runs/current")
+async def current_onboarding(type: str, ctx: RequestContext = Depends(manager)):
     return await dispatch(ctx, "onboarding_current", {"type": type})
 
 
-@router.get("/onboarding/{identifier}")
+@router.get(ACCOUNT_BOT + "/onboarding-runs/{identifier}")
 async def get_onboarding(identifier: str, ctx: RequestContext = Depends(manager)):
     return await dispatch(ctx, "onboarding_get", {"id": identifier})
 
 
-@router.patch("/onboarding/{identifier}")
-async def update_onboarding(
-    identifier: str, request: Request, ctx: RequestContext = Depends(manager)
-):
-    body = await request.json()
-    return await dispatch(
-        ctx, "onboarding_update", {"id": identifier, "action": body.get("action")}
-    )
+@router.post(ACCOUNT_BOT + "/onboarding-runs/{identifier}/retry")
+async def retry_onboarding(identifier: str, ctx: RequestContext = Depends(manager)):
+    return await dispatch(ctx, "onboarding_update", {"id": identifier, "action": "retry"})
+
+
+@router.post(ACCOUNT_BOT + "/onboarding-runs/{identifier}/cancel")
+async def cancel_onboarding(identifier: str, ctx: RequestContext = Depends(manager)):
+    return await dispatch(ctx, "onboarding_update", {"id": identifier, "action": "cancel"})
+
+
+@router.post(ACCOUNT_BOT + "/onboarding-runs/{identifier}/manual")
+async def manual_onboarding(identifier: str, ctx: RequestContext = Depends(manager)):
+    return await dispatch(ctx, "onboarding_update", {"id": identifier, "action": "manual"})

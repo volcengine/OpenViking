@@ -55,7 +55,7 @@ class StudioService:
     async def create(self, account, body, identity):
         provider = get_provider(body)
         async with self.lock:
-            fields = await provider.prepare(body)
+            fields = await provider.prepare(body.get("credentials", body))
             candidate = {**fields, "type": provider.type}
             key = provider.runtime_key(candidate)
             if (
@@ -112,7 +112,7 @@ class StudioService:
                     self.tasks[connection_id] = asyncio.create_task(runtime.start())
                     record["enabled"] = True
             elif action == "credentials":
-                candidate = await get_provider(record).credentials(record, body)
+                candidate = await get_provider(record).credentials(record, body.get("credentials", body))
                 if body.get("identity"):
                     if body["identity"]["user_id"] != record["identity"]["user_id"]:
                         raise HTTPException(409, "Rotate the key for the same Bot user")

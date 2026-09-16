@@ -38,8 +38,7 @@ export function FeishuSetup({
     mutationFn: () =>
       createConnection({
         type: 'feishu',
-        app_id: appId.trim(),
-        app_secret: secret.trim(),
+        credentials: { app_id: appId.trim(), app_secret: secret.trim() },
         user_id: selectedUser,
       }),
     onSuccess: (value) => {

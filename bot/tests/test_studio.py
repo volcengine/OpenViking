@@ -295,3 +295,37 @@ async def test_history_name_lookup_failure_keeps_messages(channel, monkeypatch):
     messages = await channel.history_with_names("group")
     assert messages[0]["content"] == "hello"
     assert messages[0]["sender"] == ""
+
+
+async def test_platform_provider_receives_generic_credentials(tmp_path, monkeypatch):
+    from vikingbot.studio.providers.registry import PROVIDERS
+
+    class FutureProvider:
+        type = "future-platform"
+
+        async def prepare(self, credentials):
+            assert credentials == {"client_id": "app", "client_secret": "secret"}
+            return {"client_id": credentials["client_id"]}
+
+        def runtime_key(self, record):
+            return self.type + record["client_id"]
+
+        def install(self, service, record):
+            channel = SimpleNamespace(start=AsyncMock())
+            service.manager.channels[self.runtime_key(record)] = channel
+            return channel
+
+        def public_fields(self, record):
+            return {"client_id": record["client_id"]}
+
+    monkeypatch.setitem(PROVIDERS, "future-platform", FutureProvider())
+    service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
+    result = await service.create("a", {
+        "type": "future-platform",
+        "credentials": {"client_id": "app", "client_secret": "secret"},
+    }, {"user_id": "bot"})
+    await asyncio.gather(*service.tasks.values())
+    assert result["type"] == "future-platform"
+    assert result["client_id"] == "app"
+    assert "secret" not in str(result)
+    assert service.get("a", result["id"])["account"] == "a"

@@ -54,7 +54,7 @@ export function Channels({
       action,
     }: {
       connection: Connection
-      action: string
+      action: 'pause' | 'resume'
     }) => updateConnection(connection, action),
     onSuccess: () => client.invalidateQueries({ queryKey: key }),
   })

@@ -28,7 +28,7 @@ vi.mock('./api', () => ({
 vi.mock('../../-api', () => ({
   getBotUsers: api.users,
   getConnections: api.connections,
-  updateConnection: vi.fn(),
+  verifyConnection: vi.fn(),
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'a' }),

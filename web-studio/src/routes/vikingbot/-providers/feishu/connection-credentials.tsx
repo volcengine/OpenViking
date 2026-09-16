@@ -17,7 +17,11 @@ export function ConnectionCredentials({
   const [secret, setSecret] = useState('')
   const mutation = useMutation({
     mutationFn: () =>
-      rotateCredentials(connection, secret, connection.identity_user),
+      rotateCredentials(
+        connection,
+        { app_secret: secret },
+        connection.identity_user,
+      ),
     onSuccess: () => {
       setSecret('')
       onSaved()

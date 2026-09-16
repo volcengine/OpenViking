@@ -8,13 +8,16 @@ import pytest
 from fastapi import FastAPI
 
 from openviking.server.auth import get_request_context
-from openviking.server.routers import bot_studio
+from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import admin, bot_studio
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.fixture
 def app():
     app = FastAPI()
-    app.include_router(bot_studio.router, prefix="/studio")
+    app.include_router(bot_studio.router)
+    app.include_router(admin.router)
     return app
 
 
@@ -29,13 +32,18 @@ async def test_management_rejects_non_root(app, role, monkeypatch):
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         for method, url in [
-            ("GET", "/studio/connections"),
-            ("POST", "/studio/connections"),
-            ("POST", "/studio/onboarding"),
-            ("GET", "/studio/onboarding"),
-            ("GET", "/studio/onboarding/job"),
-            ("PATCH", "/studio/onboarding/job"),
-            ("GET", "/studio/connections/x/messages?conversation=y"),
+            ("GET", "/api/v1/admin/accounts/a/bot/connections"),
+            ("POST", "/api/v1/admin/accounts/a/bot/connections"),
+            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs"),
+            ("GET", "/api/v1/admin/accounts/a/bot/onboarding-runs/current?type=feishu"),
+            ("GET", "/api/v1/admin/accounts/a/bot/onboarding-runs/job"),
+            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs/job/retry"),
+            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs/job/cancel"),
+            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs/job/manual"),
+            ("DELETE", "/api/v1/admin/accounts/a/bot/connections/x?revision=1"),
+            ("POST", "/api/v1/admin/accounts/a/bot/connections/x/credentials"),
+            ("POST", "/api/v1/admin/accounts/a/bot/connections/x/verifications"),
+            ("GET", "/api/v1/admin/accounts/a/bot/connections/x/messages?conversation=y"),
         ]:
             result = await client.request(method, url, json={})
             assert result.status_code == 403
@@ -43,8 +51,8 @@ async def test_management_rejects_non_root(app, role, monkeypatch):
 
 
 async def test_update_scope_comes_from_authenticated_context(app, monkeypatch):
-    app.dependency_overrides[get_request_context] = lambda: SimpleNamespace(
-        role="root", account_id="a"
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"), role=Role.ROOT
     )
     dispatch = AsyncMock(return_value={"status": "ok", "result": {}})
     monkeypatch.setattr(bot_studio, "dispatch", dispatch)
@@ -52,31 +60,48 @@ async def test_update_scope_comes_from_authenticated_context(app, monkeypatch):
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         result = await client.patch(
-            "/studio/connections/id", json={"account": "victim", "action": "pause"}
+            "/api/v1/admin/accounts/a/bot/connections/id", json={"revision": 1, "enabled": False}
         )
         assert result.status_code == 200
     assert dispatch.call_args.args[0].account_id == "a"
 
 
-async def test_users_never_expose_credentials(app, monkeypatch):
-    app.dependency_overrides[get_request_context] = lambda: SimpleNamespace(
-        role="root", account_id="a"
+@pytest.mark.parametrize("include_credentials", [True, False])
+async def test_reused_admin_users_support_safe_credential_status(
+    app, monkeypatch, include_credentials
+):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"),
+        role=Role.ROOT,
     )
-    monkeypatch.setattr(
-        bot_studio,
-        "account_users",
-        AsyncMock(return_value=[{"user_id": "bot", "api_key": "private"}, {"user_id": "hashed"}]),
+    registry = SimpleNamespace(
+        refresh_account_users_from_store=AsyncMock(),
+        get_users=lambda *args, **kwargs: [
+            {"user_id": "bot", "role": "user", "api_key": "private"},
+            {"user_id": "hashed", "role": "user", "key_prefix": "prefix"},
+        ],
     )
+    app.state.api_key_manager = registry
+    monkeypatch.setattr(admin, "_get_api_key_manager", lambda request: registry)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.get("/studio/users")
+        response = await client.get(
+            "/api/v1/admin/accounts/a/users",
+            params={
+                "role": "user",
+                "include_credentials": str(include_credentials).lower(),
+            },
+        )
     assert response.status_code == 200
-    assert "private" not in response.text
-    assert response.json()["result"] == [
-        {"user_id": "bot", "available": True},
-        {"user_id": "hashed", "available": False},
-    ]
+    if include_credentials:
+        assert response.json()["result"][0]["api_key"] == "private"
+    else:
+        assert "private" not in response.text and "prefix" not in response.text
+        assert response.json()["result"] == [
+            {"user_id": "bot", "role": "user", "api_key_available": True},
+            {"user_id": "hashed", "role": "user", "api_key_available": False},
+        ]
 
 
 @pytest.mark.parametrize("user_id,accepted", [("missing", False), ("root", False), ("bot", True)])
@@ -119,8 +144,8 @@ async def test_hashed_key_is_not_treated_as_a_usable_credential(monkeypatch):
 
 
 async def test_onboarding_identity_is_selected_server_side(app, monkeypatch):
-    app.dependency_overrides[get_request_context] = lambda: SimpleNamespace(
-        role="root", account_id="a"
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"), role=Role.ROOT
     )
     identity = {"user_id": "bot", "account_id": "a", "api_key": "server-key"}
     select = AsyncMock(return_value=identity)
@@ -131,11 +156,11 @@ async def test_onboarding_identity_is_selected_server_side(app, monkeypatch):
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         result = await client.post(
-            "/studio/onboarding",
+            "/api/v1/admin/accounts/a/bot/onboarding-runs",
             json={
                 "user_id": "bot",
-                "account": "victim",
-                "identity": {"api_key": "forged"},
+                "type": "feishu",
+                "request_id": "e232e744-f13a-44f3-8fda-4e82ad1b58b4",
             },
         )
     assert result.status_code == 200
@@ -147,11 +172,12 @@ async def test_onboarding_identity_is_selected_server_side(app, monkeypatch):
 @pytest.mark.parametrize(
     "path,allowed",
     [
-        ("/bot/v1/studio/capabilities", True),
-        ("/bot/v1/studio/users", True),
-        ("/bot/v1/studio/onboarding", True),
+        ("/api/v1/admin/bot/capabilities", True),
+        ("/api/v1/admin/accounts/a/users", True),
+        ("/api/v1/admin/accounts/a/bot/onboarding-runs", True),
         ("/bot/v1/chat", False),
         ("/bot/v1/studio-other", False),
+        ("/bot/v1/studio/connections", False),
     ],
 )
 def test_real_root_policy_allows_only_studio_control_plane(path, allowed):
@@ -167,7 +193,7 @@ def test_real_root_policy_allows_only_studio_control_plane(path, allowed):
             ApiKeyAuthPlugin().get_request_context_checks(path, identity)
 
 
-async def test_root_studio_account_selector_does_not_use_data_identity_headers(app, monkeypatch):
+async def test_root_management_scope_comes_from_account_path(app, monkeypatch):
     from openviking.server.identity import RequestContext
     from openviking_cli.session.user_id import UserIdentifier
 
@@ -179,7 +205,8 @@ async def test_root_studio_account_selector_does_not_use_data_identity_headers(a
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         result = await client.get(
-            "/studio/connections", headers={"X-OpenViking-Studio-Account": "team"}
+            "/api/v1/admin/accounts/team/bot/connections",
+            headers={"X-OpenViking-Studio-Account": "ignored"},
         )
     assert result.status_code == 200
     assert dispatch.call_args.args[0].account_id == "team"
@@ -187,8 +214,8 @@ async def test_root_studio_account_selector_does_not_use_data_identity_headers(a
 
 
 async def test_removed_scheduler_endpoint_is_not_exposed(app, monkeypatch):
-    app.dependency_overrides[get_request_context] = lambda: SimpleNamespace(
-        role="root", account_id="a"
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"), role=Role.ROOT
     )
     dispatch = AsyncMock()
     monkeypatch.setattr(bot_studio, "dispatch", dispatch)
@@ -198,3 +225,69 @@ async def test_removed_scheduler_endpoint_is_not_exposed(app, monkeypatch):
         response = await client.get("/studio/schedules")
     assert response.status_code == 404
     dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "method,suffix,body,action",
+    [
+        ("PATCH", "", {"revision": 3, "enabled": True}, "resume"),
+        ("DELETE", "?revision=3", None, "delete"),
+        ("POST", "/verifications", {"revision": 3}, "verify"),
+    ],
+)
+async def test_connection_http_methods_map_to_lifecycle(
+    app, monkeypatch, method, suffix, body, action
+):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("default", "root"),
+        role=Role.ROOT,
+    )
+    dispatch = AsyncMock(return_value={"status": "ok", "result": {}})
+    monkeypatch.setattr(bot_studio, "dispatch", dispatch)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.request(
+            method, "/api/v1/admin/accounts/team/bot/connections/id" + suffix, json=body
+        )
+    assert response.status_code == 200
+    assert dispatch.call_args.args[0].account_id == "team"
+    assert dispatch.call_args.args[2] == {"action": action, "revision": 3}
+
+
+async def test_platform_credentials_are_opaque_to_http_router(app, monkeypatch):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"),
+        role=Role.ROOT,
+    )
+    identity = {"user_id": "bot", "api_key": "server-only"}
+    monkeypatch.setattr(bot_studio, "selected_identity", AsyncMock(return_value=identity))
+    dispatch = AsyncMock(return_value={"status": "ok", "result": {"id": "new"}})
+    monkeypatch.setattr(bot_studio, "dispatch", dispatch)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/admin/accounts/a/bot/connections",
+            json={
+                "type": "future-platform",
+                "user_id": "bot",
+                "credentials": {"client_id": "client", "client_secret": "secret"},
+            },
+        )
+        assert response.status_code == 200
+        assert dispatch.call_args.args[2]["type"] == "future-platform"
+        assert dispatch.call_args.args[2]["credentials"] == {
+            "client_id": "client",
+            "client_secret": "secret",
+        }
+        assert dispatch.call_args.kwargs["identity"] == identity
+        response = await client.patch(
+            "/api/v1/admin/accounts/a/bot/connections/new",
+            json={
+                "revision": 1,
+                "enabled": True,
+                "identity": {"api_key": "forged"},
+            },
+        )
+        assert response.status_code == 422

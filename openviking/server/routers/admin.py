@@ -617,6 +617,9 @@ async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
+    include_credentials: bool = Query(
+        True, description="Include credentials when permitted; false returns only credential availability"
+    ),
     name: str | None = None,
     role: str | None = None,
     page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
@@ -633,9 +636,18 @@ async def list_users(
         limit=limit,
         name_filter=name,
         role_filter=role,
-        expose_key=expose_key,
+        expose_key=expose_key or not include_credentials,
         page=page,
     )
+    if not include_credentials:
+        users = [
+            {
+                "user_id": user["user_id"],
+                "role": user["role"],
+                "api_key_available": bool(user.get("api_key")),
+            }
+            for user in users
+        ]
     return Response(status="ok", result=users)
 
 

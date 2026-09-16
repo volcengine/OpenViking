@@ -19,7 +19,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('../../-api', () => ({
   createConnection: api.create,
-  updateConnection: api.update,
+  verifyConnection: api.update,
   getBotUsers: api.users,
 }))
 vi.mock('#/hooks/use-app-connection', () => ({
