@@ -178,7 +178,7 @@ const activity = {
       botDisabledFooter: '启用 VikingBot 后即可与 Agent 对话',
       historyTitle: 'Agent 会话历史',
       historyDescription:
-        '这里只显示 Agent 面板使用过的会话。新建会话会创建一段空白的 Agent 上下文。',
+        '工作台与 VikingBot 共用对话记录，也包含当前浏览器保存的旧 Agent 会话。',
       loadingSessions: '正在加载会话...',
       noSessions: '暂无历史会话',
       createTimeout: '创建工作台会话超时，请检查连接设置后重试。',

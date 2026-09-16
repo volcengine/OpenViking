@@ -186,7 +186,7 @@ const activity = {
       botDisabledFooter: 'Enable bot mode to chat with the Agent',
       historyTitle: 'Agent session history',
       historyDescription:
-        'Only sessions used by the Agent panel are shown here; a new session opens a blank Agent context.',
+        'Conversations are shared with VikingBot, including legacy Agent sessions saved in this browser.',
       loadingSessions: 'Loading sessions...',
       noSessions: 'No session history yet',
       createTimeout:
