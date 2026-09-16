@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Protocol
@@ -30,6 +31,16 @@ class TaskStore(Protocol):
 
     async def list(
         self, account_id: str, *, user_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]: ...
+
+    async def list_page(
+        self,
+        account_id: str,
+        *,
+        user_id: str,
+        limit: int,
+        before: tuple[float, str] | None = None,
+        **filters: Any,
     ) -> List[Dict[str, Any]]: ...
 
     async def delete(
@@ -89,6 +100,50 @@ class PersistentTaskStore:
                 continue
             tasks.append(json.loads(_decode_bytes(raw)))
         return tasks
+
+    async def list_page(
+        self,
+        account_id: str,
+        *,
+        user_id: str,
+        limit: int,
+        before: tuple[float, str] | None = None,
+        **filters: Any,
+    ) -> List[Dict[str, Any]]:
+        """Scan durable records, retaining only the requested page in memory.
+
+        AGFS has no indexed query API. This bounds record memory, but still
+        performs O(n) reads; it deliberately does not load all tasks into the tracker.
+        """
+        from openviking.service.task_pagination import matches
+
+        directory = self._task_dir(account_id, user_id)
+        try:
+            entries = await self._agfs.ls(directory)
+        except (AGFSNotFoundError, FileNotFoundError):
+            return []
+        heap: list = []
+        for entry in entries:
+            path = entry.get("path") or f"{directory}/{entry.get('name', '')}"
+            if not path.endswith(".json"):
+                continue
+            try:
+                task = json.loads(_decode_bytes(await self._agfs.read(path)))
+            except (AGFSNotFoundError, FileNotFoundError):
+                continue
+            if task.get("account_id") != account_id or task.get("user_id") != user_id:
+                continue
+            key = (float(task["created_at"]), str(task["task_id"]))
+            if before is not None and key >= before:
+                continue
+            if not matches(task, **filters):
+                continue
+            item = (*key, task)
+            if len(heap) < limit:
+                heapq.heappush(heap, item)
+            elif key > heap[0][:2]:
+                heapq.heapreplace(heap, item)
+        return [item[2] for item in sorted(heap, reverse=True)]
 
     async def delete(self, task_id: str, *, account_id: str, user_id: Optional[str] = None) -> None:
         """Delete a task record, succeeding if it has already been removed."""

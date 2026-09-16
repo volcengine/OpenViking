@@ -30,6 +30,7 @@ const workspace = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
+      compile: { title: 'Compile' },
       home: {
         title: '首页',
       },
@@ -400,6 +401,14 @@ const workspace = {
       },
       error: '失败原因',
       result: '执行结果',
+      noResultRunning: '任务进行中',
+      noResultRunningDescription:
+        '尚未返回最终结果。可查看上方已上报的阶段和执行日志。',
+      noResultPending: '任务排队中',
+      noResultPendingDescription:
+        '任务尚未开始执行，开始后会显示已上报的阶段和执行日志。',
+      noResultCompleted: '任务已完成',
+      noResultCompletedDescription: '该任务未返回可展示的执行结果。',
       noResult: '暂无执行结果',
       noResultDescription: '任务完成后，接口返回的结果会显示在这里。',
       noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
@@ -457,6 +466,7 @@ const workspace = {
       unknown: '未知',
     },
     types: {
+      compile: 'Compile',
       session_commit: '会话提交',
       add_resource: '资源处理',
       add_skill: '技能导入',

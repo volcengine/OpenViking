@@ -15,6 +15,8 @@ export type ResourceRef = {
 }
 
 export type TerminalEntry = {
+  compileTaskId?: string
+  compileForm?: boolean
   id: string
   kind: 'command' | 'error' | 'info' | 'success'
   title: string

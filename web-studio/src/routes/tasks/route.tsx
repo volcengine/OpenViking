@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   CheckCircle2Icon,
   CheckIcon,
@@ -63,6 +63,7 @@ export const Route = createFileRoute('/tasks')({
 const DEFAULT_PAGE_SIZE = 20
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
+  'compile',
   'session_commit',
   'add_resource',
   'add_skill',
@@ -82,6 +83,7 @@ const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
 ]
 
 function TasksRoute() {
+  const navigate = useNavigate()
   const { i18n, t } = useTranslation('tasksPage')
   const { identityScopeKey } = useAppConnection()
   const queryClient = useQueryClient()
@@ -104,7 +106,7 @@ function TasksRoute() {
     if (!dedupByResource) return rawTasks
     const map = new Map<string, TaskRecord>()
     for (const t of rawTasks) {
-      const key = t.resource_id ? `res:${t.resource_id}` : `task:${t.task_id}`
+      const key = t.resource_id && t.task_type !== 'compile' ? `res:${t.resource_id}` : `task:${t.task_id}`
       if (!map.has(key)) {
         map.set(key, t)
       }
@@ -866,7 +868,11 @@ function TasksRoute() {
                           'cursor-pointer outline-none hover:bg-muted/35 focus-visible:bg-muted/35 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
                       )}
                       onClick={() => {
-                        if (taskId) setSelectedTaskId(taskId)
+                        if (taskId) {
+                          if (task.task_type === 'compile') {
+                            void navigate({ to: '/compile/tasks/$taskId', params: { taskId } })
+                          } else setSelectedTaskId(taskId)
+                        }
                       }}
                       onKeyDown={(event) => {
                         if (
@@ -874,7 +880,9 @@ function TasksRoute() {
                           (event.key === 'Enter' || event.key === ' ')
                         ) {
                           event.preventDefault()
-                          setSelectedTaskId(taskId)
+                          if (task.task_type === 'compile') {
+                            void navigate({ to: '/compile/tasks/$taskId', params: { taskId } })
+                          } else setSelectedTaskId(taskId)
                         }
                       }}
                     >

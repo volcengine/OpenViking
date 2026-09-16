@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 560" width="1240" height="560">
+  <defs>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000000" flood-opacity="0.1"/>
+    </filter>
+    <marker id="arrL" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect width="1240" height="560" fill="#FAFBFC"/>
+
+  <!-- ===== Card 1: 写入 ===== -->
+  <rect x="20" y="40" width="280" height="470" rx="8" fill="#FFFFFF" stroke="#9CC3EA" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="20" y="40" width="280" height="50" rx="8" fill="#4A90D9"/>
+  <rect x="20" y="78" width="280" height="12" fill="#4A90D9"/>
+  <circle cx="48" cy="65" r="14" fill="#FFFFFF" opacity="0.22"/>
+  <text x="48" y="70" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">1</text>
+  <text x="72" y="62" font-family="Noto Sans SC, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">写入</text>
+  <text x="72" y="80" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#DBEAFE" letter-spacing="1">INGESTION</text>
+
+  <rect x="36" y="110" width="248" height="58" rx="6" fill="#EBF3FB" stroke="#C9DDF2" stroke-width="1"/>
+  <text x="48" y="132" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2C5E8A">实时追加</text>
+  <text x="48" y="150" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">每条消息 append 到 messages.jsonl</text>
+  <text x="48" y="164" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">持 AGFS PathLock</text>
+
+  <rect x="36" y="176" width="248" height="58" rx="6" fill="#EBF3FB" stroke="#C9DDF2" stroke-width="1"/>
+  <text x="48" y="198" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2C5E8A">auto-commit 触发</text>
+  <text x="48" y="216" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">pending_tokens&gt;150k / 消息&gt;100</text>
+  <text x="48" y="230" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">idle &gt; 86400s</text>
+
+  <rect x="36" y="242" width="248" height="72" rx="6" fill="#EBF3FB" stroke="#C9DDF2" stroke-width="1"/>
+  <text x="48" y="264" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2C5E8A">Phase 1 同步归档</text>
+  <text x="48" y="282" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">retention 按 turn_budget 选边界</text>
+  <text x="48" y="298" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">写 archive_NNN/ · 重写根文件</text>
+  <text x="48" y="312" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">入队 QueueFS</text>
+
+  <rect x="36" y="322" width="248" height="58" rx="6" fill="#EBF3FB" stroke="#C9DDF2" stroke-width="1"/>
+  <text x="48" y="344" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2C5E8A">tool-results 外置</text>
+  <text x="48" y="362" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">大工具输出存 tool-results/</text>
+  <text x="48" y="376" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">消息内仅留引用 + synopsis</text>
+
+  <text x="160" y="420" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">原始消息永不删除</text>
+  <text x="160" y="438" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">archive 只增不减，无 TTL</text>
+
+  <!-- arrow -->
+  <line x1="300" y1="275" x2="326" y2="275" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrL)"/>
+
+  <!-- ===== Card 2: 后处理 ===== -->
+  <rect x="330" y="40" width="280" height="470" rx="8" fill="#FFFFFF" stroke="#D9C6E8" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="330" y="40" width="280" height="50" rx="8" fill="#9B59B6"/>
+  <rect x="330" y="78" width="280" height="12" fill="#9B59B6"/>
+  <circle cx="358" cy="65" r="14" fill="#FFFFFF" opacity="0.22"/>
+  <text x="358" y="70" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">2</text>
+  <text x="382" y="62" font-family="Noto Sans SC, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">后处理</text>
+  <text x="382" y="80" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#EDE9FE" letter-spacing="1">POST-PROCESS</text>
+
+  <rect x="346" y="110" width="248" height="58" rx="6" fill="#F6F0FA" stroke="#E3D4EE" stroke-width="1"/>
+  <text x="358" y="132" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#6B3F8A">Phase 2 异步 worker</text>
+  <text x="358" y="150" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">hydrate 工具输出全文</text>
+  <text x="358" y="164" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">重启安全，写 .done / .failed.json</text>
+
+  <rect x="346" y="176" width="248" height="58" rx="6" fill="#F6F0FA" stroke="#E3D4EE" stroke-width="1"/>
+  <text x="358" y="198" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#6B3F8A">Working Memory v2 摘要</text>
+  <text x="358" y="216" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">.overview.md（7 段）+ .abstract.md</text>
+  <text x="358" y="230" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">增量模式 KEEP/APPEND/REPLACE</text>
+
+  <rect x="346" y="242" width="248" height="72" rx="6" fill="#EAF7EE" stroke="#BFE6CB" stroke-width="1"/>
+  <text x="358" y="264" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2E7D46">Phase 1 轨迹提取</text>
+  <text x="358" y="282" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">归档消息 → trajectories/*.md</text>
+  <text x="358" y="298" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">12 段操作契约 · add_only</text>
+
+  <rect x="346" y="322" width="248" height="72" rx="6" fill="#FDF3E3" stroke="#F0D8A8" stroke-width="1"/>
+  <text x="358" y="344" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#9A6B14">Phase 2 经验提取</text>
+  <text x="358" y="362" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">轨迹 + 向量候选 → experiences/*.md</text>
+  <text x="358" y="378" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">Situation/Approach/Reflect · upsert</text>
+
+  <text x="470" y="420" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">记忆文件向量化入 VikingDB</text>
+  <text x="470" y="438" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">derived_from 血缘 + supersedes 替代</text>
+
+  <!-- arrow -->
+  <line x1="610" y1="275" x2="636" y2="275" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrL)"/>
+
+  <!-- ===== Card 3: 消费 ===== -->
+  <rect x="640" y="40" width="280" height="470" rx="8" fill="#FFFFFF" stroke="#BEE3C7" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="640" y="40" width="280" height="50" rx="8" fill="#50B86A"/>
+  <rect x="640" y="78" width="280" height="12" fill="#50B86A"/>
+  <circle cx="668" cy="65" r="14" fill="#FFFFFF" opacity="0.22"/>
+  <text x="668" y="70" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">3</text>
+  <text x="692" y="62" font-family="Noto Sans SC, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">消费</text>
+  <text x="692" y="80" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#D7F0DE" letter-spacing="1">CONSUMPTION</text>
+
+  <rect x="656" y="110" width="248" height="58" rx="6" fill="#EAF7EE" stroke="#BFE6CB" stroke-width="1"/>
+  <text x="668" y="132" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2E7D46">向量检索召回</text>
+  <text x="668" y="150" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">experiences / trajectories / events</text>
+  <text x="668" y="164" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">按检索锚点语义召回</text>
+
+  <rect x="656" y="176" width="248" height="58" rx="6" fill="#EAF7EE" stroke="#BFE6CB" stroke-width="1"/>
+  <text x="668" y="198" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2E7D46">上下文自动注入</text>
+  <text x="668" y="216" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">各 Context Provider 按需注入</text>
+  <text x="668" y="230" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">profile / identity / 相关经验</text>
+
+  <rect x="656" y="242" width="248" height="72" rx="6" fill="#EAF7EE" stroke="#BFE6CB" stroke-width="1"/>
+  <text x="668" y="264" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#2E7D46">Train 子系统消费</text>
+  <text x="668" y="282" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">trajectory 作为 rollout 信号</text>
+  <text x="668" y="298" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">SessionCommitPolicyTrainer 回流</text>
+  <text x="668" y="312" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">→ gradient / policy 训练</text>
+
+  <text x="780" y="420" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">默认检索 = resources + user_root</text>
+  <text x="780" y="438" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">peer 隔离范围可控</text>
+
+  <!-- arrow -->
+  <line x1="920" y1="275" x2="946" y2="275" stroke="#94A3B8" stroke-width="2" marker-end="url(#arrL)"/>
+
+  <!-- ===== Card 4: 维护删除 ===== -->
+  <rect x="950" y="40" width="270" height="470" rx="8" fill="#FFFFFF" stroke="#CBD2D6" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="950" y="40" width="270" height="50" rx="8" fill="#7F8C8D"/>
+  <rect x="950" y="78" width="270" height="12" fill="#7F8C8D"/>
+  <circle cx="978" cy="65" r="14" fill="#FFFFFF" opacity="0.22"/>
+  <text x="978" y="70" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">4</text>
+  <text x="1002" y="62" font-family="Noto Sans SC, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">维护/删除</text>
+  <text x="1002" y="80" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#E4E8EA" letter-spacing="1">MAINTENANCE</text>
+
+  <rect x="966" y="110" width="238" height="58" rx="6" fill="#F1F2F4" stroke="#D7DBE0" stroke-width="1"/>
+  <text x="978" y="132" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#4B5563">upsert / add_only</text>
+  <text x="978" y="150" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">experiences 同名重写</text>
+  <text x="978" y="164" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">trajectories / events 只追加</text>
+
+  <rect x="966" y="176" width="238" height="58" rx="6" fill="#F1F2F4" stroke="#D7DBE0" stroke-width="1"/>
+  <text x="978" y="198" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#4B5563">supersedes 替代</text>
+  <text x="978" y="216" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">新经验名不同时旧经验自动删除</text>
+  <text x="978" y="230" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">并继承其轨迹历史</text>
+
+  <rect x="966" y="242" width="238" height="58" rx="6" fill="#F1F2F4" stroke="#D7DBE0" stroke-width="1"/>
+  <text x="978" y="264" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#4B5563">隐私过滤</text>
+  <text x="978" y="282" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">privacy/ 规则影响记忆提取</text>
+  <text x="978" y="296" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">版本管理 + 回滚</text>
+
+  <rect x="966" y="308" width="238" height="58" rx="6" fill="#F1F2F4" stroke="#D7DBE0" stroke-width="1"/>
+  <text x="978" y="330" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#4B5563">原始消息保留</text>
+  <text x="978" y="348" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">archive 只增不减，永不物理删除</text>
+  <text x="978" y="362" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">删除仅作用于记忆索引</text>
+
+  <text x="1085" y="420" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">PATCH/REPLACE/SUM/IMMUTABLE</text>
+  <text x="1085" y="438" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">按字段策略合并</text>
+</svg>

@@ -292,12 +292,25 @@ class CompileService:
     def _client(self) -> CompileAPIClient:
         return CompileAPIClient(self._endpoint())
 
+    def capabilities(self, ctx: RequestContext) -> dict[str, Any]:
+        try:
+            endpoint = self._endpoint()
+        except UnavailableError:
+            return {"configured": False, "can_create": False, "reason_code": "NOT_CONFIGURED"}
+        allowed = endpoint.local or bool(ctx.api_key)
+        return {
+            "configured": True,
+            "can_create": allowed,
+            "reason_code": None if allowed else "API_KEY_REQUIRED",
+        }
+
     async def create(
         self,
         request: CompileRequest,
         *,
         connection: Mapping[str, Any],
         ctx: RequestContext,
+        idempotency_key: str | None = None,
     ) -> TaskRecord:
         endpoint = self._endpoint()
         if not endpoint.local and not str(connection.get("api_key") or "").strip():
@@ -311,6 +324,7 @@ class CompileService:
             private_payload=private_payload,
             connection=connection,
             ctx=ctx,
+            **({"idempotency_key": idempotency_key} if idempotency_key else {}),
         )
 
     async def submit(

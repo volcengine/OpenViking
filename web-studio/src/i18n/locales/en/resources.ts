@@ -133,6 +133,10 @@ const resources = {
     tooManyFiles: 'Only the first {{count}} files were kept.',
     error: 'Request Failed',
     dirPicker: {
+      scope: 'Resource scope',
+      mine: 'My resources',
+      shared: 'Shared resources',
+
       title: 'Select Directory',
       select: 'Select',
       cancel: 'Cancel',

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import * as React from 'react'
 import { createInstance } from 'i18next'
 import { I18nextProvider } from 'react-i18next'
 import type { ComponentType } from 'react'
+import type * as TanStackRouter from '@tanstack/react-router'
 import en from '#/i18n/locales/en/workspace'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -23,6 +23,12 @@ import { Route } from './route'
 import type { TaskRecord } from './-lib/task-record'
 
 const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn() }))
+
+const navigationMocks = vi.hoisted(() => ({ navigate: vi.fn() }))
+vi.mock('@tanstack/react-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof TanStackRouter>()),
+  useNavigate: () => navigationMocks.navigate,
+}))
 
 vi.mock('#/lib/ov-client', () => ({
   getOvResult: async (value: unknown) => value,
@@ -191,5 +197,25 @@ describe('task status presentation', () => {
     await user.click(screen.getByRole('button', { name: 'Go to next page' }))
     expectRunningRows(6)
     expect(screen.getByText('26 / 0')).toBeDefined()
+  })
+  it('keeps separate compile runs and opens their dedicated detail page', async () => {
+    records = ['cmp_one', 'cmp_two'].map((task_id) => ({
+      task_id,
+      task_type: 'compile',
+      resource_id: 'same-source',
+      status: 'running',
+      created_at: 200,
+    }))
+    const user = await renderPage()
+    await user.click(
+      await screen.findByRole('row', { name: 'View details for task cmp_one' }),
+    )
+    expect(
+      screen.getByRole('row', { name: 'View details for task cmp_two' }),
+    ).toBeDefined()
+    expect(navigationMocks.navigate).toHaveBeenCalledWith({
+      to: '/compile/tasks/$taskId',
+      params: { taskId: 'cmp_one' },
+    })
   })
 })

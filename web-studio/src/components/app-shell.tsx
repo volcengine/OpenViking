@@ -111,6 +111,14 @@ const NAV_ITEMS: readonly NavItem[] = [
     titleKey: 'navigation.skills.title',
     to: '/skills',
   },
+
+  {
+    icon: SparklesIcon,
+    id: 'compile',
+    section: 'workspace',
+    titleKey: 'navigation.compile.title',
+    to: '/compile',
+  },
   {
     icon: BrainIcon,
     id: 'agentExperience',

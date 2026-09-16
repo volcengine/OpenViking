@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 560" width="820" height="560">
+  <defs>
+    <filter id="shadow1" x="-3%" y="-3%" width="106%" height="108%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000000" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <rect width="820" height="560" fill="#FAFBFC"/>
+
+  <!-- ===== 阶段1：SOURCE ===== -->
+  <g>
+    <rect x="60" y="30" width="700" height="220" rx="14" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.5" filter="url(#shadow1)"/>
+    <rect x="60" y="30" width="700" height="50" rx="14" fill="#3B82F6"/>
+    <rect x="60" y="66" width="700" height="14" fill="#3B82F6"/>
+    <circle cx="90" cy="55" r="14" fill="#FFFFFF" opacity="0.22"/>
+    <text x="90" y="60" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">1</text>
+    <text x="114" y="52" font-family="Noto Sans SC, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">阶段一：SOURCE</text>
+    <text x="114" y="70" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#DBEAFE">源获取 + 解析 + 写入 VikingFS（同步执行）</text>
+    <rect x="660" y="45" width="80" height="20" rx="10" fill="#FFFFFF" opacity="0.18"/>
+    <text x="700" y="59" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#FFFFFF">同步执行</text>
+
+    <!-- 子步骤 -->
+    <g font-family="Noto Sans SC, sans-serif">
+      <rect x="80" y="100" width="320" height="36" rx="6" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+      <circle cx="98" cy="118" r="8" fill="#3B82F6"/>
+      <text x="98" y="122" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">1</text>
+      <text x="116" y="122" font-size="12" fill="#1E3A5F">Accessor 获取源到本地临时目录</text>
+
+      <rect x="420" y="100" width="320" height="36" rx="6" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+      <circle cx="438" cy="118" r="8" fill="#3B82F6"/>
+      <text x="438" y="122" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">2</text>
+      <text x="456" y="122" font-size="12" fill="#1E3A5F">Parser 解析内容（文本/图片/表格/代码）</text>
+
+      <rect x="80" y="148" width="320" height="36" rx="6" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+      <circle cx="98" cy="166" r="8" fill="#3B82F6"/>
+      <text x="98" y="170" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">3</text>
+      <text x="116" y="170" font-size="12" fill="#1E3A5F">TreeBuilder 构建目录树，写入 VikingFS</text>
+
+      <rect x="420" y="148" width="320" height="36" rx="6" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+      <circle cx="438" cy="166" r="8" fill="#3B82F6"/>
+      <text x="438" y="170" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">4</text>
+      <text x="456" y="170" font-size="12" fill="#1E3A5F">生成 prepared payload（后处理元数据）</text>
+    </g>
+
+    <text x="410" y="225" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">返回 root_uri 和 task_id，快速响应</text>
+  </g>
+
+  <!-- 中间箭头 -->
+  <g>
+    <line x1="410" y1="260" x2="410" y2="290" stroke="#94A3B8" stroke-width="2.5"/>
+    <polygon points="402,290 418,290 410,304" fill="#94A3B8"/>
+    <rect x="350" y="268" width="120" height="20" rx="4" fill="#F1F5F9"/>
+    <text x="410" y="282" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">入队异步执行</text>
+  </g>
+
+  <!-- ===== 阶段2：POST_PROCESS ===== -->
+  <g>
+    <rect x="60" y="310" width="700" height="220" rx="14" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1.5" filter="url(#shadow1)"/>
+    <rect x="60" y="310" width="700" height="50" rx="14" fill="#8B5CF6"/>
+    <rect x="60" y="346" width="700" height="14" fill="#8B5CF6"/>
+    <circle cx="90" cy="335" r="14" fill="#FFFFFF" opacity="0.22"/>
+    <text x="90" y="340" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">2</text>
+    <text x="114" y="332" font-family="Noto Sans SC, sans-serif" font-size="16" font-weight="700" fill="#FFFFFF">阶段二：POST_PROCESS</text>
+    <text x="114" y="350" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#EDE9FE">向量化 + 语义摘要 + 索引（异步队列）</text>
+    <rect x="650" y="325" width="90" height="20" rx="10" fill="#FFFFFF" opacity="0.18"/>
+    <text x="695" y="339" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#FFFFFF">异步队列</text>
+
+    <g font-family="Noto Sans SC, sans-serif">
+      <rect x="80" y="380" width="320" height="36" rx="6" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+      <circle cx="98" cy="398" r="8" fill="#8B5CF6"/>
+      <text x="98" y="402" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">1</text>
+      <text x="116" y="402" font-size="12" fill="#4C1D95">向量化写入 VikingDB</text>
+
+      <rect x="420" y="380" width="320" height="36" rx="6" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+      <circle cx="438" cy="398" r="8" fill="#8B5CF6"/>
+      <text x="438" y="402" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">2</text>
+      <text x="456" y="402" font-size="12" fill="#4C1D95">语义层级摘要（.abstract.md L0/L1）</text>
+
+      <rect x="80" y="428" width="320" height="36" rx="6" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+      <circle cx="98" cy="446" r="8" fill="#8B5CF6"/>
+      <text x="98" y="450" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">3</text>
+      <text x="116" y="450" font-size="12" fill="#4C1D95">目录元数据向量化</text>
+
+      <rect x="420" y="428" width="320" height="36" rx="6" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+      <circle cx="438" cy="446" r="8" fill="#8B5CF6"/>
+      <text x="438" y="450" text-anchor="middle" font-size="10" font-weight="700" fill="#FFFFFF">4</text>
+      <text x="456" y="450" font-size="12" fill="#4C1D95">ACL 授权 + 标签处理</text>
+    </g>
+
+    <text x="410" y="505" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">wait=true 时阻塞直到完成，确保写入后立即可检索</text>
+  </g>
+</svg>

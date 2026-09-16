@@ -23,10 +23,13 @@ import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as AgentExperienceRouteRouteImport } from './routes/agent-experience/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
+import { Route as CompileIndexRouteImport } from './routes/compile/index'
 import { Route as AgentExperienceIndexRouteImport } from './routes/agent-experience/index'
 import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
 import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
+import { Route as CompileNewRouteImport } from './routes/compile/new'
 import { Route as AgentExperienceExperienceUriRouteImport } from './routes/agent-experience/$experienceUri'
+import { Route as CompileTasksTaskIdRouteImport } from './routes/compile/tasks/$taskId'
 
 const WatchesRouteRoute = WatchesRouteRouteImport.update({
   id: '/watches',
@@ -98,6 +101,11 @@ const SessionsIndexRoute = SessionsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => SessionsRouteRoute,
 } as any)
+const CompileIndexRoute = CompileIndexRouteImport.update({
+  id: '/compile/',
+  path: '/compile/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AgentExperienceIndexRoute = AgentExperienceIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -113,12 +121,22 @@ const OauthConsentRoute = OauthConsentRouteImport.update({
   path: '/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CompileNewRoute = CompileNewRouteImport.update({
+  id: '/compile/new',
+  path: '/compile/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AgentExperienceExperienceUriRoute =
   AgentExperienceExperienceUriRouteImport.update({
     id: '/$experienceUri',
     path: '/$experienceUri',
     getParentRoute: () => AgentExperienceRouteRoute,
   } as any)
+const CompileTasksTaskIdRoute = CompileTasksTaskIdRouteImport.update({
+  id: '/compile/tasks/$taskId',
+  path: '/compile/tasks/$taskId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -135,10 +153,13 @@ export interface FileRoutesByFullPath {
   '/users': typeof UsersRouteRoute
   '/watches': typeof WatchesRouteRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
+  '/compile/new': typeof CompileNewRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
+  '/compile/': typeof CompileIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -153,10 +174,13 @@ export interface FileRoutesByTo {
   '/users': typeof UsersRouteRoute
   '/watches': typeof WatchesRouteRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
+  '/compile/new': typeof CompileNewRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/agent-experience': typeof AgentExperienceIndexRoute
+  '/compile': typeof CompileIndexRoute
   '/sessions': typeof SessionsIndexRoute
+  '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -174,10 +198,13 @@ export interface FileRoutesById {
   '/users': typeof UsersRouteRoute
   '/watches': typeof WatchesRouteRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
+  '/compile/new': typeof CompileNewRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
   '/agent-experience/': typeof AgentExperienceIndexRoute
+  '/compile/': typeof CompileIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -196,10 +223,13 @@ export interface FileRouteTypes {
     | '/users'
     | '/watches'
     | '/agent-experience/$experienceUri'
+    | '/compile/new'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/agent-experience/'
+    | '/compile/'
     | '/sessions/'
+    | '/compile/tasks/$taskId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -214,10 +244,13 @@ export interface FileRouteTypes {
     | '/users'
     | '/watches'
     | '/agent-experience/$experienceUri'
+    | '/compile/new'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/agent-experience'
+    | '/compile'
     | '/sessions'
+    | '/compile/tasks/$taskId'
   id:
     | '__root__'
     | '/'
@@ -234,10 +267,13 @@ export interface FileRouteTypes {
     | '/users'
     | '/watches'
     | '/agent-experience/$experienceUri'
+    | '/compile/new'
     | '/oauth/consent'
     | '/oauth/verify'
     | '/agent-experience/'
+    | '/compile/'
     | '/sessions/'
+    | '/compile/tasks/$taskId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -254,8 +290,11 @@ export interface RootRouteChildren {
   TasksRouteRoute: typeof TasksRouteRoute
   UsersRouteRoute: typeof UsersRouteRoute
   WatchesRouteRoute: typeof WatchesRouteRoute
+  CompileNewRoute: typeof CompileNewRoute
   OauthConsentRoute: typeof OauthConsentRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
+  CompileIndexRoute: typeof CompileIndexRoute
+  CompileTasksTaskIdRoute: typeof CompileTasksTaskIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -358,6 +397,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsIndexRouteImport
       parentRoute: typeof SessionsRouteRoute
     }
+    '/compile/': {
+      id: '/compile/'
+      path: '/compile'
+      fullPath: '/compile/'
+      preLoaderRoute: typeof CompileIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/agent-experience/': {
       id: '/agent-experience/'
       path: '/'
@@ -379,12 +425,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/compile/new': {
+      id: '/compile/new'
+      path: '/compile/new'
+      fullPath: '/compile/new'
+      preLoaderRoute: typeof CompileNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/agent-experience/$experienceUri': {
       id: '/agent-experience/$experienceUri'
       path: '/$experienceUri'
       fullPath: '/agent-experience/$experienceUri'
       preLoaderRoute: typeof AgentExperienceExperienceUriRouteImport
       parentRoute: typeof AgentExperienceRouteRoute
+    }
+    '/compile/tasks/$taskId': {
+      id: '/compile/tasks/$taskId'
+      path: '/compile/tasks/$taskId'
+      fullPath: '/compile/tasks/$taskId'
+      preLoaderRoute: typeof CompileTasksTaskIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
   }
 }
@@ -428,8 +488,11 @@ const rootRouteChildren: RootRouteChildren = {
   TasksRouteRoute: TasksRouteRoute,
   UsersRouteRoute: UsersRouteRoute,
   WatchesRouteRoute: WatchesRouteRoute,
+  CompileNewRoute: CompileNewRoute,
   OauthConsentRoute: OauthConsentRoute,
   OauthVerifyRoute: OauthVerifyRoute,
+  CompileIndexRoute: CompileIndexRoute,
+  CompileTasksTaskIdRoute: CompileTasksTaskIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 540" width="1240" height="540">
+  <defs>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000000" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="1240" height="540" fill="#FAFBFC"/>
+
+  <!-- ==================== 卡片1：写入 ==================== -->
+  <g>
+    <rect x="20" y="40" width="270" height="430" rx="14" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="20" y="40" width="270" height="56" rx="14" fill="#3B82F6"/>
+    <rect x="20" y="82" width="270" height="14" fill="#3B82F6"/>
+    <circle cx="48" cy="68" r="15" fill="#FFFFFF" opacity="0.22"/>
+    <text x="48" y="73" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">1</text>
+    <text x="74" y="64" font-family="Noto Sans SC, sans-serif" font-size="18" font-weight="700" fill="#FFFFFF">写入</text>
+    <text x="74" y="84" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#DBEAFE" letter-spacing="1">INGESTION</text>
+    <rect x="208" y="58" width="68" height="20" rx="10" fill="#FFFFFF" opacity="0.18"/>
+    <text x="242" y="72" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#FFFFFF">源入口</text>
+
+    <rect x="36" y="112" width="238" height="58" rx="8" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+    <text x="48" y="134" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#1E40AF">源获取</text>
+    <text x="48" y="152" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">本地文件 / URL / Git / 飞书</text>
+    <text x="48" y="166" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">Connector 数据源</text>
+
+    <rect x="36" y="180" width="238" height="46" rx="8" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+    <text x="48" y="200" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#1E40AF">Accessor 路由</text>
+    <text x="48" y="216" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">按优先级自动匹配源类型</text>
+
+    <rect x="36" y="236" width="238" height="46" rx="8" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+    <text x="48" y="256" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#1E40AF">目标 URI 解析</text>
+    <text x="48" y="272" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">to / parent / 自动推导</text>
+
+    <rect x="36" y="292" width="238" height="46" rx="8" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1"/>
+    <text x="48" y="312" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#1E40AF">写入 VikingFS</text>
+    <text x="48" y="328" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">TreeBuilder 结构化存储</text>
+
+    <text x="155" y="372" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">6 种 HTTP 入口 · 3 种 MCP 工具</text>
+    <text x="155" y="390" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">Watch 调度 · Connector 数据流</text>
+  </g>
+
+  <!-- 箭头1 -->
+  <g>
+    <line x1="300" y1="255" x2="326" y2="255" stroke="#94A3B8" stroke-width="2"/>
+    <polygon points="326,248 340,255 326,262" fill="#94A3B8"/>
+    <rect x="306" y="236" width="30" height="16" rx="4" fill="#F1F5F9"/>
+    <text x="321" y="248" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#64748B">触发</text>
+  </g>
+
+  <!-- ==================== 卡片2：后处理 ==================== -->
+  <g>
+    <rect x="350" y="40" width="270" height="430" rx="14" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="350" y="40" width="270" height="56" rx="14" fill="#8B5CF6"/>
+    <rect x="350" y="82" width="270" height="14" fill="#8B5CF6"/>
+    <circle cx="378" cy="68" r="15" fill="#FFFFFF" opacity="0.22"/>
+    <text x="378" y="73" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">2</text>
+    <text x="404" y="64" font-family="Noto Sans SC, sans-serif" font-size="18" font-weight="700" fill="#FFFFFF">后处理</text>
+    <text x="404" y="84" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#EDE9FE" letter-spacing="1">POST-PROCESS</text>
+    <rect x="538" y="58" width="68" height="20" rx="10" fill="#FFFFFF" opacity="0.18"/>
+    <text x="572" y="72" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#FFFFFF">异步队列</text>
+
+    <rect x="366" y="112" width="238" height="46" rx="8" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+    <text x="378" y="132" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#5B21B6">解析结构化</text>
+    <text x="378" y="148" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">文本 / 图片 / 表格 / 代码</text>
+
+    <rect x="366" y="168" width="238" height="46" rx="8" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+    <text x="378" y="188" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#5B21B6">向量化 (VikingDB)</text>
+    <text x="378" y="204" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">chunk 切分 + embedding 索引</text>
+
+    <rect x="366" y="224" width="238" height="46" rx="8" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+    <text x="378" y="244" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#5B21B6">语义层级摘要</text>
+    <text x="378" y="260" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">L0 文件级 / L1 目录级 .abstract.md</text>
+
+    <rect x="366" y="280" width="238" height="46" rx="8" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+    <text x="378" y="300" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#5B21B6">目录元数据索引</text>
+    <text x="378" y="316" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">目录本身可被语义检索命中</text>
+
+    <rect x="366" y="336" width="238" height="46" rx="8" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1"/>
+    <text x="378" y="356" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#5B21B6">ACL / 标签</text>
+    <text x="378" y="372" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">创建者自动授权 + 检索标签</text>
+
+    <text x="485" y="412" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">两阶段提交：SOURCE → POST_PROCESS</text>
+  </g>
+
+  <!-- 箭头2 -->
+  <g>
+    <line x1="630" y1="255" x2="656" y2="255" stroke="#94A3B8" stroke-width="2"/>
+    <polygon points="656,248 670,255 656,262" fill="#94A3B8"/>
+    <rect x="636" y="236" width="40" height="16" rx="4" fill="#F1F5F9"/>
+    <text x="656" y="248" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#64748B">可检索</text>
+  </g>
+
+  <!-- ==================== 卡片3：消费 ==================== -->
+  <g>
+    <rect x="680" y="40" width="270" height="430" rx="14" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="680" y="40" width="270" height="56" rx="14" fill="#10B981"/>
+    <rect x="680" y="82" width="270" height="14" fill="#10B981"/>
+    <circle cx="708" cy="68" r="15" fill="#FFFFFF" opacity="0.22"/>
+    <text x="708" y="73" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">3</text>
+    <text x="734" y="64" font-family="Noto Sans SC, sans-serif" font-size="18" font-weight="700" fill="#FFFFFF">消费</text>
+    <text x="734" y="84" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#D1FAE5" letter-spacing="1">CONSUMPTION</text>
+    <rect x="868" y="58" width="68" height="20" rx="10" fill="#FFFFFF" opacity="0.18"/>
+    <text x="902" y="72" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#FFFFFF">默认范围</text>
+
+    <rect x="696" y="112" width="238" height="58" rx="8" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="708" y="134" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#065F46">向量检索</text>
+    <text x="708" y="152" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">POST /api/v1/search/search</text>
+    <text x="708" y="166" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">VikingDB 相似度搜索</text>
+
+    <rect x="696" y="180" width="238" height="46" rx="8" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="708" y="200" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#065F46">上下文组装</text>
+    <text x="708" y="216" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">自动注入对话上下文</text>
+
+    <rect x="696" y="236" width="238" height="46" rx="8" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="708" y="256" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#065F46">文件级访问</text>
+    <text x="708" y="272" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">read / tree / WebDAV</text>
+
+    <rect x="696" y="292" width="238" height="46" rx="8" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="708" y="312" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#065F46">Watch 自动刷新</text>
+    <text x="708" y="328" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">定时重新拉取源并覆盖</text>
+
+    <rect x="696" y="348" width="238" height="46" rx="8" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="1"/>
+    <text x="708" y="368" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#065F46">MCP 工具</text>
+    <text x="708" y="384" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">Agent 直接读写检索</text>
+
+    <text x="815" y="412" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">全局共享 · 所有用户默认可见</text>
+  </g>
+
+  <!-- 箭头3 -->
+  <g>
+    <line x1="960" y1="255" x2="986" y2="255" stroke="#94A3B8" stroke-width="2"/>
+    <polygon points="986,248 1000,255 986,262" fill="#94A3B8"/>
+    <rect x="970" y="236" width="30" height="16" rx="4" fill="#F1F5F9"/>
+    <text x="985" y="248" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#64748B">变更</text>
+  </g>
+
+  <!-- ==================== 卡片4：维护删除 ==================== -->
+  <g>
+    <rect x="1010" y="40" width="270" height="430" rx="14" fill="#FFFFFF" stroke="#FCD34D" stroke-width="1.5" filter="url(#shadow)"/>
+    <rect x="1010" y="40" width="270" height="56" rx="14" fill="#F59E0B"/>
+    <rect x="1010" y="82" width="270" height="14" fill="#F59E0B"/>
+    <circle cx="1038" cy="68" r="15" fill="#FFFFFF" opacity="0.22"/>
+    <text x="1038" y="73" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">4</text>
+    <text x="1064" y="64" font-family="Noto Sans SC, sans-serif" font-size="18" font-weight="700" fill="#FFFFFF">维护删除</text>
+    <text x="1064" y="84" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#FEF3C7" letter-spacing="1">MAINTENANCE</text>
+    <rect x="1198" y="58" width="68" height="20" rx="10" fill="#FFFFFF" opacity="0.18"/>
+    <text x="1232" y="72" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="10" fill="#FFFFFF">自动级联</text>
+
+    <rect x="1026" y="112" width="238" height="58" rx="8" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+    <text x="1038" y="134" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#92400E">更新 / 覆盖</text>
+    <text x="1038" y="152" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">write / edit / reimport</text>
+    <text x="1038" y="166" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">Watch 定时刷新覆盖</text>
+
+    <rect x="1026" y="180" width="238" height="46" rx="8" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+    <text x="1038" y="200" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#92400E">删除清理</text>
+    <text x="1038" y="216" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">rm / recursive 删除</text>
+
+    <rect x="1026" y="236" width="238" height="46" rx="8" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+    <text x="1038" y="256" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#92400E">索引同步</text>
+    <text x="1038" y="272" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">语义刷新 + 向量删除</text>
+
+    <rect x="1026" y="292" width="238" height="46" rx="8" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+    <text x="1038" y="312" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#92400E">Watch 联动停用</text>
+    <text x="1038" y="328" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">目标被删自动停用监控</text>
+
+    <rect x="1026" y="348" width="238" height="46" rx="8" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+    <text x="1038" y="368" font-family="Noto Sans SC, sans-serif" font-size="12" font-weight="700" fill="#92400E">记忆链接清理</text>
+    <text x="1038" y="384" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#475569">防止悬空引用</text>
+
+    <text x="1145" y="412" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#64748B">删除联动 · 自动级联处理</text>
+  </g>
+
+  <!-- 底部闭环虚线 -->
+  <g>
+    <path d="M 1145 485 Q 1145 510 1110 510 L 155 510 Q 120 510 120 485" fill="none" stroke="#CBD5E1" stroke-width="1.5" stroke-dasharray="6,4"/>
+    <polygon points="120,485 113,495 127,495" fill="#CBD5E1"/>
+    <text x="620" y="503" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="11" fill="#94A3B8">删除后可重新写入 · 形成生命周期闭环</text>
+  </g>
+</svg>

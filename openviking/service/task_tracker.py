@@ -94,6 +94,9 @@ class TaskRecord:
 
     def to_dict(self, *, include_events: bool = False) -> Dict[str, Any]:
         """Serialize for JSON response."""
+        public_meta = deepcopy(self.meta)
+        public_meta.pop("submission_hash", None)
+        public_meta.pop("submission_token", None)
         return {
             **({"execution_events": deepcopy(self.execution_events)} if include_events else {}),
             "task_id": self.task_id,
@@ -102,7 +105,7 @@ class TaskRecord:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "resource_id": self.resource_id,
-            "meta": _sanitize_task_result(deepcopy(self.meta)),
+            "meta": _sanitize_task_result(public_meta),
             "stage": self.stage,
             "result": _sanitize_task_result(deepcopy(self.result)),
             "error": self.error,
@@ -1050,6 +1053,48 @@ class TaskTracker:
         if task is None or not self._matches_owner(task, account_id, user_id):
             return None
         return self._copy(task)
+
+    async def list_page(
+        self,
+        *,
+        account_id: str,
+        user_id: str,
+        limit: int,
+        before: tuple[float, str] | None = None,
+        include_cached: bool = False,
+        additional_owner: tuple[str, str] | None = None,
+        **filters: Any,
+    ) -> list[TaskRecord]:
+        from openviking.service.task_pagination import matches
+
+        async def read():
+            owners = {(account_id, user_id)}
+            if additional_owner:
+                owners.add(additional_owner)
+            records = []
+            for account, user in owners:
+                page = await self._store_io.run(
+                    "list_page",
+                    lambda account=account, user=user: run_to_completion(
+                        lambda: self._store.list_page(
+                            account, user_id=user, limit=limit, before=before, **filters
+                        )
+                    ),
+                )
+                records.extend(self._record_from_payload(record) for record in page)
+            if include_cached:
+                records.extend(self._copy(t) for t in self._cache_snapshot())
+            visible = {
+                t.task_id: t
+                for t in records
+                if (before is None or (t.created_at, t.task_id) < before)
+                and matches(t.to_dict(), **filters)
+            }
+            return sorted(visible.values(), key=lambda t: (t.created_at, t.task_id), reverse=True)[
+                :limit
+            ]
+
+        return await self._dispatcher.run(read)
 
     async def list_tasks(
         self,
