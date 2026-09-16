@@ -146,15 +146,21 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
         "skill": "viking://agent/skills/wiki",
         "args": {"api_key": "synthetic-private-key", "mode": "summary"},
     }
-    headers = {"Idempotency-Key": "http-retry-key-123"}
+    headers = {"Idempotency-Key": "http-retry-key-123", "X-Request-ID": "original-request-id"}
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         first = await client.post("/api/v1/compile", json=payload, headers=headers)
         assert first.status_code == 202, first.text
-        second = await client.post("/api/v1/compile", json=payload, headers=headers)
+        second = await client.post(
+            "/api/v1/compile",
+            json=payload,
+            headers={**headers, "X-Request-ID": "retry-request-id"},
+        )
         task_id = first.json()["result"]["task_id"]
         assert second.json()["result"]["task_id"] == task_id
+        auth = await tracker.get_task_auth(task_id, account_id="acme", user_id="alice")
+        assert auth["openviking_connection"]["request_id"] == "original-request-id"
         recovery = await client.get("/api/v1/compile/submissions/http-retry-key-123")
         assert recovery.json()["result"]["task_id"] == task_id
         assert isinstance((await client.get("/api/v1/tasks")).json()["result"], list)

@@ -231,7 +231,8 @@ async def test_chat_proxy_forwards_trusted_request_without_root_api_key(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkeypatch):
+@pytest.mark.parametrize("request_id", [None, "compile-request-123"])
+async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkeypatch, request_id):
     calls = {}
 
     class FakeCompileService:
@@ -267,7 +268,7 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         created = await client.post(
             "/api/v1/compile",
-            headers=headers,
+            headers={**headers, **({"X-Request-ID": request_id} if request_id else {})},
             json={
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
@@ -292,7 +293,10 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
     assert "GET /api/v1/tasks/{task_id}" in legacy_status.json()["detail"]
     assert legacy_cancel.status_code == 400
     assert "POST /api/v1/tasks/{task_id}/cancel" in legacy_cancel.json()["detail"]
-    assert calls["connection"] == {"api_key": "active-user-key"}
+    assert calls["connection"] == {
+        "api_key": "active-user-key",
+        **({"request_id": request_id} if request_id else {}),
+    }
     assert calls["owner"] == ("acct", "alice")
 
 
@@ -319,7 +323,7 @@ async def test_compile_route_uses_ov_owned_task_and_rejects_legacy_routes(monkey
 async def test_compile_api_client_session_protocol_retry_and_cancellation(
     monkeypatch, tmp_path, caplog, finish, args
 ):
-    """Runtime callbacks retain saved args through polling, cancellation, and queue recovery."""
+    """Runtime calls retain saved args and request ID through polling, cancellation, and recovery."""
     forwarded = []
     response_status = {
         "cancel": "cancelled",
@@ -407,7 +411,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         "get_queue_manager",
         lambda: SimpleNamespace(enqueue=AsyncMock()),
     )
-    connection = {"api_key": "active-user-key"}
+    connection = {"api_key": "active-user-key", "request_id": "compile-request-123"}
     owner = {"account_id": "acct", "user_id": "alice"}
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
     task = await service.create(
@@ -434,6 +438,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert restored.to_dict() == listed.to_dict() == task.to_dict()
     auth = await tracker.get_task_auth(task.task_id, **owner)
     assert auth["external_request_private"] == private_payload
+    assert auth["openviking_connection"] == connection
     external_task_id = await service.submit(
         task.task_id,
         restored.meta["request"],
@@ -442,13 +447,13 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     )
     status_snapshot = await service.get(
         external_task_id,
-        {"api_key": "active-user-key"},
+        auth["openviking_connection"],
         payload=restored.meta["request"],
         private_payload=auth["external_request_private"],
     )
     cancel_snapshot = await service.cancel(
         external_task_id,
-        {"api_key": "active-user-key"},
+        auth["openviking_connection"],
         payload=restored.meta["request"],
         private_payload=auth["external_request_private"],
     )
@@ -460,6 +465,9 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         "https://compile.example.com/runtime/v1/tasks/cancel",
     ]
     assert all(request["method"] == "POST" for request in forwarded)
+    assert all(
+        request["headers"]["X-Tt-Logid"] == connection["request_id"] for request in forwarded
+    )
     assert "X-Gateway-Token" not in forwarded[0]["headers"]
     assert forwarded[0]["headers"]["Idempotency-Key"] == task.task_id
     assert forwarded[0]["headers"]["X-API-Key"] == "active-user-key"
@@ -479,9 +487,11 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert status_snapshot.meta == {"token_usage": {"total_tokens": 12}}
     assert cancel_snapshot.status == "cancelled"
     if not args:
-        await service.get(external_task_id, connection)
-        await service.cancel(external_task_id, connection)
+        legacy_connection = {"api_key": "active-user-key"}
+        await service.get(external_task_id, legacy_connection)
+        await service.cancel(external_task_id, legacy_connection)
         assert forwarded[-1]["body"] == forwarded[-2]["body"] == callback_body
+        assert all("X-Tt-Logid" not in call["headers"] for call in forwarded[-2:])
     await tracker.complete(task.task_id, {"output": "wiki"}, **owner)
     assert await tracker.get_task_auth(task.task_id, **owner) == {}
 
@@ -547,6 +557,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
 
     async def runtime_request(_client, method, url, headers, json):
         nonlocal polls
+        assert headers["X-Tt-Logid"] == connection["request_id"]
         if url.endswith("/runtime/v1/tasks"):
             assert json["payload"].get("args") == (args or None)
             task_id = headers["Idempotency-Key"]
@@ -582,7 +593,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             resource_id="viking://resources/source",
             payload={**restored.meta["request"], "to": target},
             private_payload=private_payload,
-            connection={"api_key": "active-user-key"},
+            connection=connection,
             ctx=RequestContext(user=UserIdentifier(account, user), role=Role.USER),
         )
 

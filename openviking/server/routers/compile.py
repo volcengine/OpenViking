@@ -20,8 +20,12 @@ async def create_compile(
     idempotency_key: str | None = Header(
         None, min_length=16, max_length=128, pattern=r"^[A-Za-z0-9:._-]+$"
     ),
+    x_request_id: str | None = Header(None),
 ):
     connection = {"api_key": ctx.api_key} if ctx.api_key else {}
+    # Persist the submission's request ID for all asynchronous Runtime calls.
+    if x_request_id:
+        connection["request_id"] = x_request_id
     task = await get_service().compile.create(
         body,
         connection=connection,

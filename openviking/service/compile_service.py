@@ -117,6 +117,7 @@ class CompileAPIClient:
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, str]:
+        """Build Runtime headers from saved connection data; legacy tasks may lack request_id."""
         headers = {
             "Content-Type": "application/json",
         }
@@ -125,6 +126,9 @@ class CompileAPIClient:
         api_key = str(connection.get("api_key") or "").strip()
         if api_key:
             headers["X-API-Key"] = api_key
+        request_id = connection.get("request_id")
+        if request_id:
+            headers["X-Tt-Logid"] = request_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         return headers
