@@ -64,7 +64,7 @@ export function FeishuSetup({
   const verification = connection?.status.verification
   const steps = t('steps', { returnObjects: true }) as string[]
   return (
-    <section className="w-full min-w-0 p-4 md:p-6">
+    <section className="mx-auto w-full min-w-0 max-w-4xl px-6 py-8 sm:px-8 lg:px-12 lg:py-10">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold">{t('setupTitle')}</h2>
@@ -86,7 +86,7 @@ export function FeishuSetup({
             </li>
           ))}
         </ol>
-        <div className="space-y-5 rounded-xl border p-5 md:p-6">
+        <div className="space-y-5 rounded-xl border p-6 sm:p-8">
           <h3 className="font-semibold">{steps[step]}</h3>
           {connection && (
             <p className="text-sm text-muted-foreground">
@@ -117,7 +117,7 @@ export function FeishuSetup({
           {step === 1 && (
             <>
               <p className="text-sm leading-7">{t('credentialsHint')}</p>
-              <label className="block space-y-2 text-sm">
+              <label className="grid gap-3 text-sm">
                 <span>{t('appId')}</span>
                 <Input
                   value={appId}
@@ -125,7 +125,7 @@ export function FeishuSetup({
                   autoComplete="off"
                 />
               </label>
-              <label className="block space-y-2 text-sm">
+              <label className="grid gap-3 text-sm">
                 <span>{t('appSecret')}</span>
                 <Input
                   type="password"
@@ -134,7 +134,7 @@ export function FeishuSetup({
                   autoComplete="new-password"
                 />
               </label>
-              <label className="block space-y-2 text-sm">
+              <label className="grid gap-3 text-sm">
                 <span>{t('runtimeUser')}</span>
                 <select
                   aria-label={t('runtimeUser')}

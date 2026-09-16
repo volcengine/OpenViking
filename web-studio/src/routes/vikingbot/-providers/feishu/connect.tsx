@@ -149,7 +149,7 @@ function ScanSetup({
     connections.error
   const step = run?.state === 'ready' ? 2 : id ? 1 : 0
   return (
-    <section className="w-full min-w-0 space-y-6 p-4 md:p-6">
+    <section className="mx-auto w-full min-w-0 max-w-4xl space-y-8 px-6 py-8 sm:px-8 lg:px-12 lg:py-10">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold">{t('setupTitle')}</h2>
@@ -159,27 +159,27 @@ function ScanSetup({
           {t('qr.close')}
         </Button>
       </div>
-      <ol className="grid grid-cols-3 gap-2 text-sm">
+      <ol className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         {STEP_LABELS.map((label, index) => (
           <li
             key={label}
             aria-current={step === index ? 'step' : undefined}
-            className={`rounded-lg px-3 py-2 ${step === index ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'}`}
+            className={`rounded-lg px-4 py-3 ${step === index ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'}`}
           >
             {index + 1}. {t(`qr.${label}`)}
           </li>
         ))}
       </ol>
-      <div className="rounded-xl border p-5 md:p-6">
+      <div className="rounded-xl border p-6 sm:p-8">
         {!id && current.isPending ? (
           <p role="status">{t('loading')}</p>
         ) : !id && !current.error ? (
-          <div className="max-w-xl space-y-4">
-            <label className="block space-y-2 text-sm">
+          <div className="space-y-6">
+            <label className="grid gap-3 text-sm">
               <span>{t('runtimeUser')}</span>
               <select
                 aria-label={t('runtimeUser')}
-                className="h-10 w-full rounded-md border bg-background px-3"
+                className="h-11 w-full rounded-md border bg-background px-4"
                 value={selectedUser}
                 disabled={mutation.isPending || users.isPending}
                 onChange={(event) => setUserId(event.target.value)}
@@ -216,9 +216,10 @@ function ScanSetup({
                 </Button>
               </p>
             )}
-            <label className="block space-y-2 text-sm">
+            <label className="grid gap-3 text-sm">
               <span>{t('qr.botName')}</span>
               <Input
+                className="h-11 px-4"
                 value={name}
                 maxLength={50}
                 onChange={(event) => setName(event.target.value)}
