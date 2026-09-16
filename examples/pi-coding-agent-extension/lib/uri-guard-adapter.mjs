@@ -18,6 +18,7 @@ const VIKING_URI_TOOL_HINTS = {
     example: (uri) => `viking_browse(action="list", uri="${uri}")`,
   },
   bash: {
+    shell: true,
     tool: "viking_read or viking_search",
     example: (uri) => `viking_read(uri="${uri}", level="overview")`,
   },

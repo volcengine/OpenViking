@@ -107,3 +107,21 @@ test("uri guard still denies a viking URI used as a location", async () => {
     assert.equal(decision.kind, "deny", name);
   }
 });
+
+test("uri guard lets a shell command carry a viking URI as data", async () => {
+  const next = async () => ({ kind: "allow", marker: true });
+  const commands = [
+    "curl -s 'https://host/api?uri=viking://user/default/memories/a.md'",
+    "ov read viking://user/default/memories/a.md",
+    "grep -n 'viking://' /tmp/notes.md",
+    'U="viking://user/default/memories/a.md"; curl -s "$U"',
+    "python3 - <<'PY'\nuri='viking://user/default/memories/a.md'\nprint(uri)\nPY",
+  ];
+  for (const command of commands) {
+    assert.deepEqual(
+      await guardVikingUri({ name: "bash", arguments: { command } }, next),
+      { kind: "allow", marker: true },
+      command,
+    );
+  }
+});

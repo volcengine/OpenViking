@@ -89,3 +89,32 @@ test("deny envelopes carry only the keys their host recognizes", () => {
 test("normalizeToolName trims and lowercases", () => {
   assert.equal(normalizeToolName(" Read "), "read")
 })
+
+// A shell command is program text, not a path list: it carries a URI as data
+// (an HTTP payload, the ov CLI's own argument, a grep pattern, a heredoc) far
+// more often than it opens one as a file, and scanning the whole command
+// denied all of those. Shell hints read operand positions instead.
+test("shell hints deny a URI the shell opens as a file, not one it carries as data", () => {
+  for (const command of [
+    "cat viking://resources/a.md",
+    "head -n 20 viking://resources/a.md",
+    "sed -n 1,5p viking://resources/a.md",
+    "cp viking://resources/a.md /tmp/a.md",
+    "echo x > viking://resources/a.md",
+    "sudo cat viking://resources/a.md",
+  ]) {
+    assert.ok(evaluateUriGuard("bash", { command })?.uri, command)
+  }
+
+  for (const command of [
+    "curl -s 'https://host/api?uri=viking://resources/a.md'",
+    "ov read viking://resources/a.md",
+    "grep -n 'viking://' README.md",
+    'U="viking://resources/a.md"; curl -s "$U"',
+    "python3 - <<'PY'\nuri='viking://resources/a.md'\nprint(uri)\nPY",
+    "echo 'viking://resources/a.md is virtual'",
+    "cp /tmp/a.md /tmp/b.md",
+  ]) {
+    assert.equal(evaluateUriGuard("bash", { command }), null, command)
+  }
+})

@@ -62,6 +62,10 @@ test("Cursor URI guard redirects virtual paths to OpenViking MCP tools", () => {
   assert.equal(shellDecision.permission, "deny");
   assert.match(shellDecision.agent_message, /OpenViking MCP read or search/);
 
+  assert.deepEqual(
+    evaluateHostUriGuard("cursor", { command: "ov read viking://resources/project/file.md" }),
+    {},
+  );
   assert.deepEqual(evaluateHostUriGuard("cursor", { file_path: "/tmp/file.md" }), {});
 });
 

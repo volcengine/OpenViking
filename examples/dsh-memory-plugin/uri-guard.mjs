@@ -19,6 +19,7 @@ const GUARDED_TOOLS = {
       `${mcp("grep")}(pattern="${escapeText(args?.pattern)}", uri="${uri}")`,
   },
   bash: {
+    shell: true,
     tool: `${mcp("read")} or ${mcp("search")}`,
     example: uri => `${mcp("read")}(uris="${uri}")`,
   },

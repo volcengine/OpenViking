@@ -29,3 +29,14 @@ test("pi URI guard allows normal local paths and OpenViking native tools", () =>
   assert.equal(guardVikingUriToolCall({ toolName: "read", input: { path: "/tmp/file.md" } }), null)
   assert.equal(guardVikingUriToolCall({ toolName: "viking_read", input: { uri: "viking://resources/file.md" } }), null)
 })
+
+test("pi URI guard lets a shell command carry a viking URI as data", () => {
+  assert.equal(guardVikingUriToolCall({
+    toolName: "bash",
+    input: { command: "ov read viking://resources/project/file.md" },
+  }), null)
+  assert.equal(guardVikingUriToolCall({
+    toolName: "bash",
+    input: { command: "curl -s 'https://host/api?uri=viking://resources/project/file.md'" },
+  }), null)
+})

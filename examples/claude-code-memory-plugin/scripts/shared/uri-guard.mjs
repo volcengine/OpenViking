@@ -70,6 +70,51 @@ export function findVikingUriInValue(value, skipKeys) {
   return null;
 }
 
+// A shell command is program text, not a list of paths: it names a viking://
+// URI as an operand (cat viking://file.md) far less often than it carries one
+// as data — an HTTP payload, the ov CLI's own argument, a grep pattern, a
+// heredoc that builds a JSON body. Scanning the whole command denied every one
+// of those, so a shell hint reads operand positions instead.
+const SHELL_WRAPPERS = new Set(["command", "doas", "env", "nohup", "sudo", "time"]);
+const SHELL_FILE_COMMANDS = new Set([
+  ".", "base64", "bat", "cat", "chmod", "chown", "code", "cp", "du", "emacs",
+  "file", "head", "less", "ln", "ls", "md5", "md5sum", "mkdir", "more", "mv",
+  "nano", "open", "readlink", "realpath", "rm", "rmdir", "sha1sum", "sha256sum",
+  "shasum", "source", "stat", "strings", "tail", "tee", "touch", "tree", "vi",
+  "vim", "wc", "xxd",
+]);
+// Their first non-option argument is a pattern or a program, never a path.
+const SHELL_PATTERN_FIRST_COMMANDS = new Set(["awk", "egrep", "fgrep", "gawk", "grep", "rg", "sed"]);
+
+/** The viking URI a shell command would open as a file, or null when it only carries one as data. */
+export function findVikingUriInShellCommand(command) {
+  const text = String(command || "");
+  for (const segment of text.split(/[\n;|&()]+/)) {
+    const words = segment.trim().split(/\s+/).filter(Boolean);
+    let index = 0;
+    while (index < words.length && (
+      SHELL_WRAPPERS.has(words[index]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])
+    )) index += 1;
+    const name = (words[index] || "").replace(/^.*\//, "");
+    const patternFirst = SHELL_PATTERN_FIRST_COMMANDS.has(name);
+    if (!patternFirst && !SHELL_FILE_COMMANDS.has(name)) continue;
+    let operand = false;
+    for (let position = index + 1; position < words.length; position += 1) {
+      const word = words[position].replace(/^["']|["']$/g, "");
+      if (word.startsWith("-")) continue;
+      if (patternFirst && !operand) {
+        operand = true;
+        continue;
+      }
+      const uri = findVikingUriInValue(word);
+      if (uri) return uri;
+      operand = true;
+    }
+  }
+  const redirect = text.match(/(?:>>?|<)\s*["']?(viking:\/\/[^\s"'\x60<>)|;&]*)/i);
+  return redirect ? redirect[1] : null;
+}
+
 export function buildGuardMessage(uri, hint = {}) {
   const tool = hint.tool || "the OpenViking MCP tools";
   const example = typeof hint.example === "function" ? hint.example(uri) : hint.example;
@@ -100,14 +145,17 @@ export const DEFAULT_TOOL_HINTS = {
     ),
   },
   bash: {
+    shell: true,
     tool: "OpenViking MCP read or search",
     example: (uri) => `read(uris="${uri}")`,
   },
   runcommand: {
+    shell: true,
     tool: "OpenViking MCP read or search",
     example: (uri) => `read(uris="${uri}")`,
   },
   shell: {
+    shell: true,
     tool: "OpenViking MCP read or search",
     example: (uri) => `read(uris="${uri}")`,
   },
@@ -119,14 +167,17 @@ export const DEFAULT_TOOL_HINTS = {
  * `hints` carries the host's replacement tool names and example calls; `guarded`
  * narrows which tool names the host guards at all, because the set is not the
  * same everywhere — claude-code and opencode leave the shell alone (their
- * matchers never see it), pi guards it.
+ * matchers never see it), pi guards it. A hint marked `shell: true` describes
+ * a shell command, whose URI is read from operand positions rather than the
+ * whole command, because a shell command carries URIs as data far more often
+ * than as paths.
  */
 export function evaluateUriGuard(toolName, input = {}, { hints = DEFAULT_TOOL_HINTS, guarded } = {}) {
   const name = normalizeToolName(toolName);
   if (guarded && !guarded.has(name)) return null;
   const hint = hints[name];
   if (!hint) return null;
-  const uri = findVikingUri(input);
+  const uri = hint.shell ? findVikingUriInShellCommand(input?.command) : findVikingUri(input);
   if (!uri) return null;
   return {
     uri,
