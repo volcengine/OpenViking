@@ -15,6 +15,10 @@ import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { Thread } from '#/routes/sessions/-components/thread'
 import { getCapabilities, getConnections } from './-api'
 import { Schedules } from './-components/schedules'
+import {
+  createVikingBotWebSessionId,
+  isVikingBotWebSession,
+} from './-web-sessions'
 import { Channels } from './-components/channels'
 import {
   PlatformConversationList,
@@ -73,7 +77,9 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
     const generation = ++mountedGeneration.current
     setError('')
     try {
-      const session = await createSession.mutateAsync(undefined)
+      const session = await createSession.mutateAsync(
+        createVikingBotWebSessionId(),
+      )
       if (generation !== mountedGeneration.current) return
       setTitle(session.session_id, t('newChat'))
       setSelected({ id: session.session_id })
@@ -182,6 +188,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
               )}
               {filter !== 'feishu' &&
                 sessions.data
+                  .filter(isVikingBotWebSession)
                   .filter((s) =>
                     (getTitle(s.session_id) || t('newChat'))
                       .toLowerCase()
