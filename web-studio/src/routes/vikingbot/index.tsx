@@ -2,12 +2,13 @@ import { ConversationRow } from './-components/conversation-row'
 import { readPlaygroundAgentSessionIds } from '#/routes/playground/-lib/utils'
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import {
   ArrowLeftIcon,
   BotIcon,
   PlusIcon,
   MessageSquareIcon,
+  UsersIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
@@ -20,17 +21,14 @@ import {
 } from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { Thread } from '#/routes/sessions/-components/thread'
-import { getCapabilities, getConnections } from './-api'
+import { getCapabilities, getConnections, getConversations } from './-api'
 import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
 } from '#/lib/sessions/vikingbot-sessions'
 import { DeleteConversation } from '#/components/sessions/delete-conversation'
 import { Channels } from './-components/channels'
-import {
-  PlatformConversationList,
-  PlatformHistory,
-} from './-components/platform-history'
+import { PlatformHistory } from './-components/platform-history'
 
 const PAGE_TABS = ['conversations', 'channels'] as const
 const START_COMMAND = 'openviking-server --with-bot'
@@ -84,6 +82,45 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
   const sessions = useSessionListByRecency()
   const createSession = useCreateSession()
   const { getTitle, setTitle, removeTitle } = useSessionTitles(scope)
+  const platformQueries = useQueries({
+    queries: (connections.data ?? []).map((connection) => ({
+      queryKey: ['vikingbot', scope, connection.id, 'conversations'],
+      queryFn: () => getConversations(connection.id),
+      refetchInterval: 5000,
+      enabled: canManage,
+    })),
+  })
+  const rows = [
+    ...sessions.data
+      .filter((session) =>
+        isVikingBotWebSession(session, readPlaygroundAgentSessionIds(scope)),
+      )
+      .map((session) => ({
+        id: session.session_id,
+        connection: undefined as string | undefined,
+        title: getTitle(session.session_id) || t('newChat'),
+        time: session.mod_time,
+        channel: 'web',
+      })),
+    ...platformQueries.flatMap((query, index) =>
+      (query.data ?? []).map((item) => ({
+        id: item.conversation,
+        connection: connections.data![index].id,
+        title: item.title || t('newChat'),
+        time: item.time,
+        channel: connections.data![index].type ?? 'feishu',
+      })),
+    ),
+  ]
+    .filter(
+      (row) =>
+        (activeFilter === 'all' || row.channel === activeFilter) &&
+        row.title.toLowerCase().includes(search.toLowerCase()),
+    )
+    .sort(
+      (a, b) =>
+        (Date.parse(b.time ?? '') || 0) - (Date.parse(a.time ?? '') || 0),
+    )
   async function create() {
     if (creating.current) return
     creating.current = true
@@ -199,60 +236,54 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                   {error}
                 </p>
               )}
-              {activeFilter !== 'feishu' &&
-                sessions.data
-                  .filter((session) =>
-                    isVikingBotWebSession(
-                      session,
-                      readPlaygroundAgentSessionIds(scope),
-                    ),
-                  )
-                  .filter((s) =>
-                    (getTitle(s.session_id) || t('newChat'))
-                      .toLowerCase()
-                      .includes(search.toLowerCase()),
-                  )
-                  .map((s) => (
-                    <ConversationRow
-                      key={s.session_id}
-                      title={getTitle(s.session_id) || t('newChat')}
-                      subtitle={t('web')}
-                      time={s.mod_time}
-                      icon={<MessageSquareIcon className="size-4" />}
-                      selected={
-                        selected?.id === s.session_id && !selected.connection
-                      }
-                      onSelect={() => select(s.session_id)}
-                      action={
-                        <DeleteConversation
-                          id={s.session_id}
-                          title={getTitle(s.session_id) || t('newChat')}
-                          onDeleted={() => {
-                            removeTitle(s.session_id)
-                            setSelected((current) =>
-                              current?.id === s.session_id &&
-                              !current.connection
-                                ? undefined
-                                : current,
-                            )
-                          }}
-                        />
-                      }
-                    />
-                  ))}
-              {activeFilter !== 'web' &&
-                connections.data?.map((c) => (
-                  <PlatformConversationList
-                    key={c.id}
-                    connection={c}
-                    selected={
-                      selected?.connection === c.id ? selected.id : undefined
-                    }
-                    search={search}
-                    scope={scope}
-                    onSelect={(connection, id) => select(id, connection)}
-                  />
-                ))}
+              {platformQueries.map(
+                (query, index) =>
+                  query.error && (
+                    <p
+                      key={index}
+                      role="alert"
+                      className="p-2 text-sm text-destructive"
+                    >
+                      {query.error.message}
+                    </p>
+                  ),
+              )}
+              {rows.map((row) => (
+                <ConversationRow
+                  key={`${row.connection ?? 'web'}:${row.id}`}
+                  title={row.title}
+                  subtitle={t(row.channel)}
+                  time={row.time}
+                  icon={
+                    row.connection ? (
+                      <UsersIcon className="size-4" />
+                    ) : (
+                      <MessageSquareIcon className="size-4" />
+                    )
+                  }
+                  selected={
+                    selected?.id === row.id &&
+                    selected.connection === row.connection
+                  }
+                  onSelect={() => select(row.id, row.connection)}
+                  action={
+                    !row.connection ? (
+                      <DeleteConversation
+                        id={row.id}
+                        title={row.title}
+                        onDeleted={() => {
+                          removeTitle(row.id)
+                          setSelected((current) =>
+                            current?.id === row.id && !current.connection
+                              ? undefined
+                              : current,
+                          )
+                        }}
+                      />
+                    ) : undefined
+                  }
+                />
+              ))}
               {activeFilter === 'feishu' && !canManage && (
                 <p className="p-3 text-sm text-muted-foreground">
                   {t('adminOnly')}
