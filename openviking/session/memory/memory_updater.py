@@ -635,14 +635,19 @@ class MessageRange:
 
     @staticmethod
     def _speaker_for(message: Message) -> str:
-        return getattr(message, "peer_id", None) or message.role
+        peer_id = getattr(message, "peer_id", None)
+        return f"{message.role} [peer={peer_id}]" if peer_id else message.role
 
     def _can_merge_messages(self, previous: Message, current: Message) -> bool:
         previous_meta = self._chunk_meta_for(previous)
         current_meta = self._chunk_meta_for(current)
         if previous_meta is None or current_meta is None:
             return False
-        if self._speaker_for(previous) != self._speaker_for(current):
+        # 身份比较独立于展示格式，避免同一 peer 的不同角色被合并。
+        if (previous.role, getattr(previous, "peer_id", None)) != (
+            current.role,
+            getattr(current, "peer_id", None),
+        ):
             return False
         return (
             previous_meta.source_message_id == current_meta.source_message_id
