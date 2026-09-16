@@ -104,8 +104,7 @@ limit on the combined JSON. The payload is preserved without truncation.
 
 New records carry a format version. Existing unversioned records remain readable, and updates
 write the new format; no full database rewrite, index rebuild, or embedding recomputation is
-required for this format upgrade. Delta replay also accepts both formats. Other `string` fields
-in the physical bytes-row format retain their existing limit.
+required for this format upgrade. Delta replay also accepts both formats.
 
 This compatibility is one-way: older releases cannot read the new record format. To downgrade,
 restore a backup taken before the first write with the new format; changing the executable alone
