@@ -368,3 +368,28 @@ async def test_numeric_permission_ids_are_sent_as_strings():
 def test_invalid_permission_ids_are_not_accepted():
     for value in (True, False, None, {}, []):
         assert console.scope_ids({"name": next(iter(console.SCOPES)), "id": value}) == {}
+
+
+async def test_current_feishu_catalog_uses_chat_read_permission():
+    calls = []
+
+    async def post(path, body=None):
+        calls.append((path, body))
+        if "/scope/all/" in path:
+            return {
+                "data": {
+                    "appScopeList": [
+                        {"name": "im:message.group_at_msg:readonly", "id": 101},
+                        {"name": "im:message:send_as_bot", "id": 102},
+                        {"name": "im:chat:read", "id": 103},
+                    ]
+                }
+            }
+        if path == "/developers/v1/event/cli_test":
+            return {"data": {"eventMode": 4, "appEvents": ["im.message.receive_v1"]}}
+        return {"code": 0}
+
+    await console.configure_app(SimpleNamespace(post=post), "cli_test")
+    body = next(body for path, body in calls if "/scope/update/" in path)
+    assert set(body["appScopeIDs"]) == {"101", "102", "103"}
+    assert body["userScopeIDs"] == []
