@@ -1,4 +1,9 @@
 export default {
+  platformReady: 'Scan to connect, then add your bot to Feishu groups.',
+  connectedBots: 'Connected bots',
+  noConnectedBots: 'No bots connected yet. Select Feishu above to get started.',
+  dingtalk: 'DingTalk',
+
   schedules: 'Scheduled tasks',
   schedule: {
     adminOnly: 'Only server administrators can view scheduled tasks.',
@@ -132,7 +137,7 @@ export default {
   loading: 'Loading…',
   error: 'Something went wrong: {{error}}',
   addFeishu: 'Connect Feishu',
-  comingSoon: 'Studio integration coming soon',
+  comingSoon: 'Coming soon',
   adminOnly:
     'Only the server administrator can manage connections and view Feishu history.',
   webReady: 'Web conversations use your current OpenViking identity.',

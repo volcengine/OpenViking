@@ -5,7 +5,7 @@ import {
 } from '../-providers/registry'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CableIcon, GlobeIcon, PlusIcon } from 'lucide-react'
+import { CableIcon, PlusIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
 import { getConnections, updateConnection } from '../-api'
@@ -68,19 +68,6 @@ export function Channels({
             {t('manageHint')}
           </p>
         </div>
-        {canManage &&
-          Object.entries(providers).map(([type, entry]) => (
-            <Button
-              key={type}
-              onClick={() => {
-                setNewType(type)
-                setEditing('new')
-              }}
-            >
-              <PlusIcon className="size-4" />
-              {t(entry.addLabel)}
-            </Button>
-          ))}
       </div>
       {!canManage && (
         <p className="rounded-lg bg-muted p-4 text-sm">{t('adminOnly')}</p>
@@ -92,11 +79,59 @@ export function Channels({
           })}
         </p>
       )}
-      <div className="rounded-xl border p-5">
-        <GlobeIcon className="mb-3 size-5 text-primary" />
-        <h3 className="font-medium">{t('web')}</h3>
-        <p className="mt-2 text-sm text-muted-foreground">{t('webReady')}</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {Object.entries(providers).map(([type, entry]) => (
+          <div
+            key={type}
+            className="flex min-h-36 flex-col items-start justify-between gap-4 rounded-xl border p-5"
+          >
+            <div className="space-y-2">
+              <h3 className="font-medium">{t(entry.label)}</h3>
+              <p className="text-sm text-muted-foreground">
+                {t('platformReady')}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              disabled={!canManage}
+              onClick={() => {
+                setNewType(type)
+                setEditing('new')
+              }}
+            >
+              <PlusIcon className="size-4" />
+              {t(entry.addLabel)}
+            </Button>
+          </div>
+        ))}
+        {upcomingProviders.map((name) => (
+          <div
+            key={name}
+            className="flex min-h-36 flex-col items-start justify-between gap-4 rounded-xl border p-5"
+          >
+            <h3 className="font-medium">
+              {name === 'DingTalk' ? t('dingtalk') : name}
+            </h3>
+            <span className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
+              {t('comingSoon')}
+            </span>
+          </div>
+        ))}
       </div>
+      {canManage && (
+        <div className="space-y-2 border-t pt-6">
+          <h2 className="font-semibold">{t('connectedBots')}</h2>
+          {connections.isPending ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t('loading')}
+            </p>
+          ) : !connections.error && !connections.data.length ? (
+            <p className="text-sm text-muted-foreground">
+              {t('noConnectedBots')}
+            </p>
+          ) : null}
+        </div>
+      )}
       {connections.data?.map((connection) => {
         const entry = getProvider(connection.type)
         const Credentials = entry?.Credentials
@@ -159,17 +194,6 @@ export function Channels({
           </div>
         )
       })}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {upcomingProviders.map((name) => (
-          <div
-            key={name}
-            className="rounded-xl border border-dashed p-5 text-muted-foreground"
-          >
-            <h3 className="font-medium">{name}</h3>
-            <p className="mt-2 text-xs">{t('comingSoon')}</p>
-          </div>
-        ))}
-      </div>
     </div>
   )
 }

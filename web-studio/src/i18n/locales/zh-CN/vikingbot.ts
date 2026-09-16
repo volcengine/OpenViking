@@ -1,4 +1,9 @@
 export default {
+  platformReady: '扫码连接，将机器人添加到飞书群。',
+  connectedBots: '已连接的机器人',
+  noConnectedBots: '还没有连接机器人，从上方选择飞书开始。',
+  dingtalk: '钉钉',
+
   schedules: '定时任务',
   schedule: {
     adminOnly: '仅服务器管理员可查看定时任务。',
@@ -123,7 +128,7 @@ export default {
   loading: '加载中…',
   error: '操作失败：{{error}}',
   addFeishu: '连接飞书',
-  comingSoon: 'Studio 接入管理开发中',
+  comingSoon: '开发中',
   adminOnly: '仅服务管理员可以管理连接和查看飞书历史。',
   webReady: '网页对话使用当前 OpenViking 身份。',
   manageHint: '连接一个应用后，可将它的机器人加入多个群。',
