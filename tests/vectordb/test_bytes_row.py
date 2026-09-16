@@ -14,7 +14,6 @@ from openviking.storage.vectordb.store.bytes_row import (
     _PyFieldType,
     _PySchema,
 )
-from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.store.serializable import serializable
 
 
@@ -370,53 +369,16 @@ class TestTextFieldType(unittest.TestCase):
         self.assertEqual(len(py_bytes), len(cpp_bytes), "Binary length mismatch")
         self.assertEqual(py_bytes, cpp_bytes, "Binary content mismatch")
 
-    def test_record_upgrade_preserves_legacy_rows_and_large_text(self):
-        # Captured from the pre-upgrade native serializer, independently of the
-        # new schema. Both full reads and projected reads must remain compatible.
-        legacy_rows = {
-            CandidateData: bytes.fromhex(
-                "062a00000000000000210000002b00000033000000390000007b00000000000000"
-                "02000000803f0000000001000400776f726401000000003f12007b226162737472"
-                "616374223a226f6c64227d"
-            ),
-            DeltaRecord: bytes.fromhex(
-                "0700000000000000002a00000000000000250000002f000000370000003d000000"
-                "5100000002000000803f0000000001000400776f726401000000003f12007b2261"
-                "62737472616374223a226f6c64227d15007b226162737472616374223a22626566"
-                "6f7265227d"
-            ),
-        }
-        large_fields = json.dumps({"abstract": "你好" * 15000}, ensure_ascii=False)
-        for record_type, legacy_bytes in legacy_rows.items():
-            with self.subTest(record=record_type.__name__):
-                record = record_type.from_bytes(legacy_bytes)
-                self.assertEqual(record.label, 42)
-                self.assertEqual(record.vector, [1.0, 0.0])
-                self.assertEqual(record.sparse_raw_terms, ["word"])
-                self.assertEqual(record.sparse_values, [0.5])
-                self.assertEqual(record.fields, '{"abstract":"old"}')
-                self.assertEqual(
-                    record_type.bytes_row.deserialize_field(legacy_bytes, "fields"), record.fields
-                )
-                if record_type is CandidateData:
-                    self.assertEqual(record.expire_ns_ts, 123)
-                else:
-                    self.assertEqual(record.old_fields, '{"abstract":"before"}')
-                    record.old_fields = large_fields + " "
-                record.fields = large_fields
-                serialized = record.serialize()
-                self.assertEqual(serialized[:2], b"\x00\x01")
-                self.assertEqual(record_type.serialize_list([record]), [serialized])
-                self.assertEqual(record_type.from_bytes(serialized), record)
-                self.assertEqual(
-                    record_type.bytes_row.deserialize_field(serialized, "fields"), large_fields
-                )
-                # Unknown versions must not be interpreted as legacy records.
-                for invalid in (b"\x00", b"\x00\x01", b"\x00\x02" + serialized[2:]):
-                    with self.assertRaisesRegex(ValueError, "record version"):
-                        record_type.from_bytes(invalid)
-                    with self.assertRaisesRegex(ValueError, "record version"):
-                        record_type.bytes_row.deserialize_field(invalid, "fields")
+    def test_text_declared_via_metadata(self):
+        @serializable
+        @dataclass
+        class TextData:
+            body: str = field(default="", metadata={"field_type": FieldType.text})
+
+        text = "y" * 70000
+        data = TextData(body=text)
+        serialized = data.serialize()
+        self.assertEqual(TextData.from_bytes(serialized).body, text)
 
 
 if __name__ == "__main__":

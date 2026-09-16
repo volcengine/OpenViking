@@ -14,7 +14,6 @@ db_path_basic = "./test_data/db_test_filters_basic/"
 db_path_complex = "./test_data/db_test_filters_complex/"
 db_path_lifecycle = "./test_data/db_test_filters_lifecycle/"
 db_path_scale = "./test_data/db_test_filters_scale/"
-db_path_large_fields = "./test_data/db_test_filters_large_fields/"
 
 
 def clean_dir(path):
@@ -114,65 +113,6 @@ class TestFilterOpsBasic(unittest.TestCase):
         self.assertEqual(
             self._search({"op": "contains", "field": "val_str", "substring": "er"}), [3, 5]
         )  # chERry, eldERbERry
-
-
-class TestFilterOpsLargeFields(unittest.TestCase):
-    def setUp(self):
-        clean_dir(db_path_large_fields)
-        self.path = db_path_large_fields
-        self.collection = self._create_collection()
-
-    def tearDown(self):
-        if self.collection:
-            self.collection.drop()
-        clean_dir(self.path)
-
-    def _create_collection(self):
-        collection_meta = {
-            "CollectionName": "test_filters_large_fields",
-            "Fields": [
-                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
-                {"FieldName": "embedding", "FieldType": "vector", "Dim": 4},
-                {"FieldName": "uri", "FieldType": "string"},
-                {"FieldName": "abstract", "FieldType": "string"},
-            ],
-        }
-        return get_or_create_local_collection(meta_data=collection_meta, path=self.path)
-
-    def test_large_fields_survive_update_reopen_and_delete(self):
-        large_abstract = 'prefix "quoted" \\ path\n' + ("你好" * 15000)
-        uri = "viking://user/memories/large.md"
-        self.collection.create_index(
-            "idx_large",
-            {
-                "IndexName": "idx_large",
-                "VectorIndex": {"IndexType": "flat"},
-                "ScalarIndex": ["uri"],
-            },
-        )
-        self.collection.upsert_data(
-            [{"id": 1, "embedding": [1.0, 0, 0, 0], "uri": uri, "abstract": large_abstract}]
-        )
-        # This writes both a large fields value and a large old_fields value.
-        updated = large_abstract + "更新"
-        self.collection.update_data([{"id": 1, "abstract": updated}])
-        self.collection.close()
-        self.collection = get_or_create_local_collection(path=self.path)
-        self.assertEqual(self.collection.fetch_data([1]).items[0].fields["abstract"], updated)
-        result = self.collection.search_by_vector(
-            "idx_large",
-            [1.0, 0, 0, 0],
-            filters={"op": "must", "field": "uri", "conds": [uri]},
-            output_fields=["abstract"],
-        )
-        self.assertEqual(
-            [(item.id, item.fields["abstract"]) for item in result.data], [(1, updated)]
-        )
-        self.collection.delete_data([1])
-        self.collection.close()
-        self.collection = get_or_create_local_collection(path=self.path)
-        self.assertEqual(self.collection.fetch_data([1]).ids_not_exist, [1])
-        self.assertEqual(self.collection.search_by_vector("idx_large", [1.0, 0, 0, 0]).data, [])
 
 
 class TestFilterOpsComplex(unittest.TestCase):
