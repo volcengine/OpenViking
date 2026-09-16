@@ -13,7 +13,8 @@ from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import bot
 from openviking_cli.session.user_id import UserIdentifier
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+# Studio's internal UI contract is not part of the public OpenAPI schema.
+router = APIRouter(prefix="/api/v1/admin", tags=["admin"], include_in_schema=False)
 ACCOUNT_BOT = "/accounts/{account_id}/bot"
 
 

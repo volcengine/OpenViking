@@ -16,7 +16,7 @@ def create_router(channel, service):
         ):
             raise HTTPException(403, "Studio management requires the internal gateway token")
 
-    router = APIRouter(prefix="/studio", dependencies=[Depends(authorize)])
+    router = APIRouter(prefix="/studio", dependencies=[Depends(authorize)], include_in_schema=False)
 
     @router.post("/dispatch")
     async def dispatch(request: Request):
