@@ -20,7 +20,10 @@ import {
 } from '#/components/ui/dialog'
 import { cn } from '#/lib/utils'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { createRandomUuid } from '#/lib/browser-crypto'
+import {
+  createVikingBotWebSessionId,
+  isVikingBotWebSession,
+} from '#/lib/sessions/vikingbot-sessions'
 import { useChat } from '#/lib/sessions/use-chat'
 import {
   useBotHealth,
@@ -54,7 +57,7 @@ export function AgentPanel({
   const { t } = useTranslation('playground')
   const { identityScopeKey } = useAppConnection()
   const [sessionId, setSessionId] = useState(
-    initialSessionId ?? createRandomUuid(),
+    initialSessionId ?? createVikingBotWebSessionId(),
   )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -99,7 +102,7 @@ export function AgentPanel({
 
     try {
       const result = await withTimeout(
-        createSession.mutateAsync(undefined),
+        createSession.mutateAsync(createVikingBotWebSessionId()),
         12_000,
         t('agent.createTimeout'),
       )
@@ -207,17 +210,9 @@ export function AgentPanel({
   const displayedSessionTitle =
     sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
   const reversedSessions = useMemo(() => {
-    // `sessions` is already sorted by recency (newest first). Filter to
-    // sessions that were opened in this playground, preserving recency order.
-    const sessionById = new Map(
-      sessions.map((session) => [session.session_id, session]),
+    return sessions.filter((session) =>
+      isVikingBotWebSession(session, playgroundSessionIds),
     )
-
-    return playgroundSessionIds
-      .map((playgroundSessionId) => sessionById.get(playgroundSessionId))
-      .filter((session): session is NonNullable<typeof session> =>
-        Boolean(session),
-      )
   }, [sessions, playgroundSessionIds])
 
   return (

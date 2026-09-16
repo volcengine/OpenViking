@@ -1,3 +1,4 @@
+import { readPlaygroundAgentSessionIds } from '#/routes/playground/-lib/utils'
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -18,7 +19,7 @@ import { Schedules } from './-components/schedules'
 import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
-} from './-web-sessions'
+} from '#/lib/sessions/vikingbot-sessions'
 import { Channels } from './-components/channels'
 import {
   PlatformConversationList,
@@ -188,7 +189,12 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
               )}
               {filter !== 'feishu' &&
                 sessions.data
-                  .filter(isVikingBotWebSession)
+                  .filter((session) =>
+                    isVikingBotWebSession(
+                      session,
+                      readPlaygroundAgentSessionIds(scope),
+                    ),
+                  )
                   .filter((s) =>
                     (getTitle(s.session_id) || t('newChat'))
                       .toLowerCase()

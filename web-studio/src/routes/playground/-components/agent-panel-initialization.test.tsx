@@ -99,6 +99,7 @@ it('creates the draft before sending and publishes only the persisted ID', async
   expect(mocks.send).not.toHaveBeenCalled()
   expect(onSessionChange).not.toHaveBeenCalled()
   const id = mocks.create.mock.calls[0][0]
+  expect(id).toMatch(/^vikingbot-web-/)
   await act(async () => {
     resolveCreation({ session_id: id })
     await sending

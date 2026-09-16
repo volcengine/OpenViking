@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
-} from './-web-sessions'
+} from '#/lib/sessions/vikingbot-sessions'
 
 describe('VikingBot web session ownership', () => {
   it.each([
@@ -26,4 +26,13 @@ describe('VikingBot web session ownership', () => {
     expect(isVikingBotWebSession({ session_id: first })).toBe(true)
     expect(createVikingBotWebSessionId()).not.toBe(first)
   })
+})
+
+it('includes only explicitly registered legacy playground sessions', () => {
+  const legacy = 'f5216b16-cd10-4e9a-b542-a29576f2260c'
+  expect(isVikingBotWebSession({ session_id: legacy }, [legacy])).toBe(true)
+  expect(isVikingBotWebSession({ session_id: legacy }, [])).toBe(false)
+  expect(isVikingBotWebSession({ session_id: 'cx-other' }, [legacy])).toBe(
+    false,
+  )
 })
