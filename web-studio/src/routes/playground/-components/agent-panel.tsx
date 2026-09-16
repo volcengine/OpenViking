@@ -1,3 +1,4 @@
+import { useDefaultConversationTitles } from '#/lib/sessions/use-default-conversation-titles'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -80,6 +81,12 @@ export function AgentPanel({
   const { getTitle, setTitle, removeTitle } = useSessionTitles(identityScopeKey)
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(identityScopeKey),
+  )
+  useDefaultConversationTitles(
+    identityScopeKey,
+    sessions
+      .filter((session) => isVikingBotWebSession(session, playgroundSessionIds))
+      .map((session) => session.session_id),
   )
   const { data: historyMessages } = useSessionMessages(historySessionId)
   const chat = useChat({

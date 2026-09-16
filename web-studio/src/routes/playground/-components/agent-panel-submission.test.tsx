@@ -10,6 +10,9 @@ const m = vi.hoisted(() => ({
   stream: vi.fn(),
   history: vi.fn(),
 }))
+vi.mock('#/lib/sessions/use-default-conversation-titles', () => ({
+  useDefaultConversationTitles: vi.fn(),
+}))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))

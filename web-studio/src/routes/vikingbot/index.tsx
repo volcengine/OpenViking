@@ -1,3 +1,4 @@
+import { useDefaultConversationTitles } from '#/lib/sessions/use-default-conversation-titles'
 import { ConversationRow } from './-components/conversation-row'
 import { readPlaygroundAgentSessionIds } from '#/routes/playground/-lib/utils'
 import { useEffect, useRef, useState } from 'react'
@@ -82,6 +83,14 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
   const sessions = useSessionListByRecency()
   const createSession = useCreateSession()
   const { getTitle, setTitle, removeTitle } = useSessionTitles(scope)
+  useDefaultConversationTitles(
+    scope,
+    sessions.data
+      .filter((session) =>
+        isVikingBotWebSession(session, readPlaygroundAgentSessionIds(scope)),
+      )
+      .map((session) => session.session_id),
+  )
   const platformQueries = useQueries({
     queries: (connections.data ?? []).map((connection) => ({
       queryKey: ['vikingbot', scope, connection.id, 'conversations'],
@@ -98,7 +107,10 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
       .map((session) => ({
         id: session.session_id,
         connection: undefined as string | undefined,
-        title: getTitle(session.session_id) || t('newChat'),
+        title:
+          getTitle(session.session_id) === session.session_id
+            ? t('newChat')
+            : getTitle(session.session_id),
         time: session.mod_time,
         channel: 'web',
       })),

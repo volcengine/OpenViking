@@ -45,7 +45,7 @@ def test_store_survives_restart_deduplicates_and_paginates(tmp_path):
     assert len(page) == 101
     assert page[0]["content"] == "104"
     assert len(reloaded.history("connection", "group", page[99]["id"])) == 5
-    assert reloaded.conversations("connection")[0]["title"] == "Team"
+    assert reloaded.conversations("connection")[0]["title"] == "0"
     assert path.stat().st_mode & 0o777 == 0o600
 
 
@@ -257,15 +257,15 @@ def test_conversations_show_latest_preview_and_time(tmp_path):
         "content": "latest reply", "time": "2026-09-16T12:00:00+00:00",
     })
     item = store.conversations("bot")[0]
-    assert item["title"] == "Team"
+    assert item["title"] == "first"
     assert item["preview"] == "latest reply"
     assert item["time"] == "2026-09-16T12:00:00+00:00"
     assert store.conversations("another") == []
 
 
-def test_conversation_title_falls_back_to_content_then_uses_resolved_name(tmp_path):
+def test_conversation_title_keeps_first_message_when_group_name_resolves(tmp_path):
     store = StudioStore(tmp_path / "titles.db")
     store.append("bot", "group", "1", {"title": "", "content": "介绍一下 OpenViking"})
     assert store.conversations("bot")[0]["title"] == "介绍一下 OpenViking"
     store.append("bot", "group", "2", {"title": "开发讨论", "content": "继续"})
-    assert store.conversations("bot")[0]["title"] == "开发讨论"
+    assert store.conversations("bot")[0]["title"] == "介绍一下 OpenViking"
