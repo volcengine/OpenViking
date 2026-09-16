@@ -85,6 +85,7 @@ it('uses provider selection for current setup and explicit job actions', () => {
   })
   updateOnboarding('job', 'retry')
   expect(transport.post).toHaveBeenCalledWith({
-    url: `${base}/onboarding-runs/job/retry`,
+    url: `${base}/onboarding-runs/job/actions`,
+    body: { action: 'retry' },
   })
 })

@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import replace
+from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -45,6 +46,11 @@ class CreateConnectionRequest(BaseModel):
     user_id: str
     credentials: dict[str, str]
     settings: dict = Field(default_factory=dict)
+
+
+class OnboardingActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["retry", "cancel", "manual"]
 
 
 class StartOnboardingRequest(BaseModel):
@@ -239,16 +245,8 @@ async def get_onboarding(identifier: str, ctx: RequestContext = Depends(manager)
     return await dispatch(ctx, "onboarding_get", {"id": identifier})
 
 
-@router.post(ACCOUNT_BOT + "/onboarding-runs/{identifier}/retry")
-async def retry_onboarding(identifier: str, ctx: RequestContext = Depends(manager)):
-    return await dispatch(ctx, "onboarding_update", {"id": identifier, "action": "retry"})
-
-
-@router.post(ACCOUNT_BOT + "/onboarding-runs/{identifier}/cancel")
-async def cancel_onboarding(identifier: str, ctx: RequestContext = Depends(manager)):
-    return await dispatch(ctx, "onboarding_update", {"id": identifier, "action": "cancel"})
-
-
-@router.post(ACCOUNT_BOT + "/onboarding-runs/{identifier}/manual")
-async def manual_onboarding(identifier: str, ctx: RequestContext = Depends(manager)):
-    return await dispatch(ctx, "onboarding_update", {"id": identifier, "action": "manual"})
+@router.post(ACCOUNT_BOT + "/onboarding-runs/{identifier}/actions")
+async def update_onboarding(
+    identifier: str, body: OnboardingActionRequest, ctx: RequestContext = Depends(manager)
+):
+    return await dispatch(ctx, "onboarding_update", {"id": identifier, "action": body.action})

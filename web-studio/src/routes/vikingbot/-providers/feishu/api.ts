@@ -57,7 +57,8 @@ export function updateOnboarding(
 ) {
   return getOvResult<OnboardingRun>(
     ovClient.client.post({
-      url: `${base()}/${encodeURIComponent(id)}/${action}`,
+      url: `${base()}/${encodeURIComponent(id)}/actions`,
+      body: { action },
     }),
   )
 }

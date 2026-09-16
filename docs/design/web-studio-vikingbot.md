@@ -36,11 +36,9 @@
 | `POST B/onboarding-runs` | 创建自动接入任务，显式传 `type`、`user_id`、`request_id` 和可选 `name`。 |
 | `GET B/onboarding-runs/current?type=...` | 查询指定平台当前未完成任务；没有任务时返回 null。不是全量任务列表。 |
 | `GET B/onboarding-runs/{id}` | 轮询指定任务。 |
-| `POST B/onboarding-runs/{id}/retry` | 重试符合条件的任务。 |
-| `POST B/onboarding-runs/{id}/cancel` | 取消符合条件的任务。 |
-| `POST B/onboarding-runs/{id}/manual` | 将失败或中断任务转为手动接入。 |
+| `POST B/onboarding-runs/{id}/actions` | 请求体 `action` 严格限定为 `retry`、`cancel`、`manual`，保留各操作的状态校验。 |
 
-浏览器管理接口共 15 个，加上复用的用户列表接口。操作方法拆开后 HTTP 路由数量增加，但没有增加业务能力。旧的 `PATCH {action: ...}` 和 `X-OpenViking-Studio-Account` 已移除。该变更调整当前未发布 PR 内的接口，前后端需一起更新；不为旧的临时浏览器接口保留兼容入口。
+浏览器管理接口共 13 个，加上复用的用户列表接口。扫码任务的重试、取消和转手动共用一个 actions 接口，连接生命周期保持独立方法。Studio 管理路由及 Gateway 内部 dispatch 均不进入 OpenAPI schema；接口仍正常注册并保留原鉴权。旧的 `PATCH {action: ...}` 和 `X-OpenViking-Studio-Account` 已移除。该变更调整当前未发布 PR 内的接口，前后端需一起更新；不为旧的临时浏览器接口保留兼容入口。
 
 网页会话创建、列表、历史、删除、Bot 聊天流式响应和健康状态继续复用既有 API。平台收发记录按连接归属并保存发送状态，不能直接替换为 OpenViking 上下文会话历史。
 
@@ -296,7 +294,7 @@ Conversation 索引保存：权限作用域、来源、连接、原始会话引�
 
 ### 扫码任务与回复配置
 
-浏览器使用 `/api/v1/admin/accounts/{account_id}/bot` 下的 `onboarding-runs` 创建任务，`onboarding-runs/current?type=feishu` 恢复任务，`onboarding-runs/{id}` 查询状态，以及对应的 `/retry`、`/cancel`、`/manual` 动作。所有接口复用 root 管理认证和 account 隔离；返回状态白名单不含凭证、Cookie 或原始上游错误。
+浏览器使用 `/api/v1/admin/accounts/{account_id}/bot` 下的 `onboarding-runs` 创建任务，`onboarding-runs/current?type=feishu` 恢复任务，`onboarding-runs/{id}` 查询状态，以及 `POST onboarding-runs/{id}/actions`（`action` 为 `retry`、`cancel`、`manual`）。所有接口复用 root 管理认证和 account 隔离；返回状态白名单不含凭证、Cookie 或原始上游错误。
 
 扫码和手动创建均提供“群聊回复方式”，通过已有创建接口的 `settings.thread_require_mention` 保存，默认为 `true`。已创建连接通过已有 `PATCH connections/{id}` 提交 `settings` 和 `revision` 修改；一次请求只能修改 `enabled` 或 `settings` 之一。设置立即更新运行中的渠道，并持久化供重启或恢复时加载，旧记录保持原默认行为。
 

@@ -37,9 +37,7 @@ async def test_management_rejects_non_root(app, role, monkeypatch):
             ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs"),
             ("GET", "/api/v1/admin/accounts/a/bot/onboarding-runs/current?type=feishu"),
             ("GET", "/api/v1/admin/accounts/a/bot/onboarding-runs/job"),
-            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs/job/retry"),
-            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs/job/cancel"),
-            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs/job/manual"),
+            ("POST", "/api/v1/admin/accounts/a/bot/onboarding-runs/job/actions"),
             ("DELETE", "/api/v1/admin/accounts/a/bot/connections/x?revision=1"),
             ("POST", "/api/v1/admin/accounts/a/bot/connections/x/credentials"),
             ("POST", "/api/v1/admin/accounts/a/bot/connections/x/verifications"),
@@ -325,3 +323,37 @@ async def test_settings_patch_reuses_connection_endpoint(app, monkeypatch):
             },
         )
         assert response.status_code == 422
+
+
+@pytest.mark.parametrize("action", ["retry", "cancel", "manual"])
+async def test_onboarding_actions_preserve_account_and_validate_body(app, monkeypatch, action):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("default", "root"), role=Role.ROOT
+    )
+    dispatch = AsyncMock(return_value={"status": "ok", "result": {}})
+    monkeypatch.setattr(bot_studio, "dispatch", dispatch)
+    base = "/api/v1/admin/accounts/team/bot/onboarding-runs/job"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(base + "/actions", json={"action": action})
+        assert response.status_code == 200
+        assert dispatch.call_args.args[0].account_id == "team"
+        assert dispatch.call_args.args[1:] == ("onboarding_update", {"id": "job", "action": action})
+        dispatch.reset_mock()
+        for body in ({}, {"action": "unknown"}, {"action": action, "account": "other"}):
+            response = await client.post(base + "/actions", json=body)
+            assert response.status_code == 422
+        response = await client.post(base + "/" + action)
+        assert response.status_code == 404
+        dispatch.assert_not_called()
+
+
+def test_studio_routes_are_registered_but_excluded_from_public_schema(app):
+    paths = app.openapi()["paths"]
+    assert all(route.path not in paths for route in bot_studio.router.routes)
+    assert all(
+        route in app.routes or any(r.path == route.path for r in app.routes)
+        for route in bot_studio.router.routes
+    )
+    assert "/api/v1/admin/accounts/{account_id}/users" in paths
