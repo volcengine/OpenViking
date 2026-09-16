@@ -2034,6 +2034,10 @@ class AgentLoop:
             disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
             if not isinstance(disabled_tools, list):
                 disabled_tools = []
+            if msg.metadata.get("studio_managed"):
+                from vikingbot.studio.policy import disabled_group_tools
+
+                disabled_tools = list(set(disabled_tools) | set(disabled_group_tools(self.tools.tool_names)))
             openviking_connection = getattr(msg, "openviking_connection", None)
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None

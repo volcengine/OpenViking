@@ -98,6 +98,13 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/playground',
   },
   {
+    icon: BotIcon,
+    id: 'vikingbot',
+    section: 'workspace',
+    titleKey: 'vikingbot:title',
+    to: '/vikingbot',
+  },
+  {
     icon: SearchIcon,
     id: 'retrieval',
     section: 'workspace',

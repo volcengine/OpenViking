@@ -1,0 +1,127 @@
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
+import { Button } from '#/components/ui/button'
+import { getConversations, getMessages } from '../-api'
+import type { Connection } from '../-api'
+
+export function PlatformConversationList({
+  connection,
+  scope,
+  onSelect,
+  search,
+}: {
+  connection: Connection
+  search: string
+  scope: string
+  onSelect: (connection: string, conversation: string) => void
+}) {
+  const { t } = useTranslation('vikingbot')
+  const query = useQuery({
+    queryKey: ['vikingbot', scope, connection.id, 'conversations'],
+    queryFn: () => getConversations(connection.id),
+    refetchInterval: 5000,
+  })
+  return (
+    <div>
+      <p className="px-3 pt-4 text-xs font-medium text-muted-foreground">
+        {connection.bot_name}
+      </p>
+      {query.error && (
+        <p role="alert" className="p-3 text-xs text-destructive">
+          {query.error.message}
+        </p>
+      )}
+      {query.data
+        ?.filter((item) =>
+          `${connection.bot_name} ${item.title}`
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+        )
+        .map((item, index) => (
+          <button
+            type="button"
+            className="w-full rounded-lg p-3 text-left text-sm hover:bg-muted"
+            key={item.conversation}
+            onClick={() => onSelect(connection.id, item.conversation)}
+          >
+            {item.title || `${t('group')} ${index + 1}`}
+          </button>
+        ))}
+    </div>
+  )
+}
+
+export function PlatformHistory({
+  connection,
+  conversation,
+  scope,
+}: {
+  connection: string
+  conversation: string
+  scope: string
+}) {
+  const { t } = useTranslation('vikingbot')
+  const query = useInfiniteQuery({
+    queryKey: ['vikingbot', scope, connection, conversation, 'messages'],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      getMessages(connection, conversation, pageParam),
+    getNextPageParam: (page) => (page.length > 100 ? page[99].id : undefined),
+    refetchInterval: 5000,
+  })
+  const messages = [
+    ...(query.data?.pages.flatMap((page) => page.slice(0, 100)) ?? []),
+  ].reverse()
+  return (
+    <section className="flex h-full flex-col">
+      <div className="border-b p-4">
+        <h2 className="font-medium">{t('group')}</h2>
+        <p className="mt-1 text-xs text-muted-foreground">{t('historyHint')}</p>
+      </div>
+      <div className="flex-1 space-y-5 overflow-auto p-4 md:p-8">
+        {query.hasNextPage && (
+          <Button
+            variant="outline"
+            disabled={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
+            {t('earlier')}
+          </Button>
+        )}
+        {query.isPending && <p role="status">{t('loading')}</p>}
+        {query.error && (
+          <p role="alert" className="text-destructive">
+            {query.error.message}
+          </p>
+        )}
+        {!query.isPending && !messages.length && (
+          <p className="text-sm text-muted-foreground">{t('noHistory')}</p>
+        )}
+        {messages.map((message) => (
+          <article
+            key={message.id}
+            className="mx-auto max-w-3xl rounded-xl border p-4"
+          >
+            <div className="mb-2 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+              <span>{message.sender || t('unknownSender')}</span>
+              <time>{new Date(message.time).toLocaleString()}</time>
+            </div>
+            <p className="whitespace-pre-wrap break-words text-sm leading-7">
+              {message.content}
+            </p>
+            <p
+              className={`mt-2 text-xs ${message.status === 'send_failed' ? 'text-destructive' : 'text-muted-foreground'}`}
+            >
+              {t(
+                `delivery.${message.status as 'received' | 'sent' | 'send_failed'}`,
+              )}
+            </p>
+          </article>
+        ))}
+      </div>
+      <p className="border-t p-4 text-center text-sm text-muted-foreground">
+        {t('readonly')}
+      </p>
+    </section>
+  )
+}

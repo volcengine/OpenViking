@@ -685,6 +685,9 @@ def prepare_channel(
             global_config=config,
             compile_service=compile_service,
         )
+        from vikingbot.studio.service import StudioService
+
+        openapi_channel._studio_service = StudioService(config, channels)
         channels.add_channel(openapi_channel)
         logger.info(f"OpenAPI channel enabled on port {openapi_port}")
 

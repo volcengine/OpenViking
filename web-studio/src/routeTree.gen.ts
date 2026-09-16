@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as WatchesRouteRouteImport } from './routes/watches/route'
+import { Route as VikingbotRouteRouteImport } from './routes/vikingbot/route'
 import { Route as UsersRouteRouteImport } from './routes/users/route'
 import { Route as TasksRouteRouteImport } from './routes/tasks/route'
 import { Route as SkillsRouteRouteImport } from './routes/skills/route'
@@ -22,6 +23,7 @@ import { Route as MonitoringRouteRouteImport } from './routes/monitoring/route'
 import { Route as HomeRouteRouteImport } from './routes/home/route'
 import { Route as AgentExperienceRouteRouteImport } from './routes/agent-experience/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as VikingbotIndexRouteImport } from './routes/vikingbot/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
 import { Route as CompileIndexRouteImport } from './routes/compile/index'
 import { Route as AgentExperienceIndexRouteImport } from './routes/agent-experience/index'
@@ -34,6 +36,11 @@ import { Route as CompileTasksTaskIdRouteImport } from './routes/compile/tasks/$
 const WatchesRouteRoute = WatchesRouteRouteImport.update({
   id: '/watches',
   path: '/watches',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VikingbotRouteRoute = VikingbotRouteRouteImport.update({
+  id: '/vikingbot',
+  path: '/vikingbot',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UsersRouteRoute = UsersRouteRouteImport.update({
@@ -96,6 +103,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const VikingbotIndexRoute = VikingbotIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => VikingbotRouteRoute,
+} as any)
 const SessionsIndexRoute = SessionsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -151,6 +163,7 @@ export interface FileRoutesByFullPath {
   '/skills': typeof SkillsRouteRoute
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
+  '/vikingbot': typeof VikingbotRouteRouteWithChildren
   '/watches': typeof WatchesRouteRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
@@ -159,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/vikingbot/': typeof VikingbotIndexRoute
   '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRoutesByTo {
@@ -180,6 +194,7 @@ export interface FileRoutesByTo {
   '/agent-experience': typeof AgentExperienceIndexRoute
   '/compile': typeof CompileIndexRoute
   '/sessions': typeof SessionsIndexRoute
+  '/vikingbot': typeof VikingbotIndexRoute
   '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRoutesById {
@@ -196,6 +211,7 @@ export interface FileRoutesById {
   '/skills': typeof SkillsRouteRoute
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
+  '/vikingbot': typeof VikingbotRouteRouteWithChildren
   '/watches': typeof WatchesRouteRoute
   '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
   '/compile/new': typeof CompileNewRoute
@@ -204,6 +220,7 @@ export interface FileRoutesById {
   '/agent-experience/': typeof AgentExperienceIndexRoute
   '/compile/': typeof CompileIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/vikingbot/': typeof VikingbotIndexRoute
   '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRouteTypes {
@@ -221,6 +238,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/users'
+    | '/vikingbot'
     | '/watches'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
@@ -229,6 +247,7 @@ export interface FileRouteTypes {
     | '/agent-experience/'
     | '/compile/'
     | '/sessions/'
+    | '/vikingbot/'
     | '/compile/tasks/$taskId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -250,6 +269,7 @@ export interface FileRouteTypes {
     | '/agent-experience'
     | '/compile'
     | '/sessions'
+    | '/vikingbot'
     | '/compile/tasks/$taskId'
   id:
     | '__root__'
@@ -265,6 +285,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/users'
+    | '/vikingbot'
     | '/watches'
     | '/agent-experience/$experienceUri'
     | '/compile/new'
@@ -273,6 +294,7 @@ export interface FileRouteTypes {
     | '/agent-experience/'
     | '/compile/'
     | '/sessions/'
+    | '/vikingbot/'
     | '/compile/tasks/$taskId'
   fileRoutesById: FileRoutesById
 }
@@ -289,6 +311,7 @@ export interface RootRouteChildren {
   SkillsRouteRoute: typeof SkillsRouteRoute
   TasksRouteRoute: typeof TasksRouteRoute
   UsersRouteRoute: typeof UsersRouteRoute
+  VikingbotRouteRoute: typeof VikingbotRouteRouteWithChildren
   WatchesRouteRoute: typeof WatchesRouteRoute
   CompileNewRoute: typeof CompileNewRoute
   OauthConsentRoute: typeof OauthConsentRoute
@@ -304,6 +327,13 @@ declare module '@tanstack/react-router' {
       path: '/watches'
       fullPath: '/watches'
       preLoaderRoute: typeof WatchesRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vikingbot': {
+      id: '/vikingbot'
+      path: '/vikingbot'
+      fullPath: '/vikingbot'
+      preLoaderRoute: typeof VikingbotRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/users': {
@@ -390,6 +420,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/vikingbot/': {
+      id: '/vikingbot/'
+      path: '/'
+      fullPath: '/vikingbot/'
+      preLoaderRoute: typeof VikingbotIndexRouteImport
+      parentRoute: typeof VikingbotRouteRoute
+    }
     '/sessions/': {
       id: '/sessions/'
       path: '/'
@@ -474,6 +511,18 @@ const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
   SessionsRouteRouteChildren,
 )
 
+interface VikingbotRouteRouteChildren {
+  VikingbotIndexRoute: typeof VikingbotIndexRoute
+}
+
+const VikingbotRouteRouteChildren: VikingbotRouteRouteChildren = {
+  VikingbotIndexRoute: VikingbotIndexRoute,
+}
+
+const VikingbotRouteRouteWithChildren = VikingbotRouteRoute._addFileChildren(
+  VikingbotRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentExperienceRouteRoute: AgentExperienceRouteRouteWithChildren,
@@ -487,6 +536,7 @@ const rootRouteChildren: RootRouteChildren = {
   SkillsRouteRoute: SkillsRouteRoute,
   TasksRouteRoute: TasksRouteRoute,
   UsersRouteRoute: UsersRouteRoute,
+  VikingbotRouteRoute: VikingbotRouteRouteWithChildren,
   WatchesRouteRoute: WatchesRouteRoute,
   CompileNewRoute: CompileNewRoute,
   OauthConsentRoute: OauthConsentRoute,

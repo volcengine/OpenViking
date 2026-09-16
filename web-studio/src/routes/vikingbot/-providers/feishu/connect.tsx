@@ -1,0 +1,358 @@
+import { useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
+import { QRCodeSVG } from 'qrcode.react'
+import { Loader2Icon } from 'lucide-react'
+import { Button } from '#/components/ui/button'
+import { Input } from '#/components/ui/input'
+import { useAppConnection } from '#/hooks/use-app-connection'
+import { getBotUsers, getConnections } from '../../-api'
+import { FeishuSetup } from './feishu-setup'
+import { GroupSetup } from './group-setup'
+import {
+  currentOnboarding,
+  getOnboarding,
+  startOnboarding,
+  updateOnboarding,
+} from './api'
+import type { OnboardingRun } from './api'
+import type { Connection } from '../../-api'
+
+const STEP_LABELS = ['choose', 'scan', 'addGroup'] as const
+const finished = new Set([
+  'ready',
+  'failed',
+  'expired',
+  'interrupted',
+  'cancelled',
+])
+const cancellable = new Set([
+  'initializing',
+  'waiting_for_scan',
+  'scanned',
+  'expired',
+])
+
+export function FeishuConnect(props: {
+  connection?: Connection
+  onChange: (connection: Connection) => void
+  onClose: () => void
+}) {
+  const [manual, setManual] = useState<Connection | boolean>(false)
+  if (manual || (props.connection && props.connection.setup_mode !== 'qr')) {
+    return (
+      <FeishuSetup
+        {...props}
+        connection={typeof manual === 'object' ? manual : props.connection}
+      />
+    )
+  }
+  return <ScanSetup {...props} onManual={(value) => setManual(value ?? true)} />
+}
+
+function ScanSetup({
+  connection,
+  onChange,
+  onClose,
+  onManual,
+}: {
+  connection?: Connection
+  onChange: (connection: Connection) => void
+  onClose: () => void
+  onManual: (connection?: Connection) => void
+}) {
+  const { t } = useTranslation('vikingbot')
+  const { identityScopeKey: scope } = useAppConnection()
+  const client = useQueryClient()
+  const [userId, setUserId] = useState('')
+  const [name, setName] = useState('VikingBot')
+  const [jobId, setJobId] = useState(connection?.onboarding_id)
+  const busy = useRef(false)
+  const requestId = useRef(crypto.randomUUID())
+  const currentKey = ['vikingbot', scope, 'onboarding', 'current']
+  const current = useQuery({
+    queryKey: currentKey,
+    queryFn: currentOnboarding,
+    enabled: !jobId,
+    retry: false,
+    staleTime: 0,
+  })
+  const id = jobId ?? current.data?.id
+  const jobKey = ['vikingbot', scope, 'onboarding', id]
+  const job = useQuery({
+    queryKey: jobKey,
+    queryFn: () => getOnboarding(id!),
+    enabled: Boolean(id),
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data && finished.has(query.state.data.state) ? false : 1500,
+  })
+  const run = job.data ?? (current.data?.id === id ? current.data : undefined)
+  const users = useQuery({
+    queryKey: ['vikingbot', scope, 'users'],
+    queryFn: getBotUsers,
+    enabled: !id,
+    retry: false,
+  })
+  const available = users.data?.filter((user) => user.available) ?? []
+  const selectedUser =
+    userId || (available.length === 1 ? available[0].user_id : '')
+  const connections = useQuery({
+    queryKey: ['vikingbot', scope, 'connections'],
+    queryFn: getConnections,
+    enabled: Boolean(run?.connection_id),
+    refetchInterval: run?.state === 'ready' ? 4000 : false,
+  })
+  const linked =
+    connection ??
+    connections.data?.find((item) => item.id === run?.connection_id)
+  const mutation = useMutation({
+    mutationFn: (action: 'start' | 'retry' | 'cancel' | 'manual') =>
+      action === 'start'
+        ? startOnboarding({
+            user_id: selectedUser,
+            name,
+            request_id: requestId.current,
+          })
+        : updateOnboarding(id!, action),
+    onSuccess: (value: OnboardingRun, action) => {
+      if (action === 'manual') {
+        client.setQueryData(currentKey, null)
+        onManual(linked)
+        return
+      }
+      if (value.state === 'cancelled') {
+        client.setQueryData(currentKey, null)
+        setJobId(undefined)
+        requestId.current = crypto.randomUUID()
+      } else {
+        client.setQueryData(['vikingbot', scope, 'onboarding', value.id], value)
+        setJobId(value.id)
+      }
+    },
+  })
+  function submit(action: 'start' | 'retry' | 'cancel' | 'manual') {
+    if (busy.current) return
+    busy.current = true
+    mutation.mutate(action, {
+      onSettled: () => {
+        busy.current = false
+      },
+    })
+  }
+  const error =
+    mutation.error ||
+    current.error ||
+    job.error ||
+    users.error ||
+    connections.error
+  const step = run?.state === 'ready' ? 2 : id ? 1 : 0
+  return (
+    <section className="w-full min-w-0 space-y-6 p-4 md:p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold">{t('setupTitle')}</h2>
+          <p className="mt-2 text-sm text-muted-foreground">{t('qr.intro')}</p>
+        </div>
+        <Button variant="ghost" onClick={onClose}>
+          {t('qr.close')}
+        </Button>
+      </div>
+      <ol className="grid grid-cols-3 gap-2 text-sm">
+        {STEP_LABELS.map((label, index) => (
+          <li
+            key={label}
+            aria-current={step === index ? 'step' : undefined}
+            className={`rounded-lg px-3 py-2 ${step === index ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'}`}
+          >
+            {index + 1}. {t(`qr.${label}`)}
+          </li>
+        ))}
+      </ol>
+      <div className="rounded-xl border p-5 md:p-6">
+        {!id && current.isPending ? (
+          <p role="status">{t('loading')}</p>
+        ) : !id && !current.error ? (
+          <div className="max-w-xl space-y-4">
+            <label className="block space-y-2 text-sm">
+              <span>{t('runtimeUser')}</span>
+              <select
+                aria-label={t('runtimeUser')}
+                className="h-10 w-full rounded-md border bg-background px-3"
+                value={selectedUser}
+                disabled={mutation.isPending || users.isPending}
+                onChange={(event) => setUserId(event.target.value)}
+              >
+                <option value="">{t('selectUser')}</option>
+                {users.data?.map((user) => (
+                  <option
+                    key={user.user_id}
+                    value={user.user_id}
+                    disabled={!user.available}
+                  >
+                    {user.user_id}
+                    {!user.available ? ` · ${t('userUnavailable')}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-xs leading-6 text-muted-foreground">
+              {t('runtimeUserHint')}
+            </p>
+            {users.isSuccess && available.length === 0 && (
+              <p className="text-sm">
+                {t('noUsers')}{' '}
+                <a
+                  className="underline"
+                  href="/users"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {t('manageUsers')}
+                </a>{' '}
+                <Button variant="ghost" onClick={() => void users.refetch()}>
+                  {t('retry')}
+                </Button>
+              </p>
+            )}
+            <label className="block space-y-2 text-sm">
+              <span>{t('qr.botName')}</span>
+              <Input
+                value={name}
+                maxLength={50}
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+            <p className="text-xs leading-6 text-muted-foreground">
+              {t('qr.consent')}
+            </p>
+            <Button
+              disabled={
+                !selectedUser ||
+                !name.trim() ||
+                mutation.isPending ||
+                current.isPending
+              }
+              onClick={() => submit('start')}
+            >
+              {mutation.isPending && (
+                <Loader2Icon className="size-4 animate-spin" />
+              )}
+              {t('qr.start')}
+            </Button>
+          </div>
+        ) : run?.state === 'ready' && linked ? (
+          <GroupSetup
+            connection={linked}
+            onChange={onChange}
+            onClose={onClose}
+          />
+        ) : (
+          <div className="space-y-4">
+            <p role="status" className="font-medium">
+              {run ? t(`qr.states.${run.state}`) : t('loading')}
+            </p>
+            {run?.qr && !finished.has(run.state) && (
+              <div className="w-fit rounded-xl bg-white p-4">
+                <QRCodeSVG
+                  value={run.qr}
+                  size={208}
+                  marginSize={2}
+                  title={t('qr.scan')}
+                />
+              </div>
+            )}
+            {run?.qr && (
+              <p className="text-sm text-muted-foreground">
+                {t('qr.scanHint')}
+              </p>
+            )}
+            {run && (
+              <p className="text-sm text-muted-foreground">
+                {t('runtimeUser')}: {run.user_id}
+              </p>
+            )}
+            {run?.owner && (
+              <p className="text-sm text-muted-foreground">
+                {run.owner.user_name} · {run.owner.tenant_name}
+              </p>
+            )}
+            {run?.state === 'awaiting_approval' && (
+              <p className="text-sm text-muted-foreground">
+                {t('qr.approvalHint')}
+              </p>
+            )}
+            {run?.error && (
+              <p role="alert" className="text-sm text-destructive">
+                {t(`qr.errors.${run.error}`, {
+                  defaultValue: t('qr.errors.setup_failed'),
+                })}
+              </p>
+            )}
+            {run?.app_id && (
+              <a
+                className="inline-block text-sm underline"
+                target="_blank"
+                rel="noreferrer"
+                href={`https://open.feishu.cn/app/${encodeURIComponent(run.app_id)}`}
+              >
+                {t('openPlatform')}
+              </a>
+            )}
+            <div className="flex flex-wrap gap-3">
+              {run &&
+                ['failed', 'expired', 'interrupted'].includes(run.state) && (
+                  <Button
+                    variant="outline"
+                    disabled={mutation.isPending}
+                    onClick={() => submit('manual')}
+                  >
+                    {t('qr.manualRecovery')}
+                  </Button>
+                )}
+              {run?.can_retry && (
+                <Button
+                  disabled={mutation.isPending}
+                  onClick={() => submit('retry')}
+                >
+                  {t('qr.retryScan')}
+                </Button>
+              )}
+              {run && cancellable.has(run.state) && (
+                <Button
+                  variant="outline"
+                  disabled={mutation.isPending}
+                  onClick={() => submit('cancel')}
+                >
+                  {t('qr.cancel')}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+        {error && (
+          <div className="mt-4 space-y-2">
+            <p role="alert" className="text-sm text-destructive">
+              {t('error', { error: error.message })}
+            </p>
+            <Button
+              variant="outline"
+              onClick={() => {
+                void current.refetch()
+                if (id) void job.refetch()
+                void users.refetch()
+              }}
+            >
+              {t('retry')}
+            </Button>
+          </div>
+        )}
+      </div>
+      {!id && (
+        <Button variant="link" onClick={() => onManual()}>
+          {t('qr.manual')}
+        </Button>
+      )}
+    </section>
+  )
+}

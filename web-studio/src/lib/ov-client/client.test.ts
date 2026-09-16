@@ -137,3 +137,12 @@ describe('createOvClient API key selection', () => {
     expect(readRequestHeader(requests[0], 'X-OpenViking-User')).toBe('bob')
   })
 })
+
+it('uses the control credential for Studio bot management only', async () => {
+  const { client, requests } = createRecordingClient()
+  client.setConnection({ adminApiKey: 'admin-key', apiKey: 'user-key' })
+  await client.instance.get('/bot/v1/studio/connections')
+  await client.instance.post('/bot/v1/chat/stream')
+  expect(readRequestHeader(requests[0], 'X-API-Key')).toBe('admin-key')
+  expect(readRequestHeader(requests[1], 'X-API-Key')).toBe('user-key')
+})

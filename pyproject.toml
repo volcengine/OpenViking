@@ -212,6 +212,7 @@ include = ["openviking*", "vikingbot*"]
 exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
+"vikingbot.studio.providers.feishu" = ["icon.png"]
 openviking = [
     "prompts/templates/**/*.yaml",
     "server/static/**/*",
