@@ -209,7 +209,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                   .map((s) => (
                     <div
                       key={s.session_id}
-                      className={`flex items-center rounded-lg hover:bg-muted ${selected?.id === s.session_id ? 'bg-muted' : ''}`}
+                      className={`group/conversation flex items-center rounded-lg hover:bg-muted ${selected?.id === s.session_id ? 'bg-muted' : ''}`}
                     >
                       <button
                         type="button"
@@ -219,8 +219,26 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                         <span className="block truncate">
                           {getTitle(s.session_id) || t('newChat')}
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          {t('web')}
+                        <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                          <span>{t('web')}</span>
+                          {s.mod_time &&
+                            !Number.isNaN(Date.parse(s.mod_time)) && (
+                              <time
+                                className="shrink-0"
+                                dateTime={s.mod_time}
+                                title={new Date(s.mod_time).toLocaleString()}
+                              >
+                                {new Date(s.mod_time).toLocaleString(
+                                  undefined,
+                                  {
+                                    month: 'numeric',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  },
+                                )}
+                              </time>
+                            )}
                         </span>
                       </button>
                       <DeleteConversation

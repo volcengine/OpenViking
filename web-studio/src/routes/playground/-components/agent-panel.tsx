@@ -322,7 +322,7 @@ export function AgentPanel({
                   return (
                     <div
                       key={session.session_id}
-                      className="flex items-center gap-1"
+                      className="group/conversation flex items-center gap-1"
                     >
                       <button
                         type="button"

@@ -31,7 +31,7 @@ export function DeleteConversation({
       <Button
         size="icon"
         variant="ghost"
-        className="mr-1 shrink-0 text-muted-foreground hover:text-destructive"
+        className="mr-1 shrink-0 text-muted-foreground hover:text-destructive [@media(hover:hover)]:opacity-0 group-hover/conversation:opacity-100 group-focus-within/conversation:opacity-100 focus-visible:opacity-100 transition-opacity"
         aria-label={t('threadList.deleteSession', { title })}
         onClick={() => {
           mutation.reset()
