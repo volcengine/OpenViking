@@ -1,0 +1,42 @@
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 218,279,1225-1227,1467-1469,1538,1630-1631,2048-2058
+bot/vikingbot/agent/subagent.py
+  h_b34c679d17e2ac 265-266
+bot/vikingbot/agent/tools/compile.py
+  h_b34c679d17e2ac 28,49,64,66-67,72-74,81-82,85,91,93,101-102,113-115,122,134,143-146,165,173-176,189,195-210,213-219,252,257,261,265,267-273,279-280,283,293-295,301,304,332-335,339,342-351,369,390-391,395-396,408-409,420-442,459,462,468,470-472,502,504-505,513-514,516-518,520-541
+bot/vikingbot/agent/tools/compile_merge.py
+  h_b34c679d17e2ac 1-781
+bot/vikingbot/agent/tools/spawn.py
+  h_b34c679d17e2ac 4,70-76,80-81,126-129,149-151
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 33-34,36,41
+bot/vikingbot/compile/renderer.py
+  h_b34c679d17e2ac 331,334-337,342,348-349,352-357,448-450,471,477-482,534-544,546,554
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 8,46,96,98-101,103,705-715,760,795,803-810,814,943-944,967,972-975,1029,1031-1036,1039-1040,1042-1047,1060-1063,1091,1094-1096,1618,1631-1642,1645-1650,1652-1657,1663-1685,1687-1701,1711,1717-1723,1745-1754,1768,1776,1780-1811,1813-1815,1824-1830,1838-1841,1872,1922,1931-1932,1936,1941-1959,1963-1966,1986-1996
+docs/design/ov-compile-design.md
+  h_b34c679d17e2ac 200,299,354,561,564,566,575
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 9,11-17,159-160
+docs/en/context-compilation/02-llm-wiki.md
+  h_b34c679d17e2ac 74,78-81,84-85,93
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 9,11-17,159-160
+docs/zh/context-compilation/02-llm-wiki.md
+  h_b34c679d17e2ac 74,78-81,84-85,93
+examples/compile/ov-compile-skills/llm-wiki/SKILL.md
+  h_b34c679d17e2ac 106,116-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "71d6dbf1c23846acee7ffe7c2beee328e5c7e859",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

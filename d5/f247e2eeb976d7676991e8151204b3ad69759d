@@ -1,0 +1,28 @@
+bot/vikingbot/agent/subagent.py
+  h_b34c679d17e2ac 65-77
+bot/vikingbot/agent/tools/compile_merge.py
+  h_b34c679d17e2ac 230,859
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 38,42-44
+bot/vikingbot/compile/renderer.py
+  h_b34c679d17e2ac 299,301-302,401-402
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 657-660,772,1872,1948-1951,1968-1972,1982,2017
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 13,17
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 13,17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d5f247e2eeb976d7676991e8151204b3ad69759d",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

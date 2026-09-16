@@ -1,0 +1,36 @@
+bot/tests/test_compile.py
+  h_b34c679d17e2ac 4,17,26,45,131,152,204,2009,2014,2035,2044-2045,2062,2067,2082,2095,2106,2124,2141,2149,2382-2397,2399,2401-2402,2404-2408,2410-2417,2419-2420,2422,2424-2428,2432-2434,2447-2450,2487,2495,2625-2627,2733-2734,2738,2744,3348,3405,3572-3574,3668,3809,3837-3850,3852-3857,3859-3907,3909-3960
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 1899-1900
+bot/vikingbot/agent/tools/compile.py
+  h_b34c679d17e2ac 24,31,53-54,78-79,96,98,102,105,109,112,114,116,121,124,131-132,134-135,163,167-168,665-666,669,727
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 18,98-99
+bot/vikingbot/compile/renderer.py
+  h_b34c679d17e2ac 55-57,268,273-274,276,331,714,717
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 31,36,62,75,435,612,614-616,619-622,624-627,630-631,634,636-639,666,669,676,691,769,774,1045,1050-1051,1435,1437-1441,1443,1445-1447,1449,1451,1458,1467,1470-1477,1479-1482,1484-1487,1489-1495,1498-1499,1501-1505
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 5-6
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 5-6
+openviking/server/routers/compile.py
+  h_b34c679d17e2ac 21,23
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 120,126-133,538
+tests/server/test_bot_proxy_auth.py
+  h_b34c679d17e2ac 295-299,323,450,456,471-473
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "c82c918be238f511408a7e5b69d11969416785b2",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}

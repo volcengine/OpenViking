@@ -1,0 +1,48 @@
+bot/tests/test_agent_loop_timing.py
+  h_b34c679d17e2ac 1-152
+bot/tests/test_compile.py
+  h_b34c679d17e2ac 5,9,19-20,31,33-34,49,59,2380-2381,2392-2393,2426,3130-3131,3193-3194,3677-3679,3886,3973-4245
+bot/tests/test_sandbox_file_access.py
+  h_b34c679d17e2ac 6,10,13-14,25-63,302-333
+bot/tests/test_subagent_skills_context.py
+  h_b34c679d17e2ac 6,16,162-230
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 10,284,288-290,292,297,301,492-494,496-505,509-571,573-611,1416,1455-1458,1531-1532,1609,1654,1659-1667,1751-1765,1945-1946,1994-1997
+bot/vikingbot/agent/subagent.py
+  h_b34c679d17e2ac 7,32-34,56,58-63,78,80-81,84-86,88-94,101-104,113,120-121,124-188,458-460
+bot/vikingbot/agent/tools/compile.py
+  h_b34c679d17e2ac 6-7,9,27,57-252,269-270,279-280,297-300,367-370,415,528-531,552-555
+bot/vikingbot/agent/tools/filesystem.py
+  h_b34c679d17e2ac 20,26-38,46-60,64-69
+bot/vikingbot/agent/tools/spawn.py
+  h_b34c679d17e2ac 3,64-133
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 19
+bot/vikingbot/compile/renderer.py
+  h_b34c679d17e2ac 28-33,387,398-399
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 10,14-15,31-38,40-42,47,49,69,74,149-179,193-197,663-664,697,730-738,762-763,921-923,1072,1127,1511,1537-1635,1637-1649,1651-1656,1658-1665,1679-1690,1693-1744
+bot/vikingbot/config/schema.py
+  h_b34c679d17e2ac 478
+bot/vikingbot/sandbox/backends/direct.py
+  h_b34c679d17e2ac 4-5,35,46,50,55-66
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 7-16
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 7-16
+examples/compile/ov-compile-skills/llm-wiki/SKILL.md
+  h_b34c679d17e2ac 3,6,8,10,12,14,16,18,20,22-24,26,28,30,32,34,36,38,40-52,54,56,58,60-68,70,72,74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "7fb0562a5a18180e385ab583815ea4ec44a8f6ab",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
