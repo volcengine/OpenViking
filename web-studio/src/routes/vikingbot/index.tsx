@@ -19,6 +19,7 @@ import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
 } from '#/lib/sessions/vikingbot-sessions'
+import { DeleteConversation } from './-components/delete-conversation'
 import { Channels } from './-components/channels'
 import {
   PlatformConversationList,
@@ -76,7 +77,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
   const activeFilter = hasFeishu ? filter : 'all'
   const sessions = useSessionListByRecency()
   const createSession = useCreateSession()
-  const { getTitle, setTitle } = useSessionTitles(scope)
+  const { getTitle, setTitle, removeTitle } = useSessionTitles(scope)
   async function create() {
     if (creating.current) return
     creating.current = true
@@ -147,7 +148,6 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
             {t('retry')}
           </Button>
         </div>
-
       ) : tab === 'channels' ? (
         <div className="flex-1 overflow-auto">
           <Channels canManage={canManage} scope={scope} />
@@ -207,19 +207,35 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                       .includes(search.toLowerCase()),
                   )
                   .map((s) => (
-                    <button
-                      type="button"
-                      className={`w-full rounded-lg p-3 text-left text-sm hover:bg-muted ${selected?.id === s.session_id ? 'bg-muted' : ''}`}
+                    <div
                       key={s.session_id}
-                      onClick={() => select(s.session_id)}
+                      className={`flex items-center rounded-lg hover:bg-muted ${selected?.id === s.session_id ? 'bg-muted' : ''}`}
                     >
-                      <span className="block truncate">
-                        {getTitle(s.session_id) || t('newChat')}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {t('web')}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 p-3 text-left text-sm"
+                        onClick={() => select(s.session_id)}
+                      >
+                        <span className="block truncate">
+                          {getTitle(s.session_id) || t('newChat')}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {t('web')}
+                        </span>
+                      </button>
+                      <DeleteConversation
+                        id={s.session_id}
+                        title={getTitle(s.session_id) || t('newChat')}
+                        onDeleted={() => {
+                          removeTitle(s.session_id)
+                          setSelected((current) =>
+                            current?.id === s.session_id && !current.connection
+                              ? undefined
+                              : current,
+                          )
+                        }}
+                      />
+                    </div>
                   ))}
               {activeFilter !== 'web' &&
                 connections.data?.map((c) => (
