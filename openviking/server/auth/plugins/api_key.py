@@ -24,6 +24,7 @@ _API_KEY_ROOT_ALLOWED_PATHS = {
     "/api/v1/debug/health",
 }
 _API_KEY_ROOT_ALLOWED_PREFIXES = (
+    "/bot/v1/studio/",  # Root-managed connections, not Bot chat/data APIs.
     "/api/v1/admin",
     "/api/v1/observer",
     "/api/v1/console",

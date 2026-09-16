@@ -142,3 +142,45 @@ async def test_onboarding_identity_is_selected_server_side(app, monkeypatch):
     assert dispatch.call_args.args[0].account_id == "a"
     assert dispatch.call_args.kwargs["identity"] == identity
     assert "server-key" not in result.text
+
+
+@pytest.mark.parametrize(
+    "path,allowed",
+    [
+        ("/bot/v1/studio/capabilities", True),
+        ("/bot/v1/studio/users", True),
+        ("/bot/v1/studio/onboarding", True),
+        ("/bot/v1/chat", False),
+        ("/bot/v1/studio-other", False),
+    ],
+)
+def test_real_root_policy_allows_only_studio_control_plane(path, allowed):
+    from openviking.server.auth.plugins.api_key import ApiKeyAuthPlugin
+    from openviking.server.identity import ResolvedIdentity
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    identity = ResolvedIdentity(role="root", account_id="default", user_id="default")
+    if allowed:
+        ApiKeyAuthPlugin().get_request_context_checks(path, identity)
+    else:
+        with pytest.raises(PermissionDeniedError):
+            ApiKeyAuthPlugin().get_request_context_checks(path, identity)
+
+
+async def test_root_studio_account_selector_does_not_use_data_identity_headers(app, monkeypatch):
+    from openviking.server.identity import RequestContext
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier("default", "default"), role="root")
+    app.dependency_overrides[get_request_context] = lambda: ctx
+    dispatch = AsyncMock(return_value={"status": "ok", "result": []})
+    monkeypatch.setattr(bot_studio, "dispatch", dispatch)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        result = await client.get(
+            "/studio/connections", headers={"X-OpenViking-Studio-Account": "team"}
+        )
+    assert result.status_code == 200
+    assert dispatch.call_args.args[0].account_id == "team"
+    assert ctx.account_id == "default"

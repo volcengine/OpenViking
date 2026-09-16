@@ -1,22 +1,33 @@
 """Root-managed, account-scoped Studio bot administration."""
 
 import os
+from dataclasses import replace
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from openviking.server.auth import get_api_key_manager_or_raise, get_request_context
 from openviking.server.config import get_server_url_from_server_data
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import bot
+from openviking_cli.session.user_id import UserIdentifier
 
 router = APIRouter()
 
 
-async def manager(ctx: RequestContext = Depends(get_request_context)):
+async def manager(
+    ctx: RequestContext = Depends(get_request_context),
+    studio_account: str | None = Header(None, alias="X-OpenViking-Studio-Account"),
+):
     # App installations are process-wide. Account admins cannot mutate host credentials.
     if ctx.role != Role.ROOT:
         raise HTTPException(403, "Only the server administrator can manage Bot connections")
+    if studio_account:
+        # This is a root-only control-plane selector, not a data-plane identity assertion.
+        try:
+            ctx = replace(ctx, user=UserIdentifier(studio_account, ctx.user.user_id))
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid Studio account") from exc
     return ctx
 
 
