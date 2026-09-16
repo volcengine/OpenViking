@@ -14,6 +14,7 @@ import {
   MoonIcon,
   ActivityIcon,
   BotIcon,
+  PanelsTopLeftIcon,
   CableIcon,
   ScrollTextIcon,
   SearchIcon,
@@ -91,7 +92,7 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/home',
   },
   {
-    icon: BotIcon,
+    icon: PanelsTopLeftIcon,
     id: 'playground',
     section: 'workspace',
     titleKey: 'navigation.playground.title',
