@@ -498,7 +498,6 @@ class OpenVikingService:
                     queue_name,
                     dequeue_handler=AddResourceProcessor(
                         self._resource_service,
-                        asyncio.get_running_loop(),
                         queue_name,
                         self._viking_fs,
                     ),
@@ -508,7 +507,6 @@ class OpenVikingService:
                 self._queue_manager.SESSION_COMMIT,
                 dequeue_handler=SessionCommitProcessor(
                     self._session_service,
-                    asyncio.get_running_loop(),
                 ),
                 allow_create=True,
             )
@@ -516,7 +514,6 @@ class OpenVikingService:
                 self._queue_manager.EXTERNAL_TASK,
                 dequeue_handler=ExternalTaskProcessor(
                     self._external_task_service,
-                    asyncio.get_running_loop(),
                 ),
                 allow_create=True,
             )

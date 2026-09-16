@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -278,9 +279,18 @@ class TestWatchSchedulerResourceExistence:
             processing_mode="vectors_only",
         )
 
+        started = threading.Event()
+
+        async def execute_from_worker():
+            started.set()
+            await scheduler._execute_task(task.model_copy(deep=True))
+
         async with coordinator.mutation(task.account_id, [old_uri, new_uri]):
-            execution = asyncio.create_task(scheduler._execute_task(task.model_copy(deep=True)))
-            await asyncio.sleep(0)
+            execution = asyncio.create_task(
+                asyncio.to_thread(lambda: asyncio.run(execute_from_worker()))
+            )
+            assert await asyncio.to_thread(started.wait, 3)
+            await asyncio.sleep(0.01)
             assert resource_service.calls == []
             await manager.rewrite_target_prefix_internal(
                 old_uri,

@@ -85,7 +85,8 @@ class ExternalTaskService:
 
     def __init__(self) -> None:
         self._providers: dict[str, ExternalTaskProvider] = {}
-        # Accessed only on the service loop. Restored owners may include multiple
+        # Restored before workers start, then accessed only by the ExternalTask
+        # queue's loop. Restored owners may include multiple
         # tasks submitted before target serialization was enabled.
         self._owners: dict[tuple[str | None, str, str], set[str]] = {}
         self._executing: set[str] = set()
@@ -227,7 +228,7 @@ class ExternalTaskService:
             if task_id in self._executing or (owners and task_id not in owners):
                 return False
             # No await between checking and claiming: concurrent deliveries on the
-            # service loop cannot both acquire an unoccupied target.
+            # queue loop cannot both acquire an unoccupied target.
             if key is not None:
                 self._owners.setdefault(key, set()).add(task_id)
             self._executing.add(task_id)

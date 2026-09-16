@@ -8,7 +8,6 @@ worker binds the committing account/user (so tokens are not attributed to
 "__unknown__") and resets the context afterwards.
 """
 
-import asyncio
 import json
 
 from openviking.observability.context import get_root_observability_context
@@ -80,7 +79,6 @@ async def test_process_binds_committing_identity_to_root_context():
     captured: dict = {}
     processor = SessionCommitProcessor(
         _FakeSessionService(captured),
-        asyncio.get_running_loop(),
     )
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
@@ -100,7 +98,6 @@ async def test_process_requeues_deferred_commit_and_resets_root_context(monkeypa
 
     processor = SessionCommitProcessor(
         _FakeSessionService({}, processed=False),
-        asyncio.get_running_loop(),
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
@@ -125,7 +122,6 @@ async def test_cancelled_queued_commit_writes_terminal_marker_before_returning()
     )
     processor = SessionCommitProcessor(
         _SingleSessionService(session),
-        asyncio.get_running_loop(),
     )
     marker_uri = f"{msg.archive_uri}/.failed.json"
 

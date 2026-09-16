@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional
 from openviking.observability.context import bind_execution_context
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
-from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
 from openviking.service.task_work_index import bind_task_context, extract_task_metadata
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -38,12 +37,10 @@ class AddResourceProcessor(DequeueHandlerBase):
     def __init__(
         self,
         resource_service: Any,
-        service_loop: asyncio.AbstractEventLoop,
         queue_name: str,
         viking_fs: Any,
     ):
         self._resource_service = resource_service
-        self._dispatcher = OwnerLoopDispatcher(service_loop)
         self._queue_name = queue_name
         self._viking_fs = viking_fs
 
@@ -340,16 +337,14 @@ class AddResourceProcessor(DequeueHandlerBase):
             msg = AddResourceMsg.from_dict(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
-        await self._dispatcher.run(
-            lambda: self._handle_cancelled(
-                msg,
-                RequestContext(
-                    user=UserIdentifier(msg.account_id, msg.user_id),
-                    role=Role(msg.role),
-                    group_ids=tuple(msg.group_ids),
-                    actor_peer_id=msg.actor_peer_id,
-                    bypass_acl=msg.bypass_acl,
-                ),
+        await self._handle_cancelled(
+            msg,
+            RequestContext(
+                user=UserIdentifier(msg.account_id, msg.user_id),
+                role=Role(msg.role),
+                group_ids=tuple(msg.group_ids),
+                actor_peer_id=msg.actor_peer_id,
+                bypass_acl=msg.bypass_acl,
             ),
         )
         unregister_telemetry(msg.telemetry_id or "")
@@ -368,4 +363,4 @@ class AddResourceProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
 
-        return await self._dispatcher.run(lambda: self._process(msg, data))
+        return await self._process(msg, data)

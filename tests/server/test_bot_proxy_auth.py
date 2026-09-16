@@ -520,7 +520,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     manager = QueueManager(agfs=object())
     queue = manager.get_queue(
         QueueManager.EXTERNAL_TASK,
-        dequeue_handler=ExternalTaskProcessor(tasks, asyncio.get_running_loop()),
+        dequeue_handler=ExternalTaskProcessor(tasks),
         allow_create=True,
     )
     queue._async_agfs = backend
@@ -628,7 +628,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         tracker = TaskTracker(store)
         tasks = ExternalTaskService()
         tasks.register(CompileService(service._config, tasks, SimpleNamespace()))
-        queue.set_dequeue_handler(ExternalTaskProcessor(tasks, asyncio.get_running_loop()))
+        queue.set_dequeue_handler(ExternalTaskProcessor(tasks))
         await tasks.restore_tasks(await manager.prepare_task_tracking(tracker))
         # Recover processing behind pending work to prove recovery reserves the target first.
         backend.pending.extend(backend.processing.values())

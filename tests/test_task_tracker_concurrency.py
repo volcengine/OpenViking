@@ -450,38 +450,27 @@ async def test_keyed_lock_serializes_same_key_and_allows_different_keys():
     from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool
 
     pool = KeyedAsyncLockPool[str]()
-    first_entered = asyncio.Event()
-    release_first = asyncio.Event()
-    same_key_entered = asyncio.Event()
-    other_key_entered = asyncio.Event()
-
-    async def hold_first_key() -> None:
-        async with pool.acquire("task-1"):
-            first_entered.set()
-            await release_first.wait()
+    same_key_entered = threading.Event()
+    other_key_entered = threading.Event()
 
     async def wait_for_same_key() -> None:
-        await first_entered.wait()
         async with pool.acquire("task-1"):
             same_key_entered.set()
 
     async def use_other_key() -> None:
-        await first_entered.wait()
         async with pool.acquire("task-2"):
             other_key_entered.set()
 
-    tasks = [
-        asyncio.create_task(hold_first_key()),
-        asyncio.create_task(wait_for_same_key()),
-        asyncio.create_task(use_other_key()),
-    ]
+    async def work() -> None:
+        await asyncio.gather(wait_for_same_key(), use_other_key())
 
-    await asyncio.wait_for(other_key_entered.wait(), timeout=1)
-    assert not same_key_entered.is_set()
+    async with pool.acquire("task-1"):
+        worker = asyncio.create_task(asyncio.to_thread(lambda: asyncio.run(work())))
+        assert await asyncio.to_thread(other_key_entered.wait, 3)
+        assert not same_key_entered.is_set()
 
-    release_first.set()
-    await asyncio.wait_for(same_key_entered.wait(), timeout=1)
-    await asyncio.gather(*tasks)
+    await asyncio.wait_for(worker, timeout=3)
+    assert same_key_entered.is_set()
 
 
 @pytest.mark.asyncio
@@ -518,6 +507,17 @@ async def test_keyed_lock_registry_is_cleaned_after_use_and_cancellation():
 
     release_blocker.set()
     await blocker_task
+    assert pool.entry_count == 0
+
+    # Cancellation can arrive after release hands over the slot, but before
+    # the waiting coroutine resumes. The slot must still become available.
+    async with pool.acquire("cancelled"):
+        granted_waiter = asyncio.create_task(waiter())
+        await asyncio.sleep(0)
+    granted_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await granted_waiter
+    await asyncio.wait_for(waiter(), timeout=1)
     assert pool.entry_count == 0
 
 
@@ -986,12 +986,12 @@ async def test_cancelled_create_waiting_for_task_lock_finishes_before_lock_relea
 
 
 @pytest.mark.asyncio
-async def test_task_tracker_public_mutation_from_foreign_loop_runs_on_owner():
+async def test_task_tracker_public_mutation_stays_on_calling_loop():
     from openviking.service.task_tracker import TaskStatus, TaskTracker
 
     store = _ControllableTaskStore()
     tracker = TaskTracker(store=store)
-    owner_loop = asyncio.get_running_loop()
+    request_loop = asyncio.get_running_loop()
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
 
     await asyncio.to_thread(lambda: asyncio.run(tracker.start(task.task_id)))
@@ -1006,18 +1006,17 @@ async def test_task_tracker_public_mutation_from_foreign_loop_runs_on_owner():
     assert loaded is not None
     assert snapshot is not None
     assert snapshot.status == TaskStatus.RUNNING
-    assert all(loop is owner_loop for loop in store.operation_loops)
+    assert store.operation_loops[0] is request_loop
+    assert all(loop is not request_loop for loop in store.operation_loops[1:])
 
 
 @pytest.mark.asyncio
 async def test_cancelling_foreign_mutation_cleans_task_lock_and_store_slot():
     from openviking.service.task_tracker import TaskStatus, TaskTracker
 
-    store = _ControllableTaskStore()
+    store = _ThreadBlockingUpdateTaskStore()
     tracker = TaskTracker(store=store)
     task = await tracker.create("add_resource", account_id="acme", user_id="alice")
-    store.update_started[task.task_id] = asyncio.Event()
-    store.update_release[task.task_id] = asyncio.Event()
     cancel_foreign = threading.Event()
 
     def run_from_foreign_loop() -> None:
@@ -1031,11 +1030,11 @@ async def test_cancelling_foreign_mutation_cleans_task_lock_and_store_slot():
         asyncio.run(invoke())
 
     foreign_call = asyncio.create_task(asyncio.to_thread(run_from_foreign_loop))
-    await store.update_started[task.task_id].wait()
+    assert await asyncio.to_thread(store.thread_update_started.wait, 3)
     cancel_foreign.set()
     await asyncio.sleep(0.05)
     returned_before_store_settled = foreign_call.done()
-    store.update_release[task.task_id].set()
+    store.thread_update_release.set()
     await foreign_call
 
     assert not returned_before_store_settled

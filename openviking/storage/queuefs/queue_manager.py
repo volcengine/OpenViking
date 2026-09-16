@@ -267,6 +267,15 @@ class QueueManager:
                         traceback.print_exc()
                         stop_event.wait(poll_interval)
         finally:
+            # Consumers may own timers and async generators in addition to
+            # their active queue deliveries. Finish them on the worker loop.
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
 
     async def _worker_async_concurrent(

@@ -7,6 +7,7 @@ Provides scheduled task execution for watch tasks.
 """
 
 import asyncio
+import threading
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
@@ -80,7 +81,7 @@ class WatchScheduler:
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
         self._execution_tasks: Dict[asyncio.Task, WatchTask] = {}
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     @property
     def watch_manager(self) -> Optional[WatchManager]:
@@ -161,7 +162,7 @@ class WatchScheduler:
             logger.warning(f"[WatchScheduler] Task {task_id} not found")
             return False
 
-        if not await self._try_mark_executing(task_id):
+        if not self._try_mark_executing(task_id):
             logger.info(f"[WatchScheduler] Task {task_id} is already executing, skipping")
             return False
 
@@ -173,7 +174,7 @@ class WatchScheduler:
             return True
         finally:
             self._execution_tasks.pop(execution, None)
-            await asyncio.shield(self._discard_executing(task_id))
+            self._discard_executing(task_id)
 
     async def delete_tasks(self, account_id: str, user_id: str | None = None) -> None:
         """Remove an identity's watches and settle their current executions."""
@@ -243,7 +244,7 @@ class WatchScheduler:
 
         tasks_to_run = []
         for task in due_tasks:
-            if not await self._try_mark_executing(task.task_id):
+            if not self._try_mark_executing(task.task_id):
                 logger.info(f"[WatchScheduler] Task {task.task_id} is already executing, skipping")
                 continue
             tasks_to_run.append(task)
@@ -253,7 +254,7 @@ class WatchScheduler:
                 async with self._semaphore:
                     await self._execute_task(t)
             finally:
-                await asyncio.shield(self._discard_executing(t.task_id))
+                self._discard_executing(t.task_id)
 
         for due_task in tasks_to_run:
             execution = asyncio.create_task(run_one(due_task))
@@ -549,23 +550,23 @@ class WatchScheduler:
         Used while an import's first round runs so a due tick does not start an
         overlapping run; release with :meth:`release_execution`.
         """
-        held = await self._try_mark_executing(task_id)
+        held = self._try_mark_executing(task_id)
         logger.debug(f"[WatchScheduler] hold_execution task_id={task_id} held={held}")
         return held
 
     async def release_execution(self, task_id: str) -> None:
-        await self._discard_executing(task_id)
+        self._discard_executing(task_id)
         logger.debug(f"[WatchScheduler] release_execution task_id={task_id}")
 
-    async def _try_mark_executing(self, task_id: str) -> bool:
-        async with self._lock:
+    def _try_mark_executing(self, task_id: str) -> bool:
+        with self._lock:
             if task_id in self._executing_tasks:
                 return False
             self._executing_tasks.add(task_id)
             return True
 
-    async def _discard_executing(self, task_id: str) -> None:
-        async with self._lock:
+    def _discard_executing(self, task_id: str) -> None:
+        with self._lock:
             self._executing_tasks.discard(task_id)
 
     async def _prepare_feishu_auth_state(
@@ -627,4 +628,5 @@ class WatchScheduler:
     @property
     def executing_tasks(self) -> Set[str]:
         """Get the set of currently executing task IDs."""
-        return self._executing_tasks.copy()
+        with self._lock:
+            return self._executing_tasks.copy()
