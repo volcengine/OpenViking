@@ -84,7 +84,7 @@ New configuration should use `sender`; existing `peer_role=person` configuration
 
 ## How assemble builds context
 
-The plugin occupies OpenClaw's `contextEngine` slot. It handles session history, long-term memory recall, and the pending user input separately; `assemble()` does not capture conversation messages.
+The plugin occupies OpenClaw's `contextEngine` slot. It handles session history, long-term memory recall, and the pending user input separately; `assemble()` returns context for the current model request. It does not persist assembled summaries or recalled context to the OpenClaw session transcript, nor does it append messages to the OV session through this call. The host may update the current turn's in-memory messages with the result; that is separate from writing persistent conversation history.
 
 Main assemble prepares history at the start of each new turn. The plugin identifies this call by the presence of at least one of `prompt`, `availableTools`, or `citationsMode`.
 

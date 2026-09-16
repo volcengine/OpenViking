@@ -84,7 +84,7 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 
 ## assemble 如何组装上下文
 
-插件占用 OpenClaw 的 `contextEngine` 槽位。会话历史、长期记忆召回和本轮新输入分别处理；`assemble()` 本身不写入对话。
+插件占用 OpenClaw 的 `contextEngine` 槽位。会话历史、长期记忆召回和本轮新输入分别处理；`assemble()` 返回供本次模型请求使用的上下文，不把组装出的摘要或召回内容持久化到 OpenClaw 的 session transcript，也不通过该调用向 OV session 追加消息。宿主可以用返回的 messages 更新本轮内存状态，这与写入持久化对话记录不同。
 
 主 assemble 在每轮新输入开始执行时准备历史上下文。插件通过参数中是否包含 `prompt`、`availableTools`、`citationsMode` 中任一字段识别该调用。
 
