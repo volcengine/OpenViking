@@ -157,7 +157,9 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
         </p>
       ) : capabilities.error ? (
         <div role="alert" className="p-8">
-          <p>{capabilities.error.message}</p>
+          <p>
+            {t('operationFailed')} {capabilities.error.message}
+          </p>
           <Button onClick={() => void capabilities.refetch()}>
             {t('retry')}
           </Button>
@@ -225,7 +227,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                       role="alert"
                       className="p-2 text-sm text-destructive"
                     >
-                      {query.error.message}
+                      {t('operationFailed')} {query.error.message}
                     </p>
                   ),
               )}

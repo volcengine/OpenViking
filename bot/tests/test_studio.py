@@ -117,7 +117,10 @@ async def test_delivery_failure_is_not_reported_as_sent(channel, monkeypatch):
 
     monkeypatch.setattr(FeishuChannel, "send", AsyncMock(return_value=False))
     result = await channel.send(
-        OutboundMessage(SessionKey(type="feishu", channel_id="cli_test", chat_id="group"), "answer")
+        OutboundMessage(
+            SessionKey(type="feishu", channel_id="cli_test", chat_id="studio:connection:group"),
+            "answer",
+        )
     )
     assert not result
     assert channel.last_sent is None
@@ -436,3 +439,71 @@ async def test_feishu_upstream_failure_is_not_a_credentials_error(monkeypatch, e
         await provider.FeishuProvider().validate_app("cli_test", "secret")
     assert error.value.status_code == 502
     assert error.value.detail == "Cannot reach Feishu; retry the connection check"
+
+
+async def test_recreated_connection_isolates_sessions_and_rejects_old_replies(
+    tmp_path, monkeypatch
+):
+    from vikingbot.channels.feishu import FeishuChannel
+    from vikingbot.channels.manager import ChannelManager
+    from vikingbot.session.manager import SessionManager
+
+    async def start(channel):
+        channel._running = True
+
+    provider = get_provider({"type": "feishu"})
+    monkeypatch.setattr(provider, "validate_app", AsyncMock(return_value={"open_id": "ou_bot"}))
+    monkeypatch.setattr(StudioFeishuChannel, "start", start)
+    delivery = AsyncMock(return_value=True)
+    monkeypatch.setattr(FeishuChannel, "send", delivery)
+    bus = MessageBus()
+    service = StudioService(
+        SimpleNamespace(bot_data_path=tmp_path, workspace_path=tmp_path, channels=[]),
+        ChannelManager(bus),
+    )
+
+    async def connect(account):
+        result = await service.create(
+            account,
+            {"type": "feishu", "credentials": {"app_id": "cli_test", "app_secret": "secret"}},
+            {"account_id": account, "user_id": "bot-user", "role": "user"},
+        )
+        await asyncio.gather(*service.tasks.values())
+        channel = service.runtime(service.get(account, result["id"]))
+        await channel._handle_message(
+            "sender", "oc_group#topic", "hello", metadata={"message_id": account}
+        )
+        return result, channel, await bus.consume_inbound()
+
+    old, _, old_event = await connect("a")
+    sessions = SessionManager(tmp_path)
+    old_session = sessions.get_or_create(old_event.session_key)
+    old_session.add_message("assistant", "account A private result")
+    await sessions.save(old_session)
+    await service.update("a", old["id"], {"action": "delete", "revision": old["revision"]})
+    new, channel, event = await connect("b")
+    assert event.openviking_connection["account_id"] == "b"
+    assert sessions.get_or_create(event.session_key).get_history() == []
+    assert SessionManager(tmp_path).get_or_create(event.session_key).get_history() == []
+    assert service.store.history(old["id"]) == []
+
+    assert not await channel.send(OutboundMessage(old_event.session_key, "late old reply"))
+    delivery.assert_not_awaited()
+    assert await channel.send(OutboundMessage(event.session_key, "new reply"))
+    assert delivery.await_args.args[0].session_key.chat_id == "oc_group#topic"
+    assert event.session_key.channel_key() in service.manager.channels
+    assert service.store.history(new["id"], "oc_group#topic")[0]["content"] == "new reply"
+
+    # Restarting the same connection must retain its scoped session.
+    current_session = sessions.get_or_create(event.session_key)
+    current_session.add_message("assistant", "account B result")
+    await sessions.save(current_session)
+    service.install(service.get("b", new["id"]))
+    restored = service.runtime(service.get("b", new["id"]))
+    await restored.start()
+    await restored._handle_message("sender", "oc_group#topic", "again")
+    restored_event = await bus.consume_inbound()
+    assert restored_event.session_key == event.session_key
+    assert SessionManager(tmp_path).get_or_create(restored_event.session_key).get_history() == [
+        {"role": "assistant", "content": "account B result"}
+    ]

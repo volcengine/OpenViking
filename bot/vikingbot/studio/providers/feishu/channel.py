@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from vikingbot.bus.events import InboundMessage, OutboundMessage
@@ -19,6 +20,7 @@ class StudioFeishuChannel(FeishuChannel):
     def __init__(self, config, bus, *, record, store, **kwargs):
         super().__init__(config, bus, **kwargs)
         self.record = record
+        self._session_prefix = f"studio:{record['id']}:"
         self.store = store
         self.verification = None
         self.last_received = None
@@ -47,7 +49,9 @@ class StudioFeishuChannel(FeishuChannel):
         metadata = dict(metadata or {})
         metadata["studio_managed"] = True
         self.last_received = now()
-        key = SessionKey(type="feishu", channel_id=self.channel_id, chat_id=chat_id)
+        key = SessionKey(
+            type="feishu", channel_id=self.channel_id, chat_id=self._session_prefix + chat_id
+        )
         token = self.verification
         if (
             token
@@ -174,6 +178,17 @@ class StudioFeishuChannel(FeishuChannel):
             await client.close()
 
     async def send(self, msg):
+        # A replaced connection must never deliver an old in-flight response.
+        if not msg.session_key.chat_id.startswith(self._session_prefix):
+            return False
+        # Only the Agent session is scoped; Feishu delivery and captured history
+        # continue using the original group/topic identifier.
+        msg = replace(
+            msg,
+            session_key=msg.session_key.model_copy(
+                update={"chat_id": msg.session_key.chat_id.removeprefix(self._session_prefix)}
+            ),
+        )
         accepted = await super().send(msg)
         if msg.is_normal_message:
             if accepted:

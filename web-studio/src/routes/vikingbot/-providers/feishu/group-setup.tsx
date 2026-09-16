@@ -115,7 +115,7 @@ export function GroupSetup({
           )}
           {mutation.error && (
             <p role="alert" className="text-sm text-destructive">
-              {mutation.error.message}
+              {t('operationFailed')} {mutation.error.message}
             </p>
           )}
         </div>
