@@ -93,11 +93,12 @@ Main assemble prepares history at the start of each new turn. The plugin identif
 The main branch calls `getSessionContext(tokenBudget)` and builds:
 
 ```text
-messages = [Session History Summary] + OV active messages
+summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
+messages = [summaryMessage] + OV active messages
 systemPromptAddition = Session Context Guide (when archives exist) + recalled context (when available)
 ```
 
-`latest_archive_overview` becomes a synthetic user message containing the history summary; active messages provide recent uncompressed conversation. The host adds the pending `prompt` to the turn. The plugin uses it for recall without appending a second copy to the returned history. Recalled context belongs to this request and is not directly captured as new conversation in OV.
+`latest_archive_overview` is the summary text returned by the server; `[Session History Summary]` is the literal heading prepended by the plugin. This synthetic user message is inserted only when the overview is nonempty. Active messages provide recent uncompressed conversation. The host adds the pending `prompt` to the turn. The plugin uses it for recall without appending a second copy to the returned history. Recalled context belongs to this request and is not directly captured as new conversation in OV.
 
 OV generates the overview through its server-side working-memory flow; the plugin reads the result. The server budgets active messages first and omits the overview if the remaining space is insufficient. `pre_archive_abstracts` is currently an empty array, so the response is not a complete archive index. Use `ov_archive_search` for original details.
 

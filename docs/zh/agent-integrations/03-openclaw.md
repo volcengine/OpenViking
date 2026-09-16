@@ -93,11 +93,12 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 主分支调用 `getSessionContext(tokenBudget)`，用返回的内容构造：
 
 ```text
-messages = [Session History Summary] + OV active messages
+summaryMessage = { role: "user", content: "[Session History Summary]\n" + latest_archive_overview }
+messages = [summaryMessage] + OV active messages
 systemPromptAddition = Session Context Guide（有归档时）+ 本轮召回结果（有命中时）
 ```
 
-`latest_archive_overview` 作为一条合成 user 消息承载历史摘要，active messages 保留近期未压缩对话。当前 `prompt` 由宿主加入本轮；插件只用它查询记忆，不把它重复追加到返回的历史中。召回结果属于本次请求的上下文，不直接作为新对话写回 OV。
+`latest_archive_overview` 是服务端返回的摘要正文，`[Session History Summary]` 是插件加在正文前的固定文本标题。仅在 overview 非空时插入这条合成 user 消息；active messages 保留近期未压缩对话。当前 `prompt` 由宿主加入本轮；插件只用它查询记忆，不把它重复追加到返回的历史中。召回结果属于本次请求的上下文，不直接作为新对话写回 OV。
 
 overview 由 OV 服务端的工作记忆流程生成，插件读取结果。服务端先为 active messages 分配预算，剩余空间不足时不返回 overview；`pre_archive_abstracts` 当前为空数组。因此返回结果不是完整归档索引，需要原始细节时通过 `ov_archive_search` 查询归档。
 
