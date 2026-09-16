@@ -12,7 +12,7 @@ class TestFsCp:
         content = f"copy payload {suffix}"
         try:
             write = api_client.fs_write(source, content, mode="create", wait=True)
-            assert write.status_code == 200
+            assert write.status_code == 200, write.text
 
             copied = api_client.fs_cp(source, target)
             assert copied.status_code == 200, copied.text
@@ -29,10 +29,22 @@ class TestFsCp:
                 assert content in read.json().get("result", "")
 
             if os.getenv("HAS_SECRETS", "true").lower() == "true":
-                found = api_client.find(query=suffix, target_uri=target, limit=5)
-                assert found.status_code == 200
-                resources = found.json().get("result", {}).get("resources", [])
-                assert any(item.get("uri") == target for item in resources)
+                vectors = result.get("vectors", {})
+                assert vectors.get("scanned", 0) > 0, copied.text
+                assert vectors.get("written") == vectors["scanned"], copied.text
+                # This contract checks index copying, not the embedding model's
+                # similarity score for a random UUID. Filter-only find still
+                # reads the vector store and preserves tenant/access scoping.
+                for uri in (source, target):
+                    found = api_client.find(
+                        query="",
+                        target_uri=uri,
+                        filter={"op": "must", "field": "uri", "conds": [uri]},
+                        limit=5,
+                    )
+                    assert found.status_code == 200, found.text
+                    resources = found.json().get("result", {}).get("resources", [])
+                    assert any(item.get("uri") == uri for item in resources), found.text
 
             assert api_client.fs_rm(source).status_code == 200
             assert api_client.fs_read(target).status_code == 200
