@@ -1,4 +1,5 @@
 export default {
+  viewSetup: '查看配置',
   chooseBotChannel: '选择机器人接入的平台。',
   channelFilter: '渠道',
   addBot: '添加机器人',

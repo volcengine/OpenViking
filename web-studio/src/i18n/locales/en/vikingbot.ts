@@ -1,4 +1,5 @@
 export default {
+  viewSetup: 'View configuration',
   chooseBotChannel: 'Choose a platform for your bot.',
   channelFilter: 'Channel',
   addBot: 'Add bot',

@@ -220,7 +220,13 @@ export function Channels({
                   variant="outline"
                   onClick={() => setEditing(connection.id)}
                 >
-                  {t('continueSetup')}
+                  {t(
+                    connection.step >= 5
+                      ? 'viewSetup'
+                      : connection.setup_mode === 'qr' && connection.step === 4
+                        ? 'qr.addGroup'
+                        : 'continueSetup',
+                  )}
                 </Button>
                 <Button
                   variant="ghost"
