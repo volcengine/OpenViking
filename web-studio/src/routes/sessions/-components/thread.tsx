@@ -20,6 +20,7 @@ const PRODUCT_NAME = 'OpenViking'
 interface ThreadProps {
   sessionId: string
   draft?: boolean
+  onPersisted?: () => void
 }
 
 export function Thread(props: ThreadProps) {
@@ -29,7 +30,7 @@ export function Thread(props: ThreadProps) {
   )
 }
 
-function SessionThread({ sessionId, draft = false }: ThreadProps) {
+function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const { t } = useTranslation('sessions')
   const { identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
@@ -71,6 +72,7 @@ function SessionThread({ sessionId, draft = false }: ThreadProps) {
         setCreationError(undefined)
         try {
           await createSession.mutateAsync(sessionId)
+          onPersisted?.()
           if (!mounted.current) return false
           persisted.current = true
         } catch (error) {
@@ -86,7 +88,7 @@ function SessionThread({ sessionId, draft = false }: ThreadProps) {
       void chat.send(message)
       return true
     },
-    [chat, createSession, sessionId],
+    [chat, createSession, sessionId, onPersisted],
   )
 
   // ---- Auto-scroll ----

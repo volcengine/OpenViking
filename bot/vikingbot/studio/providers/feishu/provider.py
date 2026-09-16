@@ -109,20 +109,20 @@ class FeishuProvider:
     async def validate_app(self, app_id, secret):
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                auth = (
-                    await client.post(
-                        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-                        json={"app_id": app_id, "app_secret": secret},
-                    )
-                ).json()
+                auth_response = await client.post(
+                    "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                    json={"app_id": app_id, "app_secret": secret},
+                )
+                auth_response.raise_for_status()
+                auth = auth_response.json()
                 if auth.get("code") != 0 or not auth.get("tenant_access_token"):
                     raise HTTPException(400, "Feishu rejected the application credentials")
-                bot = (
-                    await client.get(
-                        "https://open.feishu.cn/open-apis/bot/v3/info",
-                        headers={"Authorization": "Bearer " + auth["tenant_access_token"]},
-                    )
-                ).json()
+                bot_response = await client.get(
+                    "https://open.feishu.cn/open-apis/bot/v3/info",
+                    headers={"Authorization": "Bearer " + auth["tenant_access_token"]},
+                )
+                bot_response.raise_for_status()
+                bot = bot_response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(502, "Cannot reach Feishu; retry the connection check") from exc
         info = bot.get("bot", {})

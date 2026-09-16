@@ -417,3 +417,22 @@ async def test_reply_settings_persist_apply_immediately_and_keep_revision_guard(
     service.config.workspace_path = tmp_path
     provider.install(service, persisted)
     assert captured == [False]
+
+
+@pytest.mark.parametrize("endpoint", ["token", "bot"])
+@pytest.mark.parametrize("status", [429, 503])
+async def test_feishu_upstream_failure_is_not_a_credentials_error(monkeypatch, endpoint, status):
+    import httpx
+    from vikingbot.studio.providers.feishu import provider
+
+    def respond(request):
+        if endpoint == "bot" and request.method == "POST":
+            return httpx.Response(200, json={"code": 0, "tenant_access_token": "token"})
+        return httpx.Response(status, json={"code": 99991400, "msg": "unavailable"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(provider.httpx, "AsyncClient", lambda **kwargs: client)
+    with pytest.raises(HTTPException) as error:
+        await provider.FeishuProvider().validate_app("cli_test", "secret")
+    assert error.value.status_code == 502
+    assert error.value.detail == "Cannot reach Feishu; retry the connection check"

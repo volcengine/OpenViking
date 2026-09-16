@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from 'react'
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Thread } from './thread'
@@ -93,4 +94,35 @@ it('loads the correct history when switching existing sessions', () => {
   view.rerender(<Thread sessionId="second" />)
   expect(m.history).toHaveBeenLastCalledWith('second')
   expect(m.create).not.toHaveBeenCalled()
+})
+
+it('loads persisted history and continues after switching tabs', async () => {
+  let showThread!: (visible: boolean) => void
+  function Workspace() {
+    const [draft, setDraft] = useState(true)
+    const [visible, setVisible] = useState(true)
+    showThread = setVisible
+    return visible ? (
+      <Thread
+        sessionId="draft"
+        draft={draft}
+        onPersisted={() => setDraft(false)}
+      />
+    ) : null
+  }
+  m.create
+    .mockResolvedValueOnce({ session_id: 'draft' })
+    .mockRejectedValue(new Error('Session already exists'))
+  render(<Workspace />)
+  await act(async () => {
+    expect(await m.onSend!('first')).toBe(true)
+  })
+  act(() => showThread(false))
+  act(() => showThread(true))
+  expect(m.history).toHaveBeenLastCalledWith('draft')
+  await act(async () => {
+    expect(await m.onSend!('second')).toBe(true)
+  })
+  expect(m.create).toHaveBeenCalledExactlyOnceWith('draft')
+  expect(m.send).toHaveBeenLastCalledWith('second')
 })

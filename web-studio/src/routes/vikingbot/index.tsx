@@ -314,6 +314,13 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                     key={selected.id}
                     sessionId={selected.id}
                     draft={selected.draft}
+                    onPersisted={() =>
+                      setSelected((current) =>
+                        current?.id === selected.id && !current.connection
+                          ? { ...current, draft: false }
+                          : current,
+                      )
+                    }
                   />
                 )
               ) : (
