@@ -139,20 +139,40 @@ class TestFilterOpsLargeFields(unittest.TestCase):
         }
         return get_or_create_local_collection(meta_data=collection_meta, path=self.path)
 
-    def test_upsert_record_with_oversized_json_field_raises(self):
-        large_abstract = 'prefix "quoted" \\\\ path\n' + ("x" * 66000)
+    def test_large_fields_survive_update_reopen_and_delete(self):
+        large_abstract = 'prefix "quoted" \\ path\n' + ("你好" * 15000)
         uri = "viking://user/memories/large.md"
-        with self.assertRaisesRegex((RuntimeError, ValueError), "fields.*exceeds 65535 bytes"):
-            self.collection.upsert_data(
-                [
-                    {
-                        "id": 1,
-                        "embedding": [1.0, 0, 0, 0],
-                        "uri": uri,
-                        "abstract": large_abstract,
-                    }
-                ]
-            )
+        self.collection.create_index(
+            "idx_large",
+            {
+                "IndexName": "idx_large",
+                "VectorIndex": {"IndexType": "flat"},
+                "ScalarIndex": ["uri"],
+            },
+        )
+        self.collection.upsert_data(
+            [{"id": 1, "embedding": [1.0, 0, 0, 0], "uri": uri, "abstract": large_abstract}]
+        )
+        # This writes both a large fields value and a large old_fields value.
+        updated = large_abstract + "更新"
+        self.collection.update_data([{"id": 1, "abstract": updated}])
+        self.collection.close()
+        self.collection = get_or_create_local_collection(path=self.path)
+        self.assertEqual(self.collection.fetch_data([1]).items[0].fields["abstract"], updated)
+        result = self.collection.search_by_vector(
+            "idx_large",
+            [1.0, 0, 0, 0],
+            filters={"op": "must", "field": "uri", "conds": [uri]},
+            output_fields=["abstract"],
+        )
+        self.assertEqual(
+            [(item.id, item.fields["abstract"]) for item in result.data], [(1, updated)]
+        )
+        self.collection.delete_data([1])
+        self.collection.close()
+        self.collection = get_or_create_local_collection(path=self.path)
+        self.assertEqual(self.collection.fetch_data([1]).ids_not_exist, [1])
+        self.assertEqual(self.collection.search_by_vector("idx_large", [1.0, 0, 0, 0]).data, [])
 
 
 class TestFilterOpsComplex(unittest.TestCase):

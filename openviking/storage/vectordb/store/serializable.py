@@ -10,6 +10,43 @@ from typing import Any, get_args, get_origin
 from openviking.storage.vectordb.store.bytes_row import BytesRow, FieldType, Schema
 
 
+class _VersionedBytesRow:
+    """Write v1 rows and read the unversioned schema used by existing stores.
+
+    Legacy rows start with their nonzero field count. A zero byte followed by
+    version 1 therefore identifies an envelope without changing bytes_row's
+    offsets or its native/Python encodings. Only schemas declaring a legacy
+    field type use this envelope; ordinary bytes_row strings stay unchanged.
+    """
+
+    _HEADER = b"\x00\x01"
+
+    def __init__(self, schema, legacy_schema):
+        self._current = BytesRow(schema)
+        self._legacy = BytesRow(legacy_schema)
+
+    def serialize(self, row_data) -> bytes:
+        return self._HEADER + self._current.serialize(row_data)
+
+    def serialize_batch(self, rows_data) -> list[bytes]:
+        return [self._HEADER + row for row in self._current.serialize_batch(rows_data)]
+
+    def _decode(self, data: bytes):
+        if data[:1] != b"\x00":
+            return self._legacy, data
+        if not data.startswith(self._HEADER) or len(data) <= len(self._HEADER):
+            raise ValueError("Invalid or unsupported bytes_row record version")
+        return self._current, data[len(self._HEADER) :]
+
+    def deserialize(self, data: bytes):
+        row, payload = self._decode(data)
+        return row.deserialize(payload)
+
+    def deserialize_field(self, data: bytes, field_name: str):
+        row, payload = self._decode(data)
+        return row.deserialize_field(payload, field_name)
+
+
 def _python_type_to_field_type(py_type: Any, field_name: str) -> FieldType:
     """Convert Python type annotation to BytesRow FieldType enum"""
     origin = get_origin(py_type)
@@ -60,6 +97,9 @@ def serializable(cls):
     Optional field metadata:
         - field_type: Override the auto-inferred type with FieldType enum (e.g., FieldType.int64 vs FieldType.uint64)
         - default_value: Override the default value
+        - legacy_field_type: Decode unversioned records with this field type;
+          new writes use a v1 envelope and field_type. Keep this mapping while
+          existing stores may contain unversioned records.
 
     Example:
         @serializable
@@ -75,6 +115,8 @@ def serializable(cls):
 
     # Automatically generate schema
     field_list = []
+    legacy_field_list = []
+    has_legacy_fields = False
     for idx, f in enumerate(fields(cls)):
         field_name = f.name
 
@@ -101,11 +143,18 @@ def serializable(cls):
             field_def["default_value"] = f.metadata["default_value"]
 
         field_list.append(field_def)
+        legacy_type = f.metadata.get("legacy_field_type", field_type)
+        legacy_field_list.append({**field_def, "data_type": legacy_type})
+        has_legacy_fields |= legacy_type != field_type
 
     # Create schema and bytes_row
     # Pass field_list (list of dicts) to C++ Schema constructor
     cls.schema = Schema(field_list)
-    cls.bytes_row = BytesRow(cls.schema)
+    cls.bytes_row = (
+        _VersionedBytesRow(cls.schema, Schema(legacy_field_list))
+        if has_legacy_fields
+        else BytesRow(cls.schema)
+    )
 
     # Automatically generate serialization method
     def serialize(self) -> bytes:
