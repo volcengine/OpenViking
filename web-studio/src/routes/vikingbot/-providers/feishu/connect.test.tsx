@@ -58,6 +58,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.resetAllMocks()
+  vi.unstubAllGlobals()
 })
 function show() {
   render(
@@ -141,4 +142,20 @@ it('does not retry uncertain creation', async () => {
   show()
   await screen.findByText(zh.qr.errors.creation_uncertain)
   expect(screen.queryByRole('button', { name: zh.qr.retryScan })).toBeNull()
+})
+
+it('works on HTTP dev hosts without crypto.randomUUID', async () => {
+  vi.stubGlobal('crypto', {
+    getRandomValues: crypto.getRandomValues.bind(crypto),
+  })
+  show()
+  const button = await screen.findByRole('button', { name: zh.qr.start })
+  await waitFor(() =>
+    expect((button as HTMLButtonElement).disabled).toBe(false),
+  )
+  fireEvent.click(button)
+  await waitFor(() => expect(api.start).toHaveBeenCalledTimes(1))
+  expect(api.start.mock.calls[0][0].request_id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  )
 })

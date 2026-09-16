@@ -5,6 +5,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { Loader2Icon } from 'lucide-react'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import { createRandomUuid } from '#/lib/browser-crypto'
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { getBotUsers, getConnections } from '../../-api'
 import { FeishuSetup } from './feishu-setup'
@@ -68,7 +69,7 @@ function ScanSetup({
   const [name, setName] = useState('VikingBot')
   const [jobId, setJobId] = useState(connection?.onboarding_id)
   const busy = useRef(false)
-  const requestId = useRef(crypto.randomUUID())
+  const requestId = useRef(createRandomUuid())
   const currentKey = ['vikingbot', scope, 'onboarding', 'current']
   const current = useQuery({
     queryKey: currentKey,
@@ -124,7 +125,7 @@ function ScanSetup({
       if (value.state === 'cancelled') {
         client.setQueryData(currentKey, null)
         setJobId(undefined)
-        requestId.current = crypto.randomUUID()
+        requestId.current = createRandomUuid()
       } else {
         client.setQueryData(['vikingbot', scope, 'onboarding', value.id], value)
         setJobId(value.id)
