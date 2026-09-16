@@ -201,7 +201,9 @@ class CompileAPIClient:
                     json=dict(json),
                 )
         except httpx.RequestError as exc:
-            raise ExternalTaskError("UNAVAILABLE", str(exc), transient=True) from exc
+            reason = str(exc).strip() or type(exc).__name__
+            message = f"Failed to reach the compile kernel service: {reason}"
+            raise ExternalTaskError("UNAVAILABLE", message, transient=True) from exc
 
         try:
             body = response.json()
