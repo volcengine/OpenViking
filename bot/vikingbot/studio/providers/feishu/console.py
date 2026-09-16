@@ -11,7 +11,7 @@ from loguru import logger
 
 from .web_session import SetupError, data, field
 
-SCOPES = {"im:message.group_at_msg:readonly", "im:message:send_as_bot", "im:chat:read"}
+SCOPES = {"im:message.group_at_msg:readonly", "im:message:send_as_bot", "im:chat:read", "im:chat.members:read"}
 EVENT = "im.message.receive_v1"
 
 

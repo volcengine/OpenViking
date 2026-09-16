@@ -75,6 +75,14 @@ class StudioStore:
             for row in rows
         ]
 
+    def update_sender(self, connection, message_id, name):
+        with self.db:
+            self.db.execute(
+                "UPDATE messages SET value=json_set(value, '$.sender', ?) "
+                "WHERE connection_id=? AND id=?",
+                (name, connection, message_id),
+            )
+
     def conversations(self, connection: str):
         rows = self.db.execute(
             "SELECT conversation, MAX(id) AS latest FROM messages WHERE connection_id=? "

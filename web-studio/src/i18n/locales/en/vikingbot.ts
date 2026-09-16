@@ -175,7 +175,7 @@ export default {
   connect: 'Validate and connect',
   connectedAs: 'Bot identity: {{name}} · OpenViking user: {{user}}',
   permissionsHint:
-    'Enable receiving group @bot messages and sending messages as the bot. Add receiving direct messages if you need private chat. Optional group/member information permissions improve names.',
+    'Enable receiving group @bot messages and sending messages as the bot. Add receiving direct messages if you need private chat. Enable im:chat.members:read and publish a new version to display member names.',
   eventsHint:
     'Under Events & Callbacks, choose long connection and subscribe to im.message.receive_v1. No public callback URL is needed. Wait for the connection before saving the subscription.',
   officialDocs: 'Open official event documentation',

@@ -49,6 +49,9 @@ def create_router(channel, service):
             return service.store.conversations(record["id"])
         if action == "messages":
             before = max(0, int(payload.get("before", 0)))
+            runtime = service.runtime(record)
+            if runtime and hasattr(runtime, "history_with_names"):
+                return await runtime.history_with_names(payload.get("conversation", ""), before)
             return service.store.history(record["id"], payload.get("conversation", ""), before)
         raise HTTPException(400, "Unknown operation")
 

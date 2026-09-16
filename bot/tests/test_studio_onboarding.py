@@ -361,7 +361,7 @@ async def test_numeric_permission_ids_are_sent_as_strings():
 
     await console.configure_app(SimpleNamespace(post=post), "cli_test")
     update = next(body for path, body in calls if "/scope/update/" in path)
-    assert update["appScopeIDs"] == ["101", "102", "103"]
+    assert update["appScopeIDs"] == ["101", "102", "103", "104"]
     assert update["userScopeIDs"] == []
 
 
@@ -382,6 +382,7 @@ async def test_current_feishu_catalog_uses_chat_read_permission():
                         {"name": "im:message.group_at_msg:readonly", "id": 101},
                         {"name": "im:message:send_as_bot", "id": 102},
                         {"name": "im:chat:read", "id": 103},
+                        {"name": "im:chat.members:read", "id": 104},
                     ]
                 }
             }
@@ -391,7 +392,7 @@ async def test_current_feishu_catalog_uses_chat_read_permission():
 
     await console.configure_app(SimpleNamespace(post=post), "cli_test")
     body = next(body for path, body in calls if "/scope/update/" in path)
-    assert set(body["appScopeIDs"]) == {"101", "102", "103"}
+    assert set(body["appScopeIDs"]) == {"101", "102", "103", "104"}
     assert body["userScopeIDs"] == []
 
 

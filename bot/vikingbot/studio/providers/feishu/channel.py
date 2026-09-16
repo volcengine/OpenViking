@@ -81,6 +81,7 @@ class StudioFeishuChannel(FeishuChannel):
                 "role": "user",
                 "content": content,
                 "sender": sender_name or "",
+                "sender_id": sender_id,
                 "time": now(),
                 "status": "received",
                 "chat_type": metadata.get("chat_type"),
@@ -105,6 +106,24 @@ class StudioFeishuChannel(FeishuChannel):
                 openviking_connection=connection,
             )
         )
+
+    async def history_with_names(self, conversation, before=0):
+        messages = self.store.history(self.record["id"], conversation, before)
+        for message in messages:
+            sender_id = message.get("sender_id")
+            if message.get("role") != "user" or message.get("sender") or not sender_id:
+                continue
+            group = message.get("conversation", "").split("#")[0]
+            try:
+                name = await asyncio.wait_for(
+                    self._get_group_member_name(group, sender_id), timeout=3
+                )
+            except Exception:
+                break
+            if name:
+                message["sender"] = name
+                self.store.update_sender(self.record["id"], message["id"], name)
+        return messages
 
     async def chat_title(self, chat_id, content, metadata):
         group_id = metadata.get("reply_to", chat_id).split("#")[0]

@@ -164,7 +164,7 @@ export default {
   connect: '验证并建立连接',
   connectedAs: '机器人：{{name}} · OpenViking 用户：{{user}}',
   permissionsHint:
-    '开启接收群聊 @机器人消息、以机器人身份发送消息的权限。如需私聊，再开启接收单聊消息权限。群信息和成员信息权限用于改善名称展示。',
+    '开启接收群聊 @机器人消息、以机器人身份发送消息的权限。如需私聊，再开启接收单聊消息权限。显示成员姓名需开启 im:chat.members:read（获取群成员列表），并重新发布应用。',
   eventsHint:
     '在「事件与回调」中选择长连接，订阅 im.message.receive_v1。无需公网回调地址，请等待连接建立后再保存订阅。',
   officialDocs: '查看官方事件说明',

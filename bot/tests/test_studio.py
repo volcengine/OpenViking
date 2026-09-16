@@ -269,3 +269,29 @@ def test_conversation_title_keeps_first_message_when_group_name_resolves(tmp_pat
     assert store.conversations("bot")[0]["title"] == "介绍一下 OpenViking"
     store.append("bot", "group", "2", {"title": "开发讨论", "content": "继续"})
     assert store.conversations("bot")[0]["title"] == "介绍一下 OpenViking"
+
+
+async def test_history_backfills_names_only_when_sender_identity_is_known(channel, monkeypatch):
+    channel.store.append("connection", "group", "known", {
+        "role": "user", "sender": "", "sender_id": "ou_person", "content": "hello",
+    })
+    channel.store.append("connection", "group", "legacy", {
+        "role": "user", "sender": "", "content": "old",
+    })
+    lookup = AsyncMock(return_value="张三")
+    monkeypatch.setattr(channel, "_get_group_member_name", lookup)
+    messages = await channel.history_with_names("group")
+    assert messages[1]["sender"] == "张三"
+    assert messages[0]["sender"] == ""
+    assert channel.store.history("connection", "group")[1]["sender"] == "张三"
+    lookup.assert_awaited_once_with("group", "ou_person")
+
+
+async def test_history_name_lookup_failure_keeps_messages(channel, monkeypatch):
+    channel.store.append("connection", "group", "known", {
+        "role": "user", "sender": "", "sender_id": "ou_person", "content": "hello",
+    })
+    monkeypatch.setattr(channel, "_get_group_member_name", AsyncMock(side_effect=RuntimeError()))
+    messages = await channel.history_with_names("group")
+    assert messages[0]["content"] == "hello"
+    assert messages[0]["sender"] == ""
