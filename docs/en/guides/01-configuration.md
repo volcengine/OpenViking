@@ -1547,11 +1547,11 @@ When config files are at the default path, OpenViking loads them automatically â
 ### Reload boundary
 
 The server reads `ov.conf` during process startup and does not watch the file
-for changes. Editing `embedding`, `vlm`, `rerank`, `retrieval`, `storage`, or
-`server` settings requires restarting the OpenViking server. Queue work that is
-already running is not migrated to the new configuration, so use the normal
-service-manager restart procedure and verify with `openviking-server doctor`
-after the process comes back.
+for changes. Editing `embedding`, `vlm`, `rerank`, `retrieval`, `storage`,
+`parsers`, or `server` settings requires restarting the OpenViking server.
+Queue work that is already running is not migrated to the new configuration, so
+use the normal service-manager restart procedure and verify with
+`openviking-server doctor` after the process comes back.
 
 `ovcli.conf` is client-side configuration. A new `ov` command or newly created
 HTTP client reads the current file; an already-running client or plugin may keep

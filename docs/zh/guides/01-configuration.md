@@ -1522,7 +1522,7 @@ OpenViking 使用两个配置文件：
 ### 配置重载边界
 
 服务端只在进程启动时读取 `ov.conf`，不会监听文件变化。修改 `embedding`、
-`vlm`、`rerank`、`retrieval`、`storage` 或 `server` 配置后，需要重启
+`vlm`、`rerank`、`retrieval`、`storage`、`parsers` 或 `server` 配置后，需要重启
 OpenViking 服务。已经运行中的队列任务不会自动迁移到新配置；请使用部署环境
 原有的服务管理方式重启，并在服务恢复后运行 `openviking-server doctor` 验证。
 
