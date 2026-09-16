@@ -82,6 +82,46 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 
 New configuration should use `sender`; existing `peer_role=person` configurations remain compatible and are treated as `sender`. OpenViking initializes the managed `peers/` container for every user, so `none` means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
 
+## How assemble builds context
+
+The plugin occupies OpenClaw's `contextEngine` slot. It handles session history, long-term memory recall, and the pending user input separately; `assemble()` does not capture conversation messages.
+
+| Call shape | Input | Plugin behavior |
+| --- | --- | --- |
+| Main assemble | At least one of `prompt`, `availableTools`, or `citationsMode` is present | Fetch OV session context and build history; recall from the separate `prompt` and return matches through `systemPromptAddition` |
+| transformContext assemble | None of those fields is present; messages belong to the current model call | Preserve the message sequence; attempt recall only for a user tail and prepend matches to that user's text |
+
+These are two call shapes of the same `assemble()` method. A tool loop usually ends in a tool result or assistant message, which transformContext passes through. The host controls invocation frequency; there is no fixed two-calls-per-turn rule.
+
+### Main assemble: history and pending input
+
+The main branch calls `getSessionContext(tokenBudget)` and builds:
+
+```text
+messages = [Session History Summary] + OV active messages
+systemPromptAddition = Session Context Guide (when archives exist) + recalled context (when available)
+```
+
+`latest_archive_overview` becomes a synthetic user message containing the history summary; active messages provide recent uncompressed conversation. The host adds the pending `prompt` to the turn. The plugin uses it for recall without appending a second copy to the returned history. Recalled context belongs to this request and is not directly captured as new conversation in OV.
+
+OV generates the overview through its server-side working-memory flow; the plugin reads the result. The server budgets active messages first and omits the overview if the remaining space is insufficient. `pre_archive_abstracts` is currently an empty array, so the response is not a complete archive index. Use `ov_archive_search` for original details.
+
+The plugin reserves output headroom, subtracts estimated guide and summary tokens, trims active messages from the oldest end, and normalizes provider message formats such as tool calls and results. It does not hard-truncate the summary to the calculated archive budget, so the partitions are not strict per-layer limits. A new recall block is omitted if it would push the total estimate above `tokenBudget`.
+
+The history branch falls back to host messages when OV has no data, has fewer messages than the host without an archive, produces an empty converted history, or fails to load. Main-branch recall can still run with a valid `prompt` and `autoRecall` enabled even when history passes through. Missing recall results or recall failures do not stop the conversation.
+
+### transformContext: preserve the current tool loop
+
+This branch does not rebuild history from OV. It cleans the latest user text and limits the recall query to 4000 characters. It passes through when recall is already injected, the query is shorter than five characters, `autoRecall` is disabled, or `bypassSessionPatterns` matches. Tool results therefore remain in the current message sequence instead of being replaced by OV history that has not captured this turn yet.
+
+### Capture and compaction
+
+- `ingest()` / `ingestBatch()` do not write messages. Regular capture uses `afterTurn`. For stable OpenClaw versions from 2026.9.3 onward, the plugin also captures completed turns delivered through `commitTurn`; older hosts and standalone runners use `afterTurn`. If the host version cannot be classified, `commitTurn` rejects acknowledgement to avoid confirming uncaptured data.
+- Capture removes injected context, converts text and tool messages, and writes them to the OV session. When `pending_tokens >= tokenBudget × commitTokenThresholdRatio`, it starts an asynchronous session commit. The default ratio is `0.5`; retention defaults to the most recent `10` messages, with `turn_budget` available as another policy. `pending_tokens` counts messages eligible for archiving under the server retention policy, not the entire model request.
+- `ownsCompaction: true` assigns compaction to the plugin. Normal `compact()` commits the OV session with `wait=true` and retention `0`, then reads the overview as its summary. The next main assemble rebuilds history from that summary and active messages. Bypassed sessions attempt to delegate compaction to the host; if the host bridge is unavailable, the plugin returns a skip result.
+
+A **session commit** archives conversation and processes memory. It is separate from a [snapshot commit](../guides/15-snapshot.md), which versions resource files.
+
 ## Verify
 
 ```bash

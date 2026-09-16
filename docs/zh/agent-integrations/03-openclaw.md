@@ -82,6 +82,46 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 
 新配置请使用 `sender`；已有的 `peer_role=person` 配置仍兼容，并按 `sender` 处理。OpenViking 会为每个用户初始化受管的 `peers/` 容器，因此 `none` 的含义是不使用具体的 `peers/<peer_id>/memories` 子树。Actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换 scope 不会搬迁已有记忆。
 
+## assemble 如何组装上下文
+
+插件占用 OpenClaw 的 `contextEngine` 槽位。会话历史、长期记忆召回和本轮新输入分别处理；`assemble()` 本身不写入对话。
+
+| 调用形态 | 输入特征 | 插件行为 |
+| --- | --- | --- |
+| 主 assemble | 参数带有 `prompt`、`availableTools`、`citationsMode` 中任一字段 | 从 OV 读取会话上下文，组装历史；以单独传入的 `prompt` 召回长期记忆，通过 `systemPromptAddition` 返回 |
+| transformContext assemble | 不带上述字段，接收当次模型调用的 messages | 保留消息序列；仅当最后一条是 user 时尝试召回，把结果前置到该 user 消息的文本中 |
+
+这两个分支是同一个 `assemble()` 的调用形态。工具循环中尾消息通常是 tool result 或 assistant，此时 transformContext 直接透传。调用次数由宿主决定，不能按“每轮固定调用两次”理解。
+
+### 主 assemble：历史和当前输入分开
+
+主分支调用 `getSessionContext(tokenBudget)`，用返回的内容构造：
+
+```text
+messages = [Session History Summary] + OV active messages
+systemPromptAddition = Session Context Guide（有归档时）+ 本轮召回结果（有命中时）
+```
+
+`latest_archive_overview` 作为一条合成 user 消息承载历史摘要，active messages 保留近期未压缩对话。当前 `prompt` 由宿主加入本轮；插件只用它查询记忆，不把它重复追加到返回的历史中。召回结果属于本次请求的上下文，不直接作为新对话写回 OV。
+
+overview 由 OV 服务端的工作记忆流程生成，插件读取结果。服务端先为 active messages 分配预算，剩余空间不足时不返回 overview；`pre_archive_abstracts` 当前为空数组。因此返回结果不是完整归档索引，需要原始细节时通过 `ov_archive_search` 查询归档。
+
+插件为模型输出预留 token 空间，扣除使用指南和摘要的实际估算量，再从 active messages 头部裁掉超预算内容，并整理工具调用/结果等 provider 消息格式。摘要不会按插件计算出的 archive 预算硬截断，因此这些预算不能当作各层的严格配额；新增召回块若使总估算量超过 `tokenBudget`，该块会被省略。
+
+OV 无数据、无归档且消息数少于宿主输入、转换后为空或读取失败时，历史分支回退到宿主 messages。即使历史透传，只要有合法 `prompt` 且启用了 `autoRecall`，主分支仍可尝试召回。召回无命中或失败不会阻止对话。
+
+### transformContext：保留当前工具循环
+
+此分支不从 OV 重建历史。它从最新 user 消息提取查询，清洗并截取最多 4000 个字符；已注入召回块、查询不足 5 个字符、关闭 `autoRecall` 或命中 `bypassSessionPatterns` 时透传。这样不会在工具结果到达后，用尚未捕获本轮消息的 OV 历史覆盖当前工具循环。
+
+### 捕获和压缩
+
+- `ingest()` / `ingestBatch()` 不写入消息。常规捕获通过 `afterTurn`；插件对 OpenClaw 2026.9.3 及之后的稳定版本支持由 `commitTurn` 接收宿主交付的已结束轮次，旧版和独立 runner 使用 `afterTurn`。无法识别版本时，`commitTurn` 拒绝确认，避免确认未捕获的数据。
+- 捕获逻辑清洗注入内容、转换文本和工具消息，再写入 OV session。达到 `pending_tokens >= tokenBudget × commitTokenThresholdRatio` 时，发起异步 session commit；默认比例为 `0.5`，默认保留最近 `10` 条消息，也可选 `turn_budget` 保留策略。`pending_tokens` 是服务端按保留策略计算的待归档消息 token 数，不是整个模型请求的 token 数。
+- `ownsCompaction: true` 表示插件负责压缩。正常 `compact()` 提交 OV session（`wait=true`、保留数为 `0`），读取 overview 作为压缩摘要；下一次主 assemble 用摘要和 active messages 重建历史。被 bypass 的会话尝试委托宿主压缩器，宿主 bridge 不可用时返回跳过。
+
+这里的 **session commit** 负责会话归档和记忆处理，与保存资源文件版本的 [snapshot commit](../guides/15-snapshot.md) 是不同操作。
+
 ## 验证
 
 ```bash

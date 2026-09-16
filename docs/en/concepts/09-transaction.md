@@ -1,6 +1,6 @@
 # Path Locks and Crash Recovery
 
-OpenViking uses two simple primitives — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
+OpenViking uses two simple primitives — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), coordinating concurrent writes and resuming queued session work after a process restart. These primitives do not form an atomic transaction across VikingFS, VectorDB, and QueueManager.
 
 ## Design Philosophy
 
@@ -10,8 +10,8 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 
 ## Design Principles
 
-1. **Write-exclusive**: Path locks ensure only one write operation can operate on a path at a time
-2. **On by default**: All data operations automatically acquire locks; no extra configuration needed
+1. **Write-exclusive**: Different owners participating in the protocol cannot hold conflicting path locks simultaneously
+2. **On by default**: Protected writes acquire locks by default; ordinary reads and low-level mkdir do not automatically acquire locks
 3. **Lock as protection**: LockContext acquires locks on entry, releases on exit — no undo/journal/commit semantics
 4. **Only session_memory needs crash recovery**: a persistent `session_commit` queue resumes Phase 2 after a process crash
 5. **Queue operations run outside locks**: SemanticQueue/EmbeddingQueue enqueue operations are idempotent and retriable
@@ -276,24 +276,47 @@ The lock mechanism uses two lock types to handle different conflict patterns:
 - **EXACT (E)**: Locks one concrete path. It can protect files, directory names, and not-yet-created target paths. Blocks if any ancestor holds a TreeLock.
 - **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but stores one provider token for the root path. Conflict checks cover descendants and Tree-locked ancestors within the provider's scope. The filesystem provider may create a missing target directory to place its lock file.
 
+### Path scope and target type
+
+Exact and Tree describe an operation's scope; file, directory, and missing describe the target's current state. These are independent. Locks protect path names, including names that do not currently exist.
+
+The following conflicts apply to different owners within the same provider scope:
+
+| Held lock | New request | Conflict |
+| --- | --- | --- |
+| Exact(`/docs/a.md`) | Exact or Tree(`/docs/a.md`) | Yes |
+| Exact(`/docs`) | Exact(`/docs/a.md`) | No |
+| Tree(`/docs`) | Exact or Tree(`/docs/a.md`) | Yes |
+| Exact(`/docs/a.md`) | Tree(`/docs`) | Yes |
+| Tree(`/docs/a.md`) | Exact(`/docs/b.md`) | No |
+
+`Tree(/docs/a.md)` does not expand to `Tree(/docs)`. Likewise, Exact on a directory name does not protect its descendants; recursive deletion needs Tree.
+
+Locks coordinate participating operations. The low-level `PathLockWrappedFS` uses Exact for create, write, truncate, and non-recursive remove, and Tree for remove_all. File rename uses Exact on both paths; directory rename uses Tree on the source and Exact on the destination. Read, stat, directory listing, and mkdir pass through, though higher layers may hold their own locks. The operating system does not block I/O that bypasses this protocol.
+
 ## Lock Mechanism
 
 ### Filesystem Provider Lock Protocol
 
-Lock file paths:
+The caller chooses the lock type; the resolver chooses the token location from the target's state:
+
+| Target state | Exact token | Tree token |
+| --- | --- | --- |
+| Existing file `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
+| Existing directory `/docs/a` | `/docs/a/.path.ovlock`, containing E | Same file inside the directory, containing T |
+| Missing `/docs/a` | Parent sidecar, containing E | Create the target directory, then write `.path.ovlock` inside it, containing T |
+
+A sidecar sits beside its target but represents only that target, not its parent directory. `<hash>` is a SHA-1 prefix of the full backend path, not the business file's contents.
+
+`.exact.ovlock.*` can contain a Tree token, and `.path.ovlock` can contain an Exact token. Filenames are part of the storage protocol, but do not alone identify the logical lock type. Token contents are:
 
 ```text
-TreeLock(path)                  -> {path}/.path.ovlock
-ExactPathLock(existing dir path) -> {path}/.path.ovlock
-ExactPathLock(file or missing path) -> {parent}/.exact.ovlock.<name>.<hash>
+{owner_id}:{time_ns}:{lock_type}
 ```
 
-Lock file content (Fencing Token):
-```
-{handle_id}:{time_ns}:{lock_type}
-```
+`lock_type` is `E` or `T`. This ownership token supports conflict checks, refresh, and conditional release; it does not imply storage-side fencing of every business write.
 
-Where `lock_type` is `E` (EXACT) or `T` (TREE).
+A lease records logical scope in `covered_paths` separately from token locations in `lock_paths`. An owned lease controls refresh, release, and handoff. A borrowed lease proves coverage by an existing lock without permission to release the outer lock.
 
 ### Cache Provider Lock Protocol
 
@@ -344,7 +367,7 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 
 ```
 loop until timeout (poll interval: 200ms):
-    1. Check if target directory is locked by another operation
+    1. Check if target path is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
     2. Check all ancestor directories for TREE locks
@@ -354,8 +377,8 @@ loop until timeout (poll interval: 200ms):
        - Missing target directory? -> treat as no descendant locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Ensure the target directory exists; create it if missing
-    5. Write TREE (T) lock file (only one file, at the root path)
+    4. Ensure the resolved token parent exists; this creates a missing target as a directory
+    5. Write the TREE (T) token (sidecar for an existing file, internal .path.ovlock otherwise)
     6. TOCTOU double-check: re-scan descendants and ancestors
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
@@ -378,11 +401,15 @@ for conflicts first:
 4. Step 3 does not roll back the empty directory
 ```
 
+Acquisition rollback and normal release clean up tokens without guaranteeing removal of directories created to store them. An Exact sidecar can also create a missing parent chain. Snapshots use a separate policy for missing targets; see [snapshot scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
+
 ### Lock Expiry Cleanup
+
+**Automatic refresh**: Rust PathLockManager refreshes active leases every `lock_expire / 3`. The default 30-second expiry is not a maximum operation duration. Refresh stops when the process exits.
 
 **Stale lock detection**: PathLockEngine checks the ownership token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
 
-**In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own provider tokens but have been inactive for longer than `lock_expire` are force-released.
+**In-process cleanup**: During refresh, Rust PathLockManager checks leases that have not refreshed successfully for `2 × lock_expire` and attempts cleanup with ownership validation.
 
 **Orphan locks**: Provider tokens left behind after a process crash are automatically removed via stale lock detection when a later acquisition checks the same path or scope.
 
