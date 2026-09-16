@@ -15,7 +15,6 @@ import {
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { Thread } from '#/routes/sessions/-components/thread'
 import { getCapabilities, getConnections } from './-api'
-import { Schedules } from './-components/schedules'
 import {
   createVikingBotWebSessionId,
   isVikingBotWebSession,
@@ -26,7 +25,7 @@ import {
   PlatformHistory,
 } from './-components/platform-history'
 
-const PAGE_TABS = ['conversations', 'channels', 'schedules'] as const
+const PAGE_TABS = ['conversations', 'channels'] as const
 const START_COMMAND = 'openviking-server --with-bot'
 
 export const Route = createFileRoute('/vikingbot/')({
@@ -148,8 +147,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
             {t('retry')}
           </Button>
         </div>
-      ) : tab === 'schedules' ? (
-        <Schedules canManage={canManage} scope={scope} />
+
       ) : tab === 'channels' ? (
         <div className="flex-1 overflow-auto">
           <Channels canManage={canManage} scope={scope} />
