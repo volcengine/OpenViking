@@ -110,23 +110,18 @@ export function Channels({
         </p>
       )}
       <Dialog open={choosing} onOpenChange={setChoosing}>
-        <DialogContent>
+        <DialogContent className="max-h-[85svh] overflow-y-auto sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t('addBot')}</DialogTitle>
             <DialogDescription>{t('chooseBotChannel')}</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-2">
             {Object.entries(providers).map(([type, entry]) => (
               <div
                 key={type}
-                className="flex min-h-36 flex-col items-start justify-between gap-4 rounded-xl border p-5"
+                className="flex min-h-16 items-center justify-between gap-4 rounded-lg border px-4 py-3"
               >
-                <div className="space-y-2">
-                  <h3 className="font-medium">{t(entry.label)}</h3>
-                  <p className="text-sm text-muted-foreground">
-                    {t('platformReady')}
-                  </p>
-                </div>
+                <h3 className="text-sm font-medium">{t(entry.label)}</h3>
                 <Button
                   size="sm"
                   disabled={!canManage}
@@ -144,9 +139,9 @@ export function Channels({
             {upcomingProviders.map((name) => (
               <div
                 key={name}
-                className="flex min-h-36 flex-col items-start justify-between gap-4 rounded-xl border p-5"
+                className="flex min-h-16 items-center justify-between gap-4 rounded-lg border px-4 py-3"
               >
-                <h3 className="font-medium">
+                <h3 className="text-sm font-medium text-muted-foreground">
                   {name === 'DingTalk' ? t('dingtalk') : name}
                 </h3>
                 <span className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
