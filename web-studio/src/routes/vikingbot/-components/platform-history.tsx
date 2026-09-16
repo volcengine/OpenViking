@@ -27,9 +27,6 @@ export function PlatformConversationList({
   })
   return (
     <div>
-      <p className="px-3 pt-4 text-xs font-medium text-muted-foreground">
-        {connection.bot_name}
-      </p>
       {query.error && (
         <p role="alert" className="p-3 text-xs text-destructive">
           {query.error.message}
@@ -41,11 +38,11 @@ export function PlatformConversationList({
             .toLowerCase()
             .includes(search.toLowerCase()),
         )
-        .map((item, index) => (
+        .map((item) => (
           <ConversationRow
             key={item.conversation}
-            title={item.title || `${t('group')} ${index + 1}`}
-            subtitle={item.preview || t('noHistory')}
+            title={item.title || t('newChat')}
+            subtitle={t('feishu')}
             time={item.time}
             icon={<UsersIcon className="size-4" />}
             selected={selected === item.conversation}
@@ -90,7 +87,7 @@ export function PlatformHistory({
       <div className="border-b p-4">
         <h2 className="flex items-center gap-2 font-medium">
           <UsersIcon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="truncate">{title || t('group')}</span>
+          <span className="truncate">{title || t('newChat')}</span>
         </h2>
         <p className="mt-1 text-xs text-muted-foreground">{t('historyHint')}</p>
       </div>

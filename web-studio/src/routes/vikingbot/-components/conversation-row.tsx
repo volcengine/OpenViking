@@ -34,7 +34,9 @@ export function ConversationRow({
           <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
         </span>
         <span className="mt-1.5 flex h-4 items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span className="min-w-0 flex-1 truncate">{subtitle}</span>
+          <span className="truncate rounded bg-muted px-1.5 py-0.5 text-[11px]">
+            {subtitle}
+          </span>
           {date && (
             <time
               className="shrink-0"

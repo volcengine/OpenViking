@@ -261,3 +261,11 @@ def test_conversations_show_latest_preview_and_time(tmp_path):
     assert item["preview"] == "latest reply"
     assert item["time"] == "2026-09-16T12:00:00+00:00"
     assert store.conversations("another") == []
+
+
+def test_conversation_title_falls_back_to_content_then_uses_resolved_name(tmp_path):
+    store = StudioStore(tmp_path / "titles.db")
+    store.append("bot", "group", "1", {"title": "", "content": "介绍一下 OpenViking"})
+    assert store.conversations("bot")[0]["title"] == "介绍一下 OpenViking"
+    store.append("bot", "group", "2", {"title": "开发讨论", "content": "继续"})
+    assert store.conversations("bot")[0]["title"] == "开发讨论"

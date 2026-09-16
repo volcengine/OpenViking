@@ -92,8 +92,15 @@ class StudioStore:
                 "SELECT value FROM messages WHERE id=?", (row["latest"],)
             ).fetchone()
             message = json.loads(last[0])
+            named = self.db.execute(
+                "SELECT value FROM messages WHERE connection_id=? AND conversation=? "
+                "AND COALESCE(json_extract(value, '$.title'), '') != '' ORDER BY id DESC LIMIT 1",
+                (connection, row["conversation"]),
+            ).fetchone()
+            first_message = json.loads(first[0])
+            title = json.loads(named[0])["title"] if named else str(first_message.get("content", ""))[:60]
             result.append(dict(row) | {
-                "title": json.loads(first[0]).get("title", ""),
+                "title": title,
                 "preview": str(message.get("content", ""))[:160],
                 "time": message.get("time", ""),
             })
