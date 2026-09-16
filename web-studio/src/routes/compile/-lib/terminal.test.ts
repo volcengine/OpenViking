@@ -8,6 +8,7 @@ import zh from '#/i18n/locales/zh-CN/compile'
 
 const api = vi.hoisted(() => ({
   createCompile: vi.fn(),
+  lookupSubmission: vi.fn(),
   fetchCompileTasks: vi.fn(),
   fetchCompileTask: vi.fn(),
   cancelCompile: vi.fn(),
@@ -108,15 +109,136 @@ it('retains the creation key across response loss and task queries', async () =>
   expect(saveKey).toHaveBeenLastCalledWith(null)
 })
 
-it('releases a rejected submission so its parameters can be corrected', async () => {
-  const pending = { current: null }
-  api.createCompile.mockRejectedValueOnce(
-    new OvClientError({ code: 'INVALID_ARGUMENT', message: 'Invalid URI' }),
-  )
-  const command =
-    'compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s'
+it.each(['INVALID_ARGUMENT', 'INVALID_URI'])(
+  'releases %s so parameters can be corrected',
+  async (code) => {
+    const pending = { current: null }
+    api.createCompile.mockRejectedValueOnce(
+      new OvClientError({ code, message: 'Invalid URI' }),
+    )
+    const command =
+      'compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s'
+    await expect(
+      runCompileSubmission(command, pending, String, vi.fn()),
+    ).rejects.toThrow('Invalid URI')
+    expect(pending.current).toBeNull()
+  },
+)
+
+const retryCommand =
+  'compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s'
+it('recovers a persisted submission after remount without creating again', async () => {
+  let saved: string | null = null
+  const save = (key: string | null) => {
+    saved = key
+  }
+  api.createCompile.mockRejectedValueOnce(new Error('response lost'))
   await expect(
-    runCompileSubmission(command, pending, String, vi.fn()),
-  ).rejects.toThrow('Invalid URI')
+    runCompileSubmission(retryCommand, { current: null }, String, save),
+  ).rejects.toThrow('response lost')
+  const originalKey = saved
+  api.lookupSubmission.mockResolvedValueOnce({
+    task_id: 'original-task',
+    status: 'pending',
+  })
+  const result = await runCompileSubmission(
+    retryCommand,
+    { current: null },
+    String,
+    save,
+    () => saved,
+  )
+  expect(result.taskId).toBe('original-task')
+  expect(api.lookupSubmission).toHaveBeenCalledWith(originalKey)
+  expect(api.createCompile).toHaveBeenCalledTimes(1)
+  expect(saved).toBeNull()
+})
+it('reuses the persisted key when lookup races creation, including after conflict', async () => {
+  const key = `${Date.now()}:saved-key`
+  const pending = { current: null }
+  const save = vi.fn()
+  api.lookupSubmission.mockRejectedValue(
+    new OvClientError({ code: 'NOT_FOUND', message: 'not found' }),
+  )
+  api.createCompile.mockRejectedValueOnce(
+    new OvClientError({ code: 'CONFLICT', message: 'different request' }),
+  )
+  await expect(
+    runCompileSubmission(
+      retryCommand + ' --instruction changed',
+      pending,
+      String,
+      save,
+      () => key,
+    ),
+  ).rejects.toThrow('different request')
   expect(pending.current).toBeNull()
+  expect(save).not.toHaveBeenCalledWith(null)
+  api.createCompile.mockResolvedValueOnce({
+    task_id: 'original-task',
+    status: 'pending',
+  })
+  await runCompileSubmission(retryCommand, pending, String, save, () => key)
+  expect(api.createCompile.mock.calls.map((call) => call[1])).toEqual([
+    key,
+    key,
+  ])
+})
+it('does not create after a failed recovery lookup or expired key', async () => {
+  api.lookupSubmission.mockRejectedValueOnce(new Error('offline'))
+  await expect(
+    runCompileSubmission(
+      retryCommand,
+      { current: null },
+      String,
+      vi.fn(),
+      () => `${Date.now()}:saved`,
+    ),
+  ).rejects.toThrow('offline')
+  api.lookupSubmission.mockRejectedValueOnce(
+    new OvClientError({ code: 'NOT_FOUND', message: 'not found' }),
+  )
+  await expect(
+    runCompileSubmission(
+      retryCommand,
+      { current: null },
+      String,
+      vi.fn(),
+      () => `1:expired`,
+    ),
+  ).rejects.toThrow('expiredSubmission')
+  expect(api.createCompile).not.toHaveBeenCalled()
+})
+
+it('localizes known stages while preserving unknown provider stages', async () => {
+  const i18n = createInstance()
+  await i18n.init({
+    lng: 'zh-CN',
+    resources: { 'zh-CN': { compile: zh } },
+    defaultNS: 'compile',
+  })
+  const localizeStage = (stage: string) =>
+    i18n.t(`stages.${stage.replace(/^compile:\s*/, '')}`, {
+      defaultValue: stage,
+    })
+  for (const stage of ['compile: queued', 'custom-stage']) {
+    api.fetchCompileTask.mockResolvedValueOnce({
+      task_id: 't',
+      status: 'running',
+      stage,
+    })
+    const result = await runCompileSubmission(
+      'task status t',
+      { current: null },
+      String,
+      vi.fn(),
+      () => null,
+      localizeStage,
+    )
+    expect(result.body).toContain(
+      stage === 'custom-stage' ? stage : i18n.t('stages.queued'),
+    )
+    if (stage !== 'custom-stage')
+      expect(result.body).not.toContain('compile: queued')
+  }
 })

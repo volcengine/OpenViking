@@ -11,6 +11,8 @@ export default {
     details: '技术详情',
   },
   commandErrors: {
+    expiredSubmission:
+      '上次提交已超过安全重试期限，请先检查任务历史，再通过表单新建任务。',
     pendingSubmission:
       '上次提交结果尚未确认。请重试原命令，或打开编译表单查询结果后再更改命令。',
     shellSyntax: '不支持 Shell 运算符。',

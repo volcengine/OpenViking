@@ -1,6 +1,6 @@
 import { ArgsEditor } from './args-editor'
 import { readCompileHandoff, clearCompileHandoff } from '../-lib/handoff'
-import { isOvClientError } from '#/lib/ov-client'
+import { isRejectedCompileSubmission } from '../-lib/errors'
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useBlocker } from '@tanstack/react-router'
@@ -258,15 +258,7 @@ export function CompileForm({ fromTask }: { fromTask?: string }) {
       await finish(await createCompile(body, key))
     } catch (cause) {
       if (mounted.current) {
-        const definite =
-          isOvClientError(cause) &&
-          [
-            'INVALID_ARGUMENT',
-            'NOT_FOUND',
-            'PERMISSION_DENIED',
-            'UNAUTHENTICATED',
-            'CONFLICT',
-          ].includes(cause.code)
+        const definite = isRejectedCompileSubmission(cause)
         if (definite) {
           submission.current = null
           setRecoverKey(null)

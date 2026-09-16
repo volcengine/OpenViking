@@ -13,7 +13,8 @@ export class CompileCommandError extends Error {
       | 'taskUsage'
       | 'missingValue'
       | 'listUsage'
-      | 'pendingSubmission',
+      | 'pendingSubmission'
+      | 'expiredSubmission',
   ) {
     super(code)
     this.name = 'CompileCommandError'

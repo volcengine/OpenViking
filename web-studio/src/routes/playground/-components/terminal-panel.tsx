@@ -884,7 +884,8 @@ export function TerminalPanel({
             (status) =>
               t(`compile:statuses.${status}`, { defaultValue: status }),
             (key) => {
-              if (identityRef.current !== identityScopeKey) return
+              if (identityRef.current !== identityScopeKey)
+                throw new DOMException('Identity changed', 'AbortError')
               try {
                 if (key) sessionStorage.setItem(recoveryKey, key)
                 else sessionStorage.removeItem(recoveryKey)
@@ -892,6 +893,17 @@ export function TerminalPanel({
                 /* optional recovery */
               }
             },
+            () => {
+              try {
+                return sessionStorage.getItem(recoveryKey)
+              } catch {
+                return null
+              }
+            },
+            (stage) =>
+              t(`compile:stages.${stage.replace(/^compile:\s*/, '')}`, {
+                defaultValue: stage,
+              }),
           )
           if (identityRef.current !== identityScopeKey) return
           append({
@@ -1372,6 +1384,7 @@ export function TerminalPanel({
             throw new Error(t('terminal.unknownCommand'))
         }
       } catch (error) {
+        if (identityRef.current !== identityScopeKey) return
         append({
           body:
             error instanceof CompileCommandError

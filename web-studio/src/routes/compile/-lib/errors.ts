@@ -1,4 +1,7 @@
+import { isOvClientError } from '#/lib/ov-client'
+
 const errorKeys = {
+  INVALID_URI: 'errors.invalidArgument',
   INVALID_ARGUMENT: 'errors.invalidArgument',
   NOT_FOUND: 'errors.notFound',
   PERMISSION_DENIED: 'errors.permissionDenied',
@@ -16,4 +19,19 @@ export function compileErrorKey(error: unknown) {
   return Object.hasOwn(errorKeys, code)
     ? errorKeys[code as keyof typeof errorKeys]
     : 'errors.generic'
+}
+
+/** These responses confirm that this request was rejected before creation. */
+export function isRejectedCompileSubmission(error: unknown): boolean {
+  return (
+    isOvClientError(error) &&
+    [
+      'INVALID_ARGUMENT',
+      'INVALID_URI',
+      'NOT_FOUND',
+      'PERMISSION_DENIED',
+      'UNAUTHENTICATED',
+      'CONFLICT',
+    ].includes(error.code)
+  )
 }

@@ -11,6 +11,8 @@ export default {
     details: 'Technical details',
   },
   commandErrors: {
+    expiredSubmission:
+      'The previous submission is too old to retry safely. Check task history before starting another task.',
     pendingSubmission:
       'Resolve the previous submission before changing the command. Retry the original command or open the Compile form to look up its result.',
     shellSyntax: 'Shell operators are not supported.',
