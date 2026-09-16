@@ -232,7 +232,13 @@ class HierarchicalRetriever:
             telemetry.count("vector.scanned", len(global_results))
 
             leaf_results: List[Dict[str, Any]] = []
-            if self.vector_store._acl_enabled(ctx) and (level is None or 2 in level):
+            # Query file-level (L2) vectors in THINKING mode for every
+            # deployment, not only ACL-enabled ones: embeddings are generated
+            # and stored regardless, and non-ACL installs would otherwise never
+            # see file-level results in this branch (QUICK mode already queries
+            # unfiltered; #4482). Tenant scoping lives inside
+            # search_in_tenant, not in whether the query happens.
+            if level is None or 2 in level:
                 leaf_results = await vector_proxy.search_in_tenant(
                     query_vector=query_vector,
                     sparse_query_vector=sparse_query_vector,
