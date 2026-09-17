@@ -1,26 +1,29 @@
-import feishu from './platform-icons/feishu.svg'
-import slack from './platform-icons/slack.svg'
-import dingtalk from './platform-icons/dingtalk.svg'
-import discord from './platform-icons/discord.svg'
-import telegram from './platform-icons/telegram.svg'
+import {
+  FeatherIcon,
+  Gamepad2Icon,
+  HashIcon,
+  SendIcon,
+  ZapIcon,
+} from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
-const icons: Record<string, string> = {
-  feishu,
-  slack,
-  dingtalk,
-  discord,
-  telegram,
+const icons: Record<string, LucideIcon> = {
+  feishu: FeatherIcon,
+  slack: HashIcon,
+  dingtalk: ZapIcon,
+  discord: Gamepad2Icon,
+  telegram: SendIcon,
 }
 
 export function PlatformIcon({ platform }: { platform: string }) {
-  const src = icons[platform.toLowerCase()]
-  if (!src) return null
+  const Icon = icons[platform.toLowerCase()]
+  if (!Icon) return null
   return (
     <span
-      className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/50"
+      className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground"
       aria-hidden="true"
     >
-      <img src={src} alt="" className="size-5 object-contain" />
+      <Icon className="size-5" />
     </span>
   )
 }
