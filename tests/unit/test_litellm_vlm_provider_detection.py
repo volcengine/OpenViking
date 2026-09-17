@@ -115,4 +115,7 @@ def test_explicit_local_routes_reach_completion_unchanged(
         assert kwargs.get("api_key") == api_key
         assert kwargs.get("api_base") == api_base
         if model.startswith(("ollama/", "ollama_chat/")):
-            assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False} | extra_body
+            # num_ctx is promoted to a direct kwarg so LiteLLM places it under
+            # Ollama's ``options``; think stays in extra_body.
+            assert kwargs["num_ctx"] == extra_body.get("num_ctx", 16384)
+            assert kwargs["extra_body"] == {"think": extra_body.get("think", False)}

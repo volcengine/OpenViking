@@ -530,8 +530,10 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        # Ollama models also get a default num_ctx; the explicit think is kept.
-        assert kwargs["extra_body"] == {"think": False, "num_ctx": 16384}
+        # Ollama models also get a default num_ctx as a direct kwarg (LiteLLM
+        # routes it into Ollama's ``options``); the explicit think is kept.
+        assert kwargs["extra_body"] == {"think": False}
+        assert kwargs["num_ctx"] == 16384
 
     def test_ollama_defaults_num_ctx_and_think(self):
         """Ollama models get a larger context window and thinking disabled by default."""
@@ -545,7 +547,8 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False}
+        assert kwargs["extra_body"] == {"think": False}
+        assert kwargs["num_ctx"] == 16384
 
     def test_ollama_extra_request_body_overrides_num_ctx(self):
         """An explicit num_ctx in extra_request_body is not overridden by the default."""
@@ -560,7 +563,8 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        assert kwargs["extra_body"] == {"num_ctx": 32768, "think": False}
+        assert kwargs["extra_body"] == {"think": False}
+        assert kwargs["num_ctx"] == 32768
 
     def test_non_ollama_model_gets_no_num_ctx(self):
         """num_ctx is Ollama-specific and must not leak into other providers."""
@@ -574,6 +578,7 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
+        assert "num_ctx" not in kwargs
         assert "extra_body" not in kwargs or "num_ctx" not in kwargs.get("extra_body", {})
 
     def test_litellm_dashscope_merges_thinking_with_extra_request_body(self):

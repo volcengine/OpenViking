@@ -104,11 +104,26 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
 # longer prompt to fit. OV prompts (memory extraction is ~5k+ tokens) overflow
 # it, so the model never sees the real input and returns empty/garbage with no
 # error. Default to a larger window for Ollama models; callers can override via
-# ``extra_request_body["num_ctx"]``.
+# ``extra_request_body["num_ctx"]`` (or ``extra_request_body["options"]``).
 OLLAMA_DEFAULT_NUM_CTX = 16384
 
 # LiteLLM routes that address a local Ollama server.
 OLLAMA_LITELLM_PREFIXES: tuple[str, ...] = ("ollama/", "ollama_chat/")
+
+# kwargs that must never be overwritten by user-supplied Ollama ``options``.
+_OLLAMA_RESERVED_KWARGS: frozenset[str] = frozenset(
+    {
+        "model",
+        "messages",
+        "tools",
+        "tool_choice",
+        "api_key",
+        "api_base",
+        "extra_headers",
+        "extra_body",
+        "timeout",
+    }
+)
 
 
 # Prefixes that are already complete LiteLLM routes. Keep them authoritative
@@ -315,9 +330,30 @@ class LiteLLMVLMProvider(VLMBase):
         # truncates long prompts to its 4096-token default; thinking models left
         # in thinking mode emit only reasoning and stall on CPU. Set safe
         # defaults, but let extra_request_body override either.
+        #
+        # LiteLLM emits ``extra_body`` keys at the top level of the Ollama JSON
+        # body, but Ollama only honours runtime options such as ``num_ctx``
+        # inside its ``options`` object. Direct kwargs are what LiteLLM's Ollama
+        # transformation routes into ``options`` (next to ``temperature``), so
+        # promote ``num_ctx`` and any user-supplied ``options`` dict out of
+        # ``extra_body`` into kwargs. ``think`` is a top-level Ollama field and
+        # stays in ``extra_body``.
         if _has_litellm_prefix(model, OLLAMA_LITELLM_PREFIXES):
             extra = kwargs.get("extra_body", {})
-            extra.setdefault("num_ctx", OLLAMA_DEFAULT_NUM_CTX)
+            user_options = extra.pop("options", None)
+            promoted: dict[str, Any] = dict(user_options) if isinstance(user_options, dict) else {}
+            if "num_ctx" in extra:
+                promoted["num_ctx"] = extra.pop("num_ctx")
+            promoted.setdefault("num_ctx", OLLAMA_DEFAULT_NUM_CTX)
+            for key, value in promoted.items():
+                if key in _OLLAMA_RESERVED_KWARGS:
+                    logger.warning(
+                        "Ignoring extra_request_body.options[%r]: it would overwrite a "
+                        "reserved request field",
+                        key,
+                    )
+                    continue
+                kwargs[key] = value
             extra.setdefault("think", self._effective_thinking(thinking))
             kwargs["extra_body"] = extra
 
