@@ -312,7 +312,7 @@ graph LR
 | `StorageProbeDataSource` | `ProbeMetricDataSource` | AGFS / VikingFS、系统表访问检查 | 存储探针结果 | storage readability、storage writability、system table readiness |
 | `RetrievalBackendProbeDataSource` | `ProbeMetricDataSource` | VikingDB、检索后端最小能力检查 | 检索后端探针结果 | backend readiness、collection availability |
 | `ModelProviderProbeDataSource` | `ProbeMetricDataSource` | VLM / Embedding / Rerank provider 可用性检查 | 模型依赖探针结果 | provider readiness、credential availability |
-| `AsyncSystemProbeDataSource` | `ProbeMetricDataSource` | Queue、TaskTracker、后台消费线程检查 | 异步系统探针结果 | queue readiness、worker liveness |
+| `AsyncSystemProbeDataSource` | `ProbeMetricDataSource` | Queue、默认 asyncio executor monitor | 异步系统探针与 executor 指标 | queue readiness、executor threads / tasks |
 | `EncryptionProbeDataSource` | `ProbeMetricDataSource` | Root Key、KMS / Vault Provider、加密组件检查 | 加密探针结果 | root key readiness、kms availability、encryption component health |
 
 设计边界如下：
@@ -427,7 +427,7 @@ Collector 与 DataSource 的主映射关系如下：
 | `StorageProbeCollector` | `ProbeMetricCollector` | StorageProbeDataSource | storage readiness、system table availability |
 | `RetrievalBackendProbeCollector` | `ProbeMetricCollector` | RetrievalBackendProbeDataSource | backend readiness、collection availability |
 | `ModelProviderProbeCollector` | `ProbeMetricCollector` | ModelProviderProbeDataSource | provider readiness、credential availability |
-| `AsyncSystemProbeCollector` | `ProbeMetricCollector` | AsyncSystemProbeDataSource | queue readiness、worker liveness |
+| `AsyncSystemProbeCollector` | `ProbeMetricCollector` | AsyncSystemProbeDataSource | queue readiness、默认 executor 线程与任务指标 |
 | `EncryptionProbeCollector` | `ProbeMetricCollector` | EncryptionProbeDataSource | root key readiness、kms availability、encryption component health |
 
 设计理由：在引入四类 Collector 之后，整个体系的语义边界更清晰：
@@ -644,6 +644,7 @@ sequenceDiagram
 | RAGFS 监控 | `RagfsMetricDataSource` | `RagfsMetricCollector` | Counter、Histogram、Gauge | 文件操作、Cache、multi-backend、Lock |
 | 加密监控 | `EncryptionEventDataSource`、`EncryptionProbeDataSource` | `EncryptionCollector`、`EncryptionProbeCollector` | Counter、Histogram、Gauge | encrypt count、decrypt duration、root key readiness |
 | 系统探针监控 | 各类 `*ProbeDataSource` | 各类 `*ProbeCollector` | Gauge、Health | service readiness、storage readiness、kms availability |
+| Python executor 监控 | `AsyncSystemProbeDataSource` | `AsyncSystemProbeCollector` | Gauge、Counter | 默认 executor 线程数、任务数、提交/完成/失败计数 |
 | 操作级 Telemetry 指标化 | telemetry adapter / bridge | `TelemetryBridgeCollector` | Counter、Histogram、Gauge | operation requests、vector scanned、memory extracted |
 
 ### 3.2 指标对象模型
@@ -808,7 +809,81 @@ sequenceDiagram
 | `summary.semantic_nodes.{total|done|pending|running}` | `openviking_semantic_nodes_total{status=...}` |
 | `summary.memory.extracted` | `openviking_memory_extracted_total{memory_type=...}` |
 
-### 3.8 多租户支持范围
+### 3.8 Python 默认 executor 指标
+
+Python executor 指标用于观察当前服务进程内 asyncio 默认 executor 的线程和任务状态。
+它只覆盖 Python 默认 executor，不覆盖 Rust / RAGFS 内部 Tokio runtime。
+
+当前代码路径：
+
+| 文件 | 符号 | 职责 |
+| --- | --- | --- |
+| `openviking/server/app.py` | `lifespan()` | 在 `_configure_default_executor(config)` 后安装 monitor，在 shutdown metrics 后卸载 |
+| `openviking/metrics/core/runtime.py` | `DefaultExecutorMonitor` | 保存 event loop、原始 `run_in_executor`、计数器和锁 |
+| `openviking/metrics/core/runtime.py` | `install_executor_monitor()` / `uninstall_executor_monitor()` | 安装和恢复当前 event loop 的默认 executor 入口 |
+| `openviking/metrics/datasources/probes.py` | `AsyncSystemProbeDataSource.read_async_system_state()` | 合并 queue readiness 和 executor metrics |
+| `openviking/metrics/collectors/async_system_probe.py` | `AsyncSystemProbeCollector` | 写 `openviking_async_system_readiness` 和 `openviking_executor_*` |
+
+采集链路：
+
+```text
+/metrics
+-> CollectorManager.collect_all()
+-> asyncio.to_thread(collector.collect, registry)
+-> AsyncSystemProbeCollector.read_metric_input()
+-> AsyncSystemProbeDataSource.read_async_system_state()
+-> get_executor_monitor().read_metrics()
+-> AsyncSystemProbeCollector.collect_hook()
+-> MetricRegistry
+```
+
+统计范围：
+
+```text
+统计：loop.run_in_executor(None, func, *args)
+统计：asyncio.to_thread(func, *args, **kwargs)
+不统计：loop.run_in_executor(custom_executor, func, *args)
+不统计：concurrent.futures.ThreadPoolExecutor(...) 直接创建的 executor
+不统计：Rust / RAGFS 内部 runtime 或线程
+```
+
+指标定义：
+
+| 指标名 | 类型 | 标签 | 说明 |
+| --- | --- | --- | --- |
+| `openviking_executor_max_workers` | Gauge | `pool,process_role,worker` | 默认 executor 最大 worker 数 |
+| `openviking_executor_threads` | Gauge | `pool,process_role,worker` | 默认 executor 已创建线程数 |
+| `openviking_executor_active_tasks` | Gauge | `pool,process_role,worker` | 当前正在执行的默认 executor 任务数 |
+| `openviking_executor_pending_tasks` | Gauge | `pool,process_role,worker` | 当前等待执行的默认 executor 任务数 |
+| `openviking_executor_submitted_total` | Counter | `pool,process_role,worker` | 累计提交到默认 executor 的任务数 |
+| `openviking_executor_completed_total` | Counter | `pool,process_role,worker` | 累计执行结束的默认 executor 任务数，失败也计入 |
+| `openviking_executor_failed_total` | Counter | `pool,process_role,worker` | 默认 executor callable 抛异常的累计次数 |
+
+固定标签：
+
+```text
+pool="asyncio_default"
+process_role="legacy_server"
+worker=multiprocessing.current_process().name
+```
+
+`failed_total` 的语义：
+
+- 该指标统计 worker callable 抛出的 `Exception`。
+- 如果异常被上层业务捕获并作为正常分支处理，也会计入。
+- 它不等同于业务请求失败数。
+- `/metrics` scrape 自身会通过 `asyncio.to_thread()` 刷新 collector，因此也会计入 executor 指标。
+
+运行观测：
+
+- monitor 在服务初始化前安装，会统计启动阶段的默认 executor 调用。
+- AGFS 初始化中的文件不存在、目录已存在等探测式异常会计入 `failed_total`。
+- 当前运行时如果加载旧版 `ragfs_python` binding，`RagfsMetricCollector` 调用
+  `service._agfs_client.metrics()` 会失败。
+- repo 当前源码 `crates/ragfs-python/src/lib.rs` 已定义 `metrics()`；若运行时对象没有该方法，
+  说明 `.venv` 里的 native binding 产物与源码能力不一致。
+
+### 3.9 多租户支持范围
 
 当前代码中，只有进入 `ACCOUNT_DIMENSION_SUPPORTED_METRICS` 支持集的指标族允许注入 `account_id`。支持集如下：
 

@@ -331,6 +331,10 @@ def create_app(
         """Application lifespan handler."""
         nonlocal service
         _configure_default_executor(config)
+        if config.observability.metrics.enabled:
+            from openviking.metrics.core.runtime import install_executor_monitor
+
+            install_executor_monitor()
         owns_service = service is None
         if owns_service:
             service = OpenVikingService()
@@ -398,6 +402,10 @@ def create_app(
 
         await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
+        if config.observability.metrics.enabled:
+            from openviking.metrics.core.runtime import uninstall_executor_monitor
+
+            uninstall_executor_monitor()
         task_tracker.stop_cleanup_loop()
         auth_plugin_state = getattr(app.state, "auth_plugin", None)
         if auth_plugin_state is not None:

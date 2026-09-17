@@ -228,6 +228,13 @@ Notes:
 | `openviking_queue_errors_total` | Counter | `queue` | total error count per queue |
 | `openviking_queue_pending` | Gauge | `queue` | pending queue items |
 | `openviking_queue_in_progress` | Gauge | `queue` | in-progress queue items |
+| `openviking_executor_max_workers` | Gauge | `pool, process_role, worker` | maximum workers in the asyncio default executor |
+| `openviking_executor_threads` | Gauge | `pool, process_role, worker` | threads created by the asyncio default executor |
+| `openviking_executor_active_tasks` | Gauge | `pool, process_role, worker` | default executor tasks currently running |
+| `openviking_executor_pending_tasks` | Gauge | `pool, process_role, worker` | default executor tasks waiting to run |
+| `openviking_executor_submitted_total` | Counter | `pool, process_role, worker` | total tasks submitted to the default executor |
+| `openviking_executor_completed_total` | Counter | `pool, process_role, worker` | default executor tasks that finished, including failed tasks |
+| `openviking_executor_failed_total` | Counter | `pool, process_role, worker` | default executor callables that raised exceptions |
 | `openviking_lock_active` | Gauge | none | current published lock leases |
 | `openviking_lock_waiting` | Gauge | none | requests currently waiting for locks |
 | `openviking_lock_stale` | Gauge | none | cumulative count of stale lock tokens removed |
@@ -240,6 +247,14 @@ These help answer:
 
 - Is there queue backlog?
 - Is there lock contention or stale locking?
+- Is the default executor near its worker limit or building a queue?
+
+Executor metrics only cover `loop.run_in_executor(None, ...)` and
+`asyncio.to_thread(...)`. Calls using an explicit custom executor and Rust /
+RAGFS internal runtimes or threads are not included. `failed_total` counts
+callables that raise exceptions. If the caller catches that exception and treats
+it as a normal branch, it still counts here, so this is not the business request
+failure count.
 
 ### RAGFS
 

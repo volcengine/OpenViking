@@ -22,6 +22,7 @@ from openviking.metrics.collectors.service_probe import ServiceProbeCollector
 from openviking.metrics.collectors.storage_probe import StorageProbeCollector
 from openviking.metrics.core.base import ReadEnvelope
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.datasources import probes as probe_datasources
 
 
 class _FailingProbeCollector(ProbeMetricCollector):
@@ -279,14 +280,20 @@ def test_model_provider_probe_collector_uses_last_provider_on_failure(registry, 
     assert 'openviking_model_provider_readiness{provider="volcengine",valid="0"} 0.0' in text2
 
 
-def test_async_system_probe_collector_marks_invalid_on_failure(registry, render_prometheus):
-    ds = _ProbeDataSource(value={"queue": True}, ok=True)
+def test_async_system_probe_collector_marks_invalid_on_failure(
+    monkeypatch, registry, render_prometheus
+):
+    monkeypatch.setattr(probe_datasources, "get_queue_manager", lambda: object())
+    ds = probe_datasources.AsyncSystemProbeDataSource()
     c = AsyncSystemProbeCollector(data_source=ds)
     c.collect(registry)
     text = render_prometheus(registry)
     assert 'openviking_async_system_readiness{probe="queue",valid="1"} 1.0' in text
 
-    ds.raises = True
+    def _raise_queue_manager():
+        raise RuntimeError("probe read failed")
+
+    monkeypatch.setattr(probe_datasources, "get_queue_manager", _raise_queue_manager)
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_async_system_readiness{probe="queue",valid="0"} 0.0' in text2
