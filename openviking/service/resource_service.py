@@ -70,6 +70,7 @@ from openviking.utils.git_auth import (
     GitHttpAuthConfig,
     build_git_http_auth_env,
     parse_git_http_auth_config,
+    raise_git_auth_error,
     reject_git_http_userinfo,
 )
 from openviking.utils.ingest_options import IngestOptions
@@ -1371,6 +1372,7 @@ class ResourceService:
             raise
 
         if proc.returncode != 0:
+            raise_git_auth_error(stderr)
             raise InvalidArgumentError("Cannot access Git repository; git ls-remote failed.")
         repo_name = parse_code_hosting_url(source)
         return _ResourceSourceInfo(
