@@ -13,7 +13,10 @@ IndexEngine::IndexEngine(const std::string& path_or_json) {
 
 SearchResult IndexEngine::search(const SearchRequest& req) {
   SearchResult result;
-  impl_->search(req, result);
+  const int ret = impl_->search(req, result);
+  if (ret != 0) {
+    throw std::runtime_error("Failed to search native index");
+  }
   result.result_num = result.labels.size();
   return result;
 }
