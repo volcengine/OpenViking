@@ -43,14 +43,13 @@ parse_result.temp_dir_path  # viking://temp/abc123
 
 ### Smart Splitting
 
-```
-If document_tokens <= 1024:
-    → Save as single file
-Else:
-    → Split by headers
-    → Section < 512 tokens → Merge
-    → Section > 1024 tokens → Create subdirectory
-```
+Smart splitting is threshold-based, not one-file-per-heading. In the default parse mode:
+
+- Markdown stays in one file while it is at most `2048` estimated tokens **and** `6000` characters, even when it contains multiple headings.
+- Once either limit is exceeded, headings become section boundaries. Sections below `512` tokens are merged with adjacent content when possible to avoid low-value fragments.
+- Oversized leaf sections, or documents without headings, are split by paragraph while targeting both limits. A single Markdown table row may exceed a target so its structure is preserved.
+
+The values above are the `ParserConfig.max_section_size` and `ParserConfig.max_section_chars` defaults. Set `args.parse_mode` to `no_split` to keep each converted Markdown body intact. This changes the stored file layout only; semantic processing, vectorization, and internal embedding chunking still run normally.
 
 ### Return Result
 
