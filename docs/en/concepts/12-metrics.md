@@ -217,8 +217,8 @@ Typical `stage` values include:
 
 Notes:
 
-- `openviking_model_*` gives a unified cross-model view for embedding and VLM usage
-- `openviking_vlm_*` and `openviking_embedding_*` are better suited for workload-specific dashboards
+- `openviking_model_*` gives a unified cross-model view for embedding, rerank, and VLM usage
+- `openviking_vlm_*`, `openviking_embedding_*`, and `openviking_rerank_*` are better suited for workload-specific dashboards
 
 ### Queues, Locks, and Runtime State
 
