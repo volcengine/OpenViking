@@ -35,6 +35,42 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
   }
 }
 
+void test_invalid_filter_is_rejected() {
+  SPDLOG_INFO("[Running] test_invalid_filter_is_rejected...");
+
+  const std::string config = R"({
+        "CollectionName": "invalid_filter_is_rejected",
+        "IndexName": "default",
+        "VectorIndex": {
+            "IndexType": "flat",
+            "ElementCount": 0,
+            "MaxElementCount": 4,
+            "Dimension": 1,
+            "Distance": "l2",
+            "Quant": "float"
+        },
+        "ScalarIndex": [
+            {"FieldName": "score", "FieldType": "float32"}
+        ]
+    })";
+
+  IndexEngine engine(config);
+  if (!engine.is_valid()) {
+    SPDLOG_ERROR("Invalid-filter test engine initialization failed");
+    exit(1);
+  }
+
+  try {
+    (void)engine.evaluate_filter(
+        R"({"filter":{"op":"not-a-real-op","field":"score","conds":[1]}})");
+    SPDLOG_ERROR("Invalid filter was accepted");
+    exit(1);
+  } catch (const std::runtime_error&) {
+  }
+
+  SPDLOG_INFO("[Passed] test_invalid_filter_is_rejected");
+}
+
 void test_basic_workflow() {
   SPDLOG_INFO("[Running] test_basic_workflow...");
 
@@ -585,6 +621,7 @@ void test_paged_store_scan() {
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  test_invalid_filter_is_rejected();
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
