@@ -40,3 +40,29 @@ test("installs an atomic managed copy and registry record, then purges only on r
   assert.equal((await run("remove", home, undefined, "--purge")).code, 0);
   assert.equal(existsSync(record.plugins[0].root), false);
 });
+
+test("serializes concurrent installs and removes without corrupting Kimi state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openviking-kimi-plugin-concurrent-"));
+  const source = join(root, "source");
+  const home = join(root, "home");
+  await mkdir(source, { recursive: true });
+  await writeFile(join(source, "kimi.plugin.json"), JSON.stringify({ name: "openviking-memory", version: "0.1.0" }));
+  await writeFile(join(source, "marker.txt"), "managed");
+
+  const operations = [
+    ...Array.from({ length: 8 }, () => run("install", home, source)),
+    ...Array.from({ length: 4 }, () => run("remove", home, undefined, "--purge")),
+  ];
+  const results = await Promise.all(operations);
+  for (const result of results) assert.equal(result.code, 0, result.stderr);
+
+  const registryPath = join(home, "plugins", "installed.json");
+  if (existsSync(registryPath)) {
+    const registry = JSON.parse(await readFile(registryPath, "utf8"));
+    assert.ok(Array.isArray(registry.plugins));
+    assert.ok(registry.plugins.length <= 1);
+    const record = registry.plugins.find((plugin) => plugin.id === "openviking-memory");
+    assert.equal(existsSync(join(home, "plugins", "managed", "openviking-memory")), Boolean(record));
+  }
+  assert.equal(existsSync(join(home, "plugins", ".openviking-memory.lock")), false);
+});
