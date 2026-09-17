@@ -213,3 +213,108 @@ async def test_memory_write_error_returns_failed():
     assert result.outcome is ProcessOutcome.FAILED
     assert result.value is None
     assert result.error == (f"Failed to write abstract/overview for {msg.uri}: Permission denied")
+
+
+def _memory_fs(summaries: dict) -> MagicMock:
+    """Fake fs with one writeable memory directory, pathlock mocked."""
+    fake_fs = MagicMock()
+    fake_fs.exists = AsyncMock(return_value=True)
+    fake_fs.ls = AsyncMock(return_value=[{"name": name, "isDir": False} for name in summaries])
+    fake_fs.read_file = AsyncMock(return_value="some content")
+    fake_fs.write_file = AsyncMock(return_value=True)
+    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(return_value={"lease_ref": "test"})
+    fake_fs._async_agfs.pathlock_release = AsyncMock()
+    fake_fs._uri_to_path = MagicMock(
+        side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"
+    )
+    return fake_fs
+
+
+def _config_patch():
+    return patch(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        return_value=SimpleNamespace(
+            semantic=SimpleNamespace(
+                overview_max_chars=100_000,
+                abstract_max_chars=10_000,
+            )
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_all_summary_failures_counted():
+    """Every summary falling back to empty must fail the delivery (issue #5032).
+
+    A dead VLM previously left the queue Errors column at 0; the run must now
+    return FAILED so the error is counted and visible to operators.
+    """
+    processor = SemanticProcessor()
+
+    fake_fs = _memory_fs({"file1.md": None})
+    msg = _make_msg(skip_vectorization=True)
+    data = _build_data(msg)
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fake_fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+        _config_patch(),
+        patch.object(
+            processor,
+            "_generate_single_file_summary",
+            new=AsyncMock(side_effect=RuntimeError("model 'llama3.2-vision' not found")),
+        ),
+        patch.object(
+            processor,
+            "_generate_overview",
+            new=AsyncMock(return_value="# Overview\ntest overview"),
+        ),
+    ):
+        result = await processor.on_dequeue(data)
+
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.error == (f"all 1 summary/overview generations failed for {msg.uri}")
+
+
+@pytest.mark.asyncio
+async def test_memory_partial_summary_failure_stays_success():
+    """Partial failures keep the delivery successful — unaffected nodes landed."""
+    processor = SemanticProcessor()
+
+    fake_fs = _memory_fs({"file1.md": None, "file2.md": None})
+    msg = _make_msg(skip_vectorization=True)
+    data = _build_data(msg)
+
+    good = {"name": "file1.md", "summary": "test summary"}
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fake_fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+        _config_patch(),
+        patch.object(
+            processor,
+            "_generate_single_file_summary",
+            new=AsyncMock(side_effect=[good, RuntimeError("transient VLM failure")]),
+        ),
+        patch.object(
+            processor,
+            "_generate_overview",
+            new=AsyncMock(return_value="# Overview\ntest overview"),
+        ),
+    ):
+        result = await processor.on_dequeue(data)
+
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert result.value is None
+    assert result.error is None
