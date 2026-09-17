@@ -287,29 +287,8 @@ function ExperienceDetailRoute() {
         </Card>
 
         <Card size="sm" className="bg-background shadow-none ring-border/70">
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="grid min-w-0 gap-1">
-                <CardTitle className="truncate text-base">
-                  {activeTab === 'impact'
-                    ? t('detail.analysisTitle')
-                    : t('detail.sourceTitle')}
-                </CardTitle>
-                <CardDescription>
-                  {activeTab === 'impact'
-                    ? t('detail.analysisDescription')
-                    : t('detail.sourceDescription')}
-                </CardDescription>
-              </div>
-              {activeTab === 'impact' ? (
-                <TimeRangePicker
-                  onChange={handleTimeRangeChange}
-                  preset={timeRangePreset}
-                  range={timeRange}
-                />
-              ) : null}
-            </div>
-            <div className="mt-4 flex gap-5 border-b border-border/60">
+          <CardHeader className="gap-4">
+            <div className="flex gap-5 border-b border-border/60">
               {DETAIL_TABS.map((tab) => (
                 <button
                   key={tab}
@@ -317,21 +296,35 @@ function ExperienceDetailRoute() {
                   aria-pressed={activeTab === tab}
                   className={
                     activeTab === tab
-                      ? 'flex items-center gap-2 border-b-2 border-primary px-1 pb-3 text-sm font-medium text-foreground'
-                      : 'flex items-center gap-2 border-b-2 border-transparent px-1 pb-3 text-sm text-muted-foreground transition-colors hover:text-foreground'
+                      ? 'flex items-center gap-2 whitespace-nowrap border-b-2 border-primary px-1 pb-3 text-sm font-medium text-foreground'
+                      : 'flex items-center gap-2 whitespace-nowrap border-b-2 border-transparent px-1 pb-3 text-sm text-muted-foreground transition-colors hover:text-foreground'
                   }
                   onClick={() => setActiveTab(tab)}
                 >
                   {tab === 'impact' ? (
-                    <BarChart3Icon className="size-3" />
+                    <BarChart3Icon className="size-4" />
                   ) : (
-                    <GitBranchIcon className="size-3" />
+                    <GitBranchIcon className="size-4" />
                   )}
                   {tab === 'impact'
                     ? t('detail.tabImpact')
                     : t('detail.tabSource')}
                 </button>
               ))}
+            </div>
+            <div className="grid gap-3">
+              <CardDescription>
+                {activeTab === 'impact'
+                  ? t('detail.analysisDescription')
+                  : t('detail.sourceDescription')}
+              </CardDescription>
+              {activeTab === 'impact' ? (
+                <TimeRangePicker
+                  onChange={handleTimeRangeChange}
+                  preset={timeRangePreset}
+                  range={timeRange}
+                />
+              ) : null}
             </div>
           </CardHeader>
           <CardContent className="grid gap-5 px-5 pb-5">
