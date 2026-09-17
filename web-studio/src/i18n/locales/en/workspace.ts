@@ -388,8 +388,17 @@ const workspace = {
     },
   },
   tasksPage: {
+    summary: {
+      successRate: 'Success rate (last 24h)',
+      loading: 'Loading summary...',
+      loadFailed: 'Could not load summary',
+      counts: '{{completed}} completed / {{failed}} failed attempts',
+      listEntries: 'List entries',
+      listHint: 'After filters and resource folding; up to 200 recent tasks',
+    },
     retry: {
-      noPendingMessages: 'No new task created: this session has no pending messages',
+      noPendingMessages:
+        'No new task created: this session has no pending messages',
       commitSkipped: 'No new task created: this session commit was skipped',
     },
     title: 'Task Center',

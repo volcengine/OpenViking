@@ -377,6 +377,14 @@ const workspace = {
     },
   },
   tasksPage: {
+    summary: {
+      successRate: '近 24 小时任务成功率',
+      loading: '正在加载统计...',
+      loadFailed: '任务统计加载失败',
+      counts: '成功 {{completed}} 次 / 失败 {{failed}} 次',
+      listEntries: '列表条目数',
+      listHint: '筛选、折叠后的条目；最多取最近 200 条任务',
+    },
     retry: {
       noPendingMessages: '未创建新任务：该会话没有待提交消息',
       commitSkipped: '未创建新任务：本次会话提交已跳过',

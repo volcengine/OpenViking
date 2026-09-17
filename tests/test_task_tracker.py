@@ -9,12 +9,21 @@ import time
 from copy import deepcopy
 
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import tasks as task_routes
 from openviking.service.session_service import SessionService
-from openviking.service.task_store import PersistentTaskStore, _task_to_payload
+from openviking.service.task_store import (
+    SYSTEM_TASK_ACCOUNT_ID,
+    SYSTEM_TASK_USER_ID,
+    PersistentTaskStore,
+    _task_to_payload,
+)
 from openviking.service.task_tracker import (
+    TaskRecord,
     TaskStatus,
     TaskTracker,
     _sanitize_error,
@@ -838,6 +847,102 @@ async def test_session_service_get_commit_task_also_filters_account():
     )
 
     assert other_account_result is None
+
+
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+async def test_task_summary_counts_retained_attempts_in_one_window(monkeypatch, role):
+    now = time.time()
+    monkeypatch.setattr(task_routes.time, "time", lambda: now)
+    store = PersistentTaskStore(_FakeAgfs())
+    tracker = TaskTracker(store=store)
+    set_task_tracker(tracker)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=role)
+    owner = (
+        _owner_kwargs(SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID)
+        if role == Role.ROOT
+        else _owner_kwargs()
+    )
+    for index, (status, age) in enumerate(
+        [(TaskStatus.COMPLETED, 60)] * 250
+        + [(TaskStatus.FAILED, 60), (TaskStatus.FAILED, 86400)]
+        + [(TaskStatus.FAILED, 86401), (TaskStatus.COMPLETED, 86401)]
+        + [(TaskStatus.FAILED, -1)]
+        + [
+            (status, 60)
+            for status in TaskStatus
+            if status not in (TaskStatus.COMPLETED, TaskStatus.FAILED)
+        ]
+    ):
+        await store.create(
+            TaskRecord(
+                task_id=f"attempt-{index}",
+                task_type="session_commit",
+                status=status,
+                created_at=now - 172800,
+                updated_at=now - age,
+                resource_id="same-session",
+                **owner,
+            )
+        )
+    for task_id, extra in [
+        ("internal", {"meta": {"internal": True}}),
+        ("different-type", {"task_type": "add_resource"}),
+        ("different-user", _owner_kwargs("acme", "bob")),
+        ("different-account", _owner_kwargs("other", "alice")),
+    ]:
+        await store.create(
+            TaskRecord(
+                **{
+                    "task_id": task_id,
+                    "task_type": "session_commit",
+                    "status": TaskStatus.FAILED,
+                    "updated_at": now - 60,
+                    **owner,
+                    **extra,
+                }
+            )
+        )
+    app = FastAPI()
+    app.include_router(task_routes.router)
+    app.dependency_overrides[task_routes.get_request_context] = lambda: ctx
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # The summary loads persisted records even with an initially empty cache.
+        for _ in range(2):
+            response = await client.get("/api/v1/tasks/summary?task_type=session_commit")
+            assert response.status_code == 200
+            assert response.json()["result"] == {
+                "window_seconds": 86400,
+                "since": now - 86400,
+                "until": now,
+                "completed": 250,
+                "failed": 2,
+                "total": 252,
+                "success_rate": pytest.approx(250 / 252 * 100),
+            }
+        # The existing list limit and status filter remain independent.
+        listing = await client.get("/api/v1/tasks?limit=200&status=completed")
+        assert len(listing.json()["result"]) == 200
+        page_query = {
+            "pagination": "cursor",
+            "limit": 200,
+            "status": "completed",
+            "task_type": "session_commit",
+        }
+        page = (await client.get("/api/v1/tasks", params=page_query)).json()["result"]
+        assert len(page["items"]) == 200
+        assert page["has_more"] is True
+        next_page = (
+            await client.get("/api/v1/tasks", params={**page_query, "cursor": page["next_cursor"]})
+        ).json()["result"]
+        assert len(next_page["items"]) == 50
+        assert next_page["has_more"] is False
+        assert next_page["next_cursor"] is None
+        assert len({task["task_id"] for task in page["items"] + next_page["items"]}) == 250
+        unfiltered = await client.get("/api/v1/tasks/summary")
+        assert unfiltered.json()["result"]["failed"] == 3
+        empty = await client.get("/api/v1/tasks/summary?task_type=add_skill")
+        assert empty.json()["result"]["total"] == 0
+        assert empty.json()["result"]["success_rate"] is None
 
 
 async def test_feishu_response_checkpoint_survives_reload(tracker):

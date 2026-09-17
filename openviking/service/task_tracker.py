@@ -1152,7 +1152,7 @@ class TaskTracker:
         user_id: Optional[str] = None,
         include_internal: bool = True,
     ) -> List[TaskRecord]:
-        """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
+        """List snapshot copies, most-recent first. ``limit=None`` returns all matches."""
         return await self._dispatcher.run(
             lambda: self._list_tasks_on_owner(
                 task_type,
