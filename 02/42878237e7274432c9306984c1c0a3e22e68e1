@@ -1,0 +1,774 @@
+agent-plugins/README.md
+  h_b34c679d17e2ac 40-41,79
+agent-plugins/plugin.json
+  h_b34c679d17e2ac 4
+agent-plugins/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 21,24,26,29
+agent-plugins/servers/shared/credentials.mjs
+  h_b34c679d17e2ac 112-142,148-152,154-179,189-190,202,205-207,209-214,218-225,227-238,240-249,252-297,300-302,305,309-316,320-325,343-344,352,356-369
+agent-plugins/servers/shared/mcp-proxy-config.mjs
+  h_b34c679d17e2ac 15-16,20-64,105,242-276
+bot/README.md
+  h_b34c679d17e2ac 414-435
+bot/README_CN.md
+  h_b34c679d17e2ac 411-432
+bot/docs/en/concepts/02-agent-capabilities.md
+  h_b34c679d17e2ac 43,161-177
+bot/docs/zh/concepts/02-agent-capabilities.md
+  h_b34c679d17e2ac 43,161-177
+bot/tests/test_cron_config.py
+  h_b34c679d17e2ac 1-122
+bot/tests/test_studio.py
+  h_b34c679d17e2ac 1-534
+bot/tests/test_studio_onboarding.py
+  h_b34c679d17e2ac 1-500
+bot/vikingbot/agent/context.py
+  h_b34c679d17e2ac 289
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 1831,2204-2207
+bot/vikingbot/agent/tools/factory.py
+  h_b34c679d17e2ac 131
+bot/vikingbot/channels/feishu.py
+  h_b34c679d17e2ac 310-315,540,544,548,552,563,668-669,672,1009,1011,1034,1070-1076,1093
+bot/vikingbot/channels/openapi.py
+  h_b34c679d17e2ac 367-371
+bot/vikingbot/cli/commands.py
+  h_b34c679d17e2ac 36,496,530-531,595-600,694-696,870
+bot/vikingbot/config/schema.py
+  h_b34c679d17e2ac 689-694,723
+bot/vikingbot/studio/__init__.py
+  h_b34c679d17e2ac 1
+bot/vikingbot/studio/onboarding.py
+  h_b34c679d17e2ac 1-175
+bot/vikingbot/studio/policy.py
+  h_b34c679d17e2ac 1-17
+bot/vikingbot/studio/providers/__init__.py
+  h_b34c679d17e2ac 1
+bot/vikingbot/studio/providers/feishu/__init__.py
+  h_b34c679d17e2ac 1
+bot/vikingbot/studio/providers/feishu/channel.py
+  h_b34c679d17e2ac 1-233
+bot/vikingbot/studio/providers/feishu/console.py
+  h_b34c679d17e2ac 1-208
+bot/vikingbot/studio/providers/feishu/onboarding.py
+  h_b34c679d17e2ac 1-126
+bot/vikingbot/studio/providers/feishu/provider.py
+  h_b34c679d17e2ac 1-145
+bot/vikingbot/studio/providers/feishu/transport.py
+  h_b34c679d17e2ac 1-76
+bot/vikingbot/studio/providers/feishu/web_session.py
+  h_b34c679d17e2ac 1-155
+bot/vikingbot/studio/providers/registry.py
+  h_b34c679d17e2ac 1-23
+bot/vikingbot/studio/router.py
+  h_b34c679d17e2ac 1-54
+bot/vikingbot/studio/service.py
+  h_b34c679d17e2ac 1-152
+bot/vikingbot/studio/store.py
+  h_b34c679d17e2ac 1-152
+crates/ragfs/src/lock/manager.rs
+  h_b34c679d17e2ac 871,976,990,1045,1047,1082,1084,1178-1188,1190-1194,2200-2201,2203,2214-2215,2217,2221-2222,2228-2229,2231,2242-2243,2245,2273-2279,2283-2287,2314-2318,2897,2900,2927,2936-2981
+deploy/helm/README.md
+  h_b34c679d17e2ac 36-38
+deploy/helm/openviking/values.yaml
+  h_b34c679d17e2ac 6-7
+docker-compose.yml
+  h_b34c679d17e2ac 20-21
+docs/design/web-studio-compile-interaction-design.md
+  h_b34c679d17e2ac 1-521
+docs/design/web-studio-vikingbot.md
+  h_b34c679d17e2ac 1-304
+docs/en/agent-integrations/04-codex.md
+  h_b34c679d17e2ac 60,76,106
+docs/en/agent-integrations/09-log-ingestion.md
+  h_b34c679d17e2ac 3,27,49
+docs/en/agent-integrations/11-pi.md
+  h_b34c679d17e2ac 15
+docs/en/agent-integrations/12-cursor.md
+  h_b34c679d17e2ac 34,43
+docs/en/agent-integrations/13-trae.md
+  h_b34c679d17e2ac 46
+docs/en/agent-integrations/15-agent-plugins.md
+  h_b34c679d17e2ac 38-40,46
+docs/en/agent-integrations/16-capability-reference.md
+  h_b34c679d17e2ac 55-56,59,61,139,168,205-206,208,210-211,522-523,531-533,541,548-549,556,565,574,582,584,591
+docs/en/agent-integrations/17-dsh.md
+  h_b34c679d17e2ac 66
+docs/en/agent-integrations/18-plugin-development.md
+  h_b34c679d17e2ac 115,167,195,279,400
+docs/en/api/01-overview.md
+  h_b34c679d17e2ac 471-472,536-537
+docs/en/api/08-admin.md
+  h_b34c679d17e2ac 979,989-996
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 128-175
+docs/en/concepts/15-acl.md
+  h_b34c679d17e2ac 96
+docs/en/getting-started/02-quickstart.md
+  h_b34c679d17e2ac 59
+docs/en/getting-started/04-setup-for-agent.md
+  h_b34c679d17e2ac 231,240
+docs/en/guides/01-configuration.md
+  h_b34c679d17e2ac 121,128-129
+docs/en/guides/03-deployment.md
+  h_b34c679d17e2ac 198-199
+docs/en/guides/06-mcp-integration.md
+  h_b34c679d17e2ac 200
+docs/images/agents/en/workbuddy.md
+  h_b34c679d17e2ac 4,7,10,28,31,37
+docs/images/agents/zh/workbuddy.md
+  h_b34c679d17e2ac 4,7,10,28,31,37
+docs/scripts/check-api-reference.mjs
+  h_b34c679d17e2ac 78-85
+docs/zh/agent-integrations/04-codex.md
+  h_b34c679d17e2ac 59,75,105
+docs/zh/agent-integrations/09-log-ingestion.md
+  h_b34c679d17e2ac 3,27,49
+docs/zh/agent-integrations/11-pi.md
+  h_b34c679d17e2ac 15
+docs/zh/agent-integrations/12-cursor.md
+  h_b34c679d17e2ac 43
+docs/zh/agent-integrations/13-trae.md
+  h_b34c679d17e2ac 46
+docs/zh/agent-integrations/15-agent-plugins.md
+  h_b34c679d17e2ac 38-40,46
+docs/zh/agent-integrations/16-capability-reference.md
+  h_b34c679d17e2ac 55-56,59,61,140,170,207-208,210,212-213,503-504,512-514,522,529-530,538,547,556,564,566,573
+docs/zh/agent-integrations/17-dsh.md
+  h_b34c679d17e2ac 66
+docs/zh/agent-integrations/18-plugin-development.md
+  h_b34c679d17e2ac 115,167,195,279,400
+docs/zh/api/01-overview.md
+  h_b34c679d17e2ac 466-467,531-532
+docs/zh/api/08-admin.md
+  h_b34c679d17e2ac 923,933-940
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 128-175
+docs/zh/concepts/15-acl.md
+  h_b34c679d17e2ac 91
+docs/zh/getting-started/02-quickstart.md
+  h_b34c679d17e2ac 59
+docs/zh/getting-started/04-setup-for-agent.md
+  h_b34c679d17e2ac 231,240
+docs/zh/guides/01-configuration.md
+  h_b34c679d17e2ac 122,129-130
+docs/zh/guides/03-deployment.md
+  h_b34c679d17e2ac 196-197
+docs/zh/guides/06-mcp-integration.md
+  h_b34c679d17e2ac 190
+examples/agent-hook-plugin/DESIGN.md
+  h_b34c679d17e2ac 46-48
+examples/agent-hook-plugin/README.md
+  h_b34c679d17e2ac 17,32
+examples/agent-hook-plugin/README_CN.md
+  h_b34c679d17e2ac 17,32
+examples/agent-hook-plugin/hosts/cursor.mjs
+  h_b34c679d17e2ac 66-70
+examples/agent-hook-plugin/hosts/cursor/openviking.integration.json
+  h_b34c679d17e2ac 4
+examples/agent-hook-plugin/hosts/trae.mjs
+  h_b34c679d17e2ac 7,25
+examples/agent-hook-plugin/hosts/trae/openviking.integration.json
+  h_b34c679d17e2ac 4
+examples/agent-hook-plugin/hosts/zcode.mjs
+  h_b34c679d17e2ac 11,30-32
+examples/agent-hook-plugin/hosts/zcode/openviking.integration.json
+  h_b34c679d17e2ac 4
+examples/agent-hook-plugin/plugin.json
+  h_b34c679d17e2ac 3
+examples/agent-hook-plugin/scripts/uri-guard.mjs
+  h_b34c679d17e2ac 6
+examples/agent-hook-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 8,12,17-19,23
+examples/agent-hook-plugin/tests/cursor.test.mjs
+  h_b34c679d17e2ac 55,62-68
+examples/agent-hook-plugin/tests/trae.test.mjs
+  h_b34c679d17e2ac 54-73
+examples/agent-hook-plugin/tests/zcode.test.mjs
+  h_b34c679d17e2ac 63-70,87,92-105
+examples/claude-code-memory-plugin/.claude-plugin/plugin.json
+  h_b34c679d17e2ac 3
+examples/claude-code-memory-plugin/README.md
+  h_b34c679d17e2ac 471-472
+examples/claude-code-memory-plugin/README_CN.md
+  h_b34c679d17e2ac 421-422
+examples/claude-code-memory-plugin/hooks/hooks.json
+  h_b34c679d17e2ac 40
+examples/claude-code-memory-plugin/package.json
+  h_b34c679d17e2ac 3
+examples/claude-code-memory-plugin/scripts/config.mjs
+  h_b34c679d17e2ac 108,111,131-132
+examples/claude-code-memory-plugin/scripts/marketplace.test.mjs
+  h_b34c679d17e2ac 82,86-87
+examples/claude-code-memory-plugin/scripts/shared/agent-hook-runtime.mjs
+  h_b34c679d17e2ac 47,51-52
+examples/claude-code-memory-plugin/scripts/shared/credentials.mjs
+  h_b34c679d17e2ac 112-142,148-152,154-179,189-190,202,205-207,209-214,218-225,227-238,240-249,252-297,300-302,305,309-316,320-325,343-344,352,356-369
+examples/claude-code-memory-plugin/scripts/shared/doctor-core.mjs
+  h_b34c679d17e2ac 1146,1160-1161,1163,1167-1170,1185-1186,1191-1195
+examples/claude-code-memory-plugin/scripts/shared/mcp-proxy-config.mjs
+  h_b34c679d17e2ac 15-16,20-64,105,242-276
+examples/claude-code-memory-plugin/scripts/shared/plugin-config.mjs
+  h_b34c679d17e2ac 37,178-187,215-216,222-223,234-235,238-239,241-249,276
+examples/claude-code-memory-plugin/scripts/shared/uri-guard.mjs
+  h_b34c679d17e2ac 83-93,112-119,134-144,148-149,153-154,157,161-181,193-217
+examples/claude-code-memory-plugin/scripts/uri-guard.mjs
+  h_b34c679d17e2ac 3,5
+examples/claude-code-memory-plugin/scripts/uri-guard.test.mjs
+  h_b34c679d17e2ac 16-39,41-60
+examples/claude-code-memory-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 6-7,16,19-20
+examples/claude-code-memory-plugin/skills/ov-memory-doctor/reference.md
+  h_b34c679d17e2ac 38,42-43
+examples/cloud/GUIDE.md
+  h_b34c679d17e2ac 254
+examples/codex-memory-plugin/.codex-plugin/plugin.json
+  h_b34c679d17e2ac 3
+examples/codex-memory-plugin/.mcp.json
+  h_b34c679d17e2ac 14,20
+examples/codex-memory-plugin/README.md
+  h_b34c679d17e2ac 14,113,116,336-343,380,440-442,460
+examples/codex-memory-plugin/hooks/hooks.json
+  h_b34c679d17e2ac 27-38
+examples/codex-memory-plugin/scripts/config.mjs
+  h_b34c679d17e2ac 20,23-25,64,67
+examples/codex-memory-plugin/scripts/config.test.mjs
+  h_b34c679d17e2ac 25,28-33
+examples/codex-memory-plugin/scripts/marketplace.test.mjs
+  h_b34c679d17e2ac 19-20,130-131,163,182-193,208-217,222
+examples/codex-memory-plugin/scripts/ov-memory-doctor.mjs
+  h_b34c679d17e2ac 55-56,278,312-314
+examples/codex-memory-plugin/scripts/shared/agent-hook-runtime.mjs
+  h_b34c679d17e2ac 47,51-52
+examples/codex-memory-plugin/scripts/shared/credentials.mjs
+  h_b34c679d17e2ac 112-142,148-152,154-179,189-190,202,205-207,209-214,218-225,227-238,240-249,252-297,300-302,305,309-316,320-325,343-344,352,356-369
+examples/codex-memory-plugin/scripts/shared/doctor-core.mjs
+  h_b34c679d17e2ac 1146,1160-1161,1163,1167-1170,1185-1186,1191-1195
+examples/codex-memory-plugin/scripts/shared/mcp-proxy-config.mjs
+  h_b34c679d17e2ac 15-16,20-64,105,242-276
+examples/codex-memory-plugin/scripts/shared/plugin-config.mjs
+  h_b34c679d17e2ac 37,178-187,215-216,222-223,234-235,238-239,241-249,276
+examples/codex-memory-plugin/scripts/shared/uri-guard.mjs
+  h_b34c679d17e2ac 1-250
+examples/codex-memory-plugin/scripts/uri-guard.mjs
+  h_b34c679d17e2ac 1-7
+examples/codex-memory-plugin/scripts/uri-guard.test.mjs
+  h_b34c679d17e2ac 1-57
+examples/codex-memory-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 6-8,15,18-19
+examples/codex-memory-plugin/skills/ov-memory-doctor/reference.md
+  h_b34c679d17e2ac 17,28,40,43-44,55-58
+examples/dsh-memory-plugin/README.md
+  h_b34c679d17e2ac 127-133,206-207
+examples/dsh-memory-plugin/capture.mjs
+  h_b34c679d17e2ac 1,10-22
+examples/dsh-memory-plugin/config.mjs
+  h_b34c679d17e2ac 4,20-22,40-41
+examples/dsh-memory-plugin/config.test.mjs
+  h_b34c679d17e2ac 53-61
+examples/dsh-memory-plugin/index.mjs
+  h_b34c679d17e2ac 7,74
+examples/dsh-memory-plugin/mcp-env.mjs
+  h_b34c679d17e2ac 1-33
+examples/dsh-memory-plugin/mcp.mjs
+  h_b34c679d17e2ac 3,5
+examples/dsh-memory-plugin/mcp.test.mjs
+  h_b34c679d17e2ac 3-5,11-30,58-113,115,117,119-139,142-159,161-165,167-180
+examples/dsh-memory-plugin/package-lock.json
+  h_b34c679d17e2ac 3,9
+examples/dsh-memory-plugin/package.json
+  h_b34c679d17e2ac 3,17
+examples/dsh-memory-plugin/runtime.mjs
+  h_b34c679d17e2ac 16,125,144
+examples/dsh-memory-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 7-10,17,22-23,26-28,30
+examples/dsh-memory-plugin/uri-guard.mjs
+  h_b34c679d17e2ac 1-2,4,47-62
+examples/dsh-memory-plugin/uri-guard.test.mjs
+  h_b34c679d17e2ac 3,5,107-189
+examples/memory-plugin-shared/credentials.test.mjs
+  h_b34c679d17e2ac 6-7,9-28,31-32,34-46,52,54,58-69,75,77,80-98,100-105,112,115-121,123-144,147-148,150-154,158-167,170-171,175,179-180,182,185-215,217-232,234,236,238-322
+examples/memory-plugin-shared/doctor-core.test.mjs
+  h_b34c679d17e2ac 288-289,395-403
+examples/memory-plugin-shared/install-agent-hooks.test.mjs
+  h_b34c679d17e2ac 268,272-278,311,366,436-437
+examples/memory-plugin-shared/lib/agent-hook-runtime.mjs
+  h_b34c679d17e2ac 46,50-51
+examples/memory-plugin-shared/lib/credentials.d.mts
+  h_b34c679d17e2ac 5,7-10,14-30,37-38,40-52,76-77
+examples/memory-plugin-shared/lib/credentials.mjs
+  h_b34c679d17e2ac 111-141,147-151,153-178,188-189,201,204-206,208-213,217-224,226-237,239-248,251-296,299-301,304,308-315,319-324,342-343,351,355-368
+examples/memory-plugin-shared/lib/doctor-core.mjs
+  h_b34c679d17e2ac 1145,1159-1160,1162,1166-1169,1184-1185,1190-1194
+examples/memory-plugin-shared/lib/install/host-json-config.mjs
+  h_b34c679d17e2ac 82-87,164-168
+examples/memory-plugin-shared/lib/mcp-proxy-config.mjs
+  h_b34c679d17e2ac 14-15,19-63,104,241-275
+examples/memory-plugin-shared/lib/plugin-config.d.mts
+  h_b34c679d17e2ac 41
+examples/memory-plugin-shared/lib/plugin-config.mjs
+  h_b34c679d17e2ac 36,177-186,214-215,221-222,233-234,237-238,240-248,275
+examples/memory-plugin-shared/lib/uri-guard.mjs
+  h_b34c679d17e2ac 82-92,111-118,133-143,147-148,152-153,156,160-180,192-216
+examples/memory-plugin-shared/mcp-hook-parity.test.mjs
+  h_b34c679d17e2ac 1-234
+examples/memory-plugin-shared/mcp-proxy-config.test.mjs
+  h_b34c679d17e2ac 3-4,7-8,13-14,18,23,126-217,224-225,228-229,234-244,328,347,364,380
+examples/memory-plugin-shared/plugin-config.test.mjs
+  h_b34c679d17e2ac 50
+examples/memory-plugin-shared/testing/support.mjs
+  h_b34c679d17e2ac 12,35-72
+examples/memory-plugin-shared/uri-guard.test.mjs
+  h_b34c679d17e2ac 5,9,12,14-15,55-56,59-81,83-84,86-99,121-125,129-154
+examples/opencode-plugin/INSTALL-ZH.md
+  h_b34c679d17e2ac 212
+examples/opencode-plugin/INSTALL.md
+  h_b34c679d17e2ac 209
+examples/opencode-plugin/README.md
+  h_b34c679d17e2ac 21,195-198
+examples/opencode-plugin/index.mjs
+  h_b34c679d17e2ac 8,31,61
+examples/opencode-plugin/lib/config.mjs
+  h_b34c679d17e2ac 26,29
+examples/opencode-plugin/lib/viking-uri-guard.mjs
+  h_b34c679d17e2ac 2,17-20,38-51
+examples/opencode-plugin/package.json
+  h_b34c679d17e2ac 3
+examples/opencode-plugin/servers/mcp-proxy.mjs
+  h_b34c679d17e2ac 6-7,15,18-21
+examples/opencode-plugin/tests/viking-uri-guard.test.mjs
+  h_b34c679d17e2ac 3,26-65
+examples/ov.conf.example
+  h_b34c679d17e2ac 188
+examples/pi-coding-agent-extension/DESIGN.md
+  h_b34c679d17e2ac 45,176,188
+examples/pi-coding-agent-extension/index.ts
+  h_b34c679d17e2ac 22,228-234
+examples/pi-coding-agent-extension/lib/uri-guard-adapter.d.mts
+  h_b34c679d17e2ac 2
+examples/pi-coding-agent-extension/lib/uri-guard-adapter.mjs
+  h_b34c679d17e2ac 1,26-32,34,38-47
+examples/pi-coding-agent-extension/package.json
+  h_b34c679d17e2ac 3
+examples/pi-coding-agent-extension/tests/uri-guard.test.mjs
+  h_b34c679d17e2ac 3,17,24,30-58
+openviking/concurrency.py
+  h_b34c679d17e2ac 1-62
+openviking/ingest/sources/__init__.py
+  h_b34c679d17e2ac 11,17-26
+openviking/ingest/sources/base.py
+  h_b34c679d17e2ac 6
+openviking/ingest/sources/mimo.py
+  h_b34c679d17e2ac 1-165
+openviking/models/embedder/openai_embedders.py
+  h_b34c679d17e2ac 9,18-21,160-164,166-169,175-179,181-184,347-351,353-358
+openviking/models/embedder/volcengine_embedders.py
+  h_b34c679d17e2ac 10,21-24,82-103,203,315,406,484,574,669
+openviking/models/network.py
+  h_b34c679d17e2ac 1-174
+openviking/models/vlm/backends/litellm_vlm.py
+  h_b34c679d17e2ac 318-323,326-327
+openviking/models/vlm/backends/openai_vlm.py
+  h_b34c679d17e2ac 12-15,96-102,121-127
+openviking/models/vlm/backends/volcengine_vlm.py
+  h_b34c679d17e2ac 13-16,120,126-132,143,149-155
+openviking/observability/http_observability_middleware.py
+  h_b34c679d17e2ac 19,22,748-749,751-752,754-757,759,761-762,766-768,778,781,783-831,833-842
+openviking/parse/directory_scan.py
+  h_b34c679d17e2ac 19,59,66
+openviking/parse/parsers/upload_utils.py
+  h_b34c679d17e2ac 73-81,106
+openviking/resource/uri_mutation_coordinator.py
+  h_b34c679d17e2ac 6-7,51-52,85-96,99,105-109
+openviking/resource/watch_manager.py
+  h_b34c679d17e2ac 16,203
+openviking/resource/watch_scheduler.py
+  h_b34c679d17e2ac 10,84,165,177,247,257,553,558,561-562,568-569,631-632
+openviking/server/api_keys/legacy.py
+  h_b34c679d17e2ac 1047-1070,1076-1078,1083-1091,1097-1101,1103-1108,1110-1116
+openviking/server/api_keys/new.py
+  h_b34c679d17e2ac 562-581
+openviking/server/app.py
+  h_b34c679d17e2ac 30,37,60,466-468,470,473-475,624
+openviking/server/bootstrap.py
+  h_b34c679d17e2ac 6,279-282
+openviking/server/mcp_endpoint.py
+  h_b34c679d17e2ac 79,277-284,367-400,1397,1407-1414,1420-1423,1429-1430,1432-1435,1444-1446
+openviking/server/profile_middleware.py
+  h_b34c679d17e2ac 14-16,112,169-170,172-173,175-178,181-215,218
+openviking/server/routers/__init__.py
+  h_b34c679d17e2ac 9,37
+openviking/server/routers/admin.py
+  h_b34c679d17e2ac 258,618-621,625-628,637,642,644,646-655,852,866
+openviking/server/routers/bot_studio.py
+  h_b34c679d17e2ac 1-252
+openviking/server/routers/compile.py
+  h_b34c679d17e2ac 5,20-23,28-36,41-63
+openviking/server/routers/search.py
+  h_b34c679d17e2ac 175-196,243-245
+openviking/server/routers/tasks.py
+  h_b34c679d17e2ac 38-39,96-99,104-141
+openviking/server/timing_middleware.py
+  h_b34c679d17e2ac 1-41
+openviking/service/compile_service.py
+  h_b34c679d17e2ac 120,134-136,209-211,306-317,324,326-333,346,420-421,423-432,434,438-452,455,458,460,466
+openviking/service/external_task_service.py
+  h_b34c679d17e2ac 8-9,16-20,22,95-96,100-101,157-189,193-199,205-213,219-225,261-301,335,638-655
+openviking/service/resource_memory_link_service.py
+  h_b34c679d17e2ac 16,130-131
+openviking/service/task_pagination.py
+  h_b34c679d17e2ac 1-75
+openviking/service/task_store.py
+  h_b34c679d17e2ac 7,9,15,38-49,116-172
+openviking/service/task_tracker.py
+  h_b34c679d17e2ac 96-98,107,184-185,235-238,287,305,385,521-528,594,637,646,684,771-778,868-881,914-917,922-995
+openviking/service/task_tracker_concurrency.py
+  h_b34c679d17e2ac 15,34,36-61,185-186,193-194,198-199,208-213,217-218,230,239,243-244,248-253,263-266
+openviking/session/memory/extract_loop.py
+  h_b34c679d17e2ac 33,873
+openviking/session/memory/extraction_output_protocol/python_protocol.py
+  h_b34c679d17e2ac 24,1101,1103,1171-1176
+openviking/session/memory/memory_updater.py
+  h_b34c679d17e2ac 625-627
+openviking/session/memory/merge_op/immutable.py
+  h_b34c679d17e2ac 26-34,37
+openviking/session/skill/skill_operation_updater.py
+  h_b34c679d17e2ac 64-65,78-80,97-98,114
+openviking/session/train/components/skill_policy_updater.py
+  h_b34c679d17e2ac 92-94
+openviking/storage/queuefs/add_resource_processor.py
+  h_b34c679d17e2ac 340-347,366
+openviking/storage/queuefs/external_task_processor.py
+  h_b34c679d17e2ac 45,68
+openviking/storage/queuefs/queue_manager.py
+  h_b34c679d17e2ac 270-278
+openviking/storage/queuefs/session_commit_processor.py
+  h_b34c679d17e2ac 47-48,113,124
+openviking/storage/vectordb_adapters/base.py
+  h_b34c679d17e2ac 38,40,43,106-110,112-114,289-293
+openviking/storage/vectordb_adapters/vikingdb_private_adapter.py
+  h_b34c679d17e2ac 7,13-17,24,127-140
+openviking/storage/vectordb_adapters/volcengine_adapter.py
+  h_b34c679d17e2ac 18-22,29,189
+openviking/storage/viking_fs/_semantic.py
+  h_b34c679d17e2ac 530-531,539,541-543,550,568,587
+openviking/storage/viking_vector_index_backend.py
+  h_b34c679d17e2ac 204,1760-1761,1822,1824-1825,1919-1938
+openviking/utils/media_processor.py
+  h_b34c679d17e2ac 22,246,251,266
+openviking/utils/skill_processor.py
+  h_b34c679d17e2ac 121,158,170,218,227,538,549,559,578-580,582
+openviking_cli/setup_wizard.py
+  h_b34c679d17e2ac 37
+pyproject.toml
+  h_b34c679d17e2ac 63-74,87-88,216
+tests/api_test/filesystem/test_fs_cp.py
+  h_b34c679d17e2ac 15,32-47
+tests/api_test/scenarios/resources_retrieval/test_build_error_handling.py
+  h_b34c679d17e2ac 54,57
+tests/api_test/scenarios/resources_retrieval_slow/test_build_error_handling_slow.py
+  h_b34c679d17e2ac 298,302,314,319
+tests/cli/test_setup_wizard.py
+  h_b34c679d17e2ac 1423,1430-1432,1439-1445
+tests/ingest/test_parsers.py
+  h_b34c679d17e2ac 11,176-177,431-542
+tests/metrics/integration/test_account_dimension.py
+  h_b34c679d17e2ac 30,32,42,45-46,116
+tests/metrics/integration/test_http_metrics.py
+  h_b34c679d17e2ac 25,29,39,42-43,160,201,228,256,284
+tests/parse/test_directory_scan.py
+  h_b34c679d17e2ac 110-111,116-117
+tests/parse/test_empty_source_rejection.py
+  h_b34c679d17e2ac 27-38,40,50-54
+tests/resource/test_watch_manager.py
+  h_b34c679d17e2ac 884-886,900,903,909,912-922,924-926
+tests/resource/test_watch_scheduler.py
+  h_b34c679d17e2ac 2,282-287,289-293
+tests/server/test_admin_api.py
+  h_b34c679d17e2ac 2764-2853
+tests/server/test_bot_proxy_auth.py
+  h_b34c679d17e2ac 234-235,271,300,329,417,444,453,459,471-473,496-498,500,539,566,602,648
+tests/server/test_bot_studio.py
+  h_b34c679d17e2ac 1-372
+tests/server/test_compile_studio.py
+  h_b34c679d17e2ac 1-300
+tests/server/test_mcp_grep_failures.py
+  h_b34c679d17e2ac 1-119
+tests/server/test_mcp_search_modes.py
+  h_b34c679d17e2ac 1-177
+tests/server/test_profile_middleware.py
+  h_b34c679d17e2ac 4-6,10-11,13-14,49-59,63,69-72,114,122-128,134,139-140,144-145,148-159,162-171,175-179,182-244
+tests/server/test_request_id.py
+  h_b34c679d17e2ac 9,11,16,22,40,62,64-67,70-72,76-88
+tests/service/test_resource_memory_link_service.py
+  h_b34c679d17e2ac 5,7,259-272,278-284,286-307,309-310,313-315
+tests/service/test_task_queue_middleware.py
+  h_b34c679d17e2ac 7,429-432,442,448,468,475,478
+tests/session/memory/test_memory_updater.py
+  h_b34c679d17e2ac 7,13,164-251
+tests/session/train/test_train_components.py
+  h_b34c679d17e2ac 1228-1288
+tests/storage/test_transfer_merge_binding.py
+  h_b34c679d17e2ac 77,79-166,168,170-176,178-182,184-191,200-201,204-205,207-209,212-214,302-303,378-382,425,434
+tests/storage/test_vector_transfer.py
+  h_b34c679d17e2ac 414,419,453,496,521-523,528,546,549-550,552,593-594,622,625-626,633,670,672,724,744-745,1137-1138,1140-1141,1145,1150-1157
+tests/storage/test_volcengine_clients.py
+  h_b34c679d17e2ac 1,11-15,669-746
+tests/telemetry/test_http_observability_middleware.py
+  h_b34c679d17e2ac 30,33,63-64,96
+tests/test_task_tracker_concurrency.py
+  h_b34c679d17e2ac 5,7,430-431,437-439,445-474,482-483,493-494,496-499,501-502,541-551,1018,1023,1038-1039,1046,1062,1066
+tests/test_upload_utils.py
+  h_b34c679d17e2ac 311-312,315-316
+tests/unit/test_codex_vlm.py
+  h_b34c679d17e2ac 143
+tests/unit/test_extra_headers_vlm.py
+  h_b34c679d17e2ac 11,535-538,552-553,568-601
+tests/unit/test_skill_processor_windows_paths.py
+  h_b34c679d17e2ac 91,122
+uv.lock
+  h_b34c679d17e2ac 3602,3681-3692
+web-studio/README.md
+  h_b34c679d17e2ac 345
+web-studio/README_CN.md
+  h_b34c679d17e2ac 344
+web-studio/package-lock.json
+  h_b34c679d17e2ac 53,12407-12415
+web-studio/package.json
+  h_b34c679d17e2ac 63
+web-studio/src/components/app-shell.tsx
+  h_b34c679d17e2ac 17,24,96,102-108,123-130,200,526,528,531,536,549,572-573,583
+web-studio/src/components/current-user-menu.tsx
+  h_b34c679d17e2ac 111,113,117
+web-studio/src/components/sessions/delete-conversation.test.tsx
+  h_b34c679d17e2ac 1-62
+web-studio/src/components/sessions/delete-conversation.tsx
+  h_b34c679d17e2ac 1-93
+web-studio/src/components/ui/dialog.tsx
+  h_b34c679d17e2ac 1,51,77
+web-studio/src/components/ui/pagination.tsx
+  h_b34c679d17e2ac 1,9,13,69,72,75,81,88,91,94,99,109,122
+web-studio/src/components/ui/sheet.tsx
+  h_b34c679d17e2ac 1,50,77
+web-studio/src/components/ui/sidebar.tsx
+  h_b34c679d17e2ac 1,188,223-224,283,300,306,313,316
+web-studio/src/components/ui/spinner.tsx
+  h_b34c679d17e2ac 1,6,8
+web-studio/src/i18n/locales/en.ts
+  h_b34c679d17e2ac 1-2,9-10
+web-studio/src/i18n/locales/en/activity.ts
+  h_b34c679d17e2ac 189
+web-studio/src/i18n/locales/en/compile.ts
+  h_b34c679d17e2ac 1-172
+web-studio/src/i18n/locales/en/resources.ts
+  h_b34c679d17e2ac 136-139,422-427
+web-studio/src/i18n/locales/en/vikingbot.ts
+  h_b34c679d17e2ac 1-234
+web-studio/src/i18n/locales/en/workspace.ts
+  h_b34c679d17e2ac 33,212,391-418,446-454,492-514,541,688-700,927-939
+web-studio/src/i18n/locales/zh-CN.ts
+  h_b34c679d17e2ac 1-2,9-10
+web-studio/src/i18n/locales/zh-CN/activity.ts
+  h_b34c679d17e2ac 181
+web-studio/src/i18n/locales/zh-CN/compile.ts
+  h_b34c679d17e2ac 1-159
+web-studio/src/i18n/locales/zh-CN/resources.ts
+  h_b34c679d17e2ac 129-132,402-407
+web-studio/src/i18n/locales/zh-CN/vikingbot.ts
+  h_b34c679d17e2ac 1-215
+web-studio/src/i18n/locales/zh-CN/workspace.ts
+  h_b34c679d17e2ac 33,211,380-406,432-439,472-494,520,658-670,889-901
+web-studio/src/lib/admin.test.ts
+  h_b34c679d17e2ac 1-73
+web-studio/src/lib/admin.ts
+  h_b34c679d17e2ac 378-419
+web-studio/src/lib/markdown-frontmatter.test.ts
+  h_b34c679d17e2ac 1-20
+web-studio/src/lib/markdown-frontmatter.ts
+  h_b34c679d17e2ac 1-14
+web-studio/src/lib/ov-client/client.test.ts
+  h_b34c679d17e2ac 140-163
+web-studio/src/lib/sessions/api.test.ts
+  h_b34c679d17e2ac 5-9,163-207
+web-studio/src/lib/sessions/api.ts
+  h_b34c679d17e2ac 207-257
+web-studio/src/lib/sessions/use-default-conversation-titles.test.tsx
+  h_b34c679d17e2ac 1-34
+web-studio/src/lib/sessions/use-default-conversation-titles.ts
+  h_b34c679d17e2ac 1-31
+web-studio/src/lib/sessions/vikingbot-sessions.ts
+  h_b34c679d17e2ac 1-21
+web-studio/src/routeTree.gen.ts
+  h_b34c679d17e2ac 13,26,28,32,34,41-45,106-110,116-120,136-140,147-151,166,169,173,175-176,191,195,197-198,214,217,221,223-224,241,244,248,250-251,266,270,272-273,288,291,295,297-298,314,316,319-320,332-338,423-429,437-443,465-471,479-485,514-525,539,541,544-545
+web-studio/src/routes/agent-experience/$experienceUri.tsx
+  h_b34c679d17e2ac 290-291,299-300,305,307,315-328
+web-studio/src/routes/agent-experience/-components/experience-setup-guide.tsx
+  h_b34c679d17e2ac 44,48-49,54
+web-studio/src/routes/agent-experience/index.tsx
+  h_b34c679d17e2ac 281,285,391-392,418-420,433,435-436,439,442,461,463,470-471,491-504,508,512
+web-studio/src/routes/compile/-components/args-editor.tsx
+  h_b34c679d17e2ac 1-252
+web-studio/src/routes/compile/-components/compile-form.test.tsx
+  h_b34c679d17e2ac 1-143
+web-studio/src/routes/compile/-components/compile-form.tsx
+  h_b34c679d17e2ac 1-621
+web-studio/src/routes/compile/-components/context-link.test.tsx
+  h_b34c679d17e2ac 1-161
+web-studio/src/routes/compile/-components/context-link.tsx
+  h_b34c679d17e2ac 1-85
+web-studio/src/routes/compile/-components/shared.tsx
+  h_b34c679d17e2ac 1-130
+web-studio/src/routes/compile/-components/skill-picker.tsx
+  h_b34c679d17e2ac 1-119
+web-studio/src/routes/compile/-lib/api.ts
+  h_b34c679d17e2ac 1-113
+web-studio/src/routes/compile/-lib/commands.test.ts
+  h_b34c679d17e2ac 1-87
+web-studio/src/routes/compile/-lib/commands.ts
+  h_b34c679d17e2ac 1-149
+web-studio/src/routes/compile/-lib/errors.ts
+  h_b34c679d17e2ac 1-37
+web-studio/src/routes/compile/-lib/handoff.ts
+  h_b34c679d17e2ac 1-32
+web-studio/src/routes/compile/-lib/navigation.test.ts
+  h_b34c679d17e2ac 1-70
+web-studio/src/routes/compile/-lib/navigation.ts
+  h_b34c679d17e2ac 1-23
+web-studio/src/routes/compile/-lib/suggestions.ts
+  h_b34c679d17e2ac 1-23
+web-studio/src/routes/compile/-lib/terminal.test.ts
+  h_b34c679d17e2ac 1-244
+web-studio/src/routes/compile/-lib/terminal.ts
+  h_b34c679d17e2ac 1-130
+web-studio/src/routes/compile/index.tsx
+  h_b34c679d17e2ac 1-322
+web-studio/src/routes/compile/new.tsx
+  h_b34c679d17e2ac 1-20
+web-studio/src/routes/compile/tasks/$taskId.tsx
+  h_b34c679d17e2ac 1-287
+web-studio/src/routes/home/-components/context-commits-heatmap.tsx
+  h_b34c679d17e2ac 1,34-47,77,81,120,256,262,268
+web-studio/src/routes/home/-components/metric-panels.tsx
+  h_b34c679d17e2ac 2,38,97,102-103,119
+web-studio/src/routes/home/-components/panel.tsx
+  h_b34c679d17e2ac 15,50,52
+web-studio/src/routes/home/-components/token-trend-chart.tsx
+  h_b34c679d17e2ac 51,56,69,74,87,92,98
+web-studio/src/routes/home/-components/token-trend-panel.tsx
+  h_b34c679d17e2ac 43
+web-studio/src/routes/home/-constants/dashboard.ts
+  h_b34c679d17e2ac 5-7,11-14,16
+web-studio/src/routes/playground/-components/agent-panel-initialization.test.tsx
+  h_b34c679d17e2ac 12-14,105
+web-studio/src/routes/playground/-components/agent-panel-submission.test.tsx
+  h_b34c679d17e2ac 9,13-15,23-27,32-36,52,156-182
+web-studio/src/routes/playground/-components/agent-panel.tsx
+  h_b34c679d17e2ac 1,14,25-28,61,80,84-89,100,102,105,107-112,188-189,297,299,301-318,320-347
+web-studio/src/routes/playground/-components/terminal-panel.tsx
+  h_b34c679d17e2ac 1-11,237,317-321,490-496,674-688,698-707,850-853,859-864,870-916,1387,1389-1392,1529-1542,1943,1973-1986
+web-studio/src/routes/playground/-lib/types.ts
+  h_b34c679d17e2ac 18-19
+web-studio/src/routes/resources/-components/directory-picker-dialog.tsx
+  h_b34c679d17e2ac 32-33,58-59,77,102-137,207
+web-studio/src/routes/resources/-components/file-preview.tsx
+  h_b34c679d17e2ac 1-2,138,140,144,146,1364,1749,1765,1794,1796,1914,1942
+web-studio/src/routes/resources/-components/okf-metadata-panel.tsx
+  h_b34c679d17e2ac 1,139
+web-studio/src/routes/resources/-components/yaml-metadata.tsx
+  h_b34c679d17e2ac 1-28
+web-studio/src/routes/sessions/-components/thread-draft.test.tsx
+  h_b34c679d17e2ac 1-128
+web-studio/src/routes/sessions/-components/thread.tsx
+  h_b34c679d17e2ac 7-11,22-23,26-33,39-51,56,68-89,91,150-152,162,188,193
+web-studio/src/routes/tasks/-components/task-detail-sheet.tsx
+  h_b34c679d17e2ac 207-208,215,219,238-240,253,255,257-258
+web-studio/src/routes/tasks/-lib/localize-commit-result.ts
+  h_b34c679d17e2ac 1-12
+web-studio/src/routes/tasks/-lib/task-list.ts
+  h_b34c679d17e2ac 8
+web-studio/src/routes/tasks/-lib/task-pipeline.test.ts
+  h_b34c679d17e2ac 1-55
+web-studio/src/routes/tasks/-lib/task-pipeline.ts
+  h_b34c679d17e2ac 5-6,13-16,43,53,62,66,76-79,86,90,95,108,120,131-132,141,145-146,157,161-162
+web-studio/src/routes/tasks/-lib/task-time.ts
+  h_b34c679d17e2ac 33
+web-studio/src/routes/tasks/route.test.tsx
+  h_b34c679d17e2ac 6,10-16,28-29,35-40,49-51,117,213-306
+web-studio/src/routes/tasks/route.tsx
+  h_b34c679d17e2ac 3,56,67,87-88,110-113,132,138-139,153,179,187-192,222-225,234,241,253-254,263-264,294,301,331,341-344,350-354,367-378,541-543,571-574,627,635-638,644,654,660,664,668,674,682,692,701,789-793,843,845,866-873,881-886,913
+web-studio/src/routes/users/-components/memory-policy-picker.tsx
+  h_b34c679d17e2ac 164,170-221
+web-studio/src/routes/users/-components/user-memory-policy-cell.test.tsx
+  h_b34c679d17e2ac 12,45-46
+web-studio/src/routes/users/-components/user-memory-policy-cell.tsx
+  h_b34c679d17e2ac 23,103-108
+web-studio/src/routes/users/-components/user-pagination.tsx
+  h_b34c679d17e2ac 1-92
+web-studio/src/routes/users/-lib/use-user-list.test.ts
+  h_b34c679d17e2ac 1-31
+web-studio/src/routes/users/-lib/use-user-list.ts
+  h_b34c679d17e2ac 1-23
+web-studio/src/routes/users/route.tsx
+  h_b34c679d17e2ac 21-23,64,152-163,165-174,180-182,186-195,402,417,437-444,447,459,461-463,465-469,695-699
+web-studio/src/routes/vikingbot/-api.test.ts
+  h_b34c679d17e2ac 1-91
+web-studio/src/routes/vikingbot/-api.ts
+  h_b34c679d17e2ac 1-158
+web-studio/src/routes/vikingbot/-components/channels.tsx
+  h_b34c679d17e2ac 1-330
+web-studio/src/routes/vikingbot/-components/conversation-row.tsx
+  h_b34c679d17e2ac 1-59
+web-studio/src/routes/vikingbot/-components/delete-connection.tsx
+  h_b34c679d17e2ac 1-95
+web-studio/src/routes/vikingbot/-components/platform-history.tsx
+  h_b34c679d17e2ac 1-91
+web-studio/src/routes/vikingbot/-components/platform-icon.tsx
+  h_b34c679d17e2ac 1-29
+web-studio/src/routes/vikingbot/-components/runtime-user-select.tsx
+  h_b34c679d17e2ac 1-96
+web-studio/src/routes/vikingbot/-providers/feishu/api.ts
+  h_b34c679d17e2ac 1-64
+web-studio/src/routes/vikingbot/-providers/feishu/connect.test.tsx
+  h_b34c679d17e2ac 1-204
+web-studio/src/routes/vikingbot/-providers/feishu/connect.tsx
+  h_b34c679d17e2ac 1-322
+web-studio/src/routes/vikingbot/-providers/feishu/connection-credentials.tsx
+  h_b34c679d17e2ac 1-105
+web-studio/src/routes/vikingbot/-providers/feishu/feishu-setup.test.tsx
+  h_b34c679d17e2ac 1-174
+web-studio/src/routes/vikingbot/-providers/feishu/feishu-setup.tsx
+  h_b34c679d17e2ac 1-141
+web-studio/src/routes/vikingbot/-providers/feishu/group-setup.test.tsx
+  h_b34c679d17e2ac 1-41
+web-studio/src/routes/vikingbot/-providers/feishu/group-setup.tsx
+  h_b34c679d17e2ac 1-125
+web-studio/src/routes/vikingbot/-providers/feishu/reply-settings.test.tsx
+  h_b34c679d17e2ac 1-65
+web-studio/src/routes/vikingbot/-providers/feishu/reply-settings.tsx
+  h_b34c679d17e2ac 1-120
+web-studio/src/routes/vikingbot/-providers/registry.ts
+  h_b34c679d17e2ac 1-26
+web-studio/src/routes/vikingbot/-web-sessions.test.ts
+  h_b34c679d17e2ac 1-38
+web-studio/src/routes/vikingbot/index.tsx
+  h_b34c679d17e2ac 1-354
+web-studio/src/routes/vikingbot/route.tsx
+  h_b34c679d17e2ac 1-3
+web-studio/src/styles.css
+  h_b34c679d17e2ac 15-28,30-40,47-54,107-120,122-132,138-145
+web-studio/types/ov-server/api/v1/sessions.ts
+  h_b34c679d17e2ac 75-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0242878237e7274432c9306984c1c0a3e22e68e1",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
