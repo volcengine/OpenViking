@@ -43,17 +43,23 @@ it('keeps a failed selection for retry and saves against the connection revision
       <ReplySettings connection={connection} onSaved={saved} />
     </QueryClientProvider>,
   )
-  const select = screen.getByLabelText<HTMLSelectElement>(zh.replyMode)
+  fireEvent.click(screen.getByRole('button', { name: zh.replyMode }))
+  const select = screen.getByRole<HTMLSelectElement>('combobox', {
+    name: zh.replyMode,
+  })
   expect(select.value).toBe('true')
-  expect(screen.getByRole<HTMLButtonElement>('button').disabled).toBe(true)
+  expect(
+    screen.getByRole<HTMLButtonElement>('button', { name: zh.saveReplyMode })
+      .disabled,
+  ).toBe(true)
   fireEvent.change(select, { target: { value: 'false' } })
-  fireEvent.click(screen.getByRole('button'))
+  fireEvent.click(screen.getByRole('button', { name: zh.saveReplyMode }))
   await screen.findByRole('alert')
   expect(select.value).toBe('false')
   expect(saved).not.toHaveBeenCalled()
   expect(update).toHaveBeenCalledWith(connection, {
     thread_require_mention: false,
   })
-  fireEvent.click(screen.getByRole('button'))
+  fireEvent.click(screen.getByRole('button', { name: zh.saveReplyMode }))
   await waitFor(() => expect(saved).toHaveBeenCalledTimes(1))
 })

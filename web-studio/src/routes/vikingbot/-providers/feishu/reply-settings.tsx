@@ -2,6 +2,15 @@ import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '#/components/ui/dialog'
 import { updateConnectionSettings } from '../../-api'
 import type { Connection } from '../../-api'
 
@@ -51,33 +60,61 @@ export function ReplySettings({
   const { t } = useTranslation('vikingbot')
   const saved = connection.settings?.thread_require_mention !== false
   const [required, setRequired] = useState(saved)
+  const [open, setOpen] = useState(false)
   const mutation = useMutation({
     mutationFn: () =>
       updateConnectionSettings(connection, {
         thread_require_mention: required,
       }),
-    onSuccess: onSaved,
+    onSuccess: () => {
+      setOpen(false)
+      onSaved()
+    },
   })
   return (
-    <div className="space-y-3 border-t pt-4">
-      <ReplyMode
-        value={required}
-        onChange={setRequired}
-        disabled={mutation.isPending}
-      />
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={required === saved || mutation.isPending}
-        onClick={() => mutation.mutate()}
-      >
-        {t(mutation.isPending ? 'savingReplyMode' : 'saveReplyMode')}
-      </Button>
-      {mutation.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {t('operationFailed')} {mutation.error.message}
-        </p>
-      )}
-    </div>
+    <Dialog
+      open={open}
+      onOpenChange={(value) => {
+        if (mutation.isPending) return
+        setRequired(saved)
+        mutation.reset()
+        setOpen(value)
+      }}
+    >
+      <DialogTrigger render={<Button variant="ghost" />}>
+        {t('replyMode')}
+      </DialogTrigger>
+      <DialogContent showCloseButton={!mutation.isPending}>
+        <DialogHeader>
+          <DialogTitle>{t('replyMode')}</DialogTitle>
+          <DialogDescription>{connection.bot_name}</DialogDescription>
+        </DialogHeader>
+        <ReplyMode
+          value={required}
+          onChange={setRequired}
+          disabled={mutation.isPending}
+        />
+        {mutation.error && (
+          <p role="alert" className="text-sm text-destructive">
+            {t('operationFailed')} {mutation.error.message}
+          </p>
+        )}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            disabled={mutation.isPending}
+            onClick={() => setOpen(false)}
+          >
+            {t('cancelEdit')}
+          </Button>
+          <Button
+            disabled={required === saved || mutation.isPending}
+            onClick={() => mutation.mutate()}
+          >
+            {t(mutation.isPending ? 'savingReplyMode' : 'saveReplyMode')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

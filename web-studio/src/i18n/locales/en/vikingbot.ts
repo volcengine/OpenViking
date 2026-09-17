@@ -14,6 +14,9 @@ export default {
     'The operation could not be completed. Please retry. Details:',
   viewSetup: 'View configuration',
   chooseBotChannel: 'Choose a platform for your bot.',
+  searchBots: 'Search bots or runtime users',
+  botCount: '{{count}} bots',
+  noMatchingBots: 'No bots match your filters.',
   channelFilter: 'Channel',
   addBot: 'Add bot',
   botsHint: 'Manage your bots and filter by channel.',
@@ -104,6 +107,7 @@ export default {
   rotateHint:
     'Leave the application secret empty to keep it unchanged. The server refreshes the bound user credential automatically. Failed validation keeps the existing connection.',
   rotate: 'Update credentials',
+  cancelEdit: 'Cancel',
 
   saveCredentials: 'Validate and save',
   credentialsSaved: 'Credentials updated',

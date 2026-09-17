@@ -12,6 +12,9 @@ export default {
   operationFailed: '操作未完成，请重试。错误详情：',
   viewSetup: '查看配置',
   chooseBotChannel: '选择机器人接入的平台。',
+  searchBots: '搜索机器人或运行用户',
+  botCount: '{{count}} 个机器人',
+  noMatchingBots: '没有符合筛选条件的机器人',
   channelFilter: '渠道',
   addBot: '添加机器人',
   botsHint: '管理已添加的机器人，按渠道筛选。',
@@ -95,6 +98,7 @@ export default {
   rotateHint:
     '应用密钥不变时可留空。运行用户的凭证由服务端自动同步，验证失败会保留原连接。',
   rotate: '更新凭证',
+  cancelEdit: '取消',
 
   saveCredentials: '验证并保存',
   credentialsSaved: '凭证已更新',

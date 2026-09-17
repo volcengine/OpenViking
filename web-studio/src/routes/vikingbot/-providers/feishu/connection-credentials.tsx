@@ -3,6 +3,15 @@ import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '#/components/ui/dialog'
 import { rotateCredentials } from '../../-api'
 import type { Connection } from '../../-api'
 
@@ -15,6 +24,7 @@ export function ConnectionCredentials({
 }) {
   const { t } = useTranslation('vikingbot')
   const [secret, setSecret] = useState('')
+  const [open, setOpen] = useState(false)
   const mutation = useMutation({
     mutationFn: () =>
       rotateCredentials(
@@ -24,44 +34,72 @@ export function ConnectionCredentials({
       ),
     onSuccess: () => {
       setSecret('')
+      setOpen(false)
       onSaved()
     },
   })
   return (
-    <details className="border-t pt-3">
-      <summary className="cursor-pointer text-sm">{t('rotate')}</summary>
-      <div className="mt-3 max-w-lg space-y-3">
-        <p className="text-xs text-muted-foreground">{t('rotateHint')}</p>
-        <label className="block space-y-1 text-sm">
-          <span>{t('appSecret')}</span>
-          <Input
-            autoComplete="new-password"
-            type="password"
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-          />
-        </label>
-        <p className="text-sm text-muted-foreground">
-          {t('runtimeUser')}: {connection.identity_user}
-        </p>
-        <Button
-          size="sm"
-          disabled={mutation.isPending}
-          onClick={() => mutation.mutate()}
+    <Dialog
+      open={open}
+      onOpenChange={(value) => {
+        if (mutation.isPending) return
+        setSecret('')
+        mutation.reset()
+        setOpen(value)
+      }}
+    >
+      <DialogTrigger render={<Button variant="ghost" />}>
+        {t('rotate')}
+      </DialogTrigger>
+      <DialogContent showCloseButton={!mutation.isPending}>
+        <DialogHeader>
+          <DialogTitle>{t('rotate')}</DialogTitle>
+          <DialogDescription>{t('rotateHint')}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!mutation.isPending) mutation.mutate()
+          }}
         >
-          {t('saveCredentials')}
-        </Button>
-        {mutation.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {t('operationFailed')} {mutation.error.message}
+          <label className="block space-y-1 text-sm">
+            <span>{t('appSecret')}</span>
+            <Input
+              autoComplete="new-password"
+              type="password"
+              disabled={mutation.isPending}
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+            />
+          </label>
+          <p className="text-sm text-muted-foreground">
+            {t('runtimeUser')}: {connection.identity_user}
           </p>
-        )}
-        {mutation.isSuccess && (
-          <p role="status" className="text-sm">
-            {t('credentialsSaved')}
-          </p>
-        )}
-      </div>
-    </details>
+          {mutation.error && (
+            <p role="alert" className="text-sm text-destructive">
+              {t('operationFailed')} {mutation.error.message}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => {
+                setOpen(false)
+                setSecret('')
+                mutation.reset()
+              }}
+            >
+              {t('cancelEdit')}
+            </Button>
+            <Button type="submit" disabled={mutation.isPending}>
+              {t('saveCredentials')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
