@@ -142,6 +142,20 @@ test("a per-call timeout overrides the default", async () => {
   assert.ok(Date.now() - started < 5000, "the per-call timeout did not fire");
 });
 
+test("a per-call deadline may be below the configured safety floor", async () => {
+  globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener("abort", () => reject(new Error("The operation was aborted.")));
+  });
+
+  const started = Date.now();
+  const res = await createOvHttp(CFG, { defaultTimeoutMs: 600000 })(
+    "/health", {}, { timeoutMs: 25 },
+  );
+
+  assert.equal(res.ok, false);
+  assert.ok(Date.now() - started < 500, "the explicit deadline was raised to the default floor");
+});
+
 test("a budget below the floor is raised to it", async () => {
   let aborted = false;
   globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {

@@ -61,6 +61,29 @@ test("replayPending honors the per-run replay limit", async () => {
   });
 });
 
+test("replayPending honors a session deadline and passes remaining request time", async () => {
+  await withPendingDir(async () => {
+    await enqueue("addMessage", "queue-deadline", { role: "user", content: "deadline" });
+
+    const calls = [];
+    const expired = await replayPending(async (...args) => {
+      calls.push(args);
+      return { ok: true };
+    }, () => {}, { deadlineMs: Date.now() - 1 });
+    assert.deepEqual(expired, { replayed: 0, failed: 0, skipped: 0, deferred: 1 });
+    assert.equal(calls.length, 0);
+    assert.equal((await listPending()).length, 1);
+
+    const replayed = await replayPending(async (...args) => {
+      calls.push(args);
+      return { ok: true };
+    }, () => {}, { deadlineMs: Date.now() + 5000 });
+    assert.equal(replayed.replayed, 1);
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0][2].timeoutMs > 0 && calls[0][2].timeoutMs <= 5000);
+  });
+});
+
 test("claimForReplay atomically claims a file only once", async () => {
   await withPendingDir(async (dir) => {
     await enqueue("commitSession", "queue-claim", {});

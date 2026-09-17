@@ -51,6 +51,9 @@ export async function runAgentHook({ clientId, event, host }) {
     if (value) process.stdout.write(`${JSON.stringify(value)}\n`);
   };
   const normalize = (input) => (host.normalizeInput ? host.normalizeInput(input) : input);
+  const sessionStartDeadlineMs = host.sessionStartBudgetMs
+    ? Date.now() + host.sessionStartBudgetMs
+    : 0;
 
   async function sessionStart(ctx) {
     return withAgentHookLock(clientId, ctx.nativeSessionId, async () => {
@@ -63,7 +66,8 @@ export async function runAgentHook({ clientId, event, host }) {
         ...(host.profileOnPrompt ? { profileInjected: false } : {}),
       };
       await writeHookState(clientId, ctx.nativeSessionId, nextState);
-      await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
+      await replayAgentPending(ctx.fetchJSON, log, { deadlineMs: sessionStartDeadlineMs })
+        .catch((error) => logError("pending", error));
       if (host.profileOnSessionStart === false) return "";
       const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
         logError("profile", error);

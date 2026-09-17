@@ -54,4 +54,5 @@ test("Kimi hook delegates lifecycle ordering to the shared runner", () => {
 test("Kimi Interrupt stays synchronous while capture events detach", () => {
   assert.equal(kimicode.detachEvents.has("interrupt"), false);
   assert.deepEqual([...kimicode.detachEvents].sort(), ["pre-compact", "session-end", "stop"]);
+  assert.equal(kimicode.sessionStartBudgetMs, 25_000);
 });

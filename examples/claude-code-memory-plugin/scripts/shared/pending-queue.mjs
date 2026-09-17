@@ -374,10 +374,24 @@ export async function cleanStale() {
  *   a background drainer can keep retrying a transient failure without
  *   burning the session-start retry budget. Exhausted and non-retryable
  *   entries are deleted exactly as in the default mode.
+ * @param {number} [options.deadlineMs] - absolute deadline for this replay run.
+ *   Once reached, unclaimed entries remain pending and are reported as deferred.
+ *   Each request receives the remaining time as its explicit timeout.
  * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
  */
 export async function replayPending(fetchJSON, log, options = {}) {
   const consumeRetries = options.consumeRetries !== false;
+  const deadlineMs = Number.isFinite(Number(options.deadlineMs)) && Number(options.deadlineMs) > 0
+    ? Number(options.deadlineMs)
+    : 0;
+  if (deadlineMs) {
+    const baseFetchJSON = fetchJSON;
+    fetchJSON = (path, init) => baseFetchJSON(
+      path,
+      init,
+      { timeoutMs: Math.max(1, deadlineMs - Date.now()) },
+    );
+  }
   const pending = await listPending();
 
   if (pending.length === 0) {
@@ -394,6 +408,10 @@ export async function replayPending(fetchJSON, log, options = {}) {
   let processed = 0;
 
   for (const { filename, entry } of pending) {
+    if (deadlineMs && Date.now() >= deadlineMs) {
+      deferred += pending.length - processed;
+      break;
+    }
     if (processed >= replayLimit) {
       deferred++;
       continue;

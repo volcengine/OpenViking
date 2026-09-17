@@ -56,10 +56,13 @@ export function createOvHttp(cfg = {}, {
   extraHeaders,
   requireJsonBody = false,
 } = {}) {
-  // dsh and pi name this field `endpoint`; every other harness names it `baseUrl`.
+  // dsh and pi name this field endpoint; every other harness names it baseUrl.
   const baseUrl = cfg.baseUrl || cfg.endpoint || "";
   return async function fetchJSON(path, init = {}, options = {}) {
-    const timeoutMs = Math.max(MIN_TIMEOUT_MS, Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0);
+    const requestedTimeoutMs = Number(options.timeoutMs);
+    const timeoutMs = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+      ? requestedTimeoutMs
+      : Math.max(MIN_TIMEOUT_MS, Number(defaultTimeoutMs) || 0);
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {

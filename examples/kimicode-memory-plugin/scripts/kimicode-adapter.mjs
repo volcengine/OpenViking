@@ -29,6 +29,8 @@ export const kimicode = {
   // Interrupt must remain synchronous so Kimi can finish the cancellation request.
   detachEvents: new Set(["stop", "pre-compact", "session-end"]),
   profileOnSessionStart: false,
+  // Leave room in Kimi's 30-second SessionStart hook for state and cleanup.
+  sessionStartBudgetMs: 25_000,
   profileOnPrompt: true,
   plainTextEnvelope: true,
   stages: {
