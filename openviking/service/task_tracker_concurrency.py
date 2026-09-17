@@ -30,34 +30,34 @@ async def run_to_completion(
     aligned with the physical I/O lifetime.
     """
     work: asyncio.Future[_ResultT] = asyncio.ensure_future(factory())
-    caller = asyncio.current_task()
+    caller: Any = asyncio.current_task()
     cancellation: asyncio.CancelledError | None = None
-    while not work.done():
-        try:
-            await asyncio.shield(work)
-        except asyncio.CancelledError as exc:
-            if work.cancelled():
-                raise
-            cancellation = exc
-        except BaseException:
-            # A completion exception can race with delivery of caller
-            # cancellation. Honour the already-requested cancellation below.
-            caller_with_cancellation_count: Any = caller
-            if (
-                caller is None
-                or not hasattr(caller, "cancelling")
-                or caller_with_cancellation_count.cancelling() == 0
-            ):
-                raise
-            cancellation = asyncio.CancelledError()
+    try:
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError as exc:
+                if work.cancelled():
+                    raise
+                cancellation = exc
+            except BaseException:
+                # A completion exception can race with delivery of caller
+                # cancellation. Honour the already-requested cancellation below.
+                if caller is None or not hasattr(caller, "cancelling") or caller.cancelling() == 0:
+                    raise
+                cancellation = asyncio.CancelledError()
 
-    if cancellation is not None:
-        if not work.cancelled():
-            # Caller cancellation wins once it has been observed. Consume a
-            # later work failure so asyncio does not report it as unhandled.
-            work.exception()
-        raise cancellation
-    return work.result()
+        if cancellation is not None:
+            if not work.cancelled():
+                # Caller cancellation wins once it has been observed. Consume a
+                # later work failure so asyncio does not report it as unhandled.
+                work.exception()
+            raise cancellation
+        return work.result()
+    finally:
+        # Propagated exceptions retain this frame. Keeping either task here
+        # creates a traceback cycle that also retains the finished request.
+        del work, caller, cancellation
 
 
 class OwnerLoopDispatcher:

@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import gc
 import threading
+import weakref
 from copy import deepcopy
 from typing import Any
 
@@ -425,24 +427,51 @@ def test_store_io_limiter_rejects_non_positive_limit():
 
 
 @pytest.mark.asyncio
-async def test_run_to_completion_preserves_caller_cancellation_when_work_fails_later():
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_run_to_completion_releases_failed_request_and_preserves_cancellation(cancel):
     from openviking.service.task_tracker_concurrency import run_to_completion
 
     started = asyncio.Event()
     release = asyncio.Event()
+
+    class RequestPayload:
+        pass
 
     async def fail_later() -> None:
         started.set()
         await release.wait()
         raise RuntimeError("late store failure")
 
-    operation = asyncio.create_task(run_to_completion(fail_later))
-    await started.wait()
-    operation.cancel()
-    release.set()
+    async def request():
+        payload = RequestPayload()
+        try:
+            await run_to_completion(fail_later)
+        except (asyncio.CancelledError, RuntimeError) as exc:
+            assert type(exc) is (asyncio.CancelledError if cancel else RuntimeError)
+            if not cancel:
+                assert str(exc) == "late store failure"
+        else:
+            pytest.fail("The operation must propagate its failure or caller cancellation")
+        return weakref.ref(payload)
 
-    with pytest.raises(asyncio.CancelledError):
-        await operation
+    # Finished requests must be released without waiting for cyclic GC.
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        operation = asyncio.create_task(request())
+        await started.wait()
+        if cancel:
+            operation.cancel()
+        await asyncio.sleep(0)
+        assert not operation.done()
+        release.set()
+        payload_ref = await operation
+        await asyncio.sleep(0)
+        assert payload_ref() is None
+    finally:
+        release.set()
+        if gc_was_enabled:
+            gc.enable()
 
 
 @pytest.mark.asyncio
