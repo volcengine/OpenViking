@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Content endpoints for OpenViking HTTP Server."""
 
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
@@ -76,13 +76,29 @@ class BatchWriteRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
+# Bounds for caller-supplied search tags. Every tag becomes its own `must`
+# clause in build_search_tags_filter() and the whole list is stored on the
+# record, so an unbounded list turns one authenticated request into an
+# arbitrarily large filter and an arbitrarily large stored metadata field.
+#
+# Enforced on the request models rather than inside normalize_search_tags():
+# Experience lineage builds one tag per read Experience with the percent-escaped
+# URI as the key (session/memory/experience_lineage.py), so a cap in the shared
+# normalizer would silently drop data no caller ever supplied.
+MAX_SEARCH_TAGS = 64
+MAX_SEARCH_TAG_LENGTH = 1024
+
+SearchTag = Annotated[str, Field(max_length=MAX_SEARCH_TAG_LENGTH)]
+SearchTagList = Annotated[list[SearchTag], Field(max_length=MAX_SEARCH_TAGS)]
+
+
 class SetTagsRequest(BaseModel):
     """Request to set explicit k=v retrieval tags metadata for a file or directory."""
 
     model_config = ConfigDict(extra="forbid")
 
     uri: str
-    tags: list[str]
+    tags: SearchTagList
     mode: str = "replace"
     recursive: bool = False
     telemetry: TelemetryRequest = False
@@ -96,7 +112,7 @@ class ReindexRequest(BaseModel):
     wait: bool = True
     dry_run: bool = False
     recursive: bool = True
-    tags: list[str] | None = None
+    tags: SearchTagList | None = None
     tag_mode: str = "replace"
 
 
