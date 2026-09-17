@@ -28,6 +28,7 @@ from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
+from openviking.utils.git_auth import GIT_AUTH_FAILED
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -318,19 +319,19 @@ class WatchScheduler:
 
         cancelled = False
         should_deactivate = False
-        deactivation_reason = ""
         execution_task_id = None
         execution_status = None
         execution_error = None
+        execution_code = None
 
         try:
             auth_state = getattr(task, "auth_state", None)
             connector_watch = ConnectorDelegate.is_watch_auth_state(auth_state)
             if not connector_watch and not self._check_resource_exists(task.path):
                 should_deactivate = True
-                deactivation_reason = f"Resource path does not exist: {task.path}"
+                execution_error = f"Resource path does not exist: {task.path}"
                 logger.warning(
-                    f"[WatchScheduler] Task {task.task_id}: {deactivation_reason}. "
+                    f"[WatchScheduler] Task {task.task_id}: {execution_error}. "
                     "Deactivating task."
                 )
             else:
@@ -358,9 +359,9 @@ class WatchScheduler:
                     target_exists = await self._check_target_uri_exists(task.to_uri, ctx)
                     if target_exists is False:
                         should_deactivate = True
-                        deactivation_reason = f"Watched target URI does not exist: {task.to_uri}"
+                        execution_error = f"Watched target URI does not exist: {task.to_uri}"
                         logger.warning(
-                            f"[WatchScheduler] Task {task.task_id}: {deactivation_reason}. "
+                            f"[WatchScheduler] Task {task.task_id}: {execution_error}. "
                             "Deactivating task."
                         )
 
@@ -375,7 +376,7 @@ class WatchScheduler:
                         except FeishuTokenRefreshError as e:
                             if e.permanent:
                                 should_deactivate = True
-                                deactivation_reason = str(e)
+                                execution_error = str(e)
                                 logger.error(
                                     f"[WatchScheduler] Task {task.task_id} permanent Feishu "
                                     f"token refresh failure: {e}. Deactivating task."
@@ -422,6 +423,7 @@ class WatchScheduler:
                         **processor_kwargs,
                     )
 
+                    execution_code = result.get("code")
                     execution_task_id = result.get("task_id")
                     result_status = str(result.get("status") or "").lower()
                     if execution_task_id and result_status not in {
@@ -460,6 +462,9 @@ class WatchScheduler:
                         else:
                             result_status = ingestion_task.status.value
                             execution_error = ingestion_task.error
+                            execution_code = (getattr(ingestion_task, "result", None) or {}).get(
+                                "code"
+                            )
 
                     if result_status in {"failed", "error"}:
                         execution_status = "failed"
@@ -493,15 +498,15 @@ class WatchScheduler:
             raise
         except FileNotFoundError as e:
             should_deactivate = True
-            deactivation_reason = f"Resource not found: {e}"
+            execution_error = f"Resource not found: {e}"
             execution_status = "failed"
-            execution_error = deactivation_reason
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} resource not found: {e}. Deactivating task."
             )
         except Exception as e:
             execution_status = "failed"
             execution_error = str(e) or type(e).__name__
+            execution_code = getattr(e, "code", None)
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} execution failed, "
                 f"error_type={type(e).__name__}"
@@ -510,9 +515,10 @@ class WatchScheduler:
         finally:
             try:
                 if not cancelled:
+                    if execution_status == "failed" and execution_code == GIT_AUTH_FAILED:
+                        should_deactivate = True
                     if should_deactivate:
                         execution_status = "failed"
-                        execution_error = deactivation_reason
                     await asyncio.shield(
                         self._watch_manager.record_execution(
                             task.task_id,
@@ -532,7 +538,7 @@ class WatchScheduler:
                             )
                         )
                         logger.info(
-                            f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
+                            f"[WatchScheduler] Deactivated task {task.task_id}: {execution_error}"
                         )
                     else:
                         logger.info(

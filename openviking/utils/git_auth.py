@@ -10,7 +10,33 @@ from dataclasses import dataclass, field
 from typing import Mapping
 from urllib.parse import urlparse
 
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
+
+GIT_AUTH_FAILED = "GIT_AUTH_FAILED"
+
+
+def raise_git_auth_error(stderr: bytes) -> None:
+    """Preserve explicit Git authentication failures without exposing credentials."""
+    error = stderr.decode(errors="replace").lower()
+    if any(
+        marker in error
+        for marker in (
+            "authentication failed",
+            "authentication failure",
+            "http basic: access denied",
+            "invalid username or password",
+            "invalid username or token",
+            "permission denied (publickey",
+            "permission denied (password",
+            "the requested url returned error: 401",
+            "could not read username",
+            "could not read password",
+        )
+    ):
+        raise OpenVikingError(
+            "Git authentication failed. Check your SSH keys or credentials.",
+            code=GIT_AUTH_FAILED,
+        )
 
 
 @dataclass(frozen=True)
