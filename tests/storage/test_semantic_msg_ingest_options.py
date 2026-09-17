@@ -74,3 +74,24 @@ def test_semantic_msg_round_trips_hierarchical_aggregation_policy():
 
     assert restored.use_hierarchical_aggregation is True
     assert restored.propagate_to_parent is False
+
+
+def test_semantic_msg_round_trips_retry_progress():
+    progress = {
+        "viking://resources/demo/a.txt": {
+            "version": 1,
+            "content_hash": "abc123",
+            "summary": "Summary",
+            "summary_status": "succeeded",
+            "vector_status": "succeeded",
+        }
+    }
+    msg = SemanticMsg(
+        uri="viking://resources/demo",
+        context_type="resource",
+        retry_progress=progress,
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.retry_progress == progress

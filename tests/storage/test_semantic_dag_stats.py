@@ -347,6 +347,8 @@ async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
     async def read_file(uri, ctx=None):
         if uri == f"{root_uri}/.abstract.md":
             return sidecar
+        if uri == changed:
+            return "updated file content"
         raise FileNotFoundError(uri)
 
     monkeypatch.setattr(fake_fs, "read_file", read_file, raising=False)

@@ -330,6 +330,7 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> ProcessResult:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
+        executor: Optional[SemanticDagExecutor] = None
         collector = None
         try:
             import json
@@ -497,6 +498,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 generation_trigger=msg.generation_trigger,
                                 aggregate_directory=msg.aggregate_directory,
                                 copy_source_uri=msg.copy_source_uri,
+                                retry_progress=msg.retry_progress,
                             )
                             await executor.run(run_uri)
                             self._cache_dag_stats(
@@ -536,6 +538,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     exc_info=True,
                 )
                 if msg is not None:
+                    if executor is not None:
+                        msg.retry_progress = executor.retry_progress
                     return await self._requeue_semantic_msg_after_error(msg, e)
                 return ProcessResult.failed(str(e))
 
@@ -571,6 +575,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 )
                 self._circuit_breaker.record_failure(e)
                 if msg is not None:
+                    if executor is not None:
+                        msg.retry_progress = executor.retry_progress
                     return await self._requeue_semantic_msg_after_error(msg, e)
                 return ProcessResult.failed(str(e))
 
