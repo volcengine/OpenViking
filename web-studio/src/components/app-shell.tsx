@@ -523,7 +523,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       </Sidebar>
 
       <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
-        <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-background px-4 backdrop-blur-md md:px-6">
+        <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-sidebar px-4 backdrop-blur-md md:px-6">
           <SidebarTrigger className="mr-auto shrink-0 md:hidden" />
           <div className="flex items-center gap-2">
             <div
