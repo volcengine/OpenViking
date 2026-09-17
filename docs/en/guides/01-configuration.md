@@ -118,12 +118,14 @@ Use `openviking-server init` to complete the Codex login/import step, then run `
   },
   "vlm": {
     "provider" : "openai-codex",
-    "model"    : "gpt-5.4",
+    "model"    : "gpt-5.6-terra",
     "api_base" : "https://chatgpt.com/backend-api/codex",
     "reasoning_effort": "xhigh"
   }
 }
 ```
+
+OpenAI [retired `gpt-5.4` from Codex with ChatGPT sign-in](https://learn.chatgpt.com/docs/models#deprecated-codex-models) on August 31, 2026. For an existing setup, change `vlm.model` in `ov.conf` to `gpt-5.6-terra` and restart the server; upgrading OpenViking does not rewrite saved model settings. This retirement does not affect `provider: "openai"` with an API key.
 
 </details>
 
