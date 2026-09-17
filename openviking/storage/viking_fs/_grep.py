@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.viking_fs._base import logger
+from openviking.storage.viking_fs._base import LS_ALL_NODES, logger
 from openviking_cli.utils.config.grep_config import GrepEngine
 
 
@@ -635,7 +635,13 @@ class _GrepMixin:
                 return
 
             try:
-                entries = await self.ls(normalized_current_uri, ctx=ctx)
+                # Do not inherit ls()'s 1,000-entry UI cap: that would silently
+                # skip overflow children in the encrypted/fallback grep walk.
+                entries = await self.ls(
+                    normalized_current_uri,
+                    node_limit=LS_ALL_NODES,
+                    ctx=ctx,
+                )
             except Exception:
                 return
 
