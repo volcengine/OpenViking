@@ -21,6 +21,7 @@ from openviking.session.memory.extraction_output_protocol.base import (
 from openviking.session.memory.merge_op import (
     DeleteBlock,
     FieldType,
+    ImmutableOp,
     MergeOp,
     SearchReplaceBlock,
     StrPatch,
@@ -1097,8 +1098,9 @@ class _PythonProgramCompiler:
             field_schema is not None
             and field_schema.merge_op == MergeOp.IMMUTABLE
             and owner.existing
+            and ImmutableOp.is_set(owner.fields.get(name))
         ):
-            # Immutable identity fields cannot change on an existing memory; ignore silently.
+            # Preserve established values, but allow filling a blank template field.
             return
         if handle.full_value is not _UNSET:
             owner.fields[name] = handle.full_value
@@ -1165,9 +1167,13 @@ class _PythonProgramCompiler:
                 continue
             if field_schema is None:
                 continue
-            if field_schema.merge_op == MergeOp.IMMUTABLE and owner.existing:
-                continue
             current = owner.fields.get(name)
+            if (
+                field_schema.merge_op == MergeOp.IMMUTABLE
+                and owner.existing
+                and ImmutableOp.is_set(current)
+            ):
+                continue
             if field_schema.merge_op == MergeOp.SUM:
                 value = (current or 0) + value
                 previous_delta = owner.changed_fields.get(name, 0)
