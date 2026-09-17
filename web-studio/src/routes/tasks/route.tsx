@@ -135,13 +135,8 @@ function TasksRoute() {
       // ── 1. task_type 精确匹配优先（不受 URI 前缀干扰）──────────────────────
       if (task.task_type === 'session_commit') {
         const res = await commitSession(task.resource_id)
-        const resAny = res as any
-        if (resAny?.result?.reason === 'no_messages' || resAny?.reason === 'no_messages') {
-          toast.info(
-            i18n.language.startsWith('zh')
-              ? '该会话无未提交消息，已无需重复入队'
-              : 'Session has no pending uncommitted messages',
-          )
+        if (res.status === 'skipped' || res.reason === 'no_messages') {
+          return { res, task, skippedReason: res.reason ?? 'skipped' }
         }
         return { res, task }
       }
@@ -197,7 +192,19 @@ function TasksRoute() {
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : String(error))
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      if ('skippedReason' in result && result.skippedReason) {
+        toast.info(
+          result.skippedReason === 'no_messages'
+            ? i18n.language.startsWith('zh')
+              ? '未创建新任务：该会话没有待提交消息'
+              : 'No new task created: this session has no pending messages'
+            : i18n.language.startsWith('zh')
+              ? '未创建新任务：本次会话提交已跳过'
+              : 'No new task created: this session commit was skipped',
+        )
+        return
+      }
       toast.success(
         i18n.language.startsWith('zh')
           ? '重新入队请求已发送，后端正在处理新任务！'

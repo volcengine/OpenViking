@@ -7,7 +7,13 @@ import type * as TanStackRouter from '@tanstack/react-router'
 import en from '#/i18n/locales/en/workspace'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   afterEach,
@@ -19,6 +25,8 @@ import {
   vi,
 } from 'vitest'
 
+import { toast } from 'sonner'
+import { commitSession } from '#/lib/sessions/api'
 import { Route } from './route'
 import type { TaskRecord } from './-lib/task-record'
 
@@ -38,6 +46,9 @@ vi.mock('#/lib/ov-client', () => ({
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
 vi.mock('#/lib/sessions/api', () => ({ commitSession: vi.fn() }))
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
+}))
 vi.mock('#/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test/test' }),
 }))
@@ -103,6 +114,7 @@ function expectRunningRows(count: number) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   records = runningTasks(12)
   clientMocks.getTasks.mockReset()
   // Model the API contract: filtering precedes ordering and the result limit.
@@ -217,5 +229,79 @@ describe('task status presentation', () => {
       to: '/compile/tasks/$taskId',
       params: { taskId: 'cmp_one' },
     })
+  })
+})
+
+describe('session commit re-trigger feedback', () => {
+  beforeEach(() => {
+    records = [
+      {
+        task_id: 'failed-commit',
+        task_type: 'session_commit',
+        resource_id: 'session-1',
+        status: 'failed',
+        created_at: 100,
+      },
+    ]
+    vi.mocked(commitSession).mockReset()
+  })
+
+  it.each([
+    [
+      'en',
+      'no_messages',
+      'No new task created: this session has no pending messages',
+    ],
+    ['zh-CN', 'no_messages', '未创建新任务：该会话没有待提交消息'],
+    [
+      'en',
+      'all_within_keep_window',
+      'No new task created: this session commit was skipped',
+    ],
+    ['zh-CN', 'all_within_keep_window', '未创建新任务：本次会话提交已跳过'],
+    ['en', undefined, 'No new task created: this session commit was skipped'],
+  ])(
+    'reports skipped commits without success in %s (%s)',
+    async (lng, reason, message) => {
+      vi.mocked(commitSession).mockResolvedValue({
+        status: 'skipped',
+        reason,
+        task_id: null,
+      } as Awaited<ReturnType<typeof commitSession>>)
+      const user = await renderPage(lng)
+      await user.click(
+        await screen.findByTitle(
+          lng === 'en' ? 'Re-trigger Task' : '重新发起任务',
+        ),
+      )
+      await waitFor(() => expect(toast.info).toHaveBeenCalledWith(message))
+      expect(commitSession).toHaveBeenCalledWith('session-1')
+      expect(toast.info).toHaveBeenCalledTimes(1)
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(toast.error).not.toHaveBeenCalled()
+    },
+  )
+
+  it('reports success when a new task is accepted', async () => {
+    vi.mocked(commitSession).mockResolvedValue({
+      status: 'accepted',
+      task_id: 'new-task',
+    } as Awaited<ReturnType<typeof commitSession>>)
+    const user = await renderPage()
+    await user.click(await screen.findByTitle('Re-trigger Task'))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('reports request errors without success', async () => {
+    vi.mocked(commitSession).mockRejectedValue(new Error('Commit failed'))
+    const user = await renderPage()
+    await user.click(await screen.findByTitle('Re-trigger Task'))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Commit failed'),
+    )
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
   })
 })
