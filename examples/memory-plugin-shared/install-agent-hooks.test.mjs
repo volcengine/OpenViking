@@ -509,6 +509,78 @@ test("uninstall with no installer runtime on disk removes what it can and fetche
   }
 });
 
+test("Kimi sourceless uninstall uses its persisted native-plugin runtime", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-kimi-uninstall-sourceless-"));
+  try {
+    const binDir = join(home, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const kimi = join(binDir, "kimi");
+    writeFileSync(kimi, "#!/bin/sh\nexit 0\n");
+    chmodSync(kimi, 0o755);
+    const env = { PATH: `${binDir}:${process.env.PATH}` };
+    const installed = runInstaller(home, [
+      "--harness", "kimicode",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:1933",
+      "--api-key", "",
+      "--yes",
+    ], env);
+    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
+    assert.ok(existsSync(join(home, ".kimi-code", "plugins", "managed", "openviking-memory")));
+    assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "kimicode", "lib", "install", "kimicode-plugin.mjs")));
+
+    const detached = join(home, "install.sh");
+    cpSync(installer, detached);
+    rmSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared"), {
+      recursive: true,
+      force: true,
+    });
+    const result = runInstaller(home, ["--harness", "kimicode", "--uninstall", "--lang", "en", "--yes"], env, detached);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.equal(result.status, 0, output);
+    assert.doesNotMatch(output, /Cloning|Refreshing checkout/u, output);
+    assert.equal(existsSync(join(home, ".kimi-code", "plugins", "managed", "openviking-memory")), false);
+    const registry = JSON.parse(readFileSync(join(home, ".kimi-code", "plugins", "installed.json"), "utf8"));
+    assert.equal(registry.plugins.some((plugin) => plugin.id === "openviking-memory"), false);
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "kimicode")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Kimi uninstall fails loudly when its persisted runtime is missing", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-kimi-uninstall-missing-runtime-"));
+  try {
+    const binDir = join(home, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const kimi = join(binDir, "kimi");
+    writeFileSync(kimi, "#!/bin/sh\nexit 0\n");
+    chmodSync(kimi, 0o755);
+    const env = { PATH: `${binDir}:${process.env.PATH}` };
+    const installed = runInstaller(home, [
+      "--harness", "kimicode",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:1933",
+      "--api-key", "",
+      "--yes",
+    ], env);
+    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
+    rmSync(join(home, ".openviking", "agent-integrations"), { recursive: true, force: true });
+
+    const detached = join(home, "install.sh");
+    cpSync(installer, detached);
+    const result = runInstaller(home, ["--harness", "kimicode", "--uninstall", "--lang", "en", "--yes"], env, detached);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.notEqual(result.status, 0, output);
+    assert.match(output, /uninstall runtime is missing|卸载运行时缺失/u, output);
+    assert.ok(existsSync(join(home, ".kimi-code", "plugins", "managed", "openviking-memory")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("malformed existing agent JSON fails without overwriting user configuration", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-agent-invalid-json-"));
   try {

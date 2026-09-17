@@ -1445,7 +1445,8 @@ install_lib_dir() {
     "${self:+$self/lib/install}" \
     "$OV_HOME/agent-integrations/memory-plugin-shared/lib/install" \
     "${MKT_DIR:+$MKT_DIR/memory-plugin-shared/lib/install}" \
-    "${SRC_ROOT:+$SRC_ROOT/examples/memory-plugin-shared/lib/install}"; do
+    "${SRC_ROOT:+$SRC_ROOT/examples/memory-plugin-shared/lib/install}" \
+    "$OV_HOME/agent-integrations/kimicode/lib/install"; do
     [ -n "$candidate" ] && [ -d "$candidate" ] || continue
     printf '%s' "$candidate"
     return 0
@@ -2116,13 +2117,48 @@ CLEAN_NODE
     info "$(t 'Removed ZCode OpenViking hooks and MCP config.' '已移除 ZCode OpenViking hooks 与 MCP 配置。')"
   fi
   if contains_harness kimicode; then
-    local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimi_bin kimicode_lib
+    local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimi_bin kimicode_lib kimicode_installed
     kimi_bin="$(command -v kimi || true)"
     kimicode_lib="$(install_lib_dir || true)"
-    if [ -n "$kimicode_lib" ]; then
-      "$NODE_BIN" "$kimicode_lib/kimicode-plugin.mjs" remove "$kimi_home" --purge >/dev/null 2>&1 || true
-    fi
-    info "$(t 'Removed the native Kimi Code plugin and cleaned up legacy config entries.' '已移除 Kimi Code 原生插件，并清理旧配置项。')"
+    kimicode_installed="$("$NODE_BIN" - "$kimi_home" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const file = path.join(process.argv[2], "plugins", "installed.json");
+if (!fs.existsSync(file)) {
+  process.stdout.write("no");
+  process.exit(0);
+}
+try {
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  const installed = Array.isArray(data.plugins)
+    && data.plugins.some((plugin) => plugin && plugin.id === "openviking-memory");
+  process.stdout.write(installed ? "yes" : "no");
+} catch {
+  process.stdout.write("invalid");
+}
+NODE
+)"
+    [ -e "$kimi_home/plugins/managed/openviking-memory" ] && kimicode_installed="yes"
+    case "$kimicode_installed" in
+      invalid)
+        err "$(t 'Kimi Code plugin registry is invalid; refusing to claim it was removed.' 'Kimi Code 插件注册表无效，拒绝伪报已卸载。')"
+        return 1
+        ;;
+      yes)
+        [ -n "$kimicode_lib" ] || {
+          err "$(t 'Kimi Code uninstall runtime is missing; refusing to claim the native plugin was removed.' 'Kimi Code 卸载运行时缺失，拒绝伪报原生插件已移除。')"
+          return 1
+        }
+        "$NODE_BIN" "$kimicode_lib/kimicode-plugin.mjs" remove "$kimi_home" --purge \
+          || { err "$(t 'Failed to remove the native Kimi Code plugin.' '移除 Kimi Code 原生插件失败。')"; return 1; }
+        rm -rf "$OV_HOME/agent-integrations/kimicode"
+        info "$(t 'Removed the native Kimi Code plugin and cleaned up legacy config entries.' '已移除 Kimi Code 原生插件，并清理旧配置项。')"
+        ;;
+      no)
+        rm -rf "$OV_HOME/agent-integrations/kimicode"
+        info "$(t 'Kimi Code native plugin is not installed.' 'Kimi Code 原生插件未安装。')"
+        ;;
+    esac
   fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
@@ -2218,7 +2254,7 @@ install_zcode() {
 
 install_kimicode() {
   heading "$(t 'Kimi Code CLI integration' 'Kimi Code CLI 集成')"
-  local plugin_dir kimi_bin kimi_home kimicode_lib
+  local plugin_dir kimi_bin kimi_home kimicode_lib persisted_dir persisted_tmp
   plugin_dir="$(plugin_dir_on_disk kimicode-memory-plugin)" || {
     err "$(t 'Kimi Code plugin sources not found.' '未找到 Kimi Code 插件源码。')"
     return 1
@@ -2230,8 +2266,18 @@ install_kimicode() {
   }
   kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
   kimicode_lib="$(require_install_lib_dir)" || return 1
+  persisted_dir="$OV_HOME/agent-integrations/kimicode/lib/install"
+  persisted_tmp="$OV_HOME/agent-integrations/kimicode.tmp.$$"
+  rm -rf "$persisted_tmp"
+  mkdir -p "$persisted_tmp"
+  cp "$kimicode_lib/kimicode-plugin.mjs" "$persisted_tmp/kimicode-plugin.mjs" \
+    || { rm -rf "$persisted_tmp"; err "$(t 'Failed to persist the Kimi Code uninstall runtime.' '持久化 Kimi Code 卸载运行时失败。')"; return 1; }
   "$NODE_BIN" "$kimicode_lib/kimicode-plugin.mjs" install "$kimi_home" "$plugin_dir" \
-    || { warn "$(t 'Failed to install the native Kimi Code plugin' '原生 Kimi Code 插件安装失败')"; return 1; }
+    || { rm -rf "$persisted_tmp"; warn "$(t 'Failed to install the native Kimi Code plugin' '原生 Kimi Code 插件安装失败')"; return 1; }
+  rm -rf "$persisted_dir"
+  mkdir -p "$(dirname "$persisted_dir")"
+  mv "$persisted_tmp" "$persisted_dir" \
+    || { err "$(t 'Failed to persist the Kimi Code uninstall runtime.' '持久化 Kimi Code 卸载运行时失败。')"; return 1; }
   info "$(t 'Kimi Code native plugin installed:' 'Kimi Code 原生插件已安装：') openviking-memory"
   info "$(t 'Run /reload or start a new session to activate its hooks and MCP.' '请运行 /reload 或新建会话以启用 hooks 和 MCP。')"
 }
