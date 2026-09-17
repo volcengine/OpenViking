@@ -140,6 +140,18 @@ def test_resolve_mcp_workspace_uri_supports_dotted_current_user_id():
     )
 
 
+def test_resolve_mcp_workspace_uri_trims_whitespace():
+    ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+    assert (
+        _resolve_mcp_workspace_uri("  viking://resources/notes.md  ", ctx)
+        == "viking://resources/notes.md"
+    )
+    assert (
+        _resolve_mcp_workspace_uri("\n viking://~/resources \t", ctx)
+        == "viking://user/test_user/resources"
+    )
+
+
 # ---------------------------------------------------------------------------
 # health tool
 # ---------------------------------------------------------------------------
@@ -944,6 +956,20 @@ async def test_list_root(service):
     assert isinstance(result, str)
 
 
+async def test_list_defaults_to_viking_root(service):
+    result_default = await list_tool()
+    result_explicit = await list_tool("viking://")
+    assert result_default == result_explicit
+
+
+async def test_list_empty_string_defaults_to_viking_root(service):
+    result_root = await list_tool("viking://")
+    result_empty = await list_tool("")
+    result_spaces = await list_tool("   ")
+    assert result_empty == result_root
+    assert result_spaces == result_root
+
+
 async def test_list_empty_dir(service):
     ctx = DEFAULT_CTX
     await service.viking_fs.mkdir(
@@ -1028,6 +1054,147 @@ async def test_store_skips_empty_message_content(service, monkeypatch):
     assert peer_id is None
     assert created_at is None
     service.sessions.commit_async.assert_awaited_once()
+
+
+async def test_store_bare_string(service, monkeypatch):
+    fake_session = AsyncMock()
+    fake_session.messages = []
+    fake_session.add_message_async = AsyncMock(
+        side_effect=lambda role, parts, **kw: fake_session.messages.append((role, parts[0].text))
+    )
+    fake_session.add_message = lambda role, parts, **kw: fake_session.messages.append(
+        (role, parts[0].text)
+    )
+    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "commit_async", AsyncMock())
+
+    result = await remember(messages="User likes TypeScript")
+    assert "stored" in result.lower()
+    assert "1 message" in result
+    assert fake_session.messages == [("user", "User likes TypeScript")]
+    service.sessions.commit_async.assert_awaited_once()
+
+
+async def test_store_content_kwarg(service, monkeypatch):
+    fake_session = AsyncMock()
+    fake_session.messages = []
+    fake_session.add_message_async = AsyncMock(
+        side_effect=lambda role, parts, **kw: fake_session.messages.append((role, parts[0].text))
+    )
+    fake_session.add_message = lambda role, parts, **kw: fake_session.messages.append(
+        (role, parts[0].text)
+    )
+    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "commit_async", AsyncMock())
+
+    result = await remember(content="User prefers light mode")
+    assert "stored" in result.lower()
+    assert "1 message" in result
+    assert fake_session.messages == [("user", "User prefers light mode")]
+    service.sessions.commit_async.assert_awaited_once()
+
+
+async def test_store_string_list(service, monkeypatch):
+    fake_session = AsyncMock()
+    fake_session.messages = []
+    fake_session.add_message_async = AsyncMock(
+        side_effect=lambda role, parts, **kw: fake_session.messages.append((role, parts[0].text))
+    )
+    fake_session.add_message = lambda role, parts, **kw: fake_session.messages.append(
+        (role, parts[0].text)
+    )
+    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "commit_async", AsyncMock())
+
+    result = await remember(messages=["Fact 1: uses Mac", "Fact 2: uses zsh"])
+    assert "stored" in result.lower()
+    assert "2 message" in result
+    assert fake_session.messages == [
+        ("user", "Fact 1: uses Mac"),
+        ("user", "Fact 2: uses zsh"),
+    ]
+    service.sessions.commit_async.assert_awaited_once()
+
+
+async def test_store_dict_with_text_and_role(service, monkeypatch):
+    fake_session = AsyncMock()
+    fake_session.messages = []
+    fake_session.add_message_async = AsyncMock(
+        side_effect=lambda role, parts, **kw: fake_session.messages.append((role, parts[0].text))
+    )
+    fake_session.add_message = lambda role, parts, **kw: fake_session.messages.append(
+        (role, parts[0].text)
+    )
+    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "commit_async", AsyncMock())
+
+    result = await remember(
+        messages=[
+            {"role": "user", "text": "What is my project?"},
+            {"role": "assistant", "body": "It is OpenViking."},
+        ]
+    )
+    assert "stored" in result.lower()
+    assert "2 message" in result
+    assert fake_session.messages == [
+        ("user", "What is my project?"),
+        ("assistant", "It is OpenViking."),
+    ]
+    service.sessions.commit_async.assert_awaited_once()
+
+
+async def test_store_dict_invalid_role_raises_invalid_argument(service, monkeypatch):
+    commit_mock = AsyncMock()
+    monkeypatch.setattr(service.sessions, "commit_async", commit_mock)
+
+    for invalid_role in ["system", "admin", "unknown"]:
+        with pytest.raises(InvalidArgumentError, match="Invalid message role"):
+            await remember(messages=[{"role": invalid_role, "content": "hello"}])
+
+    commit_mock.assert_not_awaited()
+
+
+async def test_store_via_mcp_call_tool_json_object(service, monkeypatch):
+    fake_session = AsyncMock()
+    fake_session.messages = []
+    fake_session.add_message_async = AsyncMock(
+        side_effect=lambda role, parts, **kw: fake_session.messages.append((role, parts[0].text))
+    )
+    fake_session.add_message = lambda role, parts, **kw: fake_session.messages.append(
+        (role, parts[0].text)
+    )
+    monkeypatch.setattr(service.sessions, "get", AsyncMock(return_value=fake_session))
+    monkeypatch.setattr(service.sessions, "commit_async", AsyncMock())
+
+    result = await mcp_endpoint.mcp.call_tool("remember", {"messages": '{"preference": "Rust"}'})
+    assert isinstance(result, list)
+    assert "stored 1 message" in result[0].text.lower()
+    assert fake_session.messages == [("user", '{"preference": "Rust"}')]
+    service.sessions.commit_async.assert_awaited_once()
+
+
+async def test_store_empty_input_raises_invalid_argument(service, monkeypatch):
+    commit_mock = AsyncMock()
+    monkeypatch.setattr(service.sessions, "commit_async", commit_mock)
+
+    for empty_args in [
+        {"messages": ""},
+        {"messages": []},
+        {"messages": "   "},
+        {"messages": [{"content": ""}]},
+        {"messages": [{"content": "   "}]},
+        {"messages": [{"text": ""}]},
+        {"messages": [{}]},
+        {"messages": [{"role": "user"}]},
+        {"messages": [{"role": "user", "content": "   "}]},
+        {},
+        {"content": ""},
+        {"content": "   "},
+    ]:
+        with pytest.raises(InvalidArgumentError, match="non-empty content"):
+            await remember(**empty_args)
+
+    commit_mock.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1610,6 +1777,23 @@ async def test_edit_memory_file_preserves_metadata(service):
     assert "coffee" in raw_after
     visible = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
     assert visible.strip() == "likes: coffee"
+
+
+async def test_edit_crlf_mismatch_provides_helpful_hint(service):
+    uri_crlf = "viking://resources/test_edit_crlf.md"
+    await write(uri=uri_crlf, content="line 1\r\nline 2\r\n")
+    with pytest.raises(InvalidArgumentError, match="detected CRLF/LF line ending mismatch"):
+        await edit(uri=uri_crlf, old_string="line 1\nline 2\n", new_string="line 1\nchanged\n")
+
+    uri_lf = "viking://resources/test_edit_lf.md"
+    await write(uri=uri_lf, content="line 1\nline 2\n")
+    with pytest.raises(InvalidArgumentError, match="detected CRLF/LF line ending mismatch"):
+        await edit(uri=uri_lf, old_string="line 1\r\nline 2\r\n", new_string="line 1\nchanged\n")
+
+    uri_mixed = "viking://resources/test_edit_mixed.md"
+    await write(uri=uri_mixed, content="header\r\nline 1\nline 2\n")
+    with pytest.raises(InvalidArgumentError, match="detected CRLF/LF line ending mismatch"):
+        await edit(uri=uri_mixed, old_string="line 1\r\nline 2\r\n", new_string="line 1\nchanged\n")
 
 
 @pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
