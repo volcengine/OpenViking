@@ -43,6 +43,8 @@ export default {
   argTypes: { string: '文本', number: '数字', boolean: '布尔值', json: 'JSON' },
 
   moreSources: '另有 {{count}} 个素材目录',
+  outputDirectory: '输出目录',
+  viewDetails: '查看详情',
   detailTitle: '编译任务详情',
   copyTaskId: '复制任务 ID',
   stages: {
@@ -72,7 +74,7 @@ export default {
     '已超过安全重试时间。请先查询上次提交或检查任务列表，确认后清空草稿再创建新任务。',
   targetPlaceholder: 'viking://resources/wiki',
   removeSource: '移除 {{uri}}',
-  title: 'Compile',
+  title: '编译',
   description: '使用 Skill 将素材整理为新的内容。',
   new: '新建编译',
   back: '返回列表',
@@ -140,7 +142,8 @@ export default {
   storageFailed: '草稿保存失败。',
   newTasks: '刷新查看新任务',
   createdAt: '创建时间',
-  task: '任务 / Skill',
+  skillColumn: '技能',
+  taskId: '任务 ID',
   materials: '素材',
   status: '状态',
   invalidTask: '任务不存在或不是编译任务。',

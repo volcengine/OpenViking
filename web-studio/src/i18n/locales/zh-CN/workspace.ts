@@ -30,7 +30,7 @@ const workspace = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
-      compile: { title: 'Compile' },
+      compile: { title: '编译' },
       home: {
         title: '首页',
       },
@@ -208,6 +208,7 @@ const workspace = {
     },
   },
   agentExperiencePage: {
+    pageCount: '本页 {{count}} 条经验',
     setup: {
       expand: '展开步骤',
       collapse: '收起',
@@ -489,7 +490,7 @@ const workspace = {
       unknown: '未知',
     },
     types: {
-      compile: 'Compile',
+      compile: '编译',
       session_commit: '会话提交',
       add_resource: '资源处理',
       add_skill: '技能导入',

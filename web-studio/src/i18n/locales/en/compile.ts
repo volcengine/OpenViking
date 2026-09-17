@@ -50,6 +50,8 @@ export default {
   },
 
   moreSources: '{{count}} more source directories',
+  outputDirectory: 'Output directory',
+  viewDetails: 'View details',
   detailTitle: 'Compile task details',
   copyTaskId: 'Copy task ID',
   stages: {
@@ -153,7 +155,8 @@ export default {
   storageFailed: 'Draft could not be saved.',
   newTasks: 'Refresh to see new tasks',
   createdAt: 'Created',
-  task: 'Task / Skill',
+  skillColumn: 'Skill',
+  taskId: 'Task ID',
   materials: 'Materials',
   status: 'Status',
   invalidTask: 'Task not found or not a compilation.',

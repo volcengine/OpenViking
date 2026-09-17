@@ -10,6 +10,7 @@ import {
   providers,
   upcomingProviders,
 } from '../-providers/registry'
+import { PlatformIcon } from './platform-icon'
 import { DeleteConnection } from './delete-connection'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -147,7 +148,10 @@ export function Channels({
                 key={type}
                 className="flex min-h-16 items-center justify-between gap-4 rounded-lg border px-4 py-3"
               >
-                <h3 className="text-sm font-medium">{t(entry.label)}</h3>
+                <div className="flex min-w-0 items-center gap-3">
+                  <PlatformIcon platform={type} />
+                  <h3 className="text-sm font-medium">{t(entry.label)}</h3>
+                </div>
                 <Button
                   size="sm"
                   disabled={!canManage}
@@ -167,9 +171,12 @@ export function Channels({
                 key={name}
                 className="flex min-h-16 items-center justify-between gap-4 rounded-lg border px-4 py-3"
               >
-                <h3 className="text-sm font-medium text-muted-foreground">
-                  {name === 'DingTalk' ? t('dingtalk') : name}
-                </h3>
+                <div className="flex min-w-0 items-center gap-3">
+                  <PlatformIcon platform={name} />
+                  <h3 className="text-sm font-medium text-muted-foreground">
+                    {name === 'DingTalk' ? t('dingtalk') : name}
+                  </h3>
+                </div>
                 <span className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">
                   {t('comingSoon')}
                 </span>

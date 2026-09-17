@@ -19,6 +19,7 @@ import {
   CompileShell,
   CompileStatus,
 } from '../-components/shared'
+import { ContextLink, useCompileSkillName } from '../-components/context-link'
 import { active, cancelCompile, fetchCompileTask } from '../-lib/api'
 
 const TABS = ['overview', 'events', 'result'] as const
@@ -27,6 +28,7 @@ export const Route = createFileRoute('/compile/tasks/$taskId')({
   component: CompileDetail,
 })
 function CompileDetail() {
+  const skillName = useCompileSkillName()
   const { taskId } = Route.useParams(),
     { t, i18n } = useTranslation('compile')
   const { identityScopeKey, connectionRole } = useAppConnection(),
@@ -185,7 +187,9 @@ function CompileDetail() {
                     </dt>
                     <dd>
                       <p className="mb-2 break-all font-medium">
-                        {request.skill.split('/').filter(Boolean).pop()}
+                        <ContextLink uri={request.skill}>
+                          {skillName(request.skill)}
+                        </ContextLink>
                       </p>
                       <p className="break-all font-mono text-xs text-muted-foreground">
                         {request.skill}
@@ -204,7 +208,7 @@ function CompileDetail() {
                       {request.from.map((uri) => (
                         <div key={uri}>
                           <p className="mb-1 break-all font-medium">
-                            {uri.split('/').filter(Boolean).pop()}
+                            <ContextLink uri={uri} resolveFile />
                           </p>
                           <p className="break-all font-mono text-xs leading-5 text-muted-foreground">
                             {uri}
@@ -220,7 +224,7 @@ function CompileDetail() {
                     </dt>
                     <dd>
                       <p className="mb-1 break-all font-medium">
-                        {request.to.split('/').filter(Boolean).pop()}
+                        <ContextLink uri={request.to} />
                       </p>
                       <p className="break-all font-mono text-xs leading-5 text-muted-foreground">
                         {request.to}

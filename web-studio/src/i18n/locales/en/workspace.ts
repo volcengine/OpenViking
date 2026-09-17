@@ -209,6 +209,7 @@ const workspace = {
     },
   },
   agentExperiencePage: {
+    pageCount: '{{count}} experiences on this page',
     setup: {
       expand: 'Expand steps',
       collapse: 'Collapse',

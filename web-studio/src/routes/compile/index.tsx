@@ -25,6 +25,7 @@ import {
   CompileShell,
   CompileStatus,
 } from './-components/shared'
+import { ContextLink, useCompileSkillName } from './-components/context-link'
 import { fetchCapabilities, fetchCompileTasks } from './-lib/api'
 
 const STATUSES = [
@@ -48,6 +49,7 @@ export const Route = createFileRoute('/compile/')({
 function CompileList() {
   const { t, i18n } = useTranslation('compile')
   const { identityScopeKey } = useAppConnection()
+  const skillName = useCompileSkillName()
   const location = useLocation()
   const search = Route.useSearch(),
     navigate = useNavigate()
@@ -181,86 +183,98 @@ function CompileList() {
       )}
       {!!tasks.length && (
         <div className="overflow-hidden rounded-xl border">
-          <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_150px_16px] gap-5 border-b bg-muted/30 px-5 py-3 text-xs font-medium text-muted-foreground lg:grid">
-            <span>{t('task')}</span>
+          <div className="hidden grid-cols-[180px_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_100px_110px] gap-5 border-b bg-muted/15 px-5 py-3 text-xs font-medium text-muted-foreground xl:grid">
+            <span>{t('taskId')}</span>
+            <span>{t('skillColumn')}</span>
             <span>{t('materials')}</span>
+            <span>{t('outputDirectory')}</span>
             <span>{t('status')}</span>
             <span>{t('createdAt')}</span>
-            <span />
           </div>
           {tasks.map((task) => {
             const request = task.meta?.request
-            const leaf = (uri: string) =>
-              uri.split('/').filter(Boolean).pop() || uri
             const date = task.created_at
               ? new Date(Number(task.created_at) * 1000)
               : null
             return (
-              <Link
+              <div
                 key={task.task_id}
-                to="/compile/tasks/$taskId"
-                params={{ taskId: task.task_id }}
-                state={{
-                  compileListOrigin: {
-                    scope: identityScopeKey,
-                    index: location.state.__TSR_index,
-                    search,
-                  },
-                }}
-                className="group grid gap-4 border-b bg-card px-5 py-5 transition-colors last:border-b-0 hover:bg-muted/30 focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-[-2px] lg:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_150px_16px] lg:items-center lg:gap-5"
+                className="grid gap-4 border-b bg-card/40 px-5 py-4 transition-colors last:border-b-0 hover:bg-muted/30 xl:grid-cols-[180px_minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_100px_110px] xl:items-start xl:gap-5"
               >
                 <div className="min-w-0 space-y-2">
+                  <p className="text-xs text-muted-foreground xl:hidden">
+                    {t('taskId')}
+                  </p>
+                  <Link
+                    to="/compile/tasks/$taskId"
+                    params={{ taskId: task.task_id }}
+                    state={{
+                      compileListOrigin: {
+                        scope: identityScopeKey,
+                        index: location.state.__TSR_index,
+                        search,
+                      },
+                    }}
+                    aria-label={`${t('detailTitle')}: ${task.task_id}`}
+                    title={`${t('detailTitle')}: ${task.task_id}`}
+                    className="group inline-flex min-w-0 items-center gap-1 rounded-sm py-0.5 text-xs font-medium text-foreground transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    <span className="truncate font-mono">
+                      {task.task_id.length > 22
+                        ? `${task.task_id.slice(0, 10)}…${task.task_id.slice(-6)}`
+                        : task.task_id}
+                    </span>
+                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </Link>
+                </div>
+                <div className="min-w-0 space-y-2">
+                  <p className="text-xs text-muted-foreground xl:hidden">
+                    {t('skillColumn')}
+                  </p>
                   <p
-                    className="break-words text-sm font-semibold [overflow-wrap:anywhere]"
+                    className="break-words text-sm font-medium [overflow-wrap:anywhere]"
                     title={request?.skill}
                   >
-                    {request ? leaf(request.skill) : t('title')}
-                  </p>
-                  <div
-                    className="flex items-start gap-2 text-xs text-muted-foreground"
-                    title={request?.to}
-                  >
-                    <FolderOutput className="mt-0.5 size-3.5 shrink-0" />
-                    <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-                      {request ? leaf(request.to) : '—'}
-                    </span>
-                  </div>
-                  <p
-                    className="font-mono text-[11px] text-muted-foreground/70"
-                    title={task.task_id}
-                  >
-                    {task.task_id.length > 24
-                      ? `${task.task_id.slice(0, 12)}…${task.task_id.slice(-6)}`
-                      : task.task_id}
+                    {request ? (
+                      <ContextLink uri={request.skill}>
+                        {skillName(request.skill)}
+                      </ContextLink>
+                    ) : (
+                      '—'
+                    )}
                   </p>
                 </div>
                 <div className="min-w-0 space-y-2">
-                  <p className="text-xs text-muted-foreground lg:hidden">
+                  <p className="text-xs text-muted-foreground xl:hidden">
                     {t('materials')}
                   </p>
                   {request?.from.length
-                    ? request.from.slice(0, 2).map((uri) => (
+                    ? request.from.map((uri) => (
                         <div
                           key={uri}
                           title={uri}
-                          className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"
+                          className="flex items-start gap-2 text-sm leading-5"
                         >
-                          <FolderInput className="mt-0.5 size-3.5 shrink-0" />
+                          <FolderInput className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/60" />
                           <span className="min-w-0 break-words [overflow-wrap:anywhere]">
-                            {leaf(uri)}
+                            <ContextLink uri={uri} resolveFile />
                           </span>
                         </div>
                       ))
                     : '—'}
-                  {request && request.from.length > 2 && (
-                    <p className="text-xs text-muted-foreground">
-                      {t('moreSources', { count: request.from.length - 2 })}
-                    </p>
-                  )}
+                </div>
+                <div className="min-w-0 space-y-2">
+                  <p className="text-xs text-muted-foreground xl:hidden">
+                    {t('outputDirectory')}
+                  </p>
+                  <div className="flex items-start gap-2 text-sm leading-5">
+                    <FolderOutput className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/60" />
+                    {request ? <ContextLink uri={request.to} /> : '—'}
+                  </div>
                 </div>
                 <div className="min-w-0 space-y-2">
                   <CompileStatus status={task.status} />
-                  {task.stage && (
+                  {task.stage && task.status !== 'completed' && (
                     <p
                       className="break-words text-xs text-muted-foreground"
                       title={task.stage}
@@ -288,8 +302,7 @@ function CompileList() {
                     '—'
                   )}
                 </time>
-                <ChevronRight className="hidden size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 lg:block" />
-              </Link>
+              </div>
             )
           })}
         </div>

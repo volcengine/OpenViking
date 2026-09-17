@@ -114,14 +114,17 @@ export default {
   title: 'VikingBot',
   conversations: 'Conversations',
   channels: 'Bots',
-  intro: 'Talk to VikingBot here, or bring it into your team’s Feishu groups.',
+  intro:
+    'Talk to VikingBot here, or connect it to your team’s messaging platform.',
   newChat: 'New conversation',
   web: 'Web',
   feishu: 'Feishu',
   all: 'All',
   search: 'Search conversations',
   empty: 'Start a conversation',
-  emptyHint: 'Ask a question, explore your resources, or connect Feishu.',
+  emptyHint:
+    'Ask a question, explore your resources, or connect a bot to your messaging platform.',
+  manageBots: 'Manage bots',
   enable: 'Enable VikingBot to begin',
   enableHint:
     'Ask your administrator to start OpenViking with Bot support and configure a conversation model.',

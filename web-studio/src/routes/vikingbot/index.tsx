@@ -341,7 +341,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                     {t('emptyHint')}
                   </p>
                   <Button variant="outline" onClick={() => setTab('channels')}>
-                    {t('addFeishu')}
+                    {t('manageBots')}
                   </Button>
                 </div>
               )}
