@@ -53,6 +53,7 @@ import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
 import { fetchTasks, MAX_TASKS } from './-lib/task-list'
+import { localizeSkippedCommit } from './-lib/localize-commit-result'
 import type { TaskStatusFilter, TaskTypeFilter } from './-lib/task-list'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
 
@@ -194,13 +195,7 @@ function TasksRoute() {
     },
     onSuccess: async (result) => {
       if ('skippedReason' in result && result.skippedReason) {
-        toast.info(
-          t(
-            result.skippedReason === 'no_messages'
-              ? 'retry.noPendingMessages'
-              : 'retry.commitSkipped',
-          ),
-        )
+        toast.info(localizeSkippedCommit(result.skippedReason, t))
         return
       }
       toast.success(
