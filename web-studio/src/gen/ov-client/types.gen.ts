@@ -4122,6 +4122,12 @@ export type GetTaskByTaskIdData = {
          * Include recorded execution events
          */
         include_events?: boolean;
+        /**
+         * Include Pending Events
+         *
+         * Include buffered execution events
+         */
+        include_pending_events?: boolean;
     };
     url: '/api/v1/tasks/{task_id}';
 };
