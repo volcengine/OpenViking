@@ -13,6 +13,7 @@ import {
   createReport,
   credentialSources,
   describeApiKey,
+  effectiveHealthProbe,
   inspectJsonFile,
   lintBaseUrl,
   lintServerConf,
@@ -108,6 +109,42 @@ test("assessProbes accepts an echoed identity and warns about root keys", () => 
   const titles = report.problems().map((p) => p.title);
   assert.ok(titles.some((t) => t.includes("ROOT api key")));
   assert.ok(titles.some((t) => t.includes("differ from the key's identity")));
+});
+
+test("assessProbes keeps going when the deployment authenticates /health itself", () => {
+  const conn = { baseUrl: "https://api.vikingdb.cn-beijing.volces.com/openviking", apiKey: "k".repeat(64) };
+  const health = { ok: false, status: 401, latencyMs: 40, json: { status: "error", error: { code: "AuthenticationError", message: "The API key in the request is missing or invalid." } } };
+  const healthAuth = { ok: true, status: 200, latencyMs: 45, json: { status: "ok", version: "v0.4.17.3", auth_mode: "api_key", account_id: "default", user_id: "default", role: "admin" } };
+  const report = createReport();
+  const summary = assessProbes(report, { health, healthAuth, systemStatus: { ok: true, status: 200, json: { result: { user: "default" } } } }, conn, describeApiKey(conn.apiKey));
+  assert.equal(summary.reachable, true);
+  assert.equal(summary.authOk, true);
+  assert.equal(summary.version, "v0.4.17.3");
+  assert.equal(summary.authMode, "api_key");
+  assert.deepEqual(report.problems(), []);
+  assert.equal(report.exitCode(), 0);
+  assert.equal(effectiveHealthProbe({ health, healthAuth }), healthAuth);
+});
+
+test("assessProbes blames the key when the authenticated /health is rejected too", () => {
+  const conn = { baseUrl: "https://api.vikingdb.cn-beijing.volces.com/openviking", apiKey: "k".repeat(64) };
+  const health = { ok: false, status: 401, latencyMs: 40, json: { status: "error", error: { message: "The API key in the request is missing or invalid." } } };
+  const report = createReport();
+  const summary = assessProbes(report, { health, healthAuth: { ...health } }, conn, describeApiKey(conn.apiKey));
+  assert.equal(summary.reachable, true);
+  assert.equal(summary.authOk, false);
+  const titles = report.problems().map((p) => p.title);
+  assert.ok(titles.some((t) => t.startsWith("api key rejected on /health")));
+  assert.ok(!titles.some((t) => t.includes("not like OpenViking")));
+  assert.equal(effectiveHealthProbe({ health, healthAuth: { ...health } }), health);
+});
+
+test("assessProbes names the missing key when a gated /health gets no credentials", () => {
+  const report = createReport();
+  const health = { ok: false, status: 401, latencyMs: 40, json: { status: "error", error: { message: "missing or invalid" } } };
+  const summary = assessProbes(report, { health }, { baseUrl: "https://api.vikingdb.cn-beijing.volces.com/openviking" }, describeApiKey(""));
+  assert.equal(summary.reachable, true);
+  assert.match(report.render(), /no credentials are configured/);
 });
 
 test("assessProbes reports unreachable servers with the classified cause", () => {
