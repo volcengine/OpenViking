@@ -4,7 +4,21 @@ import test from "node:test";
 import {
   applyKimicodeCaptureResult,
   buildKimicodeCapturePlan,
+  KIMI_INTERRUPT_REQUEST_TIMEOUT_MS,
+  shouldCommitKimicodeCapture,
 } from "./kimicode-capture.mjs";
+
+test("commit happens at lifecycle boundaries or the configured turn threshold, not every Stop", () => {
+  assert.equal(shouldCommitKimicodeCapture("stop", { commitTurnThreshold: 8 }, 1, 1), false);
+  assert.equal(shouldCommitKimicodeCapture("stop", { commitTurnThreshold: 2 }, 1, 1), true);
+  assert.equal(shouldCommitKimicodeCapture("pre-compact", { autoCommitOnCompact: true }, 1, 1), true);
+  assert.equal(shouldCommitKimicodeCapture("pre-compact", { autoCommitOnCompact: false }, 1, 1), false);
+  assert.equal(shouldCommitKimicodeCapture("interrupt", {}, 0, 1), true);
+});
+
+test("Interrupt request timeout stays below Kimi's synchronous hook budget", () => {
+  assert.equal(KIMI_INTERRUPT_REQUEST_TIMEOUT_MS, 2000);
+});
 
 const turns = [
   { role: "user", content: "question", turnId: "turn-001" },

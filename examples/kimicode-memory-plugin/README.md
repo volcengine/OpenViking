@@ -2,16 +2,18 @@
 
 Thin Kimi Code CLI adapter for OpenViking long-term memory. Reuses `memory-plugin-shared` — no memory logic is duplicated.
 
-This follows the ZCode plugin layout ([PR #3678](https://github.com/volcengine/OpenViking/pull/3678)) but is **not** a rename. Kimi Code has its own native plugin manifest, hook lifecycle, MCP declarations, and `wire.jsonl` transcripts. See [DESIGN.md](./DESIGN.md).
+The Kimi-specific manifest, lifecycle wiring, and `wire.jsonl` transcript adapter are kept here; shared runtime modules are generated from `../memory-plugin-shared/lib/` by `sync.mjs`. Kimi Code has its own native plugin manifest, hook lifecycle, MCP declarations, and transcript format. See [DESIGN.md](./DESIGN.md).
 
 > **Requires an OpenViking server with `viking://~` home-alias support.**
+>
+> **Tested with Kimi Code CLI 0.43.1. Older releases are not validated.**
 
 ## What it does
 
 - **SessionStart** — replay the offline pending queue (cannot inject; observation-only).
 - **UserPromptSubmit** — inject profile once and recall relevant memories as **plain text**.
 - **PreToolUse** (`Read|Glob|Grep`) — deny direct `viking://` reads; use MCP tools instead.
-- **Stop / PreCompact / SessionEnd** — capture unseen `wire.jsonl` turns in a detached worker, then commit.
+- **Stop / PreCompact / SessionEnd** — capture unseen `wire.jsonl` turns in a detached worker; commit at compaction/session end or when the configured threshold is reached.
 - **Interrupt** — same capture, synchronously (this event replaces Stop when the user hits Esc).
 
 ## Install
@@ -20,7 +22,7 @@ This follows the ZCode plugin layout ([PR #3678](https://github.com/volcengine/O
 bash examples/memory-plugin-shared/install.sh --harness kimicode
 ```
 
-The installer registers this directory through `kimi plugin install`. Kimi then reads `kimi.plugin.json` and owns the hook and MCP lifecycle. Existing `config.toml` and `mcp.json` entries are not modified.
+The installer copies the native plugin into `$KIMI_CODE_HOME/plugins/managed/openviking-memory` and records it in `$KIMI_CODE_HOME/plugins/installed.json`. Existing `config.toml` and `mcp.json` entries are not modified.
 
 Alternatively, from a Kimi Code session:
 

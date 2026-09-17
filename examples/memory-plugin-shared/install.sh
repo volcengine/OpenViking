@@ -2116,41 +2116,12 @@ CLEAN_NODE
     info "$(t 'Removed ZCode OpenViking hooks and MCP config.' '已移除 ZCode OpenViking hooks 与 MCP 配置。')"
   fi
   if contains_harness kimicode; then
-    local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimi_bin
+    local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimi_bin kimicode_lib
     kimi_bin="$(command -v kimi || true)"
-    if [ -n "$kimi_bin" ]; then
-      "$kimi_bin" plugin remove openviking-memory >/dev/null 2>&1 || true
+    kimicode_lib="$(install_lib_dir || true)"
+    if [ -n "$kimicode_lib" ]; then
+      "$NODE_BIN" "$kimicode_lib/kimicode-plugin.mjs" remove "$kimi_home" --purge >/dev/null 2>&1 || true
     fi
-    if [ -f "$kimi_home/config.toml" ]; then
-      "$NODE_BIN" - "$kimi_home/config.toml" <<'CLEAN_TOML' 2>/dev/null || true
-const fs = require("node:fs");
-const file = process.argv[2];
-let text = fs.readFileSync(file, "utf8");
-const begin = "# >>> openviking kimicode integration";
-const end = "# <<< openviking kimicode integration";
-const i = text.indexOf(begin);
-const j = text.indexOf(end);
-if (i >= 0 && j > i) {
-  text = (text.slice(0, i) + text.slice(j + end.length)).replace(/\n{3,}/g, "\n\n");
-  fs.writeFileSync(file, text);
-}
-CLEAN_TOML
-    fi
-    if [ -f "$kimi_home/mcp.json" ]; then
-      "$NODE_BIN" - "$kimi_home/mcp.json" <<'CLEAN_MCP' 2>/dev/null || true
-const fs = require("node:fs");
-const file = process.argv[2];
-let parsed = {};
-try { parsed = JSON.parse(fs.readFileSync(file, "utf8")); } catch { process.exit(0); }
-const server = parsed && parsed.mcpServers && parsed.mcpServers.openviking;
-const owned = server && JSON.stringify(server).includes("OPENVIKING_INTEGRATION_ID");
-if (owned) {
-  delete parsed.mcpServers.openviking;
-  fs.writeFileSync(file, JSON.stringify(parsed, null, 2) + "\n");
-}
-CLEAN_MCP
-    fi
-    rm -rf "$OV_HOME/agent-integrations/kimicode"
     info "$(t 'Removed the native Kimi Code plugin and cleaned up legacy config entries.' '已移除 Kimi Code 原生插件，并清理旧配置项。')"
   fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
@@ -2247,7 +2218,7 @@ install_zcode() {
 
 install_kimicode() {
   heading "$(t 'Kimi Code CLI integration' 'Kimi Code CLI 集成')"
-  local plugin_dir kimi_bin
+  local plugin_dir kimi_bin kimi_home kimicode_lib
   plugin_dir="$(plugin_dir_on_disk kimicode-memory-plugin)" || {
     err "$(t 'Kimi Code plugin sources not found.' '未找到 Kimi Code 插件源码。')"
     return 1
@@ -2257,11 +2228,9 @@ install_kimicode() {
     err "$(t 'kimi command not found.' '未找到 kimi 命令。')"
     return 1
   }
-  "$kimi_bin" plugin --help >/dev/null 2>&1 || {
-    err "$(t 'This Kimi Code version does not support native plugins; upgrade Kimi Code first.' '当前 Kimi Code 版本不支持原生插件，请先升级 Kimi Code。')"
-    return 1
-  }
-  "$kimi_bin" plugin install "$plugin_dir" \
+  kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+  kimicode_lib="$(require_install_lib_dir)" || return 1
+  "$NODE_BIN" "$kimicode_lib/kimicode-plugin.mjs" install "$kimi_home" "$plugin_dir" \
     || { warn "$(t 'Failed to install the native Kimi Code plugin' '原生 Kimi Code 插件安装失败')"; return 1; }
   info "$(t 'Kimi Code native plugin installed:' 'Kimi Code 原生插件已安装：') openviking-memory"
   info "$(t 'Run /reload or start a new session to activate its hooks and MCP.' '请运行 /reload 或新建会话以启用 hooks 和 MCP。')"
@@ -2612,7 +2581,9 @@ EOF
   fi
   if contains_harness kimicode; then
     kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
-    if [ -f "$kimi_home/plugins/managed/openviking-memory/kimi.plugin.json" ]; then
+    kimicode_lib="$(install_lib_dir || true)"
+    if [ -n "$kimicode_lib" ] && "$NODE_BIN" "$kimicode_lib/kimicode-plugin.mjs" verify "$kimi_home" \
+      && [ -f "$kimi_home/plugins/managed/openviking-memory/kimi.plugin.json" ]; then
       if "$NODE_BIN" --check "$kimi_home/plugins/managed/openviking-memory/scripts/kimicode-hook.mjs" \
         && "$NODE_BIN" --check "$kimi_home/plugins/managed/openviking-memory/scripts/uri-guard.mjs"; then
         info "kimicode: $(t 'native plugin is installed' '原生插件已安装')"

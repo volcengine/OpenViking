@@ -65,7 +65,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
   --harness kimicode
 ```
 
-安装器通过 `kimi plugin install` 安装原生插件，不修改用户已有的 `config.toml` 或 `mcp.json`。
+安装器把原生插件复制到 `$KIMI_CODE_HOME/plugins/managed/openviking-memory`，并写入 `$KIMI_CODE_HOME/plugins/installed.json`，不修改用户已有的 `config.toml` 或 `mcp.json`。
 
 细节见插件 [README](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimicode-memory-plugin/DESIGN.md)。
 

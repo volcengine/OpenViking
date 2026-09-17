@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { kimicode } from "./kimicode-adapter.mjs";
 import { evaluateKimicodeUriGuard } from "./uri-guard.mjs";
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -43,4 +44,14 @@ test("native plugin manifest owns hook and MCP declarations", () => {
   assert.ok(manifest.mcpServers.openviking);
   assert.equal(typeof manifest.mcpServers.openviking.command, "string");
   assert.ok(manifest.hooks.length > 0);
+});
+
+test("Kimi hook delegates lifecycle ordering to the shared runner", () => {
+  const source = readFileSync(join(PLUGIN_ROOT, "scripts", "kimicode-hook.mjs"), "utf8");
+  assert.match(source, /shared\/hook-runner\.mjs/);
+});
+
+test("Kimi Interrupt stays synchronous while capture events detach", () => {
+  assert.equal(kimicode.detachEvents.has("interrupt"), false);
+  assert.deepEqual([...kimicode.detachEvents].sort(), ["pre-compact", "session-end", "stop"]);
 });

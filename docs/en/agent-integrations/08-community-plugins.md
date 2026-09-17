@@ -65,7 +65,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/e
   --harness kimicode
 ```
 
-The installer runs `kimi plugin install` for the native plugin. It does not modify the user's `config.toml` or `mcp.json`.
+The installer copies the native plugin to `$KIMI_CODE_HOME/plugins/managed/openviking-memory` and records it in `$KIMI_CODE_HOME/plugins/installed.json`. It does not modify the user's `config.toml` or `mcp.json`.
 
 Details: plugin [README](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimicode-memory-plugin/DESIGN.md).
 

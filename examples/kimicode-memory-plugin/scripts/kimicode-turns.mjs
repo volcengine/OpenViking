@@ -1,7 +1,7 @@
 /**
  * Pure transcript parser for Kimi Code CLI hook events.
  *
- * Verified against Kimi Code 0.41.0 (2026-09-04) docs and a live ~/.kimi-code install:
+ * Verified against Kimi Code 0.43.1 (2026-09-17) docs and a live ~/.kimi-code install:
  *   - Hook stdin is snake_case JSON (session_id, cwd, hook_event_name).
  *   - The authoritative incremental transcript is the session wire log:
  *     $KIMI_CODE_HOME/sessions/<wd>/session_<id>/agents/main/wire.jsonl
@@ -30,11 +30,19 @@ const INJECTION_BLOCKS = [
 
 export function cleanKimicodeText(value) {
   if (value == null) return "";
-  let text = String(value);
+  const text = Array.isArray(value)
+    ? value
+        .map((part) => (typeof part === "string" ? part : part?.text || ""))
+        .filter(Boolean)
+        .join("\n")
+    : typeof value === "object" && typeof value.text === "string"
+      ? value.text
+      : String(value);
+  let cleaned = text;
   for (const pattern of INJECTION_BLOCKS) {
-    text = text.replace(pattern, "");
+    cleaned = cleaned.replace(pattern, "");
   }
-  return text.replace(/\s+\n/g, "\n").trim();
+  return cleaned.replace(/\s+\n/g, "\n").trim();
 }
 
 export function kimiCodeHome() {

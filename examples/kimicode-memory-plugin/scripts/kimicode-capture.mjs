@@ -2,6 +2,15 @@ import { stableHash } from "./shared/agent-hook-runtime.mjs";
 import { shouldCaptureText } from "./shared/capture-utils.mjs";
 import { cleanKimicodeText } from "./kimicode-turns.mjs";
 
+export const KIMI_INTERRUPT_REQUEST_TIMEOUT_MS = 2000;
+
+export function shouldCommitKimicodeCapture(eventName, cfg = {}, capturedSinceCommit = 0, captured = 0) {
+  if (captured <= 0) return false;
+  if (eventName === "interrupt" || eventName === "session-end") return true;
+  if (eventName === "pre-compact") return cfg.autoCommitOnCompact !== false;
+  return Number(capturedSinceCommit) + captured >= Number(cfg.commitTurnThreshold || Infinity);
+}
+
 export function kimicodeTurnDedupKey(turn) {
   return turn.turnId
     ? `${turn.turnId}:${turn.role}`

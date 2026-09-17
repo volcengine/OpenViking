@@ -1,10 +1,10 @@
 # DESIGN: Kimi Code CLI Memory Plugin
 
-Template: [examples/zcode-memory-plugin](../zcode-memory-plugin) ([PR #3678](https://github.com/volcengine/OpenViking/pull/3678)). Shared runtime is vendored because this directory is directly installable as a native Kimi plugin; only the host adapter is new.
+Shared runtime modules are generated from the canonical `../memory-plugin-shared/lib/` source by `sync.mjs`; this directory is directly installable as a native Kimi plugin, and only its manifest, lifecycle wiring, and transcript adapter are Kimi-specific.
 
 ## Verified Kimi Code extension surface
 
-Facts checked against Kimi Code CLI **0.41.0** (2026-09-04), official docs (`hooks.html`, `mcp.html`, `plugins.html`, `config-files.html`), and a live `~/.kimi-code` install.
+Facts checked against Kimi Code CLI **0.43.1** (2026-09-17) and the official Kimi Code extension documentation.
 
 | Aspect | Kimi Code CLI | ZCode (do not copy) |
 |--------|---------------|---------------------|
@@ -36,11 +36,11 @@ Session ids are derived with the `kc-` prefix.
 
 ## Why not only `/plugins install`
 
-The shared installer invokes `kimi plugin install` for this native plugin. Kimi Code reads `kimi.plugin.json`, owns the installed copy and hook/MCP lifecycle, and leaves the user's `config.toml` and `mcp.json` unchanged. The interactive `/plugins install <path>` flow is equivalent.
+The shared installer writes the native plugin to `$KIMI_CODE_HOME/plugins/managed/openviking-memory` and records it in `$KIMI_CODE_HOME/plugins/installed.json`. Kimi Code then reads `kimi.plugin.json` and owns the hook/MCP lifecycle; the user's `config.toml` and `mcp.json` remain unchanged. The interactive `/plugins install <path>` flow is the supported manual alternative.
 
 ## Adversarial checks
 
 - Recall must never emit ZCode/Claude JSON wrappers — Kimi Code would inject the JSON as user-visible context.
 - Empty `matcher` is omitted (Kimi Code matcher is optional regex).
-- Uninstall removes only the OpenViking comment-delimited block.
+- Uninstall removes the OpenViking record from `installed.json`; `--purge` also removes the exact managed copy created by this installer.
 - Wire cursor uses host `turnId`; missing wire falls back to stdin + pendingPrompt.

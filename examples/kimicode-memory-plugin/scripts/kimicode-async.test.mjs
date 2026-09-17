@@ -102,7 +102,7 @@ test("Stop argv is copied into env so the detached worker still captures", async
   assert.equal(completedResponses, 0, "parent waited for a network response");
   assert.ok(elapsedMs < HOOK_TIMEOUT_MS, `parent hook took ${elapsedMs}ms`);
 
-  await waitFor(() => requests.some(({ url }) => url?.endsWith("/commit")), WORKER_WAIT_MS);
+  await waitFor(() => requests.some(({ url }) => url?.endsWith("/messages/batch")), WORKER_WAIT_MS);
   const batch = requests.find(({ url }) => url?.endsWith("/messages/batch"));
   assert.ok(batch, "detached worker never posted messages");
   const body = JSON.parse(batch.body);

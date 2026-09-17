@@ -19,6 +19,35 @@ test("cleanKimicodeText strips relevant-memory blocks", () => {
   assert.equal(cleanKimicodeText(input), "text  here");
 });
 
+test("cleanKimicodeText joins Kimi content parts instead of coercing objects", () => {
+  assert.equal(
+    cleanKimicodeText([{ type: "text", text: "first" }, { type: "text", text: "second" }]),
+    "first\nsecond",
+  );
+});
+
+test("buildKimicodeTurns normalizes a content-part prompt in the stdin fallback", () => {
+  const original = process.env.KIMI_CODE_HOME;
+  process.env.KIMI_CODE_HOME = mkdtempSync(join(tmpdir(), "kc-empty-"));
+  try {
+    const turns = buildKimicodeTurns(
+      {
+        session_id: "session_missing",
+        prompt: [{ type: "text", text: "hello" }],
+        responseText: "world",
+      },
+      {},
+    );
+    assert.deepEqual(turns, [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "world" },
+    ]);
+  } finally {
+    if (original === undefined) delete process.env.KIMI_CODE_HOME;
+    else process.env.KIMI_CODE_HOME = original;
+  }
+});
+
 test("extractUnseenWireTurns reads user prompt and assistant text parts", () => {
   const dir = mkdtempSync(join(tmpdir(), "kc-wire-"));
   const wire = join(dir, "wire.jsonl");

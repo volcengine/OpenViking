@@ -20,19 +20,21 @@ import { spawn } from "node:child_process";
 
 const WORKER_ENV = "OV_HOOK_WORKER";
 
-export async function maybeDetach(cfg, { approve }) {
+export async function maybeDetach(cfg, { approve, raw: providedRaw } = {}) {
   if (!cfg.writePathAsync) return false;
   if (process.env[WORKER_ENV] === "1") return false;
 
   // Drain parent stdin so we can forward to the worker.
-  let raw;
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    raw = Buffer.concat(chunks);
-  } catch {
-    // stdin read failed - let the synchronous path handle it.
-    return false;
+  let raw = providedRaw;
+  if (raw === undefined) {
+    try {
+      const chunks = [];
+      for await (const chunk of process.stdin) chunks.push(chunk);
+      raw = Buffer.concat(chunks);
+    } catch {
+      // stdin read failed - let the synchronous path handle it.
+      return false;
+    }
   }
 
   let child;
@@ -54,8 +56,7 @@ export async function maybeDetach(cfg, { approve }) {
   approve();
 
   try {
-    child.stdin.write(raw);
-    child.stdin.end();
+    await new Promise((resolve) => child.stdin.end(raw, resolve));
   } catch { /* worker may have already exited; nothing useful to recover */ }
   child.unref();
   return true;
