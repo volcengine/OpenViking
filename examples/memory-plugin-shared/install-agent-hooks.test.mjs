@@ -22,6 +22,7 @@ writeFileSync(join(checkout, ".git"), "gitdir: .\n");
 
 const installer = join(checkout, "examples", "memory-plugin-shared", "install.sh");
 const installedNode = spawnSync("bash", ["-c", "command -v node"], { encoding: "utf8" }).stdout.trim();
+const agentHookVersion = JSON.parse(readFileSync(join(checkout, "examples", "agent-hook-plugin", "plugin.json"), "utf8")).version;
 
 /** Every `command` string a hooks configuration holds, at any depth. */
 function hookCommands(value, out = []) {
@@ -363,7 +364,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
       [join(home, ".openviking", "agent-integrations", "cursor", "scripts", "ov-memory-doctor.mjs"), "cursor", "--offline", "--no-color"],
       { env: { ...process.env, HOME: home }, encoding: "utf8" },
     );
-    assert.match(doctor.stdout, /version 0\.3\.2, client cursor/);
+    assert.match(doctor.stdout, new RegExp("version " + agentHookVersion.replaceAll(".", "\\.") + ", client cursor"));
     // A hooks.json entry that names a script the install did not put on disk
     // fails only when the host first runs it, so the rendered commands are
     // checked against the tree they were rendered for.
