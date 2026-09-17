@@ -387,6 +387,10 @@ const workspace = {
     },
   },
   tasksPage: {
+    retry: {
+      noPendingMessages: 'No new task created: this session has no pending messages',
+      commitSkipped: 'No new task created: this session commit was skipped',
+    },
     title: 'Task Center',
     description:
       'Track background work such as resource processing, session commits, and reindexing.',

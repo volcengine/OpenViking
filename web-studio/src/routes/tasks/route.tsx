@@ -195,13 +195,11 @@ function TasksRoute() {
     onSuccess: async (result) => {
       if ('skippedReason' in result && result.skippedReason) {
         toast.info(
-          result.skippedReason === 'no_messages'
-            ? i18n.language.startsWith('zh')
-              ? '未创建新任务：该会话没有待提交消息'
-              : 'No new task created: this session has no pending messages'
-            : i18n.language.startsWith('zh')
-              ? '未创建新任务：本次会话提交已跳过'
-              : 'No new task created: this session commit was skipped',
+          t(
+            result.skippedReason === 'no_messages'
+              ? 'retry.noPendingMessages'
+              : 'retry.commitSkipped',
+          ),
         )
         return
       }

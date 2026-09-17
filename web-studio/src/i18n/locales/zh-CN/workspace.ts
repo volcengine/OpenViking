@@ -376,6 +376,10 @@ const workspace = {
     },
   },
   tasksPage: {
+    retry: {
+      noPendingMessages: '未创建新任务：该会话没有待提交消息',
+      commitSkipped: '未创建新任务：本次会话提交已跳过',
+    },
     title: '任务中心',
     description: '集中查看资源处理、会话提交和重建索引等后台任务。',
     refresh: '刷新',

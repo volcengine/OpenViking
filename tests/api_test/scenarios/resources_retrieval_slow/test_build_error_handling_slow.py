@@ -295,10 +295,11 @@ class TestBuildErrorHandlingSlow:
             assert (
                 "resolve" in error_msg
                 or "hostname" in error_msg
+                or "host does not exist" in error_msg
                 or "dns" in error_msg
                 or "error" in error_msg
                 or "connect" in error_msg
-            ), f"DNS失败错误信息应包含 resolve/hostname/dns/error/connect, 实际: {error_msg}"
+            ), f"DNS失败错误信息应包含 resolve/hostname/host does not exist/dns/error/connect, 实际: {error_msg}"
             print("✓ TC-E08 DNS解析失败处理通过(返回error)")
             return
 
@@ -310,11 +311,12 @@ class TestBuildErrorHandlingSlow:
                 assert (
                     "resolve" in inner_msg
                     or "hostname" in inner_msg
+                    or "host does not exist" in inner_msg
                     or "dns" in inner_msg
                     or "connect" in inner_msg
                     or "failed" in inner_msg
                     or "error" in inner_msg
-                ), f"DNS内层错误应包含 resolve/hostname/dns/connect/failed/error, 实际: {inner_msg}"
+                ), f"DNS内层错误应包含 resolve/hostname/host does not exist/dns/connect/failed/error, 实际: {inner_msg}"
                 print(f"✓ TC-E08 DNS解析失败处理通过(内层错误): {inner_msg[:80]}")
                 return
 
