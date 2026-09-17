@@ -138,13 +138,15 @@ async function main() {
     cfg = resolved;
     const payload = normalize(input);
     if (!stageName) return "";
+    const http = makeAgentFetchJSON(cfg, cwd);
     const ctx = {
       cfg,
       cwd,
       input: payload,
       nativeSessionId: resolveNativeSessionId(payload),
       sessionId: deriveAgentSessionId(host.prefix, payload),
-      fetchJSON: makeAgentFetchJSON(cfg, cwd).fetchJSON,
+      fetchJSON: http.fetchJSON,
+      get effectivePeer() { return http.effectivePeer; },
       log,
       logError,
     };

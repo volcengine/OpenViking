@@ -43,7 +43,9 @@ export const zcode = {
     input.prompt || input.user_prompt || input.userMessage || input.user_message || input.message || "",
   ),
   async capture(ctx, state) {
-    const plan = buildZcodeCapturePlan(buildZcodeTurns(ctx.input, state), state, ctx.cfg);
+    const plan = buildZcodeCapturePlan(buildZcodeTurns(ctx.input, state), state, {
+      ...ctx.cfg, peerId: ctx.effectivePeer.peerId,
+    });
     // Fail-closed: if no turns and no dedup keys, skip silently (not an error —
     // could be a Stop with no new content, or a race with UserPromptSubmit).
     if (plan.toSend.length === 0) return null;

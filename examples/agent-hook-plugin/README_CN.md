@@ -46,3 +46,7 @@ client 默认取这份副本安装时对应的那个；传 `cursor`、`trae`、`
 ```bash
 node --test examples/agent-hook-plugin/tests/*.test.mjs
 ```
+
+### ZCode 记忆归属
+
+ZCode 采集消息的正文 `peer_id` 与请求 actor header 使用同一个解析结果，支持显式 peer 配置和工作区派生规则；未解析出 peer 时不写该字段。此前仅 header 带 peer 的新消息会开始携带正文归属，后续提取可将 peer 范围记忆写入对应 peer。已有归档、记忆和已经排队的 payload 不自动迁移。

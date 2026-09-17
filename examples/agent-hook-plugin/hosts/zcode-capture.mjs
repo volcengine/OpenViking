@@ -24,6 +24,7 @@ export function buildZcodeCapturePlan(turns, state = {}, cfg = {}) {
   const payloads = toSend.map(({ turn, content }) => ({
     role: turn.role,
     content,
+    ...(cfg.peerId ? { peer_id: cfg.peerId } : {}),
     ...(turn.turnId ? { turn_id: turn.turnId } : {}),
   }));
   return { candidates, toSend, payloads };

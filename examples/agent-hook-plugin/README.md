@@ -33,6 +33,8 @@ The memory logic itself is not here: recall, batching, the pending queue, creden
 - **TRAE / TRAE CN** — capture reads `prompt`, `text_content` and `last_assistant_message` off the Stop event rather than parsing a transcript. Every Stop that carries content commits. Sessions are `tr-` and `trcn-`. See the [TRAE guide](../../docs/en/agent-integrations/13-trae.md).
 - **ZCode** — the rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and let a later Stop recover missed turns, and hook stdin is only the fallback. ZCode supports neither `PreCompact` nor `SessionEnd`, so committing on every Stop stands in for both. Its output schema is strict, so a pass-through writes nothing at all. Sessions are `zc-`. [DESIGN.md](./DESIGN.md) records the verified extension surface.
 
+ZCode capture messages carry the same resolved `peer_id` as the request actor header (explicit peer configuration or the configured workspace rule). With no resolved peer, the field stays absent. This changes attribution for newly captured messages that previously had only a header peer: subsequent extraction can place peer-scoped memories under that peer. Existing archives, memories and already queued payloads are not migrated.
+
 ## Diagnostics
 
 ```bash

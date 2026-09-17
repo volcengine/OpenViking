@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,6 +48,7 @@ test("Stop returns before slow writes while detached worker finishes capture", a
     request.on("end", () => {
       requests.push({
         url: request.url,
+        peer: request.headers["x-openviking-actor-peer"],
         body: Buffer.concat(chunks).toString(),
       });
       setTimeout(() => {
@@ -61,6 +63,9 @@ test("Stop returns before slow writes while detached worker finishes capture", a
 
   const home = mkdtempSync(join(tmpdir(), "zcode-async-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
+  const workspace = join(home, "project");
+  execFileSync("git", ["init", "-q", workspace]);
+  execFileSync("git", ["-C", workspace, "remote", "add", "origin", "https://github.com/example/zcode-peer-test.git"]);
   const sessionId = "sess-async-test";
   const rolloutDir = join(home, ".zcode", "cli", "rollout");
   mkdirSync(rolloutDir, { recursive: true });
@@ -76,7 +81,7 @@ test("Stop returns before slow writes while detached worker finishes capture", a
   const startedAt = Date.now();
   const run = await runHookScript(hook, {
     argv: ["stop", "zcode"],
-    input: { session_id: sessionId, cwd: home },
+    input: { session_id: sessionId, cwd: workspace },
     env: {
       HOME: home,
       OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
@@ -102,10 +107,11 @@ test("Stop returns before slow writes while detached worker finishes capture", a
   assert.equal(requests.length, 2);
   const batch = requests.find(({ url }) => url?.endsWith("/messages/batch"));
   assert.ok(batch);
+  assert.ok(batch.peer, "default Git-derived peer must reach the server");
   assert.deepEqual(JSON.parse(batch.body), {
     messages: [
-      { role: "user", content: "slow question", turn_id: "turn-001" },
-      { role: "assistant", content: "slow answer", turn_id: "turn-001" },
+      { role: "user", content: "slow question", peer_id: batch.peer, turn_id: "turn-001" },
+      { role: "assistant", content: "slow answer", peer_id: batch.peer, turn_id: "turn-001" },
     ],
   });
 
@@ -129,6 +135,7 @@ test("400 failure does not advance state and successful retry prevents duplicate
     request.on("end", () => {
       requests.push({
         url: request.url,
+        peer: request.headers["x-openviking-actor-peer"],
         body: Buffer.concat(chunks).toString(),
       });
       const isBatch = request.url?.endsWith("/messages/batch");
@@ -163,6 +170,7 @@ test("400 failure does not advance state and successful retry prevents duplicate
   writeFileSync(statePath, `${JSON.stringify({ version: 1, pendingPrompt })}\n`);
   const env = {
     HOME: home,
+    OPENVIKING_PEER_ID: "zcode-primary",
     OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
     OPENVIKING_WRITE_PATH_ASYNC: "0",
     OPENVIKING_TIMEOUT_MS: String(HOOK_TIMEOUT_MS),
@@ -177,10 +185,11 @@ test("400 failure does not advance state and successful retry prevents duplicate
 
   expectExit(await runHook({ session_id: sessionId, cwd: home }, env));
   const retriedBatch = requests.filter(({ url }) => url?.endsWith("/messages/batch"))[1];
+  assert.equal(retriedBatch.peer, "zcode-primary");
   assert.deepEqual(JSON.parse(retriedBatch.body), {
     messages: [
-      { role: "user", content: "retry question", turn_id: "turn-001" },
-      { role: "assistant", content: "retry answer", turn_id: "turn-001" },
+      { role: "user", content: "retry question", peer_id: "zcode-primary", turn_id: "turn-001" },
+      { role: "assistant", content: "retry answer", peer_id: "zcode-primary", turn_id: "turn-001" },
     ],
   });
   const successfulState = JSON.parse(readFileSync(statePath, "utf8"));
