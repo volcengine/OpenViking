@@ -158,9 +158,15 @@ int parse_dsl_query(const std::string& dsl_filter_query_str,
   }
   if (has_filter) {
     ctx.filter_op = parse_filter_json_doc_outter(dsl_filter_query);
+    if (!ctx.filter_op) {
+      return -1;
+    }
   }
   if (has_sorter) {
     ctx.sorter_op = parse_sorter_json_doc_outter(dsl_filter_query);
+    if (!ctx.sorter_op) {
+      return -1;
+    }
   }
   return 0;
 }
