@@ -419,6 +419,12 @@ const resources = {
       },
     },
     filePreview: {
+      directoryLevels: {
+        abstractLabel: 'Abstract',
+        overviewLabel: 'Overview',
+        abstractDescription: 'Short semantic abstract',
+        overviewDescription: 'Directory overview',
+      },
       cancel: 'Cancel',
       edit: 'Edit',
       emptyFile: '(empty file)',

@@ -399,6 +399,12 @@ const resources = {
       },
     },
     filePreview: {
+      directoryLevels: {
+        abstractLabel: '摘要',
+        overviewLabel: '概览',
+        abstractDescription: '简短的语义摘要',
+        overviewDescription: '目录内容概览',
+      },
       cancel: '取消',
       edit: '编辑',
       emptyFile: '(空文件)',

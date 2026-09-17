@@ -1,10 +1,9 @@
 import { useEffect, useRef } from 'react'
-import type { ComponentType, CSSProperties, ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { Coins, Database, Search } from 'lucide-react'
 
 import { Skeleton } from '#/components/ui/skeleton'
 
-import { HOME_ACCENT_COLORS } from '../-constants/dashboard'
 import type {
   ContextCounts,
   HomeT,
@@ -36,7 +35,7 @@ function MetricPanel({
 }: {
   children?: ReactNode
   description: string
-  icon: ComponentType<{ className?: string; style?: CSSProperties }>
+  icon: ComponentType<{ className?: string }>
   isError?: boolean
   isLoading?: boolean
   title: string
@@ -95,19 +94,13 @@ function MetricPanel({
       <div>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold tracking-normal text-[oklch(0.42_0.04_232)] dark:text-[oklch(0.8_0.03_232)]">
+            <h2 className="truncate text-sm font-semibold tracking-normal text-muted-foreground">
               {title}
             </h2>
             <p className="sr-only">{description}</p>
           </div>
-          <span
-            className="flex size-7 shrink-0 items-center justify-center rounded-full"
-            style={{ backgroundColor: HOME_ACCENT_COLORS.iconSoft }}
-          >
-            <Icon
-              className="size-3.5"
-              style={{ color: HOME_ACCENT_COLORS.icon }}
-            />
+          <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground">
+            <Icon className="size-4" />
           </span>
         </div>
 
@@ -123,7 +116,7 @@ function MetricPanel({
       </div>
 
       {children ? (
-        <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2">
+        <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-x-5 gap-y-1">
           {children}
         </div>
       ) : null}
