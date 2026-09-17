@@ -1067,6 +1067,13 @@ class FeishuChannel(BaseChannel):
                         message.root_id = message.message_id
                     final_chat_id = f"{reply_to}#{message.root_id}"
 
+            topic_title = ""
+            if chat_mode == "thread" and message.root_id == message_id and msg_type == "post":
+                try:
+                    topic_title = json.loads(message.content).get("title", "")
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
             # 10. 转发到消息总线
             logger.info(f"Received message from Feishu: {content}")
             await self._handle_message(
@@ -1083,6 +1090,7 @@ class FeishuChannel(BaseChannel):
                     "msg_type": msg_type,
                     "root_id": message.root_id,
                     "chat_mode": chat_mode,
+                    "topic_title": topic_title if isinstance(topic_title, str) else "",
                     "sender_id": sender_id,
                 },
             )

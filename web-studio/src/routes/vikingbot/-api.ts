@@ -92,6 +92,7 @@ export function getConversations(id: string) {
       conversation: string
       latest: number
       title: string
+      group_name?: string
       preview?: string
       time?: string
     }>

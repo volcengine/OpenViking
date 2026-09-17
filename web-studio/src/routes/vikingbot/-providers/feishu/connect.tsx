@@ -1,3 +1,7 @@
+import {
+  RuntimeUserSelect,
+  useRuntimeUserSelection,
+} from '../../-components/runtime-user-select'
 import { ReplyMode } from './reply-settings'
 import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -8,7 +12,7 @@ import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { createRandomUuid } from '#/lib/browser-crypto'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { getBotUsers, getConnections } from '../../-api'
+import { getConnections } from '../../-api'
 import { FeishuSetup } from './feishu-setup'
 import { GroupSetup } from './group-setup'
 import {
@@ -66,7 +70,6 @@ function ScanSetup({
   const { t } = useTranslation('vikingbot')
   const { identityScopeKey: scope } = useAppConnection()
   const client = useQueryClient()
-  const [userId, setUserId] = useState('')
   const [requireMention, setRequireMention] = useState(true)
   const [name, setName] = useState('VikingBot')
   const [jobId, setJobId] = useState(connection?.onboarding_id)
@@ -91,15 +94,8 @@ function ScanSetup({
       query.state.data && finished.has(query.state.data.state) ? false : 1500,
   })
   const run = job.data ?? (current.data?.id === id ? current.data : undefined)
-  const users = useQuery({
-    queryKey: ['vikingbot', scope, 'users'],
-    queryFn: getBotUsers,
-    enabled: !id,
-    retry: false,
-  })
-  const available = users.data?.filter((user) => user.available) ?? []
-  const selectedUser =
-    userId || (available.length === 1 ? available[0].user_id : '')
+  const userSelection = useRuntimeUserSelection(!id)
+  const { selectedUser } = userSelection
   const connections = useQuery({
     queryKey: ['vikingbot', scope, 'connections'],
     queryFn: getConnections,
@@ -145,11 +141,7 @@ function ScanSetup({
     })
   }
   const error =
-    mutation.error ||
-    current.error ||
-    job.error ||
-    users.error ||
-    connections.error
+    mutation.error || current.error || job.error || connections.error
   const step = run?.state === 'ready' ? 2 : id ? 1 : 0
   return (
     <section className="mx-auto w-full min-w-0 max-w-4xl space-y-8 px-6 py-8 sm:px-8 lg:px-12 lg:py-10">
@@ -178,52 +170,15 @@ function ScanSetup({
           <p role="status">{t('loading')}</p>
         ) : !id && !current.error ? (
           <div className="space-y-6">
-            <label className="grid gap-3 text-sm">
-              <span>{t('runtimeUser')}</span>
-              <select
-                aria-label={t('runtimeUser')}
-                className="h-11 w-full rounded-md border bg-background px-4"
-                value={selectedUser}
-                disabled={mutation.isPending || users.isPending}
-                onChange={(event) => setUserId(event.target.value)}
-              >
-                <option value="">{t('selectUser')}</option>
-                {users.data?.map((user) => (
-                  <option
-                    key={user.user_id}
-                    value={user.user_id}
-                    disabled={!user.available}
-                  >
-                    {user.user_id}
-                    {!user.available ? ` · ${t('userUnavailable')}` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="text-xs leading-6 text-muted-foreground">
-              {t('runtimeUserHint')}
-            </p>
+            <RuntimeUserSelect
+              selection={userSelection}
+              disabled={mutation.isPending}
+            />
             <ReplyMode
               value={requireMention}
               onChange={setRequireMention}
               disabled={mutation.isPending}
             />
-            {users.isSuccess && available.length === 0 && (
-              <p className="text-sm">
-                {t('noUsers')}{' '}
-                <a
-                  className="underline"
-                  href="/users"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {t('manageUsers')}
-                </a>{' '}
-                <Button variant="ghost" onClick={() => void users.refetch()}>
-                  {t('retry')}
-                </Button>
-              </p>
-            )}
             <label className="grid gap-3 text-sm">
               <span>{t('qr.botName')}</span>
               <Input
@@ -350,7 +305,6 @@ function ScanSetup({
               onClick={() => {
                 void current.refetch()
                 if (id) void job.refetch()
-                void users.refetch()
               }}
             >
               {t('retry')}

@@ -1,12 +1,15 @@
+import {
+  RuntimeUserSelect,
+  useRuntimeUserSelection,
+} from '../../-components/runtime-user-select'
 import { ReplyMode } from './reply-settings'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ExternalLinkIcon, Loader2Icon } from 'lucide-react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { Button } from '#/components/ui/button'
-import { useAppConnection } from '#/hooks/use-app-connection'
 import { Input } from '#/components/ui/input'
-import { createConnection, getBotUsers } from '../../-api'
+import { createConnection } from '../../-api'
 import { GroupSetup } from './group-setup'
 import type { Connection } from '../../-api'
 
@@ -20,22 +23,13 @@ export function FeishuSetup({
   onClose: () => void
 }) {
   const { t } = useTranslation('vikingbot')
-  const { identityScopeKey } = useAppConnection()
   const [appId, setAppId] = useState('')
   const [secret, setSecret] = useState('')
-  const [userId, setUserId] = useState('')
   const [requireMention, setRequireMention] = useState(true)
   const [created, setCreated] = useState<Connection>()
   const current = connection ?? created
-  const users = useQuery({
-    queryKey: ['vikingbot', identityScopeKey, 'users'],
-    queryFn: getBotUsers,
-    enabled: !current,
-    retry: false,
-  })
-  const available = users.data?.filter((user) => user.available) ?? []
-  const selectedUser =
-    userId || (available.length === 1 ? available[0].user_id : '')
+  const userSelection = useRuntimeUserSelection(!current)
+  const { selectedUser } = userSelection
   const mutation = useMutation({
     mutationFn: () =>
       createConnection({
@@ -92,65 +86,10 @@ export function FeishuSetup({
               autoComplete="new-password"
             />
           </label>
-          <label className="grid gap-3 text-sm">
-            <span>{t('runtimeUser')}</span>
-            <select
-              aria-label={t('runtimeUser')}
-              className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-              value={selectedUser}
-              disabled={users.isPending || users.isError}
-              onChange={(e) => setUserId(e.target.value)}
-            >
-              <option value="">
-                {t(users.isPending ? 'loading' : 'selectUser')}
-              </option>
-              {users.data?.map((user) => (
-                <option
-                  key={user.user_id}
-                  value={user.user_id}
-                  disabled={!user.available}
-                >
-                  {user.user_id}
-                  {user.available ? '' : ` — ${t('userUnavailable')}`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="text-xs leading-6 text-muted-foreground">
-            {t('runtimeUserHint')}
-          </p>
-          {users.error && (
-            <p role="alert" className="text-sm text-destructive">
-              {t('operationFailed')} {users.error.message}{' '}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void users.refetch()}
-              >
-                {t('retry')}
-              </Button>
-            </p>
-          )}
-          {!users.isPending && !users.isError && !users.data.length && (
-            <p className="text-sm text-muted-foreground">
-              {t('noUsers')}{' '}
-              <a
-                href="/users"
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary underline"
-              >
-                {t('manageUsers')}
-              </a>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void users.refetch()}
-              >
-                {t('retry')}
-              </Button>
-            </p>
-          )}
+          <RuntimeUserSelect
+            selection={userSelection}
+            disabled={mutation.isPending}
+          />
 
           <ReplyMode
             value={requireMention}

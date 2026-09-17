@@ -141,3 +141,34 @@ it('preserves credentials after validation failure and blocks duplicate submissi
   )
   expect(changed).not.toHaveBeenCalled()
 })
+
+it.each([
+  { users: [] },
+  { users: [{ user_id: 'unavailable', available: false }] },
+])(
+  'offers user management and recovers after refreshing unavailable users: %j',
+  async ({ users }) => {
+    api.users.mockResolvedValueOnce(users)
+    show()
+    await screen.findByRole('link', { name: zh.manageUsers })
+    fireEvent.change(screen.getByLabelText(zh.appId), {
+      target: { value: 'cli_test' },
+    })
+    fireEvent.change(screen.getByLabelText(zh.appSecret), {
+      target: { value: 'secret' },
+    })
+    const submit = screen.getByRole<HTMLButtonElement>('button', {
+      name: zh.connect,
+    })
+    expect(submit.disabled).toBe(true)
+    api.users.mockResolvedValueOnce([{ user_id: 'recovered', available: true }])
+    fireEvent.click(screen.getByRole('button', { name: zh.retry }))
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText<HTMLSelectElement>(zh.runtimeUser).value,
+      ).toBe('recovered'),
+    )
+    expect(submit.disabled).toBe(false)
+    expect(screen.queryByRole('link', { name: zh.manageUsers })).toBeNull()
+  },
+)

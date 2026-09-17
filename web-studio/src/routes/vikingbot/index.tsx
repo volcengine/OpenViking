@@ -103,6 +103,7 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
             : getTitle(session.session_id),
         time: session.mod_time,
         channel: 'web',
+        groupName: '',
       })),
     ...platformQueries.flatMap((query, index) =>
       (query.data ?? []).map((item) => ({
@@ -111,13 +112,16 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
         title: item.title || t('newChat'),
         time: item.time,
         channel: connections.data![index].type ?? 'feishu',
+        groupName: item.group_name ?? '',
       })),
     ),
   ]
     .filter(
       (row) =>
         (activeFilter === 'all' || row.channel === activeFilter) &&
-        row.title.toLowerCase().includes(search.toLowerCase()),
+        `${row.title} ${row.groupName}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
     )
     .sort(
       (a, b) =>
@@ -235,7 +239,11 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
                 <ConversationRow
                   key={`${row.connection ?? 'web'}:${row.id}`}
                   title={row.title}
-                  subtitle={t(row.channel)}
+                  subtitle={
+                    row.groupName
+                      ? `${t(row.channel)}-${row.groupName}`
+                      : t(row.channel)
+                  }
                   time={row.time}
                   icon={
                     row.connection ? (

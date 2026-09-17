@@ -108,12 +108,31 @@ class StudioStore:
                 (connection, row["conversation"]),
             ).fetchone()
             first_message = json.loads(user[0] if user else first[0])
-            title = " ".join(str(first_message.get("content", "")).split())[:60]
-            result.append(dict(row) | {
-                "title": title,
-                "preview": str(message.get("content", ""))[:160],
-                "time": message.get("time", ""),
-            })
+            title = " ".join(
+                str(first_message.get("topic_title") or first_message.get("content", "")).split()
+            )[:60]
+            named = self.db.execute(
+                "SELECT value FROM messages WHERE connection_id=? AND conversation=? "
+                "AND json_extract(value, '$.chat_type')='group' "
+                "AND TRIM(COALESCE(json_extract(value, '$.title'), '')) != '' "
+                "ORDER BY id DESC LIMIT 1",
+                (connection, row["conversation"]),
+            ).fetchone()
+            group_name = ""
+            if named:
+                source = json.loads(named[0])
+                group_name = source.get("group_name") or source["title"]
+                if not source.get("group_name") and "#" in row["conversation"]:
+                    group_name = group_name.removesuffix(" / " + source.get("content", "")[:40])
+            result.append(
+                dict(row)
+                | {
+                    "title": title,
+                    "group_name": group_name,
+                    "preview": str(message.get("content", ""))[:160],
+                    "time": message.get("time", ""),
+                }
+            )
         return result
 
     def onboarding_runs(self, account=None):

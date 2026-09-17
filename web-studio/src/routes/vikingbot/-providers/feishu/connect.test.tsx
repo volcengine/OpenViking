@@ -177,3 +177,28 @@ it('passes the selected group reply mode to QR onboarding', async () => {
     ),
   )
 })
+
+it.each([
+  { users: [] },
+  { users: [{ user_id: 'unavailable', available: false }] },
+])(
+  'offers user management and recovers after refreshing unavailable users: %j',
+  async ({ users }) => {
+    api.users.mockResolvedValueOnce(users)
+    show()
+    await screen.findByRole('link', { name: zh.manageUsers })
+    const submit = screen.getByRole<HTMLButtonElement>('button', {
+      name: zh.qr.start,
+    })
+    expect(submit.disabled).toBe(true)
+    api.users.mockResolvedValueOnce([{ user_id: 'recovered', available: true }])
+    fireEvent.click(screen.getByRole('button', { name: zh.retry }))
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText<HTMLSelectElement>(zh.runtimeUser).value,
+      ).toBe('recovered'),
+    )
+    expect(submit.disabled).toBe(false)
+    expect(screen.queryByRole('link', { name: zh.manageUsers })).toBeNull()
+  },
+)

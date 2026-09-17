@@ -36,7 +36,16 @@ def test_store_survives_restart_deduplicates_and_paginates(tmp_path):
     store = StudioStore(path)
     store.save(record())
     for i in range(105):
-        store.append("connection", "group", str(i), {"content": str(i), "title": "Team"})
+        store.append(
+            "connection",
+            "group",
+            str(i),
+            {
+                "content": str(i),
+                "title": "Team",
+                "chat_type": "group",
+            },
+        )
     store.append("connection", "group", "0", {"content": "duplicate"})
     reloaded = StudioStore(path)
     assert reloaded.connections("b") == []
@@ -46,6 +55,22 @@ def test_store_survives_restart_deduplicates_and_paginates(tmp_path):
     assert page[0]["content"] == "104"
     assert len(reloaded.history("connection", "group", page[99]["id"])) == 5
     assert reloaded.conversations("connection")[0]["title"] == "0"
+    assert reloaded.conversations("connection")[0]["group_name"] == "Team"
+    store.append(
+        "connection",
+        "group#topic",
+        "topic",
+        {
+            "role": "user",
+            "content": "First question",
+            "chat_type": "group",
+            "title": "Team / First question",
+            "topic_title": "Release plan",
+        },
+    )
+    topic = reloaded.conversations("connection")[0]
+    assert topic["title"] == "Release plan"
+    assert topic["group_name"] == "Team"
     assert path.stat().st_mode & 0o777 == 0o600
 
 

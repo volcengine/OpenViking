@@ -89,7 +89,13 @@ class StudioFeishuChannel(FeishuChannel):
                 "time": now(),
                 "status": "received",
                 "chat_type": metadata.get("chat_type"),
+                "topic_title": metadata.get("topic_title", ""),
                 "title": await self.chat_title(chat_id, content, metadata),
+                "group_name": self.chat_names.get(
+                    metadata.get("reply_to", chat_id).split("#")[0], ""
+                )
+                if metadata.get("chat_type") == "group"
+                else "",
             },
         )
         if not inserted:
