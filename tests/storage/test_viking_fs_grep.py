@@ -7,8 +7,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 import openviking.storage.viking_fs as viking_fs_module
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclEntry, AclLevel, AclMode, DirectAcl, EffectiveAcl
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.grep_config import GrepConfig
 
 
@@ -710,3 +713,77 @@ async def test_grep_applies_node_limit_to_backend_results(monkeypatch, fs):
         "viking://resources/a.md",
         "viking://resources/b.md",
     ]
+
+
+class _RestrictedAclManager:
+    """ACL manager stub: enabled, with per-URI effective ACLs from `resolve_many`."""
+
+    def __init__(self, effective_by_uri):
+        self.effective_by_uri = effective_by_uri
+
+    def is_enabled(self, account_id):
+        return True
+
+    async def resolve_many(self, uris, ctx):
+        return {uri: self.effective_by_uri[uri] for uri in uris}
+
+
+def _acl_grep_fs(monkeypatch, effective_by_uri):
+    """VikingFS with a native-grep stub returning one restricted resource match."""
+    viking_fs = VikingFS(agfs=_DummyAgfs())
+
+    async def fake_grep(**kwargs):
+        return {
+            "matches": [
+                {"file": "secret.md", "line": 1, "content": "SECRET_MARKER_4977"},
+            ],
+            "count": 1,
+        }
+
+    monkeypatch.setattr(viking_fs._async_agfs, "grep", fake_grep)
+    viking_fs.acl_manager = _RestrictedAclManager(effective_by_uri)
+    return viking_fs
+
+
+def _restricted_acl() -> EffectiveAcl:
+    """RESTRICTED inheritance with no grants — denies every non-bypassing principal."""
+    return EffectiveAcl(AclMode.RESTRICTED, DirectAcl(), DirectAcl())
+
+
+@pytest.mark.asyncio
+async def test_grep_with_agfs_denies_acl_restricted_content_without_grant(monkeypatch):
+    """Native grep must not leak restricted-inheritance content to a user with no grant."""
+    viking_fs = _acl_grep_fs(
+        monkeypatch,
+        {"viking://resources/secret.md": _restricted_acl()},
+    )
+    ctx = RequestContext(user=UserIdentifier("acct1", "mallory"), role=Role.USER)
+
+    result = await viking_fs._grep_with_agfs(
+        "viking://resources", pattern="SECRET_MARKER_4977", ctx=ctx
+    )
+
+    assert result["matches"] == []
+    assert result["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grep_with_agfs_allows_acl_granted_content(monkeypatch):
+    """Authorized principals keep receiving restricted-inheritance content through grep."""
+    granted = EffectiveAcl(
+        AclMode.RESTRICTED,
+        DirectAcl.from_entries([AclEntry("user:mallory", AclLevel.READ)]),
+        DirectAcl(),
+    )
+    viking_fs = _acl_grep_fs(
+        monkeypatch,
+        {"viking://resources/secret.md": granted},
+    )
+    ctx = RequestContext(user=UserIdentifier("acct1", "mallory"), role=Role.USER)
+
+    result = await viking_fs._grep_with_agfs(
+        "viking://resources", pattern="SECRET_MARKER_4977", ctx=ctx
+    )
+
+    assert [m["uri"] for m in result["matches"]] == ["viking://resources/secret.md"]
+    assert result["count"] == 1
