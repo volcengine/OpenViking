@@ -150,6 +150,15 @@ async def test_http_contract_preserves_legacy_list_and_retries(monkeypatch):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        empty_page = await client.get(
+            "/api/v1/tasks", params={"pagination": "cursor", "task_type": "compile", "limit": 30}
+        )
+        assert empty_page.status_code == 200, empty_page.text
+        assert empty_page.json()["result"] == {
+            "items": [],
+            "has_more": False,
+            "next_cursor": None,
+        }
         first = await client.post("/api/v1/compile", json=payload, headers=headers)
         assert first.status_code == 202, first.text
         second = await client.post(

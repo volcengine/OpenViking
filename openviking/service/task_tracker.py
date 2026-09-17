@@ -966,35 +966,32 @@ class TaskTracker:
     ) -> list[TaskRecord]:
         from openviking.service.task_pagination import matches
 
-        async def read():
-            owners = {(account_id, user_id)}
-            if additional_owner:
-                owners.add(additional_owner)
-            records = []
-            for account, user in owners:
-                page = await self._store.list_page(
-                    account,
-                    user_id=user,
-                    limit=limit,
-                    before=before,
-                    prune_expired=self._prune_persisted_expired,
-                    io_limiter=self._store_io,
-                    **filters,
-                )
-                records.extend(self._record_from_payload(record) for record in page)
-            if include_cached:
-                records.extend(self._copy(t) for t in self._cache_snapshot())
-            visible = {
-                t.task_id: t
-                for t in records
-                if (before is None or (t.created_at, t.task_id) < before)
-                and matches(t.to_dict(), **filters)
-            }
-            return sorted(visible.values(), key=lambda t: (t.created_at, t.task_id), reverse=True)[
-                :limit
-            ]
-
-        return await self._dispatcher.run(read)
+        owners = {(account_id, user_id)}
+        if additional_owner:
+            owners.add(additional_owner)
+        records = []
+        for account, user in owners:
+            page = await self._store.list_page(
+                account,
+                user_id=user,
+                limit=limit,
+                before=before,
+                prune_expired=self._prune_persisted_expired,
+                io_limiter=self._store_io,
+                **filters,
+            )
+            records.extend(self._record_from_payload(record) for record in page)
+        if include_cached:
+            records.extend(self._copy(t) for t in self._cache_snapshot())
+        visible = {
+            t.task_id: t
+            for t in records
+            if (before is None or (t.created_at, t.task_id) < before)
+            and matches(t.to_dict(), **filters)
+        }
+        return sorted(visible.values(), key=lambda t: (t.created_at, t.task_id), reverse=True)[
+            :limit
+        ]
 
     async def list_tasks(
         self,
