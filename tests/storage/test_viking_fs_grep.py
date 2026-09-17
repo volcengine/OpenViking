@@ -7,8 +7,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 import openviking.storage.viking_fs as viking_fs_module
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclManager
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _DEFAULT_GREP_FILE_CONCURRENCY, VikingFS
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.grep_config import GrepConfig
 
 
@@ -686,6 +689,77 @@ async def test_grep_maps_agfs_matches_to_viking_uris(monkeypatch, fs):
         "match_count": 2,
         "files_scanned": 7,
     }
+
+
+@pytest.mark.asyncio
+async def test_grep_acl_fallback_filters_before_node_limit(monkeypatch, fs):
+    denied_parent = "viking://resources/restricted"
+    denied_uri = f"{denied_parent}/secret.md"
+    allowed_uri = "viking://resources/public.md"
+    ctx = RequestContext(user=UserIdentifier("account", "reader"), role=Role.USER)
+
+    class _AclStore:
+        async def scroll(self, **kwargs):
+            filter_expr = kwargs["filter"]
+            requested_uris = {
+                condition.path
+                for condition in filter_expr.conds
+                if isinstance(condition, PathScope)
+            }
+            records = []
+            if denied_parent in requested_uris:
+                records.append(
+                    {
+                        "uri": denied_parent,
+                        "acl_mode": "restricted",
+                        "acl_direct_grants": [],
+                        "acl_inherited_grants": [],
+                    }
+                )
+            return records, None
+
+    fs.acl_manager = AclManager(_AclStore())
+    fs.acl_manager.set_enabled(ctx.account_id, True)
+    monkeypatch.setattr(
+        fs,
+        "_collect_grep_files",
+        AsyncMock(return_value=[denied_uri, allowed_uri]),
+    )
+
+    read_paths = []
+
+    async def fake_read(path, offset, size):
+        read_paths.append(path)
+        return {
+            "/resources/restricted/secret.md": b"secret",
+            "/resources/public.md": b"first public match\nsecond public match",
+        }[path]
+
+    native_grep = AsyncMock(side_effect=AssertionError("native grep must not run with ACL"))
+    monkeypatch.setattr(fs._async_agfs, "grep", native_grep)
+    monkeypatch.setattr(fs._async_agfs, "read", fake_read)
+
+    result = await fs.grep(
+        "viking://resources",
+        pattern="match",
+        node_limit=1,
+        ctx=ctx,
+    )
+
+    assert result == {
+        "matches": [
+            {
+                "line": 1,
+                "uri": allowed_uri,
+                "content": "first public match",
+            },
+        ],
+        "count": 1,
+        "match_count": 1,
+        "files_scanned": 2,
+    }
+    native_grep.assert_not_awaited()
+    assert read_paths == ["/resources/public.md"]
 
 
 @pytest.mark.asyncio
