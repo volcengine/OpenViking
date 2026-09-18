@@ -142,6 +142,22 @@ async def test_content_write_rejects_watch_task_control_files(user_ctx, uri):
 @pytest.mark.parametrize(
     "uri",
     [
+        "viking://resources/project/.path.ovlock",
+        "viking://resources/project/.exact.ovlock.notes.md.0123abcd",
+        "viking://resources/project/.redirect.json",
+        "viking://resources/project/.sync_log.json",
+    ],
+)
+async def test_content_write_rejects_storage_internal_files(user_ctx, uri):
+    coordinator = ContentWriteCoordinator(_NoWriteVikingFS())
+
+    with pytest.raises(InvalidArgumentError, match="storage internal file"):
+        await coordinator.write(uri=uri, content="x", ctx=user_ctx)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
         "viking://resources//.watch_tasks.json",
         "viking://resources//.watch_tasks.json.bak",
         "viking://resources///.watch_tasks.json.tmp/",

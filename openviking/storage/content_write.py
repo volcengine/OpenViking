@@ -39,6 +39,10 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, CreatorAclGrant
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.internal_names import (
+    MULTIWRITE_EXACT_LOCK_FILE_PREFIX,
+    MULTIWRITE_INTERNAL_FILE_NAMES,
+)
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -1077,6 +1081,13 @@ class ContentWriteCoordinator:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
+        if name in MULTIWRITE_INTERNAL_FILE_NAMES or name.startswith(
+            MULTIWRITE_EXACT_LOCK_FILE_PREFIX
+        ):
+            # These names are storage-layer metadata (RAGFS multi-write lock, redirect and
+            # sync-log files) that listings hide at every level; a user write would be
+            # routed to the raw backend and overwrite the real file.
+            raise InvalidArgumentError(f"cannot write storage internal file directly: {uri}")
         if is_watch_task_control_uri(uri):
             raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
 
