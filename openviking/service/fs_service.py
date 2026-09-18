@@ -1016,6 +1016,51 @@ class FSService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.overview(uri, ctx=ctx)
 
+    async def _attach_grep_context(
+        self,
+        matches: List[Dict[str, Any]],
+        ctx: RequestContext,
+        before_context: int,
+        after_context: int,
+    ) -> List[Dict[str, Any]]:
+        enriched = []
+        for match in matches:
+            item = dict(match)
+            item["before_context"] = []
+            item["after_context"] = []
+            uri = match.get("uri")
+            line = match.get("line")
+            if not isinstance(uri, str) or not isinstance(line, int) or line < 1:
+                enriched.append(item)
+                continue
+
+            start_line = max(1, line - before_context)
+            limit = line - start_line + 1 + after_context
+            try:
+                content = await self.read_visible(
+                    uri,
+                    ctx=ctx,
+                    offset=start_line - 1,
+                    limit=limit,
+                )
+            except Exception:
+                logger.warning("Failed to read grep context for %s:%s", uri, line, exc_info=True)
+                enriched.append(item)
+                continue
+
+            lines = content.splitlines()
+            match_index = line - start_line
+            item["before_context"] = [
+                {"line": line_number, "content": text}
+                for line_number, text in enumerate(lines[:match_index], start=start_line)
+            ]
+            item["after_context"] = [
+                {"line": line_number, "content": text}
+                for line_number, text in enumerate(lines[match_index + 1 :], start=line + 1)
+            ]
+            enriched.append(item)
+        return enriched
+
     async def grep(
         self,
         uri: str,
@@ -1027,6 +1072,8 @@ class FSService:
         level_limit: int = 10,
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
+        before_context: int = 0,
+        after_context: int = 0,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
@@ -1051,6 +1098,13 @@ class FSService:
         matches = result.get("matches", [])
         if include_tags and not normalized_tags and any("tags" not in match for match in matches):
             matches = await self._attach_and_filter_tags(matches, ctx, None, include_tags=True)
+        if before_context or after_context:
+            matches = await self._attach_grep_context(
+                matches,
+                ctx,
+                before_context=before_context,
+                after_context=after_context,
+            )
         result["matches"] = matches
         result["count"] = len(matches)
         return result

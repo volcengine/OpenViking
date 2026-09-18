@@ -777,6 +777,8 @@ impl HttpClient {
         exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
+        after_context: i32,
+        before_context: i32,
         node_limit: i32,
         level_limit: i32,
         tags: &[String],
@@ -787,6 +789,8 @@ impl HttpClient {
             "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
+            "after_context": (after_context > 0).then_some(after_context),
+            "before_context": (before_context > 0).then_some(before_context),
             "node_limit": node_limit,
             "level_limit": level_limit,
             "tags": (!tags.is_empty()).then(|| tags),
@@ -2010,6 +2014,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn grep_only_sends_nonzero_context_options() {
+        let (default_url, default_request_rx) = spawn_request_capture_server().await;
+        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
+        default_client
+            .grep(
+                "viking://resources",
+                None,
+                "needle",
+                false,
+                0,
+                0,
+                256,
+                10,
+                &[],
+                false,
+            )
+            .await
+            .expect("default grep request should succeed");
+        let default_request = default_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(!default_request.contains("after_context"));
+        assert!(!default_request.contains("before_context"));
+
+        let (context_url, context_request_rx) = spawn_request_capture_server().await;
+        let context_client = HttpClient::new(context_url, None, None, None, None, 5.0, false, None);
+        context_client
+            .grep(
+                "viking://resources",
+                None,
+                "needle",
+                false,
+                2,
+                3,
+                256,
+                10,
+                &[],
+                false,
+            )
+            .await
+            .expect("context grep request should succeed");
+        let context_request = context_request_rx
+            .await
+            .expect("request should be captured");
+        assert!(context_request.contains(r#""after_context":2"#));
+        assert!(context_request.contains(r#""before_context":3"#));
+    }
+
+    #[tokio::test]
     async fn add_resource_sends_parse_mode_through_args() {
         let (default_url, default_request_rx) = spawn_request_capture_server().await;
         let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
@@ -2504,6 +2557,8 @@ mod tests {
                 None,
                 "needle",
                 false,
+                0,
+                0,
                 10,
                 3,
                 &[],
@@ -2529,6 +2584,8 @@ mod tests {
                 None,
                 "needle",
                 false,
+                0,
+                0,
                 10,
                 3,
                 &[],

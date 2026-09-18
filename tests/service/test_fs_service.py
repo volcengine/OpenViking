@@ -306,6 +306,85 @@ async def test_grep_projects_memory_content_but_keeps_resource_fast_path(request
 
 
 @pytest.mark.asyncio
+async def test_grep_attaches_requested_context_via_read_visible(request_context):
+    match = {"uri": "viking://resources/a.md", "line": 3, "content": "needle"}
+    service = FSService(
+        viking_fs=SimpleNamespace(
+            grep=AsyncMock(return_value={"matches": [match], "count": 1})
+        )
+    )
+    service.read_visible = AsyncMock(return_value="line two\nneedle\nline four\nline five\n")
+
+    result = await service.grep(
+        "viking://resources",
+        "needle",
+        ctx=request_context,
+        before_context=1,
+        after_context=2,
+    )
+
+    assert result["matches"] == [
+        {
+            **match,
+            "before_context": [{"line": 2, "content": "line two"}],
+            "after_context": [
+                {"line": 4, "content": "line four"},
+                {"line": 5, "content": "line five"},
+            ],
+        }
+    ]
+    service.read_visible.assert_awaited_once_with(
+        match["uri"],
+        ctx=request_context,
+        offset=1,
+        limit=4,
+    )
+
+
+@pytest.mark.asyncio
+async def test_grep_context_is_truncated_at_file_boundaries(request_context):
+    match = {"uri": "viking://resources/a.md", "line": 1, "content": "needle"}
+    service = FSService(
+        viking_fs=SimpleNamespace(
+            grep=AsyncMock(return_value={"matches": [match], "count": 1})
+        )
+    )
+    service.read_visible = AsyncMock(return_value="needle\nline two\n")
+
+    result = await service.grep(
+        "viking://resources",
+        "needle",
+        ctx=request_context,
+        before_context=2,
+        after_context=3,
+    )
+
+    assert result["matches"] == [
+        {
+            **match,
+            "before_context": [],
+            "after_context": [{"line": 2, "content": "line two"}],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_grep_without_context_keeps_matches_unchanged(request_context):
+    matches = [{"uri": "viking://resources/a.md", "line": 1, "content": "needle"}]
+    service = FSService(
+        viking_fs=SimpleNamespace(
+            grep=AsyncMock(return_value={"matches": matches, "count": 1})
+        )
+    )
+    service.read_visible = AsyncMock()
+
+    result = await service.grep("viking://resources", "needle", ctx=request_context)
+
+    assert result["matches"] == matches
+    service.read_visible.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_grep_projects_tags_for_each_match(request_context):
     matches = [
         {"uri": "viking://resources/a.md", "line": 1, "content": "needle"},
