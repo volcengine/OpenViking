@@ -331,6 +331,14 @@ export async function commitSession(
   )
 }
 
+export async function retrySessionCommitTask(
+  taskId: string,
+): Promise<CommitSessionResult> {
+  return getOvResult<CommitSessionResult>(
+    ovClient.instance.post(`/api/v1/tasks/${encodeURIComponent(taskId)}/retry`),
+  )
+}
+
 export async function extractSession(sessionId: string): Promise<unknown> {
   return getOvResult<unknown>(
     postSessionIdExtract({

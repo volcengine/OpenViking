@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.agent_evolution_config import AgentEvolutionConfigProvider
 from openviking.server.config import AgentEvolutionConfig, ToolOutputExternalizationConfig
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import read_user_memory_policy
 from openviking.service.session_auto_commit import (
     compute_next_check_at,
@@ -38,10 +38,12 @@ from openviking.utils.tags import normalize_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    FailedPreconditionError,
     NotFoundError,
     NotInitializedError,
 )
 from openviking_cli.utils import get_logger
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
@@ -361,6 +363,48 @@ class SessionService:
         logger.info(f"Deleted session: {session_id}")
         self._record_lifecycle_metric("delete", "ok")
         return True
+
+    async def retry_failed_commit_task(
+        self,
+        task_id: str,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Retry one failed session-commit Phase 2 task from its archive snapshot."""
+        self._ensure_initialized()
+        tracker = get_task_tracker()
+        task = (
+            await tracker.get(task_id)
+            if ctx.role == Role.ROOT
+            else await tracker.get(
+                task_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+        )
+        if task is None:
+            raise NotFoundError(task_id, "task")
+        if task.task_type != "session_commit":
+            raise FailedPreconditionError(f"Task {task_id} is not a session commit")
+        if task.status.value != "failed":
+            raise FailedPreconditionError(f"Task {task_id} is not failed and cannot be retried")
+        if not task.resource_id:
+            raise FailedPreconditionError(f"Task {task_id} has no session resource ID")
+
+        task_ctx = ctx
+        if ctx.role == Role.ROOT:
+            if not task.account_id or not task.user_id:
+                raise FailedPreconditionError(f"Task {task_id} has no tenant owner")
+            task_ctx = replace(
+                ctx,
+                user=UserIdentifier(task.account_id, task.user_id),
+                role=Role.USER,
+                bypass_acl=True,
+            )
+
+        session = await self.get(task.resource_id, task_ctx, auto_create=False)
+        result = await session.retry_failed_commit_task(task_id)
+        self._record_lifecycle_metric("commit_retry", "ok")
+        return result
 
     async def commit(
         self,

@@ -82,13 +82,13 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra local-embed \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini \
+            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra local-embed \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
@@ -103,6 +103,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \
+    libgomp1 \
     libstdc++6 \
     ripgrep \
  && rm -rf /var/lib/apt/lists/*

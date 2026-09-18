@@ -26,7 +26,7 @@ import {
 } from 'vitest'
 
 import { toast } from 'sonner'
-import { commitSession } from '#/lib/sessions/api'
+import { retrySessionCommitTask } from '#/lib/sessions/api'
 import { Route } from './route'
 import type { TaskRecord } from './-lib/task-record'
 
@@ -45,7 +45,7 @@ vi.mock('#/lib/ov-client', () => ({
 }))
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
-vi.mock('#/lib/sessions/api', () => ({ commitSession: vi.fn() }))
+vi.mock('#/lib/sessions/api', () => ({ retrySessionCommitTask: vi.fn() }))
 vi.mock('sonner', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
 }))
@@ -232,7 +232,7 @@ describe('task status presentation', () => {
   })
 })
 
-describe('session commit re-trigger feedback', () => {
+describe('failed session commit retry', () => {
   beforeEach(() => {
     records = [
       {
@@ -243,63 +243,29 @@ describe('session commit re-trigger feedback', () => {
         created_at: 100,
       },
     ]
-    vi.mocked(commitSession).mockReset()
+    vi.mocked(retrySessionCommitTask).mockReset()
   })
 
-  it.each([
-    [
-      'en',
-      'no_messages',
-      'No new task created: this session has no pending messages',
-    ],
-    ['zh-CN', 'no_messages', '未创建新任务：该会话没有待提交消息'],
-    [
-      'en',
-      'all_within_keep_window',
-      'No new task created: this session commit was skipped',
-    ],
-    ['zh-CN', 'all_within_keep_window', '未创建新任务：本次会话提交已跳过'],
-    ['en', undefined, 'No new task created: this session commit was skipped'],
-  ])(
-    'reports skipped commits without success in %s (%s)',
-    async (lng, reason, message) => {
-      vi.mocked(commitSession).mockResolvedValue({
-        status: 'skipped',
-        reason,
-        task_id: null,
-      } as Awaited<ReturnType<typeof commitSession>>)
-      const user = await renderPage(lng)
-      await user.click(
-        await screen.findByTitle(
-          lng === 'en' ? 'Re-trigger Task' : '重新发起任务',
-        ),
-      )
-      await waitFor(() => expect(toast.info).toHaveBeenCalledWith(message))
-      expect(commitSession).toHaveBeenCalledWith('session-1')
-      expect(toast.info).toHaveBeenCalledTimes(1)
-      expect(toast.success).not.toHaveBeenCalled()
-      expect(toast.error).not.toHaveBeenCalled()
-    },
-  )
-
-  it('reports success when a new task is accepted', async () => {
-    vi.mocked(commitSession).mockResolvedValue({
+  it('requeues the failed task and reports success', async () => {
+    vi.mocked(retrySessionCommitTask).mockResolvedValue({
       status: 'accepted',
       task_id: 'new-task',
-    } as Awaited<ReturnType<typeof commitSession>>)
+    } as Awaited<ReturnType<typeof retrySessionCommitTask>>)
     const user = await renderPage()
     await user.click(await screen.findByTitle('Re-trigger Task'))
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
-    expect(toast.info).not.toHaveBeenCalled()
+    expect(retrySessionCommitTask).toHaveBeenCalledWith('failed-commit')
     expect(toast.error).not.toHaveBeenCalled()
   })
 
   it('reports request errors without success', async () => {
-    vi.mocked(commitSession).mockRejectedValue(new Error('Commit failed'))
+    vi.mocked(retrySessionCommitTask).mockRejectedValue(
+      new Error('Retry failed'),
+    )
     const user = await renderPage()
     await user.click(await screen.findByTitle('Re-trigger Task'))
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Commit failed'),
+      expect(toast.error).toHaveBeenCalledWith('Retry failed'),
     )
     expect(toast.info).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()

@@ -45,7 +45,7 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { ovClient } from '#/lib/ov-client'
 import { postResources } from '#/gen/ov-client'
-import { commitSession } from '#/lib/sessions/api'
+import { retrySessionCommitTask } from '#/lib/sessions/api'
 import { cn } from '#/lib/utils'
 import { QueueStatusCard } from '#/routes/monitoring/-components/queue-status-card'
 import { TaskDetailSheet } from '#/routes/tasks/-components/task-detail-sheet'
@@ -134,10 +134,7 @@ function TasksRoute() {
 
       // ── 1. task_type 精确匹配优先（不受 URI 前缀干扰）──────────────────────
       if (task.task_type === 'session_commit') {
-        const res = await commitSession(task.resource_id)
-        if (res.status === 'skipped' || res.reason === 'no_messages') {
-          return { res, task, skippedReason: res.reason ?? 'skipped' }
-        }
+        const res = await retrySessionCommitTask(task.task_id)
         return { res, task }
       }
       const resourceUri = task.resource_id || ''

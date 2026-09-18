@@ -76,6 +76,9 @@ def _configure_test_env(monkeypatch, tmp_path):
     )
 
     mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
+    settings_path = mock_agfs.root / "local" / "default" / "_system" / "setting.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("{}", encoding="utf-8")
 
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, str(config_path))
     OpenVikingConfigSingleton.reset_instance()
@@ -1435,6 +1438,78 @@ async def test_commit_failed_when_long_term_extraction_fails_does_not_block_next
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["archived"] is True
+
+
+async def test_retry_failed_session_commit_task_requeues_archived_messages(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+):
+    """A retry reuses archived Phase 1 data rather than the empty live session."""
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+    extractor = service.sessions._session_compressor
+    original_extract = extractor.extract_long_term_memories
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic extraction failure")
+
+    async def no_memories(*args, **kwargs):
+        del args, kwargs
+        return []
+
+    extractor.extract_long_term_memories = failing_extract
+    try:
+        await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json=_message_request("user", content="recover this archived message"),
+        )
+        commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+        failed_task_id = commit_resp.json()["result"]["task_id"]
+        failed_task = await _wait_for_task(client, failed_task_id)
+        assert failed_task["status"] == "failed"
+        extractor.extract_long_term_memories = no_memories
+
+        # The retry mutates archive descendants, so an exact session-root
+        # lease is insufficient and must never be used for this path.
+        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+        session = service.sessions.session(ctx, session_id)
+        await session.load()
+        agfs = session._viking_fs._async_agfs
+        original_tree_acquire = agfs.pathlock_acquire_tree
+        tree_acquires = []
+
+        async def record_tree_acquire(*args, **kwargs):
+            tree_acquires.append((args, kwargs))
+            return await original_tree_acquire(*args, **kwargs)
+
+        monkeypatch.setattr(agfs, "pathlock_acquire_tree", record_tree_acquire)
+
+        retry_resp = await client.post(f"/api/v1/tasks/{failed_task_id}/retry")
+        assert retry_resp.status_code == 200
+        assert tree_acquires
+        retry = retry_resp.json()["result"]
+        assert retry["status"] == "accepted"
+        assert retry["retry_of_task_id"] == failed_task_id
+        assert retry["archived_messages"] == 1
+
+        retried_task = await _wait_for_task(client, retry["task_id"])
+        assert retried_task["status"] == "completed"
+
+        session = service.sessions.session(ctx, session_id)
+        await session.load()
+        archive_uri = f"{session.uri}/history/archive_001"
+        assert not await _archive_marker_exists(session, archive_uri, ".failed.json")
+        assert await _archive_marker_exists(session, archive_uri, ".done")
+
+        archive_resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
+        assert archive_resp.status_code == 200
+        assert archive_resp.json()["result"]["messages"][0]["parts"][0]["text"] == (
+            "recover this archived message"
+        )
+    finally:
+        extractor.extract_long_term_memories = original_extract
 
 
 async def test_commit_failed_when_summary_fails_does_not_block_next_commit(

@@ -2290,6 +2290,203 @@ class Session:
             error="session commit cancelled",
         )
 
+    async def retry_failed_commit_task(self, task_id: str) -> Dict[str, Any]:
+        """Requeue one failed Phase 2 archive identified by its prior task ID.
+
+        Phase 1 stores the original QueueFS message in archive metadata.  That
+        snapshot is the authoritative recovery source: live session messages
+        have already been archived and must not be uploaded or committed again.
+        """
+        for archive in await self._list_archive_refs():
+            meta = await self._read_archive_meta(archive["archive_uri"])
+            phase1 = meta.get("phase1")
+            queue_message = phase1.get("queue_message") if isinstance(phase1, dict) else None
+            original_task_id = (
+                queue_message.get("task_id") if isinstance(queue_message, dict) else None
+            )
+            retry_history = meta.get("retry_history")
+            retry_task_ids = {
+                item.get("task_id")
+                for item in retry_history
+                if isinstance(item, dict) and isinstance(item.get("task_id"), str)
+            } if isinstance(retry_history, list) else set()
+            if task_id == original_task_id or task_id in retry_task_ids:
+                return await self.retry_failed_archive(archive["archive_id"], retry_of_task_id=task_id)
+
+        raise NotFoundError(task_id, "failed session commit task")
+
+    async def retry_failed_archive(
+        self,
+        archive_id: str,
+        *,
+        retry_of_task_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Safely requeue a failed Phase 2 archive without re-running Phase 1.
+
+        The failure marker is removed only after the original queue payload has
+        been validated and a replacement task record exists.  If enqueueing
+        fails, the original terminal marker is restored so the raw archive never
+        becomes an ambiguous pending commit.
+        """
+        from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+
+        if not re.fullmatch(r"archive_\d+", archive_id):
+            raise ValueError(f"Invalid session archive ID: {archive_id}")
+
+        archive_uri = f"{self._session_uri}/history/{archive_id}"
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        # Retry mutates files below the session root (the archive marker and
+        # archive metadata), so the lease must cover the whole session tree.
+        lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            if await self._archive_file_exists(archive_uri, ".done"):
+                raise FailedPreconditionError(
+                    f"Session archive {archive_id} is already completed and cannot be retried"
+                )
+
+            failed_marker_uri = f"{archive_uri}/.failed.json"
+            try:
+                failed_raw = await self._viking_fs.read_file(failed_marker_uri, ctx=self.ctx)
+                failed = json.loads(failed_raw or "{}")
+            except Exception as exc:
+                if _is_storage_not_found(exc):
+                    raise FailedPreconditionError(
+                        f"Session archive {archive_id} is not in a retryable failed state"
+                    ) from exc
+                raise
+            if not isinstance(failed, dict):
+                raise FailedPreconditionError(
+                    f"Session archive {archive_id} has an invalid failure marker"
+                )
+
+            phase1 = await self._read_phase1_meta(archive_uri)
+            queue_payload = phase1.get("queue_message") if isinstance(phase1, dict) else None
+            if not isinstance(queue_payload, dict) or phase1.get("status") != "ready":
+                raise FailedPreconditionError(
+                    f"Session archive {archive_id} has no ready Phase 1 snapshot to retry"
+                )
+
+            original_message = SessionCommitMsg.from_dict(queue_payload)
+            if (
+                original_message.session_id != self.session_id
+                or original_message.session_uri != self._session_uri
+                or original_message.archive_uri != archive_uri
+            ):
+                raise FailedPreconditionError(
+                    f"Session archive {archive_id} has a mismatched Phase 1 snapshot"
+                )
+            if retry_of_task_id and retry_of_task_id != original_message.task_id:
+                archive_meta = await self._read_archive_meta(archive_uri)
+                retry_history = archive_meta.get("retry_history")
+                prior_retry_ids = {
+                    item.get("task_id")
+                    for item in retry_history
+                    if isinstance(item, dict) and isinstance(item.get("task_id"), str)
+                } if isinstance(retry_history, list) else set()
+                if retry_of_task_id not in prior_retry_ids:
+                    raise FailedPreconditionError(
+                        f"Task {retry_of_task_id} is not associated with session archive {archive_id}"
+                    )
+
+            archive_messages = await self._read_archive_messages(archive_uri)
+            if not archive_messages:
+                raise FailedPreconditionError(
+                    f"Session archive {archive_id} has no recoverable messages"
+                )
+
+            new_task_id = str(uuid4())
+            replacement_message = SessionCommitMsg(
+                task_id=new_task_id,
+                session_id=original_message.session_id,
+                session_uri=original_message.session_uri,
+                archive_uri=original_message.archive_uri,
+                user=dict(original_message.user),
+                memory_policy=dict(original_message.memory_policy),
+                usage_uris=list(original_message.usage_uris),
+                record_auto_commit_success=original_message.record_auto_commit_success,
+                event_search_tags=list(original_message.event_search_tags),
+                auto_commit_policy=dict(original_message.auto_commit_policy),
+            )
+            retry_entry = {
+                "task_id": new_task_id,
+                "retry_of_task_id": retry_of_task_id or original_message.task_id,
+                "requested_at": get_current_timestamp(),
+                "status": "queued",
+            }
+            meta = await self._read_archive_meta(archive_uri)
+            retry_history = meta.get("retry_history")
+            retry_history = list(retry_history) if isinstance(retry_history, list) else []
+            retry_history.append(retry_entry)
+
+            tracker = get_task_tracker()
+            await tracker.create(
+                "session_commit",
+                resource_id=self.session_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                task_id=new_task_id,
+            )
+            try:
+                await self._viking_fs.remove_files(
+                    failed_marker_uri,
+                    ctx=self.ctx,
+                    lease_ref=lease,
+                    auto_pathlock=False,
+                )
+                await self._merge_archive_meta(
+                    archive_uri,
+                    {"retry_history": retry_history},
+                    lease_ref=lease,
+                )
+                await get_queue_manager().enqueue(
+                    QueueManager.SESSION_COMMIT,
+                    replacement_message.to_dict(),
+                )
+            except Exception as exc:
+                retry_entry["status"] = "enqueue_failed"
+                retry_entry["error"] = str(exc)
+                await self._merge_archive_meta(
+                    archive_uri,
+                    {"retry_history": retry_history},
+                    lease_ref=lease,
+                )
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage=str(failed.get("stage") or "memory_extraction"),
+                    error=str(failed.get("error") or "session commit failed"),
+                    blocked_by=str(failed.get("blocked_by") or ""),
+                    skipped=bool(failed.get("skipped", True)),
+                    completed_memory_steps=(
+                        failed.get("completed_memory_steps")
+                        if isinstance(failed.get("completed_memory_steps"), dict)
+                        else None
+                    ),
+                    lease_ref=lease,
+                )
+                await tracker.fail(
+                    new_task_id,
+                    f"Failed to requeue session archive {archive_id}: {exc}",
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+                raise
+
+            return {
+                "session_id": self.session_id,
+                "archive_id": archive_id,
+                "archive_uri": archive_uri,
+                "status": "accepted",
+                "task_id": new_task_id,
+                "retry_of_task_id": retry_entry["retry_of_task_id"],
+                "archived_messages": len(archive_messages),
+            }
+        finally:
+            await self._viking_fs._async_agfs.pathlock_release(lease)
+
     async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
