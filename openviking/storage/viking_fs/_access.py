@@ -31,7 +31,7 @@ from openviking.storage.acl import (
     normalize_acl_level,
     normalize_acl_principal,
 )
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     NotFoundError,
@@ -53,7 +53,7 @@ class _AccessMixin:
 
     # First path segments that the Rust git enumerate.rs prunes from snapshots,
     # plus the runtime lock name. Mirrors INTERNAL_FIRST_SEGMENTS in
-    # crates/ragfs/src/git/enumerate.rs and VikingFS._INTERNAL_NAMES so that
+    # crates/ragfs/src/git/enumerate.rs so that
     # callers fail fast in Python with a clear error rather than passing a
     # path that the Rust side will silently drop.
     _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
@@ -445,7 +445,7 @@ class _AccessMixin:
         parts = [p for p in parent_path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return name in VikingURI.LISTABLE_SCOPES
-        return name not in STORAGE_INTERNAL_ENTRY_NAMES
+        return not is_storage_internal_name(name)
 
     def _ancestor_is_filtered(self, entry_path: str, base_path: str) -> bool:
         """Check if any ancestor directory of entry_path would be filtered by _ls_entries.

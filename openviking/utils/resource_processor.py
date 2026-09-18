@@ -30,7 +30,7 @@ from openviking.storage.acl import AclAction, CreatorAclGrant
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.resource_rnfv import RequestIntent
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
@@ -917,7 +917,7 @@ class ResourceProcessor:
                                         if not name or name in {".", ".."}:
                                             continue
                                         names.append(str(name))
-                                    if all(name in STORAGE_INTERNAL_ENTRY_NAMES for name in names):
+                                    if all(is_storage_internal_name(name) for name in names):
                                         target_preexisting = False
                             except Exception:
                                 pass

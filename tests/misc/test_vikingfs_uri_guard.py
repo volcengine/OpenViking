@@ -394,7 +394,9 @@ class TestVikingFSURITraversalGuard:
             {"name": "_system", "isDir": True},
             {"name": "notes.md", "isDir": False},
             {"name": ".path.ovlock", "isDir": False},
+            {"name": ".exact.ovlock.notes.md.0123abcd", "isDir": False},
             {"name": ".redirect.json", "isDir": False},
+            {"name": ".sync_log.json", "isDir": False},
         ]
 
         entries = await fs._ls_entries("/local/default/resources/project")

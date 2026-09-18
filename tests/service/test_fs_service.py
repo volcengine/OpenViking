@@ -11,6 +11,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -911,6 +912,24 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name",
+    [".path.ovlock", ".exact.ovlock.notes.md.0123abcd", ".redirect.json", ".sync_log.json"],
+)
+async def test_mkdir_cp_mv_reject_storage_internal_names(request_context, name):
+    viking_fs = _FakeVikingFS(events=[])
+    service = FSService(viking_fs=viking_fs)
+    target = f"viking://resources/project/{name}"
+
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.mkdir(target, ctx=request_context)
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.cp("viking://resources/project/a.md", target, False, ctx=request_context)
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.mv("viking://resources/project/a.md", target, ctx=request_context)
+    assert viking_fs.mv_calls == []
+
+
 async def test_resource_mv_without_watch_scheduler_moves_resource_directly(request_context):
     events = []
     viking_fs = _FakeVikingFS(events=events)

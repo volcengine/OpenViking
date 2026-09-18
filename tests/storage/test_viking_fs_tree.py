@@ -224,6 +224,7 @@ def test_is_name_visible_at_account_root(fs, name, parent_path, expected):
         ("tasks", "/local/test_account/resources/bar", True),
         ("tasks", "/local/test_account/agent", True),
         (".path.ovlock", "/local/test_account/resources", False),
+        (".exact.ovlock.notes.md.0123abcd", "/local/test_account/resources", False),
         (".sync_log.json", "/local/test_account/resources", False),
         (".redirect.json", "/local/test_account/resources", False),
     ],
