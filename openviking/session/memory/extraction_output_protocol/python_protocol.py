@@ -80,13 +80,13 @@ _CONTRACT_PREAMBLE = (
     "To change an existing string field, edit it through the object's field attribute. Use the "
     "real field name (e.g. content), NOT the literal word 'field':",
     "  - obj.content.update(new_value): replace the whole field with a complete new string.",
-    "  - obj.content.edit(search=..., replace=...): replace one exact snippet in place.",
-    "  - obj.content.drop(text=...): delete one exact snippet in place.",
+    "  - obj.content.edit(search=..., replace=...): replace one exact snippet in an editable string (merge_op=patch).",
+    "  - obj.content.drop(text=...): delete one exact snippet in an editable string (merge_op=patch).",
     "edit()/drop() may be chained, e.g. obj.content.edit(search='a', replace='b').drop(text='c'); do not mix them with .update() in one chain.",
     "A field attribute is a write handle only; you cannot read it as a string or call str methods on it.",
     "Each search= (and drop text=) MUST be copied verbatim from the current field value shown in the object's sdk.existing(...) binding, and must occur exactly once. If the snippet appears more than once, include an adjacent unique line just before or after it so the match is unique. Never use text from the conversation or the new facts you intend to add as a search anchor; that text is not in the current content and the edit will fail.",
-    "edit()/drop() only work on an existing memory's string field; new memories from create/set must be given complete field values.",
-    "For existing memories, prefer the smallest unique edit()/drop(). Do not rewrite the entire field just to add or change a few facts; large full-content rewrites are more likely to be truncated or malformed. Use obj.content.update() only when most of the content changes.",
+    "edit()/drop() only work on an existing memory's editable string field (merge_op=patch); new memories from create/set must be given complete field values.",
+    "For existing editable strings (merge_op=patch), prefer the smallest unique edit()/drop(). Do not rewrite the entire field just to add or change a few facts; large full-content rewrites are more likely to be truncated or malformed. Use obj.content.update() only when most of such an editable string changes. For string fields marked [replace], always pass the complete new value to obj.content.update(), even for a small change; edit()/drop() are unavailable.",
     'ALWAYS use a triple-quoted string ("""...""") for EVERY natural-language argument '
     "(content, summary, goal, and every search=/replace=/text= snippet), even one-liners. "
     "Prose frequently contains apostrophes (e.g. Evan's), quotes, colons, or dates that break "
@@ -1122,7 +1122,16 @@ class _PythonProgramCompiler:
         if field_schema is None or not (
             field_schema.merge_op == MergeOp.PATCH and field_schema.field_type == FieldType.STRING
         ):
-            self._error(node, f"field {name!r} does not support edit()/drop()")
+            guidance = "edit()/drop() require an editable string (merge_op=patch)"
+            if field_schema is not None and (
+                field_schema.merge_op == MergeOp.REPLACE
+                and field_schema.field_type == FieldType.STRING
+            ):
+                guidance = (
+                    "merge_op=replace requires the complete new value, including unchanged text; "
+                    f'use `{owner.name}.{_identifier_alias(name)}.update("""complete new value""")`'
+                )
+            self._error(node, f"field {name!r} does not support edit()/drop(): {guidance}")
         # Do NOT apply here. Store the edits as a StrPatch so python mode flows through
         # the same resolve_operations -> _validate_patch_operations -> patch-repair path
         # as json mode: a failed snippet is isolated to its own operation and gets the
