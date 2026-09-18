@@ -281,10 +281,16 @@ After startup, you can access:
 
 ### Multi-instance notes
 
+With an embedded vector backend (`local` or `cuvs`), OpenViking holds an exclusive OS file lock on `storage.workspace` by default. The `.openviking.lock` file remains on disk; its presence does not mean a server is running. The OS releases the lock when the server closes it or the process terminates. Do not manually delete a running server's lock file.
+
+Remote vector backends (`http`, `volcengine`, `vikingdb`) do not acquire this workspace lock, including when files are stored on a shared NAS. They do not require `storage.skip_process_lock=true`. Placing an embedded vector database on NAS does not make it safe to share between processes.
+
+For embedded vector backends, when upgrading from a version that uses `.openviking.pid`, stop all older servers using the workspace before starting the new version. The new version does not use leftover PIDs to determine ownership; the two locking protocols cannot be mixed.
+
 For multi-instance deployments, prefer these settings:
 
 - Set `server.temp_upload.default_mode` to `"shared"` so uploaded temporary files can be consumed by a different replica.
-- Only set `storage.skip_process_lock` to `true` when multiple instances intentionally share the same `storage.workspace`. When enabled, OpenViking will no longer check or create `.openviking.pid`.
+- Use a remote vector backend for shared storage. The existing `storage.skip_process_lock` option only disables the embedded-backend startup guard; it does not add multi-process support to embedded vector storage.
 - For QueueFS, prefer an explicit per-instance local SQLite path via `storage.agfs.queuefs.db_path`. If usage audit is enabled, prefer an explicit per-instance local SQLite path via `server.observability.usage_audit.sqlite_path` instead of mixing these files into a shared workspace volume.
 
 Example:
@@ -297,12 +303,15 @@ Example:
     }
   },
   "storage": {
-    "skip_process_lock": true
+    "vectordb": {
+      "backend": "http",
+      "url": "http://vector-db:5000"
+    }
   }
 }
 ```
 
-This example only applies when multiple instances intentionally share the same `workspace`. If each instance has its own local `workspace`, do not enable `skip_process_lock`.
+This example uses a remote HTTP vector service. Replace its URL with your deployment's vector-service address, or configure a `volcengine` or `vikingdb` backend.
 
 Example with explicit local SQLite paths for QueueFS and usage audit:
 
@@ -319,7 +328,10 @@ Example with explicit local SQLite paths for QueueFS and usage audit:
     }
   },
   "storage": {
-    "skip_process_lock": true,
+    "vectordb": {
+      "backend": "http",
+      "url": "http://vector-db:5000"
+    },
     "agfs": {
       "queuefs": {
         "db_path": "/var/lib/openviking-local/queue.db"

@@ -279,10 +279,16 @@ docker compose up -d
 
 ### 多实例部署注意事项
 
+使用本地向量后端（`local` 或 `cuvs`）时，OpenViking 默认通过操作系统文件锁独占 `storage.workspace`。`.openviking.lock` 文件会保留在磁盘上，文件存在不代表服务正在运行；正常关闭或进程终止后，操作系统会释放锁。不要手动删除运行中服务的锁文件。
+
+远程向量后端（`http`、`volcengine`、`vikingdb`）不会获取此 workspace 锁，包括文件存放在共享 NAS 上的情况，无需设置 `storage.skip_process_lock=true`。把本地向量数据库放在 NAS 上，并不会使它支持多进程共享。
+
+使用本地向量后端从 `.openviking.pid` 旧版本升级时，必须先停止所有使用该 workspace 的旧版服务，再启动新版。新版不再根据遗留 PID 判断目录是否被占用，新旧锁机制不支持混用。
+
 多实例部署时，通常建议注意这几项配置：
 
 - 把 `server.temp_upload.default_mode` 设为 `"shared"`，这样临时上传文件可以被其他副本消费。
-- 只有在多个实例明确共享同一个 `storage.workspace` 时，才考虑把 `storage.skip_process_lock` 设为 `true`。启用后，OpenViking 不会再检查或创建 `.openviking.pid`。
+- 共享存储应使用远程向量后端。保留的 `storage.skip_process_lock` 开关只关闭本地后端的启动保护，不会使本地向量存储支持多进程共享。
 - 对 QueueFS，建议通过 `storage.agfs.queuefs.db_path` 显式指定实例本地的 SQLite 路径。如果启用了 usage audit，建议通过 `server.observability.usage_audit.sqlite_path` 显式指定实例本地的 SQLite 路径，不要默认和共享 workspace 卷混用。
 
 示例：
@@ -295,12 +301,15 @@ docker compose up -d
     }
   },
   "storage": {
-    "skip_process_lock": true
+    "vectordb": {
+      "backend": "http",
+      "url": "http://vector-db:5000"
+    }
   }
 }
 ```
 
-这个示例只适用于多个实例明确共享同一个 `workspace` 的场景。如果每个实例都有自己的本地 `workspace`，不要开启 `skip_process_lock`。
+这个示例使用远程 HTTP 向量服务。请将 URL 替换为实际的向量服务地址，或配置 `volcengine`、`vikingdb` 后端。
 
 如果你还需要为 QueueFS 和 usage audit 显式指定本地 SQLite 路径，可以参考：
 
@@ -317,7 +326,10 @@ docker compose up -d
     }
   },
   "storage": {
-    "skip_process_lock": true,
+    "vectordb": {
+      "backend": "http",
+      "url": "http://vector-db:5000"
+    },
     "agfs": {
       "queuefs": {
         "db_path": "/var/lib/openviking-local/queue.db"

@@ -1003,7 +1003,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `workspace` | str | 本地数据存储路径（主要配置） | "./data" |
-| `skip_process_lock` | bool | 是否跳过 `storage.workspace` 的启动进程锁检查。启用后，OpenViking 不会检查或创建 `.openviking.pid` 锁文件。 | `false` |
+| `skip_process_lock` | bool | 是否跳过本地向量后端（`local`、`cuvs`）对 `storage.workspace` 的 `.openviking.lock` 独占文件锁。其他后端不会获取此锁。跳过检查不代表本地向量存储支持多进程共享。 | `false` |
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 
