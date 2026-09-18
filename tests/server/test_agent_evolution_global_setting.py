@@ -132,6 +132,34 @@ def test_server_default_memory_policy_is_configured_on_session_service(fake_viki
     }
 
 
+async def test_auto_commit_defaults_apply_to_new_sessions(fake_viking_fs, monkeypatch):
+    sessions = SessionService(viking_fs=fake_viking_fs)
+    config = ServerConfig(
+        user_config_defaults={"auto_commit_policy": {"idle_timeout_seconds": 7200}}
+    )
+    create_app(
+        config=config,
+        service=SimpleNamespace(sessions=sessions),
+    )
+    expected = config.user_config_defaults.auto_commit_policy
+
+    session = SimpleNamespace(
+        meta=SimpleNamespace(auto_commit_policy=None),
+        exists=AsyncMock(return_value=False),
+        ensure_exists=AsyncMock(),
+        load=AsyncMock(),
+    )
+    monkeypatch.setattr(sessions, "session", lambda *_args, **_kwargs: session)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    await sessions.create(ctx, "created")
+    assert session.meta.auto_commit_policy == expected
+
+    session.meta.auto_commit_policy = None
+    await sessions.get("auto-created", ctx, auto_create=True)
+    assert session.meta.auto_commit_policy == expected
+
+
 async def test_existing_session_observes_updated_account_value(fake_viking_fs):
     service = SessionService(viking_fs=fake_viking_fs)
     service.set_agent_evolution_config(AgentEvolutionConfig(enabled=False))
