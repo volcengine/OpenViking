@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Code skeleton extraction via tree-sitter-language-pack.process()."""
 
+import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -118,6 +120,27 @@ def _display_language(lang: str) -> str:
     return _DISPLAY.get(lang, lang.replace("_", " ").title())
 
 
+@lru_cache(maxsize=1)
+def _downloaded_tree_sitter_languages() -> frozenset[str]:
+    try:
+        from tree_sitter_language_pack import PackConfig, configure, downloaded_languages
+
+        cache_dir = os.environ.get("OPENVIKING_TREE_SITTER_CACHE_DIR")
+        if cache_dir:
+            if not Path(cache_dir).is_dir():
+                logger.warning("Configured tree-sitter parser cache does not exist: %s", cache_dir)
+                return frozenset()
+            configure(PackConfig(cache_dir=cache_dir))
+        return frozenset(downloaded_languages())
+    except Exception as exc:
+        logger.warning("Failed to inspect tree-sitter parser cache: %s", exc)
+        return frozenset()
+
+
+def _is_tree_sitter_language_preloaded(lang: str) -> bool:
+    return lang in _downloaded_tree_sitter_languages()
+
+
 def _detect_process_language(file_name: str) -> Optional[str]:
     path = Path(file_name)
     if path.suffix.lower() in _PROCESS_SUFFIX_DENYLIST:
@@ -177,6 +200,13 @@ def extract_process_skeleton(
     del verbose
     lang = _detect_process_language(file_name)
     if lang is None:
+        return None
+    if not _is_tree_sitter_language_preloaded(lang):
+        logger.info(
+            "tree-sitter grammar is not preloaded for '%s' (language: %s); falling back",
+            file_name,
+            lang,
+        )
         return None
     try:
         return _extract_process_skeleton(file_name, content, lang)
