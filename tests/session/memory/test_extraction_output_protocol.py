@@ -178,6 +178,7 @@ def test_python_contract_includes_link_rules_when_enabled():
     assert "obj_a.link(" in contract
     assert "assign the create/set call to a variable first" in contract
 
+
 def test_python_contract_omits_link_rules_when_disabled():
     context = _context([_preference_schema()], link_enabled=False)
     protocol = create_extraction_output_protocol("python")
@@ -432,6 +433,23 @@ def test_python_contract_uses_set_for_single_file_schema_and_create_for_collecti
     assert "Current self identity: exactly one sdk.set_profile() call without peer_id" in contract
 
 
+def test_python_field_update_retry_provides_a_valid_positional_example():
+    context = _context([_preference_schema()])
+    protocol = create_extraction_output_protocol("python")
+    header = 'obj = sdk.create_preferences(topic="editor", content="old", score=0)\n'
+    operations, error = protocol.parse(header + 'obj.content.update(new_value="new")', context)
+
+    assert operations is None
+    assert "field.update() takes exactly one positional argument" in error
+    example = 'obj.content.update("""complete new value""")'
+    assert example in protocol.render_contract(context)
+    assert example in protocol.render_format_retry(error)
+
+    operations, error = protocol.parse(header + example, context)
+    assert error is None
+    assert operations.preferences[0].content == "complete new value"
+
+
 def test_python_reserved_existing_retry_explains_new_replacement_binding():
     protocol = create_extraction_output_protocol("python")
 
@@ -447,9 +465,7 @@ def test_python_reserved_existing_retry_explains_new_replacement_binding():
 def test_python_string_literal_retry_pushes_triple_quotes():
     protocol = create_extraction_output_protocol("python")
 
-    retry = protocol.render_format_retry(
-        "Line 33: invalid syntax. Perhaps you forgot a comma?"
-    )
+    retry = protocol.render_format_retry("Line 33: invalid syntax. Perhaps you forgot a comma?")
 
     assert "offending line is shown above" in retry
     assert 'triple-quoted string ("""...""")' in retry
@@ -633,7 +649,7 @@ def test_python_syntax_error_includes_offending_source_line():
 
     assert error is not None
     assert "invalid Python syntax" in error
-    assert 'Little Women' in error
+    assert "Little Women" in error
     assert "^" in error
 
 
@@ -1589,7 +1605,7 @@ def test_python_rejects_fstring_width_format_spec():
     # A width format spec turns a small integer literal into a huge padded string
     # with no repeat operator; format specs are disallowed.
     operations, error = protocol.parse(
-        'sdk.set_profile(content=f"{\'x\':>1000001}")\nsdk.commit()',
+        "sdk.set_profile(content=f\"{'x':>1000001}\")\nsdk.commit()",
         context,
     )
 
