@@ -32,6 +32,7 @@ from openviking.utils.code_hosting_utils import (
 from openviking.utils.git_auth import (
     build_git_http_auth_env,
     parse_git_http_auth_config,
+    raise_git_auth_error,
 )
 from openviking_cli.utils.logger import get_logger
 
@@ -311,15 +312,12 @@ class GitAccessor(DataAccessor):
                 await asyncio.shield(proc.wait())
             raise
         if proc.returncode != 0:
+            raise_git_auth_error(stderr)
             error_msg = stderr.decode().strip()
             user_msg = "Git command failed."
             if "Could not resolve hostname" in error_msg:
                 user_msg = (
                     "Git command failed: could not resolve hostname. Check the URL or your network."
-                )
-            elif "Permission denied" in error_msg or "publickey" in error_msg:
-                user_msg = (
-                    "Git command failed: authentication error. Check your SSH keys or credentials."
                 )
             if env is None:
                 logger.warning(f"[GitAccessor] {user_msg} Details: {error_msg}")
