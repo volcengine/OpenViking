@@ -6,6 +6,7 @@ from .base import CollectionAdapter
 from .factory import create_collection_adapter
 from .http_adapter import HttpCollectionAdapter
 from .local_adapter import CuVSCollectionAdapter, LocalCollectionAdapter
+from .milvus_adapter import MilvusCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
 
@@ -14,6 +15,7 @@ __all__ = [
     "LocalCollectionAdapter",
     "CuVSCollectionAdapter",
     "HttpCollectionAdapter",
+    "MilvusCollectionAdapter",
     "VolcengineCollectionAdapter",
     "VikingDBPrivateCollectionAdapter",
     "create_collection_adapter",
