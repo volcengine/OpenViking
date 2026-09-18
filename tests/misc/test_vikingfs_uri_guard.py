@@ -120,9 +120,7 @@ class TestVikingFSURITraversalGuard:
             "viking://agent/",
         ],
     )
-    async def test_rm_rejects_protected_namespace_roots_before_side_effects(
-        self, uri: str
-    ) -> None:
+    async def test_rm_rejects_protected_namespace_roots_before_side_effects(self, uri: str) -> None:
         fs = _make_viking_fs()
         fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
@@ -161,9 +159,7 @@ class TestVikingFSURITraversalGuard:
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
 
-    @pytest.mark.parametrize(
-        "uri", ["viking://user/alice", "viking://resources"]
-    )
+    @pytest.mark.parametrize("uri", ["viking://user/alice", "viking://resources"])
     @pytest.mark.asyncio
     async def test_rm_allows_maintenance_scope_roots_for_root(self, uri: str) -> None:
         fs = _make_viking_fs()
