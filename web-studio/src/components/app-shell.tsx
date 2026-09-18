@@ -129,18 +129,18 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/compile',
   },
   {
-    icon: BrainIcon,
-    id: 'agentExperience',
-    section: 'workspace',
-    titleKey: 'navigation.agentExperience.title',
-    to: '/agent-experience',
-  },
-  {
     icon: MessagesSquareIcon,
     id: 'sessions',
     section: 'operations',
     titleKey: 'navigation.sessions.title',
     to: '/sessions',
+  },
+  {
+    icon: BrainIcon,
+    id: 'agentExperience',
+    section: 'operations',
+    titleKey: 'navigation.agentExperience.title',
+    to: '/agent-experience',
   },
   {
     icon: ScrollTextIcon,

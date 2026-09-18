@@ -196,7 +196,9 @@ class StudioFeishuChannel(FeishuChannel):
             ),
         )
         accepted = await super().send(msg)
-        if msg.is_normal_message:
+        # Control actions use RESPONSE events, but are not chat deliveries.
+        is_control_action = msg.metadata.get("action") in ("add_reaction", "processing_tick")
+        if msg.is_normal_message and not is_control_action:
             if accepted:
                 self.last_sent = now()
             if not msg.metadata.get("studio_verification"):

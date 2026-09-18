@@ -137,19 +137,45 @@ async def test_pause_drops_new_inbound_messages(channel):
     assert channel.store.history("connection") == []
 
 
-async def test_delivery_failure_is_not_reported_as_sent(channel, monkeypatch):
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_delivery_status_matches_send_result(channel, monkeypatch, accepted):
     from vikingbot.channels.feishu import FeishuChannel
 
-    monkeypatch.setattr(FeishuChannel, "send", AsyncMock(return_value=False))
+    monkeypatch.setattr(FeishuChannel, "send", AsyncMock(return_value=accepted))
     result = await channel.send(
         OutboundMessage(
             SessionKey(type="feishu", channel_id="cli_test", chat_id="studio:connection:group"),
             "answer",
         )
     )
-    assert not result
+    assert result is accepted
+    assert bool(channel.last_sent) is accepted
+    message = channel.store.history("connection")[0]
+    assert message["content"] == "answer"
+    assert message["status"] == ("sent" if accepted else "send_failed")
+
+
+@pytest.mark.parametrize(
+    "metadata,emoji",
+    [
+        ({"action": "processing_tick", "tick_count": 0}, "StatusInFlight"),
+        ({"action": "add_reaction", "emoji": "THINKING"}, "THINKING"),
+    ],
+)
+async def test_control_events_do_not_create_delivery_history(channel, monkeypatch, metadata, emoji):
+    reaction = AsyncMock()
+    monkeypatch.setattr(channel, "send_processing_reaction", reaction)
+    await channel.send(
+        OutboundMessage(
+            SessionKey(type="feishu", channel_id="cli_test", chat_id="studio:connection:group"),
+            "",
+            metadata={**metadata, "message_id": "m1"},
+        )
+    )
+    reaction.assert_awaited_once_with("m1", emoji)
+    assert channel.store.history("connection") == []
+    assert channel.store.conversations("connection") == []
     assert channel.last_sent is None
-    assert channel.store.history("connection")[0]["status"] == "send_failed"
 
 
 def test_public_config_never_returns_credentials_and_filters_accounts(tmp_path):
