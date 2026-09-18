@@ -13,10 +13,13 @@ servers/mcp-proxy.mjs                # stdio -> streamable-HTTP proxy to the OV 
 servers/shared/                      # generated from examples/memory-plugin-shared/lib (do not edit)
 skills/openviking-memory/SKILL.md    # teaches the model the recall + persist loop
 skills/ov-memory-troubleshoot/       # read-only extraction troubleshooting
+skills/ov-tasks/                     # task board: pick, execute, hand off tasks stored as OV markdown files
 plugin.test.mjs                      # node --test conformance checks
 ```
 
 Use `ov-memory-troubleshoot` to trace backward from a memory file to its archive diff and, when needed, session messages. Diagnosis is read-only.
+
+Use `ov-tasks` to run long or multi-agent work through a task board in OpenViking: each task is one markdown file (`viking://agent/tasks/<scope>/<id>.md`, falling back to `viking://resources/tasks` on servers that reject writes under `viking://agent`) whose header and body are the handoff, so any agent with the `ov` CLI can claim, continue, and write it back. `references/loop.sh` drives unattended ticks; see [docs/design/ov-tasks.md](../docs/design/ov-tasks.md).
 
 Zero npm dependencies; the proxy and tests run on the Node.js standard library (Node 18+ for global `fetch`).
 
@@ -25,7 +28,7 @@ Zero npm dependencies; the proxy and tests run on the Node.js standard library (
 1. Have an OpenViking server reachable (see the [quickstart](../docs/en/getting-started/02-quickstart.md)); default local endpoint is `http://127.0.0.1:1933`.
 2. Point your Agent-Plugins-conforming client at this directory (each client has its own install command or plugin directory; consult its docs). The client will:
    - register the `openviking` MCP server from `mcp.json` — it runs `node <plugin>/servers/mcp-proxy.mjs` over stdio;
-   - discover the `openviking-memory` and `ov-memory-troubleshoot` skills from `skills/`.
+   - discover the `openviking-memory`, `ov-memory-troubleshoot`, and `ov-tasks` skills from `skills/`.
 3. Configure credentials (next section) and start a session. The model gains `find` / `search` / `read` / `remember` / `write` and the other OpenViking MCP tools. Use `search` with `mode="context"` for server-assembled context.
 
 ## Why a stdio proxy instead of a `streamable-http` entry
