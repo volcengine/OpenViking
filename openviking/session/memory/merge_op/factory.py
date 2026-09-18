@@ -33,7 +33,7 @@ class MergeOpFactory:
         if merge_op == MergeOp.PATCH:
             return PatchOp(field_type)
         elif merge_op == MergeOp.REPLACE:
-            return ReplaceOp()
+            return ReplaceOp(field_type)
         elif merge_op == MergeOp.SUM:
             return SumOp()
         elif merge_op == MergeOp.IMMUTABLE:
