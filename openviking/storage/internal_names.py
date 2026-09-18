@@ -15,13 +15,12 @@ MULTIWRITE_INTERNAL_FILE_NAMES = frozenset(
     }
 )
 
-STORAGE_INTERNAL_ENTRY_NAMES = frozenset(
-    {
-        "_system",
-        "tasks",
-        *MULTIWRITE_INTERNAL_FILE_NAMES,
-    }
-)
+# Entries hidden from listings at every level: the multi-write lock/redirect/sync-log
+# files the storage layer creates next to user content. The account-root internal
+# directories (/local/{account}/_system, /local/{account}/tasks) are not listed here:
+# root listings use VikingURI.LISTABLE_SCOPES as a whitelist, and below the root a user
+# directory that happens to be called "tasks" or "_system" is ordinary content.
+STORAGE_INTERNAL_ENTRY_NAMES = frozenset(MULTIWRITE_INTERNAL_FILE_NAMES)
 
 WEBDAV_RESERVED_FILENAMES = frozenset(
     {

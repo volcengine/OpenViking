@@ -388,3 +388,19 @@ class TestVikingFSURITraversalGuard:
         entries = await fs._ls_entries("/local/default")
 
         assert [entry["name"] for entry in entries] == ["resources"]
+
+    @pytest.mark.asyncio
+    async def test_ls_entries_below_root_keeps_reserved_root_names(self) -> None:
+        """A directory a user created and can stat must also show up in ls."""
+        fs = _make_viking_fs()
+        fs.agfs.ls.return_value = [
+            {"name": "tasks", "isDir": True},
+            {"name": "_system", "isDir": True},
+            {"name": "notes.md", "isDir": False},
+            {"name": ".path.ovlock", "isDir": False},
+            {"name": ".redirect.json", "isDir": False},
+        ]
+
+        entries = await fs._ls_entries("/local/default/resources/project")
+
+        assert [entry["name"] for entry in entries] == ["tasks", "_system", "notes.md"]

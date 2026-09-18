@@ -220,15 +220,16 @@ def test_is_name_visible_at_account_root(fs, name, parent_path, expected):
     [
         ("my_dir", "/local/test_account/resources", True),
         ("normal_dir", "/local/test_account/resources/foo", True),
-        ("_system", "/local/test_account/resources", False),
-        ("tasks", "/local/test_account/resources/bar", False),
+        ("_system", "/local/test_account/resources", True),
+        ("tasks", "/local/test_account/resources/bar", True),
+        ("tasks", "/local/test_account/agent", True),
         (".path.ovlock", "/local/test_account/resources", False),
         (".sync_log.json", "/local/test_account/resources", False),
         (".redirect.json", "/local/test_account/resources", False),
     ],
 )
 def test_is_name_visible_at_non_root(fs, name, parent_path, expected):
-    """PY-FLT-004: Non-root internal-name blacklist."""
+    """PY-FLT-004: Below the account root only multi-write internal files are hidden."""
     assert fs._is_name_visible_at_path(name, parent_path) == expected
 
 
@@ -238,7 +239,9 @@ def test_is_name_visible_at_non_root(fs, name, parent_path, expected):
         ("/local/test_account/resources/a", "/local/test_account", False),
         ("/local/test_account/tasks/foo", "/local/test_account", True),
         ("/local/test_account/tasks/foo/bar.txt", "/local/test_account", True),
-        ("/local/test_account/resources/_system/secret.txt", "/local/test_account", True),
+        ("/local/test_account/resources/_system/secret.txt", "/local/test_account", False),
+        ("/local/test_account/resources/tasks/demo/t.md", "/local/test_account", False),
+        ("/local/test_account/resources/.path.ovlock/x", "/local/test_account", True),
         ("/local/test_account/resources/normal/file.txt", "/local/test_account", False),
         ("/local/test_account/resources/a/b/c", "/local/test_account", False),
     ],
