@@ -22,7 +22,7 @@ import { copyTextToClipboard } from '#/lib/clipboard'
 import { EvolutionSettingsPopover } from './evolution-settings-popover'
 
 const INSTALL_COMMAND =
-  'npx skills add https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin/skills/ov-experience-memory'
+  'npx skills add https://github.com/volcengine/OpenViking/tree/main/examples/skills/ov-experience-memory'
 
 export function ExperienceSetupGuide() {
   const [expanded, setExpanded] = useState(false)
