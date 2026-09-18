@@ -28,27 +28,21 @@ class AccountAgentEvolutionSettings(BaseModel):
 
     enabled: bool
 
-    model_config = {"extra": "forbid"}
-
 
 class AccountAclSettings(BaseModel):
     """Account-scoped ACL switch."""
 
     enabled: bool = False
 
-    model_config = {"extra": "forbid"}
-
 
 class AccountSettings(BaseModel):
     """Persisted account overrides.
 
-    Only explicitly allowlisted hot-reloadable settings belong in this model.
+    Unknown persisted fields are ignored for upgrade compatibility.
     """
 
     agent_evolution: Optional[AccountAgentEvolutionSettings] = None
     acl: Optional[AccountAclSettings] = None
-
-    model_config = {"extra": "forbid"}
 
 
 class AccountSettingsPatch(BaseModel):

@@ -64,5 +64,3 @@ class OAuthConfig(BaseModel):
         default="oauth.db",
         description="SQLite database filename (relative to OpenVikingConfig.storage.workspace).",
     )
-
-    model_config = {"extra": "forbid"}

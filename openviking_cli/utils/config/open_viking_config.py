@@ -13,7 +13,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 from .cache_config import CacheConfig
 from .config_loader import resolve_config_path
-from .config_utils import format_validation_error, raise_unknown_config_fields
+from .config_utils import format_validation_error
 from .consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -69,8 +69,6 @@ class ConnectorConfig(BaseModel):
     poll_interval_ms: int = 5000
     allowed_add_types: List[str] = Field(default_factory=lambda: ["tos"])
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="after")
     def _validate(self) -> "ConnectorConfig":
         if self.enable:
@@ -103,7 +101,6 @@ class ParserApiConfig(BaseModel):
     http_timeout_seconds: float = 10.0
     response_timeout_seconds: int = 1800
     poll_interval_ms: int = 3000
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _normalize_and_validate(self) -> "ParserApiConfig":
@@ -144,7 +141,6 @@ class CompileApiConfig(BaseModel):
     gateway_token: str = ""
     http_timeout_seconds: float = 10.0
     poll_interval_ms: int = 30000
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _validate(self) -> "CompileApiConfig":
@@ -404,33 +400,6 @@ class OpenVikingConfig(BaseModel):
         data["git"] = git
         return data
 
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_removed_cache_config(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-
-        storage_value = data.get("storage")
-        if not isinstance(storage_value, dict):
-            return data
-        agfs_value = storage_value.get("agfs")
-        if not isinstance(agfs_value, dict):
-            return data
-        if "cache" in agfs_value:
-            raise ValueError(
-                "storage.agfs.cache has been removed; configure cache.provider/cache.params "
-                "and storage.agfs.cachefs.backend='cache'"
-            )
-        queuefs = agfs_value.get("queuefs")
-        if isinstance(queuefs, dict) and (
-            queuefs.get("backend") == "redis" or "redis" in queuefs
-        ):
-            raise ValueError(
-                "storage.agfs.queuefs backend='redis' and queuefs.redis have been removed; "
-                "use backend='cache' with top-level cache.provider/cache.params"
-            )
-        return data
-
     allow_private_networks: bool = Field(
         default=False,
         description=(
@@ -461,7 +430,7 @@ class OpenVikingConfig(BaseModel):
         description="Conversation-log ingest (openviking-server ingest) configuration",
     )
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
+    model_config = {"arbitrary_types_allowed": True}
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "OpenVikingConfig":
@@ -484,11 +453,6 @@ class OpenVikingConfig(BaseModel):
                 "feishu",
                 "webfeed",
             ]
-            raise_unknown_config_fields(
-                data=config_copy,
-                valid_fields=set(cls.model_fields.keys()) | {"server", "bot", "parsers"},
-                context_name="OpenVikingConfig",
-            )
 
             # Remove sections managed by other loaders (e.g. server config)
             config_copy.pop("server", None)
@@ -509,11 +473,6 @@ class OpenVikingConfig(BaseModel):
                         "Config field 'parsers.excel' was removed and is ignored; "
                         "spreadsheet parsing now uses 'parsers.anydoc'."
                     )
-            raise_unknown_config_fields(
-                data=parser_configs,
-                valid_fields=set(parser_types),
-                context_name="parsers",
-            )
             for parser_type in parser_types:
                 if parser_type in config_copy:
                     parser_configs[parser_type] = config_copy.pop(parser_type)
@@ -548,8 +507,9 @@ class OpenVikingConfig(BaseModel):
                     ) from e
 
             # Apply parser configurations
-            for parser_type, parser_data in parser_configs.items():
-                if hasattr(instance, parser_type):
+            for parser_type in parser_types:
+                if parser_type in parser_configs:
+                    parser_data = parser_configs[parser_type]
                     config_class = getattr(instance, parser_type).__class__
                     setattr(instance, parser_type, config_class.from_dict(parser_data))
 

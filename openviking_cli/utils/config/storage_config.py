@@ -48,8 +48,6 @@ class StorageConfig(BaseModel):
         default_factory=dict, description="Additional storage-specific parameters"
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="before")
     @classmethod
     def ignore_deprecated_task_tracker(cls, data: Any) -> Any:

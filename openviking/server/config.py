@@ -72,8 +72,6 @@ class AddTargetsConfig(BaseModel):
     resource_uri: Optional[str] = None
     skill_uri: Optional[str] = None
 
-    model_config = {"extra": "forbid"}
-
     @field_validator("resource_uri")
     @classmethod
     def validate_resource_uri(cls, value: Optional[str]) -> Optional[str]:
@@ -131,15 +129,11 @@ class AgentEvolutionConfig(BaseModel):
 
     enabled: bool = False
 
-    model_config = {"extra": "forbid"}
-
 
 class DeprecatedUserAgentEvolutionConfig(BaseModel):
     """Parse-only compatibility for legacy per-user configuration files."""
 
     enabled: Optional[bool] = None
-
-    model_config = {"extra": "forbid"}
 
 
 class UserConfig(BaseModel):
@@ -151,8 +145,6 @@ class UserConfig(BaseModel):
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
     )
-
-    model_config = {"extra": "forbid"}
 
     @field_validator("memory_policy", mode="before")
     @classmethod
@@ -172,15 +164,11 @@ class MetricsAccountDimensionConfig(BaseModel):
     max_active_accounts: int = 100
     metric_allowlist: List[str] = Field(default_factory=list)
 
-    model_config = {"extra": "forbid"}
-
 
 class PrometheusExporterConfig(BaseModel):
     """Prometheus exporter configuration."""
 
     enabled: bool = True
-
-    model_config = {"extra": "forbid"}
 
 
 class OTelExporterConfig(BaseModel):
@@ -190,8 +178,6 @@ class OTelExporterConfig(BaseModel):
         """TLS configuration for OTLP exporters."""
 
         insecure: bool = False
-
-        model_config = {"extra": "forbid"}
 
     enabled: bool = False
     protocol: str = "grpc"  # "grpc", "http", or "local" for traces
@@ -204,16 +190,12 @@ class OTelExporterConfig(BaseModel):
     local_rotation_mb: int = Field(default=40, gt=0)
     local_backup_count: int = Field(default=2, ge=0)
 
-    model_config = {"extra": "forbid"}
-
 
 class MetricsExportersConfig(BaseModel):
     """Metrics exporters configuration."""
 
     prometheus: PrometheusExporterConfig = Field(default_factory=PrometheusExporterConfig)
     otel: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
-
-    model_config = {"extra": "forbid"}
 
 
 class MetricsConfig(BaseModel):
@@ -225,8 +207,6 @@ class MetricsConfig(BaseModel):
         default_factory=MetricsAccountDimensionConfig
     )
     exporters: MetricsExportersConfig = Field(default_factory=MetricsExportersConfig)
-
-    model_config = {"extra": "forbid"}
 
 
 class UsageAuditConfig(BaseModel):
@@ -245,8 +225,6 @@ class UsageAuditConfig(BaseModel):
     timezone: str = "local"
     inventory_ttl_seconds: float = Field(10.0, ge=0)
 
-    model_config = {"extra": "forbid"}
-
 
 class UsageReporterSinkConfig(BaseModel):
     """Usage reporter sink configuration."""
@@ -255,8 +233,6 @@ class UsageReporterSinkConfig(BaseModel):
     class_path: Optional[str] = None
     config: Dict[str, object] = Field(default_factory=dict)
 
-    model_config = {"extra": "forbid"}
-
 
 class UsageReporterConfig(BaseModel):
     """Usage event reporter configuration."""
@@ -264,8 +240,6 @@ class UsageReporterConfig(BaseModel):
     enabled: bool = False
     extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
     sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
-
-    model_config = {"extra": "forbid"}
 
 
 class TraceDumpBodyConfig(BaseModel):
@@ -279,8 +253,6 @@ class TraceDumpBodyConfig(BaseModel):
     enabled: bool = False
     max_bytes: int = 4096
 
-    model_config = {"extra": "forbid"}
-
 
 class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
@@ -290,8 +262,6 @@ class ObservabilityConfig(BaseModel):
     traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
-
-    model_config = {"extra": "forbid"}
 
 
 class TempUploadConfig(BaseModel):
@@ -306,8 +276,6 @@ class TempUploadConfig(BaseModel):
     # to reclaim junk directories that would otherwise be skipped forever.
     cleanup_invalid_dirs: bool = False
 
-    model_config = {"extra": "forbid"}
-
 
 class ToolOutputExternalizationConfig(BaseModel):
     """External storage controls for oversized tool outputs."""
@@ -320,8 +288,6 @@ class ToolOutputExternalizationConfig(BaseModel):
     min_preview_chars: int = 1_000
     aggregate_selection_strategy: Literal["largest_first"] = "largest_first"
     failure_mode: Literal["reject", "preserve_raw", "preview_only"] = "preserve_raw"
-
-    model_config = {"extra": "forbid"}
 
 
 class ServerConfig(BaseModel):
@@ -379,8 +345,6 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
-
-    model_config = {"extra": "forbid"}
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.

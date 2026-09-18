@@ -14,8 +14,6 @@ from typing import Any, Dict, Optional, Union
 
 from openviking_cli.utils.logger import get_logger
 
-from .config_utils import raise_unknown_config_fields
-
 logger = get_logger(__name__)
 
 
@@ -57,15 +55,10 @@ class ParserConfig:
         Returns:
             ParserConfig instance
 
-        Raises:
-            ValueError: If the dictionary contains unknown fields (with suggestions)
-
         Examples:
             >>> config = ParserConfig.from_dict({"max_content_length": 50000})
         """
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
-        return cls(**data)
+        return cls(**{key: value for key, value in data.items() if key in cls.__dataclass_fields__})
 
     @classmethod
     def from_yaml(cls, yaml_path: Union[str, Path]) -> "ParserConfig":
@@ -281,9 +274,7 @@ class CodeConfig(CodeHostingConfig):
                 "code summaries now always use the fixed skeleton route with LLM fallback"
             )
 
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
-        return cls(**data)
+        return super().from_dict(data)
 
     def validate(self) -> None:
         """
@@ -469,12 +460,6 @@ class AnydocConfig(ParserConfig):
     """Configuration for the shared anydoc Office converter."""
 
     max_table_rows: int = 1000
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AnydocConfig":
-        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
-        return cls(**data)
 
     def validate(self) -> None:
         super().validate()
@@ -807,12 +792,6 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]
     """
-    raise_unknown_config_fields(
-        data=config_dict,
-        valid_fields=set(PARSER_CONFIG_REGISTRY.keys()),
-        context_name="parsers",
-    )
-
     configs = {}
 
     for parser_type, config_class in PARSER_CONFIG_REGISTRY.items():
