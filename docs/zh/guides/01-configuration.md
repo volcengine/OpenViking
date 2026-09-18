@@ -934,6 +934,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
   "retrieval": {
     "hotness_alpha": 0.0,
     "score_propagation_alpha": 1.0,
+    "recall_min_score": 0.35,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -944,6 +945,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 |------|------|------|--------|
 | `hotness_alpha` | float | hotness 分数在最终召回分数中的混合权重。`0.0` 表示关闭 hotness boost，最终分数等于语义相似度；`1.0` 表示只使用 hotness。有效范围：`0.0` 到 `1.0`。 | `0.0` |
 | `score_propagation_alpha` | float | 层级检索中，子节点自身分数与父节点传播分数混合时，子节点自身分数的权重。`1.0` 表示忽略父节点分数（仅使用语义相似度）；`0.5` 表示与父节点分数等权混合；`0.0` 表示只使用父节点分数。有效范围：`0.0` 到 `1.0`。 | `1.0` |
+| `recall_min_score` | float | MCP `find` 与 `search`（list 模式）在调用方未传 `min_score` 时使用的默认召回分数阈值；调用方显式传入的 `min_score` 始终优先生效。召回漏掉预期内容时调低，弱匹配过多时调高。有效范围：`0.0` 到 `1.0`。`/recall` 端点自身的 `0.1` preset 默认值独立于此配置，保持不变。 | `0.35` |
 
 如果需要分数严格反映向量相似度，保持 `hotness_alpha` 为 `0.0`。只有当希望高频访问或最近更新的上下文获得排序提升时，才将它设置为大于 `0.0`。
 

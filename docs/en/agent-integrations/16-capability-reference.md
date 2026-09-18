@@ -87,7 +87,7 @@ These tools are defined on the server side, and future updates will be centrally
 
 | # | Tool | What it does | Key parameters (definition line) |
 |---|---|---|---|
-| 1 | `find` | Fast semantic search requiring no session context | `query, target_uri="", limit=10, min_score=0.35, level, context_type` (`:259`) |
+| 1 | `find` | Fast semantic search requiring no session context | `query, target_uri="", limit=10, min_score` (optional; omitted `min_score` falls back to the server's `retrieval.recall_min_score`, default `0.35`), `level, context_type` |
 | 2 | `search` | Deep search, featuring optional `session_id` integration and intent analysis | The session is only loaded if the server has `retrieval.enable_intent` enabled (defaults to true) (`:285`, `:302-304`) |
 | 3 | `read` | Read the full text of one or more `viking://` files | Uses a concurrency semaphore of 10; a single failure yields `(nothing found at <uri>)` rather than raising an exception (`:389`) |
 | 4 | `list` | List a directory (function name `ls`, explicitly registered as `list`) | `recursive=False` (`:423`) |

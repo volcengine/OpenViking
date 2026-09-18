@@ -186,6 +186,75 @@ async def test_search_respects_min_score(service):
     assert isinstance(result, str)
 
 
+def _patch_recall_config(monkeypatch, recall_min_score: float) -> None:
+    """Point retrieval.recall_min_score at a test value for one test."""
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: SimpleNamespace(retrieval=SimpleNamespace(recall_min_score=recall_min_score)),
+    )
+
+
+async def test_find_defaults_to_configured_recall_min_score(service, monkeypatch):
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    _patch_recall_config(monkeypatch, 0.18)
+
+    await mcp_endpoint.find(query="fast lookup")
+
+    assert captured["score_threshold"] == 0.18
+
+
+async def test_find_explicit_min_score_overrides_config(service, monkeypatch):
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    _patch_recall_config(monkeypatch, 0.18)
+
+    await mcp_endpoint.find(query="fast lookup", min_score=0.5)
+
+    assert captured["score_threshold"] == 0.5
+
+
+async def test_search_list_mode_defaults_to_configured_recall_min_score(service, monkeypatch):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+    _patch_recall_config(monkeypatch, 0.18)
+
+    result = await search(query="deep lookup")
+
+    assert result == "No matching context found."
+    assert captured["score_threshold"] == 0.18
+
+
+async def test_search_explicit_min_score_overrides_config(service, monkeypatch):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+    _patch_recall_config(monkeypatch, 0.18)
+
+    await search(query="deep lookup", min_score=0.6)
+
+    assert captured["score_threshold"] == 0.6
+
+
 async def test_search_tools_expose_only_context_type_parameter():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
