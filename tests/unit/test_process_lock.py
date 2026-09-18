@@ -4,6 +4,7 @@
 """Tests for PID-based process lock utility."""
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -136,6 +137,43 @@ class TestIsPidAlive:
         else:
             api.WaitForSingleObject.assert_not_called()
             api.CloseHandle.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "ps_returncode, ps_stdout, expected",
+        [
+            (0, "/usr/local/bin/openviking-server --transport http", True),
+            (0, "/usr/local/bin/openviking run --workspace w", True),
+            (0, "/System/Library/DriverExtensions/IOUserBluetoothSerial", False),
+            (0, "/usr/sbin/launchd", False),
+            (0, "WindowServer", False),
+            (1, "", True),
+            (0, "", True),
+        ],
+    )
+    def test_macos_probe_checks_command_line(self, monkeypatch, ps_returncode, ps_stdout, expected):
+        """A recycled macOS PID belonging to a non-OpenViking process is stale."""
+        calls = []
+
+        def _fake_ps(command, **_kwargs):
+            calls.append(command)
+            return SimpleNamespace(returncode=ps_returncode, stdout=ps_stdout, stderr="")
+
+        monkeypatch.setattr(process_lock_module.sys, "platform", "darwin")
+        monkeypatch.setattr(process_lock_module.os, "kill", Mock(return_value=None))
+        monkeypatch.setattr(process_lock_module.subprocess, "run", _fake_ps)
+        assert _is_pid_alive(os.getpid()) is expected
+        assert calls == [["ps", "-p", str(os.getpid()), "-o", "command="]]
+
+    def test_macos_probe_failure_stays_conservative(self, monkeypatch):
+        """If ps is unavailable or times out, keep the previous alive verdict."""
+
+        def _raise_timeout(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired(cmd="ps", timeout=5)
+
+        monkeypatch.setattr(process_lock_module.sys, "platform", "darwin")
+        monkeypatch.setattr(process_lock_module.os, "kill", Mock(return_value=None))
+        monkeypatch.setattr(process_lock_module.subprocess, "run", _raise_timeout)
+        assert _is_pid_alive(os.getpid()) is True
 
     @pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows APIs")
     def test_windows_native_current_pid_never_signals(self, monkeypatch):

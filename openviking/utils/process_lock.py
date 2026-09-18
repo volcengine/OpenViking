@@ -8,6 +8,7 @@ directory, which causes silent failures in AGFS and VectorDB.
 
 import atexit
 import os
+import subprocess
 import sys
 import threading
 
@@ -72,6 +73,34 @@ def _is_pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it.
         pass
+
+    # PID exists, but on macOS there is no /proc and PIDs are recycled.
+    # Verify this is actually an OpenViking process via `ps` so a stale lock
+    # whose PID was reassigned to an unrelated daemon does not block startup
+    # (same rationale as the Linux check below, see issue #1088).
+    if sys.platform == "darwin":
+        try:
+            probe = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            # ps unavailable or timed out: keep the conservative answer.
+            return True
+        cmdline = (probe.stdout or "").strip()
+        if probe.returncode == 0 and cmdline:
+            if "openviking" not in cmdline.lower():
+                logger.info(
+                    "PID %d is alive but not an OpenViking process (command: %.100s). "
+                    "Assuming stale lock from recycled PID.",
+                    pid,
+                    cmdline[:100],
+                )
+                return False
+        return True
 
     # PID exists, but on Linux PIDs are recycled. Verify this is actually
     # an OpenViking process by checking /proc/{pid}/cmdline to avoid false
