@@ -1,7 +1,26 @@
 import asyncio
+from pathlib import Path
 
 import pytest
-from openviking_sdk._utils import run_async
+from openviking_sdk import AsyncHTTPClient
+from openviking_sdk._utils import _path_is_relative_to, run_async
+from openviking_sdk.options import FindOptions
+
+
+def test_path_is_relative_to_handles_paths_outside_root():
+    root = Path("/tmp/openviking-sdk-root")
+
+    assert _path_is_relative_to(root / "nested" / "file.txt", root)
+    assert not _path_is_relative_to(Path("/tmp/openviking-sdk-other"), root)
+
+
+def test_options_payload_uses_typed_dict_fields_on_supported_python_versions():
+    payload = AsyncHTTPClient._build_options_payload(
+        {"node_limit": 3},
+        FindOptions,
+    )
+
+    assert payload == {"node_limit": 3}
 
 
 def test_run_async_reuses_worker_loop_across_sync_and_async_contexts():
