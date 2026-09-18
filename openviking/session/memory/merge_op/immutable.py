@@ -23,10 +23,18 @@ class ImmutableOp(MergeOpBase):
         return get_python_type_for_field(field_type)
 
     def get_output_schema_description(self, field_description: str) -> str:
-        return f"Immutable field '{field_description}' - can only be set once, cannot be modified"
+        return (
+            f"Immutable field '{field_description}' - can only be set once, cannot be modified. "
+            "None and blank strings are unset and may receive their first value."
+        )
+
+    @staticmethod
+    def is_set(value: Any) -> bool:
+        """Blank string placeholders are unset; zero and False are real values."""
+        return value is not None and not (isinstance(value, str) and not value.strip())
 
     async def apply(self, current_value: Any, patch_value: Any) -> Any:
-        if current_value is None:
+        if not self.is_set(current_value):
             return patch_value
         # Keep current value if already set
         return current_value

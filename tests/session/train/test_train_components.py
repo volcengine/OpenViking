@@ -1225,3 +1225,77 @@ async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypa
     assert result.updated_policy_set.policies[0].metadata["description"] == saved["description"]
     if existing:
         assert policy_set.policies[0].metadata["description"] == "Old description"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("locked", [False, True], ids=["standalone", "outer-tree-lock"])
+async def test_skill_policy_creation_preserves_lock_ownership(tmp_path, monkeypatch, locked):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from openviking.core.skill_loader import SkillLoader
+    from openviking.server.identity import RequestContext, Role
+    from openviking.session.train.components.skill_policy_updater import SkillPolicyUpdater
+    from openviking.session.train.domain import PolicyPlanItem
+    from openviking.storage.viking_fs import VikingFS
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking.utils.skill_processor import SkillProcessor
+    from openviking_cli.session.user_id import UserIdentifier
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
+
+    agfs = create_agfs_client(RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path))))
+    fs = VikingFS(agfs=agfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role(Role.ROOT))
+    root = "viking://user/default/skills"
+    uri = f"{root}/code-review/SKILL.md"
+    processor = SkillProcessor(vikingdb=AsyncMock())
+    queue = SimpleNamespace(enqueue=AsyncMock())
+    manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    policy_set = ExperienceSet(root_uri=root, policies=[], viking_fs=fs, request_context=ctx)
+    updater = SkillPolicyUpdater(skill_processor=processor, viking_fs=fs)
+    plan = PolicyUpdatePlan(
+        items=[
+            PolicyPlanItem(
+                kind="upsert",
+                memory_type=SESSION_SKILL_MEMORY_TYPE,
+                target_name="code-review",
+                target_uri=uri,
+                before_content=None,
+                after_content="Review steps.",
+                metadata={"merge_memory_fields": {"description": "Review code changes"}},
+            )
+        ]
+    )
+    try:
+        async with policy_set.lock() if locked else nullcontext() as lease:
+            result = await updater.apply(plan, policy_set, ctx, transaction_handle=lease)
+            assert result.errors == []
+            assert result.written_uris == [uri]
+            assert SkillLoader.parse(await fs.read_file(uri, ctx=ctx))["content"] == "Review steps."
+            for filename in (".abstract.md", ".overview.md"):
+                assert await fs.read_file(f"{root}/code-review/{filename}", ctx=ctx)
+            if locked:
+                # The callee must not release the caller's tree lock.
+                with pytest.raises(LockAcquisitionError):
+                    await fs._async_agfs.pathlock_acquire_exact(fs._uri_to_path(uri, ctx=ctx))
+        # Queued indexing keeps its own package lease after the caller exits.
+        with pytest.raises(LockAcquisitionError):
+            await fs._async_agfs.pathlock_acquire_exact(fs._uri_to_path(uri, ctx=ctx))
+        msg = queue.enqueue.await_args.args[0]
+        worker_lease = await fs._async_agfs.pathlock_adopt(msg.lock_handoff)
+        await fs._async_agfs.pathlock_release(worker_lease)
+        lease = await fs._async_agfs.pathlock_acquire_tree(fs._uri_to_path(root, ctx=ctx))
+        await fs._async_agfs.pathlock_release(lease)
+    finally:
+        from openviking.telemetry import unregister_telemetry
+        from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+
+        if queue.enqueue.await_args:
+            msg = queue.enqueue.await_args.args[0]
+            tracker = get_request_wait_tracker()
+            tracker.mark_semantic_done(msg.telemetry_id, msg.id)
+            tracker.cleanup(msg.telemetry_id)
+            unregister_telemetry(msg.telemetry_id)
+        agfs.close()

@@ -1,5 +1,5 @@
 import { log } from "./utils.mjs"
-import { evaluateUriGuard, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
+import { evaluateUriGuard, evaluateUriNotice, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
 
 const FILESYSTEM_TOOL_HINTS = {
   read: {
@@ -13,6 +13,10 @@ const FILESYSTEM_TOOL_HINTS = {
   grep: {
     tool: "openviking_search",
     example: (uri, args = {}) => `openviking_search(query="${String(args.pattern ?? "").replaceAll('"', '\\"')}", target_uri="${uri}")`,
+  },
+  bash: {
+    tool: "openviking_read or openviking_search",
+    example: (uri) => `openviking_read(uris=["${uri}"])`,
   },
 }
 
@@ -28,6 +32,20 @@ export function createVikingUriGuard() {
       uri: decision.uri,
     })
     throw new Error(decision.reason)
+  }
+}
+
+export function createVikingUriNotice() {
+  return async (input, output) => {
+    const toolName = normalizeToolName(input?.tool ?? input?.name)
+    const notice = evaluateUriNotice(toolName, input?.args ?? {}, { hints: FILESYSTEM_TOOL_HINTS })
+    if (!notice || !output) return
+
+    log("INFO", "viking-uri-guard", "Attached viking URI notice to shell tool output", {
+      tool: toolName,
+      uri: notice.uri,
+    })
+    output.output = output.output ? `${output.output}\n\n${notice.reason}` : notice.reason
   }
 }
 

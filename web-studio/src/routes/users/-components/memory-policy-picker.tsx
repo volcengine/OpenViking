@@ -161,53 +161,61 @@ export function MemoryPolicySummary({
             {t('memoryPolicy.change')}
           </Button>
         </div>
-        <div className="grid gap-3 bg-muted/30 p-4 text-sm text-muted-foreground">
-          <div className="flex flex-wrap gap-4">
-            {value.self?.enabled !== false &&
-              (value.memory_types ?? defaultMemoryTypes).some((type) =>
-                personalMemoryTypes.includes(type),
-              ) && (
-                <span className="flex items-center gap-2">
-                  <CheckIcon className="size-4" />
-                  {t('memoryPolicy.userMemory')}
-                </span>
-              )}
-            {value.self?.enabled !== false &&
-              (value.memory_types ?? defaultMemoryTypes).includes(
-                'experiences',
-              ) && (
-                <span className="flex items-center gap-2">
-                  <CheckIcon className="size-4" />
-                  {t('memoryPolicy.agentMemory')}
-                </span>
-              )}
-          </div>
-          <p>{t(`memoryPolicy.${preset}.description`)}</p>
-          <p>{t(`memoryPolicy.${preset}.examples`)}</p>
-          {preset === 'custom' && (
-            <div className="grid gap-2">
-              {memoryScopeKeys.map((key) => (
-                <p key={key}>
-                  {t(`memoryPolicy.custom.${key}`)}:{' '}
-                  {t(
-                    value[key]?.enabled === false
-                      ? 'memoryPolicy.disabled'
-                      : 'memoryPolicy.enabled',
-                  )}
-                </p>
-              ))}
-              <p className="break-words">
-                {value.memory_types === undefined
-                  ? t('memoryPolicy.custom.all')
-                  : value.memory_types.length
-                    ? value.memory_types.join(', ')
-                    : t('memoryPolicy.custom.empty')}
-              </p>
-            </div>
-          )}
-        </div>
+        <MemoryPolicyDetails value={value} />
       </div>
     </section>
+  )
+}
+
+export function MemoryPolicyDetails({ value }: { value: UserMemoryPolicy }) {
+  const { t } = useTranslation('settings')
+  const preset = identifyMemoryPreset(value)
+  return (
+    <div className="grid gap-3 bg-muted/30 p-4 text-sm text-muted-foreground">
+      <div className="flex flex-wrap gap-4">
+        {value.self?.enabled !== false &&
+          (value.memory_types ?? defaultMemoryTypes).some((type) =>
+            personalMemoryTypes.includes(type),
+          ) && (
+            <span className="flex items-center gap-2">
+              <CheckIcon className="size-4" />
+              {t('memoryPolicy.userMemory')}
+            </span>
+          )}
+        {value.self?.enabled !== false &&
+          (value.memory_types ?? defaultMemoryTypes).includes(
+            'experiences',
+          ) && (
+            <span className="flex items-center gap-2">
+              <CheckIcon className="size-4" />
+              {t('memoryPolicy.agentMemory')}
+            </span>
+          )}
+      </div>
+      <p>{t(`memoryPolicy.${preset}.description`)}</p>
+      <p>{t(`memoryPolicy.${preset}.examples`)}</p>
+      {preset === 'custom' && (
+        <div className="grid gap-2">
+          {memoryScopeKeys.map((key) => (
+            <p key={key}>
+              {t(`memoryPolicy.custom.${key}`)}:{' '}
+              {t(
+                value[key]?.enabled === false
+                  ? 'memoryPolicy.disabled'
+                  : 'memoryPolicy.enabled',
+              )}
+            </p>
+          ))}
+          <p className="break-words">
+            {value.memory_types === undefined
+              ? t('memoryPolicy.custom.all')
+              : value.memory_types.length
+                ? value.memory_types.join(', ')
+                : t('memoryPolicy.custom.empty')}
+          </p>
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -333,6 +333,8 @@ JSON output - error:
 | `SESSION_EXPIRED` | 410 | Session no longer exists |
 | `NOT_INITIALIZED` | - | Service or component not initialized (need to call initialize() first) |
 
+File/directory type misuse, copying or removing a directory without `recursive=true`, and a definitively nonexistent HTTP source hostname return `INVALID_ARGUMENT` (400). Path-lock contention, including encrypted writes, returns `CONFLICT` (409); corrupt lock tokens, lock I/O failures, and stored-data decryption failures return `INTERNAL` (500). An unavailable HTTP source or temporary network failure returns `UNAVAILABLE` (503), while a fetch timeout returns `DEADLINE_EXCEEDED` (504).
+
 ---
 
 ## API Endpoints
@@ -466,6 +468,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/v1/compile` | Create an OV-owned Compile task |
+| GET | `/api/v1/compile/capabilities` | Check Compile availability |
+| GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/api/v1/tasks/{task_id}` | Get a background task |
 | POST | `/api/v1/tasks/{task_id}/cancel` | Cancel a background task |
 | GET | `/api/v1/tasks` | List background tasks |
@@ -529,6 +533,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| GET | `/api/v1/compile/capabilities` | Check Compile availability |
+| GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
 | GET | `/bot/v1/health` | VikingBot health check |
 | POST | `/bot/v1/chat` | Non-streaming VikingBot chat |
 | POST | `/bot/v1/chat/stream` | Streaming VikingBot chat |

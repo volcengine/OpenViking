@@ -1142,7 +1142,7 @@ export function inspectConfigFiles(report, { harness = "", launcherHint = "this 
  * block from `server.root_api_key`.
  *
  * The identity has no such answer to read, so account and user follow the chain
- * in `resolveOpenVikingCredentials` step for step: pinned to ovcli.conf it ends
+ * in `resolveConnection` step for step: pinned to ovcli.conf it ends
  * at that file's `plugin` section, and otherwise the environment wins and
  * ov.conf's harness block is last.
  */
@@ -1156,14 +1156,17 @@ export function credentialSources(cfg, cliConf, ovConf, { section = harnessKey(c
   const scoped = (section && plugin[section]) || {};
   const block = (section && ov[section]) || {};
   const server = ov.server || {};
-  // Pinned to ovcli.conf, the chain never looks at the environment.
+  // Pinned to ovcli.conf, the chain never looks at the environment; forced to
+  // the environment, it never looks at a file.
   const pinned = cfg.credentialSource === "ovcli";
+  const envOnly = /^(env|environment)$/i.test(String(env.OPENVIKING_CREDENTIAL_SOURCE || env.OPENVIKING_CREDENTIALS_SOURCE || "").trim());
 
   const envUrl = env.OPENVIKING_URL || env.OPENVIKING_BASE_URL;
   const url = (!pinned && envUrl) ? "env"
-    : cli.url ? cliShort
-      : server.url ? ovShort
-        : (server.host || server.port) ? `${ovShort} server.host/port` : "default (http://127.0.0.1:1933)";
+    : envOnly ? "default (http://127.0.0.1:1933)"
+      : cli.url ? cliShort
+        : server.url ? ovShort
+          : (server.host || server.port) ? `${ovShort} server.host/port` : "default (http://127.0.0.1:1933)";
 
   let apiKey;
   if (cfg.apiKeySource === "env") {
@@ -1178,15 +1181,17 @@ export function credentialSources(cfg, cliConf, ovConf, { section = harnessKey(c
   } else if (cfg.apiKeySource === "host") {
     apiKey = "the host application";
   } else {
-    apiKey = pinned ? "(none — ovcli.conf mode ignores env)" : "(none)";
+    apiKey = pinned ? "(none — ovcli.conf mode ignores env)"
+      : envOnly ? "(none — env mode reads no file)" : "(none)";
   }
 
   const identity = (envName, cliValue, name) => (
     (!pinned && env[envName]) ? "env"
-      : cliValue ? cliShort
-        : scoped[name] ? `${cliShort} plugin.${section}.${name}`
-          : plugin[name] ? `${cliShort} plugin.${name}`
-            : (!pinned && block[name]) ? `${ovShort} ${section}.${name}` : "(unset)"
+      : envOnly ? "(unset)"
+        : cliValue ? cliShort
+          : scoped[name] ? `${cliShort} plugin.${section}.${name}`
+            : plugin[name] ? `${cliShort} plugin.${name}`
+              : (!pinned && block[name]) ? `${ovShort} ${section}.${name}` : "(unset)"
   );
   return {
     url,

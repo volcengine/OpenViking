@@ -920,6 +920,7 @@ ov admin register-user acme bob-private --role user \
 | account_id | str | 是 | - | 工作区 ID |
 | name | str | 否 | null | 按用户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | role | str | 否 | null | 按角色过滤 |
+| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；默认保持现有按鉴权模式返回字段的行为。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
@@ -928,6 +929,14 @@ ov admin register-user acme bob-private --role user \
 - ADMIN 只能列出自己所属的 account 中的用户
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 用户删除开始后，不再出现在该列表中
+
+**带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
+
+`query` 对用户 ID 做去除首尾空格、不区分大小写的字面包含匹配，可与已有的 `name` 通配符、`role` 过滤组合。例如：
+
+```text
+GET /api/v1/admin/accounts/acme/users?limit=20&page=1&query=alice&include_summary=true
+```
 
 #### 3. 使用示例
 

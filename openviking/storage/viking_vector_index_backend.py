@@ -43,7 +43,6 @@ from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
-from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
@@ -201,6 +200,7 @@ class _AsyncVectorAdapter:
                 )
 
         await asyncio.to_thread(_update)
+
 
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
@@ -1757,12 +1757,45 @@ class VikingVectorIndexBackend:
         scopes: List[FilterExpr] = [Eq("uri", uri)]
         if recursive:
             scopes.append(PathScope("uri", uri, depth=-1))
-        # Chunk URIs are siblings in the path index. Scan one parent level and
-        # filter exact transfer entries below, without backend-specific operators.
-        parent = VikingURI(uri).parent
-        if parent is not None and parent.uri != "viking://":
-            scopes.append(PathScope("uri", parent.uri, depth=1))
+        # Never include the parent: unrelated siblings are outside transfer locks
+        # and may change between the count and paginated reads.
         return And([Eq("account_id", ctx.account_id), Or(scopes)])
+
+    async def _read_uri_transfer_entries(
+        self,
+        ctx: RequestContext,
+        entry_uris: List[str],
+        *,
+        include_full_records: bool,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """Use legacy per-entry reads; concurrent misses do not abort a transfer.
+
+        Each URI has the pre-transaction limit of 100 records. Do not count or
+        sort: separate aggregate and search requests need not share a snapshot.
+        Backend failures still propagate, unlike the legacy fail-open query API.
+        """
+        backend = self._get_backend_for_context(ctx)
+        records: Dict[str, Dict[str, Any]] = {}
+        entries = sorted(set(entry_uris))
+        for uri in entries:
+            page = await backend.strict_query(
+                filter=self._uri_transfer_filter(ctx, uri, recursive=False),
+                limit=100,
+                output_fields=["id", "uri"],
+            )
+            ids = [
+                str(record["id"])
+                for record in page
+                if record.get("id") and record.get("uri") == uri
+            ]
+            if include_full_records and ids:
+                page = await self._strict_transfer_get(ctx, ids)
+            records.update(
+                (str(record["id"]), record)
+                for record in page
+                if record.get("uri") == uri and str(record.get("id")) in ids
+            )
+        return list(records.values()), len(entries)
 
     async def _scan_uri_transfer_scope(
         self,
@@ -1822,9 +1855,10 @@ class VikingVectorIndexBackend:
                 for record in page
                 if isinstance(record.get("uri"), str)
                 and (
-                    self._vector_entry_uri(record["uri"], selected_entries) in selected_entries
+                    record["uri"] in selected_entries
                     if selected_entries is not None
-                    else uri_in_transfer_scope(record["uri"], uri, recursive=recursive)
+                    else record["uri"] == uri
+                    or (recursive and record["uri"].startswith(uri.rstrip("/") + "/"))
                 )
             ]
             if include_full_records and scoped:
@@ -1914,24 +1948,22 @@ class VikingVectorIndexBackend:
         target_entry_exists: Callable[[str], Awaitable[bool]] | None = None,
     ) -> tuple[List[Dict[str, Any]], int, Dict[str, Dict[str, Any]]]:
         """Read selected source records and remove affected target records."""
-        source_records, batches = await self._scan_uri_transfer_scope(
-            ctx,
-            source_uri,
-            recursive=recursive,
-            include_full_records=True,
-        )
-
         selected_source_uris = {
             resolve_uri(uri).uri
             for uri in (source_uris if source_uris is not None else [source_uri])
         }
-        if source_uris is not None:
-            source_records = [
-                record
-                for record in source_records
-                if self._vector_entry_uri(str(record["uri"]), selected_source_uris)
-                in selected_source_uris
-            ]
+        use_entry_queries = source_uris is not None or not recursive
+        if not use_entry_queries:
+            # Direct vector callers without a filesystem manifest retain subtree scans.
+            source_records, batches = await self._scan_uri_transfer_scope(
+                ctx, source_uri, recursive=recursive, include_full_records=True
+            )
+        else:
+            # Filesystem transfers supply the actual entries under their locks.
+            # Match legacy mv: do not discover independent #chunk_* records.
+            source_records, batches = await self._read_uri_transfer_entries(
+                ctx, list(selected_source_uris), include_full_records=True
+            )
 
         # Match legacy mv: unindexed source entries leave old target records intact.
         if not source_records:
@@ -1978,22 +2010,29 @@ class VikingVectorIndexBackend:
             preserved_acl_uris = {
                 uri for uri in replacement_target_uris - written_uris if is_acl_uri(uri)
             }
-        # Bound the query expression and avoid scanning destination-only subtrees.
-        target_entries = sorted(replacement_target_uris)
+        # Query only overwritten entries, never destination-only subtrees.
         affected_target_ids: List[str] = []
-        for offset in range(0, len(target_entries), 100):
-            target_records, _ = await self._scan_uri_transfer_scope(
-                ctx,
-                target_uri,
-                recursive=False,
-                include_full_records=False,
-                entry_uris=target_entries[offset : offset + 100],
+        if use_entry_queries:
+            target_records, _ = await self._read_uri_transfer_entries(
+                ctx, list(replacement_target_uris), include_full_records=False
             )
-            for record in target_records:
-                if record["uri"] not in preserved_acl_uris and not await is_independent_target(
-                    str(record["uri"])
-                ):
-                    affected_target_ids.append(str(record["id"]))
+        else:
+            target_records = []
+            target_entries = sorted(replacement_target_uris)
+            for offset in range(0, len(target_entries), 100):
+                records, _ = await self._scan_uri_transfer_scope(
+                    ctx,
+                    target_uri,
+                    recursive=False,
+                    include_full_records=False,
+                    entry_uris=target_entries[offset : offset + 100],
+                )
+                target_records.extend(records)
+        for record in target_records:
+            if record["uri"] not in preserved_acl_uris and not await is_independent_target(
+                str(record["uri"])
+            ):
+                affected_target_ids.append(str(record["id"]))
         target_acl_fields: Dict[str, Dict[str, Any]] = {}
         if preserve_target_acl and self._acl_enabled(ctx) and replacement_target_uris:
             assert self.acl_manager is not None

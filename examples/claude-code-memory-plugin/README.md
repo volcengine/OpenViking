@@ -468,7 +468,8 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
-| `PreToolUse`          | Native `Read` / `Glob` / `Grep` on a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool                  |
+| `PreToolUse`          | Native `Read` / `Glob` / `Grep` / `Edit` / `Write` whose path is a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool |
+| `PreToolUse`          | `Bash` command that contains a `viking://` URI | Let the command run and attach a notice pointing Claude to the OpenViking MCP tools in case it meant OpenViking content |
 | `PostToolUse`         | `Read` of a `SKILL.md` file              | Optional (default off): inject an experience block when OV has relevant skill-experience memories |
 
 ### Async write path

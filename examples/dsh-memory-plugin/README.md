@@ -124,11 +124,13 @@ SDK client opens that standalone stream it stops resolving POST responses, so
 `tools/list` never returns. The proxy owns the transport itself and is
 unaffected.
 
-The bundle's resolved credentials travel to the proxy through the child
-environment, because DSH scrubs credential-shaped names out of the inherited env
-and a subprocess cannot see the Cordis patch; the proxy then applies the usual
-`OPENVIKING_*` → `ovcli.conf` → `ov.conf` chain and reloads when those files
-change.
+The bundle's resolved connection — url, MCP url, key, account, user and auth
+mode — travels to the proxy through the child environment, because DSH scrubs
+credential-shaped names out of the inherited env and a subprocess cannot see the
+Cordis patch. It goes with `OPENVIKING_CREDENTIAL_SOURCE=env`, so the proxy reads
+no config file and reaches the server exactly as the runtime does, including
+with no key when the runtime has none. A changed `ovcli.conf` therefore takes
+effect for the tools when DSH restarts the bundle, as it does for the runtime.
 
 Two consequences follow from the proxy being one process per profile:
 
@@ -201,7 +203,8 @@ The patch can also carry plugin config:
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
 - `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
 - Failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
-- `tools/pre-execute` blocks DSH filesystem and shell tools from treating `viking://` URIs as local paths, pointing the model at the bridged `mcp__openviking__*` tools instead.
+- `tools/pre-execute` denies a DSH filesystem tool (`read`, `glob`, `grep`, `edit`, `write`, `str_replace_editor`) whose path argument is a `viking://` URI, pointing the model at the bridged `mcp__openviking__*` tools instead. A `grep` whose pattern is `viking://` text still runs.
+- `tools/post-execute` lets a `bash` command that carries a `viking://` URI run unchanged and attaches a notice for the model: use the bridged tools if it meant OpenViking content, or ignore the notice when the URI is intentional data such as an `ov` argument or an HTTP payload.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. DSH does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect; pin a peer with `OPENVIKING_PEER_ID` instead. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
 

@@ -56,6 +56,7 @@ pipx upgrade openviking
    ```yaml
    services:
      openviking:
+       # 推荐优先使用 ghcr.io；如果访问有问题，可改用 openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
        image: ghcr.io/volcengine/openviking:latest
        container_name: openviking
        ports:

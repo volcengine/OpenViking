@@ -63,10 +63,11 @@ export const cursor = {
     return {};
   },
   guard(input = {}) {
-    const isShell = typeof input.command === "string";
-    const decision = evaluateUriGuard(isShell ? "bash" : "read", input);
-    if (!decision) return {};
-    return denyCursorPermission(decision.reason, { agentMessage: isShell });
+    // beforeShellExecution is no longer installed, but a hooks.json from an
+    // older install may still route a shell command here, and it must run.
+    if (typeof input.command === "string") return {};
+    const decision = evaluateUriGuard("read", input);
+    return decision ? denyCursorPermission(decision.reason) : {};
   },
   prompt: (input) => (typeof input.prompt === "string" ? input.prompt.trim() : ""),
   async capture(ctx, state, event) {

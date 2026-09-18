@@ -1,6 +1,6 @@
 # 路径锁与崩溃恢复
 
-OpenViking 通过**路径锁**和**持久化队列恢复**两个简单原语保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，确保 VikingFS、VectorDB、QueueManager 三个子系统在故障时不会出现数据不一致。
+OpenViking 通过**路径锁**和**持久化队列恢复**两个简单原语保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，协调并发写入，并在进程重启后继续处理已入队的会话任务。路径锁和队列恢复不构成跨 VikingFS、VectorDB、QueueManager 的原子事务。
 
 ## 设计哲学
 
@@ -10,8 +10,8 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 
 ## 设计原则
 
-1. **写互斥**：通过路径锁保证同一路径同一时间只有一个写操作
-2. **默认生效**：所有数据操作命令自动加锁，用户无需额外配置
+1. **写互斥**：参与锁协议的不同 owner 不能同时取得冲突路径的锁
+2. **默认生效**：受保护的写操作默认加锁；普通读取和底层 mkdir 不自动加锁
 3. **锁即保护**：进入 LockContext 时加锁，退出时释放，没有 undo/journal/commit 语义
 4. **仅 session_memory 需要崩溃恢复**：通过持久化 `session_commit` 队列在进程崩溃后恢复 Phase 2
 5. **Queue 操作在锁外执行**：SemanticQueue/EmbeddingQueue 的 enqueue 是幂等的，失败可重试
@@ -270,24 +270,47 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 - **EXACT (E)**：锁定一个具体路径本身。文件、目录名、尚未创建的目标路径都可以使用；若祖先目录持有 TreeLock 则阻塞。
 - **TREE (T)**：用于删除目录、移动目录、资源生命周期保护等。逻辑上覆盖整棵子树，但只为根路径保存一个 Provider token。冲突检查覆盖 Provider scope 内的后代和持有 Tree 锁的祖先。Filesystem Provider 可能为了写锁文件而创建尚不存在的目标目录。
 
+### 路径范围与目标类型
+
+Exact 和 Tree 表达操作范围，文件、目录或缺失路径表达目标的当前状态，两者独立。锁保护路径名字，目标不存在也可以申请锁。
+
+以下冲突关系限定为不同 owner、同一 Provider scope 内的请求：
+
+| 已持有 | 新请求 | 冲突 |
+| --- | --- | --- |
+| Exact(`/docs/a.md`) | Exact 或 Tree(`/docs/a.md`) | 是 |
+| Exact(`/docs`) | Exact(`/docs/a.md`) | 否 |
+| Tree(`/docs`) | Exact 或 Tree(`/docs/a.md`) | 是 |
+| Exact(`/docs/a.md`) | Tree(`/docs`) | 是 |
+| Tree(`/docs/a.md`) | Exact(`/docs/b.md`) | 否 |
+
+`Tree(/docs/a.md)` 不会扩大为 `Tree(/docs)`。反过来，目录自身的 Exact 也不能保护子树，递归删除需要 Tree。
+
+锁只协调参与协议的操作。底层 `PathLockWrappedFS` 对 create、write、truncate、非递归 remove 使用 Exact，对 remove_all 使用 Tree；文件 rename 锁源和目标的 Exact，目录 rename 锁源 Tree 和目标 Exact。read、stat、列目录和 mkdir 直接转发，上层可另行持锁。绕过协议的 I/O 不会被操作系统自动阻断。
+
 ## 锁机制
 
 ### Filesystem Provider 锁协议
 
-锁文件路径：
+锁类型由调用者选择，Resolver 根据目标状态决定 token 位置：
+
+| 目标状态 | Exact token | Tree token |
+| --- | --- | --- |
+| 现存文件 `/docs/a` | `/docs/.exact.ovlock.a.<hash>`，内容为 E | 同一 sidecar，内容为 T |
+| 现存目录 `/docs/a` | `/docs/a/.path.ovlock`，内容为 E | 同一目录内文件，内容为 T |
+| 缺失路径 `/docs/a` | 父目录 sidecar，内容为 E | 创建目标目录后写内部 `.path.ovlock`，内容为 T |
+
+sidecar 位于目标旁边，但只代表该目标，不会锁住整个父目录。`<hash>` 来自完整后端路径的 SHA-1 前缀，与业务文件内容无关。
+
+`.exact.ovlock.*` 可以存 Tree token，`.path.ovlock` 也可以存 Exact token。文件名是存储协议的一部分，不能单凭名字判断逻辑锁类型。token 内容为：
 
 ```text
-TreeLock(path)                 -> {path}/.path.ovlock
-ExactPathLock(已存在目录 path) -> {path}/.path.ovlock
-ExactPathLock(文件或未创建路径) -> {parent}/.exact.ovlock.<name>.<hash>
+{owner_id}:{time_ns}:{lock_type}
 ```
 
-锁文件内容（Fencing Token）：
-```
-{handle_id}:{time_ns}:{lock_type}
-```
+`lock_type` 为 `E` 或 `T`。该归属 token 用于竞争检查、续期和条件释放，不代表所有业务写入都有存储端 fencing 校验。
 
-其中 `lock_type` 为 `E`（EXACT）或 `T`（TREE）。
+lease 将逻辑范围 `covered_paths` 与 token 位置 `lock_paths` 分开记录。Owned lease 控制续期、释放和交接；Borrowed lease 仅提供已有锁的覆盖证明，不能释放外层锁。
 
 ### Cache Provider 锁协议
 
@@ -348,8 +371,8 @@ HASH。跨 scope batch 会被拒绝。
        - 目标目录不存在？ -> 视为无后代锁
        - 陈旧锁？ -> 移除后重试
        - 活跃锁？ -> 等待
-    4. 确保目标目录存在；如果不存在则创建目录
-    5. 写入 TREE (T) 锁文件（只写一个文件，在根路径）
+    4. 确保 Resolver 选定的 token 父目录存在；缺失目标会因此被创建成目录
+    5. 写入 TREE (T) token（现存文件用 sidecar，其余用内部 .path.ovlock）
     6. TOCTOU 双重检查：重新扫描后代目录和祖先目录
        - 发现冲突：比较 (timestamp, handle_id)
        - 后到者（更大的 timestamp/handle_id）主动让步（删除自己的锁），防止活锁
@@ -386,11 +409,15 @@ HASH。跨 scope batch 会被拒绝。
 fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败方会删除自己的锁，
 已创建出来的空目录可以保留。
 
+获取失败的回滚和正常释放只清理 token，不保证删除为存放 token 创建的目录。Exact sidecar 也可能创建缺失的父目录链。Snapshot 对缺失目标采用单独的策略，见 [快照的范围与并发](../guides/15-snapshot.md#提交范围与并发)。
+
 ### 锁过期清理
+
+**自动续期**：Rust PathLockManager 每隔 `lock_expire / 3` 刷新活跃 lease；默认过期时间为 30 秒，不是业务操作的最长运行时间。进程退出后续期停止。
 
 **陈旧锁检测**：PathLockEngine 检查归属 token 中的时间戳。超过 `lock_expire`（默认 30s）的锁被视为陈旧锁，在加锁过程中自动移除。
 
-**进程内清理**：LockManager 每 60 秒检查活跃的 LockHandle。仍持有 Provider token 且失活时间超过 `lock_expire` 的 handle 会被强制释放。
+**进程内清理**：Rust PathLockManager 在续期循环中检查长期未成功续期的 lease，以 `2 × lock_expire` 为阈值尝试清理，并校验归属后释放 token。
 
 **孤儿锁**：进程崩溃后遗留的 Provider token，在后续 acquire 检查同一路径或 scope 时通过 stale lock 检测自动移除。
 

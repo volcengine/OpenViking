@@ -868,7 +868,7 @@ impl PathLockManager {
             first_attempt = false;
             let acquired_lock_paths = match self.try_acquire_batch_once(&sorted, &owner_id).await {
                 Ok(acquired) => acquired,
-                Err((err, pre_conflict)) => {
+                Err(err) => {
                     drop(owner_registry);
                     if !Self::is_retryable_error(&err) {
                         break Err(err);
@@ -900,37 +900,6 @@ impl PathLockManager {
                         break Err(PathLockError::Timeout {
                             elapsed_ms: start.elapsed().as_millis() as u64,
                         });
-                    }
-
-                    if pre_conflict && self.provider.handle_mode() == PathLockHandleMode::LockPath {
-                        if let PathLockError::Conflict { ref lock_path, .. } = &err {
-                            let token = match self.provider.read_token(lock_path).await {
-                                Ok(token) => token,
-                                Err(error) => break Err(error),
-                            };
-                            if let Some(token) = token {
-                                let now_ns = Self::now_ns();
-                                if self.is_stale(&token, now_ns) {
-                                    if start.elapsed() >= timeout {
-                                        break Err(PathLockError::Timeout {
-                                            elapsed_ms: start.elapsed().as_millis() as u64,
-                                        });
-                                    }
-                                    let removed = match self
-                                        .provider
-                                        .remove_token(lock_path, &token.owner_id, true)
-                                        .await
-                                    {
-                                        Ok(removed) => removed,
-                                        Err(error) => break Err(error),
-                                    };
-                                    if removed {
-                                        info!(lock_path = %lock_path, stale_owner = %token.owner_id, token_kind = ?token.lock_type, age_ms = ((now_ns.saturating_sub(token.time_ns)) / 1_000_000) as u64, "removed stale pathlock token during acquire retry");
-                                        self.metrics.write().await.stale_tokens_removed += 1;
-                                    }
-                                }
-                            }
-                        }
                     }
 
                     let remaining = timeout.saturating_sub(start.elapsed());
@@ -1004,7 +973,7 @@ impl PathLockManager {
         &self,
         requests: &[PathLockRequest],
         owner_id: &str,
-    ) -> Result<Vec<AtomicAcquisition>, (PathLockError, bool)> {
+    ) -> PathLockResult<Vec<AtomicAcquisition>> {
         let now_ns = Self::now_ns();
         match self
             .provider
@@ -1018,7 +987,7 @@ impl PathLockManager {
         {
             Ok(Some(acquisitions)) => return Ok(acquisitions),
             Ok(None) => {}
-            Err(error) => return Err((error, true)),
+            Err(error) => return Err(error),
         }
 
         let mut acquired = Vec::new();
@@ -1073,9 +1042,9 @@ impl PathLockManager {
         .await;
         if let Err(error) = acquisition {
             if let Err(rollback_error) = self.rollback_acquisitions(&acquired, owner_id).await {
-                return Err((Self::rollback_error(error, rollback_error), false));
+                return Err(Self::rollback_error(error, rollback_error));
             }
-            return Err((error, true));
+            return Err(error);
         }
 
         let verification: PathLockResult<()> = async {
@@ -1110,9 +1079,9 @@ impl PathLockManager {
         .await;
         if let Err(error) = verification {
             if let Err(rollback_error) = self.rollback_acquisitions(&acquired, owner_id).await {
-                return Err((Self::rollback_error(error, rollback_error), false));
+                return Err(Self::rollback_error(error, rollback_error));
             }
-            return Err((error, false));
+            return Err(error);
         }
         Ok(acquired)
     }
@@ -1206,17 +1175,23 @@ impl PathLockManager {
                 debug!(lock_path = %lock_path, owner_id = %owner_id, kind = ?existing.lock_type, "reused existing pathlock token for same owner");
                 return Ok(AcquisitionChange::Reentrant);
             }
-            if !self.is_stale(&existing, now_ns) {
-                return Err(PathLockError::Conflict {
-                    lock_path: lock_path.to_string(),
-                    owner: existing.owner_id,
-                    kind: existing.lock_type,
-                });
+            // Replace only the stale snapshot we observed. A concurrent heartbeat
+            // or takeover must not be erased by a separate remove/create sequence.
+            if self.is_stale(&existing, now_ns)
+                && self
+                    .provider
+                    .compare_and_write_token(lock_path, &existing, &token)
+                    .await?
+            {
+                info!(lock_path = %lock_path, stale_owner = %existing.owner_id, owner_id = %owner_id, "replaced stale pathlock token during acquire");
+                self.metrics.write().await.stale_tokens_removed += 1;
+                return Ok(AcquisitionChange::Created { replacement: token });
             }
-            // Stale — remove it before attempting to create our own token.
-            self.provider
-                .remove_token(lock_path, &existing.owner_id, true)
-                .await?;
+            return Err(PathLockError::Conflict {
+                lock_path: lock_path.to_string(),
+                owner: existing.owner_id,
+                kind: existing.lock_type,
+            });
         }
 
         self.provider.try_create_token(lock_path, &token).await?;
@@ -2222,9 +2197,10 @@ mod tests {
         fail_next_read: AtomicBool,
         fail_next_remove: AtomicBool,
         return_false_next_remove: AtomicBool,
-        busy_next_remove: AtomicBool,
-        busy_remove_count: AtomicUsize,
+        busy_next_takeover: AtomicBool,
+        busy_takeover_count: AtomicUsize,
         reject_compare: bool,
+        refresh_on_takeover: bool,
     }
 
     impl FailNextRemoveProvider {
@@ -2235,22 +2211,24 @@ mod tests {
                 fail_next_read: AtomicBool::new(true),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
-                busy_next_remove: AtomicBool::new(false),
-                busy_remove_count: AtomicUsize::new(0),
+                busy_next_takeover: AtomicBool::new(false),
+                busy_takeover_count: AtomicUsize::new(0),
                 reject_compare: false,
+                refresh_on_takeover: false,
             }
         }
 
-        /// Build a memory provider whose next remove reports a retryable busy error.
-        fn with_busy_remove() -> Self {
+        /// Build a memory provider whose next takeover reports a retryable busy error.
+        fn with_busy_takeover() -> Self {
             Self {
                 inner: crate::lock::provider::MemoryPathLockProvider::new(),
                 fail_next_read: AtomicBool::new(false),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
-                busy_next_remove: AtomicBool::new(true),
-                busy_remove_count: AtomicUsize::new(0),
+                busy_next_takeover: AtomicBool::new(true),
+                busy_takeover_count: AtomicUsize::new(0),
                 reject_compare: false,
+                refresh_on_takeover: false,
             }
         }
 
@@ -2261,9 +2239,10 @@ mod tests {
                 fail_next_read: AtomicBool::new(false),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
-                busy_next_remove: AtomicBool::new(false),
-                busy_remove_count: AtomicUsize::new(0),
+                busy_next_takeover: AtomicBool::new(false),
+                busy_takeover_count: AtomicUsize::new(0),
                 reject_compare: true,
+                refresh_on_takeover: false,
             }
         }
     }
@@ -2291,8 +2270,20 @@ mod tests {
             expected: &LockToken,
             replacement: &LockToken,
         ) -> PathLockResult<bool> {
+            if self.busy_next_takeover.swap(false, Ordering::SeqCst) {
+                self.busy_takeover_count.fetch_add(1, Ordering::SeqCst);
+                return Err(PathLockError::Busy {
+                    lock_path: lock_path.to_string(),
+                    operation: "compare_and_write".to_string(),
+                });
+            }
             if self.reject_compare {
                 return Ok(false);
+            }
+            if self.refresh_on_takeover {
+                self.inner
+                    .refresh_token(lock_path, &expected.owner_id, PathLockManager::now_ns())
+                    .await?;
             }
             self.inner
                 .compare_and_write_token(lock_path, expected, replacement)
@@ -2314,18 +2305,16 @@ mod tests {
             owner_id: &str,
             force: bool,
         ) -> PathLockResult<bool> {
-            if self.busy_next_remove.swap(false, Ordering::SeqCst) {
-                self.busy_remove_count.fetch_add(1, Ordering::SeqCst);
-                return Err(PathLockError::Busy {
-                    lock_path: lock_path.to_string(),
-                    operation: "remove".to_string(),
-                });
-            }
             if self.return_false_next_remove.swap(false, Ordering::SeqCst) {
                 return Ok(false);
             }
             if self.fail_next_remove.swap(false, Ordering::SeqCst) {
                 return Err(PathLockError::Io("injected remove failure".to_string()));
+            }
+            if self.refresh_on_takeover {
+                self.inner
+                    .refresh_token(lock_path, owner_id, PathLockManager::now_ns())
+                    .await?;
             }
             self.inner.remove_token(lock_path, owner_id, force).await
         }
@@ -2905,10 +2894,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn busy_cleanup_is_retried() {
+    async fn busy_stale_takeover_is_retried() {
         let fs = Arc::new(MemFileSystem::new());
         fs.mkdir("/data", 0o755).await.unwrap();
-        let provider = Arc::new(FailNextRemoveProvider::with_busy_remove());
+        let provider = Arc::new(FailNextRemoveProvider::with_busy_takeover());
         provider
             .inner
             .try_create_token(
@@ -2935,13 +2924,59 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(provider.busy_remove_count.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.busy_takeover_count.load(Ordering::SeqCst), 1);
         mgr.release(&lease).await.unwrap();
         let error = PathLockManager::rollback_error(
             PathLockError::Io("commit".into()),
             PathLockError::Io("rollback".into()),
         );
         assert!(!PathLockManager::is_retryable_error(&error));
+    }
+
+    #[tokio::test]
+    async fn stale_takeover_preserves_a_concurrent_refresh() {
+        for (refresh, timeout) in [
+            (false, Duration::ZERO),
+            (true, Duration::ZERO),
+            (true, Duration::from_millis(200)),
+        ] {
+            let fs = Arc::new(MemFileSystem::new());
+            fs.mkdir("/data", 0o755).await.unwrap();
+            let provider = Arc::new(FailNextRemoveProvider {
+                reject_compare: false,
+                refresh_on_takeover: refresh,
+                ..FailNextRemoveProvider::with_compare_miss()
+            });
+            let lock_path = "/data/.path.ovlock";
+            provider
+                .inner
+                .try_create_token(
+                    lock_path,
+                    &LockToken {
+                        owner_id: "original-owner".to_string(),
+                        time_ns: 1,
+                        lock_type: PathLockKind::Tree,
+                    },
+                )
+                .await
+                .unwrap();
+            let mgr = PathLockManager::new(fs, provider.clone(), PathLockConfig::default());
+
+            let result = mgr.acquire_tree("/data", timeout, None).await;
+            let token = provider.inner.read_token(lock_path).await.unwrap().unwrap();
+            assert!(token.time_ns > 1);
+            if refresh {
+                // The heartbeat wins after the stale read but before takeover.
+                // Both the renewed token and its ownership must survive.
+                assert!(matches!(result, Err(PathLockError::Timeout { .. })));
+                assert_eq!(token.owner_id, "original-owner");
+            } else {
+                // A genuinely stale token remains reclaimable without waiting.
+                let lease = result.unwrap();
+                assert_eq!(token.owner_id, lease.lease.owner_id);
+                mgr.release(&lease).await.unwrap();
+            }
+        }
     }
 
     /// Verify a downgrade CAS miss returns without dropping local lease state.

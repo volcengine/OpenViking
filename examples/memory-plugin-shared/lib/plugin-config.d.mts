@@ -38,6 +38,7 @@ export function buildPluginConfig(
       user?: string;
       apiKey?: string;
       baseUrl?: string;
+      authMode?: string;
     };
     logFile?: string;
     rootKeyFallback?: boolean;

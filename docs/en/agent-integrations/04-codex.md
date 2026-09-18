@@ -57,7 +57,7 @@ For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confir
 
 ## How it works
 
-The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md` plus URI and abstract indexes for `preferences/` and `entities/` through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), commits the full transcript before compaction (`PreCompact`), and commits the session when the thread shuts down (`SessionEnd`) so memory extraction processes the entire conversation. Upon starting a fresh session, it also sweeps any orphaned sessions left by previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
+The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md` plus URI and abstract indexes for `preferences/` and `entities/` through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), commits the full transcript before compaction (`PreCompact`), and commits the session when the thread shuts down (`SessionEnd`) so memory extraction processes the entire conversation. Before a shell command runs (`PreToolUse` on `Bash`), it looks for a `viking://` URI in the command: the command still runs, and the model gets a notice suggesting the OpenViking MCP tools, which it can ignore when the URI is intentional data such as an `ov` argument. Upon starting a fresh session, it also sweeps any orphaned sessions left by previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
 
 > **Known limitation**: `SessionEnd` requires Codex 0.145 or newer, and it only fires on a graceful exit (`/quit`, `/exit`, double `Ctrl-C`, EOF, end of a `codex exec` run). It does not fire on `SIGTERM`, a closed terminal, `kill -9`, or a crash, and it is deferred when the TUI runs against a `codex app-server` daemon. Those sessions — and every session on Codex older than 0.145, and any TraeCode CLI build without it — are recovered by the idle-TTL sweep (30 minutes) at the next `SessionStart`.
 
@@ -73,7 +73,7 @@ Credential source: env vars win by default — when any `OPENVIKING_*` credentia
 | `OPENVIKING_URL` / `OPENVIKING_BASE_URL` | — | Full server URL |
 | `OPENVIKING_API_KEY` | — | API key (sent as `Authorization: Bearer`) |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | Active CLI config to use for hooks, MCP, and child `ov` commands |
-| `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` prefers env-var credentials when any are set; `cli` forces the active ovcli config, `env` forces env vars |
+| `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` prefers env-var credentials when any are set; `cli` forces the active ovcli config; `env` reads env vars only, and neither config file |
 | `OPENVIKING_NO_AUTO_INJECT` | `false` | Disable fixed session-start profile/background injection without disabling per-prompt recall |
 | `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | CJK-aware token budget for `profile.md` plus `preferences/` and `entities/` indexes |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart idle-TTL sweep threshold |
@@ -103,7 +103,7 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 |---------|-------|-----|
 | MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Fix `~/.openviking/ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`) and restart Codex; the stdio proxy re-reads it on launch and after auth failures. |
 | MCP tool calls fail with a connection error | Server unreachable or the URL is wrong | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| `4 hooks need review` | Security review on first launch | Run `/hooks` within Codex and approve the hooks. |
+| `6 hooks need review` | Security review on first launch; after an upgrade that adds a hook, Codex asks again for the new one | Run `/hooks` within Codex and approve the hooks. |
 | Plugin still targets an old server after `ov config switch` | Codex keeps the proxy process from the previous session | Restart Codex; the proxy resolves credentials at startup. |
 | Hooks use one server, MCP another | Stale `OPENVIKING_*` credential env vars in one context (env vars override ovcli.conf by default) | Unset the stale env vars (ovcli.conf then drives both), set `OPENVIKING_CREDENTIAL_SOURCE=cli`, or make the env vars consistent. |
 

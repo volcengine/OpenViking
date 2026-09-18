@@ -33,7 +33,7 @@ from vikingbot.config.loader import (
     load_config,
     validate_openviking_auth,
 )
-from vikingbot.config.schema import SessionKey, requires_gateway_token
+from vikingbot.config.schema import Config, SessionKey, requires_gateway_token
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
@@ -493,7 +493,7 @@ def gateway(
         version="1.0.0",
     )
 
-    cron = prepare_cron(bus)
+    cron = prepare_cron(config, bus)
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     from vikingbot.compile.service import BotCompileService
 
@@ -521,13 +521,14 @@ def gateway(
         server = uvicorn.Server(config_uvicorn)
 
         tasks = [
-            cron.start(),
             heartbeat.start(),
             compile_service.start(),
             channels.start_all(),
             agent_loop.run(),
             server.serve(),
         ]
+        if cron is not None:
+            tasks.append(cron.start())
         try:
             await asyncio.gather(*tasks)
         finally:
@@ -591,7 +592,12 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
     return agent
 
 
-def prepare_cron(bus, quiet: bool = False) -> CronService:
+def prepare_cron(config: Config, bus, quiet: bool = False) -> CronService | None:
+    if not config.tools.cron.enabled:
+        if not quiet:
+            logger.info("Cron: disabled")
+        return None
+
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
@@ -685,6 +691,9 @@ def prepare_channel(
             global_config=config,
             compile_service=compile_service,
         )
+        from vikingbot.studio.service import StudioService
+
+        openapi_channel._studio_service = StudioService(config, channels)
         channels.add_channel(openapi_channel)
         logger.info(f"OpenAPI channel enabled on port {openapi_port}")
 
@@ -858,7 +867,7 @@ def chat(
     # Use unified default session ID
     if session_id is None:
         session_id = get_or_create_machine_id()
-    cron = None if eval else prepare_cron(bus, quiet=is_single_turn)
+    cron = None if eval else prepare_cron(config, bus, quiet=is_single_turn)
     channels = prepare_agent_channel(
         config,
         bus,

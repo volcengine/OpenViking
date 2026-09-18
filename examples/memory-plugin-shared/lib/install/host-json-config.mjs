@@ -79,6 +79,12 @@ const OPENVIKING_HOOK_SCRIPTS = [
   "claude-code-memory-plugin/scripts/session-start.mjs",
 ];
 
+// Events an earlier release installed and the templates no longer name. An
+// install rewrites only the template's events, so these are pruned separately.
+const RETIRED_HOOK_EVENTS = {
+  cursor: ["postToolUse", "beforeShellExecution"],
+};
+
 /** Whether a host's hook entry is one this installer owns. */
 export function ownsHook(value) {
   const text = JSON.stringify(value || {});
@@ -155,12 +161,11 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
       ...renderHookValue(entries),
     ];
   }
-  if (kind === "cursor") {
-    if (Array.isArray(hooksConfig.hooks.postToolUse)) {
-      const remaining = hooksConfig.hooks.postToolUse.filter((item) => !ownsHook(item));
-      if (remaining.length) hooksConfig.hooks.postToolUse = remaining;
-      else delete hooksConfig.hooks.postToolUse;
-    }
+  for (const event of RETIRED_HOOK_EVENTS[kind] || []) {
+    if (!Array.isArray(hooksConfig.hooks[event])) continue;
+    const remaining = hooksConfig.hooks[event].filter((item) => !ownsHook(item));
+    if (remaining.length) hooksConfig.hooks[event] = remaining;
+    else delete hooksConfig.hooks[event];
   }
   atomicWrite(hooksPath, hooksConfig);
 

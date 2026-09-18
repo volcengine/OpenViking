@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import httpx
 
-from ._utils import run_async
+from ._utils import _path_is_relative_to, run_async
 from .actor_peer import _request_actor_peer_headers
 from .config import resolve_client_config
 from .errors import (
@@ -91,6 +91,14 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
+
+
+def _option_keys(options_type: Type[Any]) -> set[str]:
+    optional_keys = getattr(options_type, "__optional_keys__", None)
+    required_keys = getattr(options_type, "__required_keys__", None)
+    if optional_keys is not None and required_keys is not None:
+        return set(optional_keys) | set(required_keys)
+    return set(getattr(options_type, "__annotations__", {}))
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -544,7 +552,7 @@ class AsyncHTTPClient:
         protected: Optional[set[str]] = None,
     ) -> Dict[str, Any]:
         option_values = dict(options or {})
-        allowed = set(options_type.__optional_keys__) | set(options_type.__required_keys__)
+        allowed = _option_keys(options_type)
         unknown = sorted(set(option_values) - allowed)
         if unknown:
             raise TypeError(
@@ -582,7 +590,7 @@ class AsyncHTTPClient:
                 option_values["context_type"]
             )
 
-        allowed = set(options_type.__optional_keys__) | set(options_type.__required_keys__)
+        allowed = _option_keys(options_type)
         allowed.discard("image")
         allowed.add("image_url")
         proxy_type = type(
@@ -682,7 +690,7 @@ class AsyncHTTPClient:
                 if file_path.is_symlink():
                     continue
                 if file_path.is_file():
-                    if not file_path.resolve().is_relative_to(root):
+                    if not _path_is_relative_to(file_path.resolve(), root):
                         continue
                     arcname = str(file_path.relative_to(dir_path)).replace("\\", "/")
                     zipf.write(file_path, arcname=arcname)

@@ -5,6 +5,7 @@ import type { TaskRecord, TaskStatus } from '#/routes/tasks/-lib/task-record'
 export type TaskStatusFilter = Exclude<TaskStatus, 'unknown'> | 'all'
 
 export type TaskTypeFilter =
+  | 'compile'
   | 'add_resource'
   | 'add_skill'
   | 'admin_reindex'

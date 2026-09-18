@@ -308,8 +308,12 @@ class TestUploadDirectory:
 
     @pytest.mark.asyncio
     async def test_skips_empty_files(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
+        (tmp_dir / "application.properties").write_bytes(b"\n")
+        (tmp_dir / "blank.txt").write_bytes(b" \t\r\n")
         await upload_directory(tmp_dir, "viking://temp/test", viking_fs)
         assert all("empty.txt" not in uri for uri in viking_fs.files)
+        assert "viking://temp/test/application.properties" not in viking_fs.files
+        assert "viking://temp/test/blank.txt" not in viking_fs.files
 
     @pytest.mark.asyncio
     async def test_creates_root_dir(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:

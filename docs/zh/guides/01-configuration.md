@@ -119,12 +119,14 @@ openviking-server doctor
   },
   "vlm": {
     "provider" : "openai-codex",
-    "model"    : "gpt-5.4",
+    "model"    : "gpt-5.6-terra",
     "api_base" : "https://chatgpt.com/backend-api/codex",
     "reasoning_effort": "xhigh"
   }
 }
 ```
+
+OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 `gpt-5.4`](https://learn.chatgpt.com/docs/models#deprecated-codex-models)。已有配置需将 `ov.conf` 中的 `vlm.model` 改为 `gpt-5.6-terra` 并重启服务；升级 OpenViking 不会自动修改已保存的模型设置。此次退役不影响使用 API Key 的 `provider: "openai"`。
 
 </details>
 
@@ -1001,7 +1003,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `workspace` | str | 本地数据存储路径（主要配置） | "./data" |
-| `skip_process_lock` | bool | 是否跳过 `storage.workspace` 的启动进程锁检查。启用后，OpenViking 不会检查或创建 `.openviking.pid` 锁文件。 | `false` |
+| `skip_process_lock` | bool | 是否跳过本地向量后端（`local`、`cuvs`）对 `storage.workspace` 的 `.openviking.lock` 独占文件锁。其他后端不会获取此锁。跳过检查不代表本地向量存储支持多进程共享。 | `false` |
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 

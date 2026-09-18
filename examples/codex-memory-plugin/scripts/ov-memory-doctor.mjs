@@ -52,8 +52,8 @@ const LEGACY_MARKETPLACE = "openviking-plugins-local";
 const CODEX_DIR = join(homedir(), ".codex");
 const CODEX_CONFIG = process.env.CODEX_CONFIG_FILE || join(CODEX_DIR, "config.toml");
 const CACHE_DIR = join(CODEX_DIR, "plugins", "cache", MARKETPLACE, PLUGIN_NAME);
-const HOOK_EVENTS = ["session_start", "user_prompt_submit", "stop", "session_end", "pre_compact"];
-const REQUIRED_PLUGIN_FILES = [".codex-plugin/plugin.json", "hooks/hooks.json", ".mcp.json", "servers/mcp-proxy.mjs", "scripts/config.mjs", "scripts/auto-recall.mjs", "scripts/auto-capture.mjs", "scripts/session-end.mjs", "scripts/ov-session.mjs"];
+const HOOK_EVENTS = ["session_start", "user_prompt_submit", "pre_tool_use", "stop", "session_end", "pre_compact"];
+const REQUIRED_PLUGIN_FILES = [".codex-plugin/plugin.json", "hooks/hooks.json", ".mcp.json", "servers/mcp-proxy.mjs", "scripts/config.mjs", "scripts/auto-recall.mjs", "scripts/auto-capture.mjs", "scripts/session-end.mjs", "scripts/ov-session.mjs", "scripts/uri-guard.mjs"];
 
 /**
  * Minimal TOML reader — enough for config.toml's [section] headers (including
@@ -275,7 +275,7 @@ function checkInstall(report, { cliOnPath }) {
       else trusted.push(event);
     }
     if (disabled.length) report.fail(`hooks disabled in [hooks.state]: ${disabled.join(", ")}`, "", `remove enabled = false from those [hooks.state] sections in ${homeShort(CODEX_CONFIG)}`);
-    if (untrusted.length) report.info(`hooks without a trust record yet: ${untrusted.join(", ")} (Codex records trusted_hash the first time a hook is approved; a changed hooks.json — including a newly added event such as session_end — needs re-approval)`);
+    if (untrusted.length) report.info(`hooks without a trust record yet: ${untrusted.join(", ")} (Codex records trusted_hash the first time a hook is approved; a changed hooks.json — including a newly added event such as pre_tool_use — needs re-approval)`);
     if (trusted.length === HOOK_EVENTS.length) report.ok(`all ${HOOK_EVENTS.length} hooks have trust records in config.toml`);
     const legacyKeys = Object.keys(toml).filter((k) => k.includes(LEGACY_MARKETPLACE));
     if (legacyKeys.length) report.info(`config.toml still has ${legacyKeys.length} section(s) for the legacy id ${LEGACY_MARKETPLACE} (harmless)`);
@@ -309,7 +309,9 @@ function checkConfig(report, cfg, host) {
   }
 
   const modeEnv = process.env.OPENVIKING_CREDENTIAL_SOURCE || process.env.OPENVIKING_CREDENTIALS_SOURCE;
-  const modeText = cfg.credentialSource === "ovcli" ? "ovcli.conf only (env and ov.conf ignored)" : cfg.credentialSource === "env" ? "environment variables win" : "fell through to ov.conf / defaults";
+  const modeText = cfg.credentialSource === "ovcli" ? "ovcli.conf only (env and ov.conf ignored)"
+    : /^(env|environment)$/i.test(String(modeEnv || "").trim()) ? "environment variables only (both files ignored)"
+      : cfg.credentialSource === "env" ? "environment variables win" : "fell through to ov.conf / defaults";
   report.info(`credential source: ${cfg.credentialSource} — ${modeText}${modeEnv ? ` (OPENVIKING_CREDENTIAL_SOURCE=${modeEnv})` : ""}`);
   if (modeEnv && !/^(env|environment|cli|ovcli|file|config|auto)$/i.test(modeEnv)) report.warn(`OPENVIKING_CREDENTIAL_SOURCE=${modeEnv} is not a recognised value`, "valid: env, cli (ovcli/file/config), auto", "fix or unset it");
 

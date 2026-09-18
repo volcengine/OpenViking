@@ -16,10 +16,10 @@ import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, ContextManager, Optional
+from typing import Any, ContextManager, Optional
 
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 from openviking.observability.context import (
@@ -745,171 +745,98 @@ def apply_http_metrics_finalize(
         )
 
 
-async def _execute_request_with_span(
-    request: Request,
-    call_next: Callable[[Request], Awaitable[Response]],
-    root_attrs: RootSpanAttributes,
-    span_cm: Optional[Any],
-) -> Response:
-    """
-    Execute the request with optional span context management.
+class HTTPObservabilityMiddleware:
+    """Observe HTTP requests without task or response-stream wrappers."""
 
-    This function encapsulates the common logic for both cases:
-    1. When OTel is available and a span context manager exists
-    2. When OTel is not available or span creation failed
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-    Uses `contextlib.nullcontext` to unify the handling of both cases,
-    eliminating code duplication.
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-    Args:
-        request: The incoming HTTP request.
-        call_next: The next middleware/handler in the chain.
-        root_attrs: The root span attributes.
-        span_cm: The span context manager (if available), or None.
-
-    Returns:
-        The response from the next handler.
-
-    Raises:
-        Any exception raised by the next handler.
-    """
-    # Use nullcontext when span_cm is None to unify handling
-    context = span_cm if span_cm is not None else nullcontext()
-
-    with context as span:
-        try:
-            response = await call_next(request)
-
-            # Update route and span name if we have a real span
-            if span is not None:
-                _maybe_update_route_and_span_name(
-                    request=request,
-                    root_attrs=root_attrs,
-                    span=span,
-                )
-                # Apply root attributes to span
-                maybe_apply_root_span_attributes(root_attrs)
-
-            # Set status code from response
-            root_attrs.http_status_code = int(getattr(response, "status_code", 500))
-
-            # Apply response state (status code, etc.)
-            maybe_apply_root_span_response(root_attrs)
-
-            return response
-
-        except Exception as exc:
-            # The catch-all JSON renderer is outside this middleware, so mirror
-            # its public mapping before the audit event is emitted. This keeps
-            # the stored status and envelope aligned with the client response;
-            # unexpected exception text remains confined to logs and traces.
-            try:
-                from openviking.server.error_mapping import map_exception
-                from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
-
-                mapped = map_exception(exc)
-            except Exception:
-                mapped = None
-            if mapped is not None:
-                root_attrs.http_status_code = ERROR_CODE_TO_HTTP_STATUS.get(mapped.code, 500)
-                capture_public_http_error(
-                    code=mapped.code,
-                    message=mapped.message,
-                    details=mapped.details,
-                )
-            else:
-                root_attrs.http_status_code = 500
-                capture_public_http_error(
-                    code="INTERNAL",
-                    message="Internal server error",
-                )
-            # Update route and span name if we have a real span
-            if span is not None:
-                _maybe_update_route_and_span_name(
-                    request=request,
-                    root_attrs=root_attrs,
-                    span=span,
-                )
-                # Apply root attributes to span
-                maybe_apply_root_span_attributes(root_attrs)
-
-            # Apply error state to span
-            maybe_apply_root_span_error(root_attrs, exc)
-
-            raise
-
-
-def create_http_observability_middleware() -> Callable[[Request, Callable], Response]:
-    """
-    Create the unified HTTP observability middleware.
-
-    This middleware handles:
-    - HTTP metrics collection (inflight, request duration, status codes)
-    - OTel trace span creation and management
-    - Context propagation (root observability context binding)
-
-    Returns:
-        The middleware function.
-    """
-
-    async def middleware(request: Request, call_next: Callable) -> Response:
-        # Skip metrics/tracing for health check and metrics endpoints
+        request = Request(scope)
         if should_skip_http_metrics(request):
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        # Extract request information
-        raw_path = str(request.url.path)
-        route_template = _get_route_template(request)
-        request_id = request.state.request_id
-
-        # Create root span attributes
         root_attrs = create_root_span_attributes(
             http_method=request.method,
-            http_route=route_template,
-            request_id=request_id,
-            url_path=raw_path,
+            http_route=_get_route_template(request),
+            request_id=request.state.request_id,
+            url_path=str(request.url.path),
             url_scheme=request.url.scheme,
             http_host=request.url.netloc,
             source_type=request.headers.get("x-source-type"),
             source_version=request.headers.get("x-source-version"),
         )
-
-        # Attach to request state for later access
         request.state.root_span_attrs = root_attrs
-        request.state.request_id = request_id
-
-        # Bind root context and start metrics
         error_token = bind_http_error_context()
         root_token = bind_root_observability_context(root_attrs)
-        apply_http_metrics_start(request=request, root_attrs=root_attrs)
-
         start = time.perf_counter()
+        response_elapsed: float | None = None
 
         try:
-            # Try to create a root span if OTel is available
+            apply_http_metrics_start(request=request, root_attrs=root_attrs)
             span_cm = maybe_start_root_span(request, root_attrs)
+            with span_cm if span_cm is not None else nullcontext() as span:
 
-            # Execute the request with unified span handling
-            response = await _execute_request_with_span(
-                request=request,
-                call_next=call_next,
-                root_attrs=root_attrs,
-                span_cm=span_cm,
-            )
+                async def send_observed(message: Message) -> None:
+                    nonlocal response_elapsed
+                    if message["type"] == "http.response.start":
+                        root_attrs.http_status_code = int(message["status"])
+                        if span is not None:
+                            _maybe_update_route_and_span_name(
+                                request=request, root_attrs=root_attrs, span=span
+                            )
+                            maybe_apply_root_span_attributes(root_attrs)
+                        maybe_apply_root_span_response(root_attrs)
+                        # Preserve the existing response-header latency metric.
+                        # Keep context bound until streaming/background work exits.
+                        response_elapsed = time.perf_counter() - start
+                        apply_http_metrics_finalize(
+                            request=request, root_attrs=root_attrs, elapsed=response_elapsed
+                        )
+                    await send(message)
 
-            return response
+                try:
+                    await self.app(scope, receive, send_observed)
+                except Exception as exc:
+                    if response_elapsed is None:
+                        # Match the outer exception renderer before publishing the
+                        # audit event. A response already started keeps its status.
+                        from openviking.server.error_mapping import map_exception
+                        from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
 
+                        mapped = map_exception(exc)
+                        if mapped is not None:
+                            root_attrs.http_status_code = ERROR_CODE_TO_HTTP_STATUS.get(
+                                mapped.code, 500
+                            )
+                            capture_public_http_error(
+                                code=mapped.code, message=mapped.message, details=mapped.details
+                            )
+                        else:
+                            root_attrs.http_status_code = 500
+                            capture_public_http_error(
+                                code="INTERNAL", message="Internal server error"
+                            )
+                    if span is not None:
+                        _maybe_update_route_and_span_name(
+                            request=request, root_attrs=root_attrs, span=span
+                        )
+                        maybe_apply_root_span_attributes(root_attrs)
+                    maybe_apply_root_span_error(root_attrs, exc)
+                    raise
         finally:
-            # Calculate elapsed time and finalize metrics
-            elapsed = time.perf_counter() - start
-            apply_http_metrics_finalize(
-                request=request,
-                root_attrs=root_attrs,
-                elapsed=elapsed,
-            )
-
-            # Reset root context
-            reset_root_observability_context(root_token)
-            reset_http_error_context(error_token)
-
-    return middleware
+            try:
+                if response_elapsed is None:
+                    apply_http_metrics_finalize(
+                        request=request,
+                        root_attrs=root_attrs,
+                        elapsed=time.perf_counter() - start,
+                    )
+            finally:
+                reset_root_observability_context(root_token)
+                reset_http_error_context(error_token)

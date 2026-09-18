@@ -80,6 +80,7 @@ from openviking.utils.skill_processor import SkillProcessingPreparation, SkillPr
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
+    FailedPreconditionError,
     InternalError,
     InvalidArgumentError,
     NotInitializedError,
@@ -1157,6 +1158,7 @@ class ResourceService:
                 create_parent=create_parent,
                 source_info=plan.source_identity,
                 defer_candidate_resolution=defer_candidate_resolution,
+                to_is_directory=planned_to_is_directory,
             )
             lock_handoff = await self._lock_to_handoff_payload(resource_lock)
             message_path = plan.path
@@ -1271,6 +1273,7 @@ class ResourceService:
         create_parent: bool,
         source_info: _ResourceSourceInfo,
         defer_candidate_resolution: bool,
+        to_is_directory: bool,
     ) -> tuple[str, Optional[Dict[str, Any]], bool, bool]:
         """Resolve the target and track ownership of a newly reserved empty path."""
         if not self._resource_processor or not self._viking_fs:
@@ -1307,6 +1310,16 @@ class ResourceService:
         # lock still rejects compliant concurrent writers, and cleanup rechecks
         # that the target is empty before deleting it.
         target_preexisting = await self._viking_fs.exists(root_uri, ctx=ctx)
+        if to_is_directory and target_preexisting:
+            target_stat = await self._viking_fs.stat(root_uri, ctx=ctx, skip_count=True)
+            if not target_stat.get("isDir"):
+                raise FailedPreconditionError(
+                    "Target URI already exists as a file and cannot be used as a "
+                    f"resource directory: {root_uri}. Choose another URI, use "
+                    "'parent' to add a new resource under a directory, or use "
+                    "content/write to update the existing file.",
+                    details={"resource": root_uri, "type": "file"},
+                )
         dst_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
         resource_lock = await self._viking_fs._async_agfs.pathlock_acquire_tree(
             dst_path,

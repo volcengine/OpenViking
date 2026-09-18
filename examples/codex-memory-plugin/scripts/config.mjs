@@ -17,12 +17,12 @@
  *     set; otherwise the active ovcli.conf is used, so `ov config switch`
  *     changes hooks, MCP, and in-process `ov` commands together on next launch.
  *   - Set OPENVIKING_CREDENTIAL_SOURCE=cli to force ovcli.conf, or =env to
- *     force env-var credentials.
+ *     read env vars only, with neither config file.
  *   - Without env vars or ovcli.conf, ov.conf/defaults are used.
  *
- * The stdio MCP proxy calls the same resolver directly. Aligning the resolver
- * prevents identity drift between auto-capture/auto-recall hooks, MCP calls,
- * and child `ov` commands launched from inside Codex.
+ * The stdio MCP proxy builds its connection from this same `loadConfig()`, so
+ * the auto-capture/auto-recall hooks and MCP calls cannot drift apart on
+ * identity.
  *
  * File-path env vars:
  *   OPENVIKING_CLI_CONFIG_FILE  alternate ovcli.conf path  (preferred)
@@ -61,9 +61,10 @@ function configBool(value, fallback) {
  * workspace file may not carry connection or credential keys, so baseUrl/apiKey
  * cannot move — loggers and fetch helpers built from the first load stay valid.
  */
-export function loadConfig(cwd = process.cwd()) {
+export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
   const config = buildPluginConfig("codex", {
     cwd,
+    env,
     manifestUrl: MANIFEST_URL,
     logFile: "codex-hooks.log",
   });

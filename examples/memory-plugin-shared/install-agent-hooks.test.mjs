@@ -265,9 +265,17 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     const traeHooks = join(home, ".trae", "hooks.json");
     const traeCnHooks = join(home, ".trae-cn", "hooks.json");
     const zcodeConfig = join(home, ".zcode", "cli", "config.json");
+    const thirdPartyShellHook = { command: "third-party shell audit" };
     writeJson(cursorHooks, { version: 1, hooks: {
       stop: [{ command: "third-party stop" }],
       postToolUse: [{ command: "node /tmp/openviking/cursor-hook.mjs postToolUse # openviking-memory" }],
+      beforeShellExecution: [
+        thirdPartyShellHook,
+        {
+          command: "OPENVIKING_INTEGRATION_ID='openviking-memory' OPENVIKING_INTEGRATION_VERSION='0.3.0' OPENVIKING_HOOK_SOURCE='cursor' 'node' '/tmp/openviking/agent-integrations/cursor/scripts/uri-guard.mjs' cursor # openviking-memory",
+          timeout: 5,
+        },
+      ],
     } });
     writeJson(traeHooks, { version: 1, hooks: { Stop: [
       { hooks: [{ type: "command", command: "third-party trae" }] },
@@ -300,7 +308,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_INTEGRATION_ID='openviking-memory'")));
     assert.ok(cursor.hooks.stop.some((entry) => entry.command.includes("OPENVIKING_HOOK_SOURCE='cursor'")));
     assert.equal(cursor.hooks.beforeReadFile.filter((entry) => entry.command.includes("uri-guard.mjs")).length, 1);
-    assert.equal(cursor.hooks.beforeShellExecution.filter((entry) => entry.command.includes("uri-guard.mjs")).length, 1);
+    assert.deepEqual(cursor.hooks.beforeShellExecution, [thirdPartyShellHook]);
     assert.equal(Boolean(cursor.hooks.postToolUse), false);
 
     for (const [file, label] of [[traeHooks, "trae"], [traeCnHooks, "trae-cn"]]) {
@@ -355,7 +363,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
       [join(home, ".openviking", "agent-integrations", "cursor", "scripts", "ov-memory-doctor.mjs"), "cursor", "--offline", "--no-color"],
       { env: { ...process.env, HOME: home }, encoding: "utf8" },
     );
-    assert.match(doctor.stdout, /version 0\.3\.0, client cursor/);
+    assert.match(doctor.stdout, /version 0\.3\.2, client cursor/);
     // A hooks.json entry that names a script the install did not put on disk
     // fails only when the host first runs it, so the rendered commands are
     // checked against the tree they were rendered for.
@@ -425,9 +433,8 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     // Every event the installer wrote has to come back empty, the URI guard's
     // included: a surviving entry runs a script the uninstall just deleted.
     const cursorEventsAfter = JSON.parse(readFileSync(cursorHooks, "utf8")).hooks;
-    for (const event of ["beforeReadFile", "beforeShellExecution"]) {
-      assert.deepEqual(cursorEventsAfter[event] || [], [], event);
-    }
+    assert.deepEqual(cursorEventsAfter.beforeReadFile || [], [], "beforeReadFile");
+    assert.deepEqual(cursorEventsAfter.beforeShellExecution, [thirdPartyShellHook]);
     for (const [file, label] of [[traeHooks, "trae"], [traeCnHooks, "trae-cn"]]) {
       assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).hooks.PreToolUse || [], [], label);
     }

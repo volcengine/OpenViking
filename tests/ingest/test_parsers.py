@@ -8,6 +8,7 @@ import sqlite3
 from openviking.ingest.sources.claude_code import ClaudeCodeSource
 from openviking.ingest.sources.codex import CodexSource
 from openviking.ingest.sources.hermes import HermesSource
+from openviking.ingest.sources.mimo import MiMoSource
 from openviking.ingest.sources.openclaw import OpenClawSource
 from openviking.ingest.sources.opencode import OpenCodeSource
 from openviking.ingest.sources.workbuddy import WorkBuddySource, user_turn_text
@@ -172,6 +173,8 @@ def test_codex_forked_rollout_file_gets_its_own_session_id(tmp_path):
     for sid, ref in refs.items():
         msgs, _ = src.read_messages(ref, first[sid])
         assert msgs == [], f"{sid} re-read its rollout file on the second sweep"
+
+
 def _workbuddy_turn(role, text, ts_ms, model=None):
     record = {
         "id": f"m-{ts_ms}",
@@ -423,5 +426,117 @@ def test_opencode_text_from_part_table(tmp_path):
     assert [(m.role, m.text) for m in msgs] == [("user", "hello"), ("assistant", "world")]
     assert msgs[1].peer_id == "opencode__tiktok__glm-4.7"
     # cursor advanced; re-read returns nothing new
+    msgs2, _ = src.read_messages(refs[0], cursor)
+    assert msgs2 == []
+
+
+def test_mimo_skips_synthetic_parts_and_system_prompt(tmp_path):
+    db = tmp_path / "mimocode.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE session (
+            id TEXT, title TEXT, directory TEXT, version TEXT, time_created INT
+        );
+        CREATE TABLE message (
+            id TEXT, session_id TEXT, agent_id TEXT, time_created INT, data TEXT
+        );
+        CREATE TABLE part (
+            id TEXT, message_id TEXT, session_id TEXT, time_created INT, data TEXT
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO session VALUES (?,?,?,?,?)",
+        ("ses_1", "demo", str(tmp_path), "desktop-test", 1000),
+    )
+    # message.data.system is the host system prompt — must never be message text
+    conn.execute(
+        "INSERT INTO message VALUES (?,?,?,?,?)",
+        (
+            "msg_u",
+            "ses_1",
+            "main",
+            1773044814194,
+            json.dumps({"role": "user", "system": "You are MiMo agent..."}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO message VALUES (?,?,?,?,?)",
+        (
+            "msg_side",
+            "ses_1",
+            "side",
+            1773044815000,
+            json.dumps({"role": "assistant", "finish": "stop"}),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO message VALUES (?,?,?,?,?)",
+        (
+            "msg_a",
+            "ses_1",
+            "main",
+            1773044819959,
+            json.dumps(
+                {
+                    "role": "assistant",
+                    "modelID": "mimo-x-pro-preview",
+                    "providerID": "xiaomi",
+                    "finish": "stop",
+                }
+            ),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO part VALUES (?,?,?,?,?)",
+        (
+            "p_syn",
+            "msg_u",
+            "ses_1",
+            1,
+            json.dumps(
+                {
+                    "type": "text",
+                    "text": "<system-reminder>runtime</system-reminder>",
+                    "synthetic": True,
+                }
+            ),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO part VALUES (?,?,?,?,?)",
+        (
+            "p_u",
+            "msg_u",
+            "ses_1",
+            2,
+            json.dumps(
+                {
+                    "type": "text",
+                    "text": "<system-reminder>note</system-reminder>hello mimo",
+                }
+            ),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO part VALUES (?,?,?,?,?)",
+        ("p_tool", "msg_a", "ses_1", 1, json.dumps({"type": "tool", "tool": "bash"})),
+    )
+    conn.execute(
+        "INSERT INTO part VALUES (?,?,?,?,?)",
+        ("p_a", "msg_a", "ses_1", 2, json.dumps({"type": "text", "text": "world"})),
+    )
+    conn.commit()
+    conn.close()
+
+    src = MiMoSource(_cfg(db), fallback_user="tester")
+    refs = list(src.discover_sessions())
+    assert len(refs) == 1
+    assert refs[0].title == "demo"
+    msgs, cursor = src.read_messages(refs[0], None)
+    # sidechain row ignored; synthetic part dropped; reminder stripped
+    assert [(m.role, m.text) for m in msgs] == [("user", "hello mimo"), ("assistant", "world")]
+    assert msgs[1].peer_id == "mimo__xiaomi__mimo-x-pro-preview"
     msgs2, _ = src.read_messages(refs[0], cursor)
     assert msgs2 == []

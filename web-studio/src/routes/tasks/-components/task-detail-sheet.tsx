@@ -204,30 +204,19 @@ export function TaskDetailSheet({
                     <DetailField
                       className="col-span-2"
                       icon={<TimerResetIcon />}
-                      label={
-                        i18n.language.startsWith('zh')
-                          ? '执行耗时 / 已用时长'
-                          : 'Duration'
-                      }
-                      value={formatTaskDuration(
-                        task,
-                        i18n.language.startsWith('zh'),
-                      )}
+                      label={t('pipeline.duration')}
+                      value={formatTaskDuration(task)}
                       mono
                     />
                   </div>
 
                   {/* Worker Sub-Queue Pipeline Diagram (Type-Aware) */}
                   {(() => {
-                    const steps = getTaskPipelineSteps(task, i18n.language)
+                    const steps = getTaskPipelineSteps(task, t)
 
                     return (
                       <DetailSection
-                        title={
-                          i18n.language.startsWith('zh')
-                            ? '工序进度'
-                            : 'Pipeline Steps'
-                        }
+                        title={t('pipeline.steps')}
                       >
                         <div className="rounded-xl border bg-muted/20 p-3 text-xs">
                           <div className="grid gap-1.5">
@@ -246,7 +235,9 @@ export function TaskDetailSheet({
                                   <span className="flex items-center gap-2 text-[11px]">
                                     {st.count !== undefined && (
                                       <span className="font-mono text-muted-foreground">
-                                        {st.count} 项
+                                        {t('pipeline.count', {
+                                          count: st.count,
+                                        })}
                                       </span>
                                     )}
                                     <span
@@ -259,12 +250,12 @@ export function TaskDetailSheet({
                                       }
                                     >
                                       {isDone
-                                        ? '已完成'
+                                        ? t('pipeline.status.completed')
                                         : isRun
-                                          ? '进行中'
+                                          ? t('pipeline.status.running')
                                           : isFail
-                                            ? '失败'
-                                            : '等待中'}
+                                            ? t('pipeline.status.failed')
+                                            : t('pipeline.status.pending')}
                                     </span>
                                   </span>
                                 </div>

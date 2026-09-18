@@ -418,7 +418,8 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
-| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` 指向 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具                              |
+| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` / `Edit` / `Write` 的路径是 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具 |
+| `PreToolUse`          | `Bash` 命令里带 `viking://` URI | 照常执行命令，并附一条提醒：如果本意是访问 OpenViking 内容，应改用 OpenViking MCP 工具 |
 | `PostToolUse`         | `Read` 读到 `SKILL.md` 文件           | 可选（默认关闭）：OV 有相关 skill 经验记忆时注入经验块                                           |
 
 ### 异步写路径

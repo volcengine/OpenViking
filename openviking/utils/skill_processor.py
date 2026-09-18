@@ -119,6 +119,7 @@ class SkillProcessor:
         target_uri: Optional[str] = None,
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
+        lease_ref: Any = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -157,6 +158,7 @@ class SkillProcessor:
             target_uri=target_uri,
             source_metadata=source_metadata,
             owner_lease_ref=owner_lease_ref,
+            lease_ref=lease_ref,
         )
 
     async def process_prepared_skill(
@@ -170,6 +172,7 @@ class SkillProcessor:
         target_uri: Optional[str] = None,
         source_metadata: Optional[Dict[str, Any]] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
+        lease_ref: Any = None,
     ) -> Dict[str, Any]:
         cleanup_path = preparation.cleanup_path
         skill_dict = preparation.skill_dict
@@ -177,6 +180,10 @@ class SkillProcessor:
         base_path = preparation.base_path
         telemetry = get_current_telemetry()
         lease = None
+        # Training supplies its enclosing tree lease. Acquire a separate package
+        # reference so background indexing never takes ownership of that lease.
+        if owner_lease_ref is None:
+            owner_lease_ref = lease_ref
         try:
             effective_root_uri = self._resolve_skill_root_uri(ctx, target_uri)
             skill_dir_uri = f"{effective_root_uri}/{skill_dict['name']}"
@@ -614,14 +621,14 @@ class SkillProcessor:
                     aux_uri,
                     file_bytes.decode("utf-8"),
                     ctx=ctx,
-                    **({"lease_ref": lease_ref} if lease_ref is not None else {}),
+                    lease_ref=lease_ref,
                 )
             else:
                 await viking_fs.write_file_bytes(
                     aux_uri,
                     file_bytes,
                     ctx=ctx,
-                    **({"lease_ref": lease_ref} if lease_ref is not None else {}),
+                    lease_ref=lease_ref,
                 )
 
     async def _enqueue_skill_package(

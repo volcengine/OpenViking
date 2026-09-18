@@ -255,9 +255,7 @@ async def _write_initial_user_config(
     await write_user_config(service.viking_fs, user_ctx, user_config)
 
 
-async def _check_user_exists(
-    request: Request, account_id: str, user_id: str, manager=None
-) -> None:
+async def _check_user_exists(request: Request, account_id: str, user_id: str, manager=None) -> None:
     manager = manager or _get_api_key_manager(request)
     if not manager.has_user(account_id, user_id):
         raise NotFoundError(user_id, "user")
@@ -617,9 +615,17 @@ async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
+    include_credentials: bool = Query(
+        True,
+        description="Include credentials when permitted; false returns only credential availability",
+    ),
     name: str | None = None,
     role: str | None = None,
     page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
+    query: str | None = Query(None, description="Case-insensitive username substring"),
+    include_summary: bool = Query(
+        False, description="Return users, matching total and account statistics"
+    ),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
@@ -628,15 +634,25 @@ async def list_users(
     if not _registry_watcher_running(request):
         await manager.refresh_account_users_from_store(account_id)
     expose_key = _should_expose_user_key(request)
-    users = manager.get_users(
+    users = manager.get_users_page(
         account_id,
         limit=limit,
         name_filter=name,
         role_filter=role,
-        expose_key=expose_key,
+        expose_key=expose_key or not include_credentials,
         page=page,
+        query_filter=query,
     )
-    return Response(status="ok", result=users)
+    if not include_credentials:
+        users["users"] = [
+            {
+                "user_id": user["user_id"],
+                "role": user["role"],
+                "api_key_available": bool(user.get("api_key")),
+            }
+            for user in users["users"]
+        ]
+    return Response(status="ok", result=users if include_summary else users["users"])
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")
@@ -833,9 +849,7 @@ async def add_group_member(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    added = await _get_api_key_manager(request).add_group_member(
-        account_id, group_id, user_id
-    )
+    added = await _get_api_key_manager(request).add_group_member(account_id, group_id, user_id)
     return Response(status="ok", result={"added": added})
 
 
@@ -849,7 +863,5 @@ async def remove_group_member(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    removed = await _get_api_key_manager(request).remove_group_member(
-        account_id, group_id, user_id
-    )
+    removed = await _get_api_key_manager(request).remove_group_member(account_id, group_id, user_id)
     return Response(status="ok", result={"removed": removed})

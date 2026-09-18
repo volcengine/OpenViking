@@ -228,6 +228,7 @@ docker run --rm \
 ```
 
 Notes:
+- Prefer the `ghcr.io` image; if pulling fails, use `openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest` instead
 - The default config path inside the container is `/app/.openviking/ov.conf`
 - Inside the container, `HOME=/app`
 - Prefer mounting host `~/.openviking` to container `/app/.openviking` so config, CLI config, and workspace data persist
@@ -236,7 +237,7 @@ Notes:
 ##### Option 2: Use `docker-compose.yml`
 
 If the user prefers compose, the repo already includes an example with:
-- image: `ghcr.io/volcengine/openviking:latest`
+- image: `ghcr.io/volcengine/openviking:latest` (if pulling fails, use `openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest`)
 - ports: `1933:1933`
 - volume: `~/.openviking:/app/.openviking`
 

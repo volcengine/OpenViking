@@ -33,8 +33,7 @@ import {
   buildUserAgent,
   loadCredentialFiles,
   readManifestVersion,
-  resolveAuthMode,
-  resolveOpenVikingCredentials,
+  resolveConnection,
 } from "./credentials.mjs";
 import {
   announcedOverrides,
@@ -165,15 +164,6 @@ function ovConfSection(ovFile, key) {
 }
 
 /**
- * A connection value ovcli.conf's `plugin` section supplied, as opposed to
- * ov.conf's harness block or the environment — the credential chain ranks
- * those two itself, and would rank a `plugin` value wrong.
- */
-function fromPluginSection(settings, sources, name) {
-  return sources[name] === OVCLI_LAYER ? str(settings[name]) : "";
-}
-
-/**
  * One harness's whole configuration: the files, the knobs, the peer, and the
  * handful of fields derived from them.
  *
@@ -184,12 +174,16 @@ function fromPluginSection(settings, sources, name) {
  * else. What is left in a loader after this call is what only that harness
  * knows.
  *
- * `legacy` replaces the ov.conf block this harness would otherwise get (dsh's
- * host hands it one of its own); `hostInput` is what an embedding host named
- * for this process, which is the more specific answer and outranks every file;
- * `logFile` is the log basename this harness has always used, and a harness
- * that never had a default log path does not get one invented for it;
- * `rootKeyFallback` is for the harnesses whose chain predates the ovcli.conf
+ * The connection — server, key, identity, auth mode — is not a knob: it comes
+ * from `resolveConnection`, the same call an MCP proxy's connection comes
+ * from, and the `plugin` keys and ov.conf block that name it are read there.
+ *
+ * `legacy` replaces the ov.conf block this harness would otherwise get for its
+ * knobs (dsh's host hands it one of its own); `hostInput` is what an embedding
+ * host named for this process, which is the more specific answer and outranks
+ * every file; `logFile` is the log basename this harness has always used, and
+ * a harness that never had a default log path does not get one invented for
+ * it; `rootKeyFallback` is for the harnesses whose chain predates the ovcli.conf
  * pinning and has always ended at `server.root_api_key`.
  */
 export function buildPluginConfig(harness, {
@@ -217,46 +211,15 @@ export function buildPluginConfig(harness, {
     cliFile: files.cliFile,
     clientVersion,
   });
-  const credentials = resolveOpenVikingCredentials(env, key, {
-    apiKey: fromPluginSection(settings, sources, "apiKey"),
-    accountId: fromPluginSection(settings, sources, "accountId"),
-    userId: fromPluginSection(settings, sources, "userId"),
-  });
-
-  // Pinned to ovcli.conf, the credential chain stops at that file. The layers
-  // under it still answer: ov.conf's harness block is where tuning used to
-  // live, and `server.root_api_key` is where a harness that predates the
-  // pinning has always ended its chain.
-  let apiKey = credentials.apiKey;
-  let apiKeySource = credentials.apiKeySource;
-  let credentialPath = credentials.credentialPath;
-  if (!apiKey) {
-    apiKey = sources.apiKey === OV_CONF_LAYER
-      ? str(settings.apiKey)
-      : (rootKeyFallback ? str(credentials.ovFile?.server?.root_api_key) : "");
-    if (apiKey) {
-      apiKeySource = "ov";
-      credentialPath = credentials.ovPath;
-    }
-  }
-  const hostApiKey = str(hostInput.apiKey);
-  if (hostApiKey) {
-    apiKey = hostApiKey;
-    apiKeySource = "host";
-    credentialPath = "";
-  }
-
-  const hostBaseUrl = str(hostInput.baseUrl).replace(/\/+$/, "");
-  const baseUrl = hostBaseUrl || credentials.baseUrl;
-  const account = str(hostInput.account) || credentials.account;
-  const user = str(hostInput.user) || credentials.user;
+  const connection = resolveConnection(key, { env, files, hostInput, rootKeyFallback });
+  const { baseUrl, account, user } = connection;
   const timeoutMs = settings.timeoutMs;
   const peerId = resolvePluginPeerId({
     settings,
     configured,
     sources,
-    credentials,
-    hostInput: hostInput.peerId,
+    credentials: connection,
+    hostInput: hostInput?.peerId,
     env,
   });
 
@@ -267,21 +230,22 @@ export function buildPluginConfig(harness, {
     userAgent: buildUserAgent(name, clientVersion),
 
     baseUrl,
-    mcpUrl: hostBaseUrl ? `${hostBaseUrl}/mcp` : credentials.mcpUrl,
-    apiKey,
+    mcpUrl: connection.mcpUrl,
+    apiKey: connection.apiKey,
     account,
     user,
-    ...resolveAuthMode({ settings, ovFile: credentials.ovFile, account, user }),
+    authMode: connection.authMode,
+    sendIdentityHeaders: connection.sendIdentityHeaders,
 
-    credentialSource: credentials.credentialSource,
-    apiKeySource,
-    credentialPath,
-    hasApiKey: Boolean(apiKey),
-    configPath: credentials.cliPath || credentials.ovPath || null,
-    cliConfigPath: credentials.cliPath,
-    ovConfigPath: credentials.ovPath,
-    cliPath: credentials.cliPath,
-    ovPath: credentials.ovPath,
+    credentialSource: connection.credentialSource,
+    apiKeySource: connection.apiKeySource,
+    credentialPath: connection.credentialPath,
+    hasApiKey: connection.hasApiKey,
+    configPath: connection.cliPath || connection.ovPath || null,
+    cliConfigPath: connection.cliPath,
+    ovConfigPath: connection.ovPath,
+    cliPath: connection.cliPath,
+    ovPath: connection.ovPath,
 
     peerId,
     explicitPeerId: peerId,
@@ -308,7 +272,7 @@ export function buildPluginConfig(harness, {
   // it per session, against the directory the payload names, and an MCP proxy
   // must not derive one from wherever it happened to be launched.
   if (deriveEffectivePeer) {
-    const effectivePeer = resolveEffectivePeerId({ cfg: config, cwd: workspaceCwd });
+    const effectivePeer = resolveEffectivePeerId({ cfg: config, cwd: workspaceCwd, env });
     config.effectivePeer = effectivePeer;
     config.legacyPeerId = effectivePeer.legacyPeerId;
   }

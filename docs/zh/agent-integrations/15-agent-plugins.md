@@ -35,15 +35,15 @@ OpenViking 服务端本身在 `/mcp` 上就是 streamable HTTP，但 `mcp.json` 
 
 从高到低 —— 与 `ov` CLI 及其他 OpenViking 插件完全一致：
 
-1. 环境变量：`OPENVIKING_URL`（或 `OPENVIKING_BASE_URL`）、`OPENVIKING_MCP_URL`、`OPENVIKING_API_KEY`（或 `OPENVIKING_BEARER_TOKEN`）、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID`
-2. `~/.openviking/ovcli.conf`（`url`、`api_key`、`account` / `account_id`、`user` / `user_id`、`actor_peer_id` / `peer_id`）—— 可用 `OPENVIKING_CLI_CONFIG_FILE` 覆盖路径
-3. `~/.openviking/ov.conf` 的 `agent_plugins` 段（`apiKey`、`accountId`、`userId`、`peerId`）—— 可用 `OPENVIKING_CONFIG_FILE` 覆盖路径
+1. 环境变量：`OPENVIKING_URL`（或 `OPENVIKING_BASE_URL`）、`OPENVIKING_MCP_URL`、`OPENVIKING_API_KEY`（或 `OPENVIKING_BEARER_TOKEN`）、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID`、`OPENVIKING_AUTH_MODE`
+2. `~/.openviking/ovcli.conf`（`url`、`api_key`、`account` / `account_id`、`user` / `user_id`、`actor_peer_id` / `peer_id`），其后是它的 `plugin.agent_plugins` 与共享 `plugin` 键（`apiKey`、`accountId`、`userId`、`authMode`）—— 可用 `OPENVIKING_CLI_CONFIG_FILE` 覆盖路径
+3. `~/.openviking/ov.conf` 的 `agent_plugins` 段（`apiKey`、`accountId`、`userId`、`peerId`、`authMode`）—— 可用 `OPENVIKING_CONFIG_FILE` 覆盖路径
 4. `~/.openviking/ov.conf` 的 `server` 段（`url`，或 `host` / `port`，以及 `root_api_key`）
 5. 默认值：`http://127.0.0.1:1933`，不鉴权（本地模式）
 
 `OPENVIKING_MCP_URL` 覆盖的是推导出的 `<url>/mcp` 端点，而不是 base URL。
 
-`OPENVIKING_CREDENTIAL_SOURCE`（或 `OPENVIKING_CREDENTIALS_SOURCE`）把整条链钉在某一端：`env` 只认环境变量，`cli`（同义写法还有 `ovcli` / `file` / `config`）只认 ovcli.conf。默认的 `auto` 在 ovcli.conf 带凭据、且上面这些环境变量一个都没设时钉向 ovcli.conf，否则按整条链解析。钉在 ovcli.conf 时，环境变量、`OPENVIKING_MCP_URL` 和 `agent_plugins` 段都会被跳过；只有 `server.root_api_key` 仍然生效——ovcli.conf 自己没有 api_key 时由它兜底，这样一份只写了 `url` 的旧安装仍然能用原来的 key。
+`OPENVIKING_CREDENTIAL_SOURCE`（或 `OPENVIKING_CREDENTIALS_SOURCE`）把整条链钉在某一端：`env` 只认环境变量，`cli`（同义写法还有 `ovcli` / `file` / `config`）只认 ovcli.conf。默认的 `auto` 在 ovcli.conf 带凭据、且上面这些环境变量一个都没设时钉向 ovcli.conf，否则按整条链解析。钉在 ovcli.conf 时，环境变量里的凭据和 `OPENVIKING_MCP_URL` 会被跳过。key 仍依次回落到 `plugin` 键、`agent_plugins` 段，最后是 `server.root_api_key`，所以只写了 `url` 的旧安装仍能用原来的 key；account 和 user 只回落到 `plugin` 键。`env` 模式两个文件都不读。
 
 ```json
 // ~/.openviking/ovcli.conf

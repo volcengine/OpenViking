@@ -743,7 +743,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 `semantic_status: "queued"` 表示复制已经提交，目标父目录的 overview 和 abstract 将根据目标目录中已有的摘要异步重建，接口不会等待刷新完成。若语义刷新入队失败，响应可能包含 `semantic_status: "failed"` 和 `semantic_error`；已经完成的文件和向量复制不会因此回滚。
 
-常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；路径锁繁忙时返回 `CONFLICT`；复制目录但未设置 `recursive=true` 时返回 `FAILED_PRECONDITION`；源和目标关系非法或类型冲突时返回 `INVALID_ARGUMENT`。
+常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；路径锁繁忙时返回 `CONFLICT`；复制或删除目录但未设置 `recursive=true`、对文件执行目录操作、源和目标关系非法或类型冲突时返回 `INVALID_ARGUMENT`（HTTP 400）。
 
 ---
 

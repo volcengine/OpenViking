@@ -105,9 +105,10 @@ export function isPluginEnabled() {
  * baseUrl/apiKey cannot move — loggers and fetch helpers built from the first
  * load stay valid.
  */
-export function loadConfig(cwd = process.cwd()) {
+export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
   const config = buildPluginConfig("claude-code", {
     cwd,
+    env,
     manifestUrl: MANIFEST_URL,
     logFile: "cc-hooks.log",
     rootKeyFallback: true,
@@ -127,8 +128,8 @@ export function loadConfig(cwd = process.cwd()) {
     // server's `rewrite` request field; OPENVIKING_RECALL_REWRITE is the older
     // env spelling and still works.
     recallRewrite: normalizeRewriteMode(
-      process.env.OPENVIKING_RECALL_COMPRESS
-        ?? process.env.OPENVIKING_RECALL_REWRITE
+      env.OPENVIKING_RECALL_COMPRESS
+        ?? env.OPENVIKING_RECALL_REWRITE
         ?? config.recallCompress,
       "auto",
     ),

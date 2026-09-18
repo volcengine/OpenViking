@@ -14,7 +14,7 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 - **会话开始** — 注入用户画像与偏好，并重放离线会话排队的写入。
 - **提交 prompt** — 搜索与 prompt 相关的记忆并注入，按事件 id 与 500ms 窗口去重。
-- **工具调用前** — 拦截本地文件与 shell 工具对 `viking://` 虚拟路径的访问，引导回 OpenViking MCP 工具。
+- **工具调用前** — 拦截本地文件工具对 `viking://` 虚拟路径的访问，引导回 OpenViking MCP 工具。在 TRAE 上，带 `viking://` URI 的 shell 命令照常执行，并附加一条指向同一组工具的提示。
 - **Stop** — 捕获完成的回合并提交 OpenViking 会话。Cursor 另外在压缩前与会话结束时执行；ZCode 先应答，再在 detached worker 里完成写入。
 
 ## 目录结构
@@ -29,7 +29,7 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 ## 各宿主差异
 
-- **Cursor** — 七个事件，其中 `preCompact` 与 `sessionEnd` 是本插件里独有的。Stop 时 `capturedSinceCommit` 达到阈值才 commit，压缩前无条件 commit。会话前缀 `cu-`。见 [Cursor 接入文档](../../docs/zh/agent-integrations/12-cursor.md)。
+- **Cursor** — 六个事件，其中 `preCompact` 与 `sessionEnd` 是本插件里独有的。Stop 时 `capturedSinceCommit` 达到阈值才 commit，压缩前无条件 commit。会话前缀 `cu-`。见 [Cursor 接入文档](../../docs/zh/agent-integrations/12-cursor.md)。
 - **TRAE / TRAE CN** — 采集直接读 Stop 事件的 `prompt`、`text_content`、`last_assistant_message`，不解析 transcript；每次带内容的 Stop 都 commit。会话前缀 `tr-` 与 `trcn-`。见 [TRAE 接入文档](../../docs/zh/agent-integrations/13-trae.md)。
 - **ZCode** — rollout 文件是权威增量对话源：稳定的 host `turnId` 用于去重，也让后续 Stop 能补回漏掉的回合，hook stdin 只是兜底。ZCode 不支持 `PreCompact` 与 `SessionEnd`，因此每次 Stop 都 commit 来补足这两个信号。它的输出 schema 是严格的，所以放行时不写任何内容。会话前缀 `zc-`。已验证的扩展面记录在 [DESIGN.md](./DESIGN.md)。
 

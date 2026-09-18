@@ -408,6 +408,28 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 `readonly` 模式不会注册 `openviking_add_resource`。渠道设置 `ov_tools_enable: false` 时，该渠道不显示 OpenViking 工具，也不注入 Profile、Memory 和 Experience。
 
+### 定时任务配置
+
+定时任务默认关闭。在 `ov.conf` 中设置 `bot.tools.cron.enabled` 为 `true`，即可开启：
+
+```json
+{
+  "bot": {
+    "tools": {
+      "cron": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+此开关同时控制 `cron` 工具注册和定时调度服务，适用于 Gateway 和本地 Chat。设为 `false` 或省略此配置时，不注册 `cron` 工具，也不启动调度服务；已有任务保留在磁盘上，但不会自动执行。
+
+修改后需要重启 Bot。已有部署升级后，如需继续自动执行定时任务，必须显式设置 `enabled: true`。子 Agent 和 `--eval` 模式仍不提供定时任务能力。
+
+`vikingbot cron` 命令仍可手动管理任务，此开关不限制 CLI 管理操作。
+
 ### MCP 工具
 
 第三方 MCP Server 配置在 `bot.tools.mcp_servers`：

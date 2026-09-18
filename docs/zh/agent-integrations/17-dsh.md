@@ -63,7 +63,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 模型看到的工具面就是 OpenViking 的 MCP 工具集，经由与其他记忆集成相同的 stdio 代理接入，以 `mcp__openviking__` 前缀发布。由于该代理每个 profile 只起一个进程，`mcp__openviking__remember` 写入的是服务端一个短生命周期的会话而不是当前会话（对话本身仍由自动捕获记录），工具调用带的也是启动时解析的 actor peer。若一个进程要服务多个工作区且需要精确归属工具调用，请显式设置 `OPENVIKING_PEER_ID`。插件同时附带共享的 `openviking-memory` 技能，让模型知道何时该检索、读取和写入。
 
-误把 `viking://` URI 当本地路径的文件或 shell 调用会被拦截，并提示改用对应的 OpenViking 工具。
+文件工具误把 `viking://` URI 当本地路径时，调用会被拦截，并提示改用对应的 OpenViking 工具；shell 命令带 `viking://` URI 时照常执行，模型会收到一条改用 OpenViking 工具的提示，URI 是有意传入的数据时可以忽略。
 
 <details>
 <summary><b>配置</b></summary>

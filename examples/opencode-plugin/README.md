@@ -18,7 +18,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - Captures user and assistant text messages into OpenViking.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
-- Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`.
+- Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
 
 ## Files
 
@@ -192,7 +192,10 @@ It does not add or overwrite OpenCode's `mcp.openviking` entry.
 
 OpenCode's local `read`, `glob`, and `grep` tools cannot read `viking://` URIs.
 When the agent accidentally tries that, the plugin blocks the filesystem tool
-call and points it to the OpenViking MCP tools.
+call and points it to the OpenViking MCP tools. A `bash` command that contains a
+`viking://` URI is not blocked, because the URI is often data (an `ov` argument,
+an HTTP payload); the command runs and the plugin appends a notice naming the
+MCP tools to its output.
 
 ## MCP Tools
 

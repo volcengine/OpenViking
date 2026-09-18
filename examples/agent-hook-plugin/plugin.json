@@ -1,6 +1,6 @@
 {
   "name": "agent-hook-plugin",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "Long-term semantic memory for the config-driven hook hosts — Cursor, TRAE, TRAE CN and ZCode — powered by OpenViking. Auto-recall relevant memories at session start and capture the conversation as it happens.",
   "author": {
     "name": "OpenViking",

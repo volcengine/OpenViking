@@ -4,7 +4,7 @@ import {
   stableHash,
 } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { denyHookSpecificOutput, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
 export const trae = {
@@ -22,12 +22,7 @@ export const trae = {
     }
     return value;
   },
-  guard(input = {}) {
-    const toolName = input.tool_name ?? input.toolName ?? input.name ?? input.tool;
-    const toolInput = input.tool_input ?? input.toolInput ?? input.input ?? {};
-    const decision = evaluateUriGuard(toolName, toolInput);
-    return decision ? denyHookSpecificOutput(decision.reason) : {};
-  },
+  guard: (input) => preToolUseOutput(input),
   prompt: (input) => cleanTraeText(input.prompt),
   async capture(ctx, state) {
     const hashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);

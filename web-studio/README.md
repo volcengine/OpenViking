@@ -342,6 +342,7 @@ Do not set `VITE_OV_BASE_URL` to `https://ov.example.com/web-studio`. `/web-stud
 The official OpenViking image can be used as the API server dependency:
 
 ```bash
+# Prefer ghcr.io. If it is hard to reach, use openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
 docker run -d \
   --name openviking \
   -p 1933:1933 \

@@ -323,5 +323,5 @@ OpenViking 各组件采用不同的许可证：
 
 - **主项目**：AGPLv3——详见 [LICENSE](./LICENSE)
 - **crates/ov\_cli**：Apache 2.0——详见 [LICENSE](./crates/LICENSE)
-- **examples**：Apache 2.0——详见 [LICENSE](./examples/LICENSE)
+- **examples**：Apache 2.0——详见 [LICENSE](./examples/LICENSE)。`examples/hermes-plugin` 中的 Hermes 插件保留其 [MIT 许可证](./examples/hermes-plugin/LICENSE)。
 - **third\_party**：各三方项目保留其原有协议

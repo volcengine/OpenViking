@@ -129,8 +129,7 @@ class OpenVikingService:
         # State
         self._initialized = False
 
-        # Acquire the data-dir lock before encryption bootstrap so first-run root-key creation is
-        # serialized with storage initialization across processes.
+        # Acquire local-storage exclusivity before encryption and storage initialization.
         self._ensure_data_dir_lock_acquired()
 
         # Resolve encryption config (root_key) BEFORE building the agfs client, so the binding
@@ -227,19 +226,23 @@ class OpenVikingService:
             )
 
     def _ensure_data_dir_lock_acquired(self) -> None:
-        """Acquire the process-level data directory lock once for this service instance."""
+        """Protect embedded vector storage from concurrent processes in one workspace."""
         if self._data_dir_lock_acquired:
             return
 
-        # contention (see https://github.com/volcengine/OpenViking/issues/473).
-        if not self._config.storage.skip_process_lock:
+        storage = self._config.storage
+        if storage.vectordb.backend not in {"local", "cuvs"}:
+            return
+
+        if not storage.skip_process_lock:
             from openviking.utils.process_lock import acquire_data_dir_lock
 
-            self._data_dir_lock_path = acquire_data_dir_lock(self._config.storage.workspace)
+            self._data_dir_lock_path = acquire_data_dir_lock(storage.workspace)
         else:
             logger.warning(
-                "Skipping workspace process lock for '%s'; multi-process access may corrupt data",
-                self._config.storage.workspace,
+                "Skipping workspace process lock for '%s'; multi-process access may corrupt "
+                "embedded vector storage",
+                storage.workspace,
             )
         self._data_dir_lock_acquired = True
 
@@ -498,7 +501,6 @@ class OpenVikingService:
                     queue_name,
                     dequeue_handler=AddResourceProcessor(
                         self._resource_service,
-                        asyncio.get_running_loop(),
                         queue_name,
                         self._viking_fs,
                     ),
@@ -508,7 +510,6 @@ class OpenVikingService:
                 self._queue_manager.SESSION_COMMIT,
                 dequeue_handler=SessionCommitProcessor(
                     self._session_service,
-                    asyncio.get_running_loop(),
                 ),
                 allow_create=True,
             )
@@ -516,7 +517,6 @@ class OpenVikingService:
                 self._queue_manager.EXTERNAL_TASK,
                 dequeue_handler=ExternalTaskProcessor(
                     self._external_task_service,
-                    asyncio.get_running_loop(),
                 ),
                 allow_create=True,
             )
@@ -613,9 +613,8 @@ class OpenVikingService:
         if get_service_or_none() is self:
             set_service(None)
 
-        # The PID lock protects every live workspace resource above.  If any
-        # cleanup step failed or was cancelled, keep the lock so another
-        # process cannot enter while this service may still own storage state.
+        # Keep embedded storage exclusive until cleanup succeeds. If cleanup
+        # fails or is cancelled, this service may still own live storage state.
         self._release_data_dir_lock()
 
         logger.info("OpenVikingService closed")

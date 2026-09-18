@@ -10,7 +10,6 @@ const DEFAULT_URI_KEYS = [
   "uri",
   "target_uri",
   "targetUri",
-  "pattern",
 ];
 
 export function normalizeToolName(value) {
@@ -80,6 +79,17 @@ export function buildGuardMessage(uri, hint = {}) {
   return lines.join("\n");
 }
 
+export function buildGuardNotice(uri, hint = {}) {
+  const lines = [
+    `[OpenViking memory plugin] URI guard: this shell command contains the viking:// URI ${uri}.`,
+    "viking:// URIs are OpenViking virtual paths, not local files, so cat, ls, grep and other file commands cannot open them.",
+    `If you meant to read or search OpenViking content, use ${hint.tool || "the OpenViking MCP tools"} instead.`,
+  ];
+  if (hint.example) lines.push(`Example: ${hint.example}`);
+  lines.push("If the URI is intentional data (an ov CLI argument, an HTTP payload, a search pattern), ignore this notice.");
+  return lines.join("\n");
+}
+
 /** The hints a host gets when it names no table of its own. */
 export const DEFAULT_TOOL_HINTS = {
   read: {
@@ -98,6 +108,14 @@ export const DEFAULT_TOOL_HINTS = {
       `grep(uri="${uri}", pattern="${String(input.pattern ?? "").replaceAll('"', '\\"')}")`
     ),
   },
+  edit: {
+    tool: "OpenViking MCP edit",
+    example: (uri) => `edit(uri="${uri}", old_string="...", new_string="...")`,
+  },
+  write: {
+    tool: "OpenViking MCP write",
+    example: (uri) => `write(uri="${uri}", content="...")`,
+  },
   bash: {
     tool: "OpenViking MCP read or search",
     example: (uri) => `read(uris="${uri}")`,
@@ -112,28 +130,52 @@ export const DEFAULT_TOOL_HINTS = {
   },
 };
 
-/**
- * The guard decision for one tool call, or null when the call may proceed.
- *
- * `hints` carries the host's replacement tool names and example calls; `guarded`
- * narrows which tool names the host guards at all, because the set is not the
- * same everywhere — claude-code and opencode leave the shell alone (their
- * matchers never see it), pi guards it.
- */
-export function evaluateUriGuard(toolName, input = {}, { hints = DEFAULT_TOOL_HINTS, guarded } = {}) {
+// Tools whose argument is a command line rather than a location. A viking:// URI
+// in one is data (an `ov` argument, an HTTP payload, a grep pattern) as often as
+// a path the model hoped to open, so the command runs and the model gets a notice.
+const SHELL_TOOL_NAMES = new Set(["bash", "shell", "runcommand"]);
+
+// `pattern` is where glob looks but what grep looks for: a grep for the text
+// "viking://" in a local tree is not a path. The generic sweep still reaches
+// glob's pattern.
+const TEXT_ARGS_BY_TOOL = { grep: ["pattern"] };
+
+function resolveGuardedUri(toolName, input, { hints = DEFAULT_TOOL_HINTS } = {}) {
   const name = normalizeToolName(toolName);
-  if (guarded && !guarded.has(name)) return null;
   const hint = hints[name];
   if (!hint) return null;
-  const uri = findVikingUri(input);
+  const textArgs = TEXT_ARGS_BY_TOOL[name];
+  const uri = findVikingUri(input, DEFAULT_URI_KEYS, textArgs ? [...DEFAULT_CONTENT_KEYS, ...textArgs] : DEFAULT_CONTENT_KEYS);
   if (!uri) return null;
   return {
     uri,
-    reason: buildGuardMessage(uri, {
+    shell: SHELL_TOOL_NAMES.has(name),
+    hint: {
       tool: hint.tool,
       example: typeof hint.example === "function" ? hint.example(uri, input) : hint.example,
-    }),
+    },
   };
+}
+
+/**
+ * The deny decision for one tool call, or null when the call may proceed.
+ *
+ * A file tool whose path is a viking:// URI cannot succeed, and a write would
+ * leave a junk local file, so it is denied. A shell tool is never denied here;
+ * `evaluateUriNotice` covers it. `hints` carries the host's replacement tool
+ * names and example calls, and a tool without a hint is not guarded.
+ */
+export function evaluateUriGuard(toolName, input = {}, opts = {}) {
+  const match = resolveGuardedUri(toolName, input, opts);
+  if (!match || match.shell) return null;
+  return { uri: match.uri, reason: buildGuardMessage(match.uri, match.hint) };
+}
+
+/** The notice for a shell command that carries a viking:// URI, or null. The command still runs. */
+export function evaluateUriNotice(toolName, input = {}, opts = {}) {
+  const match = resolveGuardedUri(toolName, input, opts);
+  if (!match?.shell) return null;
+  return { uri: match.uri, reason: buildGuardNotice(match.uri, match.hint) };
 }
 
 /** The PreToolUse deny envelope claude-code, trae and zcode all read. */
@@ -147,11 +189,31 @@ export function denyHookSpecificOutput(reason) {
   };
 }
 
-/** Cursor's deny envelope; its shell hook also wants the reason for the agent. */
-export function denyCursorPermission(reason, { agentMessage = false } = {}) {
-  const output = { permission: "deny", user_message: reason };
-  if (agentMessage) output.agent_message = reason;
-  return output;
+/** The PreToolUse notice envelope: no permissionDecision, so the host's own permission flow still runs. */
+export function noticeHookSpecificOutput(reason) {
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: reason } };
+}
+
+/** A hook event's tool name and input, under any of the spellings the hosts use. */
+export function readToolEvent(event = {}) {
+  return {
+    toolName: event.tool_name ?? event.toolName ?? event.name ?? event.tool,
+    toolInput: event.tool_input ?? event.toolInput ?? event.input ?? {},
+  };
+}
+
+/** The whole PreToolUse guard: a deny envelope, a notice envelope, or {}. */
+export function preToolUseOutput(event = {}, opts = {}) {
+  const { toolName, toolInput } = readToolEvent(event);
+  const denied = evaluateUriGuard(toolName, toolInput, opts);
+  if (denied) return denyHookSpecificOutput(denied.reason);
+  const notice = evaluateUriNotice(toolName, toolInput, opts);
+  return notice ? noticeHookSpecificOutput(notice.reason) : {};
+}
+
+/** Cursor's beforeReadFile deny envelope. */
+export function denyCursorPermission(reason) {
+  return { permission: "deny", user_message: reason };
 }
 
 function readHookInput() {

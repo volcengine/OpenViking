@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Queue consumer for restart-safe Session Phase 2 work."""
 
-import asyncio
 import json
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -12,7 +11,6 @@ from openviking.observability.context import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
-from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
 from openviking.service.task_work_index import bind_task_context
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -28,10 +26,8 @@ class SessionCommitProcessor(DequeueHandlerBase):
     def __init__(
         self,
         session_service: "SessionService",
-        service_loop: asyncio.AbstractEventLoop,
     ) -> None:
         self._session_service = session_service
-        self._dispatcher = OwnerLoopDispatcher(service_loop)
 
     @staticmethod
     def _parse_message(data: Dict[str, Any]) -> tuple[SessionCommitMsg, RequestContext]:
@@ -48,8 +44,8 @@ class SessionCommitProcessor(DequeueHandlerBase):
     async def _process(self, msg: SessionCommitMsg, ctx: RequestContext) -> bool:
         # Bind a root observability context so Phase-2 extraction VLM/embedding
         # token events are attributed to the committing account/user rather than
-        # "__unknown__" (mirrors SemanticProcessor.on_dequeue). Bind inside the
-        # dispatched operation to cover direct calls and restore the caller context.
+        # "__unknown__" (mirrors SemanticProcessor.on_dequeue). Restore the
+        # worker's previous context when processing finishes.
         root_attrs = create_root_span_attributes(
             http_method="QUEUE",
             http_route="/queuefs/session_commit",
@@ -114,7 +110,7 @@ class SessionCommitProcessor(DequeueHandlerBase):
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
 
-        await self._dispatcher.run(lambda: self._finalize_cancelled(msg, ctx))
+        await self._finalize_cancelled(msg, ctx)
         return ProcessResult.cancelled()
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
@@ -125,5 +121,5 @@ class SessionCommitProcessor(DequeueHandlerBase):
             msg, ctx = self._parse_message(data)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             return ProcessResult.failed(str(exc))
-        processed = await self._dispatcher.run(lambda: self._process(msg, ctx))
+        processed = await self._process(msg, ctx)
         return ProcessResult.success() if processed else ProcessResult.requeued()

@@ -209,6 +209,7 @@ curl http://localhost:1933/health
 - 探索目录结构用 `openviking_list`
 - 删除前必须先获得用户明确确认，再调用 `openviking_forget`
 - 如果 agent 误用 OpenCode 本地 `read`、`glob`、`grep` 工具访问 `viking://` URI，插件会阻止这次本地文件系统调用，并提示改用 MCP 工具。
+- `bash` 命令里带 `viking://` URI 时照常执行，插件会在输出末尾附一段提示，建议改用 MCP 工具；URI 本来就是命令参数时，agent 可以忽略这段提示。
 
 ## `openviking_add_resource` 本地文件
 

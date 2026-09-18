@@ -33,6 +33,9 @@ helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=v0.3.
 helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=
 ```
 
+We recommend the `ghcr.io` image. If `ghcr.io` is hard to reach, add
+`--set image.repository=openviking-cn-beijing.cr.volces.com/volcengine/openviking`.
+
 ### Install with Custom Values
 
 Create a `my-values.yaml` file:

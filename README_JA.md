@@ -323,5 +323,5 @@ OpenViking プロジェクトは、コンポーネントごとに異なるライ
 
 - **メインプロジェクト**: AGPLv3 - 詳細は [LICENSE](./LICENSE) ファイルを参照してください
 - **crates/ov\_cli**: Apache 2.0 - 詳細は [LICENSE](./crates/LICENSE) を参照してください
-- **examples**: Apache 2.0 - 詳細は [LICENSE](./examples/LICENSE) を参照してください
+- **examples**: Apache 2.0 - 詳細は [LICENSE](./examples/LICENSE) を参照してください。`examples/hermes-plugin` の Hermes プラグインは元の [MIT ライセンス](./examples/hermes-plugin/LICENSE) を保持します。
 - **third\_party**: 各サードパーティプロジェクトの元のライセンス

@@ -976,6 +976,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | account_id | str | Yes | - | Workspace ID |
 | name | str | No | null | Filter by user ID (wildcard `*` and `?` matching) |
 | role | str | No | null | Filter by role |
+| include_credentials | bool | No | true | HTTP-only. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. The default preserves the existing mode-dependent response. |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
@@ -984,6 +985,14 @@ List active users in a workspace. Users with deletion in progress are omitted.
 - ADMIN can only list users in their own account
 - In `trusted` mode, `user_key` is omitted from the response
 - Users whose deletion has started are no longer returned
+
+**Summary responses (HTTP):** Set `include_summary=true` to return an object in `result` with `users` (the current page), `total` (matching users), `account_total`, `manager_count` (admin/root), and `key_count` (users with a visible key or prefix). Account statistics ignore search/role filters and exclude deleting users; `key_count` is zero when key exposure is disabled. The default remains a user array for existing callers.
+
+`query` performs a trimmed, case-insensitive literal substring match on user IDs. It combines with the existing `name` wildcard and `role` filters. For example:
+
+```text
+GET /api/v1/admin/accounts/acme/users?limit=20&page=1&query=alice&include_summary=true
+```
 
 #### 3. Usage Examples
 

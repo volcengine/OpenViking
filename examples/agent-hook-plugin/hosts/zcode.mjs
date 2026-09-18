@@ -8,7 +8,7 @@
  */
 
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { denyHookSpecificOutput, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { applyZcodeCaptureResult, buildZcodeCapturePlan } from "./zcode-capture.mjs";
 import { buildZcodeTurns, cleanZcodeText } from "./zcode-turns.mjs";
 
@@ -27,12 +27,9 @@ export const zcode = {
       },
     };
   },
-  guard(input = {}) {
-    const toolName = input.tool_name ?? input.toolName ?? input.name ?? input.tool;
-    const toolInput = input.tool_input ?? input.toolInput ?? input.input ?? {};
-    const decision = evaluateUriGuard(toolName, toolInput);
-    return decision ? denyHookSpecificOutput(decision.reason) : {};
-  },
+  // The matcher names no shell tool, so the notice never fires: ZCode's strict
+  // schema is not verified to accept additionalContext on PreToolUse.
+  guard: (input) => preToolUseOutput(input),
   // ZCode may pass sessionId in camelCase or snake_case. Ensure both are present
   // so resolveNativeSessionId() finds it via the direct lookup path — avoids the
   // cwd fallback that would collide for two windows in the same directory.

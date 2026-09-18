@@ -12,7 +12,31 @@ class TestFsCp:
         content = f"copy payload {suffix}"
         try:
             write = api_client.fs_write(source, content, mode="create", wait=True)
-            assert write.status_code == 200
+            assert write.status_code == 200, write.text
+
+            if os.getenv("HAS_SECRETS", "true").lower() == "true":
+                write_result = write.json().get("result", {})
+                preparation_error = f"Source index preparation failed: {write.text}"
+                assert write_result.get("vector_status") == "complete", preparation_error
+                assert write_result.get("semantic_status") != "failed", preparation_error
+                queue_status = write_result.get("queue_status") or {}
+                for queue_name in ("Semantic", "Embedding"):
+                    queue_result = queue_status.get(queue_name, {})
+                    assert not queue_result.get("error_count", 0), preparation_error
+                    assert not queue_result.get("errors"), preparation_error
+
+                source_index = api_client.find(
+                    query="",
+                    target_uri=source,
+                    filter={"op": "must", "field": "uri", "conds": [source]},
+                    limit=5,
+                )
+                source_index_error = (
+                    f"Source index missing before cp: write={write.text}; find={source_index.text}"
+                )
+                assert source_index.status_code == 200, source_index_error
+                resources = source_index.json().get("result", {}).get("resources", [])
+                assert any(item.get("uri") == source for item in resources), source_index_error
 
             copied = api_client.fs_cp(source, target)
             assert copied.status_code == 200, copied.text
@@ -29,10 +53,22 @@ class TestFsCp:
                 assert content in read.json().get("result", "")
 
             if os.getenv("HAS_SECRETS", "true").lower() == "true":
-                found = api_client.find(query=suffix, target_uri=target, limit=5)
-                assert found.status_code == 200
-                resources = found.json().get("result", {}).get("resources", [])
-                assert any(item.get("uri") == target for item in resources)
+                vectors = result.get("vectors", {})
+                assert vectors.get("scanned", 0) > 0, copied.text
+                assert vectors.get("written") == vectors["scanned"], copied.text
+                # This contract checks index copying, not the embedding model's
+                # similarity score for a random UUID. Filter-only find still
+                # reads the vector store and preserves tenant/access scoping.
+                for uri in (source, target):
+                    found = api_client.find(
+                        query="",
+                        target_uri=uri,
+                        filter={"op": "must", "field": "uri", "conds": [uri]},
+                        limit=5,
+                    )
+                    assert found.status_code == 200, found.text
+                    resources = found.json().get("result", {}).get("resources", [])
+                    assert any(item.get("uri") == uri for item in resources), found.text
 
             assert api_client.fs_rm(source).status_code == 200
             assert api_client.fs_read(target).status_code == 200
@@ -57,7 +93,7 @@ class TestFsCp:
             )
 
             without_recursive = api_client.fs_cp(source, target)
-            assert without_recursive.status_code == 412, without_recursive.text
+            assert without_recursive.status_code == 400, without_recursive.text
 
             copied = api_client.fs_cp(source, target, recursive=True)
             assert copied.status_code == 200, copied.text

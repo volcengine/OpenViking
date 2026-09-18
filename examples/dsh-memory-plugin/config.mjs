@@ -1,7 +1,7 @@
 import { buildPluginConfig } from "./shared/plugin-config.mjs";
 import { loadCredentialFiles } from "./shared/credentials.mjs";
 
-export const PLUGIN_VERSION = "0.4.1";
+export const PLUGIN_VERSION = "0.4.3";
 
 /**
  * Namespace for the bridged OpenViking MCP tools. DSH publishes every MCP tool
@@ -17,8 +17,9 @@ export const MCP_SERVER_NAME = "openviking";
  * file of its own. Every knob is declared in `shared/config-schema.mjs`, and
  * `ovcli.conf`'s `plugin` section outranks the host's input so one file
  * configures every harness and `ov config switch` moves them together.
- * Connection fields are the exception: an endpoint or key named by the host is
- * the more specific answer and stays ahead of the credential chain.
+ * Connection fields are the exception: an endpoint, key, identity or auth mode
+ * named by the host is the more specific answer and stays ahead of the
+ * credential chain.
  */
 export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()) {
   // ov.conf's `dsh` section is the legacy layer here as everywhere else, but
@@ -36,6 +37,8 @@ export function resolveConfig(input = {}, env = process.env, cwd = process.cwd()
       user: input.user,
       apiKey: input.apiKey,
       baseUrl: input.endpoint,
+      // The legacy knob layer this used to ride accepted both spellings.
+      authMode: input.authMode || input.auth_mode,
     },
     deriveEffectivePeer: true,
   });

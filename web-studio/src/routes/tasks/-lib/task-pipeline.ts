@@ -2,10 +2,16 @@ import type { TaskRecord } from './task-record'
 
 export type StepState = 'completed' | 'running' | 'pending' | 'failed'
 
+export type PipelineTranslate = (key: string) => string
+
 export type PipelineStep = {
   name: string
   state: StepState
   count?: number
+}
+
+function resolve(key: string, t?: PipelineTranslate): string {
+  return t ? t(`pipeline.step.${key}`) : key
 }
 
 export type PipelineGroup =
@@ -34,9 +40,8 @@ function inferState(
  */
 export function getTaskPipelineSteps(
   task: TaskRecord,
-  language: string = 'zh',
+  t?: PipelineTranslate,
 ): PipelineStep[] {
-  const isZh = language.startsWith('zh')
   const type = task.task_type
   const status = task.status
   const resObj = (task.result || {}) as Record<string, any>
@@ -45,7 +50,7 @@ export function getTaskPipelineSteps(
   if (type === 'session_commit') {
     return [
       {
-        name: isZh ? '会话状态持久化' : 'Session Persistence',
+        name: resolve('sessionPersistence', t),
         state: status === 'completed' ? 'completed' : (status as StepState),
       },
     ]
@@ -54,11 +59,11 @@ export function getTaskPipelineSteps(
   if (type === 'admin_reindex' || type === 'snapshot_restore_reindex') {
     return [
       {
-        name: isZh ? '外部解析' : 'Document Parsing',
+        name: resolve('externalParse', t),
         state: status === 'pending' ? 'pending' : 'completed',
       },
       {
-        name: isZh ? '嵌入向量' : 'Vector Embedding',
+        name: resolve('embedding', t),
         state: inferState('Embedding', status === 'completed' ? 'completed' : (status as StepState), status, qStatus),
         count: resObj.reindexed_items,
       },
@@ -68,26 +73,26 @@ export function getTaskPipelineSteps(
   if (type === 'connector_import') {
     const preState: StepState = status === 'pending' ? 'pending' : 'completed'
     return [
-      { name: isZh ? '连接器鉴权' : 'Connector Auth', state: preState },
-      { name: isZh ? '资源拉取' : 'Resource Fetching', state: preState, count: resObj.downloaded_files },
-      { name: isZh ? '外部解析' : 'Document Parsing', state: inferState('Semantic', status === 'completed' ? 'completed' : (status as StepState), status, qStatus) },
-      { name: isZh ? '嵌入向量' : 'Vector Embedding', state: inferState('Embedding', status === 'completed' ? 'completed' : (status as StepState), status, qStatus) },
+      { name: resolve('connectorAuth', t), state: preState },
+      { name: resolve('resourceFetching', t), state: preState, count: resObj.downloaded_files },
+      { name: resolve('externalParse', t), state: inferState('Semantic', status === 'completed' ? 'completed' : (status as StepState), status, qStatus) },
+      { name: resolve('embedding', t), state: inferState('Embedding', status === 'completed' ? 'completed' : (status as StepState), status, qStatus) },
     ]
   }
 
   // Default resource ingestion pipeline: 外部解析 -> 语义处理 -> 嵌入向量
   return [
     {
-      name: isZh ? '外部解析' : 'Document Parsing',
+      name: resolve('externalParse', t),
       state: status === 'pending' ? 'pending' : 'completed',
     },
     {
-      name: isZh ? '语义处理' : 'Semantic Processing',
+      name: resolve('semantic', t),
       state: inferState('Semantic', status === 'completed' ? 'completed' : (status as StepState), status, qStatus),
       count: qStatus?.Semantic?.processed,
     },
     {
-      name: isZh ? '嵌入向量' : 'Vector Embedding',
+      name: resolve('embedding', t),
       state: inferState('Embedding', status === 'completed' ? 'completed' : (status as StepState), status, qStatus),
       count: qStatus?.Embedding?.processed,
     },
@@ -100,9 +105,8 @@ export function getTaskPipelineSteps(
  */
 export function getTaskPipelineGroups(
   task: TaskRecord,
-  language: string = 'zh',
+  t?: PipelineTranslate,
 ): PipelineGroup[] {
-  const isZh = language.startsWith('zh')
   const type = task.task_type
   const status = task.status
   const resObj = (task.result || {}) as Record<string, any>
@@ -113,7 +117,7 @@ export function getTaskPipelineGroups(
       {
         type: 'serial',
         step: {
-          name: isZh ? '会话提交' : 'Session Commit',
+          name: resolve('sessionCommit', t),
           state: status === 'completed' ? 'completed' : (status as StepState),
         },
       },
@@ -124,8 +128,8 @@ export function getTaskPipelineGroups(
     const purgeState: StepState = status === 'pending' ? 'pending' : 'completed'
     const rebuildState = inferState('Embedding', status === 'completed' ? 'completed' : (status as StepState), status, qStatus)
     return [
-      { type: 'serial', step: { name: isZh ? '外部解析' : 'Document Parsing', state: purgeState } },
-      { type: 'serial', step: { name: isZh ? '嵌入向量' : 'Vector Embedding', state: rebuildState } },
+      { type: 'serial', step: { name: resolve('externalParse', t), state: purgeState } },
+      { type: 'serial', step: { name: resolve('embedding', t), state: rebuildState } },
     ]
   }
 
@@ -134,12 +138,12 @@ export function getTaskPipelineGroups(
     const semState = inferState('Semantic', status === 'completed' ? 'completed' : status === 'running' ? 'running' : status === 'failed' ? 'failed' : 'pending', status, qStatus)
     const embState = inferState('Embedding', status === 'completed' ? 'completed' : status === 'running' ? 'running' : status === 'failed' ? 'failed' : 'pending', status, qStatus)
     return [
-      { type: 'serial', step: { name: isZh ? '外部解析' : 'Document Parsing', state: preState } },
+      { type: 'serial', step: { name: resolve('externalParse', t), state: preState } },
       {
         type: 'parallel',
         steps: [
-          { name: isZh ? '语义处理' : 'Semantic Processing', state: semState },
-          { name: isZh ? '嵌入向量' : 'Vector Embedding', state: embState },
+          { name: resolve('semantic', t), state: semState },
+          { name: resolve('embedding', t), state: embState },
         ],
       },
     ]
@@ -150,12 +154,12 @@ export function getTaskPipelineGroups(
   const semState = inferState('Semantic', status === 'completed' ? 'completed' : status === 'running' ? 'running' : status === 'failed' ? 'failed' : 'pending', status, qStatus)
   const embState = inferState('Embedding', status === 'completed' ? 'completed' : status === 'running' ? 'running' : status === 'failed' ? 'failed' : 'pending', status, qStatus)
   return [
-    { type: 'serial', step: { name: isZh ? '外部解析' : 'Document Parsing', state: parseState } },
+    { type: 'serial', step: { name: resolve('externalParse', t), state: parseState } },
     {
       type: 'parallel',
       steps: [
-        { name: isZh ? '语义处理' : 'Semantic Processing', state: semState },
-        { name: isZh ? '嵌入向量' : 'Vector Embedding', state: embState },
+        { name: resolve('semantic', t), state: semState },
+        { name: resolve('embedding', t), state: embState },
       ],
     },
   ]

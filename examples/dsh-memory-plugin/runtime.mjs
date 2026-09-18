@@ -1,4 +1,3 @@
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
@@ -14,6 +13,7 @@ import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import {
   captureEvent,
   OPENVIKING_PLUGIN_SOURCE,
+  pluginMessage,
   promptText,
 } from "./capture.mjs";
 
@@ -122,7 +122,7 @@ export class OpenVikingRuntime {
       return null;
     }
     state.profileDelivered = true;
-    return pluginMessage(state.profileBlock, "instructions");
+    return pluginMessage(state.profileBlock, { form: "instructions" });
   }
 
   async recallMessage(agent, messages) {
@@ -141,7 +141,7 @@ export class OpenVikingRuntime {
         log: (stage, data) => this.log(stage, data),
       },
     );
-    return block ? pluginMessage(block, "recall") : null;
+    return block ? pluginMessage(block, { form: "recall" }) : null;
   }
 
   capture(session, event) {
@@ -402,19 +402,6 @@ export class OpenVikingRuntime {
   log(stage, data) {
     this.logger?.debug?.(`[openviking:dsh] ${stage} ${JSON.stringify(data)}`);
   }
-}
-
-function pluginMessage(content, form) {
-  // dsh's own constructor: identity, normalization, and any future Message
-  // invariants come from the pinned peer instead of a hand-built object.
-  return createUserMessage({
-    content: [{ type: "text", text: content }],
-    source: {
-      kind: "plugin",
-      plugin: OPENVIKING_PLUGIN_SOURCE,
-      form,
-    },
-  });
 }
 
 function hasStartupProfile(agent) {

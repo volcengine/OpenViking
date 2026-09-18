@@ -40,7 +40,6 @@ from openviking.storage.viking_fs._base import (
 )
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.exceptions import (
-    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -285,7 +284,7 @@ class _OpsMixin:
         if is_dir:
             await self._ensure_access(target_uri, ctx, action=AclAction.MANAGE)
             if not recursive:
-                raise FailedPreconditionError(
+                raise InvalidArgumentError(
                     f"Cannot remove directory without --recursive: {uri}",
                     details={"resource": uri, "expected_flag": "recursive"},
                 )
@@ -330,13 +329,13 @@ class _OpsMixin:
                     auto_pathlock=auto_pathlock,
                 )
             except AGFSDirectoryNotEmptyError:
-                raise FailedPreconditionError(
+                raise InvalidArgumentError(
                     f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
                 )
             except RuntimeError as e:
                 # Fallback for older versions without typed exceptions
                 if _is_directory_not_empty_error(str(e)):
-                    raise FailedPreconditionError(
+                    raise InvalidArgumentError(
                         f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
                     )
                 raise
@@ -415,7 +414,7 @@ class _OpsMixin:
             raise
         is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
         if is_dir and not recursive:
-            raise FailedPreconditionError(
+            raise InvalidArgumentError(
                 f"Cannot copy directory without --recursive: {old_uri}",
                 details={"resource": old_uri, "expected_flag": "recursive"},
             )

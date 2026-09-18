@@ -206,6 +206,7 @@ Usage guidance:
 - Use `openviking_list` to explore directory structure.
 - Before deleting anything, obtain explicit user confirmation first; then call `openviking_forget`.
 - If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to the MCP tools.
+- A `bash` command that contains a `viking://` URI still runs; the plugin appends a notice pointing to the MCP tools to its output, which the agent can ignore when the URI is intentional.
 
 ## Local Files with `openviking_add_resource`
 

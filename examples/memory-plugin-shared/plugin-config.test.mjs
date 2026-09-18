@@ -47,7 +47,7 @@ const LOADERS = {
   pi: {
     harness: "pi",
     load: (cwd) => loadPi(cwd),
-    options: { version: "0.3.0", deriveEffectivePeer: true },
+    options: { manifestUrl: new URL("../pi-coding-agent-extension/package.json", import.meta.url), deriveEffectivePeer: true },
     owns: ["peerId"],
   },
   cursor: { harness: "cursor", load: (cwd) => loadAgentHookConfig("cursor", cwd), options: { logFile: "cursor-hooks.log" }, owns: [] },

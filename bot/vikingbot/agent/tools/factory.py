@@ -128,7 +128,7 @@ def register_default_tools(
         registry.register(spawn_tool)
 
     # Cron tool
-    if include_cron_tool and cron_service:
+    if include_cron_tool and cron_service and config.tools.cron.enabled:
         registry.register(CronTool(cron_service))
 
 

@@ -23,9 +23,10 @@ function expandHome(value) {
   return value
 }
 
-export function loadConfig(pluginRoot, projectDirectory) {
+export function loadConfig(pluginRoot, projectDirectory, { env = process.env } = {}) {
   const config = buildPluginConfig("opencode", {
     cwd: projectDirectory,
+    env,
     manifestUrl: MANIFEST_URL,
     logFile: "opencode-plugin.log",
     deriveEffectivePeer: true,

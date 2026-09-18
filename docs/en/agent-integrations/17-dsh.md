@@ -63,7 +63,7 @@ Each DSH session maps to `dsh-<session-id>` in OpenViking, and every subagent ge
 
 The model-facing surface is the OpenViking MCP tool set, reached through the same stdio proxy the other memory integrations use and published under an `mcp__openviking__` prefix. Because that proxy runs once per profile, `mcp__openviking__remember` stores into a short-lived server-side session rather than the current one—automatic capture still records the conversation itself—and tool calls carry the actor peer resolved at startup. Set `OPENVIKING_PEER_ID` when one process serves several workspaces and tool calls need exact attribution. The bundle also ships the shared `openviking-memory` skill, so the model knows when to search, read, and write.
 
-Accidental filesystem or shell calls on `viking://` URIs are blocked with a hint pointing at the right OpenViking tool.
+A filesystem tool call whose path is a `viking://` URI is blocked with a hint pointing at the right OpenViking tool. A shell command that carries a `viking://` URI still runs, and the model gets a notice suggesting the OpenViking tools, which it can ignore when the URI is intentional data.
 
 <details>
 <summary><b>Configuration</b></summary>

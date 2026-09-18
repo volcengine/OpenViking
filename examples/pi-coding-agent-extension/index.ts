@@ -19,7 +19,7 @@ import { RecallLedger } from "./lib/recall-ledger.mjs";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { isBypassed } from "./shared/session-model.mjs";
-import { guardVikingUriToolCall } from "./lib/uri-guard-adapter.mjs";
+import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
 import { registerTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
 
@@ -223,6 +223,13 @@ export default async function (pi: ExtensionAPI) {
     const decision = guardVikingUriToolCall(event);
     if (!decision) return;
     return decision;
+  });
+
+  // --- tool_result ---
+  pi.on("tool_result", async (event, _ctx) => {
+    const notice = noticeVikingUriToolResult(event);
+    if (!notice) return;
+    return notice;
   });
 
   // --- turn_end ---

@@ -1,3 +1,5 @@
+import { YamlMetadata } from './yaml-metadata'
+import { splitMarkdownFrontmatter } from '#/lib/markdown-frontmatter'
 import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -133,15 +135,15 @@ const DIRECTORY_LEVEL_META: Array<{
 }> = [
   {
     id: 'abstract',
-    label: 'Abstract',
+    label: 'filePreview.directoryLevels.abstractLabel',
     name: 'L0',
-    title: 'Short semantic abstract',
+    title: 'filePreview.directoryLevels.abstractDescription',
   },
   {
     id: 'overview',
-    label: 'Overview',
+    label: 'filePreview.directoryLevels.overviewLabel',
     name: 'L1',
-    title: 'Directory overview',
+    title: 'filePreview.directoryLevels.overviewDescription',
   },
 ]
 
@@ -1359,6 +1361,7 @@ export function FilePreview({
     () => memoryFieldsDisplayContent(preview?.content || ''),
     [preview?.content],
   )
+  const frontmatter = useMemo(() => splitMarkdownFrontmatter(displayContent || ''), [displayContent])
   const okfDocument = useMemo(
     () =>
       file && preview?.fileType === 'markdown'
@@ -1743,7 +1746,7 @@ export function FilePreview({
                               ? 'border-border bg-muted text-foreground'
                               : 'border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground'
                           }`}
-                          title={level.title}
+                          title={t(level.title)}
                           onClick={() =>
                             setActiveDirectoryLevels((current) => {
                               const next = new Set(current)
@@ -1759,7 +1762,7 @@ export function FilePreview({
                           <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-primary">
                             {level.name}
                           </span>
-                          <span className="font-medium">{level.label}</span>
+                          <span className="font-medium">{t(level.label)}</span>
                         </button>
                       )
                     })}
@@ -1788,9 +1791,9 @@ export function FilePreview({
                           <span className="font-mono font-semibold uppercase tracking-wide text-primary">
                             {level.name}
                           </span>
-                          <span className="font-medium">{level.label}</span>
+                          <span className="font-medium">{t(level.label)}</span>
                           <span className="text-muted-foreground">
-                            {level.title}
+                            {t(level.title)}
                           </span>
                         </header>
                         {level.document ? (
@@ -1908,7 +1911,7 @@ export function FilePreview({
                     onNavigate={onNavigate}
                     rawFrontmatter={okfDocument.rawFrontmatter}
                   />
-                ) : null}
+                ) : frontmatter ? <YamlMetadata rawFrontmatter={frontmatter.rawFrontmatter} defaultOpen /> : null}
                 <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
@@ -1936,7 +1939,7 @@ export function FilePreview({
                   >
                     {okfDocument
                       ? okfDocument.body || emptyFileText
-                      : displayContent || emptyFileText}
+                      : (frontmatter?.body ?? displayContent) || emptyFileText}
                   </ReactMarkdown>
                 </article>
               </div>

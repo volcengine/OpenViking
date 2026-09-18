@@ -1,3 +1,4 @@
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import {
   extractPartsFromPayload,
   extractTextFromPayload,
@@ -5,6 +6,19 @@ import {
 } from "./shared/capture-utils.mjs";
 
 export const OPENVIKING_PLUGIN_SOURCE = "openviking-memory";
+
+export function pluginMessage(content, source) {
+  // dsh's own constructor: identity, normalization, and any future Message
+  // invariants come from the pinned peer instead of a hand-built object.
+  return createUserMessage({
+    content: [{ type: "text", text: content }],
+    source: {
+      kind: "plugin",
+      plugin: OPENVIKING_PLUGIN_SOURCE,
+      ...source,
+    },
+  });
+}
 
 export function captureEvent(event, config, toolNames = new Map()) {
   if (!event || typeof event !== "object") return null;

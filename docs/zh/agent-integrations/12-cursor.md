@@ -40,7 +40,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 - `sessionStart`：加载用户画像和当前项目的记忆索引。
 - `beforeSubmitPrompt`：根据当前问题召回记忆并通过 `additional_context` 注入。
-- `beforeReadFile` 和 `beforeShellExecution`：阻止把 `viking://` 虚拟路径当作本地文件访问，并提示改用 OpenViking MCP 工具。
+- `beforeReadFile`：阻止把 `viking://` 虚拟路径当作本地文件读取，并提示改用 OpenViking MCP 工具；shell 命令不做检查。
 - `stop`：增量捕获本轮新增的用户与助手消息。
 - `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取。
 

@@ -285,6 +285,8 @@ const CREDENTIAL_ENV = [
   "OPENVIKING_BEARER_TOKEN",
   "OPENVIKING_ACCOUNT",
   "OPENVIKING_USER",
+  "OPENVIKING_CREDENTIAL_SOURCE",
+  "OPENVIKING_CREDENTIALS_SOURCE",
 ];
 
 function withEnv(vars, fn) {
@@ -389,5 +391,14 @@ test("credentialSources ranks the identity the way the credential chain does", (
     assert.equal(rows({ credentialSource: "auto" }, noAccount).account, `${CLI_PATH} plugin.codex.accountId`);
     assert.equal(rows({ credentialSource: "auto" }, cliConf({})).account, `${OV_PATH} codex.accountId`);
     assert.equal(rows({ credentialSource: "auto" }, cliConf({})).url, OV_PATH);
+  });
+
+  withEnv({ OPENVIKING_CREDENTIAL_SOURCE: "env", OPENVIKING_ACCOUNT: "acct-env" }, () => {
+    // Forced to the environment, no file answers, whatever it holds.
+    const envOnly = rows({ credentialSource: "env" }, full);
+    assert.equal(envOnly.url, "default (http://127.0.0.1:1933)");
+    assert.equal(envOnly.account, "env");
+    assert.equal(envOnly.user, "(unset)");
+    assert.equal(envOnly.apiKey, "(none — env mode reads no file)");
   });
 });

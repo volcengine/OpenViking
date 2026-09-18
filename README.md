@@ -323,5 +323,5 @@ The OpenViking project uses different licenses for different components:
 
 - **Main Project**: AGPLv3 - see the [LICENSE](./LICENSE) file for details
 - **crates/ov\_cli**: Apache 2.0 - see the [LICENSE](./crates/LICENSE) for details
-- **examples**: Apache 2.0 - see the [LICENSE](./examples/LICENSE) for details
+- **examples**: Apache 2.0 - see the [LICENSE](./examples/LICENSE) for details. The Hermes plugin in `examples/hermes-plugin` retains its [MIT license](./examples/hermes-plugin/LICENSE).
 - **third\_party**: Respective original licenses of third-party projects

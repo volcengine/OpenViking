@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+import threading
 from unittest.mock import AsyncMock
 
 import pytest
@@ -425,9 +426,10 @@ async def test_cancel_cleanup_interruption_does_not_ack(tracked_queue):
 
 async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
     queue, index, transport, _, cancelled = tracked_queue
-    started = asyncio.Event()
-    cleanup_started = asyncio.Event()
-    cleanup_release = asyncio.Event()
+    started = threading.Event()
+    cleanup_started = threading.Event()
+    cleanup_release = threading.Event()
+    request_loop = asyncio.get_running_loop()
 
     class Session:
         async def exists(self):
@@ -437,12 +439,13 @@ async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
             pass
 
         async def resume_queued_commit(self, msg):
+            assert asyncio.get_running_loop() is not request_loop
             started.set()
             try:
                 await asyncio.Event().wait()
             finally:
                 cleanup_started.set()
-                await cleanup_release.wait()
+                await asyncio.to_thread(cleanup_release.wait)
 
     class Service:
         def session(self, ctx, session_id, session_uri=None):
@@ -462,17 +465,17 @@ async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
         await queue.enqueue(msg.to_dict())
     message = {"id": "m", "data": transport.write.await_args.args[1].decode()}
     transport.write.reset_mock()
-    queue.set_dequeue_handler(SessionCommitProcessor(Service(), asyncio.get_running_loop()))
+    queue.set_dequeue_handler(SessionCommitProcessor(Service()))
 
     def consume():
         return asyncio.run(queue.process_dequeued(message))
 
     worker = asyncio.create_task(asyncio.to_thread(consume))
     try:
-        await asyncio.wait_for(started.wait(), timeout=3)
+        assert await asyncio.to_thread(started.wait, 3)
         cancelled.add("task-1")
         index.cancel_active("task-1")
-        await asyncio.wait_for(cleanup_started.wait(), timeout=3)
+        assert await asyncio.to_thread(cleanup_started.wait, 3)
         assert not worker.done()
         transport.write.assert_not_awaited()
     finally:

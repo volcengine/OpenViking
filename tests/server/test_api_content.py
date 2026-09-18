@@ -195,14 +195,17 @@ async def test_overview_content(client_with_resource, service):
     assert body["result"] == f"# {uri}\n\n[Directory overview is not ready]"
 
 
-async def test_abstract_file_uri_returns_failed_precondition(client_with_resource):
-    client, uri = client_with_resource
-    file_uri = await _first_child_uri(client, uri)
-    resp = await client.get("/api/v1/content/abstract", params={"uri": file_uri})
-    assert resp.status_code == 412
+async def test_ls_file_uri_returns_invalid_argument(client, service):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    file_uri = "viking://resources/directory-type-check/file.md"
+    await service.viking_fs.mkdir("viking://resources/directory-type-check", ctx=ctx)
+    await service.viking_fs.write_file(file_uri, "file content", ctx=ctx)
+
+    resp = await client.get("/api/v1/fs/ls", params={"uri": file_uri})
+    assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
-    assert body["error"]["code"] == "FAILED_PRECONDITION"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert "not a directory" in body["error"]["message"]
 
 

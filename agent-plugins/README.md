@@ -37,8 +37,8 @@ OpenViking already speaks streamable HTTP at `/mcp`, but a `streamable-http` ent
 Highest to lowest priority (same chain as the `ov` CLI and the other OpenViking plugins):
 
 1. Environment variables: `OPENVIKING_URL` (or `OPENVIKING_BASE_URL`), `OPENVIKING_API_KEY` (or `OPENVIKING_BEARER_TOKEN`), `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`
-2. `~/.openviking/ovcli.conf` (`url`, `api_key`, `account`, `user`) — override the path with `OPENVIKING_CLI_CONFIG_FILE`
-3. `~/.openviking/ov.conf` `server` section (`url` or `host`/`port`, `root_api_key`) — override the path with `OPENVIKING_CONFIG_FILE`
+2. `~/.openviking/ovcli.conf` (`url`, `api_key`, `account`, `user`, then the `plugin.agent_plugins` and `plugin` keys) — override the path with `OPENVIKING_CLI_CONFIG_FILE`
+3. `~/.openviking/ov.conf` `agent_plugins` section, then its `server` section (`url` or `host`/`port`, `root_api_key`) — override the path with `OPENVIKING_CONFIG_FILE`
 4. Defaults: `http://127.0.0.1:1933`, no auth (local mode)
 
 Config file changes are picked up by the running proxy without a restart. Debugging: set `OPENVIKING_DEBUG=1` to log JSON lines to `~/.openviking/logs/agent-plugins.log` (path override: `OPENVIKING_DEBUG_LOG`).
@@ -76,6 +76,6 @@ node --test agent-plugins/plugin.test.mjs
 node examples/memory-plugin-shared/sync.mjs
 ```
 
-`examples/memory-plugin-shared/sync.test.mjs` fails if they drift, and pins this package to the connection half of the shared runtime: `servers/mcp-proxy.mjs` resolves everything through `buildProxyConnection()` in `shared/credentials.mjs`, so the hook-tuning knobs — which this spec has no hooks to run — never enter the bundle.
+`examples/memory-plugin-shared/sync.test.mjs` fails if they drift, and pins this package to the connection half of the shared runtime: `servers/mcp-proxy.mjs` resolves everything through `buildProxyConnection()` in `shared/credentials.mjs` — the same `resolveConnection()` every other plugin's hooks and proxy use — so the hook-tuning knobs — which this spec has no hooks to run — never enter the bundle.
 
 Both test files run in CI via `.github/workflows/pr.yml`.

@@ -56,6 +56,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
    ```yaml
    services:
      openviking:
+       # Prefer ghcr.io. If it is hard to reach, use openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
        image: ghcr.io/volcengine/openviking:latest
        container_name: openviking
        ports:

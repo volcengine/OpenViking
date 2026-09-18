@@ -44,11 +44,12 @@ export function stableHash(...values) {
  * file may not carry connection or credential keys, so the base URL and API key
  * cannot move under a logger or fetch helper already built from the first load.
  */
-export function loadAgentHookConfig(clientId, cwd = process.cwd()) {
+export function loadAgentHookConfig(clientId, cwd = process.cwd(), { env = process.env } = {}) {
   return {
     ...buildPluginConfig(clientId, {
       cwd,
-      version: process.env.OPENVIKING_INTEGRATION_VERSION,
+      env,
+      version: env.OPENVIKING_INTEGRATION_VERSION,
       logFile: `${clientId}-hooks.log`,
     }),
     clientId,

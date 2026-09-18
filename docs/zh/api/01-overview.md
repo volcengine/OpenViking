@@ -328,6 +328,8 @@ JSON 输出 - 错误：
 | `SESSION_EXPIRED` | 410 | 会话已过期 |
 | `NOT_INITIALIZED` | - | 服务或组件未初始化（需要先调用 initialize()） |
 
+文件／目录类型不符合操作要求、复制或删除目录时缺少 `recursive=true`，以及 HTTP 来源域名明确不存在，均返回 `INVALID_ARGUMENT`（400）。正常路径锁竞争（包括加密写入）返回 `CONFLICT`（409）；锁令牌损坏、锁 I/O 故障和落盘数据解密失败返回 `INTERNAL`（500）。HTTP 来源站不可用或发生临时网络故障时返回 `UNAVAILABLE`（503），抓取超时返回 `DEADLINE_EXCEEDED`（504）。
+
 ---
 
 ## API 端点总览
@@ -461,6 +463,8 @@ JSON 输出 - 错误：
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/compile` | 创建由 OV 托管的 Compile 任务 |
+| GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
+| GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/api/v1/tasks/{task_id}` | 获取后台任务 |
 | POST | `/api/v1/tasks/{task_id}/cancel` | 取消后台任务 |
 | GET | `/api/v1/tasks` | 列出后台任务 |
@@ -524,6 +528,8 @@ JSON 输出 - 错误：
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
+| GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/bot/v1/health` | VikingBot 健康检查 |
 | POST | `/bot/v1/chat` | VikingBot 非流式对话 |
 | POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |

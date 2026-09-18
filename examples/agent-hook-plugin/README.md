@@ -14,7 +14,7 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 - **Session start** — injects the user profile and preferences into context, and replays anything an offline session queued.
 - **Prompt submit** — searches OpenViking for memories relevant to the prompt and injects them, deduplicated by event id and a 500ms window.
-- **Tool use** — denies `viking://` virtual paths to local file and shell tools, and points the agent back at the OpenViking MCP tools.
+- **Tool use** — denies local file tools a `viking://` virtual path and points the agent back at the OpenViking MCP tools. On TRAE a shell command that carries a `viking://` URI still runs, with a notice pointing at the same tools.
 - **Stop** — captures the finished turn and commits the OpenViking session. Cursor also runs this before a compaction and at session end; ZCode answers first and finishes the writes in a detached worker.
 
 ## Layout
@@ -29,7 +29,7 @@ The memory logic itself is not here: recall, batching, the pending queue, creden
 
 ## Host notes
 
-- **Cursor** — seven events, including the `preCompact` and `sessionEnd` no other host in this plugin has. Commits on Stop once `capturedSinceCommit` reaches the threshold, and unconditionally before a compaction. Sessions are `cu-`. See the [Cursor guide](../../docs/en/agent-integrations/12-cursor.md).
+- **Cursor** — six events, including the `preCompact` and `sessionEnd` no other host in this plugin has. Commits on Stop once `capturedSinceCommit` reaches the threshold, and unconditionally before a compaction. Sessions are `cu-`. See the [Cursor guide](../../docs/en/agent-integrations/12-cursor.md).
 - **TRAE / TRAE CN** — capture reads `prompt`, `text_content` and `last_assistant_message` off the Stop event rather than parsing a transcript. Every Stop that carries content commits. Sessions are `tr-` and `trcn-`. See the [TRAE guide](../../docs/en/agent-integrations/13-trae.md).
 - **ZCode** — the rollout file is the authoritative incremental transcript: stable host `turnId` values drive deduplication and let a later Stop recover missed turns, and hook stdin is only the fallback. ZCode supports neither `PreCompact` nor `SessionEnd`, so committing on every Stop stands in for both. Its output schema is strict, so a pass-through writes nothing at all. Sessions are `zc-`. [DESIGN.md](./DESIGN.md) records the verified extension surface.
 

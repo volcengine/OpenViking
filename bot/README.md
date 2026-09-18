@@ -411,6 +411,28 @@ For the complete loading order, file responsibilities, and customization boundar
 
 `readonly` mode does not register `openviking_add_resource`. When a channel sets `ov_tools_enable: false`, it does not expose OpenViking tools or inject Profiles, Memories, and Experiences.
 
+### Scheduled Task Configuration
+
+Scheduled tasks are disabled by default. Set `bot.tools.cron.enabled` to `true` in `ov.conf` to enable them:
+
+```json
+{
+  "bot": {
+    "tools": {
+      "cron": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+This switch controls both `cron` tool registration and the scheduler in Gateway and local Chat modes. When set to `false` or omitted, the tool is not registered and the scheduler does not start. Existing jobs remain on disk but do not run automatically.
+
+Restart the Bot after changing this setting. Existing deployments must explicitly set `enabled: true` after upgrading to continue running scheduled jobs automatically. Subagents and `--eval` mode still do not provide scheduled task capabilities.
+
+The `vikingbot cron` commands remain available for manual job management; this switch does not restrict CLI management operations.
+
 ### MCP Tools
 
 Configure third-party MCP Servers under `bot.tools.mcp_servers`:
