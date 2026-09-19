@@ -1472,6 +1472,7 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
         "ak": "your-access-key",
         "sk": "your-secret-key"
       }
+    }
   }
 }
 ```

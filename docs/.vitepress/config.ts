@@ -431,7 +431,8 @@ const guidesSidebar = {
         items: [
           ['05-observability.md', 'Observability & Diagnostics'],
           ['07-operation-telemetry.md', 'Operation Telemetry'],
-          ['11-grafana-prometheus.md', 'Prometheus / Grafana']
+          ['11-grafana-prometheus.md', 'Prometheus / Grafana'],
+          ['12-vikingbot-metrics-validation.md', 'VikingBot Metrics Validation']
         ]
       },
       {

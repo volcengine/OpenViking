@@ -46,8 +46,9 @@ Highest to lowest priority — the same chain as the `ov` CLI and the other Open
 
 `OPENVIKING_CREDENTIAL_SOURCE` (or `OPENVIKING_CREDENTIALS_SOURCE`) pins the chain to one end: `env` for the environment, `cli` (also `ovcli` / `file` / `config`) for ovcli.conf. The default `auto` pins it to ovcli.conf when that file carries credentials and none of the variables above is set, and runs the whole chain otherwise. While the chain is pinned to ovcli.conf, the environment's credentials and `OPENVIKING_MCP_URL` are skipped. A key still falls through the `plugin` keys, the `agent_plugins` section and finally `server.root_api_key`, so an install that names only a `url` there keeps the key it has always used; the account and user stop at the `plugin` keys. `env` reads neither file.
 
+`~/.openviking/ovcli.conf`:
+
 ```json
-// ~/.openviking/ovcli.conf
 {
   "url": "https://openviking.example.com",
   "api_key": "your-api-key"

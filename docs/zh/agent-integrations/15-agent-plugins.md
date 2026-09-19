@@ -46,8 +46,9 @@ OpenViking 服务端本身在 `/mcp` 上就是 streamable HTTP，但 `mcp.json` 
 
 `OPENVIKING_CREDENTIAL_SOURCE`（或 `OPENVIKING_CREDENTIALS_SOURCE`）把整条链钉在某一端：`env` 只认环境变量，`cli`（同义写法还有 `ovcli` / `file` / `config`）只认 ovcli.conf。默认的 `auto` 在 ovcli.conf 带凭据、且上面这些环境变量一个都没设时钉向 ovcli.conf，否则按整条链解析。钉在 ovcli.conf 时，环境变量里的凭据和 `OPENVIKING_MCP_URL` 会被跳过。key 仍依次回落到 `plugin` 键、`agent_plugins` 段，最后是 `server.root_api_key`，所以只写了 `url` 的旧安装仍能用原来的 key；account 和 user 只回落到 `plugin` 键。`env` 模式两个文件都不读。
 
+`~/.openviking/ovcli.conf`:
+
 ```json
-// ~/.openviking/ovcli.conf
 {
   "url": "https://openviking.example.com",
   "api_key": "your-api-key"
