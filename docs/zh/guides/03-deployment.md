@@ -301,8 +301,8 @@ docker compose up -d
 
 #### 配置管理
 
-- **环境变量注入（推荐）**：模板在 `OPENVIKING_CONF_CONTENT` 中预置了完整配置并引用 `${OPENAI_API_KEY}`。如需切换模型或供应商，调整环境变量后重新部署即可。
-- **修改已有配置文件**：若持久卷中已生成 `ov.conf`，服务启动时将优先读取卷中配置。可通过 `railway ssh` 或 `railway service files upload --overwrite` 更新卷内文件。
+- **首次生成配置**：模板在 `OPENVIKING_CONF_CONTENT` 中预置了完整配置并引用 `${OPENAI_API_KEY}`。该变量仅在首次启动且 `ov.conf` 尚不存在时生效。
+- **后续修改配置**：首次启动后，请通过 `railway ssh` 或 `railway service files upload --overwrite` 直接修改持久卷上的 `ov.conf`；也可以删除 `ov.conf` 后重新部署，让服务按当前 `OPENVIKING_CONF_CONTENT` 重新生成配置文件。
 
 #### 资源与费用参考
 

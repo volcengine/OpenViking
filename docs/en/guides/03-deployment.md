@@ -290,7 +290,7 @@ Click the badge below to deploy OpenViking on Railway:
 #### Provisioned Resources & Defaults
 
 - **Container Image**: Uses official image `ghcr.io/volcengine/openviking:latest`, listening on port 1933 with an automatically assigned HTTPS domain.
-- **Persistent Storage**: Mounts a persistent volume at `/app/.openviking` (`storage.workspace`), ensuring accounts, resources, and vector data persist across redeployments.
+- **Persistent Storage**: Mounts a persistent volume at `/app/.openviking`. The configured `storage.workspace` (`/app/.openviking/data`) is stored on this volume, ensuring accounts, resources, and vector data persist across redeployments.
 - **Default Configuration**: Preconfigured with OpenAI defaults. `OPENAI_API_KEY` is the only required input during deployment. The admin key `OPENVIKING_ROOT_API_KEY` is generated automatically and viewable in the **Variables** tab.
 
 #### Quick Start (Web Studio)
@@ -303,8 +303,8 @@ Initial bootstrap can be completed entirely within the browser:
 
 #### Configuration Management
 
-- **Environment Injection (Recommended)**: The template pre-populates `OPENVIKING_CONF_CONTENT` with a complete configuration referencing `${OPENAI_API_KEY}`. Update the variable and redeploy to switch models or providers.
-- **Volume Configuration**: If `ov.conf` already exists on the persistent volume, it takes precedence. Update the file directly using `railway ssh` or `railway service files upload --overwrite`.
+- **Initial Configuration**: The template pre-populates `OPENVIKING_CONF_CONTENT` with a complete configuration referencing `${OPENAI_API_KEY}`. This variable is used only on the first startup, when `ov.conf` does not yet exist.
+- **Later Changes**: After the first startup, edit the volume-backed `ov.conf` directly using `railway ssh` or `railway service files upload --overwrite`. Alternatively, delete `ov.conf` and redeploy to regenerate it from the current `OPENVIKING_CONF_CONTENT` value.
 
 #### Pricing & Resource Sizing
 
