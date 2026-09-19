@@ -370,3 +370,44 @@ def test_studio_routes_are_registered_but_excluded_from_public_schema(app):
         for route in bot_studio.router.routes
     )
     assert "/api/v1/admin/accounts/{account_id}/users" in paths
+
+
+@pytest.mark.parametrize(
+    "mode,enabled",
+    [("managed", True), ("external", True), ("disabled", False)],
+)
+async def test_capabilities_follow_the_configured_gateway_mode(app, monkeypatch, mode, enabled):
+    """An externally deployed gateway must not require --with-bot."""
+    monkeypatch.setattr(bot_studio.bot, "BOT_MODE", mode)
+    monkeypatch.setattr(bot_studio.bot, "BOT_API_KEY", "")
+    monkeypatch.delenv("OPENVIKING_BOT_STUDIO_TOKEN", raising=False)
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"), role=Role.ROOT
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/v1/admin/bot/capabilities")
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {
+        "enabled": enabled,
+        "can_manage": False,
+        "mode": mode,
+    }
+
+
+async def test_capabilities_allow_management_with_a_gateway_token(app, monkeypatch):
+    monkeypatch.setattr(bot_studio.bot, "BOT_MODE", "external")
+    monkeypatch.setattr(bot_studio.bot, "BOT_API_KEY", "gateway-token")
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier("a", "root"), role=Role.ROOT
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/v1/admin/bot/capabilities")
+
+    assert response.json()["result"]["can_manage"] is True

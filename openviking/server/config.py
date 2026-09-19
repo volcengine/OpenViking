@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Server configuration for OpenViking HTTP Server."""
 
+import os
 import sys
 from typing import Any, Dict, List, Literal, Optional
 
@@ -318,8 +319,18 @@ class ServerConfig(BaseModel):
     ldap: Optional[LDAPConfig] = None
     profile_enabled: bool = False
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])
-    with_bot: bool = False  # Enable Bot API proxy to Vikingbot
-    bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
+    with_bot: bool = False  # Start and use a server-managed VikingBot gateway
+    # VikingBot gateway URL. Independent of ``with_bot``: a non-empty value
+    # enables the Bot API proxy in "external" mode, where the gateway is
+    # deployed and supervised outside this server (a separate systemd unit, a
+    # container, another host). ``with_bot`` still wins when both are set,
+    # because a managed child binds its own address. Empty keeps the proxy
+    # disabled, so ``/bot/v1/*`` and Studio channel management return 503.
+    bot_api_url: str = ""
+    # Shared secret presented to the gateway as ``X-Gateway-Token``. Required
+    # for Studio connection management over a non-loopback gateway. Falls back
+    # to ``bot.gateway.token`` in the same ov.conf.
+    bot_gateway_token: str = ""
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
     # When true, poll the shared key store and reload the in-memory index on change so
@@ -345,6 +356,37 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+
+    @field_validator("bot_api_url", "bot_gateway_token", mode="before")
+    @classmethod
+    def _none_means_unset(cls, value: Any) -> Any:
+        """Treat an explicit JSON ``null`` as "not configured"."""
+        return "" if value is None else value
+
+    @field_validator("bot_api_url")
+    @classmethod
+    def _validate_bot_api_url(cls, value: Optional[str]) -> str:
+        url = str(value or "").strip().rstrip("/")
+        if url and "://" not in url:
+            raise ValueError(
+                "server.bot_api_url must include scheme (e.g., http://127.0.0.1:18790)"
+            )
+        return url
+
+    def get_bot_proxy_mode(self) -> str:
+        """Return how this server reaches a VikingBot gateway.
+
+        - ``"managed"``: ``with_bot`` is set; the server starts and owns the
+          gateway as a child process.
+        - ``"external"``: ``bot_api_url`` points at an independently deployed
+          gateway; the server only proxies to it.
+        - ``"disabled"``: neither is configured; ``/bot/v1/*`` returns 503.
+        """
+        if self.with_bot:
+            return "managed"
+        if str(self.bot_api_url or "").strip():
+            return "external"
+        return "disabled"
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.
@@ -484,6 +526,10 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
 
 _LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
+# Internal token shared between this server and its managed VikingBot child.
+# External deployments may set it too, in which case it overrides configuration.
+BOT_STUDIO_TOKEN_ENV = "OPENVIKING_BOT_STUDIO_TOKEN"
+
 
 def _is_localhost(host: str) -> bool:
     """Return True if *host* resolves to a loopback address."""
@@ -506,7 +552,32 @@ def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
     return gateway_config.get("token", "") or ""
 
 
-def validate_server_config(config: ServerConfig) -> None:
+def resolve_bot_gateway_token(config: ServerConfig, config_path: Optional[str] = None) -> str:
+    """Resolve the secret this server presents to the VikingBot gateway.
+
+    Precedence:
+
+    1. ``OPENVIKING_BOT_STUDIO_TOKEN`` — the internal token a managed gateway
+       shares with its parent, or an explicit runtime override.
+    2. ``server.bot_gateway_token`` — the external-mode configuration field.
+    3. ``bot.gateway.token`` colocated in the same ov.conf (legacy deployments
+       that keep both sides in one file).
+
+    Returns an empty string when no token is configured. An empty token is
+    valid for a loopback gateway (its general auth treats loopback forwards as
+    trusted) but makes Studio channel management fail, so operators pointing at
+    a remote gateway must configure one.
+    """
+    env_token = str(os.environ.get(BOT_STUDIO_TOKEN_ENV) or "").strip()
+    if env_token:
+        return env_token
+    configured = str(getattr(config, "bot_gateway_token", "") or "").strip()
+    if configured:
+        return configured
+    return str(load_bot_gateway_token(config_path) or "").strip()
+
+
+def validate_server_config(config: ServerConfig, config_path: Optional[str] = None) -> None:
     """Validate server config for safe startup.
 
     Validation is delegated to the auth plugin registered for the effective
@@ -565,3 +636,32 @@ def validate_server_config(config: ServerConfig) -> None:
         sys.exit(1)
 
     plugin_cls().validate_config(config)
+
+    _warn_on_incomplete_bot_proxy_config(config, config_path)
+
+
+def _warn_on_incomplete_bot_proxy_config(
+    config: ServerConfig, config_path: Optional[str] = None
+) -> None:
+    """Warn about bot proxy setups that will not work end to end.
+
+    A configured gateway URL with no resolvable token still serves chat over
+    loopback, so this must not fail startup — but Studio channel management
+    will answer 503, which is confusing to diagnose from the UI.
+    """
+    mode = config.get_bot_proxy_mode()
+    if mode == "disabled":
+        return
+    if mode == "managed":
+        if config.bot_api_url:
+            logger.warning(
+                "server.bot_api_url is ignored while server.with_bot is enabled: "
+                "the managed gateway binds its own address."
+            )
+        return
+    if not resolve_bot_gateway_token(config, config_path):
+        logger.warning(
+            "server.bot_api_url is set in external mode without a gateway token. "
+            "VikingBot channel management will fail until server.bot_gateway_token "
+            "(or OPENVIKING_BOT_STUDIO_TOKEN) matches the gateway's bot.gateway.token."
+        )

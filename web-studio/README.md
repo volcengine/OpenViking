@@ -360,14 +360,22 @@ Web Studio static files are still built and hosted separately unless your deploy
 
 ### `/bot/v1/*` Returns 503
 
-The server was not started with `--with-bot`, or the VikingBot gateway failed to start. Install bot dependencies and restart:
+The server was neither started with `--with-bot` nor given `server.bot_api_url`, or the managed VikingBot gateway failed to start.
+
+Managed mode (the server starts the gateway itself) — install bot dependencies and restart:
 
 ```bash
 uv pip install -e ".[bot,dev]"
 openviking-server --with-bot
 ```
 
+External mode (the gateway already runs on its own, for example as a separate systemd service) — set `server.bot_api_url` and `server.bot_gateway_token` in `ov.conf`; the server only proxies. See "VikingBot gateway modes" in `docs/en/configuration/01-server.md`.
+
 Check server logs for `Bot API proxy enabled`.
+
+### Bot management endpoints return 503
+
+`/api/v1/admin/accounts/{account}/bot/*` needs the gateway shared secret. Make sure `server.bot_gateway_token` (or the `OPENVIKING_BOT_STUDIO_TOKEN` environment variable, or `bot.gateway.token` in the same ov.conf) matches the gateway's `bot.gateway.token`. The gateway may run on a different host than the OpenViking server; terminate TLS in front of it before exposing it to a network.
 
 ### Client Generation Cannot Fetch OpenAPI
 

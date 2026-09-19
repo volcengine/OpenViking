@@ -185,7 +185,11 @@ function VikingBotWorkspace({ scope }: { scope: string }) {
         </div>
       ) : tab === 'channels' ? (
         <div className="flex-1 overflow-auto">
-          <Channels canManage={canManage} scope={scope} />
+          <Channels
+            canManage={canManage}
+            mode={capabilities.data.mode}
+            scope={scope}
+          />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">

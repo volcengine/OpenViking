@@ -6,6 +6,9 @@
         "timeout_keep_alive": 5,
         "root_api_key": null,
         "cors_origins": ["*"],
+        "with_bot": false,
+        "bot_api_url": null,
+        "bot_gateway_token": null,
         "agent_evolution": {
             "enabled": false,
         },

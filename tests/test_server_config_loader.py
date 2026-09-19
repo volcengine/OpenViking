@@ -6,11 +6,13 @@ import json
 import pytest
 
 from openviking.server.config import (
+    BOT_STUDIO_TOKEN_ENV,
     ServerConfig,
     get_server_url_from_server_data,
     load_bot_gateway_token,
     load_server_config,
     map_bind_host_to_loopback,
+    resolve_bot_gateway_token,
 )
 
 
@@ -110,6 +112,82 @@ def test_load_bot_gateway_token_reads_token_from_bot_gateway_section(tmp_path):
     config_path.write_text(json.dumps({"bot": {"gateway": {"token": "gateway-token"}}}))
 
     assert load_bot_gateway_token(str(config_path)) == "gateway-token"
+
+
+def test_bot_proxy_is_disabled_by_default(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"host": "127.0.0.1"}}))
+
+    config = load_server_config(str(config_path))
+
+    assert config.bot_api_url == ""
+    assert config.bot_gateway_token == ""
+    assert config.get_bot_proxy_mode() == "disabled"
+
+
+def test_null_bot_proxy_fields_mean_unset(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"bot_api_url": None, "bot_gateway_token": None}}))
+
+    config = load_server_config(str(config_path))
+
+    assert config.bot_api_url == ""
+    assert config.bot_gateway_token == ""
+    assert config.get_bot_proxy_mode() == "disabled"
+
+
+def test_bot_api_url_enables_external_proxy_mode(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "bot_api_url": "http://127.0.0.1:18790/",
+                    "bot_gateway_token": "gateway-token",
+                }
+            }
+        )
+    )
+
+    config = load_server_config(str(config_path))
+
+    assert config.bot_api_url == "http://127.0.0.1:18790"
+    assert config.get_bot_proxy_mode() == "external"
+    assert resolve_bot_gateway_token(config, str(config_path)) == "gateway-token"
+
+
+def test_with_bot_takes_precedence_over_configured_bot_api_url(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps({"server": {"with_bot": True, "bot_api_url": "http://127.0.0.1:18790"}})
+    )
+
+    config = load_server_config(str(config_path))
+
+    assert config.get_bot_proxy_mode() == "managed"
+
+
+def test_bot_api_url_requires_a_scheme(tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"server": {"bot_api_url": "127.0.0.1:18790"}}))
+
+    with pytest.raises(ValueError, match=r"server\.bot_api_url"):
+        load_server_config(str(config_path))
+
+
+def test_resolve_bot_gateway_token_precedence(tmp_path, monkeypatch):
+    monkeypatch.delenv(BOT_STUDIO_TOKEN_ENV, raising=False)
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(json.dumps({"bot": {"gateway": {"token": "file-token"}}}))
+
+    config = ServerConfig(bot_gateway_token="config-token")
+    assert resolve_bot_gateway_token(config, str(config_path)) == "config-token"
+
+    monkeypatch.setenv(BOT_STUDIO_TOKEN_ENV, "env-token")
+    assert resolve_bot_gateway_token(config, str(config_path)) == "env-token"
+
+    monkeypatch.delenv(BOT_STUDIO_TOKEN_ENV, raising=False)
+    assert resolve_bot_gateway_token(ServerConfig(), str(config_path)) == "file-token"
 
 
 def test_server_config_get_effective_auth_mode():

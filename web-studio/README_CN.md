@@ -359,14 +359,22 @@ Web Studio 静态文件仍需单独构建和托管，除非你的部署镜像或
 
 ### `/bot/v1/*` 返回 503
 
-服务端没有用 `--with-bot` 启动，或者 VikingBot gateway 启动失败。安装 bot 依赖后重启：
+服务端既没有用 `--with-bot` 启动，也没有配置 `server.bot_api_url`，或者受管的 VikingBot gateway 启动失败。
+
+托管模式（服务端自己拉起 gateway）：安装 bot 依赖后重启：
 
 ```bash
 uv pip install -e ".[bot,dev]"
 openviking-server --with-bot
 ```
 
+外部模式（gateway 已独立部署，例如独立的 systemd 服务）：在 `ov.conf` 中配置 `server.bot_api_url` 与 `server.bot_gateway_token`，服务端只做代理。详见 `docs/zh/configuration/01-server.md` 的「VikingBot 网关的三种模式」。
+
 服务端日志中应能看到 `Bot API proxy enabled`。
+
+### 机器管理接口返回 503
+
+`/api/v1/admin/accounts/{account}/bot/*` 需要网关共享密钥。确认 `server.bot_gateway_token`（或环境变量 `OPENVIKING_BOT_STUDIO_TOKEN`，或同一份 ov.conf 中的 `bot.gateway.token`）与网关的 `bot.gateway.token` 一致；网关可以与 OpenViking Server 不同主机，跨主机暴露时务必在网关前终止 TLS。
 
 ### 生成 client 时拉不到 OpenAPI
 

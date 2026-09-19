@@ -284,11 +284,44 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |
 | `cors_origins` | string[] | `["*"]` | Allowed origins |
 | `profile_enabled` | boolean | `false` | Allow performance profiles |
-| `with_bot` | boolean | `false` | Enable the VikingBot API proxy |
-| `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI endpoint |
+| `with_bot` | boolean | `false` | Start and use a VikingBot gateway owned by this server |
+| `bot_api_url` | URL | `""` | Independently deployed VikingBot gateway URL; a non-empty value enables the Bot API proxy (external mode) |
+| `bot_gateway_token` | string | `""` | Shared secret sent as `X-Gateway-Token` in external mode; must match the gateway's `bot.gateway.token` |
 | `public_base_url` | URL / `null` | `null` | Externally visible base URL |
 | `upload_signed_ttl_seconds` | integer | `600` | Signed upload URL lifetime |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | Temporary upload storage |
+
+### VikingBot gateway modes
+
+`server.with_bot` and `server.bot_api_url` decide how the `/bot/v1/*` proxy, Web Studio's bot management and the local Compile backend reach a gateway:
+
+| Mode | Configuration | Behavior |
+|---|---|---|
+| `managed` | `with_bot: true` | This server starts and owns the vikingbot child process; the URL is derived from it |
+| `external` | `with_bot: false` and a non-empty `bot_api_url` | Proxy only — the gateway is never started or restarted here; its lifecycle belongs to the deployer (systemd, container, another host) |
+| `disabled` | neither configured | `/bot/v1/*` returns `503` |
+
+`with_bot` wins when both are set: the managed child's address overrides `bot_api_url`.
+
+External mode example (gateway deployed independently, for example as its own systemd service):
+
+```json
+{
+  "server": {
+    "bot_api_url": "http://127.0.0.1:18790",
+    "bot_gateway_token": "<gateway bot.gateway.token>"
+  }
+}
+```
+
+`bot_gateway_token` resolves in this order: the `OPENVIKING_BOT_STUDIO_TOKEN` environment variable, then `server.bot_gateway_token`, then `bot.gateway.token` from the same ov.conf. A loopback gateway does not require a token for chat proxying, but Web Studio's bot management always does and returns `503` without one.
+
+`bot_api_url` may also point at a reverse-proxy entry point (for example a gateway published under the same domain by Caddy), as long as the address reaches the gateway.
+
+The gateway does not have to run on the OpenViking Server's host. When it does not:
+
+- Bot management is gated by the shared token alone, with no loopback requirement; terminate TLS in front of the gateway before exposing it to a network.
+- Identity is no longer asserted in the request body — that assertion is only honored for a loopback gateway — but forwarded as the caller's `X-API-Key` and `X-OpenViking-*` headers, which the gateway verifies against OpenViking exactly as it does for a direct client. The gateway's `bot.ov_server.server_url` must therefore be reachable, and `dev` auth still cannot cross hosts (its local-development boundary requires both ends on loopback).
 
 ### Encryption and API Key Hashing
 

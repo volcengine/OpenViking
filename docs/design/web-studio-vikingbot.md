@@ -8,7 +8,7 @@
 - 飞书连接和收发时间线持久化到 Bot 数据目录的 `studio.sqlite3`，文件权限 0600。它含应用与专用用户凭证，备份需按服务端配置处理。
 - Studio 管理的飞书会话仅开放带绑定身份的 OpenViking 查询与记忆工具；Shell、本地文件、定时任务及未显式批准的 MCP 工具默认不可用。
 - 首期仅服务管理员可管理渠道；按当前 account 隔离连接及飞书历史。接入时选择同账户普通用户，由服务端绑定现有凭证；浏览器无需接收或输入用户 API Key。管理员身份不可选，仅存储哈希而无法自动绑定凭证的用户显示不可用。
-- 受管启动时自动为父子进程生成内部管理令牌，不写回配置文件。独立 Gateway 需要额外的管理部署支持。
+- 受管启动时自动为父子进程生成内部管理令牌，不写回配置文件。独立部署的 Gateway 通过 `server.bot_api_url` + `server.bot_gateway_token` 接入：服务端只做代理，不再要求 `--with-bot`，也不再要求与 OpenViking Server 同主机——管理通道以共享令牌为唯一门槛，跨主机时须自行在网关前终止 TLS。
 - 默认使用三步扫码接入：选择运行用户 → 飞书扫码自动建应用、配权限事件并提交发布 → 添加到群验证。保留单表单手动配置作为已有应用和故障恢复入口。支持凭证更新、暂停/恢复、重启恢复连接、群内短期验证码与独立收发验证。
 - 飞书时间线展示 Studio 连接建立后捕获的消息，不自动接管原 ov.conf 渠道或补录它们的旧历史。既有渠道的迁移需要后续显式绑定与身份确认。
 - 支持暂停连接并保留历史，也支持确认后删除连接及其本地收发记录。删除不会删除飞书应用或飞书中的消息。飞书会话首期只读。
@@ -24,7 +24,7 @@
 
 | HTTP 路由 | 调用场景与契约 |
 | --- | --- |
-| `GET /api/v1/admin/bot/capabilities` | 判断 Bot 启用及 ROOT 管理能力；与运行健康检查职责不同。 |
+| `GET /api/v1/admin/bot/capabilities` | 判断 Bot 代理是否可用、以何种模式提供（`managed`/`external`/`disabled`）及 ROOT 管理能力；与运行健康检查职责不同。 |
 | `GET /api/v1/admin/accounts/{account_id}/users?role=user&include_credentials=false` | **复用现有接口**。返回 `user_id`、`role`、`api_key_available`，不返回密钥或前缀。默认参数保持原有接口行为。 |
 | `GET B/connections` | 渠道列表、混合会话来源、扫码完成后加载连接。 |
 | `POST B/connections` | 手动连接；请求包含 `type`、`user_id`、平台自有的 `credentials` 对象。 |
@@ -43,7 +43,7 @@
 
 网页会话创建、列表、历史、删除、Bot 聊天流式响应和健康状态继续复用既有 API。平台收发记录按连接归属并保存发送状态，不能直接替换为 OpenViking 上下文会话历史。
 
-`POST /bot/v1/studio/dispatch` 仅在 Bot Gateway 内部保留，用内部令牌及 loopback 限制服务端调用。浏览器不直接调用；账号和绑定用户仍在 OpenViking 服务端校验。
+`POST /bot/v1/studio/dispatch` 仅在 Bot Gateway 内部保留，用内部令牌校验服务端调用，不限制来源主机（跨主机部署须在网关前终止 TLS）。浏览器不直接调用；账号和绑定用户仍在 OpenViking 服务端校验。
 
 ### 后续接入钉钉等平台
 

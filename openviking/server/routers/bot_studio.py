@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.server.auth import get_api_key_manager_or_raise, get_request_context
-from openviking.server.config import get_server_url_from_server_data
+from openviking.server.config import BOT_STUDIO_TOKEN_ENV, get_server_url_from_server_data
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import bot
 from openviking_cli.session.user_id import UserIdentifier
@@ -76,7 +76,7 @@ async def manager(
 
 
 async def dispatch(ctx, action, payload=None, connection_id=None, identity=None):
-    token = os.environ.get("OPENVIKING_BOT_STUDIO_TOKEN") or bot.BOT_API_KEY
+    token = os.environ.get(BOT_STUDIO_TOKEN_ENV) or bot.BOT_API_KEY
     if not token:
         raise HTTPException(503, "Managed Bot gateway authentication is unavailable")
     try:
@@ -103,12 +103,16 @@ async def dispatch(ctx, action, payload=None, connection_id=None, identity=None)
 
 @router.get("/bot/capabilities")
 async def capabilities(ctx: RequestContext = Depends(get_request_context)):
+    mode = bot.get_bot_mode()
     return {
         "status": "ok",
         "result": {
-            "enabled": bot.BOT_API_URL is not None,
+            "enabled": mode != "disabled",
             "can_manage": ctx.role == Role.ROOT
-            and bool(os.environ.get("OPENVIKING_BOT_STUDIO_TOKEN") or bot.BOT_API_KEY),
+            and bool(os.environ.get(BOT_STUDIO_TOKEN_ENV) or bot.BOT_API_KEY),
+            # "managed" when this server runs the gateway, "external" when
+            # server.bot_api_url points at an independently deployed one.
+            "mode": mode,
         },
     }
 

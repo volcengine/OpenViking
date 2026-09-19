@@ -284,11 +284,44 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |
 | `cors_origins` | string[] | `["*"]` | 允许的跨域来源 |
 | `profile_enabled` | boolean | `false` | 是否允许请求返回性能 profile |
-| `with_bot` | boolean | `false` | 是否启用 VikingBot API 代理 |
-| `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI 地址 |
+| `with_bot` | boolean | `false` | 是否启动并使用由本服务托管的 VikingBot Gateway |
+| `bot_api_url` | URL | `""` | 独立部署的 VikingBot Gateway 地址；非空即启用 Bot API 代理（外部模式） |
+| `bot_gateway_token` | string | `""` | 外部模式下随 `X-Gateway-Token` 发送的共享密钥，应与网关的 `bot.gateway.token` 一致 |
 | `public_base_url` | URL / `null` | `null` | 外部访问使用的服务基准地址 |
 | `upload_signed_ttl_seconds` | integer | `600` | 签名上传 URL 有效期 |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | 临时上传存储模式 |
+
+### VikingBot 网关的三种模式
+
+`server.with_bot` 与 `server.bot_api_url` 共同决定 `/bot/v1/*` 代理、Web Studio 的机器管理以及本地 Compile 后端如何取得网关：
+
+| 模式 | 配置 | 行为 |
+|---|---|---|
+| `managed` | `with_bot: true` | 本服务启动并托管 vikingbot 子进程，地址自动指向子进程 |
+| `external` | `with_bot: false` + 非空 `bot_api_url` | 只做代理，不启动、不重启网关；网关生命周期由部署方（systemd、容器、另一台主机）管理 |
+| `disabled` | 两者都未配置 | `/bot/v1/*` 返回 `503` |
+
+`with_bot` 优先：两者同时配置时按 `managed` 处理，`bot_api_url` 会被子进程地址覆盖。
+
+外部模式示例（网关独立部署，例如独立的 systemd 服务）：
+
+```json
+{
+  "server": {
+    "bot_api_url": "http://127.0.0.1:18790",
+    "bot_gateway_token": "<网关 bot.gateway.token>"
+  }
+}
+```
+
+`bot_gateway_token` 的解析优先级：环境变量 `OPENVIKING_BOT_STUDIO_TOKEN` > `server.bot_gateway_token` > 同一份 ov.conf 中的 `bot.gateway.token`。网关绑定在 loopback 时聊天代理不强制要求密钥，但 Web Studio 的机器管理接口始终需要，缺失时会返回 `503`。
+
+`bot_api_url` 也可以指向反向代理入口（例如网关经 Caddy 暴露在同一域名下），只要该地址最终能到达网关。
+
+网关与 OpenViking Server 可以不在同一台主机。此时：
+
+- 机器管理接口以共享令牌为唯一门槛，不再要求来源为 loopback；暴露到网络前必须在网关前终止 TLS。
+- 身份不再以请求体内的断言传递（该断言仅对 loopback 网关有效），改为转发调用方的 `X-API-Key` 与 `X-OpenViking-*` 头，由网关按直连客户端的方式向 OpenViking 复核。因此网关的 `bot.ov_server.server_url` 必须可达，且 `dev` 模式仍不允许跨主机（其本地开发边界要求两端都在 loopback）。
 
 ### 文件加密与 API Key 哈希
 

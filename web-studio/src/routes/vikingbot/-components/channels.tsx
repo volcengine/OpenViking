@@ -19,13 +19,15 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { getConnections, updateConnection } from '../-api'
-import type { Connection } from '../-api'
+import type { BotProxyMode, Connection } from '../-api'
 
 export function Channels({
   canManage,
+  mode,
   scope,
 }: {
   canManage: boolean
+  mode?: BotProxyMode
   scope: string
 }) {
   const { t } = useTranslation('vikingbot')
@@ -125,6 +127,9 @@ export function Channels({
             {t('botCount', { count: visibleConnections.length })}
           </span>
         </div>
+      )}
+      {mode === 'external' && (
+        <p className="rounded-lg bg-muted p-4 text-sm">{t('externalGateway')}</p>
       )}
       {!canManage && (
         <p className="rounded-lg bg-muted p-4 text-sm">{t('adminOnly')}</p>

@@ -7,7 +7,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -19,8 +19,8 @@ from starlette.middleware.exceptions import ExceptionMiddleware
 from openviking.observability.http_error_context import capture_public_http_error
 from openviking.server.config import (
     ServerConfig,
-    load_bot_gateway_token,
     load_server_config,
+    resolve_bot_gateway_token,
     validate_server_config,
 )
 from openviking.server.dependencies import set_server_config, set_service
@@ -93,6 +93,20 @@ def _configure_default_executor(config: ServerConfig) -> None:
     )
     asyncio.get_running_loop().set_default_executor(executor)
     logger.info("Configured asyncio default executor: max_workers=%d", max_workers)
+
+
+def _configure_bot_compile_backend(
+    service: Any, config: ServerConfig, bot_proxy_mode: str, bot_gateway_token: str
+) -> None:
+    """Use the Bot gateway as the local Compile backend when one is configured.
+
+    Managed (``with_bot``) and external (``server.bot_api_url``) gateways are
+    both valid Compile backends. An explicit ``compile_api.base_url`` still
+    wins: ``configure_local_backend`` ignores the call in that case.
+    """
+    if bot_proxy_mode == "disabled":
+        return
+    service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
 
 
 def create_worker_app() -> FastAPI:
@@ -271,12 +285,13 @@ def create_app(
         if config_path is not None or config is None
         else None
     )
+    resolved_config_path_str = (
+        str(resolved_config_path) if resolved_config_path is not None else None
+    )
     if config is None:
-        config = load_server_config(
-            str(resolved_config_path) if resolved_config_path is not None else config_path
-        )
+        config = load_server_config(resolved_config_path_str or config_path)
 
-    validate_server_config(config)
+    validate_server_config(config, resolved_config_path_str)
 
     usage_reporter_unset = object()
     usage_reporter = usage_reporter_unset
@@ -317,14 +332,19 @@ def create_app(
             None,
         )
         if callable(agent_evolution_path_setter):
-            agent_evolution_path_setter(
-                str(resolved_config_path) if resolved_config_path is not None else None
-            )
+            agent_evolution_path_setter(resolved_config_path_str)
 
     if service is not None:
         _configure_session_runtime(service)
 
-    bot_gateway_token = load_bot_gateway_token() if config.with_bot else ""
+    # "managed" (with_bot) and "external" (bot_api_url) both expose the Bot API
+    # proxy; only the former starts and owns the gateway process.
+    bot_proxy_mode = config.get_bot_proxy_mode()
+    bot_gateway_token = (
+        resolve_bot_gateway_token(config, resolved_config_path_str)
+        if bot_proxy_mode != "disabled"
+        else ""
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -336,8 +356,7 @@ def create_app(
             service = OpenVikingService()
 
         assert service is not None
-        if config.with_bot:
-            service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
+        _configure_bot_compile_backend(service, config, bot_proxy_mode, bot_gateway_token)
         _configure_session_runtime(service)
         set_service(service)
 
@@ -585,15 +604,21 @@ def create_app(
         expose_headers=[REQUEST_ID_HEADER],
     )
 
-    # Configure Bot API if --with-bot is enabled
-    if config.with_bot:
+    # Configure the Bot API proxy for both managed (--with-bot) and external
+    # (server.bot_api_url) gateways.
+    if bot_proxy_mode != "disabled":
         import openviking.server.routers.bot as bot_module
 
         bot_module.set_bot_api_url(config.bot_api_url)
         bot_module.set_bot_api_key(bot_gateway_token)
-        logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
+        bot_module.set_bot_mode(bot_proxy_mode)
+        logger.info(
+            "Bot API proxy enabled (%s mode), forwarding to %s",
+            bot_proxy_mode,
+            config.bot_api_url,
+        )
     else:
-        logger.info("Bot API proxy disabled (use --with-bot to enable)")
+        logger.info("Bot API proxy disabled (set server.with_bot or server.bot_api_url to enable)")
 
     # Register routers
     app.include_router(system_router)
