@@ -146,7 +146,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| temp_file_id | string | Yes | - | Temporary upload file ID (obtained via [temp_upload](02-resources.md#temp_upload)) |
+| temp_file_id | string | Yes | - | Temporary upload file ID (obtained via [temp_upload](02-resources.md#temp-upload)) |
 | parent | string | Yes | - | Target parent URI (import to this location) |
 | on_conflict | string | No | fail | Conflict policy: `fail`, `overwrite`, or `skip` |
 | vector_mode | string | No | auto | Vector handling: `auto`, `recompute`, or `require` |
@@ -438,4 +438,4 @@ ov restore ./backups/openviking.ovpack --on-conflict overwrite --vector-mode req
 
 - [OVPack Guide](../guides/09-ovpack.md) - format, migration, and workflows
 - [Snapshots](11-snapshot.md) - workspace version management
-- [Temporary Upload](02-resources.md#temp_upload) - upload packages before import
+- [Temporary Upload](02-resources.md#temp-upload) - upload packages before import

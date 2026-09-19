@@ -118,7 +118,7 @@ Configuration field description:
 | `timeout` | HTTP request timeout in seconds | `600.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
-See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
+See the [Configuration Guide](../guides/01-configuration.md#ovcli-conf) for details.
 
 #### Using Python SDK Client Without Configuration File
 

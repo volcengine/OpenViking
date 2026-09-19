@@ -417,7 +417,7 @@ ov restore ./backups/before-encryption.ovpack --on-conflict fail
 
 4. 切流前验证资源、用户、session 和索引数据。OVPack 不包含 queue、upload、lock、watch 和 relation 文件等运行时/内部状态，这些内容需要单独重建或验证。
 
-支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份与恢复)。
+支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份和恢复)。
 
 ### 切换密钥提供程序
 

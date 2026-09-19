@@ -37,3 +37,9 @@ jobs:
         working-directory: docs
         env:
           DOCS_BASE: /
+
+      - name: Check built section links
+        run: python3 scripts/check-built-anchors.py
+        working-directory: docs
+        env:
+          DOCS_BASE: /
