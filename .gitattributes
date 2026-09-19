@@ -3,4 +3,5 @@
 # keep their copies in git; the rest are built at pack time and gitignored.
 examples/claude-code-memory-plugin/scripts/shared/*.mjs linguist-generated=true
 examples/codex-memory-plugin/scripts/shared/*.mjs linguist-generated=true
+examples/kimicode-memory-plugin/scripts/shared/*.mjs linguist-generated=true
 agent-plugins/servers/shared/*.mjs linguist-generated=true

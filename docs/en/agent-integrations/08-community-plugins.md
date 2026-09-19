@@ -47,6 +47,28 @@ After restarting ZCode, verify that:
 
 Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
 
+## Kimi Code CLI memory integration
+
+Source: [examples/kimicode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin)
+
+Closes the Kimicode half of [#3442](https://github.com/volcengine/OpenViking/issues/3442). Layout follows the ZCode adapter ([PR #3678](https://github.com/volcengine/OpenViking/pull/3678)) but maps Kimi Code's own surface:
+
+- Hooks and MCP are declared in the plugin's `kimi.plugin.json` manifest.
+- `UserPromptSubmit` injects **plain text** (JSON wrappers would be appended as context).
+- `SessionStart` is observation-only, so profile injection happens on the first prompt.
+- `SessionEnd`, `PreCompact`, and `Interrupt` exist; capture uses `wire.jsonl` via `session_index.jsonl`.
+
+### Install
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness kimicode
+```
+
+The installer copies the native plugin to `$KIMI_CODE_HOME/plugins/managed/openviking-memory` and records it in `$KIMI_CODE_HOME/plugins/installed.json`. It does not modify the user's `config.toml` or `mcp.json`.
+
+Details: plugin [README](https://github.com/volcengine/OpenViking/tree/main/examples/kimicode-memory-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/kimicode-memory-plugin/DESIGN.md).
+
 ## AstrBot plugin
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) is a multi-platform IM bot framework supporting QQ, Telegram, Discord, Lark, and 20+ other platforms.

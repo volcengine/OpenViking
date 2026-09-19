@@ -31,6 +31,8 @@ import { buildMcpConfig as dshMcpConfig } from "../dsh-memory-plugin/mcp-env.mjs
 import { readProxyConfig as dshProxy } from "../dsh-memory-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadOpencode } from "../opencode-plugin/lib/config.mjs";
 import { readProxyConfig as opencodeProxy } from "../opencode-plugin/servers/mcp-proxy.mjs";
+import { loadAgentHookConfig as loadKimicode } from "../kimicode-memory-plugin/scripts/shared/agent-hook-runtime.mjs";
+import { readProxyConfig as kimicodeProxy } from "../kimicode-memory-plugin/servers/mcp-proxy.mjs";
 
 const WIRE = ["mcpUrl", "apiKey", "account", "user", "sendIdentityHeaders"];
 const wire = (cfg) => Object.fromEntries(WIRE.map((field) => [field, cfg[field]]));
@@ -89,6 +91,13 @@ const HARNESSES = [
     section: "dsh",
     hook: ({ env, cwd, host }) => loadDsh({ workspacePeer: false, ...host }, env, cwd),
     proxy: ({ env, hook, otherDir }) => dshProxy({ ...dshInherited(env), ...dshMcpConfig(hook).env }, otherDir),
+  },
+  {
+    name: "kimicode",
+    dir: "kimicode-memory-plugin",
+    section: "kimicode",
+    hook: ({ env, cwd }) => loadKimicode("kimicode", cwd, { env }),
+    proxy: ({ env }) => kimicodeProxy(env),
   },
 ];
 

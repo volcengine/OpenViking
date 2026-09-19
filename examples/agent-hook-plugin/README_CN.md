@@ -19,7 +19,7 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 ## 目录结构
 
-`scripts/hook.mjs` 是所有 hook 命令的唯一入口，持有四家共用的状态机——防抖、prompt 去重、召回缓存、跨进程锁——差异部分向 `hosts/` 下的适配器索取：事件词汇、响应信封、如何从 payload 读出 prompt、如何采集完成的回合。`scripts/uri-guard.mjs` 与 `servers/mcp-proxy.mjs` 同样各只有一份，按安装器传入的 client id 选择宿主。
+`scripts/hook.mjs` 是所有 hook 命令的唯一入口：它选择宿主适配器，并把共享生命周期状态机——防抖、prompt 去重、召回缓存、跨进程锁、gate 与 detached 写入顺序——交给 `memory-plugin-shared/lib/hook-runner.mjs`。`hosts/` 下的适配器只负责事件词汇、响应信封、从 payload 读取 prompt，以及采集完成的回合。`scripts/uri-guard.mjs` 与 `servers/mcp-proxy.mjs` 同样各只有一份，按安装器传入的 client id 选择宿主。
 
 根目录的 `plugin.json` 是宿主无关的包元数据，只用于版本检查和诊断，不是 Claude Code、Cursor、TRAE 或 ZCode 的原生插件 manifest。
 

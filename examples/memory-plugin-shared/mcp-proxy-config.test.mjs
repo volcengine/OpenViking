@@ -29,7 +29,7 @@ const OV = join(homedir(), ".openviking", "ov.conf");
 // new harness cannot ship a proxy that skips the shared shaping. The count is
 // pinned because a renamed directory would otherwise empty the loop and turn
 // the assertions below into a no-op.
-const MCP_PROXY_COUNT = 6;
+const MCP_PROXY_COUNT = 7;
 
 const MCP_PROXIES = [
   ...readdirSync(join(ROOT, "examples"), { withFileTypes: true })

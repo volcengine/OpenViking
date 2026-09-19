@@ -14,8 +14,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // wiring so a harness cannot silently fall back to stateless recall again.
 const CALL_SITES = [
   {
-    name: "the thin-harness hook forwards its derived session id",
-    file: join(ROOT, "examples", "agent-hook-plugin", "scripts", "hook.mjs"),
+    name: "the shared hook runner forwards its derived session id",
+    file: join(ROOT, "examples", "memory-plugin-shared", "lib", "hook-runner.mjs"),
     pattern: /recallForPrompt\([^)]*\{[^}]*\bsessionId\b/s,
   },
   {

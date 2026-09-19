@@ -21,7 +21,7 @@
 
 ## 1.1 Active tool surface (agentic calls)
 
-- **MCP-based harnesses (claude-code, codex/trae-cli, cursor, trae/trae-cn, zcode, opencode) share an identical active tool surface comprising 15 tools.** The server centrally defines these tools. The plugin reads `~/.openviking/ovcli.conf` via its proxy and establishes a connection to the server-defined MCP tools.
+- **MCP-based harnesses (claude-code, codex/trae-cli, cursor, trae/trae-cn, zcode, kimicode, opencode) share an identical active tool surface comprising 15 tools.** The server centrally defines these tools. The plugin reads `~/.openviking/ovcli.conf` via its proxy and establishes a connection to the server-defined MCP tools.
 
 - `trae-cli` means TraeCode CLI 2.0 (2.0 only). It is installed via a `codex` plugin alias and maintains format compatibility with `codex`. Therefore, it is consolidated into the `codex` row in the matrices below.
 
@@ -32,6 +32,7 @@
 | cursor | MCP passthrough | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | no type distinction² |
 | trae / trae-cn | MCP passthrough | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | no type distinction² |
 | zcode | MCP passthrough | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | no type distinction² |
+| kimicode | MCP passthrough (native plugin) | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | no type distinction² |
 | opencode | MCP passthrough (host adds an `openviking_` prefix) | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | no type distinction² |
 | dsh | MCP passthrough (`@deepseek-ai/dsh-mcp-client` → the shared stdio proxy; host adds an `mcp__openviking__` prefix) | 15 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌¹ | no type distinction² |
 | pi | native registration (7 × `viking_*`) | 7 (registration runs preflight checks⁴) | ✅ | ✅ | ✅ | ✅ `viking_remember` | ✅ `viking_add_resource` (URL only) | ❌ | no type distinction; delete by query needs score>0.8³ |
@@ -56,6 +57,7 @@
 | cursor | 6 hooks + MCP proxy + rule + skill | ✅ | ✅ | ❌ | ✅ (6000) | ❌ | ✅ | ❌ |
 | trae / trae-cn | 4 hooks + MCP proxy | ✅ | ✅ | ❌ | ✅ (6000) | ❌ | ✅ | ❌ |
 | zcode | 4 hooks + MCP proxy | ✅ | ✅ | ❌ | ✅ (6000) | ❌ | ✅ | ❌ |
+| kimicode | 7 native plugin hooks + MCP proxy | ✅ | ✅ | ❌ | ✅ (10000) | ❌ | ✅ | ❌ |
 | opencode | 8 plugin hooks + MCP proxy | ✅ | ✅ | ❌ | ✅ (10000) + repo list into the system prompt | ❌ (commits once before and once after compacting) | ✅ | ❌ (toast instead) |
 | dsh | native Cordis plugin (same process) + MCP proxy + skill | ✅ | ✅ | ❌ | ✅ (10000, once per session) | ❌ | ✅ | ❌ |
 | pi | native extension (9 events) | ✅ | ✅ | ❌ | ✅ (10000, rebuilt into systemPrompt every turn) | ✅ **takeover** (on by default) | ✅ | ✅ |
@@ -70,7 +72,7 @@
 ## 1.3 Grouping by form
 
 - **Full suite** (hook automation + MCP tool surface + surrounding UX): claude-code and codex (`trae-cli` is installed via an alias and is included here).
-- **Thin hook** (sharing `agent-hook-runtime`, meaning core behaviors are essentially identical, with differences limited to host events and thresholds): cursor, trae/trae-cn, and zcode.
+- **Thin hook** (sharing the lifecycle runner and `agent-hook-runtime`, with differences limited to host events, envelopes, and thresholds): cursor, trae/trae-cn, zcode, and the Kimi Code native adapter.
 - **Plugin event**: opencode (offers the richest host event surface; `dispose` handles shutdown).
 - **Native in-process**: dsh (Cordis), pi (extension + compaction takeover), openclaw (full ContextEngine takeover), and hermes (MemoryProvider).
 - **Tool**: ov CLI (all operations are explicit calls; no automatic background actions).
@@ -110,9 +112,9 @@ Supporting mechanisms:
 
 ## 2.2 The memory-plugin-shared layer
 
-The `examples/memory-plugin-shared/lib/` directory contains 25 `.mjs` modules and serves as the single source of truth for all JS-based harnesses. These are consumed in two ways:
+The `examples/memory-plugin-shared/lib/` directory contains 26 top-level `.mjs` modules and serves as the single source of truth for all JS-based harnesses. These are consumed in two ways:
 
-1. **Vendoring (copying)**: The `sync.mjs` script distributes these modules to 7 targets, prefixing every file with `// GENERATED FROM ... DO NOT EDIT.`. Because of this added line, a vendored copy's line number will be exactly one line greater than the library source. There is no hand-kept file list: each target gets the transitive closure of the modules its own code imports. Claude Code, Codex and agent-plugins are installed by pointing a host at a directory in this repository, and OpenClaw's `ov-install` can download the plugin file by file from a git ref, so these four commit their generated copies and a push to main regenerates them. OpenCode and DSH publish as npm packages and pi is tarred by the installer, so those three generate their copies at pack time and keep none in git.
+1. **Vendoring (copying)**: The `sync.mjs` script distributes these modules to 8 targets, prefixing every file with `// GENERATED FROM ... DO NOT EDIT.`. Because of this added line, a vendored copy's line number will be exactly one line greater than the library source. There is no hand-kept file list: each target gets the transitive closure of the modules its own code imports. Claude Code, Codex, Kimi Code and agent-plugins are installed by pointing a host at a directory in this repository, and OpenClaw's `ov-install` can download the plugin file by file from a git ref, so these five commit their generated copies and a push to main regenerates them. OpenCode and DSH publish as npm packages and pi is tarred by the installer, so those three generate their copies at pack time and keep none in git.
 2. **Direct import via relative path (no copying)**: cursor, trae, trae-cn and zcode directly `import "../../memory-plugin-shared/lib/..."`. The installer copies the package alongside the shared modules those hooks transitively import into `~/.openviking/agent-integrations/{<client>,memory-plugin-shared}/`, preserving the relative folder layout. That installed set is closed under imports, including the workspace configuration layer the hook runtime reaches. At runtime, these harnesses share this directory, so reinstalling any one of them overwrites the shared directory wholesale.
 
 Core modules at a glance (detailed further in the per-dimension sections):
@@ -120,25 +122,25 @@ Core modules at a glance (detailed further in the per-dimension sections):
 | Module | Responsibility | Consumers |
 |---|---|---|
 | `recall-core.mjs` | Handles recall request construction, three-tier degradation, and local fallback ranking/injection | All JS-based harnesses |
-| `agent-hook-runtime.mjs` | All-in-one "thin hook" runtime handling configuration resolution through the shared schema, session ID derivation, cross-process locking, fetching, and commits | cc / codex / cursor / trae / trae-cn / zcode |
+| `agent-hook-runtime.mjs` | All-in-one "thin hook" runtime handling configuration resolution through the shared schema, session ID derivation, cross-process locking, fetching, and commits | cc / codex / cursor / trae / trae-cn / zcode / kimicode |
 | `mcp-proxy-core.mjs` | stdio ↔ streamable-HTTP MCP proxy core | All MCP-based integrations + agent-plugins |
 | `ov-http.mjs` | The one path from a hook to the OpenViking server: headers, AbortController, envelope | All JS-based + agent-plugins |
-| `pending-queue.mjs` | On-disk offline queueing and replay at session start | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
+| `pending-queue.mjs` | On-disk offline queueing and replay at session start | cc / codex / cursor / trae×2 / zcode / kimicode / opencode / dsh / pi |
 | `batch-send.mjs` | Executes writes in batches of 100, handles per-message degradation on 404/405 errors, and queues the leading contiguous prefix | cc / codex / opencode + the agent-hook family |
-| `profile-inject.mjs` | Injects the profile and available-memory index at session start | 9 harnesses (all but openclaw / hermes) |
+| `profile-inject.mjs` | Injects the profile and available-memory index at session start | 10 harnesses (all but openclaw / hermes) |
 | `recall-compress-core.mjs` | Manages the recall compression prompt, URI edit-distance repair, and caching | claude-code |
-| `capture-utils.mjs` | Handles message normalization, injection back-flow guarding, and the built-in capture heuristics (acks, slash commands, signal floor) | cc / codex / opencode / dsh / pi / zcode / cursor / trae×2 |
+| `capture-utils.mjs` | Handles message normalization, injection back-flow guarding, and the built-in capture heuristics (acks, slash commands, signal floor) | cc / codex / kimicode / opencode / dsh / pi / zcode / cursor / trae×2 |
 | `input-filters.mjs` | Compiles and applies the operator's own sed-style rules — `s` substitute, `d` drop, `k` keep-only, optionally scoped to one role — over the recall query and every captured turn. A rule that fails to parse is reported and skipped, never thrown ([grammar](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#input-filters)) | All hook plugins; the `recallQueryFilters` / `captureFilters` knobs are supplied by claude-code / codex |
 | `credentials.mjs` | Credential resolution chain (see [§3.1.3](#_3-1-3-credential-systems)) | All JS-based |
 | `session-model.mjs` | Session ID prefix derivation and bypass globbing | All JS-based |
-| `async-writer.mjs` | Detaches the write path (drains stdin → spawn → approve → write → unref). Falls back to synchronous writing if spawn fails | cc / codex / zcode |
+| `async-writer.mjs` | Detaches the write path (drains stdin → spawn → approve → write → unref). Falls back to synchronous writing if spawn fails | cc / codex / kimicode / zcode |
 | `workspace-peer.mjs` | Resolves the actor peer from `peer.source` — presets, templates, and the pre-git id kept for dual-read ([§3.1.3](#_3-1-3-credential-systems)) | All JS-based |
 | `workspace-identity.mjs` | Workspace root + git identity (normalized `origin`, root path, worktree/submodule kind), derived by walking the filesystem with no `git` subprocess and cached per cwd | All JS-based |
-| `workspace-config.mjs` | The layered workspace config: reads `<root>/.openviking/config.json` and `config.local.json`, merges layers with provenance, strips connection and credential keys | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
-| `workspace-registry.mjs` | The per-machine registry `~/.openviking/workspaces/<slot>.json` — one file per workspace, hand-created and read-only for the plugins, the layer that outranks any committed file | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
+| `workspace-config.mjs` | The layered workspace config: reads `<root>/.openviking/config.json` and `config.local.json`, merges layers with provenance, strips connection and credential keys | cc / codex / cursor / trae×2 / zcode / kimicode / opencode / dsh / pi |
+| `workspace-registry.mjs` | The per-machine registry `~/.openviking/workspaces/<slot>.json` — one file per workspace, hand-created and read-only for the plugins, the layer that outranks any committed file | cc / codex / cursor / trae×2 / zcode / kimicode / opencode / dsh / pi |
 | `uri-guard.mjs` | Denies a file-tool call whose path argument is a `viking://` URI; lets a shell command that carries one run and attaches a notice for the model. grep's `pattern` is search text, not a path | Deny: each harness's `PreToolUse` or `tool.execute.before`-style hooks. Notice: `PreToolUse`, or a post-execution hook (`tools/post-execute` on dsh, `tool_result` on pi, `tool.execute.after` on opencode) |
-| `config-schema.mjs` | The single declaration of every knob: canonical name, type, default, range, `OPENVIKING_*` variable, accepted aliases, and workspace key. The doctor's known-key set and the workspace file's dotted-key map are projections of it | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
-| `plugin-config.mjs` | Resolves every declared knob through the layers: env → the workspace layers → `ovcli.conf` `plugin.<harness>` → `ovcli.conf` `plugin` → ov.conf's harness section → defaults | cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi |
+| `config-schema.mjs` | The single declaration of every knob: canonical name, type, default, range, `OPENVIKING_*` variable, accepted aliases, and workspace key. The doctor's known-key set and the workspace file's dotted-key map are projections of it | cc / codex / cursor / trae×2 / zcode / kimicode / opencode / dsh / pi |
+| `plugin-config.mjs` | Resolves every declared knob through the layers: env → the workspace layers → `ovcli.conf` `plugin.<harness>` → `ovcli.conf` `plugin` → ov.conf's harness section → defaults | cc / codex / cursor / trae×2 / zcode / kimicode / opencode / dsh / pi |
 | `setup-wizard.mjs` | Interactively writes to `ovcli.conf` | cc, codex, opencode, and pi expose an entry point for this |
 | `retryable.mjs` | Handles retryability checks: allows status codes 0, 408, 429, and ≥500, as well as 409 if `error.details.retryable===true`. Standard 4xx errors (including 401/403) are not retried | All JS-based |
 
@@ -170,6 +172,7 @@ Core modules at a glance (detailed further in the per-dimension sections):
 | cursor | Config-driven (writes `~/.cursor/hooks.json`+`mcp.json`) + rule + skill | One-line `--harness cursor` | `cu-<conversation_id>` | env + ovcli.conf `plugin.cursor` | ❌ (shares the installer TUI) |
 | trae / trae-cn | Config-driven (`~/.trae{,-cn}/hooks.json` + platform-specific mcp.json) | One-line `--harness trae,trae-cn` | `tr-` / `trcn-` | env + ovcli.conf `plugin.trae` / `plugin.trae_cn` | ❌ |
 | zcode | Config-driven (merged into `~/.zcode/cli/config.json`, forcing `hooks.enabled=true`) | One-line `--harness zcode` | `zc-<sess_…>` | env + ovcli.conf `plugin.zcode` | ❌ |
+| kimicode | Native Kimi Code plugin (`kimi.plugin.json`, managed copy + `installed.json`) | One-line `--harness kimicode` / manual `/plugins install <path>` | `kc-<session_id>` | env + ovcli.conf `plugin.kimicode` + workspace files | ❌ |
 | opencode | npm plugin `@openviking/opencode-plugin` (its config hook dynamically injects the MCP entry) | One-line `--harness opencode` (uses npm registration with a proxy snapshot fallback) / manual npm / from source | `oc-<id>`; subagents use `oc-<parent>__subagent-<child>` | env + ovcli.conf `plugin.opencode` | ✅ |
 | dsh | In-process Cordis plugin (`cordis.patch.yml` plugin group) | Unified installer (asks for the profile, default `web`), or `dsh plugin --profile web add @openviking/dsh-memory-plugin` | `dsh-<session.id as-is>`; each subagent is assigned its own session | env + ovcli.conf `plugin.dsh` + the cordis patch config, which is the lowest behavior layer (credentials still come from the patch first) | ❌ |
 | pi | Native pi extension (loaded from a directory, with TypeScript transpiled on the fly via jiti) | One-line `--harness pi` (copied into the auto-discovery directory, no `pi install` needed) | `pi-<piSessionId>` | env + ovcli.conf `plugin.pi` (credential fields are resolved via the shared credential chain) | ✅ |
@@ -179,7 +182,7 @@ Core modules at a glance (detailed further in the per-dimension sections):
 
 ### 3.1.2 Unified installer
 
-The unified install script (`examples/memory-plugin-shared/install.sh`) supports ten harness IDs: `claude, codex, cursor, trae, trae-cn, trae-cli, zcode, opencode, pi, dsh`. (Note that `openclaw` uses its own distribution channel, while `trae-cli` reuses the `codex` install flow, as detailed in [§3.1.1](#_3-1-1-decision-matrix)). Key highlights:
+The unified install script (`examples/memory-plugin-shared/install.sh`) supports eleven harness IDs: `claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh`. (Note that `openclaw` uses its own distribution channel, while `trae-cli` reuses the `codex` install flow, as detailed in [§3.1.1](#_3-1-1-decision-matrix)). Key highlights:
 
 - **Interactive prompts:** Two distributions (`--dist github|tos`) and three sources (`--source remote|archive|dev`) are available. When executed via `bash <(curl …)`, it reads input directly from `/dev/tty` to ensure prompts remain interactive.
 - **Usage:** In the official documentation, the canonical one-line command omits the `--harness` flag, which launches a TUI multi-select menu. However, the setup-helper forwarding scripts bundled with each plugin append the `--harness` flag automatically.
@@ -195,7 +198,7 @@ Four parallel credential-resolution systems coexist within the codebase, each ut
 
 | Family | Consumers | URL Env | Key Env | Identity Env | Auth Header |
 |---|---|---|---|---|---|
-| **A. Shared JS core** (`credentials.mjs`) | claude-code / codex (including trae-cli) / cursor / trae×2 / zcode / opencode / pi / dsh / agent-plugins | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_PEER_ID` | `Authorization: Bearer` alone; no harness in this family sends `X-API-Key`. |
+| **A. Shared JS core** (`credentials.mjs`) | claude-code / codex (including trae-cli) / cursor / trae×2 / zcode / kimicode / opencode / pi / dsh / agent-plugins | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_PEER_ID` | `Authorization: Bearer` alone; no harness in this family sends `X-API-Key`. |
 | **B. openclaw** (its own `config.ts`) | openclaw | `OPENVIKING_BASE_URL` → `OPENVIKING_URL` | `OPENVIKING_API_KEY` (supports SecretRef env/file) | `OPENVIKING_ACCOUNT_ID` / `OPENVIKING_USER_ID` (note the `_ID` suffix here) | `X-API-Key`. (When pointing to OV Cloud, note that it actually authenticates using Bearer). |
 | **C. hermes** (Python) | hermes | `OPENVIKING_ENDPOINT` | `OPENVIKING_API_KEY` | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` / `OPENVIKING_AGENT` (= actor peer) | Sends both `X-API-Key` and `Bearer`. When a key is present, it omits tenant headers by default (if the server rejects the call with a trusted error, it appends them and retries once). |
 | **D. ov CLI** (Rust) | ov | Primarily the conf file | conf | `--account/--user/--actor-peer-id` | `X-API-Key`. Toggles between LDAP Basic and OIDC Bearer based on `auth_mode`; an `api_key` containing two or more `.` characters automatically receives a Bearer header as well (JWT fallback). |
@@ -240,17 +243,17 @@ For `openclaw`, the peer is derived from `peer_role`/`peer_prefix` (note that if
 | Config Layer | Applies To | Notes |
 |---|---|---|
 | env `OPENVIKING_*` | Per family, see above; behavior knobs are listed on each profile card | The only layer that spans every JS-based integration. |
-| Workspace layers: the per-machine registry `~/.openviking/workspaces/<slot>.json` > `<repo-root>/.openviking/config.local.json` (private, gitignored) > `<repo-root>/.openviking/config.json` (committed, shared by the team) | claude-code / codex / cursor / trae / trae-cn / zcode / opencode / dsh / pi | Schema v1; `version: 1` is required and a file declaring another version is skipped with a warning. Keys: `peer.source`, `peer.id`, `recall.{enabled,peer_scope,dedup_turns,max_items,score_threshold}`, `capture.{enabled,commit_token_threshold}`, `bypass.session_patterns`, `labels`. Lists union across layers, and a leading `"!reset"` clears what was inherited; unknown keys are kept and ignored. These files are trusted without a prompt because a hook is non-interactive, so the refusals are structural instead: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded. Nothing writes the registry today: an entry is created by hand, and `ov-memory-doctor` prints the slot path to put it at. What a committed file switches off is announced in `ov-memory-doctor` rather than blocked. |
-| ovcli.conf `plugin` section (shared scalars, overridden by a `plugin.<harness>` object) | claude-code / codex / cursor / trae / trae-cn / zcode / opencode / dsh / pi | A per-harness key takes either spelling — `claude_code` or `claude-code`, `trae_cn` or `trae-cn`. Note: `ov config add/edit` rewrites the entire file from the Rust Config struct, thereby dropping any `plugin` sections it does not recognize; however, `ov config switch` simply copies bytes and remains unaffected. |
+| Workspace layers: the per-machine registry `~/.openviking/workspaces/<slot>.json` > `<repo-root>/.openviking/config.local.json` (private, gitignored) > `<repo-root>/.openviking/config.json` (committed, shared by the team) | claude-code / codex / cursor / trae / trae-cn / zcode / kimicode / opencode / dsh / pi | Schema v1; `version: 1` is required and a file declaring another version is skipped with a warning. Keys: `peer.source`, `peer.id`, `recall.{enabled,peer_scope,dedup_turns,max_items,score_threshold}`, `capture.{enabled,commit_token_threshold}`, `bypass.session_patterns`, `labels`. Lists union across layers, and a leading `"!reset"` clears what was inherited; unknown keys are kept and ignored. These files are trusted without a prompt because a hook is non-interactive, so the refusals are structural instead: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded. Nothing writes the registry today: an entry is created by hand, and `ov-memory-doctor` prints the slot path to put it at. What a committed file switches off is announced in `ov-memory-doctor` rather than blocked. |
+| ovcli.conf `plugin` section (shared scalars, overridden by a `plugin.<harness>` object) | claude-code / codex / cursor / trae / trae-cn / zcode / kimicode / opencode / dsh / pi | A per-harness key takes either spelling — `claude_code` or `claude-code`, `trae_cn` or `trae-cn`. Note: `ov config add/edit` rewrites the entire file from the Rust Config struct, thereby dropping any `plugin` sections it does not recognize; however, `ov config switch` simply copies bytes and remains unaffected. |
 | ov.conf harness sections (`<harness>.*`, legacy) | Every harness, for the section named after it | Both the credential fields (`apiKey`, `accountId`, `userId`, `peerId`) and the tuning knobs resolve from the calling harness's own section. Either spelling of the name reaches the same block. |
 | The harness's own config file | dsh cordis patch (which the `plugin` section outranks), openclaw `openclaw.json`, hermes `config.yaml`+`.env` | |
 
 **Quick scope reference** (these settings only take effect on the specified harnesses):
 
-- `OPENVIKING_COMMIT_TURN_THRESHOLD`: cursor only (`trae`, `trae-cn`, and `zcode` commit on every Stop and ignore this threshold).
-- `OPENVIKING_WRITE_PATH_ASYNC`: claude-code / codex / zcode.
+- `OPENVIKING_COMMIT_TURN_THRESHOLD`: cursor and kimicode (`trae`, `trae-cn`, and `zcode` commit on every Stop and ignore this threshold).
+- `OPENVIKING_WRITE_PATH_ASYNC`: claude-code / codex / kimicode / zcode.
 - Recall digest settings (`OPENVIKING_RECALL_COMPRESS`, `OPENVIKING_RECALL_REWRITE`, and their companions): claude-code / codex (note that the server-side `rewrite` parameter is available to all callers, see [§3.2.5](#_3-2-5-recall-digest)).
-- `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, the workspace config files and the ovcli.conf `plugin` section: every harness that resolves through the shared loader — claude-code / codex / cursor / trae / trae-cn / zcode / opencode / dsh / pi. openclaw and hermes have configuration systems of their own.
+- `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, the workspace config files and the ovcli.conf `plugin` section: every harness that resolves through the shared loader — claude-code / codex / cursor / trae / trae-cn / zcode / kimicode / opencode / dsh / pi. openclaw and hermes have configuration systems of their own.
 ## 3.2 Automatic recall and injection
 
 ### 3.2.1 Mechanism foundation: one shared pipeline, two server-side paths
@@ -280,6 +283,7 @@ On the server side, `session_id` handling diverges into two distinct execution p
 | cursor | `beforeSubmitPrompt` | prompt verbatim; deduped by event id and a 500ms window, reusing the cached block for the same promptHash | ✅ `cu-` | A | `additional_context` | ❌ |
 | trae / trae-cn | `UserPromptSubmit` | prompt with prior injection blocks stripped (reads `input.prompt` only) | ✅ `tr-`/`trcn-` | A | `additionalContext` | ❌ |
 | zcode | `UserPromptSubmit` | three kinds of injection block stripped (including `<system-reminder>`) | ✅ `zc-` | A | `additionalContext` (strict JSON) | ❌ |
+| kimicode | `UserPromptSubmit` | content parts are normalized and OpenViking injection blocks are stripped | ✅ `kc-` | A | plain stdout text | ❌ |
 | opencode | the user message in every `chat.message` | concatenates non-synthetic text parts; skips recall for the turn if the body already contains `<openviking-context` | ✅ `oc-` | A (timeoutMs=30000) | builds a synthetic part and `unshift`s it to the front of parts | ❌ |
 | dsh | `agent/pre-step` waterfall (await next first, then append) | every message in the claimed batch (filtering out its own injected content) | ✅ `dsh-` | A | appended to the end of `decision.messages` via `createUserMessage` (source: plugin/openviking-memory) | ❌ |
 | pi | queued during `before_agent_start`; retrieval runs inside the `context` event (this turn's prompt gets this turn's memories) | prompt verbatim | ✅ `pi-` (omitted before the session exists) | A | prepended to the last real user message (idempotency checked via `<openviking-context`) | ❌ |
@@ -295,6 +299,7 @@ On the server side, `session_id` handling diverges into two distinct execution p
   - **claude-code**: On `SessionStart` (all sources, 10000 budget).
   - **codex**: On `SessionStart` (startup/clear/resume, 10000 budget).
   - **cursor / trae×2 / zcode**: On `SessionStart` (6000 budget, 2s debounce).
+  - **kimicode**: On the first `UserPromptSubmit` (10000 budget; `SessionStart` is observation-only).
   - **opencode**: Once per session on the first `chat.message` (10000 budget, deduplicated by an in-process `Set`, subagent sessions skipped). Note that opening injection is attempted only once per session and does not retry in-process after a failure.
   - **dsh**: Posts `profileDelivered` once per session (10000 budget; not re-posted after compaction).
   - **pi**: Injected into the `systemPrompt`, re-assembled for every prompt (10000 budget, always resident).
@@ -313,6 +318,7 @@ On the server side, `session_id` handling diverges into two distinct execution p
   - **claude-code (cc)**: 15s (against a 60s hook budget).
   - **codex**: Recall enforces a hard 120s deadline for the entire hook, plus a 110s compression subprocess.
   - **cursor / trae×2 / zcode**: 15s (against a 20s host hook budget).
+  - **kimicode**: 15s for ordinary hooks; `Interrupt` is capped at 2s.
   - **opencode / dsh / pi**: 15s (`dsh` blocks the pre-step).
   - **openclaw**: Imposes a 5s hard timeout around the entire recall flow (including a 500ms health precheck). Since the default `recallPreferAbstract=false` means every leaf memory costs one extra read, this budget allows at most 1 find + 6 reads + 1 health check.
   - **hermes**: 4s total / 3s per request (configurable).
@@ -340,7 +346,7 @@ To prevent injected content from being captured a second time, the injection pro
 
 ### 3.3.1 Mechanism foundations
 
-- **Write path**: The JS family routes all writes through `batch-send.mjs` (endpoint `POST /messages/batch`, capped at 100 messages per batch to match the server's `max_length=100` limit; on a 404/405 error, it gracefully degrades to sending one message at a time). Incremental cursors are implemented per integration (e.g., `cc` and `codex` compute a cursor from the transcript turn index; `cursor` uses `sha256(index+role+content)`; `zcode` relies on the rollout `turn_id`; `opencode` uses an event-stream Map; `dsh` uses an event allowlist; `pi` uses the branch entry watermark; and `hermes` slices by the current turn).
+- **Write path**: The JS family routes all writes through `batch-send.mjs` (endpoint `POST /messages/batch`, capped at 100 messages per batch to match the server's `max_length=100` limit; on a 404/405 error, it gracefully degrades to sending one message at a time). Incremental cursors are implemented per integration (e.g., `cc` and `codex` compute a cursor from the transcript turn index; `cursor` uses `sha256(index+role+content)`; `zcode` relies on the rollout `turn_id`; `kimicode` uses the host-indexed `wire.jsonl` turn id; `opencode` uses an event-stream Map; `dsh` uses an event allowlist; `pi` uses the branch entry watermark; and `hermes` slices by the current turn).
 - **Commits are client-triggered** (see [§2.3](#_2-3-server-side-session-and-commit-semantics)): The server does not auto-commit by default. Any "threshold/trigger" condition mentioned in the tables below refers strictly to client-side logic.
 - **Differences in `keep_recent_count`** (determining how much of a "live tail" a commit leaves for the host): The server default is 0. Here is what each integration passes: `cc`/`codex` pass 10 on threshold commits; `cursor`, `trae×2`, and `zcode` send an empty body `{}`, meaning 0 (every commit acts as a full archive); `opencode` and `dsh` pass 10; `pi` passes 10 outside takeover mode and 3 within it (locally, this means "keep 3 user turns," but the server interprets it as a raw message count, so fewer messages are actually retained); `openclaw` passes 10 on an `afterTurn` threshold trigger and 0 on `compact`/`reset`/`memory_store` operations; `hermes` always passes 0.
 - **Write-path detachment** (`async-writer.mjs`, enabled by default for `cc`/`codex`/`zcode` on `Stop`): The execution flow is drain stdin → spawn detached worker → approve → write payload → unref. *(Note: If spawning fails, approval has not yet occurred, ensuring the synchronous fallback executes exactly once).* The detached worker forms its own process group, immunizing it against terminal signals. This is the crucial mechanism that makes `cc` reliable during shutdown and prevents `zcode` from losing writes upon `Ctrl+C`. **Side effect:** Once detachment is active, `Stop` no longer prints the `appended N turn(s)` notice (to restore this, set `OPENVIKING_WRITE_PATH_ASYNC=0`).
@@ -354,6 +360,7 @@ To prevent injected content from being captured a second time, the injection pro
 | cursor | stop: `capturedSinceCommit ≥ 8` (counted in messages, ~4 Q&A turns; purely client-side counting), keep 0 | sessionEnd: registered (but never reached in practice, see [§3.3.3](#_3-3-3-shutdown-method-×-harness-outcome-matrix)) | preCompact: unconditional |
 | trae / trae-cn | Every Stop with content commits (no threshold), keep 0 | — | None (no PreCompact event upstream) |
 | zcode | Same as trae (every Stop commits, keep 0; the rollout incremental cursor advances conservatively, so any missed turns are caught up on the next Stop in the same session) | — | None (no PreCompact event upstream) |
+| kimicode | Stop: `capturedSinceCommit + captured ≥ commitTurnThreshold` (default 8 captured messages, keep 10); Interrupt and SessionEnd force commit when content was captured | SessionStart replays pending; Interrupt is synchronous | PreCompact commits when `autoCommitOnCompact=true` (default) |
 | opencode | `session.idle` path: after the flush runs, `pending_tokens ≥ 20000` must hold before it commits, keep 10 | `session.deleted` / `session.error`: forced commit; dispose: forced commit | Fires once before `experimental.session.compacting` and once after `session.compacted` (so one host compaction = two commits) |
 | dsh | `turn/end`: `pending_tokens ≥ 20000` (30s timeout), keep 10 | Teardown (see [§3.3.3](#_3-3-3-shutdown-method-×-harness-outcome-matrix)) | None (does not listen for compaction events) |
 | pi (takeover on by default) | `onTurnSynced`: when the locally estimated `pendingTokens ≥ 30000` and `lastSeenUserTurns > 3`, runs commitAndAdvance (keep 3; the overview polls 15 times at 2s intervals, and if it returns empty, the boundary does not advance, but pendingTokens is zeroed and retried once it has accumulated again) | Run `/viking commit` manually | `session_before_compact` (requires a non-empty `firstKeptEntryId`) |
@@ -376,6 +383,7 @@ Legend: **C** = commits; **C\*** = commits, with a precondition (see notes); **�
 | cursor | **—** (closing a chat or opening a new chat fires no event) | **—** | **—** | **—** (`sessionEnd` is registered and only fires on window_close, but by then the host has destroyed the shell-exec host, causing the hook to abort before spawn) | **—** | A session ending below the 8-message watermark leaves its tail waiting for later messages in the same session to trigger a commit |
 | trae / trae-cn | **—** (no session-end-style event) | **—** | **—** | **—** | **—** | Every Stop has already committed, meaning the most data left to archive equals the last in-flight turn |
 | zcode | **—** (no session-end-style event) | **C\*** | **—** | **—** | **—** | C\* precondition: The Stop for that turn had already fired when Ctrl+C arrived (the detached worker finishes writing as usual); every Stop has already committed, and missed turns are recovered by the rollout cursor on the next Stop in the same session |
+| kimicode | **C** (SessionEnd → detached worker commit) | **C** (Interrupt is synchronous) | **—** | **—** | **—** | Stop only commits at the configured threshold; PreCompact/SessionEnd/Interrupt are the boundary paths. A crash leaves posted messages for a later trigger in the same session |
 | opencode | **C\*** (≥1.15.11 `dispose` calls `flushAll({commit:true})`, covering all four shutdown paths; <1.15.11 has no such hook → —) | **C\*** | **C\*** | **C\*** | **—** | C\* precondition: The host shutdown budget is 5s, while a single session takes up to 5s for health + 10s for batch + 30s for commit, and multiple sessions process serially. A commit overrunning the budget is cut off, and the pending queue does not cover this (unsettled fetches are never queued); after a restart, `init()` does not proactively flush leftover sessions |
 | dsh | **C** (Cordis teardown triggers one 3s-timeout commit per session, no threshold) | **C** (the first one; a second Ctrl+C force-quits → —) | **C** | **—** (no SIGHUP listener) | **—** | The teardown commit and the threshold commit share a serial write chain, meaning it may not fit inside the 5s process grace period if a slow request precedes it; in the web form, closing the browser tab does not trigger a teardown |
 | pi (takeover default) | **—** (`session_shutdown` fires on every shutdown path and is awaited, but the handler persists local takeover state and does not commit) | **—** | **—** | **—** | **—** | The next run accumulating 30000, or a manual `/viking commit` |
@@ -388,7 +396,7 @@ Legend: **C** = commits; **C\*** = commits, with a precondition (see notes); **�
 
 **Three reading notes**:
 
-1. Five integrations commit on a normal exit: `claude-code`, `opencode` (≥1.15.11), `dsh`, `pi` (takeover off), and `hermes`. The rest rely on the recovery mechanisms detailed in the "recovery path" column.
+1. Six integrations commit on a normal exit: `claude-code`, `opencode` (≥1.15.11), `dsh`, `kimicode`, `pi` (takeover off), and `hermes`. The rest rely on the recovery mechanisms detailed in the "recovery path" column.
 2. No integration commits under `kill -9` — messages already submitted remain in the server's live area and are archived the next time the same session triggers a commit. The server offers a per-session idle fallback ([§2.3](#_2-3-server-side-session-and-commit-semantics)), which the current plugins do not utilize by default.
 3. `trae×2` and `zcode`, which commit on every turn, offer the simplest shutdown semantics (the maximum data left to archive equals the last round that never reached Stop), at the cost of a full archive and memory extraction on every Stop (keep 0).
 
@@ -396,7 +404,7 @@ Legend: **C** = commits; **C\*** = commits, with a precondition (see notes); **�
 
 | harness | mechanism | notes |
 |---|---|---|
-| cc / codex / cursor / trae×2 / zcode / opencode / dsh / pi | On-disk queue `~/.openviking/pending` (0700/0600) | Only retryable failures are queued (4xx errors, including 401/403, are considered non-retryable and are not queued, though they appear in debug logs); replay runs at session start: ≤50 entries per run, ≤3 attempts per entry, TTL 7 days; `.processing` claims entries atomically, with a 10min stale reclaim; an addMessage failure breaks execution immediately to preserve order |
+| cc / codex / cursor / trae×2 / zcode / kimicode / opencode / dsh / pi | On-disk queue `~/.openviking/pending` (0700/0600) | Only retryable failures are queued (4xx errors, including 401/403, are considered non-retryable and are not queued, though they appear in debug logs); replay runs at session start: ≤50 entries per run, ≤3 attempts per entry, TTL 7 days; `.processing` claims entries atomically, with a 10min stale reclaim; an addMessage failure breaks execution immediately to preserve order |
 | openclaw | No local queue | An addSessionMessage failure is caught, and that turn's messages are not replayed |
 | hermes | In-process daemon-thread queue | The drain operates on a strict budget (10s/65s); nothing is written to disk |
 | LangChain | In-process `_pending_commit_sessions` set | A failed commit is retried automatically during the next record; nothing is written to disk. On partial success, it raises an `OpenVikingPartialWriteError` (carrying `messages_written`, `input_messages_consumed`, and `context_attached`, allowing the caller to slice by position and retry the suffix) — making this the only protocol across all integrations that reports partial success |
@@ -422,6 +430,7 @@ Legend: **C** = commits; **C\*** = commits, with a precondition (see notes); **�
 | claude-code | No takeover | PreCompact commits synchronously. This is the only write path that does not detach, as CC rewrites the transcript immediately afterward. | A SessionStart with `source="compact"` re-injects OV's `latest_archive_overview` plus ≤5 abstracts. |
 | codex / trae-cli | No takeover | PreCompact backfills uncaptured turns → full commit → `ovSessionId=null`. If the backfill is incomplete, no commit occurs and it is left for retry. There is no PostCompact wiring; it relies instead on the transcript shrinkage observed at Stop for defensive correction. | Injects the archive digest upon resume. |
 | cursor / trae×2 / zcode | No takeover | Cursor: `preCompact` commits unconditionally (Trae×2/Zcode lack this upstream event). | — |
+| kimicode | No takeover | `PreCompact` commits captured content when `autoCommitOnCompact=true`; `SessionEnd` and `Interrupt` are separate boundary paths. | — |
 | opencode | No takeover | Flush and commit prior to compaction. | Flush and commit again once `session.compacted` fires (two commits in total). |
 | dsh | Unaware. It does not listen for compaction events; injection rides on a pre-step user message and shrinks alongside the host's compaction. The profile is not re-sent. | — | — |
 | pi | **Two-layer takeover** (on by default, [§3.4.2](#_3-4-2-pi-takeover)) | `session_before_compact`: flush → commit → `pollOverview`. On success, it returns a custom compaction summary that overrides Pi's. On failure, it fails open and falls back to Pi's default compaction. | Calls `resetBoundary` upon success. |
@@ -483,6 +492,7 @@ There are three primary guards on MCP `write` and REST `content/write` (`content
 | claude-code | All hooks catch exceptions → approve (never blocks); at session-start, even pending replays are skipped | context-face 6h + host-cli probe 7d + health 5s | None (relies on pending replay); `peer_scope` degrades once; batch falls back to sequential | No (`uri-guard` deny is by design) |
 | codex / trae-cli | All hooks catch exceptions → noop | context-face 6h + compressor runtime_failed (until the next startup) | Same as above (pending replay, triggered at SessionStart) | No |
 | cursor/trae×2/zcode | Fetch errors are swallowed as `status:0`, and catch returns an empty injection; silently skips if the lock isn't acquired within 5s | context-face 6h (no negative cache for unreachable servers; every turn waits the full 15s) | None | No |
+| kimicode | Hook errors are caught and fail open; capture failures can be queued by the shared write path | context-face 6h | None; pending queue replay at SessionStart | No |
 | opencode | All paths catch exceptions → WARN; the `event`/`dispose` hooks lack try/catch blocks (non-retryable commit failures bubble up to the host) | context-face 6h only; `/health` is uncached (one round trip per turn) | No synchronous retry; the MCP proxy retries once each for 401/403 and 400/404 | Mostly no (except `event`/`dispose`) |
 | dsh | The client swallows all exceptions; `ensureState` failures are not cached (when the server is unreachable, each pre-step makes two 5s health calls) | context-face 6h + an in-process user-space cache that never expires | None; pending queue replays 3 times across processes | Yes (pre-step runs profile+recall serially; session/flush blocks) |
 | pi | On health failure, `start()` returns early; subsequent prompts silently retry the connection | context-face 6h | None; pending queue only | Partly (`session_shutdown` is awaited: ~0s with takeover, max 30s without; on a `turn_end` network error, each message waits 10s) |
@@ -503,6 +513,7 @@ General HTTP timeouts are 15000ms (with a 1000ms floor). MCP proxy requests time
 | cursor | ❌ | ❌ | Rule (`alwaysApply`) + skill | ❌ (Shares the installer TUI) | Standalone `uri-guard`, independent of the plugin toggle |
 | trae/trae-cn | ❌ | ❌ | None | ❌ | — |
 | zcode | ❌ | ❌ | None | ❌ | — |
+| kimicode | ❌ | ❌ | None | ❌ | — |
 | opencode | ❌ (Has toasts) | ❌ | None (Deliberately omitted) | ✅ | — |
 | dsh | ❌ | ❌ | 1 `openviking-memory` skill (own isolated `ctx.skills` provider) | ❌ | `ctx.provide("openvikingMemory")` allows other Cordis plugins to build upon it |
 | pi | ✅ `ctx.ui.setStatus` | ✅ `/viking` `/viking commit` | None | ✅ | `e2e-live.sh` |
@@ -567,6 +578,15 @@ Each card serves as a quick-reference entry point. It records only the facts and
 - **Behavior notes**: Commits on every Stop (keep 0). The capture path only strips the three types of injection blocks without performing any further text cleanup ([§3.2.6](#_3-2-6-injection-backflow-protection)). The initial capture reads the entire rollout at once, meaning that installing it into a long-running session will produce a single large push.
 - **Configuration**: Configured via environment variables, `ovcli.conf` (`plugin.zcode`), and the workspace files; `OPENVIKING_WRITE_PATH_ASYNC` takes effect for zcode.
 - **Dimension index**: tool surface [§2.1](#_2-1-server-side-mcp-tool-surface) | recall [§3.2](#_3-2-automatic-recall-and-injection) | commit [§3.3.2](#_3-3-2-regular-commit-triggers)/[§3.3.3](#_3-3-3-shutdown-method-×-harness-outcome-matrix).
+
+## kimicode
+
+- **Integration docs**: [Community Integrations → Kimi Code CLI](./08-community-plugins.md)
+- **Form**: Native Kimi Code plugin (`kimi.plugin.json`) with 7 hooks and an MCP proxy. The installer manages the copy under `$KIMI_CODE_HOME/plugins/managed/openviking-memory` and the corresponding `installed.json` record. Version 0.1.1; tested with Kimi Code CLI 0.43.1.
+- **Capability highlights**: `UserPromptSubmit` returns plain text, while `SessionStart`, `PreCompact`, `SessionEnd`, and `Interrupt` are observation-only. Capture reads the host-indexed `agents/main/wire.jsonl` transcript and uses `turn.ended` boundaries to preserve tool-only and interrupted turns.
+- **Behavior notes**: `Stop` detaches by default and only commits after `commitTurnThreshold` captured messages (default 8). `PreCompact`, `SessionEnd`, and `Interrupt` commit captured content at their event boundary; `Interrupt` uses a 2s request budget and runs synchronously. The plugin does not take over host compaction.
+- **Configuration**: Configured via environment variables, `ovcli.conf` (`plugin.kimicode`), and workspace files. Hook configuration is resolved against the session `cwd`, not the installed plugin directory.
+- **Dimension index**: tool surface [§2.1](#_2-1-server-side-mcp-tool-surface) | recall [§3.2](#_3-2-automatic-recall-and-injection) | commit [§3.3.2](#_3-3-regular-commit-triggers)/[§3.3.3](#_3-3-shutdown-method-×-harness-outcome-matrix) | compaction [§3.4](#_3-4-compaction-takeover).
 
 ## opencode
 

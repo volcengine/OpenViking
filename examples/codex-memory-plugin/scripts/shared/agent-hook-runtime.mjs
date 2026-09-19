@@ -257,8 +257,8 @@ export async function getAgentSessionContext(fetchJSON, sessionId, tokenBudget =
   return result.ok ? result.result : null;
 }
 
-export async function replayAgentPending(fetchJSON, log = () => {}) {
-  return replayPending(fetchJSON, log);
+export async function replayAgentPending(fetchJSON, log = () => {}, options = {}) {
+  return replayPending(fetchJSON, log, options);
 }
 
 export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
