@@ -462,4 +462,4 @@ It is recommended to first go back to Explore and manually run PromQL to confirm
 - [Metrics](../concepts/12-metrics.md)
 - [Metrics API](../api/09-metrics.md)
 - [Server Deployment](03-deployment.md)
-- [Quick Start: Server Mode](../getting-started/03-quickstart-server.md)
+- [Quick Start](../getting-started/02-quickstart.md)

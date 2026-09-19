@@ -1,10 +1,22 @@
 # Server Deployment
 
-OpenViking can run as a standalone HTTP server, allowing multiple clients to connect over the network.
+OpenViking runs as an HTTP service. Choose who operates it before installing a server:
+
+| Service | What you need |
+| --- | --- |
+| [Volcano Engine managed OpenViking](https://www.volcengine.com/product/openviking-service) | Obtain an API key in the [console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing), then connect with the independent CLI. No local server or model configuration is needed. |
+| An existing team or remote deployment | Obtain the service URL and a user/admin key from its administrator. |
+| Self-hosted OpenViking | Install and configure the server using the instructions below. |
+
+Managed and existing-service users can start with the [CLI quickstart](../getting-started/02-quickstart.md). For managed-service availability, plans, and limits, see the [official service documentation](https://docs.volcengine.com/docs/84313/2374478).
+
+The rest of this guide covers self-hosting.
 
 For sizing, measure memory and disk use with a representative corpus and expected concurrency. Budget storage for source files, indexes, and snapshots; use [observability](../guides/05-observability.md) to check headroom before expanding the workload.
 
 ## Quick Start
+
+Install the server first using the [self-hosted quickstart](../getting-started/02-quickstart.md). For Volcengine Ark on Python 3.14, the upstream Python SDK may emit Pydantic V1 compatibility warnings; Python 3.13 avoids that warning in this setup.
 
 ```bash
 # Create or refresh ~/.openviking/ov.conf with the setup wizard
@@ -21,9 +33,8 @@ openviking-server
 # Or specify a custom config path
 openviking-server --config /path/to/ov.conf
 
-# Verify it's running
-curl http://localhost:1933/health
-# {"status": "ok"}
+# In another terminal, configure ov for this server using the quickstart, then verify
+ov health
 ```
 
 ## Command Line Options

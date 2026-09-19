@@ -2,7 +2,7 @@
 
 This guide helps you install the OpenViking CLI, configure it, and verify that it can connect to OpenViking.
 
-`ov` is the client CLI. It connects to an existing OpenViking server or to OpenViking Service (VolcEngine Cloud). It does not replace server setup. If you still need to install or start a custom OpenViking server, follow the [Quick Start](02-quickstart.md) or the [Server Mode guide](03-quickstart-server.md) first.
+`ov` is the client CLI. It connects to an existing OpenViking server or to OpenViking Service (VolcEngine Cloud). It does not replace server setup. If you still need to install or start a custom OpenViking server, follow the [Quick Start](02-quickstart.md) first.
 
 Use this page in either of two ways:
 
@@ -284,7 +284,7 @@ For a local unauthenticated server:
 ov config add custom --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
-If the local server is not running, guide the user to start it first. See the [Server Mode guide](03-quickstart-server.md).
+If the local server is not running, guide the user to start it first. See the [Deployment Guide](../guides/03-deployment.md).
 
 ### Add a Remote Custom Server
 
@@ -431,7 +431,7 @@ Use this only when the user chose local custom setup. Then verify the server:
 curl http://127.0.0.1:1933/health
 ```
 
-If it fails, start the server before configuring `ov`. See the [Server Mode guide](03-quickstart-server.md).
+If it fails, start the server before configuring `ov`. See the [Deployment Guide](../guides/03-deployment.md).
 
 ### API Key Validation Fails
 

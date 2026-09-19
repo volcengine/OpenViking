@@ -8,7 +8,7 @@ OpenViking 是面向 AI Agent 的开源上下文数据库。它用虚拟文件�
 
 | 我想要…… | 阅读入口 |
 | --- | --- |
-| 启动服务并检索第一份文档 | [快速开始](./02-quickstart.md) |
+| 连接服务并检索第一份文档 | [快速开始](./02-quickstart.md) |
 | 接入已有 Agent 或编程工具 | [Agent 集成](../agent-integrations/01-overview.md) |
 | 在终端使用 OpenViking | [CLI 配置](./05-cli-setup.md) |
 | 部署和运维共享服务 | [部署](../guides/03-deployment.md)与[认证](../guides/04-authentication.md) |

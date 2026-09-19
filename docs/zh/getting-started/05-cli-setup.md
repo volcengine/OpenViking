@@ -2,7 +2,7 @@
 
 本文介绍如何安装 OpenViking CLI、完成配置，并验证它可以连接到 OpenViking。
 
-`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 OpenViking Service（火山引擎云）。它不是服务端安装命令。如果你还没有安装或启动自定义 OpenViking 服务端，请先阅读[快速开始](02-quickstart.md)或[服务端模式](03-quickstart-server.md)。
+`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 OpenViking Service（火山引擎云）。它不是服务端安装命令。如果你还没有安装或启动自定义 OpenViking 服务端，请先阅读[快速开始](02-quickstart.md)。
 
 你可以用两种方式阅读本文：
 
@@ -284,7 +284,7 @@ ov config add ov-service --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --
 ov config add custom --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
-如果本地服务没有运行，请先引导用户启动服务端。参见[服务端模式](03-quickstart-server.md)。
+如果本地服务没有运行，请先引导用户启动服务端。参见[部署指南](../guides/03-deployment.md)。
 
 ### 添加远程自定义服务
 
@@ -431,7 +431,7 @@ npm prefix -g
 curl http://127.0.0.1:1933/health
 ```
 
-如果失败，先启动服务端再配置 `ov`。参见[服务端模式](03-quickstart-server.md)。
+如果失败，先启动服务端再配置 `ov`。参见[部署指南](../guides/03-deployment.md)。
 
 ### API Key 校验失败
 

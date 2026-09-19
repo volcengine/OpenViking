@@ -8,7 +8,7 @@ Use it when an agent needs to reuse documents and experience across sessions, wi
 
 | I want to… | Start here |
 | --- | --- |
-| Run a server and retrieve my first document | [Quick Start](./02-quickstart.md) |
+| Connect to a service and retrieve my first document | [Quick Start](./02-quickstart.md) |
 | Connect an existing agent or coding tool | [Agent Integrations](../agent-integrations/01-overview.md) |
 | Use OpenViking from a terminal | [CLI Setup](./05-cli-setup.md) |
 | Deploy and operate a shared server | [Deployment](../guides/03-deployment.md) and [Authentication](../guides/04-authentication.md) |

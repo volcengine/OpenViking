@@ -1,10 +1,22 @@
 # 服务端部署
 
-OpenViking 可以作为独立的 HTTP 服务器运行，允许多个客户端通过网络连接。
+OpenViking 以 HTTP 服务运行。安装服务端之前，先选择由谁运行服务：
+
+| 服务方式 | 你需要准备什么 |
+| --- | --- |
+| [火山引擎托管 OpenViking](https://www.volcengine.com/product/openviking-service) | 在[控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)获取 API Key，用独立 CLI 连接，无需本地服务端或模型配置。 |
+| 团队已有服务或他人部署 | 向管理员获取服务地址和 user/admin key。 |
+| 自建 OpenViking | 按下文安装、配置和运行服务端。 |
+
+托管及已有服务用户可直接从 [CLI 快速开始](../getting-started/02-quickstart.md)进入。托管服务的可用范围、套餐和额度见[官方服务文档](https://docs.volcengine.com/docs/84313/2374478)。
+
+本页后续内容适用于自建服务。
 
 容量规划应使用有代表性的数据集和预期并发量测量内存、磁盘占用，为原始文件、索引和快照预留空间。扩大工作负载前，通过[可观测性](../guides/05-observability.md)检查容量余量。
 
 ## 快速开始
+
+先按[自建服务快速开始](../getting-started/02-quickstart.md)安装服务端。Python 3.14 下使用火山引擎 Ark 时，上游 Python SDK 可能输出 Pydantic V1 兼容性警告；此场景可使用 Python 3.13 避免该警告。
 
 ```bash
 # 使用初始化向导创建或刷新 ~/.openviking/ov.conf
@@ -21,9 +33,8 @@ openviking-server
 # 配置文件在其他位置时，通过 --config 指定
 openviking-server --config /path/to/ov.conf
 
-# 验证服务器是否运行
-curl http://localhost:1933/health
-# {"status": "ok"}
+# 在另一终端按快速开始配置 ov，连接本服务后验证
+ov health
 ```
 
 ## 命令行选项
