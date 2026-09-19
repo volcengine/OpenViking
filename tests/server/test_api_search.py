@@ -994,10 +994,21 @@ async def test_grep(client_with_resource):
     parent_uri = "/".join(uri.split("/")[:-1]) + "/"
     resp = await client.post(
         "/api/v1/search/grep",
-        json={"uri": parent_uri, "pattern": "Sample"},
+        json={
+            "uri": parent_uri,
+            "pattern": "Introduction",
+            "before_context": 1,
+            "after_context": 1,
+        },
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    match = body["result"]["matches"][0]
+    assert match["before_context"] == [{"line": 2, "content": ""}]
+    assert match["after_context"] == [
+        {"line": 4, "content": "This is a sample markdown document for server testing."}
+    ]
 
 
 @pytest.mark.asyncio
@@ -1046,6 +1057,34 @@ async def test_grep_forwards_include_tags_to_filesystem_service(monkeypatch):
     )
 
     assert seen["include_tags"] is True
+
+
+@pytest.mark.asyncio
+async def test_grep_forwards_context_to_filesystem_service(monkeypatch):
+    seen = {}
+
+    async def fake_grep(uri, pattern, **kwargs):
+        seen.update(uri=uri, pattern=pattern, **kwargs)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(
+        search_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
+    )
+
+    await search_router.grep(
+        search_router.GrepRequest(
+            uri="viking://resources",
+            pattern="OpenViking",
+            before_context=2,
+            after_context=3,
+        ),
+        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
+    )
+
+    assert seen["before_context"] == 2
+    assert seen["after_context"] == 3
 
 
 async def test_grep_case_insensitive(client_with_resource):

@@ -14,7 +14,7 @@ use tracing::debug;
 use crate::core::filesystem::FileSystem;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
 use crate::core::types::{
-    FileInfo, GlobPage, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag,
+    FileInfo, GlobPage, GrepOptions, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag,
 };
 use crate::core::MountableFS;
 
@@ -339,23 +339,9 @@ impl FileSystem for PathLockWrappedFS {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> crate::core::Result<GrepResult> {
-        self.inner
-            .grep(
-                path,
-                pattern,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_path,
-                level_limit,
-            )
-            .await
+        self.inner.grep(path, pattern, options).await
     }
 
     async fn tree_directory(

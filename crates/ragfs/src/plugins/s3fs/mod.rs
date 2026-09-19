@@ -31,9 +31,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::core::context::FsContextView;
 use crate::core::filesystem::{relative_depth, relative_match_file, sort_directory_entries};
 use crate::core::glob::PreparedGlob;
+use crate::core::grep::GrepLineCollector;
+use crate::core::types::GrepContextLine;
 use crate::core::{
-    ConfigParameter, Error, FileInfo, FileSystem, GlobEntry, GlobPage, GrepMatch, GrepResult,
-    PluginConfig, Result, ServicePlugin, TreeEntry, WriteFlag,
+    ConfigParameter, Error, FileInfo, FileSystem, GlobEntry, GlobPage, GrepMatch, GrepOptions,
+    GrepResult, PluginConfig, Result, ServicePlugin, TreeEntry, WriteFlag,
 };
 use tree::{build_tree_entries_from_flat_listing, build_tree_entries_from_listing_page, rel_parts};
 
@@ -104,92 +106,81 @@ async fn grep_stream(
     file_size: u64,
     re: &Regex,
     remaining_limit: usize,
+    before_context: usize,
+    after_context: usize,
     chunk_size: u64,
     max_partial_size: usize,
     reader: &mut dyn ChunkReader,
 ) -> Result<Vec<GrepMatch>> {
+    if remaining_limit == 0 {
+        return Ok(Vec::new());
+    }
+
     let mut offset: u64 = 0;
-    let mut partial = String::new();
+    let mut partial = Vec::new();
     let mut line_no: u64 = 0;
-    let mut matches = Vec::with_capacity(remaining_limit.min(64));
+    let mut result = GrepResult {
+        matches: Vec::with_capacity(remaining_limit.min(64)),
+        count: 0,
+    };
+    let mut collector = GrepLineCollector::new(
+        rel_file.to_string(),
+        before_context,
+        after_context,
+        remaining_limit,
+        &mut result,
+    );
 
-    loop {
-        if matches.len() >= remaining_limit || offset >= file_size {
-            break;
-        }
-
+    while offset < file_size {
         let chunk = reader.read_chunk(offset, chunk_size).await?;
-
         let is_last = chunk.is_empty()
             || chunk.len() < chunk_size as usize
-            || offset + chunk_size >= file_size;
+            || offset + chunk.len() as u64 >= file_size;
+        offset += chunk.len() as u64;
+        partial.extend_from_slice(&chunk);
 
-        let chunk_str = String::from_utf8_lossy(&chunk);
-
-        let complete_end = if is_last {
-            chunk_str.len()
-        } else {
-            chunk_str.rfind('\n').map(|p| p + 1).unwrap_or(0)
-        };
-
-        if complete_end == 0 && !is_last {
-            partial.push_str(&chunk_str);
-            if partial.len() > max_partial_size {
-                return Ok(matches);
-            }
-            offset += chunk_size;
-            continue;
+        if is_last && !partial.is_empty() && !partial.ends_with(b"\n") {
+            partial.push(b'\n');
         }
 
-        let (text, remainder) = if partial.is_empty() {
-            if complete_end == chunk_str.len() {
-                (chunk_str.into_owned(), String::new())
-            } else {
-                (
-                    chunk_str[..complete_end].to_string(),
-                    chunk_str[complete_end..].to_string(),
-                )
-            }
-        } else {
-            let merged = format!("{}{}", partial, &chunk_str[..complete_end]);
-            partial.clear();
-            (merged, chunk_str[complete_end..].to_string())
-        };
-
-        for line in text.lines() {
-            if matches.len() >= remaining_limit {
-                break;
-            }
-            line_no += 1;
-            if re.is_match(line) {
-                matches.push(GrepMatch {
-                    file: rel_file.to_string(),
-                    line: line_no,
-                    content: line.to_string(),
-                });
+        if let Some(complete_end) = partial
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map(|p| p + 1)
+        {
+            let remainder = partial.split_off(complete_end);
+            let complete = std::mem::replace(&mut partial, remainder);
+            for line_bytes in complete[..complete.len() - 1].split(|&byte| byte == b'\n') {
+                line_no += 1;
+                let content = String::from_utf8_lossy(line_bytes)
+                    .trim_end_matches('\r')
+                    .to_string();
+                let is_match = re.is_match(&content);
+                if !collector.consume_line(
+                    rel_file,
+                    GrepContextLine {
+                        line: line_no,
+                        content,
+                    },
+                    is_match,
+                ) {
+                    drop(collector);
+                    return Ok(result.matches);
+                }
             }
         }
 
-        partial.push_str(&remainder);
-
+        if partial.len() > max_partial_size {
+            drop(collector);
+            return Ok(result.matches);
+        }
         if is_last {
             break;
         }
-        offset += chunk_size;
     }
 
-    if !partial.is_empty() && matches.len() < remaining_limit {
-        line_no += 1;
-        if re.is_match(&partial) {
-            matches.push(GrepMatch {
-                file: rel_file.to_string(),
-                line: line_no,
-                content: partial,
-            });
-        }
-    }
-
-    Ok(matches)
+    drop(collector);
+    Ok(result.matches)
 }
 
 /// S3-backed file system
@@ -390,6 +381,8 @@ impl S3FileSystem {
         file_size: u64,
         re: &Regex,
         remaining_limit: usize,
+        before_context: usize,
+        after_context: usize,
     ) -> Result<Vec<GrepMatch>> {
         let normalized = Self::normalize_path(path);
         let key = self.client.build_key(&normalized);
@@ -403,6 +396,8 @@ impl S3FileSystem {
             file_size,
             re,
             remaining_limit,
+            before_context,
+            after_context,
             Self::GREP_CHUNK_SIZE,
             Self::GREP_MAX_PARTIAL_SIZE,
             &mut reader,
@@ -417,9 +412,9 @@ impl S3FileSystem {
         base_path: &str,
         files: Vec<(String, u64)>,
         re: &Regex,
-        node_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
-        let limit = node_limit.unwrap_or(usize::MAX);
+        let limit = options.node_limit.unwrap_or(usize::MAX);
         let result = Arc::new(Mutex::new(GrepResult::new()));
         let matched_count = Arc::new(AtomicUsize::new(0));
         let buf_size = Self::default_grep_concurrency().min(files.len());
@@ -436,7 +431,15 @@ impl S3FileSystem {
 
                     let remaining = limit.saturating_sub(done);
                     let matches = self
-                        .grep_one_file(base_path, &path, file_size, re, remaining)
+                        .grep_one_file(
+                            base_path,
+                            &path,
+                            file_size,
+                            re,
+                            remaining,
+                            options.before_context,
+                            options.after_context,
+                        )
                         .await?;
 
                     let mut r = result.lock().unwrap();
@@ -936,18 +939,18 @@ impl FileSystem for S3FileSystem {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         let normalized = Self::normalize_path(path);
-        let normalized_exclude = exclude_path.map(|p| Self::normalize_path(p));
+        let normalized_exclude = options.exclude_path.map(Self::normalize_path);
+        let normalized_options = GrepOptions {
+            exclude_path: normalized_exclude.as_deref(),
+            ..options
+        };
 
         let info = self.stat(&normalized).await?;
 
-        let re = if case_insensitive {
+        let re = if options.case_insensitive {
             Regex::new(&format!("(?i){}", pattern))
         } else {
             Regex::new(pattern)
@@ -960,7 +963,7 @@ impl FileSystem for S3FileSystem {
                     return Ok(GrepResult::new());
                 }
             }
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(&normalized, &normalized);
                 if relative_depth(&rel) > limit {
                     return Ok(GrepResult::new());
@@ -968,7 +971,7 @@ impl FileSystem for S3FileSystem {
             }
             let files = vec![(normalized.clone(), info.size)];
             return self
-                .grep_files_concurrent(&normalized, files, &re, node_limit)
+                .grep_files_concurrent(&normalized, files, &re, normalized_options)
                 .await;
         }
 
@@ -995,14 +998,14 @@ impl FileSystem for S3FileSystem {
                 }
             }
 
-            if !recursive || level_limit.is_some() {
+            if !options.recursive || options.level_limit.is_some() {
                 let rel = relative_match_file(&normalized, &fs_path);
                 let depth = relative_depth(&rel);
 
-                if !recursive && depth > 1 {
+                if !options.recursive && depth > 1 {
                     continue;
                 }
-                if let Some(limit) = level_limit {
+                if let Some(limit) = options.level_limit {
                     if depth > limit {
                         continue;
                     }
@@ -1016,7 +1019,7 @@ impl FileSystem for S3FileSystem {
             return Ok(GrepResult::new());
         }
 
-        self.grep_files_concurrent(&normalized, files, &re, node_limit)
+        self.grep_files_concurrent(&normalized, files, &re, normalized_options)
             .await
     }
 
@@ -1729,11 +1732,13 @@ mod tests {
     /// Returns the range `[offset, offset+size)` clamped to `data.len()`.
     struct MockChunkReader {
         data: Vec<u8>,
+        reads: usize,
     }
 
     #[async_trait]
     impl ChunkReader for MockChunkReader {
         async fn read_chunk(&mut self, offset: u64, size: u64) -> Result<Vec<u8>> {
+            self.reads += 1;
             let start = offset as usize;
             if start >= self.data.len() {
                 return Ok(Vec::new());
@@ -1756,13 +1761,15 @@ mod tests {
     ) -> Result<Vec<GrepMatch>> {
         let data = data.as_ref().to_vec();
         let file_size = data.len() as u64;
-        let mut reader = MockChunkReader { data };
+        let mut reader = MockChunkReader { data, reads: 0 };
         let re = build_re(pattern);
         grep_stream(
             "f",
             file_size,
             &re,
             100,
+            0,
+            0,
             chunk_size,
             max_partial,
             &mut reader,
@@ -1837,6 +1844,88 @@ mod tests {
         assert_eq!(matches.len(), 1, "only 'lo wo' contains 'lo'");
         assert_eq!(matches[0].line, 2, "line number should be 2");
         assert_eq!(matches[0].content, "lo wo", "stitched across boundary");
+    }
+
+    #[tokio::test]
+    async fn test_grep_stream_includes_context_across_chunks() {
+        let data = b"first\nbefore\nhit\nafter\n".to_vec();
+        let mut reader = MockChunkReader {
+            data: data.clone(),
+            reads: 0,
+        };
+        let matches = grep_stream(
+            "f",
+            data.len() as u64,
+            &build_re("hit"),
+            100,
+            2,
+            1,
+            8,
+            1024,
+            &mut reader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line, 3);
+        assert_eq!(
+            matches[0].before_context.as_ref().unwrap()[0].content,
+            "first"
+        );
+        assert_eq!(
+            matches[0].before_context.as_ref().unwrap()[1].content,
+            "before"
+        );
+        assert_eq!(
+            matches[0].after_context.as_ref().unwrap()[0].content,
+            "after"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_grep_stream_stops_after_limited_match_context() {
+        let data = b"hit\none\ntwo\nunread\nunread\nunread\n".to_vec();
+        let mut reader = MockChunkReader {
+            data: data.clone(),
+            reads: 0,
+        };
+        let matches = grep_stream(
+            "f",
+            data.len() as u64,
+            &build_re("hit"),
+            1,
+            0,
+            2,
+            4,
+            1024,
+            &mut reader,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0]
+                .after_context
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|line| line.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
+        );
+        assert_eq!(reader.reads, 3);
+    }
+
+    #[tokio::test]
+    async fn test_grep_stream_preserves_utf8_split_across_chunks() {
+        let data = "before\n命中\nafter\n".as_bytes();
+        let matches = grep_chunks(data, "命中", 9, 1024).await.unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line, 2);
+        assert_eq!(matches[0].content, "命中");
     }
 
     // ── Case 12: multiple consecutive chunks with no newline ──

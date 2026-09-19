@@ -940,6 +940,26 @@ enum Commands {
         /// Case insensitive
         #[arg(short, long, help_heading = "Common options")]
         ignore_case: bool,
+        /// Number of lines to show after each match
+        #[arg(
+            short = 'a',
+            long = "after-context",
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        after_context: i32,
+        /// Number of lines to show before each match
+        #[arg(
+            short = 'b',
+            long = "before-context",
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        before_context: i32,
         /// Maximum number of results
         #[arg(
             short = 'n',
@@ -3783,6 +3803,8 @@ async fn main() {
             exclude_uri,
             pattern,
             ignore_case,
+            after_context,
+            before_context,
             node_limit,
             level_limit,
             tags,
@@ -3793,6 +3815,8 @@ async fn main() {
                 exclude_uri,
                 pattern,
                 ignore_case,
+                after_context,
+                before_context,
                 node_limit,
                 level_limit,
                 tags,
@@ -4024,6 +4048,34 @@ mod tests {
                 assert_eq!(image.as_deref(), Some("viking://x.png"));
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_grep_context_lines() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "grep",
+            "--uri",
+            "viking://resources",
+            "-a",
+            "2",
+            "-b",
+            "3",
+            "needle",
+        ])
+        .expect("grep context should parse");
+
+        match cli.command {
+            Commands::Grep {
+                after_context,
+                before_context,
+                ..
+            } => {
+                assert_eq!(after_context, 2);
+                assert_eq!(before_context, 3);
+            }
+            _ => panic!("expected grep command"),
         }
     }
 

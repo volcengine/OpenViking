@@ -204,8 +204,9 @@ use ragfs::core::builder::{
 };
 use ragfs::core::{
     build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
-    FsContextInner, FsOperation, GlobPage, GrepResult, ListSortBy, MountableFS, OperationStats,
-    PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag, FS_CTX,
+    FsContextInner, FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy, MountableFS,
+    OperationStats, PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
+    FS_CTX,
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
@@ -1057,7 +1058,7 @@ fn serde_json_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAn
 }
 
 /// Convert GrepResult to a Python dict matching the Go binding JSON format:
-/// {"matches": [{"file": str, "line": int, "content": str}, ...], "count": int}
+/// {"matches": [{"file": str, "line": int, "content": str, ...}, ...], "count": int}
 fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
 
@@ -1067,6 +1068,26 @@ fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<Py
         match_dict.set_item("file", &m.file)?;
         match_dict.set_item("line", m.line)?;
         match_dict.set_item("content", &m.content)?;
+        if let Some(lines) = &m.before_context {
+            let context = PyList::empty(py);
+            for line in lines {
+                let item = PyDict::new(py);
+                item.set_item("line", line.line)?;
+                item.set_item("content", &line.content)?;
+                context.append(item)?;
+            }
+            match_dict.set_item("before_context", context)?;
+        }
+        if let Some(lines) = &m.after_context {
+            let context = PyList::empty(py);
+            for line in lines {
+                let item = PyDict::new(py);
+                item.set_item("line", line.line)?;
+                item.set_item("content", &line.content)?;
+                context.append(item)?;
+            }
+            match_dict.set_item("after_context", context)?;
+        }
         matches_list.append(match_dict)?;
     }
 
@@ -2241,10 +2262,12 @@ impl RAGFSBindingClient {
     ///     exclude_path: Optional path prefix to exclude from search (default: None)
     ///     level_limit: Optional maximum depth relative to query root (default: None)
     ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    ///     before_context: Number of lines to include before each match (default: 0)
+    ///     after_context: Number of lines to include after each match (default: 0)
     ///
     /// Returns:
     ///     A dict with "matches" (list of match dicts) and "count" (total matches)
-    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None, ctx=None))]
+    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None, ctx=None, before_context=0, after_context=0))]
     #[allow(clippy::too_many_arguments)]
     fn grep(
         &self,
@@ -2258,6 +2281,8 @@ impl RAGFSBindingClient {
         exclude_path: Option<String>,
         level_limit: Option<i32>,
         ctx: Option<HashMap<String, String>>,
+        before_context: i32,
+        after_context: i32,
     ) -> PyResult<Py<PyAny>> {
         if stream {
             return Err(PyRuntimeError::new_err(
@@ -2269,17 +2294,23 @@ impl RAGFSBindingClient {
         let top = self.top.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let before_context = before_context.max(0) as usize;
+        let after_context = after_context.max(0) as usize;
 
         let result = self
             .run_scoped(py, fs_ctx, move || async move {
                 top.grep(
                     &path,
                     &pattern,
-                    recursive,
-                    case_insensitive,
-                    limit,
-                    exclude_path.as_deref(),
-                    level_limit_usize,
+                    GrepOptions {
+                        recursive,
+                        case_insensitive,
+                        node_limit: limit,
+                        exclude_path: exclude_path.as_deref(),
+                        level_limit: level_limit_usize,
+                        before_context,
+                        after_context,
+                    },
                 )
                 .await
             })
