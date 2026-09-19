@@ -52,6 +52,7 @@ RETRIEVAL_OUTPUT_FIELDS = [
     "context_type",
     "abstract",
     "active_count",
+    "created_at",
     "updated_at",
     "search_tags",
 ]

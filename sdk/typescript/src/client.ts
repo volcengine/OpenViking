@@ -390,6 +390,7 @@ export class OpenVikingClient {
       level: options.level,
       tags: options.tags,
       include_provenance: options.includeProvenance,
+      include_timestamps: options.includeTimestamps,
       read_content: options.readContent,
     });
     return this.request("POST", `/api/v1/search/${kind}`, {

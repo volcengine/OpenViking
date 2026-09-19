@@ -287,6 +287,8 @@ class MatchedContext:
     match_reason: str = ""
 
     search_tags: List[str] = field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 @dataclass
@@ -341,17 +343,31 @@ class FindResult:
     def __post_init__(self):
         self.total = len(self.memories) + len(self.resources) + len(self.skills)
 
-    def to_dict(self, include_provenance: bool = False) -> Dict[str, Any]:
+    def to_dict(
+        self,
+        include_provenance: bool = False,
+        include_timestamps: bool = False,
+    ) -> Dict[str, Any]:
         """Convert to dictionary format.
 
         Args:
             include_provenance: If True, include query_results with thinking
                 trace and searched_directories for retrieval observability.
+            include_timestamps: If True, include indexed creation and update
+                timestamps on each matched context.
         """
         result = {
-            "memories": [self._context_to_dict(m) for m in self.memories],
-            "resources": [self._context_to_dict(r) for r in self.resources],
-            "skills": [self._context_to_dict(s) for s in self.skills],
+            "memories": [
+                self._context_to_dict(m, include_timestamps=include_timestamps)
+                for m in self.memories
+            ],
+            "resources": [
+                self._context_to_dict(r, include_timestamps=include_timestamps)
+                for r in self.resources
+            ],
+            "skills": [
+                self._context_to_dict(s, include_timestamps=include_timestamps) for s in self.skills
+            ],
             "total": self.total,
         }
 
@@ -366,14 +382,19 @@ class FindResult:
 
         return result
 
-    def _context_to_dict(self, ctx: MatchedContext) -> Dict[str, Any]:
+    def _context_to_dict(
+        self,
+        ctx: MatchedContext,
+        *,
+        include_timestamps: bool = False,
+    ) -> Dict[str, Any]:
         """Convert MatchedContext to dict.
 
         Only fields the retrieval pipeline actually populates are exposed.
         ``search_tags`` is surfaced under the ``tags`` key to match the
         ``tags`` filter parameter accepted by find/search.
         """
-        return {
+        result = {
             "context_type": ctx.context_type.value,
             "uri": ctx.uri,
             "level": ctx.level,
@@ -381,6 +402,10 @@ class FindResult:
             "abstract": ctx.abstract,
             "tags": normalize_search_tags(ctx.search_tags, discard_invalid=True),
         }
+        if include_timestamps:
+            result["created_at"] = ctx.created_at
+            result["updated_at"] = ctx.updated_at
+        return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
         """Convert TypedQuery to dict."""
@@ -423,6 +448,8 @@ class FindResult:
                 category=d.get("category", ""),
                 score=d.get("score", 0.0),
                 match_reason=d.get("match_reason", ""),
+                created_at=d.get("created_at"),
+                updated_at=d.get("updated_at"),
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
             )
 

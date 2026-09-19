@@ -150,6 +150,7 @@ export interface FindOptions {
   level?: number[];
   tags?: string[];
   includeProvenance?: boolean;
+  includeTimestamps?: boolean;
   readContent?: boolean;
   extra?: JsonObject;
 }
@@ -340,6 +341,8 @@ export interface MatchedContext {
   abstract?: string;
   score?: number;
   tags?: string[];
+  created_at?: string;
+  updated_at?: string;
   [key: string]: unknown;
 }
 /** Grouped semantic retrieval results. */
