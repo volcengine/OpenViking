@@ -325,45 +325,54 @@ class FSService:
         """Create directory."""
         viking_fs = self._ensure_initialized()
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
-        directory_preexisting = await viking_fs.exists(directory_uri, ctx=ctx)
-        await viking_fs.mkdir(uri, ctx=ctx)
+        async with self._uri_mutation_coordinator.mutation(ctx.account_id, [directory_uri]):
+            directory_preexisting = await viking_fs.exists(directory_uri, ctx=ctx)
+            await viking_fs.mkdir(uri, ctx=ctx)
 
-        abstract = self._normalize_directory_description(description)
-        if not abstract:
-            if await viking_fs.exists(abstract_uri, ctx=ctx):
-                return
-            abstract = f"# {uri_leaf_name(directory_uri)}"
+            lock_path = viking_fs._uri_to_path(abstract_uri, ctx=ctx)
+            lease = await viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
+            try:
+                abstract = self._normalize_directory_description(description)
+                if not abstract:
+                    if await viking_fs.exists(abstract_uri, ctx=ctx):
+                        return
+                    abstract = f"# {uri_leaf_name(directory_uri)}"
 
-        await viking_fs.write_file(
-            abstract_uri,
-            render_abstract_overview(
-                ContextLevel.ABSTRACT,
-                directory_uri,
-                abstract,
-                {
-                    "generated_by": {
-                        "component": "FSService",
-                        "trigger": "mkdir",
-                    },
-                    "freshness": {
-                        "total_entries": 0,
-                        "sampled_entries": 0,
-                        "unsampled_entries": 0,
-                        "pending_child_changes": 0,
-                    },
-                },
-            ),
-            ctx=ctx,
-        )
-        await vectorize_directory_meta(
-            uri=directory_uri,
-            abstract=abstract,
-            overview="",
-            context_type=context_type_for_uri(directory_uri),
-            ctx=ctx,
-            creator_acl_grant=(CreatorAclGrant.DIRECT if not directory_preexisting else None),
-            include_overview=False,
-        )
+                await viking_fs.write_file(
+                    abstract_uri,
+                    render_abstract_overview(
+                        ContextLevel.ABSTRACT,
+                        directory_uri,
+                        abstract,
+                        {
+                            "generated_by": {
+                                "component": "FSService",
+                                "trigger": "mkdir",
+                            },
+                            "freshness": {
+                                "total_entries": 0,
+                                "sampled_entries": 0,
+                                "unsampled_entries": 0,
+                                "pending_child_changes": 0,
+                            },
+                        },
+                    ),
+                    ctx=ctx,
+                    lease_ref=lease,
+                )
+                await vectorize_directory_meta(
+                    uri=directory_uri,
+                    abstract=abstract,
+                    overview="",
+                    context_type=context_type_for_uri(directory_uri),
+                    ctx=ctx,
+                    creator_acl_grant=(
+                        CreatorAclGrant.DIRECT if not directory_preexisting else None
+                    ),
+                    include_overview=False,
+                )
+            finally:
+                await viking_fs._async_agfs.pathlock_release(lease)
 
     @staticmethod
     def _normalize_directory_description(description: Optional[str]) -> Optional[str]:

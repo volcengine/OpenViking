@@ -11,6 +11,8 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.errors import LockAcquisitionError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -97,6 +99,113 @@ class _FakeMutationCoordinator:
         finally:
             if self.events is not None:
                 self.events.append(("mutation-exit", *uris))
+
+
+class _MkdirPathlockAGFS:
+    def __init__(self, owner, *, inject_custom_on_acquire=False):
+        self._owner = owner
+        self._lock = asyncio.Lock()
+        self._inject_custom_on_acquire = inject_custom_on_acquire
+        self.held = False
+        self.acquire_count = 0
+
+    async def pathlock_acquire_exact(self, _path):
+        if self._lock.locked():
+            raise LockAcquisitionError("exact path is busy")
+        await self._lock.acquire()
+        self.held = True
+        self.acquire_count += 1
+        if self._inject_custom_on_acquire and self._owner.abstract_content is None:
+            self._owner.abstract_content = "custom summary"
+        return {"lease_ref": f"mkdir-{self.acquire_count}"}
+
+    async def pathlock_release(self, _lease):
+        self.held = False
+        self._lock.release()
+
+
+class _MkdirVikingFS:
+    def __init__(self, *, inject_custom_on_acquire=False):
+        self.directory_exists = False
+        self.abstract_content = None
+        self.abstract_checks = 0
+        self.abstract_checks_ready = asyncio.Event()
+        self._async_agfs = _MkdirPathlockAGFS(
+            self, inject_custom_on_acquire=inject_custom_on_acquire
+        )
+
+    def _uri_to_path(self, uri, ctx=None):
+        del ctx
+        return f"/local/default/{uri.removeprefix('viking://')}"
+
+    async def exists(self, uri, ctx=None):
+        del ctx
+        if uri.endswith("/.abstract.md"):
+            if self._async_agfs.held:
+                return self.abstract_content is not None
+            if self._async_agfs._inject_custom_on_acquire:
+                self.abstract_content = "custom summary"
+                return False
+            self.abstract_checks += 1
+            if self.abstract_checks == 2:
+                self.abstract_checks_ready.set()
+            await self.abstract_checks_ready.wait()
+            return False
+        return self.directory_exists
+
+    async def mkdir(self, _uri, ctx=None):
+        del ctx
+        self.directory_exists = True
+
+    async def write_file(self, _uri, content, ctx=None, lease_ref=None):
+        del ctx
+        assert self._async_agfs.held
+        assert lease_ref is not None
+        self.abstract_content = content
+
+
+@pytest.mark.asyncio
+async def test_mkdir_default_does_not_overwrite_concurrent_abstract(monkeypatch, request_context):
+    viking_fs = _MkdirVikingFS(inject_custom_on_acquire=True)
+    vectorized = []
+
+    async def record_vectorization(**kwargs):
+        assert viking_fs._async_agfs.held
+        vectorized.append(kwargs["abstract"])
+
+    monkeypatch.setattr(
+        "openviking.service.fs_service.vectorize_directory_meta", record_vectorization
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    await service.mkdir("viking://resources/shared", ctx=request_context)
+
+    assert body_for_preview(viking_fs.abstract_content) == "custom summary"
+    assert vectorized == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_default_mkdir_vectorizes_once(monkeypatch, request_context):
+    viking_fs = _MkdirVikingFS()
+    vectorized = []
+
+    async def record_vectorization(**kwargs):
+        assert viking_fs._async_agfs.held
+        vectorized.append(kwargs["abstract"])
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(
+        "openviking.service.fs_service.vectorize_directory_meta", record_vectorization
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    await asyncio.gather(
+        service.mkdir("viking://resources/shared", ctx=request_context),
+        service.mkdir("viking://resources/shared", ctx=request_context),
+    )
+
+    assert body_for_preview(viking_fs.abstract_content) == "# shared"
+    assert vectorized == ["# shared"]
 
 
 @pytest.mark.asyncio
