@@ -1,6 +1,6 @@
 # 快速开始
 
-5 分钟上手 OpenViking。
+启动本地服务，导入一份资源，然后完成第一次检索。
 
 ## 前置要求
 
@@ -12,9 +12,9 @@
 
 ## 安装与启动
 
-OpenViking 支持通过 Python Package 安装作为本地库使用，也支持通过 Docker 快速启动独立服务。
+选择一种服务端安装方式：Python 包或 Docker。Python SDK 通过 HTTP 连接这两种方式启动的服务。
 
-### 方式一：通过 Python 包安装（作为本地命令和库）
+### 方式一：安装服务端和 CLI
 
 选择你常用的 Python 包管理工具安装 OpenViking：
 
@@ -25,7 +25,7 @@ uv tool install openviking --upgrade
 ```
 
 ```bash [pip]
-pip install openviking --upgrade --force-reinstall
+python -m pip install openviking --upgrade
 ```
 
 ```bash [pipx]
@@ -48,8 +48,9 @@ pipx upgrade openviking
    在宿主机上创建 OpenViking 目录，并准备好 `ov.conf` 配置文件（配置项参考下方“配置环境”章节）。所有持久化状态 —— 配置和工作区数据 —— 都放在这一个目录下：
    ```bash
    mkdir -p ~/.openviking
-   touch ~/.openviking/ov.conf
    ```
+
+   启动容器前，参照下方手动配置模板，将完整 JSON 写入 `~/.openviking/ov.conf`。空文件不是有效配置。
 
 2. **使用 Docker Compose 启动**
    创建 `docker-compose.yml` 文件：
@@ -60,37 +61,21 @@ pipx upgrade openviking
        image: ghcr.io/volcengine/openviking:latest
        container_name: openviking
        ports:
-         - "1933:1933"
+         - "127.0.0.1:1933:1933"
        volumes:
          - ~/.openviking:/app/.openviking
        restart: unless-stopped
    ```
    然后在同目录下执行启动命令：
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
    默认情况下，容器会启动 OpenViking API 服务（`1933`，同时在 `/studio` 提供 Web Studio 前端）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
 
    如果运行平台不支持 bind mount，可以通过 `OPENVIKING_CONF_CONTENT` 环境变量传入完整的配置 JSON，或在容器启动后 `docker exec` 进去执行 `openviking-server init`。详见 [部署指南](../guides/03-deployment.md#无法使用-docker--v-时)。
 
-> **💡 Mac 本地网络访问提示 (Connection reset 报错)：**
->
-> 默认情况下，OpenViking 为了安全仅监听 `127.0.0.1`。如果你在 Mac 上使用 Docker，宿主机可能无法直接通过 `localhost:1933` 访问。
-> 
-> **推荐解决方案：使用 socat 端口转发（无需修改配置）：**
-> 在你的 `docker-compose.yml` 中覆盖默认启动命令，利用 `socat` 在容器内部进行端口转发：
-> ```yaml
-> services:
->   openviking:
->     image: ghcr.io/volcengine/openviking:latest
->     ports:
->       - "1933:1934" # 将宿主机 1933 映射到容器 1934
->     volumes:
->       - ~/.openviking:/app/.openviking
->     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
-> ```
-> 这样即可完美解决 Mac 宿主机的访问问题。
+容器入口脚本在容器内监听 `0.0.0.0`。上述端口映射使宿主机（包括 macOS）可通过 `http://localhost:1933` 访问服务。如需允许其他机器访问，请参见 [身份认证](../guides/04-authentication.md) 和 [公网访问](../guides/12-public-access.md)。
 
 ## 模型准备
 
@@ -100,7 +85,7 @@ OpenViking 需要以下模型能力：
 
 OpenViking 支持多种模型服务：
 - **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](../guides/02-volcengine-purchase-guide.md)
-- **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
+- **OpenAI 模型**：通过 OpenAI API 使用支持视觉理解的模型和 Embedding 模型
 - **OpenAI Codex**：支持通过 ChatGPT/Codex OAuth 使用 Codex 作为 VLM
 - **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
 
@@ -108,14 +93,14 @@ OpenViking 支持多种模型服务：
 
 ### 配置文件模版
 
-推荐首次配置使用：
+通过 Python 包安装时，使用配置向导：
 
 ```bash
 openviking-server init
 openviking-server doctor
 ```
 
-如果你更希望手动创建，再编写 `~/.openviking/ov.conf`：
+使用 Docker，或希望手动配置时，编写 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -155,10 +140,9 @@ export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 
 ## 启动本地服务
 
-首次在本地运行时，完成初始化并启动服务：
+通过 Python 包安装并完成配置后，启动服务。如果 Docker 已运行，跳过此步骤：
 
 ```bash
-openviking-server init
 openviking-server
 ```
 
@@ -229,23 +213,31 @@ try:
     for result in results.get("resources", []):
         print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
-    # Close the client
+finally:
     client.close()
-
-except Exception as e:
-    print(f"Error: {e}")
 ```
 
 ### 运行脚本
 
-```bash
+SDK 需要安装在运行脚本的 Python 环境中。[`uv tool install`](https://docs.astral.sh/uv/guides/tools/#installing-tools) 和 `pipx install` 会隔离服务端依赖，不会把 SDK 安装到当前 Python 环境；Docker 也不会在宿主机安装客户端。
+
+::: code-group
+
+```bash [uv]
+uv run --with openviking-sdk python example.py
+```
+
+```bash [pip（在你的虚拟环境中）]
+python -m pip install --upgrade openviking-sdk
 python example.py
 ```
+
+:::
 
 ### 预期输出
 
 ```
-Wait for semantic processing...
+Import task: ...
 
 Directory structure:
 ...

@@ -4,7 +4,7 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 
 ## Prerequisites
 
-- OpenViking installed (`pip install openviking --upgrade --force-reinstall`)
+- OpenViking installed (`uv tool install openviking --upgrade`)
 - Model configuration ready (see [Quick Start](02-quickstart.md) for setup)
 
 > Python 3.14 note for Volcengine Ark users:
@@ -32,14 +32,14 @@ openviking-server
 # Config file at a different location — specify with --config
 openviking-server --config /path/to/ov.conf
 
-# Override host/port
+# Use a different port
 openviking-server --port 8000
 ```
 
 You should see:
 
 ```
-INFO:     Uvicorn running on http://0.0.0.0:1933
+INFO:     Uvicorn running on http://127.0.0.1:1933
 ```
 
 ## Verify
@@ -55,10 +55,18 @@ Web Studio is also served at `http://localhost:1933/studio` (bundled with pip/pi
 
 ## Connect with Python SDK
 
-```python
-import openviking as ov
+Install the standalone SDK in your client Python environment:
 
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+```bash
+python -m pip install --upgrade openviking-sdk
+```
+
+Server installations made with `uv tool` or pipx use a separate environment. You can also run a saved script with `uv run --with openviking-sdk python example.py`.
+
+```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933")
 ```
 
 ### Authentication
@@ -70,9 +78,9 @@ When authentication is enabled, pass an API key. OpenViking uses a two-tier key 
 For most scenarios, use a `user_key` — it directly works with tenant-scoped APIs like `add_resource`, `find`, and `ls`:
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
 )
@@ -87,9 +95,9 @@ Tenant-scoped data APIs such as `add_resource`, `find`, and sessions need a key
 that is bound to an account/user, such as a user key or admin key:
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.SyncHTTPClient(
+client = SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-or-admin-key>",
 )
@@ -101,14 +109,16 @@ client = ov.SyncHTTPClient(
 
 See [Authentication](../guides/04-authentication.md) for details (trusted mode, CLI config, etc.).
 
-**Full example (using `user_key`):**
+**Full example:**
+
+For an authenticated server, set `OPENVIKING_API_KEY` to a user/admin key before running this script. The SDK reads this environment variable automatically.
 
 ```python
 import time
 
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-client = ov.SyncHTTPClient(url="http://localhost:1933")
+client = SyncHTTPClient(url="http://localhost:1933")
 
 try:
     client.initialize()
@@ -145,6 +155,8 @@ finally:
 
 ## Connect with CLI
 
+For the default local server, omit `api_key`. For an authenticated server, replace `your-key` below with a user/admin key.
+
 Create a CLI config file `~/.openviking/ovcli.conf` that points to your server:
 
 ```json
@@ -179,6 +191,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 ## Connect with curl
 
+The examples below use the default local server. With authentication enabled, add `-H "X-API-Key: $OPENVIKING_API_KEY"` to each request, using a user/admin key. Resource imports are asynchronous: poll `GET /api/v1/tasks/{task_id}` with the returned `task_id` until it completes before searching.
+
 Use direct `path` for remote URLs. For local files, upload first with `POST /api/v1/resources/temp_upload`, then call the target API with the returned `temp_file_id`. For local directories in raw HTTP mode, zip the directory first and upload the `.zip` file.
 
 ```bash
@@ -196,205 +210,11 @@ curl -X POST http://localhost:1933/api/v1/search/find \
   -d '{"query": "what is openviking"}'
 ```
 
-## Recommended Cloud Deployment: Volcengine ECS
+## Deploy on a cloud server
 
-To achieve high-performance and scalable Context Memory—providing your Agents with a robust "long-term memory"—we recommend deploying on **Volcengine Elastic Compute Service (ECS)** using the **veLinux** operating system.
+For Volcengine ECS, create an instance in the [official ECS console](https://console.volcengine.com/ecs/). Follow the [Deployment Guide](../guides/03-deployment.md) for persistent storage, Docker, and service management.
 
-### 1. Instance Provisioning & Configuration
-
-When creating an instance in the [Volcengine ECS Console](https://www.google.com/search?q=https://console.volcengine.com/ecs/region:ecs%2Bcn-beijing/dashboard%3F), we recommend the following specifications:
-
-| Item | Recommended Setting | Notes |
-| --- | --- | --- |
-| **Image** | **veLinux 2.0 (CentOS Compatible)** | Check "Security Hardening" |
-| **Instance Type** | **Compute Optimized c3a** (2 vCPU, 4GiB+) | Meets basic inference and retrieval needs |
-| **Storage** | **Add 256 GiB Data Disk** | For vector data persistence |
-| **Networking** | Configure as needed | Open only required business ports (e.g., TCP 1933) |
-
-### 2. Environment Preparation (Mounting the Data Disk)
-
-Once the instance is running, you must mount the data disk to the `/data` directory. Execute the following commands to automate formatting and mounting:
-
-```bash
-# 1. Create mount point
-mkdir -p /data
-
-# 2. Configure auto-mount (using UUID to prevent drive letter drifting)
-cp /etc/fstab /etc/fstab.bak
-DISK_UUID=$(blkid -s UUID -o value /dev/vdb)
-
-if [ -z "$DISK_UUID" ]; then
-    echo "ERROR: /dev/vdb UUID not found"
-else
-    # Append to fstab
-    echo "UUID=${DISK_UUID} /data ext4 defaults,nofail 0 0" >> /etc/fstab
-    # Verify and mount
-    mount -a
-    echo "Mount successful. Current disk status:"
-    df -Th /data
-fi
-
-```
-
-### 3. Installing Dependencies and OpenViking
-
-```bash
-yum install -y curl git tree
-
-# Step 1: Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Step 2: Configure environment variables
-echo 'source $HOME/.cargo/env' >> ~/.bashrc
-source ~/.bashrc
-
-# Verify installation
-uv --version
-
-# Step 3: Create a virtual environment on the data disk
-cd /data
-uv venv ovenv --python 3.11
-
-# Step 4: Activate the virtual environment
-source /data/ovenv/bin/activate
-
-# Step 5: Verification
-echo "Ready"
-echo "Python path: $(which python)"
-echo "Python version: $(python --version)"
-
-```
-
-* **Install OpenViking**: Install the tool within your activated virtual environment:
-
-```bash
-uv tool install openviking --upgrade
-
-```
-
-### 4. OpenViking Server Configuration and Startup
-
-Configure your AI models and set up the service to run as a background daemon.
-
-#### Prepare Configuration Files
-
-Create the directory and configuration file before starting the service.
-
-**Create config directory:**
-
-```bash
-mkdir -p ~/.openviking
-
-```
-
-**Create and edit the config file:**
-
-```bash
-vim ~/.openviking/ov.conf
-
-```
-
-**Configuration Template:**
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "<api-endpoint>",   // e.g., https://ark.cn-beijing.volces.com/api/v3
-      "api_key"  : "<your-api-key>",   // Model service API Key
-      "provider" : "<provider-type>",  // volcengine or openai
-      "dimension": 1024,               // Vector dimension
-      "model"    : "<model-name>",     // e.g., doubao-embedding-vision-251215
-      "input"    : "multimodal"        // Use "multimodal" for doubao-embedding-vision models
-    }
-  },
-  "vlm": {
-    "api_base"   : "<api-endpoint>",
-    "api_key"    : "<your-api-key>",
-    "provider"   : "<provider-type>",
-    "max_retries": 2,
-    "model"      : "<model-name>"      // e.g., doubao-seed-2-0-lite-260428 or gpt-4-vision-preview
-  }
-}
-
-```
-
-> **Tip:** Press `i` to enter Insert mode, paste your config, then press `Esc` and type `:wq` to save and exit.
-
-#### Start the Service in the Background
-
-We will run the server as a background process using the virtual environment.
-
-* **Activate environment & create logs:**
-
-```bash
-source /data/ovenv/bin/activate
-mkdir -p /data/log/
-
-```
-
-* **Launch with nohup:**
-
-```bash
-nohup openviking-server > /data/log/openviking.log 2>&1 &
-
-# Note: Data will be stored in ./data relative to the execution path.
-# To stop the service: pkill openviking; pkill agfs
-
-```
-
-*Note: For production environments requiring auto-restart on failure, we recommend using `systemctl` (not covered here).*
-
-#### Verify Service Status
-
-* **Check Process:**
-```bash
-ps aux | grep openviking-server
-```
-
-* **Check Logs:**
-```bash
-tail -f /data/log/openviking.log # TODO: Implement log rotation
-```
-
-### 5. Client Configuration and Testing (CLI)
-
-Ensure `openviking` is also installed locally to use the CLI. You must point the `ovcli.conf` to your server address.
-
-* **Prepare client config:**
-
-```bash
-vim ~/.openviking/ovcli.conf
-```
-
-* **Add the following (replace with your server's IP):**
-
-```json
-{
-  "url": "http://XXX.XXX.XXX.XXX:1933",
-  "api_key": "your-key"
-}
-
-```
-
-* **Monitor System Health:**
-
-```bash
-openviking observer system
-```
-
-* **Functional Testing (Upload & Search):**
-
-```bash
-# Upload a test resource
-openviking add-resource https://raw.githubusercontent.com/ZaynJarvis/doc-eval/refs/heads/main/text.md
-
-# List resources
-openviking ls viking://resources
-
-# Test retrieval
-openviking find "who is Alice"
-```
+The local server binds to `127.0.0.1` by default. Before allowing remote clients, configure [authentication](../guides/04-authentication.md), a reachable bind address, and the required network access rules. See [Public Access](../guides/12-public-access.md) for TLS and reverse-proxy configuration. Use a tenant-bound user/admin key for data access.
 
 ## Next Steps
 

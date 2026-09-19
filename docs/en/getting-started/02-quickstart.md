@@ -1,6 +1,6 @@
 # Quick Start
 
-Get started with OpenViking in 5 minutes.
+Start a local server, import a resource, and run your first search.
 
 ## Prerequisites
 
@@ -12,9 +12,9 @@ Before using OpenViking, ensure your environment meets the following requirement
 
 ## Installation & Startup
 
-OpenViking can be installed via a Python Package to be used as a local library, or you can quickly launch it as an independent service using Docker.
+Choose one server installation method: a Python package or Docker. The Python SDK connects to either server over HTTP.
 
-### Option 1: Install as a Python package (local commands and library)
+### Option 1: Install the server and CLI
 
 Choose your preferred Python package manager to install OpenViking:
 
@@ -25,7 +25,7 @@ uv tool install openviking --upgrade
 ```
 
 ```bash [pip]
-pip install openviking --upgrade --force-reinstall
+python -m pip install openviking --upgrade
 ```
 
 ```bash [pipx]
@@ -48,8 +48,9 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
    Create the OpenViking directory on your host and prepare the `ov.conf` configuration file (see the "Configuration" section below for details). All persistent state — config and workspace data — lives under this single directory:
    ```bash
    mkdir -p ~/.openviking
-   touch ~/.openviking/ov.conf
    ```
+
+   Write a complete JSON configuration to `~/.openviking/ov.conf` using the manual template below before starting the container. An empty file is not a valid configuration.
 
 2. **Start with Docker Compose**
    Create a `docker-compose.yml` file:
@@ -60,37 +61,21 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
        image: ghcr.io/volcengine/openviking:latest
        container_name: openviking
        ports:
-         - "1933:1933"
+         - "127.0.0.1:1933:1933"
        volumes:
          - ~/.openviking:/app/.openviking
        restart: unless-stopped
    ```
    Then run the following command in the same directory:
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
    By default, the container starts the OpenViking API server on `1933` (which also serves the Web Studio UI at `/studio`) and the bundled `vikingbot` gateway. If you need to disable `vikingbot`, add either `command: ["--without-bot"]` or `environment: ["OPENVIKING_WITH_BOT=0"]`.
 
    On platforms that don't allow bind mounts, set `OPENVIKING_CONF_CONTENT` to the full config JSON to bootstrap on first start, or `docker exec` in and run `openviking-server init` after the container is up. See [Deployment Guide](../guides/03-deployment.md#when-docker--v-is-not-available) for details.
 
-> **💡 Mac Local Network Access Tip (Connection reset error):**
->
-> By default, OpenViking only listens to `127.0.0.1` for security reasons. If you are using Docker on a Mac, your host machine may not be able to access it directly via `localhost:1933`.
-> 
-> **Recommended Solution: Use socat for port forwarding (No config changes needed):**
-> Override the default startup command in your `docker-compose.yml` to use `socat` for internal port forwarding:
-> ```yaml
-> services:
->   openviking:
->     image: ghcr.io/volcengine/openviking:latest
->     ports:
->       - "1933:1934" # Map host 1933 to container 1934
->     volumes:
->       - ~/.openviking:/app/.openviking
->     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
-> ```
-> This perfectly solves the access issue for Mac host machines.
+The container entrypoint binds to `0.0.0.0` inside the container. The [port mapping](https://docs.docker.com/engine/network/port-publishing/) above makes it accessible at `http://localhost:1933` on the host, including macOS. For access from other machines, see [Authentication](../guides/04-authentication.md) and [Public Access](../guides/12-public-access.md).
 
 ## Model Preparation
 
@@ -100,7 +85,7 @@ OpenViking requires the following model capabilities:
 
 OpenViking supports multiple model services:
 - **Volcengine (Doubao Models)**: Recommended, cost-effective with good performance, free quota for new users. For purchase and activation, see: [Volcengine Purchase Guide](../guides/02-volcengine-purchase-guide.md)
-- **OpenAI Models**: Supports GPT-4V and other VLM models, plus OpenAI Embedding models
+- **OpenAI Models**: Supports vision-capable models and embedding models through the OpenAI API
 - **OpenAI Codex**: Supports Codex as the VLM provider through ChatGPT/Codex OAuth
 - **Other Custom Model Services**: Supports model services compatible with OpenAI API format
 
@@ -108,14 +93,14 @@ OpenViking supports multiple model services:
 
 ### Configuration File Template
 
-Recommended first-time setup:
+For a Python package installation, use the setup wizard:
 
 ```bash
 openviking-server init
 openviking-server doctor
 ```
 
-If you prefer manual setup, create `~/.openviking/ov.conf`:
+For Docker, or if you prefer manual setup, create `~/.openviking/ov.conf`:
 
 ```json
 {
@@ -155,10 +140,9 @@ export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 
 ## Start the Local Server
 
-For the first local run, initialize the config and start the server:
+After configuring a Python package installation, start the server. If Docker is already running, skip this step:
 
 ```bash
-openviking-server init
 openviking-server
 ```
 
@@ -229,23 +213,31 @@ try:
     for result in results.get("resources", []):
         print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
-    # Close the client
+finally:
     client.close()
-
-except Exception as e:
-    print(f"Error: {e}")
 ```
 
 ### Run the Script
 
-```bash
+Install the SDK in the environment that runs the script. [`uv tool install`](https://docs.astral.sh/uv/guides/tools/#installing-tools) and `pipx install` isolate server dependencies; they do not install the SDK into your current Python environment. Docker also does not install a client on the host.
+
+::: code-group
+
+```bash [uv]
+uv run --with openviking-sdk python example.py
+```
+
+```bash [pip (in your virtual environment)]
+python -m pip install --upgrade openviking-sdk
 python example.py
 ```
+
+:::
 
 ### Expected Output
 
 ```
-Wait for semantic processing...
+Import task: ...
 
 Directory structure:
 ...
