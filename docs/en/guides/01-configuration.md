@@ -874,7 +874,17 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 ### pdf
 
-PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+PDF parsing configuration. Four strategies are supported: `auto` (the default — pdf-inspector, routed to MinerU where it can't cope), `local` (local pdfplumber), `anydoc` (local anydoc), and `mineru` (remote MinerU API, always).
+
+`auto` extracts with pdf-inspector and keeps the result for ordinary prose and papers. It escalates to MinerU when a document shows one of the signals pdf-inspector cannot handle: pages the classifier flagged for OCR, near-empty output from a document the classifier called healthy, a slide layout, or code-heavy content.
+
+A PDF that `scan_detection` rejects never reaches this decision. That covers scans, image-based files, and mixed documents whose OCR-page ratio reaches `scan_mixed_ratio` (0.5 by default); none of them are stored. Routing sees what is left, including partial scans below that ratio, where pdf-inspector would otherwise emit blank pages for the flagged ones without reporting anything.
+
+`mineru_endpoint` serves two callers: the files routing escalates, and any file pdf-inspector fails to convert. Without it, an escalated file keeps the pdf-inspector output and logs a warning, so a missing endpoint never loses text that was extracted successfully; a pdf-inspector failure has nothing to fall back on and surfaces as a parse warning instead.
+
+`local` is no longer part of that decision — pdf-inspector matches it on body text and runs roughly 30x faster — but it remains available when you specifically want its bookmarks, tables, and images.
+
+`anydoc` is much faster than `local` but extracts text only — no images and no tables — so it suits text-heavy books and not slide decks or chart-heavy documents. It also raises a conversion error when any page needs OCR, so PDFs without a full text layer should use `local` (or offline OCR) instead.
 
 ```json
 {
@@ -893,7 +903,7 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
+| `strategy` | str | Parsing strategy: `auto` / `local` / `anydoc` / `mineru` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
 | `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
 | `mineru_bodys` | dict | MinerU API multipart form fields |
@@ -1571,11 +1581,11 @@ When config files are at the default path, OpenViking loads them automatically �
 ### Reload boundary
 
 The server reads `ov.conf` during process startup and does not watch the file
-for changes. Editing `embedding`, `vlm`, `rerank`, `retrieval`, `storage`, or
-`server` settings requires restarting the OpenViking server. Queue work that is
-already running is not migrated to the new configuration, so use the normal
-service-manager restart procedure and verify with `openviking-server doctor`
-after the process comes back.
+for changes. Editing `embedding`, `vlm`, `rerank`, `retrieval`, `storage`,
+`parsers`, or `server` settings requires restarting the OpenViking server.
+Queue work that is already running is not migrated to the new configuration, so
+use the normal service-manager restart procedure and verify with
+`openviking-server doctor` after the process comes back.
 
 `ovcli.conf` is client-side configuration. A new `ov` command or newly created
 HTTP client reads the current file; an already-running client or plugin may keep
