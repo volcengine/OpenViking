@@ -306,6 +306,75 @@ test("OpenCode tool parts preserve completed and error state fields", async () =
   })
 })
 
+test("captured message parts are not retained in the session state file", async () => {
+  await withCaptureServer(async ({ endpoint }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-state-retention" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-captured",
+            sessionID: "oc-state-retention",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-captured",
+            messageID: "msg-captured",
+            sessionID: "oc-state-retention",
+            type: "text",
+            text: "This payload was already sent and is not needed for a future flush.".repeat(20),
+          },
+        },
+      })
+
+      await manager.handleEvent({ type: "session.idle", sessionID: "oc-state-retention" })
+      await manager.flushAll({ commit: false })
+
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-pending",
+            sessionID: "oc-state-retention",
+            role: "user",
+          },
+        },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-pending",
+            messageID: "msg-pending",
+            sessionID: "oc-state-retention",
+            type: "text",
+            text: "This payload is still pending and must remain recoverable.",
+          },
+        },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 350))
+
+      const state = JSON.parse(await fs.promises.readFile(join(dir, "openviking-session-state.json"), "utf8"))
+      const persistedSession = Object.values(state.sessions)[0]
+      const persistedMessages = new Map(persistedSession.messages)
+      const capturedMessage = persistedMessages.get("msg-captured")
+      const pendingMessage = persistedMessages.get("msg-pending")
+      assert.equal(capturedMessage.captured, true)
+      assert.deepEqual(capturedMessage.parts, [])
+      assert.equal(pendingMessage.parts.length, 1)
+    })
+  })
+})
+
 test("concurrent saves never race the shared state file (#3877)", async (t) => {
   // Widen the race window: concurrent saveState() calls share the same
   // `${statePath}.tmp` temp file. A slow writeFile keeps the shared .tmp

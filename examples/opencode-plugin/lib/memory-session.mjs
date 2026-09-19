@@ -117,7 +117,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         {
           role: message.role,
           captured: message.captured,
-          parts: Array.from(message.parts.entries()),
+          // Captured messages are never read by flushPendingMessages again; retain
+          // only their metadata so completed payloads cannot grow the state file.
+          parts: message.captured ? [] : Array.from(message.parts.entries()),
         },
       ])),
     }
