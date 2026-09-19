@@ -605,7 +605,7 @@ For Git repository sources with `wait=false`, the background task has `task_type
 
 ### temp_upload
 
-Upload a temporary file for subsequent importing of local files via [add_resource](#add-resource) or [add_skill](#add_skill).
+Upload a temporary file for subsequent importing of local files via [add_resource](#add-resource) or [add_skill](04-skills.md#add-skill).
 
 #### 1. API Implementation Overview
 

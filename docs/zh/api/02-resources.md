@@ -613,7 +613,7 @@ task_id      uuid-xxx
 
 ### temp_upload
 
-上传临时文件，用于后续通过 [add_resource](#add-resource) 或 [add_skill](#add_skill) 导入本地文件。
+上传临时文件，用于后续通过 [add_resource](#add-resource) 或 [add_skill](04-skills.md#add-skill) 导入本地文件。
 
 #### 1. API 实现介绍
 
