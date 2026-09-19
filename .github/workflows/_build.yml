@@ -376,6 +376,186 @@ jobs:
         echo "Build Version: $VERSION"
         echo "::notice::Build Wheel Version (Linux ${{ matrix.arch }} glibc 2.31 py${{ matrix.python-version }}): $VERSION"
 
+  build-linux-manylinux_2_28:
+    name: Build distribution on Linux x86_64 (manylinux_2_28) py${{ matrix.python-version }}
+    # Parallel x86_64 wheel built against glibc 2.28 so older intranet hosts
+    # (Ubuntu 18 / CentOS 8 / RHEL 8) can install via pip. See issue #1986.
+    if: >-
+      inputs.build_wheels &&
+      (
+        contains(inputs.os_json, 'linux') ||
+        contains(inputs.os_json, '"ubuntu-24.04"')
+      )
+    runs-on: ubuntu-24.04
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJson(inputs.python_json) }}
+
+    steps:
+    - name: Install system dependencies (manylinux_2_28)
+      run: |
+        yum install -y clang nodejs npm
+        clang --version
+        clang++ --version
+
+    - name: Select compiler toolchain (manylinux_2_28)
+      run: |
+        echo "CC=clang" >> "$GITHUB_ENV"
+        echo "CXX=clang++" >> "$GITHUB_ENV"
+        echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"
+
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+        fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
+
+    - name: Fetch all tags
+      run: |
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        git fetch --force --tags
+
+    - name: Resolve Python interpreter (manylinux_2_28)
+      run: |
+        PYTHON_TAG="cp$(echo '${{ matrix.python-version }}' | tr -d '.')"
+        PYTHON_BIN="/opt/python/${PYTHON_TAG}-${PYTHON_TAG}/bin/python"
+        if [ ! -x "$PYTHON_BIN" ]; then
+          echo "Python interpreter ${PYTHON_BIN} not found in manylinux image" >&2
+          ls /opt/python/ >&2
+          exit 1
+        fi
+        echo "PYTHON_BIN=${PYTHON_BIN}" >> "$GITHUB_ENV"
+        "$PYTHON_BIN" -V
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: stable
+        targets: x86_64-unknown-linux-gnu
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+
+    - name: Create venv (manylinux_2_28)
+      run: uv venv --python "$PYTHON_BIN"
+
+    - name: Seed pip (manylinux_2_28)
+      run: uv run python -m ensurepip --upgrade
+
+    - name: Install dependencies
+      run: uv sync --frozen
+
+    - name: Install build dependencies
+      run: uv pip install setuptools setuptools_scm cmake wheel build
+
+    - name: Resolve OpenViking version for Rust CLI (manylinux_2_28)
+      shell: bash
+      run: |
+        OPENVIKING_VERSION=$(
+          uv run --frozen python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+        )
+        echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
+        echo "Resolved OpenViking version: $OPENVIKING_VERSION"
+
+    - name: Build Rust CLI (manylinux_2_28)
+      run: cargo build --release --target x86_64-unknown-linux-gnu -p ov_cli
+
+    - name: Copy Rust CLI binary (manylinux_2_28)
+      run: |
+        mkdir -p openviking/bin
+        cp target/x86_64-unknown-linux-gnu/release/ov openviking/bin/
+        chmod +x openviking/bin/ov
+
+    - name: Clean workspace (force ignore dirty)
+      shell: bash
+      run: |
+        # Back up pre-built artifacts before cleaning
+        cp -a openviking/bin /tmp/_ov_bin || true
+        git reset --hard HEAD
+        git clean -fd
+        rm -rf openviking/_version.py openviking.egg-info
+        # Restore pre-built artifacts
+        cp -a /tmp/_ov_bin openviking/bin || true
+        # Ignore uv.lock changes to avoid dirty state in setuptools_scm
+        git update-index --assume-unchanged uv.lock || true
+
+    - name: Debug Git and SCM
+      shell: bash
+      run: |
+        echo "=== Git Describe ==="
+        git describe --tags --long --dirty --always
+        echo "=== Setuptools SCM Version ==="
+        uv run --frozen python -m setuptools_scm
+        echo "=== Git Status (Ignored included) ==="
+        git status --ignored
+        echo "=== Check openviking/_version.py ==="
+        if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
+        echo "=== Verify pre-built artifacts survived clean ==="
+        ls -la openviking/bin/ || true
+
+    - name: Build package (Wheel Only)
+      run: uv build --wheel
+
+    - name: Repair wheels (manylinux_2_28)
+      run: |
+        uv pip install auditwheel
+        uv run auditwheel repair --plat manylinux_2_28_x86_64 dist/*.whl -w dist_fixed
+        rm dist/*.whl
+        mv dist_fixed/*.whl dist/
+        rmdir dist_fixed
+
+    - name: Smoke test built wheel (manylinux_2_28)
+      shell: bash
+      run: |
+        "$PYTHON_BIN" -m pip install --upgrade pip
+        "$PYTHON_BIN" -m pip install --force-reinstall dist/*.whl
+
+        cd "$RUNNER_TEMP"
+        "$PYTHON_BIN" - <<'PY'
+        import importlib.util
+        from importlib.resources import files
+
+        from openviking.pyagfs import get_binding_client
+        import openviking.storage.vectordb.engine as engine
+
+        binding_client, _ = get_binding_client()
+        if binding_client is None:
+            raise SystemExit("ragfs binding client was not installed")
+
+        print(f"Loaded RAGFS binding client {binding_client.__name__}")
+        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
+        print(f"Available engine variants {engine.AVAILABLE_ENGINE_VARIANTS}")
+
+        module_name = f"openviking.storage.vectordb.engine._{engine.ENGINE_VARIANT}"
+        backend_spec = importlib.util.find_spec(module_name)
+        if backend_spec is None or backend_spec.origin is None:
+            raise SystemExit(f"backend module {module_name} was not installed")
+
+        studio_index = files("openviking").joinpath("web_studio/dist/index.html")
+        if not studio_index.is_file():
+            raise SystemExit("Web Studio index.html was not installed")
+
+        print(f"Imported backend module {module_name}")
+        print(f"Backend module origin {backend_spec.origin}")
+        print(f"Bundled Web Studio index {studio_index}")
+        PY
+
+    - name: Store the distribution packages
+      uses: actions/upload-artifact@v7
+      with:
+        name: python-package-distributions-linux-x86_64-manylinux_2_28-${{ matrix.python-version }}
+        path: dist/
+
+    - name: Display built wheel version
+      continue-on-error: true
+      run: |
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Build Version: $VERSION"
+        echo "::notice::Build Wheel Version (Linux x86_64 manylinux_2_28 py${{ matrix.python-version }}): $VERSION"
+
   build-other:
     name: Build non-Linux distributions
     # Run only when non-Linux runners are explicitly requested
