@@ -2,6 +2,8 @@
 
 OpenViking is an open-source context database for AI agents. It stores resources, memories, and skills in a virtual file system, so an application can browse known paths, retrieve relevant context, and load only the detail it needs.
 
+Use it when an agent needs to reuse documents and experience across sessions, with one place to organize and retrieve that context.
+
 ## Start with your task
 
 | I want to… | Start here |

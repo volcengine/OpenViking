@@ -2,6 +2,8 @@
 
 OpenViking can run as a standalone HTTP server, allowing multiple clients to connect over the network.
 
+For sizing, measure memory and disk use with a representative corpus and expected concurrency. Budget storage for source files, indexes, and snapshots; use [observability](../guides/05-observability.md) to check headroom before expanding the workload.
+
 ## Quick Start
 
 ```bash
