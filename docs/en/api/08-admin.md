@@ -113,12 +113,10 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 }
 ```
 
-`enabled` is the account override from
-`/local/{account_id}/_system/setting.json`, or
-`server.agent_evolution.enabled` when no override exists. Session commits read
-this effective value without restarting the server.
+`enabled` resolves the Account runtime override, Cluster runtime override, then
+the startup value from `server.agent_evolution.enabled`.
 
-The existing update endpoint name is unchanged:
+The existing endpoint remains as a deprecated compatibility adapter:
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -129,9 +127,9 @@ Content-Type: application/json
 
 ### account_settings
 
-ROOT can manage any account and ADMIN can manage only its own account. The
-generic settings endpoint accepts only explicitly allowlisted fields. It currently
-allows `agent_evolution.enabled` and `acl.enabled`.
+This endpoint is deprecated. ROOT can manage any account and ADMIN can manage
+only its own account. It preserves the original ACL and Agent Evolution request
+and response semantics:
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
@@ -143,6 +141,10 @@ Content-Type: application/json
   "acl": {"enabled": true}
 }
 ```
+
+Missing and `null` sections are no-ops. A present object replaces that legacy
+section; an empty ACL object means `enabled=false`. New integrations should use
+the configuration endpoints below.
 
 `acl.enabled` defaults to `false`. While disabled, shared resources use the
 original public behavior and ACL authorization is skipped. When enabled, newly
@@ -418,6 +420,55 @@ Publication validation failures return `INVALID_ARGUMENT` with `error.details`:
 active configuration remains unchanged. Structurally valid older overrides using
 unsupported Jinja can still be read, replaced or reset, but extraction refuses to
 execute them unchecked. Corrupt YAML remains an explicit error.
+
+### runtime_configuration
+
+ROOT can manage Cluster configuration and any Account configuration. ADMIN can
+manage only its own Account layer.
+
+```http
+GET /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+Content-Type: application/json
+
+{"settings": {"agent_evolution": {"enabled": true}}}
+```
+
+`settings` always means explicit values at the addressed layer. PATCH is
+three-state: an absent key is unchanged, `null` deletes that layer's value, and
+a concrete value updates it.
+
+The Cluster runtime surface currently contains agent_evolution. The Account
+surface contains vlm, memory, feishu, agent_evolution, github, and acl as
+dynamic fields, plus embedding and vectordb as create-only fields. Cluster
+embedding, vlm, query_planner, memory, storage, parser, and retrieval fields
+are startup-only because they are not declared as runtime fields.
+
+dynamic=True fields may be set when an Account is created and changed by a
+later PATCH. dynamic=False fields may be set only during Account creation;
+later PATCH requests that touch them are rejected. embedding and vectordb must
+be supplied together when explicitly configured, and their dimensions must
+match. Account fields may declare a whole-section Cluster fallback. An Account
+section that is explicitly set does not merge individual omitted properties
+from the Cluster section; omitted properties use the model defaults.
+
+The PATCH is validated structurally before the merged configuration is built:
+unknown paths and fields outside the runtime surface are rejected, and
+create-only fields are rejected on ordinary PATCH. Objects merge recursively;
+arrays replace wholesale. A nested null removes only that leaf. To remove a
+whole object override, send null at the parent path; an empty object remains an
+explicit empty object.
+
+Both GET endpoints return only the explicit values persisted at the addressed
+layer. They do not expand fallback values. After persistence, the new
+configuration is published and matching in-process consumers are awaited.
+Consumer failures are logged without rolling back the persisted override, so
+a successful response confirms the configuration update but does not certify
+that every derived client has applied it. The current business integrations
+are documented in the [runtime configuration design](../../design/runtime-configuration-design.md).
 
 ### user_settings
 

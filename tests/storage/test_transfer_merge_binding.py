@@ -25,6 +25,12 @@ from openviking_cli.utils.config.agfs_config import AGFSConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
+class _EnabledAclConfig:
+    async def get_account(self, account_id: str, field: str):
+        del account_id, field
+        return SimpleNamespace(enabled=True)
+
+
 @pytest.fixture
 def binding_fs(tmp_path):
     client_type, _ = get_binding_client()
@@ -360,8 +366,7 @@ async def test_overwrite_preserves_target_acl_with_real_storage(
         ],
         ctx=ctx,
     )
-    acl = AclManager(backend)
-    acl.set_enabled(ctx.account_id, True)
+    acl = AclManager(backend, _EnabledAclConfig())
     fs.acl_manager = backend.acl_manager = acl
 
     await getattr(fs, operation)(source, target, ctx=ctx)
@@ -402,8 +407,7 @@ async def test_chunk_only_copy_preserves_private_target_main_record(indexed_fs):
         "acl_inherited_grants": [],
     }
     await backend._upsert_many_raw([old_main], ctx=ctx)
-    acl = AclManager(backend)
-    acl.set_enabled(ctx.account_id, True)
+    acl = AclManager(backend, _EnabledAclConfig())
     fs.acl_manager = backend.acl_manager = acl
     outsider = RequestContext(user=UserIdentifier(ctx.account_id, "outsider"), role=Role(Role.USER))
     with pytest.raises(PermissionDeniedError):
@@ -486,8 +490,7 @@ async def test_transfer_protects_chunk_shaped_target_file(
         ],
         ctx=ctx,
     )
-    acl = AclManager(backend)
-    acl.set_enabled(ctx.account_id, True)
+    acl = AclManager(backend, _EnabledAclConfig())
     fs.acl_manager = backend.acl_manager = acl
     outsider = RequestContext(user=UserIdentifier(ctx.account_id, "outsider"), role=Role(Role.USER))
     with pytest.raises(PermissionDeniedError):
@@ -623,11 +626,14 @@ async def test_acl_failure_restores_only_moved_vectors_after_directory_merge(
     await seed_vector(backend, f"{source}/file.txt", "new")
     await seed_vector(backend, f"{target}/only.txt", "keep")
     monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    async def acl_enabled(_account_id):
+        return True
+
     monkeypatch.setattr(
         fs,
         "acl_manager",
         SimpleNamespace(
-            is_enabled=lambda _: True,
+            is_enabled=acl_enabled,
             refresh_context_subtree=AsyncMock(side_effect=RuntimeError("injected ACL failure")),
         ),
     )

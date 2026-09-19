@@ -13,6 +13,7 @@ from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
@@ -122,12 +123,6 @@ class AddTargetsConfig(BaseModel):
             "skill_uri must be viking://~/skills, viking://user/{user_id}/skills, "
             "or viking://agent/skills"
         )
-
-
-class AgentEvolutionConfig(BaseModel):
-    """Default Agent Evolution setting for accounts without an override."""
-
-    enabled: bool = False
 
 
 class DeprecatedUserAgentEvolutionConfig(BaseModel):

@@ -9,6 +9,7 @@ as described in the OpenViking design document.
 
 import asyncio
 import inspect
+import os
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -33,7 +34,9 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry
+from openviking.utils import is_github_url
 from openviking.utils.embedding_utils import index_resource, vectorize_file
+from openviking.utils.git_auth import is_git_https_url
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.summarizer import Summarizer
 from openviking_cli.exceptions import OpenVikingError
@@ -69,15 +72,45 @@ class ResourceProcessor:
         media_storage: Optional["StoragePath"] = None,
         max_context_size: int = 2000,
         max_split_depth: int = 3,
+        runtime_config_manager: Optional[Any] = None,
     ):
         """Initialize coordinated writer."""
         self.vikingdb = vikingdb
         self.embedder = vikingdb.get_embedder()
         self.media_storage = media_storage
+        self.runtime_config_manager = runtime_config_manager
         self.tree_builder = TreeBuilder()
         self._vlm_processor = None
         self._media_processor = None
         self._summarizer = None
+
+    async def github_token_for(
+        self,
+        source: str,
+        ctx: RequestContext,
+    ) -> Optional[str]:
+        """Resolve a GitHub token for one request without persisting it."""
+        if not is_git_https_url(source) or not is_github_url(source):
+            return None
+        if self.runtime_config_manager is not None:
+            account_github = await self.runtime_config_manager.get_account(ctx.account_id, "github")
+            if account_github is not None and account_github.token:
+                return account_github.token
+        return os.environ.get("GITHUB_TOKEN") or None
+
+    async def _source_config_kwargs(
+        self,
+        source: str,
+        ctx: RequestContext,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add account-scoped source credentials without persisting them."""
+        github_token = await self.github_token_for(source, ctx)
+        if not github_token:
+            return kwargs
+        result = dict(kwargs)
+        result["github_token"] = github_token
+        return result
 
     def _get_summarizer(self) -> "Summarizer":
         """Lazy initialization of Summarizer."""
@@ -155,6 +188,7 @@ class ResourceProcessor:
             path, **kwargs
         ):
             return None
+        kwargs = await self._source_config_kwargs(path, ctx, kwargs)
         with get_viking_fs().bind_request_context(ctx):
             return await media_processor.prepare(
                 path,
@@ -263,6 +297,7 @@ class ResourceProcessor:
                     await _set_stage("fetching")
                 else:
                     await _set_stage("parsing")
+                kwargs = await self._source_config_kwargs(path, ctx, kwargs)
                 with viking_fs.bind_request_context(ctx):
                     parse_result = await media_processor.process(
                         source=path,

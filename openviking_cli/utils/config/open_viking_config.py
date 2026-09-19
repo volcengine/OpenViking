@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from openviking_cli.session.user_id import UserIdentifier
 
+from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
 from .config_loader import resolve_config_path
 from .config_utils import format_validation_error
@@ -49,6 +50,7 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
@@ -152,6 +154,14 @@ class CompileApiConfig(BaseModel):
             raise ValueError("compile_api.poll_interval_ms must be > 0")
         self.base_url = self.base_url.rstrip("/")
         return self
+
+
+class RuntimeConfigSettings(BaseModel):
+    """Startup selection of the runtime config source."""
+
+    source: str = "file"
+    module: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OpenVikingConfig(BaseModel):
@@ -412,6 +422,11 @@ class OpenVikingConfig(BaseModel):
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
 
+    agent_evolution: AgentEvolutionConfig = RuntimeField(
+        default_factory=AgentEvolutionConfig,
+        description="Dynamic cluster default for Agent Evolution.",
+    )
+
     oauth: OAuthConfig = Field(
         default_factory=OAuthConfig,
         description="OAuth 2.1 (MCP) configuration",
@@ -428,6 +443,14 @@ class OpenVikingConfig(BaseModel):
     ingest: IngestConfig = Field(
         default_factory=IngestConfig,
         description="Conversation-log ingest (openviking-server ingest) configuration",
+    )
+
+    runtime_config: RuntimeConfigSettings = Field(
+        default_factory=RuntimeConfigSettings,
+        description=(
+            "Boot-level selection of the runtime config source. "
+            "Read once at startup and never mutated by the dynamic config API."
+        ),
     )
 
     model_config = {"arbitrary_types_allowed": True}
@@ -664,6 +687,12 @@ class OpenVikingConfigSingleton:
             raise RuntimeError(f"Failed to load config file: {e}")
 
     @classmethod
+    def set_instance(cls, config: "OpenVikingConfig") -> None:
+        """Atomically publish an already-built validated configuration."""
+        with cls._lock:
+            cls._instance = config
+
+    @classmethod
     def reset_instance(cls) -> None:
         """Reset the singleton instance (mainly for testing)."""
         with cls._lock:
@@ -677,8 +706,8 @@ def get_openviking_config() -> OpenVikingConfig:
 
 
 def set_openviking_config(config: OpenVikingConfig) -> None:
-    """Set the global OpenVikingConfig instance."""
-    OpenVikingConfigSingleton.initialize(config_dict=config.to_dict())
+    """Atomically publish an already-built OpenVikingConfig."""
+    OpenVikingConfigSingleton.set_instance(config)
 
 
 def is_valid_openviking_config(config: OpenVikingConfig) -> bool:

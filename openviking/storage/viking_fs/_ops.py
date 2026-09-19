@@ -310,7 +310,7 @@ class _OpsMixin:
                     path,
                     recursive,
                     ctx=ctx,
-                    strict=is_dir and self._acl_enabled(ctx),
+                    strict=is_dir and await self._acl_enabled(ctx),
                 )
                 if is_dir
                 else []
@@ -695,7 +695,7 @@ class _OpsMixin:
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
         acl_manager = self.acl_manager
-        acl_enabled = self._acl_enabled(ctx)
+        acl_enabled = await self._acl_enabled(ctx)
         guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
@@ -1230,6 +1230,7 @@ class _OpsMixin:
         # Tag filtering happens in FSService on the local fallback path. Fetch
         # all matches so an early filesystem limit cannot discard later tagged
         # entries. The remote path applies the same filter before its limit.
+        acl_enabled = await self._acl_enabled(real_ctx)
         fs_node_limit = None if tag_filter else node_limit
         page_size = self._glob_page_size(fs_node_limit)
         continuation_token: Optional[str] = None
@@ -1253,6 +1254,7 @@ class _OpsMixin:
                     entry.get("name") or entry["path"].rsplit("/", 1)[-1],
                     path,
                     real_ctx,
+                    acl_enabled=acl_enabled,
                 ):
                     continue
                 if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
@@ -2393,7 +2395,8 @@ class _OpsMixin:
         remaining_offset = offset
         merge_paths = self._legacy_session_alias(uri) is not None
         browsable: List[tuple[Dict[str, Any], str]] = []
-        expose_resource_names = self._acl_enabled(ctx) and is_acl_uri(uri)
+        acl_enabled = await self._acl_enabled(ctx)
+        expose_resource_names = acl_enabled and is_acl_uri(uri)
 
         while True:
             entry_items, consumed, exhausted = await self._list_read_path_items(

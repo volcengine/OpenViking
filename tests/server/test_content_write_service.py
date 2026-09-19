@@ -8,11 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.server.account_settings import (
-    AccountAclSettings,
-    AccountSettingsPatch,
-    update_account_settings,
-)
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
@@ -136,10 +131,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     auto_protected_dir = "viking://resources/auto_protected"
     uri = "viking://resources/append_plain/journal.md"
 
-    await update_account_settings(
-        service.viking_fs,
-        creator.account_id,
-        AccountSettingsPatch(acl=AccountAclSettings(enabled=True)),
+    await service.runtime_config_manager.patch_account(
+        creator.account_id, {"acl": {"enabled": True}}
     )
     await service.fs.mkdir(auto_protected_dir, ctx=creator)
     await service.resources.wait_processed()
@@ -271,10 +264,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     with pytest.raises(PermissionDeniedError):
         await service.viking_fs.read_file(uri, ctx=outsider)
 
-    await update_account_settings(
-        service.viking_fs,
-        creator.account_id,
-        AccountSettingsPatch(acl=AccountAclSettings(enabled=False)),
+    await service.runtime_config_manager.patch_account(
+        creator.account_id, {"acl": {"enabled": False}}
     )
     assert await service.viking_fs.read_file(uri, ctx=outsider) == stored
 
