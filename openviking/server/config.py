@@ -17,7 +17,10 @@ from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
 )
-from openviking_cli.utils.config.config_utils import format_validation_error
+from openviking_cli.utils.config.config_utils import (
+    format_validation_error,
+    warn_unknown_config_fields,
+)
 from openviking_cli.utils.config.consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -465,6 +468,13 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
             "To maintain the previous behavior, set encryption.api_key_hashing.enabled=true. "
             "See documentation for more details."
         )
+
+    warn_unknown_config_fields(
+        data=server_data,
+        model=ServerConfig,
+        path_prefix="server",
+        logger=logger,
+    )
 
     try:
         config = ServerConfig.model_validate(server_data)

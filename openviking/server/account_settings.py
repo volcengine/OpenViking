@@ -15,6 +15,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import validate_account_id
+from openviking_cli.utils.config.config_utils import warn_unknown_config_fields
 from openviking_cli.utils.logger import get_logger
 
 ACCOUNT_SETTINGS_PATH_TEMPLATE = "/local/{account_id}/_system/setting.json"
@@ -90,6 +91,7 @@ def _parse_account_settings(raw: bytes) -> AccountSettings:
         raise InvalidArgumentError(f"Invalid account settings JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise InvalidArgumentError("account settings must be an object")
+    warn_unknown_config_fields(data=payload, model=AccountSettings, logger=logger)
     try:
         return AccountSettings.model_validate(payload)
     except Exception as exc:

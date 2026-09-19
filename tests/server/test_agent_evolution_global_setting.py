@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -201,7 +202,7 @@ async def test_account_overrides_are_isolated(fake_viking_fs):
     assert await provider.is_enabled("account-b") is False
 
 
-async def test_account_settings_update_backs_up_previous_file(fake_viking_fs):
+async def test_account_settings_update_backs_up_previous_file(fake_viking_fs, caplog):
     legacy_settings = json.dumps(
         {
             "namespace": {
@@ -214,12 +215,15 @@ async def test_account_settings_update_backs_up_previous_file(fake_viking_fs):
     ).encode("utf-8")
     fake_viking_fs.agfs.files[account_settings_path("default")] = legacy_settings
 
+    caplog.set_level(logging.WARNING, logger="openviking.server.account_settings")
     settings = await read_account_settings(fake_viking_fs, "default")
     assert settings.model_dump(exclude_none=True) == {
         "agent_evolution": {"enabled": False},
         "acl": {"enabled": True},
     }
     assert fake_viking_fs.agfs.files[account_settings_path("default")] == legacy_settings
+    assert "Ignoring unknown config field 'namespace'" in caplog.text
+    assert "Ignoring unknown config field 'acl.retired_field'" in caplog.text
 
     await update_account_settings(fake_viking_fs, "default", _patch(True))
 
