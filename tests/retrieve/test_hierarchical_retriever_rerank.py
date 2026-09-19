@@ -6,6 +6,7 @@
 import asyncio
 import threading
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
+from openviking.utils.time_utils import format_iso8601
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
@@ -639,6 +641,140 @@ async def test_retrieval_hotness_alpha_blends_when_configured(monkeypatch):
     )
 
     assert result[0].score == pytest.approx(0.9)
+
+
+# hotness_score decays against the wall clock, so the hot context is anchored to
+# now rather than to a literal that would cool down as the suite ages.
+_HOT_UPDATED_AT = format_iso8601(datetime.now(timezone.utc))
+_COLD_UPDATED_AT = "2020-01-01T00:00:00+00:00"
+
+
+def _hot_and_cold_children():
+    """Two cold contexts the embedder likes, and one hot context it likes less."""
+    return [
+        _result(
+            "viking://resources/cold-a",
+            0.9,
+            abstract="cold A",
+            active_count=0,
+            updated_at=_COLD_UPDATED_AT,
+        ),
+        _result(
+            "viking://resources/cold-b",
+            0.8,
+            abstract="cold B",
+            active_count=0,
+            updated_at=_COLD_UPDATED_AT,
+        ),
+        _result(
+            "viking://resources/hot",
+            0.7,
+            abstract="hot",
+            active_count=1000,
+            updated_at=_HOT_UPDATED_AT,
+        ),
+    ]
+
+
+class HotAndColdChildrenStorage(DummyStorage):
+    """A single directory holding the hot and cold children."""
+
+    async def search_in_tenant(self, ctx, level=None, **kwargs):
+        return [_result("viking://resources/dir", 0.9, level=1, abstract="dir")]
+
+    async def search_children_in_tenant(self, ctx, parent_uri, **kwargs):
+        if parent_uri != "viking://resources/dir":
+            return []
+        return _hot_and_cold_children()
+
+
+class HotAndColdChildProxy:
+    """``_recursive_search`` proxy serving those children directly."""
+
+    async def search_children_in_tenant(self, parent_uri: str, **kwargs):
+        return _hot_and_cold_children()
+
+
+def _hot_and_cold_retriever(hotness_alpha):
+    return HierarchicalRetriever(
+        storage=HotAndColdChildrenStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(hotness_alpha=hotness_alpha),
+    )
+
+
+@pytest.mark.asyncio
+async def test_hotness_alpha_promotes_a_hot_context_past_the_semantic_cutoff():
+    """A hot context outside the semantic top-``limit`` must still be selected.
+
+    ``hotness_alpha=1.0`` is documented as ranking on hotness alone, so the
+    context with hotness ~1.0 has to win over two whose hotness is 0.0, even
+    though their semantic scores are higher.
+    """
+    result = await _hot_and_cold_retriever(1.0).retrieve(
+        _query(), ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING
+    )
+
+    assert [ctx.uri for ctx in result.matched_contexts] == [
+        "viking://resources/hot",
+        "viking://resources/cold-a",
+    ]
+    assert result.matched_contexts[0].score > 0.9
+    assert result.matched_contexts[1].score == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_default_hotness_alpha_keeps_the_semantic_result_set():
+    """The default (``hotness_alpha=0.0``) still selects on semantic score."""
+    result = await _hot_and_cold_retriever(0.0).retrieve(
+        _query(), ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING
+    )
+
+    assert [ctx.uri for ctx in result.matched_contexts] == [
+        "viking://resources/cold-a",
+        "viking://resources/cold-b",
+    ]
+    assert [ctx.score for ctx in result.matched_contexts] == [
+        pytest.approx(0.9),
+        pytest.approx(0.8),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recursive_search_truncates_to_limit_by_default():
+    """Only the hotness path widens the pool; the default contract is unchanged."""
+    retriever = _hot_and_cold_retriever(0.0)
+
+    truncated = await retriever._recursive_search(
+        vector_proxy=HotAndColdChildProxy(),
+        query="hello",
+        query_vector=None,
+        sparse_query_vector=None,
+        starting_points=[("viking://resources/dir", 0.0)],
+        limit=2,
+        mode=RetrieverMode.QUICK,
+    )
+    widened = await retriever._recursive_search(
+        vector_proxy=HotAndColdChildProxy(),
+        query="hello",
+        query_vector=None,
+        sparse_query_vector=None,
+        starting_points=[("viking://resources/dir", 0.0)],
+        limit=2,
+        mode=RetrieverMode.QUICK,
+        keep_all_candidates=True,
+    )
+
+    assert [c["uri"] for c in truncated] == [
+        "viking://resources/cold-a",
+        "viking://resources/cold-b",
+    ]
+    assert [c["uri"] for c in widened] == [
+        "viking://resources/cold-a",
+        "viking://resources/cold-b",
+        "viking://resources/hot",
+    ]
 
 
 @pytest.mark.asyncio

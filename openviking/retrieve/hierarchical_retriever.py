@@ -323,6 +323,13 @@ class HierarchicalRetriever:
                     scope_dsl=scope_dsl,
                     initial_candidates=initial_candidates,
                     level=level,
+                    # Hotness is blended in _convert_to_matched_contexts, after
+                    # this call. Cutting the pool to `limit` here would settle
+                    # the result set on semantic score alone and leave the blend
+                    # able only to permute a set it can never change. These
+                    # candidates are already fetched, scored and deduplicated,
+                    # and `final = matched[:limit]` below still bounds the reply.
+                    keep_all_candidates=self.hotness_alpha > 0,
                 )
             apply_hotness = True
             rerank_used = self._rerank_client is not None and mode == RetrieverMode.THINKING
@@ -434,6 +441,7 @@ class HierarchicalRetriever:
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         initial_candidates: Optional[List[Dict[str, Any]]] = None,
         level: Optional[List[int]] = None,
+        keep_all_candidates: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -443,6 +451,8 @@ class HierarchicalRetriever:
             score_gte: True uses >=, False uses >
             grep_patterns: Keyword match patterns
             scope_dsl: Additional scope constraints from public find/search filter
+            keep_all_candidates: Return the whole collected pool instead of its
+                top ``limit``, for callers that still have to re-rank it
         """
         effective_threshold = self._resolve_threshold(threshold)
 
@@ -585,7 +595,7 @@ class HierarchicalRetriever:
             key=lambda x: x.get("_final_score", 0),
             reverse=True,
         )
-        return collected[:limit]
+        return collected if keep_all_candidates else collected[:limit]
 
     async def _convert_to_matched_contexts(
         self,
