@@ -341,6 +341,7 @@ server {
 官方 OpenViking 镜像可以作为 API server 依赖：
 
 ```bash
+# 推荐优先使用 ghcr.io；如果访问有问题，可改用 openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
 docker run -d \
   --name openviking \
   -p 1933:1933 \

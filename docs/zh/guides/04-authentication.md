@@ -480,6 +480,8 @@ ACL 用户组是例外：组和成员通过 [Admin API](../api/08-admin.md#用�
 - 携带受信部署自身的 `root_api_key`。对于 `/api/v1/admin/*`，服务端校验该 key 后会将请求视为 ROOT。
 - 如果 Admin 路由指向具体 account/user，也可以同时携带 `X-OpenViking-Account` + `X-OpenViking-User`。这些 header 必须与目标 URL 匹配，并会保留为请求身份；授权仍来自受信 `root_api_key`。
 
+角色更新 API 只支持将用户提升为 ADMIN。Trusted Admin API 的管理权限来自已校验的部署 root key，无需也不支持创建 ROOT 用户。
+
 下面是“受信上游身份”这种方式的示例：
 
 ```bash
@@ -488,12 +490,6 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: your-secret-root-key" \
   -H "Content-Type: application/json" \
   -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
-
-# 如果它需要跨 account 的管理权限，再提升为 root
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "Content-Type: application/json" \
-  -d '{"role": "root"}'
 
 # 然后，在 trusted 模式下使用该身份调用 Admin API
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
@@ -528,7 +524,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 **Python SDK（HTTP）**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",

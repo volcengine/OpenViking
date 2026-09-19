@@ -456,15 +456,13 @@ def test_sync_http_client_reindex_forwards_to_async_client():
 def test_sync_http_client_forwards_tags_to_filesystem_methods():
     client = SyncHTTPClient(url="http://localhost:1933")
 
-    with (
-        patch.object(client._async_client, "ls", return_value=[]) as mock_ls,
-        patch.object(client._async_client, "tree", return_value=[]) as mock_tree,
-        patch.object(client._async_client, "grep", return_value={}) as mock_grep,
-        patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]),
-    ):
-        client.ls("viking://resources", tags=["env=prod"])
-        client.tree("viking://resources", tags=["env=prod"])
-        client.grep("viking://resources", "Sample", tags=["env=prod"])
+    with patch.object(client._async_client, "ls", return_value=[]) as mock_ls:
+        with patch.object(client._async_client, "tree", return_value=[]) as mock_tree:
+            with patch.object(client._async_client, "grep", return_value={}) as mock_grep:
+                with patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]):
+                    client.ls("viking://resources", tags=["env=prod"])
+                    client.tree("viking://resources", tags=["env=prod"])
+                    client.grep("viking://resources", "Sample", tags=["env=prod"])
 
     assert mock_ls.call_args.kwargs["tags"] == ["env=prod"]
     assert mock_tree.call_args.kwargs["tags"] == ["env=prod"]

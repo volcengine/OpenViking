@@ -392,7 +392,6 @@ Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook
 
 - `auto-recall` logs key stages plus a compact `ranking_summary` by default.
 - Set `claude_code.logRankingDetails: true` only when investigating per-candidate scoring; output is verbose.
-- For deep diagnosis, run the standalone scripts `scripts/debug-recall.mjs` and `scripts/debug-capture.mjs` against a sample input rather than leaving the hook log on permanently.
 
 ## Troubleshooting
 
@@ -413,7 +412,7 @@ Or just ask Claude to check the plugin: the `ov-memory-doctor` skill runs the sa
 | Remote auth 401 / 403                      | API key / account / user header mismatch                     | Verify `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER` (or their `ov.conf` counterparts) |
 | `Stop` hook times out                      | Server slow + sync write path                                | Leave `writePathAsync: true` (default), or raise the `Stop` timeout in `hooks/hooks.json`          |
 | Old context keeps re-appearing in OV       | Pre-fix versions captured the recall block back into OV      | Update to current version — `auto-capture` now strips `<openviking-context>` before pushing        |
-| Logs are noisy                             | `logRankingDetails: true` left on                            | Set `false`; use `debug-recall.mjs` / `debug-capture.mjs` for one-off inspection                   |
+| Logs are noisy                             | `logRankingDetails: true` left on                            | Set `false`; the compact `ranking_summary` stays in the log                                        |
 
 ## Compared to Claude Code's built-in memory
 
@@ -469,7 +468,8 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
-| `PreToolUse`          | Native `Read` / `Glob` / `Grep` on a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool                  |
+| `PreToolUse`          | Native `Read` / `Glob` / `Grep` / `Edit` / `Write` whose path is a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool |
+| `PreToolUse`          | `Bash` command that contains a `viking://` URI | Let the command run and attach a notice pointing Claude to the OpenViking MCP tools in case it meant OpenViking content |
 | `PostToolUse`         | `Read` of a `SKILL.md` file              | Optional (default off): inject an experience block when OV has relevant skill-experience memories |
 
 ### Async write path
@@ -514,8 +514,6 @@ claude-code-memory-plugin/
 │   ├── pre-compact.mjs      # PreCompact
 │   ├── subagent-start.mjs   # SubagentStart
 │   ├── subagent-stop.mjs    # SubagentStop
-│   ├── debug-recall.mjs     # standalone diagnostic for recall
-│   ├── debug-capture.mjs    # standalone diagnostic for capture
 │   ├── ov-status.mjs        # /ov status report
 │   ├── ov-memory-doctor.mjs # diagnostics script (ov-memory-doctor skill)
 │   └── lib/

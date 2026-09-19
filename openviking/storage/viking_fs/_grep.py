@@ -514,6 +514,21 @@ class _GrepMixin:
         files_scanned_set = set()
         real_ctx = self._ctx_or_default(ctx)
 
+        # Resolve every matched file to a Viking URI first, then run one
+        # ACL-aware batch authorization. ``_is_accessible`` is ACL-blind for
+        # ``viking://resources`` and would leak content protected by restricted
+        # inheritance, so matched URIs must go through ``_can_access_many`` the
+        # same way filesystem reads and vector retrieval do.
+        match_uris: List[str] = []
+        for match in matches:
+            match_file = match.get("file", "")
+            if not match_file:
+                continue
+            agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
+            match_uris.append(self._path_to_uri(agfs_file_path, ctx=ctx))
+
+        access = await self._can_access_many(match_uris, real_ctx)
+
         for match in matches:
             match_file = match.get("file", "")
             if not match_file:
@@ -522,7 +537,7 @@ class _GrepMixin:
             agfs_file_path = self._resolve_grep_match_agfs_path(path, match_file)
 
             file_uri = self._path_to_uri(agfs_file_path, ctx=ctx)
-            if not self._is_accessible(file_uri, real_ctx):
+            if not access.get(file_uri, False):
                 continue
 
             files_scanned_set.add(file_uri)

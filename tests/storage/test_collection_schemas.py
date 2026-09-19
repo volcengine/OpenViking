@@ -26,6 +26,8 @@ from openviking.storage.errors import (
 )
 from openviking.storage.expr import Eq
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+from openviking.storage.queuefs.process_result import ProcessOutcome
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.vectordb.collection.result import UpsertDataResult
 from openviking.storage.vectordb.collection.vikingdb_clients import VikingDBClient
@@ -189,12 +191,8 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
     schema_updates = []
     config = _DummyConfig(_DummyEmbedder(), backend="local")
     existing_schema = CollectionSchemas.context_collection("context", config.embedding.dimension)
-    existing_fields = [
-        field for field in existing_schema["Fields"] if field["FieldName"] != "tags"
-    ]
-    existing_scalar_index = [
-        field for field in existing_schema["ScalarIndex"] if field != "tags"
-    ]
+    existing_fields = [field for field in existing_schema["Fields"] if field["FieldName"] != "tags"]
+    existing_scalar_index = [field for field in existing_schema["ScalarIndex"] if field != "tags"]
 
     class _FakeStorage:
         async def create_collection(self, name, schema):
@@ -302,20 +300,13 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
     )
 
     handler = TextEmbeddingHandler(_ClosingVikingDB())
-    status = {"success": 0, "requeue": 0, "error": 0}
-    handler.set_callbacks(
-        on_success=lambda: status.__setitem__("success", status["success"] + 1),
-        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
-        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
-    )
 
     result = await handler.on_dequeue(_build_queue_payload())
 
-    assert result is None
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert result.value is None
+    assert result.error is None
     assert embedder.calls == 0
-    assert status["success"] == 1
-    assert status["requeue"] == 0
-    assert status["error"] == 0
 
 
 @pytest.mark.asyncio
@@ -342,12 +333,6 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
     )
 
     handler = TextEmbeddingHandler(_QueueingVikingDB())
-    status = {"success": 0, "requeue": 0, "error": 0}
-    handler.set_callbacks(
-        on_success=lambda: status.__setitem__("success", status["success"] + 1),
-        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
-        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
-    )
     monkeypatch.setattr(
         handler._circuit_breaker,
         "check",
@@ -356,18 +341,22 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
 
     import openviking.storage.collection_schemas as collection_schemas
 
+    monkeypatch.setattr(collection_schemas.logger, "propagate", False)
     collection_schemas.logger.addHandler(caplog.handler)
     collection_schemas.logger.setLevel(logging.WARNING)
     try:
         with caplog.at_level(logging.WARNING):
-            await handler.on_dequeue(_build_queue_payload())
-            await handler.on_dequeue(_build_queue_payload())
+            first_result = await handler.on_dequeue(_build_queue_payload())
+            second_result = await handler.on_dequeue(_build_queue_payload())
     finally:
         collection_schemas.logger.removeHandler(caplog.handler)
 
     warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
     assert warnings.count("Embedding circuit breaker is open; re-enqueueing messages") == 1
-    assert status == {"success": 2, "requeue": 2, "error": 0}
+    for result in (first_result, second_result):
+        assert result.outcome is ProcessOutcome.REQUEUED
+        assert result.value is None
+        assert result.error is None
 
 
 @pytest.mark.asyncio
@@ -397,18 +386,17 @@ async def test_embedding_auth_error_fails_terminally_without_reenqueue(monkeypat
         lambda: _DummyConfig(_AuthErrorEmbedder()),
     )
     handler = TextEmbeddingHandler(vikingdb)
-    status = {"success": 0, "requeue": 0, "error": 0}
-    handler.set_callbacks(
-        on_success=lambda: status.__setitem__("success", status["success"] + 1),
-        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
-        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
-    )
 
     result = await handler.on_dequeue(_build_queue_payload_for_account("acct"))
 
-    assert result is None
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.value is None
+    assert result.error == (
+        "Failed to generate embedding: "
+        "Error code: 401 - {'code': 'AuthenticationError'} Unauthorized "
+        "(uri=viking://resources/sample)"
+    )
     assert vikingdb.enqueued == []  # terminal: not re-enqueued
-    assert status == {"success": 0, "requeue": 0, "error": 1}
     handler._circuit_breaker.check()  # breaker not tripped (would raise if open)
 
 
@@ -435,21 +423,14 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
 
     vikingdb = _ClosingDuringUpsertVikingDB()
     handler = TextEmbeddingHandler(vikingdb)
-    status = {"success": 0, "requeue": 0, "error": 0}
-    handler.set_callbacks(
-        on_success=lambda: status.__setitem__("success", status["success"] + 1),
-        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
-        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
-    )
 
     result = await handler.on_dequeue(_build_queue_payload())
 
-    assert result is None
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert result.value is None
+    assert result.error is None
     assert vikingdb.calls == 1
     assert embedder.calls == 1
-    assert status["success"] == 1
-    assert status["requeue"] == 0
-    assert status["error"] == 0
 
 
 @pytest.mark.asyncio
@@ -639,18 +620,17 @@ async def test_embedding_handler_drops_input_too_large_without_requeue(monkeypat
     )
 
     handler = TextEmbeddingHandler(vikingdb)
-    status = {"success": 0, "requeue": 0, "error": 0}
-    handler.set_callbacks(
-        on_success=lambda: status.__setitem__("success", status["success"] + 1),
-        on_requeue=lambda: status.__setitem__("requeue", status["requeue"] + 1),
-        on_error=lambda *_: status.__setitem__("error", status["error"] + 1),
-    )
 
     result = await handler.on_dequeue(_build_queue_payload())
 
-    assert result is None
+    assert result.outcome is ProcessOutcome.FAILED
+    assert result.value is None
+    assert result.error == (
+        "Failed to generate embedding: "
+        "Malformed input request: expected maxLength: 50000, actual: 75000 "
+        "(uri=viking://resources/sample)"
+    )
     assert vikingdb.enqueued == []
-    assert status == {"success": 0, "requeue": 0, "error": 1}
     assert handler._circuit_breaker._failure_count == 0
 
 
@@ -682,7 +662,13 @@ async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(m
 
     result = await handler.on_dequeue(payload)
 
-    assert result is not None
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert result.error is None
+    assert result.value == {
+        **queue_data["context_data"],
+        "id": vector_record_id("default", "viking://resources/sample", 2),
+        "vector": [0.1, 0.2],
+    }
     assert "data" in captured
     assert captured["data"]["parent_uri"] == "viking://resources"
 
@@ -904,10 +890,11 @@ def test_private_vikingdb_client_wraps_connection_error(monkeypatch):
         del kwargs
         raise requests.ConnectionError("connection refused")
 
-    monkeypatch.setattr(requests, "request", _raise_connection_error)
+    client = VikingDBClient("https://vikingdb.example.com")
+    monkeypatch.setattr(client._session, "request", _raise_connection_error)
 
     with pytest.raises(ConnectionError, match="connection refused") as exc_info:
-        VikingDBClient("https://vikingdb.example.com").do_req(
+        client.do_req(
             "POST",
             "/api/vikingdb/data/upsert",
             req_body={},

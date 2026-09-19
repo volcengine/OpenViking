@@ -30,10 +30,7 @@ export function getTaskDate(task: TaskTimestamp): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date
 }
 
-export function formatTaskDuration(
-  task: TaskTimestamp,
-  _isZh: boolean = true,
-): string {
+export function formatTaskDuration(task: TaskTimestamp): string {
   const status = task.status || 'unknown'
 
   // Pending tasks have not started execution yet

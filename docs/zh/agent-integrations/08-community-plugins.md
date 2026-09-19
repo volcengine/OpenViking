@@ -4,7 +4,7 @@
 
 ## ZCode 记忆集成
 
-源码：[examples/zcode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin)
+源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
 ZCode 社区集成通过配置驱动的生命周期 Hook 和 OpenViking MCP 服务提供跨项目、跨会话记忆：
 
@@ -45,7 +45,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | MCP 工具未出现 | MCP proxy 启动失败 | 检查 `~/.zcode/cli/config.json` 中 `mcp.servers.openviking` 的绝对路径命令 |
 | 重复捕获 | 旧安装留下了重复 Hook 条目 | 先运行 `install.sh --harness zcode --uninstall`，再重新安装 |
 
-实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/zcode-memory-plugin/DESIGN.md)。
+实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md)。
 
 ## AstrBot 插件
 

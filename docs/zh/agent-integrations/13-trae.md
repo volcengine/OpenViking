@@ -43,7 +43,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 - `SessionStart`：加载用户画像和当前项目记忆。
 - `UserPromptSubmit`：根据当前问题召回并注入相关内容。
-- `PreToolUse`：阻止把 `viking://` 虚拟路径当作本地文件访问，并提示改用 OpenViking MCP 工具。
+- `PreToolUse`：在 TRAE 和 TRAE CN 上，`Read`、`Glob`、`Grep` 的路径是 `viking://` URI 时拒绝调用，并提示改用 OpenViking MCP 工具；`Bash` 或 `RunCommand` 命令带 `viking://` URI 时照常执行，同时附加改用建议。TraeCode CLI 2.0 使用 Codex 插件，它的 `PreToolUse` 只匹配 `Bash`，只附加同样的提示，不拒绝调用。
 - `Stop`：捕获本轮消息并立即提交，使短会话也能进入记忆抽取流程。
 - OpenViking MCP Server：透传服务端完整 MCP 工具集（15 个工具）：`find`、`search`、`read`、`list`、`tree`、`remember`、`write`、`edit`、`add_resource`、`list_watches`、`cancel_watch`、`grep`、`glob`、`forget`、`health`。其中 `search` 的 `mode="context"` 可返回组装后的上下文。
 

@@ -326,7 +326,6 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d '{
     "path": "./docs/readme.md",
     "reason": "telemetry demo",
-    "wait": true,
     "telemetry": true
   }'
 ```

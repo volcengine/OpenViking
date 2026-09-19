@@ -107,30 +107,37 @@ writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTr
 
 function copyExtension() {
   for (const name of readdirSync(EXT_SRC)) {
-    if (name === "config.json") continue;
     const src = join(EXT_SRC, name);
     const dst = join(extDir, basename(name));
-    if (name.endsWith(".ts") || name === "README.md" || name === "DESIGN.md" || name === "TAKEOVER.md") {
+    if (name.endsWith(".ts") || name === "README.md" || name === "DESIGN.md") {
       copyFileSync(src, dst);
     } else if (["lib", "shared", "scripts"].includes(name)) {
       cpSync(src, dst, { recursive: true });
     }
   }
-  writeFileSync(join(extDir, "config.json"), JSON.stringify({
-    enabled: true,
-    syncTurns: true,
-    logLevel: "info",
-    takeover: {
-      enabled: true,
-      tokenThreshold: 600,
-      keepRecentTurns: 1,
-      overviewBudget: 3000,
-      overviewPollMs: 3000,
-      overviewPollMax: 30,
-    },
-  }, null, 2));
 }
 copyExtension();
+
+// The extension has no config file of its own; its knobs live in ovcli.conf's
+// plugin section like every other harness's.
+const OVCLI_CONF = join(agentDir, "ovcli.conf");
+writeFileSync(OVCLI_CONF, JSON.stringify({
+  url: OV_URL,
+  api_key: OV_KEY,
+  plugin: {
+    pi: {
+      enabled: true,
+      autoCapture: true,
+      logLevel: "info",
+      takeoverEnabled: true,
+      takeoverTokenThreshold: 600,
+      takeoverKeepRecentTurns: 1,
+      takeoverOverviewBudget: 3000,
+      takeoverOverviewPollMs: 3000,
+      takeoverOverviewPollMax: 30,
+    },
+  },
+}, null, 2));
 
 const PAD1 = `PADDING-T1 ${"lorem ipsum dolor sit amet consectetur ".repeat(60)}`;
 const PAD2 = `PADDING-T2 ${"vestibulum ante ipsum primis in faucibus ".repeat(60)}`;
@@ -153,6 +160,7 @@ function runTurn(turn, prompt, extraArgs = []) {
       PI_CODING_AGENT_DIR: agentDir,
       OPENVIKING_URL: OV_URL,
       OPENVIKING_API_KEY: OV_KEY,
+      OPENVIKING_CLI_CONFIG_FILE: OVCLI_CONF,
       SUPER_RELAY_API_KEY: RELAY_KEY,
       OV_E2E_OUT: outDir,
       OV_E2E_TURN: String(turn),

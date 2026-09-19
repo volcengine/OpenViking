@@ -697,13 +697,20 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
                 ),
             ),
             _result("viking://resources/demo.md", 0.8, level=2, abstract=markdown),
+            _result(
+                "viking://resources/malformed",
+                0.7,
+                level=int(ContextLevel.ABSTRACT),
+                abstract="---\n",
+            ),
         ],
         ctx=_ctx(),
     )
 
-    assert [item.search_tags for item in result] == [[], [], []]
+    assert [item.search_tags for item in result] == [[], [], [], []]
     assert [item.abstract for item in result] == [
         "Visible abstract.",
         "# Visible overview",
         markdown,
+        "",
     ]

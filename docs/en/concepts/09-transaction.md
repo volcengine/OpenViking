@@ -1,6 +1,6 @@
 # Path Locks and Crash Recovery
 
-OpenViking uses two simple primitives — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
+OpenViking uses two simple primitives — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), coordinating concurrent writes and resuming queued session work after a process restart. These primitives do not form an atomic transaction across VikingFS, VectorDB, and QueueManager.
 
 ## Design Philosophy
 
@@ -10,8 +10,8 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 
 ## Design Principles
 
-1. **Write-exclusive**: Path locks ensure only one write operation can operate on a path at a time
-2. **On by default**: All data operations automatically acquire locks; no extra configuration needed
+1. **Write-exclusive**: Different owners participating in the protocol cannot hold conflicting path locks simultaneously
+2. **On by default**: Protected writes acquire locks by default; ordinary reads and low-level mkdir do not automatically acquire locks
 3. **Lock as protection**: LockContext acquires locks on entry, releases on exit — no undo/journal/commit semantics
 4. **Only session_memory needs crash recovery**: a persistent `session_commit` queue resumes Phase 2 after a process crash
 5. **Queue operations run outside locks**: SemanticQueue/EmbeddingQueue enqueue operations are idempotent and retriable
@@ -41,7 +41,7 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 
 ### Component 1: PathLockEngine + LockManager + LockContext (Path Lock System)
 
-**PathLockEngine** implements file-based distributed locks with two lock types — EXACT and TREE — using fencing tokens to prevent TOCTOU races and automatic stale lock detection and cleanup.
+**PathLockEngine** implements provider-backed distributed locks with two lock types — EXACT and TREE — using ownership tokens to prevent TOCTOU races and automatic stale lock detection and cleanup. The default provider stores lock files in AGFS; the cache provider stores tokens in Redis.
 
 **LockHandle** is a lightweight lock holder token:
 
@@ -49,7 +49,7 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 @dataclass
 class LockHandle:
     id: str          # Unique ID used to generate fencing tokens
-    locks: list[str] # Acquired lock file paths
+    locks: list[str] # Provider handles: lock file paths or logical paths
     created_at: float # Handle creation time
     last_active_at: float # Last successful acquire/refresh time
 ```
@@ -274,28 +274,74 @@ The lock mechanism uses two lock types to handle different conflict patterns:
 | **TREE** | Conflict | Conflict | Conflict | Conflict |
 
 - **EXACT (E)**: Locks one concrete path. It can protect files, directory names, and not-yet-created target paths. Blocks if any ancestor holds a TreeLock.
-- **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but only writes **one lock file** at the root. Before acquiring, scans all descendants and ancestor directories for conflicting locks. If the target directory is missing, conflicts are checked first; only then is the directory created and locked. If a later double-check finds a new conflict, the acquire fails or retries without rolling back the empty directory.
+- **TREE (T)**: Used for directory delete, directory move, resource lifecycle protection, and similar subtree-level operations. Logically covers the entire subtree but stores one provider token for the root path. Conflict checks cover descendants and Tree-locked ancestors within the provider's scope. The filesystem provider may create a missing target directory to place its lock file.
+
+### Path scope and target type
+
+Exact and Tree describe an operation's scope; file, directory, and missing describe the target's current state. These are independent. Locks protect path names, including names that do not currently exist.
+
+The following conflicts apply to different owners within the same provider scope:
+
+| Held lock | New request | Conflict |
+| --- | --- | --- |
+| Exact(`/docs/a.md`) | Exact or Tree(`/docs/a.md`) | Yes |
+| Exact(`/docs`) | Exact(`/docs/a.md`) | No |
+| Tree(`/docs`) | Exact or Tree(`/docs/a.md`) | Yes |
+| Exact(`/docs/a.md`) | Tree(`/docs`) | Yes |
+| Tree(`/docs/a.md`) | Exact(`/docs/b.md`) | No |
+
+`Tree(/docs/a.md)` does not expand to `Tree(/docs)`. Likewise, Exact on a directory name does not protect its descendants; recursive deletion needs Tree.
+
+Locks coordinate participating operations. The low-level `PathLockWrappedFS` uses Exact for create, write, truncate, and non-recursive remove, and Tree for remove_all. File rename uses Exact on both paths; directory rename uses Tree on the source and Exact on the destination. Read, stat, directory listing, and mkdir pass through, though higher layers may hold their own locks. The operating system does not block I/O that bypasses this protocol.
 
 ## Lock Mechanism
 
-### Lock Protocol
+### Filesystem Provider Lock Protocol
 
-Lock file paths:
+The caller chooses the lock type; the resolver chooses the token location from the target's state:
+
+| Target state | Exact token | Tree token |
+| --- | --- | --- |
+| Existing file `/docs/a` | `/docs/.exact.ovlock.a.<hash>`, containing E | Same sidecar, containing T |
+| Existing directory `/docs/a` | `/docs/a/.path.ovlock`, containing E | Same file inside the directory, containing T |
+| Missing `/docs/a` | Parent sidecar, containing E | Create the target directory, then write `.path.ovlock` inside it, containing T |
+
+A sidecar sits beside its target but represents only that target, not its parent directory. `<hash>` is a SHA-1 prefix of the full backend path, not the business file's contents.
+
+`.exact.ovlock.*` can contain a Tree token, and `.path.ovlock` can contain an Exact token. Filenames are part of the storage protocol, but do not alone identify the logical lock type. Token contents are:
 
 ```text
-TreeLock(path)                  -> {path}/.path.ovlock
-ExactPathLock(existing dir path) -> {path}/.path.ovlock
-ExactPathLock(file or missing path) -> {parent}/.exact.ovlock.<name>.<hash>
+{owner_id}:{time_ns}:{lock_type}
 ```
 
-Lock file content (Fencing Token):
-```
-{handle_id}:{time_ns}:{lock_type}
+`lock_type` is `E` or `T`. This ownership token supports conflict checks, refresh, and conditional release; it does not imply storage-side fencing of every business write.
+
+A lease records logical scope in `covered_paths` separately from token locations in `lock_paths`. An owned lease controls refresh, release, and handoff. A borrowed lease proves coverage by an existing lock without permission to release the outer lock.
+
+### Cache Provider Lock Protocol
+
+The cache provider stores the same token format in Redis HASH fields. It uses
+Lua scripts to atomically check conflicts and write a complete batch:
+
+```text
+field = logical_path
+value = owner_id:time_ns:lock_type
 ```
 
-Where `lock_type` is `E` (EXACT) or `T` (TREE).
+HASH keys are isolated by path scope:
 
-### Lock Acquisition (EXACT mode)
+```text
+ov:pathlock:{namespace}:global:tokens
+ov:pathlock:{namespace}:scope:_system:tokens
+ov:pathlock:{namespace}:scope:account:{account}:tokens
+```
+
+All keys use `{namespace}` as the Redis Cluster hash tag. Exact acquisition
+reads the target and ancestors with `HMGET`; Tree acquisition scans only its
+scope HASH with `HGETALL`. Global `/` and `/local` locks do not scan account
+or `_system` HASHes. Cross-scope batches are rejected.
+
+### Filesystem Lock Acquisition (EXACT mode)
 
 ```
 loop until timeout (poll interval: 200ms):
@@ -317,11 +363,11 @@ loop until timeout (poll interval: 200ms):
 Timeout (default 0 = no-wait) raises LockAcquisitionError
 ```
 
-### Lock Acquisition (TREE mode)
+### Filesystem Lock Acquisition (TREE mode)
 
 ```
 loop until timeout (poll interval: 200ms):
-    1. Check if target directory is locked by another operation
+    1. Check if target path is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
     2. Check all ancestor directories for TREE locks
@@ -331,8 +377,8 @@ loop until timeout (poll interval: 200ms):
        - Missing target directory? -> treat as no descendant locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Ensure the target directory exists; create it if missing
-    5. Write TREE (T) lock file (only one file, at the root path)
+    4. Ensure the resolved token parent exists; this creates a missing target as a directory
+    5. Write the TREE (T) token (sidecar for an existing file, internal .path.ovlock otherwise)
     6. TOCTOU double-check: re-scan descendants and ancestors
        - Conflict found: compare (timestamp, handle_id)
        - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
@@ -355,13 +401,17 @@ for conflicts first:
 4. Step 3 does not roll back the empty directory
 ```
 
+Acquisition rollback and normal release clean up tokens without guaranteeing removal of directories created to store them. An Exact sidecar can also create a missing parent chain. Snapshots use a separate policy for missing targets; see [snapshot scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
+
 ### Lock Expiry Cleanup
 
-**Stale lock detection**: PathLockEngine checks the fencing token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
+**Automatic refresh**: Rust PathLockManager refreshes active leases every `lock_expire / 3`. The default 30-second expiry is not a maximum operation duration. Refresh stops when the process exits.
 
-**In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles that still own lock files but have been inactive for longer than `lock_expire` are force-released.
+**Stale lock detection**: PathLockEngine checks the ownership token timestamp. Locks older than `lock_expire` (default 30s) are considered stale and are removed automatically during acquisition.
 
-**Orphan locks**: Lock files left behind after a process crash are automatically removed via stale lock detection when any operation next attempts to acquire a lock on the same path.
+**In-process cleanup**: During refresh, Rust PathLockManager checks leases that have not refreshed successfully for `2 × lock_expire` and attempts cleanup with ownership validation.
+
+**Orphan locks**: Provider tokens left behind after a process crash are automatically removed via stale lock detection when a later acquisition checks the same path or scope.
 
 ## Crash Recovery
 
@@ -370,7 +420,7 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 | Scenario | Recovery action |
 |----------|----------------|
 | session_memory extraction crash | Recover Phase 2 from archive and continue the `session_commit` job |
-| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 30s expiry) |
+| Crash while holding lock | Provider token remains; stale detection auto-cleans on a later matching acquisition (default 30s expiry) |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
 | Orphan index | Cleaned on L2 on-demand load |
 
@@ -386,7 +436,14 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 
 ## Configuration
 
-Path locks are enabled by default with no extra configuration needed. Prefer `storage.agfs.pathlock` for expiry settings. The runtime wait timeout is fixed at `0.0` seconds and no longer accepts external configuration. `storage.transaction` remains only as a legacy compatibility layer: `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is deprecated and ignored.
+Path locks are enabled by default with the `filesystem` provider. Use
+`storage.agfs.pathlock.provider=cache` for Redis-backed coordination between
+processes. Cache-backed PathLock requires a top-level Redis Cache Provider and
+a non-empty PathLock namespace. The runtime wait timeout is fixed at `0.0`
+seconds. `storage.transaction` remains only as a legacy compatibility layer:
+`lock_timeout` is deprecated and ignored, `lock_expire` is automatically
+mapped when the new field is unset, and `redo_recovery_enabled` is deprecated
+and ignored.
 
 Recommended configuration:
 
@@ -395,12 +452,42 @@ Recommended configuration:
   "storage": {
     "agfs": {
       "pathlock": {
+        "provider": "filesystem",
         "lock_expire_secs": 30.0
       }
     }
   }
 }
 ```
+
+Redis-backed configuration:
+
+```json
+{
+  "cache": {
+    "provider": "redis",
+    "params": {
+      "mode": "standalone",
+      "endpoints": ["redis://127.0.0.1:6379"]
+    }
+  },
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "cache",
+        "namespace": "production",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `provider` | str | `filesystem`, `memory`, or `cache` | `filesystem` |
+| `namespace` | str or null | Required when `provider=cache`; identifies one OpenViking deployment | `null` |
+| `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale | `30.0` |
 
 Legacy compatibility form:
 

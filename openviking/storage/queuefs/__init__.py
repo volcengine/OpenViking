@@ -3,7 +3,9 @@
 from .embedding_msg import EmbeddingMsg
 from .embedding_queue import EmbeddingQueue
 from .named_queue import NamedQueue, QueueError, QueueStatus
+from .process_result import ProcessOutcome, ProcessResult
 from .queue_manager import QueueManager, get_queue_manager, init_queue_manager
+from .queue_middleware import QueueMiddleware
 from .semantic_dag import SemanticDagExecutor
 from .semantic_msg import SemanticMsg
 from .semantic_processor import SemanticProcessor
@@ -17,6 +19,9 @@ __all__ = [
     "NamedQueue",
     "QueueStatus",
     "QueueError",
+    "QueueMiddleware",
+    "ProcessOutcome",
+    "ProcessResult",
     "EmbeddingQueue",
     "EmbeddingMsg",
     "SemanticQueue",

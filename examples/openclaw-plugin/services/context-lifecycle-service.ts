@@ -72,6 +72,7 @@ export type AssembleOpenVikingSessionParams = {
   sessionId: string;
   sessionKey?: string;
   messages: AgentMessage[];
+  prompt?: string;
   tokenBudget: number;
   runtimeContext?: Record<string, unknown>;
   isMainAssemble: boolean;
@@ -125,6 +126,8 @@ export type CompactOpenVikingSessionParams = {
 type AfterTurnClient = Pick<OpenVikingClient, "addSessionMessage" | "getSession" | "commitSession" | "getTask">;
 
 export type AfterTurnOpenVikingSessionParams = {
+  /** Durable delivery must reject failed writes so the host retains its outbox row. */
+  throwOnError?: boolean;
   sessionId: string;
   sessionKey?: string;
   messages?: AgentMessage[];
@@ -137,6 +140,7 @@ export type AfterTurnOpenVikingSessionParams = {
     autoCapture: boolean;
     commitTokenThresholdRatio: number;
     commitKeepRecentCount: number;
+    commitRetentionMode?: "message_count" | "turn_budget";
     logFindRequests: boolean;
     peer_role?: OpenVikingPeerRole;
   };
@@ -367,6 +371,7 @@ export async function commitOpenVikingSession({
     const commitResult = await client.commitSession(ovId, {
       wait: true,
       keepRecentCount: 0,
+      resetContext: true,
     });
     const memCount = totalExtractedMemories(commitResult.memories_extracted);
     if (commitResult.status === "failed") {
@@ -421,28 +426,98 @@ function isSessionNotFoundError(err: unknown): boolean {
   return errorMessage.includes("[NOT_FOUND]") && errorMessage.includes("Session not found");
 }
 
-export async function assembleOpenVikingSession({
-  sessionId,
-  sessionKey,
-  messages,
-  tokenBudget,
-  runtimeContext,
-  isMainAssemble,
-  cfg,
-  getClient,
-  logger,
-  resolveAgentId,
-  rememberSessionAgentId,
-  isBypassedSession,
-  queryConfigStore,
-  traceRecorder,
-  diag,
-  roughEstimate,
-  messageDigest,
-  extractAgentMessageText,
-  hasAutoRecallBlock,
-  prependRecallToLatestUserMessage,
-}: AssembleOpenVikingSessionParams): Promise<AssembleOpenVikingSessionResult> {
+async function recallForAssemble(
+  params: AssembleOpenVikingSessionParams,
+  recallQuery: ReturnType<typeof prepareRecallQuery>,
+) {
+  const { sessionId, sessionKey, cfg, getClient, resolveAgentId, queryConfigStore, logger, traceRecorder } = params;
+  const ovSessionId = openClawSessionToOvStorageId(sessionId, sessionKey);
+  const sender = extractRuntimeSenderId(params.runtimeContext);
+  const client = await getClient();
+  const routingRef = sessionId ?? sessionKey ?? ovSessionId;
+  const agentId = resolveAgentId(routingRef, sessionKey, ovSessionId);
+  const actorPeerId = resolveOpenVikingActorPeerId({
+    peerRole: cfg.peer_role ?? "none",
+    senderPeerId: sanitizeOpenVikingPeerId(sender.senderId),
+    assistantPeerId: agentId,
+  });
+  const queryConfig = await queryConfigStore?.getEffective({
+    agentId,
+    sessionId,
+    sessionKey,
+    ovSessionId,
+  });
+  return buildAutoRecallContext({
+    cfg,
+    queryConfig,
+    client,
+    agentId,
+    actorPeerId,
+    queryText: recallQuery.query,
+    logger,
+    verbose: (message) => logger.info(message),
+    traceRecorder: traceRecorder as never,
+    sessionId,
+    sessionKey,
+    ovSessionId,
+    queryTruncated: recallQuery.truncated,
+    rawUserTextPreview: recallQuery.query,
+    // System additions are transient; the next turn must be able to recall the same URI.
+    dedupTurns: params.isMainAssemble ? 0 : undefined,
+  });
+}
+
+export async function assembleOpenVikingSession(
+  params: AssembleOpenVikingSessionParams,
+): Promise<AssembleOpenVikingSessionResult> {
+  const assembled = await assembleSessionContext(params);
+  // Current OpenClaw supplies the pending turn separately from history. Keep
+  // recalled context out of persisted messages and let the host own that turn.
+  if (
+    !params.isMainAssemble || !params.cfg.autoRecall || !params.prompt ||
+    params.isBypassedSession(params)
+  ) {
+    return assembled;
+  }
+  const query = prepareRecallQuery(params.prompt);
+  if (query.query.length < 5) return assembled;
+
+  try {
+    const recall = await recallForAssemble(params, query);
+    if (!recall.block) return assembled;
+    const systemPromptAddition = [assembled.systemPromptAddition, recall.block].filter(Boolean).join("\n\n");
+    const estimatedTokens = assembled.estimatedTokens
+      + estimateTextTokens(systemPromptAddition)
+      - estimateTextTokens(assembled.systemPromptAddition ?? "");
+    if (estimatedTokens > params.tokenBudget) return assembled;
+    return { ...assembled, systemPromptAddition, estimatedTokens };
+  } catch (err) {
+    params.logger.warn?.(`openviking: auto-recall failed: ${String(err)}`);
+    return assembled;
+  }
+}
+
+async function assembleSessionContext(params: AssembleOpenVikingSessionParams): Promise<AssembleOpenVikingSessionResult> {
+  const {
+    sessionId,
+    sessionKey,
+    messages,
+    tokenBudget,
+    runtimeContext,
+    isMainAssemble,
+    cfg,
+    getClient,
+    logger,
+    resolveAgentId,
+    rememberSessionAgentId,
+    isBypassedSession,
+    diag,
+    roughEstimate,
+    messageDigest,
+    extractAgentMessageText,
+    hasAutoRecallBlock,
+    prependRecallToLatestUserMessage,
+  } = params;
   const latestMessage = messages.at(-1);
   const isTransformContextAssemble = !isMainAssemble;
 
@@ -495,36 +570,7 @@ export async function assembleOpenVikingSession({
     }
 
     try {
-      const client = await getClient();
-      const routingRef = sessionId ?? sessionKey ?? ovSessionId;
-      const agentId = resolveAgentId(routingRef, sessionKey, ovSessionId);
-      const actorPeerId = resolveOpenVikingActorPeerId({
-        peerRole: cfg.peer_role ?? "none",
-        senderPeerId: sanitizeOpenVikingPeerId(sender.senderId),
-        assistantPeerId: agentId,
-      });
-      const queryConfig = await queryConfigStore?.getEffective({
-        agentId,
-        sessionId,
-        sessionKey,
-        ovSessionId,
-      });
-      const recall = await buildAutoRecallContext({
-        cfg,
-        queryConfig,
-        client,
-        agentId,
-        actorPeerId,
-        queryText: recallQuery.query,
-        logger,
-        verbose: (message) => logger.info(message),
-        traceRecorder: traceRecorder as never,
-        sessionId,
-        sessionKey,
-        ovSessionId,
-        queryTruncated: recallQuery.truncated,
-        rawUserTextPreview: recallQuery.query,
-      });
+      const recall = await recallForAssemble(params, recallQuery);
 
       if (!recall.block) {
         return assemblePassthrough({
@@ -786,6 +832,7 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
 }
 
 export async function afterTurnOpenVikingSession({
+  throwOnError = false,
   sessionId,
   sessionKey,
   messages: rawMessages,
@@ -941,7 +988,9 @@ export async function afterTurnOpenVikingSession({
 
     const commitResult = await client.commitSession(ovSessionId, {
       wait: false,
-      keepRecentCount: cfg.commitKeepRecentCount,
+      ...(cfg.commitRetentionMode === "turn_budget"
+        ? { retentionMode: "turn_budget" as const }
+        : { keepRecentCount: cfg.commitKeepRecentCount }),
     });
     logger.info(
       `openviking: committed session=${ovSessionId}, ` +
@@ -976,6 +1025,9 @@ export async function afterTurnOpenVikingSession({
       senderIdFound: sender.found,
       senderId: sender.senderId ?? null,
     });
+    if (throwOnError) {
+      throw err;
+    }
   }
 }
 

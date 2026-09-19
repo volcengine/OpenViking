@@ -23,12 +23,12 @@ Skill 源码：[examples/compile/ov-compile-skills/llm-wiki](https://github.com/
 
 ```bash
 # 导入一个目录作为来源
-ov add-resource ./my-research --to viking://resources/research --wait
+ov add-resource ./my-research --to viking://resources/research
 
 # 或者写入单个文件
 ov mkdir viking://resources/research
 ov write viking://resources/research/notes.md \
-  --from-file ./notes.md --mode create --wait
+  --from-file ./notes.md --mode create
 ```
 
 确认来源已就位：
@@ -42,7 +42,7 @@ ov ls -r viking://resources/research
 把 LLM Wiki 的 Skill 装进服务。默认落到你的用户私有 skills 命名空间；想让团队共用就用 `-p viking://agent/skills`：
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/llm-wiki --wait
+ov add-skill examples/compile/ov-compile-skills/llm-wiki
 ```
 
 查看装好的 Skill URI：

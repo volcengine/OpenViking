@@ -21,10 +21,12 @@ from openviking.session.memory.extraction_output_protocol.base import (
 from openviking.session.memory.merge_op import (
     DeleteBlock,
     FieldType,
+    ImmutableOp,
     MergeOp,
     SearchReplaceBlock,
     StrPatch,
 )
+from openviking.session.memory.utils.description_template import render_description_template
 from openviking.session.memory.utils.line_numbers import (
     every_line_has_line_numbers,
     strip_line_numbers,
@@ -214,6 +216,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             for field in schema.fields
         }
         for name, _type_name, description in fields:
+            if name in merge_ops:
+                # Render only YAML field descriptions, using the same context and
+                # restricted renderer as JSON. Keep the DSL's own edit instructions
+                # instead of copying the JSON model's merge-operation wrappers.
+                description = render_description_template(description, context.template_context)
             normalized_description = " ".join(str(description or "").split())
             qualifier = f" [{merge_ops[name]}]" if name in merge_ops else ""
             lines.append(f"  - {_identifier_alias(name)}{qualifier}: {normalized_description}")
@@ -1097,8 +1104,9 @@ class _PythonProgramCompiler:
             field_schema is not None
             and field_schema.merge_op == MergeOp.IMMUTABLE
             and owner.existing
+            and ImmutableOp.is_set(owner.fields.get(name))
         ):
-            # Immutable identity fields cannot change on an existing memory; ignore silently.
+            # Preserve established values, but allow filling a blank template field.
             return
         if handle.full_value is not _UNSET:
             owner.fields[name] = handle.full_value
@@ -1165,9 +1173,13 @@ class _PythonProgramCompiler:
                 continue
             if field_schema is None:
                 continue
-            if field_schema.merge_op == MergeOp.IMMUTABLE and owner.existing:
-                continue
             current = owner.fields.get(name)
+            if (
+                field_schema.merge_op == MergeOp.IMMUTABLE
+                and owner.existing
+                and ImmutableOp.is_set(current)
+            ):
+                continue
             if field_schema.merge_op == MergeOp.SUM:
                 value = (current or 0) + value
                 previous_delta = owner.changed_fields.get(name, 0)

@@ -118,12 +118,14 @@ Use `openviking-server init` to complete the Codex login/import step, then run `
   },
   "vlm": {
     "provider" : "openai-codex",
-    "model"    : "gpt-5.4",
+    "model"    : "gpt-5.6-terra",
     "api_base" : "https://chatgpt.com/backend-api/codex",
     "reasoning_effort": "xhigh"
   }
 }
 ```
+
+OpenAI [retired `gpt-5.4` from Codex with ChatGPT sign-in](https://learn.chatgpt.com/docs/models#deprecated-codex-models) on August 31, 2026. For an existing setup, change `vlm.model` in `ov.conf` to `gpt-5.6-terra` and restart the server; upgrading OpenViking does not rewrite saved model settings. This retirement does not affect `provider: "openai"` with an API key.
 
 </details>
 
@@ -213,7 +215,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`) |
 | `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
-| `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` uses only summary. Default: `content_only` |
+| `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` is a deprecated alias for `summary_first`; existing configurations still load, log a warning, and normalize to `summary_first`. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
 | `provider` | str | `"openai"`, `"azure"`, `"volcengine"`, `"vikingdb"`, `"jina"`, `"ollama"`, `"gemini"`, `"voyage"`, `"dashscope"`, `"minimax"`, `"cohere"`, `"litellm"`, or `"local"` |
 | `api_key` | str | API key |
@@ -442,7 +444,7 @@ OpenViking also expects dense float vectors throughout storage and retrieval, so
 
 **gemini provider example:**
 
-> **Note:** Requires `pip install "google-genai>=1.0.0"`. For async batching: `pip install "openviking[gemini-async]"`.
+> **Note:** Requires `google-genai>=1.0.0` in the server environment — uv install: `uv tool install openviking --upgrade --with "google-genai>=1.0.0"`; pip install: `pip install "google-genai>=1.0.0"`. For async batching use the extra instead: `uv tool install "openviking[gemini-async]" --upgrade` or `pip install "openviking[gemini-async]"`.
 
 ```json
 {
@@ -1006,6 +1008,24 @@ Grep engine configuration for content pattern search. These settings are server-
 
 For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `http`) the field is not written.
 
+### glob
+
+Glob engine configuration for path pattern matching. These settings are server-side only and cannot be overridden per request.
+
+```json
+{
+  "glob": {
+    "engine": "fs",
+    "switch_to_remote_threshold": 100
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `engine` | str | Path matching engine mode: `"auto"` uses remote `path_glob` processing when a VikingDB / Volcengine vector store is available and the search-scope record count reaches the threshold; otherwise it falls back to local filesystem search. `"fs"` forces local filesystem search only. | `"fs"` |
+| `switch_to_remote_threshold` | int | Record-count threshold at which `auto` mode switches to remote `path_glob`. Set to `0` to always use remote path matching. Must be ≥ 0. | `100` |
+
 ### storage
 
 Storage configuration for context data, including file storage (RAGFS) and vector database storage (VectorDB).
@@ -1015,7 +1035,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `workspace` | str | Local data storage path (main configuration) | "./data" |
-| `skip_process_lock` | bool | Whether to skip the startup process-lock check for `storage.workspace`. When enabled, OpenViking will not check or create the `.openviking.pid` lock file. | `false` |
+| `skip_process_lock` | bool | Skip the exclusive `.openviking.lock` file lock on `storage.workspace` for embedded vector backends (`local`, `cuvs`). Other backends do not acquire this lock. Skipping it does not make embedded vector storage safe for multiple processes. | `false` |
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 
@@ -1130,7 +1150,7 @@ Notes:
 
 See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more examples.
 
-##### Global Cache Provider and CacheFS Configuration
+##### Global Cache Provider, CacheFS, and PathLock Configuration
 
 The top-level `cache` section is a sibling of `storage`. Its public shape is Provider-neutral:
 
@@ -1148,6 +1168,15 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 | `max_file_size_bytes` | int | Maximum full-file object size admitted to cache | `1048576` |
 | `traversal_mode` | str | `backend` or `cached_traversal` | `backend` |
 | `bypass_prefixes` | array[str] | Path prefixes that bypass cache | `[]` |
+
+`storage.agfs.pathlock` selects the PathLock storage provider:
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `provider` | str | `filesystem`, `memory`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `namespace` | str (optional) | OpenViking instance name used in Redis PathLock keys; required when `provider=cache` | `null` |
+| `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
+| `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
 
 ```json
 {
@@ -1174,13 +1203,18 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
       "queuefs": {
         "backend": "cache",
         "cache_key_prefix": "production"
+      },
+      "pathlock": {
+        "provider": "cache",
+        "namespace": "production",
+        "lock_expire_secs": 30.0
       }
     }
   }
 }
 ```
 
-The canonical configuration has no global `cache.enabled`. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`. When all modules use local backends, `cache.params` is not parsed and no Provider connection is opened.
+The canonical configuration has no global `cache.enabled`. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, or when PathLock selects `provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
 
 This is a breaking configuration change. `storage.agfs.cache`, `storage.agfs.queuefs.backend="redis"`, and `storage.agfs.queuefs.redis` are rejected. Move Provider settings to top-level `cache.provider/cache.params`, select `cachefs.backend="cache"` or `queuefs.backend="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 
@@ -1295,7 +1329,7 @@ Notes:
 
 ###### Per-session Auto Commit Policy
 
-When a session carries an `auto_commit_policy`, any field you omit falls back to the recommended default below. Sessions without a stored policy keep auto commit disabled. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create_session) for how to set and view it.
+When a session carries an `auto_commit_policy`, any field you omit falls back to the recommended default below. Sessions without a stored policy keep auto commit disabled. Values are clamped into `[0, max]`, and unknown keys are rejected with `InvalidArgumentError`. See [Sessions API](../api/05-sessions.md#create-session) for how to set and view it.
 
 | Field | Type | Default | Max | Description |
 |-------|------|---------|-----|-------------|
@@ -1463,6 +1497,7 @@ Supports cloud-deployed VikingDB on Volcengine
         "ak": "your-access-key",
         "sk": "your-secret-key"
       }
+    }
   }
 }
 ```
@@ -1482,39 +1517,6 @@ Each element uses `{mask}:{principal}`: `1` means `read`, `3` means `write`, and
 Local backends add the fields to an existing collection and rebuild the scalar index during startup. Existing records are not rewritten; missing ACL fields read as `acl_mode=none` and empty lists.
 
 For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
-
-<details>
-<summary><b>openGauss</b></summary>
-
-Requires an openGauss server with native `vector` support and a remote-capable database user.
-Install the optional driver with `pip install "openviking[opengauss]"`.
-In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
-
-```json
-{
-  "storage": {
-    "vectordb": {
-      "name": "context",
-      "backend": "opengauss",
-      "project": "default",
-      "distance_metric": "cosine",
-      "dimension": 1024,
-      "opengauss": {
-        "host": "127.0.0.1",
-        "port": 5432,
-        "user": "openviking",
-        "password": "your-password",
-        "db_name": "postgres",
-        "schema": "public",
-        "mode": "standalone"
-      }
-    }
-  }
-}
-```
-
-Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
-</details>
 
 
 ## Config Files
@@ -1621,14 +1623,14 @@ Local directory uploads respect `.gitignore` files (root and nested). `ignore_di
 For trusted gateway deployments, CLI flags can override these identity fields per command:
 
 ```bash
-openviking --account acme --user alice ls viking://
+ov --account acme --user alice ls viking://
 ```
 
 For `add-resource`, upload filter flags are merged additively with `ovcli.conf` defaults:
 
 ```bash
 # ovcli.conf: upload.exclude="*.log"
-openviking add-resource ./docs --exclude "*.tmp"
+ov add-resource ./docs --exclude "*.tmp"
 # effective exclude sent to server: "*.log,*.tmp"
 ```
 
@@ -1674,7 +1676,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `127.0.0.1` |
 | `port` | int | Bind port | `1933` |
-| `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"`. Default is `"api_key"` | `"api_key"` |
+| `auth_mode` | str / null | Built-in modes: `"dev"`, `"api_key"`, `"trusted"`, `"oidc"`, `"ldap"`. When omitted/null, infer `api_key` from a non-empty `root_api_key`; otherwise infer `dev`. | `null` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is optional on localhost, but required for any non-localhost deployment; it does not become the source of user identity | `null` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
@@ -1688,9 +1690,9 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
 | `agent_evolution.enabled` | bool | Instance-wide Agent Evolution switch. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. When disabled, production of these memory types stops for every account and user. Existing memories remain readable and searchable. | `false` |
 
-`api_key` mode uses API keys and is the default. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
+Omitting `auth_mode` (or setting it to `null`) selects `api_key` when a non-empty `root_api_key` is configured, and `dev` otherwise. `dev` is allowed only on localhost and accepts requests without authentication. An empty-string `root_api_key` is invalid.
 
-When `root_api_key` is configured in `api_key` mode, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. In `trusted` mode, ordinary requests do not require user registration first; each request is resolved as `USER` from the injected identity headers. However, skipping `root_api_key` in `trusted` mode is allowed only on localhost. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
+Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including on localhost; without it, startup fails instead of falling back to development mode. Use the root key with the Admin API to create accounts and user/admin keys; use those tenant-bound keys for data access. `trusted` mode accepts account/user identity headers from a trusted gateway and does not require user-key provisioning first. Its root key is optional only on localhost and required for non-localhost binds. For role resolution, OIDC/LDAP setup, and gateway requirements, see [Authentication](04-authentication.md).
 
 `user_config_defaults` provides deployment defaults for add targets and memory extraction. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Memory policy precedence is Session policy > User `settings/user_config.json` policy > `server.user_config_defaults.memory_policy` > kernel default. `agent_evolution.enabled` is shared by the entire OpenViking instance and has no per-user override. Running HTTP server workers read the current Agent Evolution value from the resolved `ov.conf` when a session commits, so a valid file update applies without restarting the server.
 
@@ -1745,7 +1747,7 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
 
 ## storage.transaction Section
 
-`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` only for active PathLock expiry configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is ignored.
+`storage.transaction` is deprecated and kept only for legacy compatibility. Use `storage.agfs.pathlock` for the active PathLock provider, namespace, and expiry configuration. When legacy fields are still present, OpenViking logs a warning at runtime; `lock_timeout` is deprecated and ignored, `lock_expire` is automatically mapped when the new field is unset, and `redo_recovery_enabled` is ignored.
 
 Recommended configuration:
 
@@ -1754,6 +1756,7 @@ Recommended configuration:
   "storage": {
     "agfs": {
       "pathlock": {
+        "provider": "filesystem",
         "lock_expire_secs": 30.0
       }
     }
@@ -1918,7 +1921,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "extra_request_body": {}
   },
   "rerank": {
-    "provider": "volcengine|openai",
+    "provider": "vikingdb|cohere|openai|litellm",
     "api_key": "string",
     "model": "string",
     "api_base": "string",
@@ -1959,7 +1962,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
       "lock_expire": 300.0
     },
     "vectordb": {
-      "backend": "local|remote",
+      "backend": "local|cuvs|http|volcengine|vikingdb",
       "url": "string",
       "project": "string"
     }

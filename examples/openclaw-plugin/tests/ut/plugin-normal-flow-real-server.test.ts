@@ -288,10 +288,14 @@ describe("plugin normal flow with healthy backend", () => {
       context_type: "memory",
       query_expansion: "auto",
       max_tokens: 1000,
-      dedup_turns: 5,
+      dedup_turns: 0,
       peer_scope: "actor",
     });
     expect(contextSearchBody).not.toHaveProperty("limit");
+    const recallRequests = requests.filter(
+      (entry) => entry.method === "POST" && entry.path === "/api/v1/search/search",
+    );
+    expect(recallRequests.map((entry) => JSON.parse(entry.body ?? "{}").dedup_turns)).toEqual([0, 5]);
     expect(
       requests.some((entry) => entry.method === "GET" && entry.path.startsWith("/api/v1/sessions/session-normal/context")),
     ).toBe(true);

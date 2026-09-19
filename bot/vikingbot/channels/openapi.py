@@ -364,6 +364,11 @@ class OpenAPIChannel(BaseChannel):
             """Verify gateway access and resolve caller OpenViking identity when needed."""
             return await channel._verify_gateway_request(http_request, x_gateway_token)
 
+        if getattr(channel, "_studio_service", None) is not None:
+            from vikingbot.studio.router import create_router
+
+            router.include_router(create_router(channel, channel._studio_service))
+
         @router.get("/health", response_model=HealthResponse)
         async def health_check(
             auth: GatewayRequestAuth = Depends(verify_gateway_request),

@@ -14,7 +14,7 @@ and `CODEX_CONFIG_FILE` relocate individual pieces.
 | `~/.openviking/ovcli.conf.<name>` | Saved CLI profiles (`ov config switch` copies one over `ovcli.conf`). `ovcli.conf.bak.<epoch>` are installer backups. |
 | `<repo root>/.openviking/config.json` / `config.local.json` | Workspace config layers, `version: 1` required: `peer.source`, `peer.id`, `recall.*`, `capture.*`, `bypass.session_patterns`, `labels`. `config.json` is committed and shared; `config.local.json` is private and gitignored. Trusted without a prompt, but connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded. A blanket `.openviking/` rule in `.gitignore` stops `config.json` from ever being committed — narrow it to `.openviking/media/` and `.openviking/downloads/`. |
 | `~/.openviking/workspaces/<slot>.json` | Per-machine workspace registry, one file per workspace (`<dir name>-<hash>.json`, mode 0600). Outranks both workspace files, and nothing writes it — a user creates the file by hand. An entry recorded for a different repository is ignored, not inherited. |
-| `~/.codex/config.toml` | `[features] hooks` (or legacy `plugin_hooks`), `[plugins."openviking-memory@openviking"] enabled`, `[marketplaces.openviking]` (source, ref), `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"] trusted_hash` for `session_start`, `user_prompt_submit`, `stop`, `session_end`, `pre_compact`. |
+| `~/.codex/config.toml` | `[features] hooks` (or legacy `plugin_hooks`), `[plugins."openviking-memory@openviking"] enabled`, `[marketplaces.openviking]` (source, ref), `[hooks.state."openviking-memory@openviking:hooks/hooks.json:<event>:0:0"] trusted_hash` for `session_start`, `user_prompt_submit`, `pre_tool_use`, `stop`, `session_end`, `pre_compact`. |
 | `~/.codex/plugins/cache/openviking/openviking-memory/<version>/` | The copy Codex runs hooks from. Keyed by `plugin.json` version. |
 | `~/.codex/.tmp/marketplaces/openviking/` | Git clone of the marketplace (GitHub/TOS dist); `examples/codex-memory-plugin` inside it is what `codex plugin list` reports as the source path. |
 | `~/.openviking/codex-plugin-state/<session_id>.json` | Per-session state: `ovSessionId` (`cx-<session_id>`, null once committed), `transcriptPath` (last rollout seen, used by the SessionStart sweep to catch up unsent turns), `capturedTurnCount`, `lastUpdatedAt`. |
@@ -25,7 +25,7 @@ and `CODEX_CONFIG_FILE` relocate individual pieces.
 
 ## Config resolution
 
-`OPENVIKING_CREDENTIAL_SOURCE` picks the mode: `env` (env vars only), `cli`
+`OPENVIKING_CREDENTIAL_SOURCE` picks the mode: `env` (env vars only, neither file), `cli`
 (ovcli.conf only — env and ov.conf ignored), default `auto` (env vars win when
 any credential var is set, else ovcli.conf, else ov.conf/defaults). The
 doctor prints the effective mode as `credential source`.
@@ -33,12 +33,14 @@ doctor prints the effective mode as `credential source`.
 | Field | Order (auto mode) |
 |---|---|
 | url | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` → `ovcli.conf url` → `ov.conf server.url` → `http://{server.host\|127.0.0.1}:{server.port\|1933}` |
-| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ov.conf codex.apiKey` → `ov.conf server.root_api_key` |
-| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/account_id`, `user/user_id` → `ov.conf codex.accountId/userId` |
+| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ovcli.conf plugin.codex.apiKey` → `ovcli.conf plugin.apiKey` → `ov.conf codex.apiKey` → `ov.conf server.root_api_key` |
+| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/account_id`, `user/user_id` → `ovcli.conf plugin.codex.accountId/userId` → `ovcli.conf plugin.accountId/userId` → `ov.conf codex.accountId/userId` |
 | peer | `OPENVIKING_PEER_ID` → registry → `config.local.json` → `config.json` (`peer.id`) → `ovcli.conf plugin.codex.peerId` → `ovcli.conf plugin.peerId` → `ovcli.conf actor_peer_id/peer_id` → `ov.conf codex.peerId` → derived per `peer.source` unless `OPENVIKING_WORKSPACE_PEER=0` |
 | peer.source | `OPENVIKING_PEER_SOURCE` → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.codex.peerSource` → `ovcli.conf plugin.peerSource` → `ov.conf codex.peerSource` → `git` |
-| auth mode | `OPENVIKING_AUTH_MODE` → `codex.authMode` → `server.auth_mode` → `trusted` when account/user are set, else `api_key` |
+| auth mode | `OPENVIKING_AUTH_MODE` → `ovcli.conf plugin.codex.authMode` → `ovcli.conf plugin.authMode` → `ov.conf codex.authMode` → `ov.conf server.auth_mode` → `trusted` when account/user are set, else `api_key` |
 | tuning | env → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.codex.*` → `ovcli.conf plugin.*` → `ov.conf codex.*` → defaults |
+
+When ovcli.conf names a url, key, identity or peer and no credential variable is set, the chain is pinned to that file: the credential variables are skipped, `api_key` still falls back to `plugin.codex.apiKey` → `plugin.apiKey` → `ov.conf codex.apiKey` but never to `server.root_api_key`, and account/user stop at the `plugin` keys. The MCP proxy resolves this same chain from the variables `.mcp.json` forwards.
 
 `peer.source` decides the derivation. `git` (the default) is the template list `["{git_remote}", "{git_root}"]`: the normalized origin URL (`git@github.com:volcengine/OpenViking.git` → `github.com-volcengine-openviking`, userinfo dropped so an embedded token can never reach the id), else the repository root path (the legacy `[^A-Za-z0-9] → -` rule), else nothing — outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space. `{cwd}` is still a variable but sits in no default chain, and `{dir}` is the workspace root's directory name, empty when the directory is not a workspace. `cwd` is that legacy rule alone (the pre-git behaviour); `none` sends no peer, which is also what `OPENVIKING_WORKSPACE_PEER=0` means. Anything else is a template, or a list of templates tried in order (`"git-{git_remote}"`, `["team-{dir}", "{cwd}"]`); a template naming an empty variable falls through to the next. Derivation is filesystem-only — no `git` subprocess, which also keeps it inside the hook budgets below — so it survives a missing `git` and a dubious-ownership refusal; worktrees converge through `commondir`, a submodule keeps its own identity, and `$HOME` and `/` are never workspace roots. Every clone of one repository shares one peer; a fork's origin differs, so it stays separate, and `gh pr checkout` does not change origin.
 
@@ -50,14 +52,16 @@ Codex plugin. Disable features with `OPENVIKING_AUTO_RECALL=0`,
 `codex plugin remove openviking-memory@openviking` / `enabled = false`.
 
 Hook budgets in `hooks/hooks.json`: SessionStart 70s, UserPromptSubmit 130s,
-Stop 30s, SessionEnd 3s (Codex clamps it there; the hook detaches a worker),
-PreCompact 60s. `recallTimeoutMs` (default 120000) must stay below
-130s and `captureTimeoutMs` (default 30000) at or below 30s.
+PreToolUse 5s (`Bash` only, the `viking://` notice), Stop 30s, SessionEnd 3s
+(Codex clamps it there; the hook detaches a worker), PreCompact 60s.
+`recallTimeoutMs` (default 120000) must stay below 130s and `captureTimeoutMs`
+(default 30000) at or below 30s.
 
 Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account/User` (trusted
 mode only), `X-OpenViking-Actor-Peer`, `User-Agent: openviking-memory-codex/<version>`.
-The open-source server also accepts `X-API-Key` (and prefers it when both are
-sent); the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
+The plugin never sends `X-API-Key`. The open-source server still accepts it (and
+prefers it when both are sent), so a gateway that injects one shadows the key
+here; the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
 
 The doctor checks explicit `features.hooks` first, then the live `hooks` entry
 from `codex features list`. Legacy `plugin_hooks` only decides the result when
@@ -160,10 +164,10 @@ Startup failures (printed by the server; exit 1 unless noted):
 | Text | Cause |
 |---|---|
 | `OpenViking configuration file not found.` | No ov.conf at any resolved path |
-| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including `claude_code`, `codex` and `server.url`, which only the plugins read |
+| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including a top-level block named after any harness (`claude_code`, `codex`, `cursor`, `trae`, `trae_cn`, `zcode`, `opencode`, `dsh`, `pi`) and `server.url`, which only the plugins read |
 | `SECURITY: server.auth_mode='dev' requires server.host to be localhost` | Dev mode (no `auth_mode`, no `root_api_key`) on a non-loopback bind |
 | `Invalid server.root_api_key: empty string is not allowed` | `""` instead of `null` |
-| `Another OpenViking process (PID n) is already using the data directory` | Two servers on one workspace (exit 3, `Application startup failed. Exiting.`) |
+| `Another OpenViking process is already using the data directory` | Two servers on one workspace (exit 3, `Application startup failed. Exiting.`) |
 | `EmbeddingRebuildRequiredError` / `embedding dimension (…) does not match current configuration` | Embedding model changed on an existing workspace (exit 3) |
 | `[Errno 48] / [Errno 98] Address already in use` | Port taken — `lsof -nP -iTCP:1933 -sTCP:LISTEN` |
 | `FATAL: AUTHENTICATION HEALTH CHECK FAILED` | OIDC/LDAP backend unreachable |

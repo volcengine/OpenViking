@@ -30,6 +30,28 @@ const CODING_QUOTA_WEIGHTS = {
 
 let userSpaceCache = "";
 
+/**
+ * Is recall on for this config?
+ *
+ * The switch has four spellings in the wild: a boolean `autoRecall`, opencode's
+ * `{ enabled }` object, dsh and pi's `syncTurns`, and the global `enabled`
+ * that turns the whole plugin off. Reading it here rather than in each loader
+ * is what keeps it from drifting a fifth time — and any spelling that says off
+ * wins, so a config that disables recall under an older name still disables it.
+ */
+export function isRecallEnabled(cfg = {}) {
+  return isSwitchOn([cfg.enabled, cfg.autoRecall, cfg.recall, cfg.syncRecall]);
+}
+
+/** Any recognised spelling that says off wins; everything else means on. */
+function isSwitchOn(values) {
+  for (const value of values) {
+    if (value === false) return false;
+    if (value && typeof value === "object" && !Array.isArray(value) && value.enabled === false) return false;
+  }
+  return true;
+}
+
 export function estimateTokens(text) {
   return text ? Math.ceil(String(text).length / 4) : 0;
 }
@@ -337,9 +359,8 @@ async function resolveItemContent(fetchJSON, item, cfg, actorPeerId = "") {
 }
 
 async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = "", log = () => {}) {
-  if (items.length === 0) return null;
-
-  let budgetRemaining = Math.max(200, Number(cfg.recallTokenBudget || 2000));
+  const budgetTotal = Math.max(200, Number(cfg.recallTokenBudget || 2000));
+  let budgetRemaining = budgetTotal;
   const lines = [
     "<openviking-context>",
     "Relevant context from OpenViking. Use the read MCP tool to expand URIs.",
@@ -372,15 +393,15 @@ async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = 
 
   lines.push("</openviking-context>");
 
-  const budgetUsed = Math.max(200, Number(cfg.recallTokenBudget || 2000)) - budgetRemaining;
+  const budgetUsed = budgetTotal - budgetRemaining;
   log("recall_injection_built", {
     contentItems: contentCount,
     hintItems: hintCount,
     budgetUsed,
-    budgetTotal: Math.max(200, Number(cfg.recallTokenBudget || 2000)),
+    budgetTotal,
   });
 
-  return lines.join("\n");
+  return { block: lines.join("\n"), contentCount, hintCount, budgetUsed, stage: "ranked" };
 }
 
 const LEGACY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -625,8 +646,13 @@ export async function postRecall(fetchJSON, body, opts = {}) {
  * `"actor"` that sweep is off by definition, so the old peer is asked for
  * separately — as itself, which is both cheaper and wider than a bare
  * cross-peer read (that would need the user id, and reaches memories only).
+ *
+ * `stage` names the path the block came from, which is what a host needs to
+ * tell "the server had nothing" (`no_results`) from "the score threshold
+ * dropped everything" (`filtered_out`) when the block is empty, and a
+ * `server_assembled` block from a `ranked` one when it is not.
  */
-export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
+export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = {}) {
   const primary = await recallForPeer(fetchJSON, cfg, query, options);
 
   const legacyPeerId = String(options.legacyPeerId || "").trim();
@@ -635,16 +661,32 @@ export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
 
   const log = options.log || (() => {});
   const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId });
-  if (!legacy) return primary;
+  if (!legacy.block) return primary;
   log("recall_legacy_peer_hit", { legacyPeerId });
-  return primary ? `${primary}\n${legacy}` : legacy;
+  return {
+    block: primary.block ? `${primary.block}\n${legacy.block}` : legacy.block,
+    contentCount: primary.contentCount + legacy.contentCount,
+    hintCount: primary.hintCount + legacy.hintCount,
+    budgetUsed: primary.budgetUsed + legacy.budgetUsed,
+    stage: primary.block ? primary.stage : legacy.stage,
+  };
+}
+
+/** The block alone, or null when nothing was injectable. */
+export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
+  const { block } = await buildRecallBlockDetailed(fetchJSON, cfg, query, options);
+  return block || null;
+}
+
+function emptyRecall(stage) {
+  return { block: "", contentCount: 0, hintCount: 0, budgetUsed: 0, stage };
 }
 
 async function recallForPeer(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
   const log = options.log || (() => {});
   const trimmed = String(query || "").trim();
-  if (!trimmed) return null;
+  if (!trimmed) return emptyRecall("no_results");
 
   // Assembly happens server-side when the deployment offers the context face;
   // older servers fall through to /recall, then to raw find.
@@ -653,12 +695,23 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
     actorPeerId,
     log,
   });
-  if (serverBlock !== null) return serverBlock || null;
+  if (serverBlock !== null) {
+    if (!serverBlock) return emptyRecall("no_results");
+    // The server rendered one budgeted unit, so nothing here degraded to a
+    // URI-only hint and the block's own estimate is what it cost.
+    return {
+      block: serverBlock,
+      contentCount: 1,
+      hintCount: 0,
+      budgetUsed: estimateTokens(serverBlock),
+      stage: "server_assembled",
+    };
+  }
 
   const recallLimit = Math.max(1, Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT));
   const perSourceLimit = Math.max(recallLimit * 2, 8);
   const raw = await searchAllSources(fetchJSON, trimmed, perSourceLimit, actorPeerId, log);
-  if (raw.length === 0) return null;
+  if (raw.length === 0) return emptyRecall("no_results");
 
   const profile = buildQueryProfile(trimmed);
   const scoreThreshold = Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35;
@@ -672,6 +725,6 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
     items: picked.map((it) => ({ type: it._sourceType, uri: it.uri, score: clampScore(it.score) })),
   });
 
-  if (picked.length === 0) return null;
+  if (picked.length === 0) return emptyRecall("filtered_out");
   return buildFallbackInjectionBlock(fetchJSON, picked, cfg, actorPeerId, log);
 }

@@ -18,7 +18,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - Captures user and assistant text messages into OpenViking.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
-- Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`.
+- Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
 
 ## Files
 
@@ -83,12 +83,15 @@ npm view @openviking/opencode-plugin version
 For development or PR testing, copy the package into OpenCode's plugin directory with a top-level wrapper:
 
 ```bash
+node examples/memory-plugin-shared/sync.mjs
 mkdir -p ~/.config/opencode/plugins/openviking
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
+
+`sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
 
 This creates a stable OpenCode plugin layout:
 
@@ -113,39 +116,46 @@ Use the `.js` wrapper for source installs; OpenCode's local plugin scanner disco
 
 ## Configuration
 
-Create `~/.config/opencode/openviking-config.json`:
+Behaviour knobs live in `~/.openviking/ovcli.conf` beside the connection fields, in the shared `plugin` section or in the `plugin.opencode` override:
 
 ```json
 {
-  "enabled": true,
-  "mcp": { "enabled": true },
-  "timeoutMs": 30000,
-  "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoRecall": {
-    "enabled": true,
-    "limit": 6,
-    "scoreThreshold": 0.35,
-    "maxContentChars": 500,
-    "preferAbstract": true,
-    "tokenBudget": 2000,
-    "minQueryLength": 3
-  },
-  "commitTokenThreshold": 20000,
-  "commitKeepRecentCount": 10,
-  "profileTokenBudget": 10000,
-  "resumeContextBudget": 32000
+  "url": "http://127.0.0.1:1933",
+  "api_key": "your-api-key-here",
+  "plugin": {
+    "recallLimit": 6,
+    "opencode": {
+      "enabled": true,
+      "mcpEnabled": true,
+      "timeoutMs": 30000,
+      "repoContext": true,
+      "repoContextCacheTtlMs": 60000,
+      "autoRecall": true,
+      "scoreThreshold": 0.35,
+      "recallMaxContentChars": 500,
+      "recallPreferAbstract": true,
+      "recallTokenBudget": 2000,
+      "minQueryLength": 3,
+      "commitTokenThreshold": 20000,
+      "commitKeepRecentCount": 10,
+      "profileTokenBudget": 10000,
+      "resumeContextBudget": 32000
+    }
+  }
 }
 ```
 
-`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
+Keys in `plugin` apply to every harness; keys in `plugin.opencode` apply to this one and override them. Resolution is `OPENVIKING_*` environment variables → the workspace's `.openviking/config.json`, `.openviking/config.local.json` and machine registry entry → `plugin.opencode` → `plugin` → built-in defaults. Every knob, with its type, default, range, environment variable and accepted older spellings, is declared in [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs).
+
+`recallLimit` is a legacy quota-scaling input, not a final result cap.
 Explicit values from 1 through 5 produce an effective total quota of 6 because
 each coding category keeps one retrieval slot. Use Context `quotas` directly
 when exact category ceilings are required.
 
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
-headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty
-when using API-key mode with user/admin API keys.
-By default the plugin derives a peer from the git identity of the project directory: the normalized `origin` URL, else the repository root path. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. `git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`; the path fallback keeps the older naming rule where every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Derivation reads `.git` directly, so no `git` binary is needed. The plugin does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect. Data-plane memory/resource requests send the effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. Configure `peerId` or `OPENVIKING_PEER_ID` to override the derived peer, or set `workspacePeer=false` / `OPENVIKING_WORKSPACE_PEER=0` to send no peer at all. Memories written under the older directory-derived peer stay reachable: the default broad recall sweeps every peer under the user, and `recallPeerScope="actor"` asks that previous peer separately.
+headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; an `api_key`
+server reads both out of the key, so the plugin withholds them there.
+By default the plugin derives a peer from the git identity of the project directory: the normalized `origin` URL, else the repository root path. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. `git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`; the path fallback keeps the older naming rule where every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Derivation reads `.git` directly, so no `git` binary is needed. The plugin reads the workspace's `.openviking/config.json`, so a `peer.id` or `peer.source` written there applies. Data-plane memory/resource requests send the effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. Configure `peerId` in the `plugin` section or `OPENVIKING_PEER_ID` to override the derived peer, or set `workspacePeer` to `false` / `OPENVIKING_WORKSPACE_PEER=0` to send no peer at all. Memories written under the older directory-derived peer stay reachable: the default broad recall sweeps every peer under the user, and `recallPeerScope="actor"` asks that previous peer separately.
 
 Recall defaults to the broad mode: global memory, the current workspace, and
 other workspace memories can all be recalled, with other workspaces penalized
@@ -157,13 +167,12 @@ with an explicit actor peer so one person's memories are not recalled into
 another person's session.
 
 `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`,
-and `OPENVIKING_PEER_ID` take precedence over values in this file. The config
-file's `peerId` still applies whenever shared credentials (ovcli.conf or
-environment variables) do not carry a peer of their own, so an authenticated
-setup keeps writing peer-scoped data instead of dropping into the shared user
-tree.
+and `OPENVIKING_PEER_ID` take precedence over `ovcli.conf`. Below the
+environment, the `plugin` section's `peerId` takes precedence over
+`ovcli.conf`'s `actor_peer_id`: a peer written for this harness is the more
+specific answer, and this is the order every memory plugin follows.
 
-For advanced setups, `OPENVIKING_PLUGIN_CONFIG` can point to another config file path.
+`OPENVIKING_CLI_CONFIG_FILE` points the plugin at an `ovcli.conf` somewhere other than `~/.openviking/ovcli.conf`.
 
 ### Hook-only mode
 
@@ -172,7 +181,9 @@ skipping this plugin's bundled MCP registration:
 
 ```json
 {
-  "mcp": { "enabled": false }
+  "plugin": {
+    "opencode": { "mcpEnabled": false }
+  }
 }
 ```
 
@@ -181,7 +192,10 @@ It does not add or overwrite OpenCode's `mcp.openviking` entry.
 
 OpenCode's local `read`, `glob`, and `grep` tools cannot read `viking://` URIs.
 When the agent accidentally tries that, the plugin blocks the filesystem tool
-call and points it to the OpenViking MCP tools.
+call and points it to the OpenViking MCP tools. A `bash` command that contains a
+`viking://` URI is not blocked, because the URI is often data (an `ov` argument,
+an HTTP payload); the command runs and the plugin appends a notice naming the
+MCP tools to its output.
 
 ## MCP Tools
 
@@ -211,12 +225,12 @@ The plugin writes runtime files to `~/.config/opencode/openviking/` by default:
 - `openviking-memory.log`
 - `openviking-session-state.json`
 
-Set `runtime.dataDir` in config to override this directory.
+Set `dataDir` in `plugin.opencode` to override this directory.
 
 ## Automated npm releases
 
 Changes merged into upstream `main` under `examples/opencode-plugin/` trigger
-`.github/workflows/opencode-plugin-release.yml`. Releases use the same calendar
+`.github/workflows/plugin-npm-release.yml`. Releases use the same calendar
 version convention as the OpenClaw plugin: `YYYY.M.D`, then `YYYY.M.D-N` for
 subsequent releases on that date (Asia/Shanghai). No manual source version bump
 is required. The workflow changes the version only in the package being published;

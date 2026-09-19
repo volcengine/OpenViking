@@ -9,7 +9,11 @@ from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
-from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
+from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
+    render_abstract_overview,
+)
 from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
     _ensure_filter_present,
@@ -42,15 +46,16 @@ class _SemanticMixin:
         file_path = f"{path}/.abstract.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory abstract for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            return f"# {uri} [Directory abstract is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri} [Directory abstract is not ready]"
 
     async def _read_abstract_for_known_dir(
         self,
@@ -173,16 +178,16 @@ class _SemanticMixin:
         file_path = f"{path}/.overview.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory overview for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            # Fallback to default if .overview.md doesn't exist
-            return f"# {uri}\n\n[Directory overview is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri}\n\n[Directory overview is not ready]"
 
     async def find(
         self,
@@ -522,6 +527,8 @@ class _SemanticMixin:
         content_filename: str = "content.md",
         is_leaf: bool = False,
         ctx: Optional[RequestContext] = None,
+        *,
+        lease_ref: Any = None,
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
@@ -529,16 +536,18 @@ class _SemanticMixin:
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
-            await self._ensure_parent_dirs(path, ctx=ctx)
+            await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             try:
-                await self._async_agfs.mkdir(path)
+                # _pathlock_fs_ctx is supplied by VikingFS's _AccessMixin.
+                fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)  # type: ignore[attr-defined]
+                await self._async_agfs.mkdir(path, fs_ctx=fs_ctx)
             except Exception as e:
                 if "exist" not in str(e).lower():
                     raise
 
             if content:
                 content_uri = f"{uri}/{content_filename}"
-                await self.write_file(content_uri, content, ctx=ctx)
+                await self.write_file(content_uri, content, ctx=ctx, lease_ref=lease_ref)
 
             if abstract:
                 abstract_uri = f"{uri}/.abstract.md"
@@ -556,6 +565,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    lease_ref=lease_ref,
                 )
 
             if overview:
@@ -574,6 +584,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    lease_ref=lease_ref,
                 )
 
         except Exception as e:

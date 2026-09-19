@@ -274,7 +274,10 @@ class TrustedAuthPlugin(AuthPlugin):
         return self._flush_interval_seconds > 0
 
     def _queue_trusted_identity(self, account_id: str, user_id: str) -> None:
-        if self._api_key_manager and self._api_key_manager.has_user(account_id, user_id):
+        if self._api_key_manager and (
+            self._api_key_manager.is_deleting(account_id, user_id)
+            or self._api_key_manager.has_user(account_id, user_id)
+        ):
             return
         if user_id in self._in_flight.get(account_id, set()):
             return

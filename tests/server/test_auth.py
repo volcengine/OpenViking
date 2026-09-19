@@ -415,7 +415,11 @@ async def test_task_endpoints_require_auth():
     app = _build_task_http_test_app(identity=None)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        for url in ("/api/v1/tasks", "/api/v1/tasks/nonexistent-id"):
+        for url in (
+            "/api/v1/tasks",
+            "/api/v1/tasks/nonexistent-id",
+            "/api/v1/tasks/nonexistent-id?include_events=true",
+        ):
             resp = await client.get(url)
             assert resp.status_code == 401
     set_task_tracker(None)
@@ -455,16 +459,24 @@ async def test_task_endpoints_are_user_scoped():
         alice_get = await alice_client.get(f"/api/v1/tasks/{alice_task.task_id}")
         assert alice_get.status_code == 200
         assert alice_get.json()["result"]["resource_id"] == "alice-session"
+        assert "execution_events" not in alice_get.json()["result"]
+        with_events = await alice_client.get(
+            f"/api/v1/tasks/{alice_task.task_id}?include_events=true"
+        )
+        assert with_events.json()["result"]["execution_events"]["items"][0]["kind"] == "created"
 
         alice_list = await alice_client.get("/api/v1/tasks")
         assert alice_list.status_code == 200
         assert {task["task_id"] for task in alice_list.json()["result"]} == {alice_task.task_id}
+        assert all("execution_events" not in task for task in alice_list.json()["result"])
 
     async with httpx.AsyncClient(
         transport=bob_transport, base_url="http://testserver"
     ) as bob_client:
         bob_get_other = await bob_client.get(f"/api/v1/tasks/{alice_task.task_id}")
         assert bob_get_other.status_code == 404
+        bob_events = await bob_client.get(f"/api/v1/tasks/{alice_task.task_id}?include_events=true")
+        assert bob_events.status_code == 404
 
         bob_list = await bob_client.get("/api/v1/tasks")
         assert bob_list.status_code == 200
@@ -1810,9 +1822,7 @@ async def test_watcher_reloads_on_signature_change(auth_service):
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
 
     manager = _FakeManager(signatures=[("sig-a",), ("sig-b",)])
-    task = asyncio.create_task(
-        ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01)
-    )
+    task = asyncio.create_task(ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01))
     try:
         await asyncio.sleep(0.1)
     finally:
@@ -1828,9 +1838,7 @@ async def test_watcher_skips_reload_when_unchanged(auth_service):
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
 
     manager = _FakeManager(signatures=[("sig-stable",)])
-    task = asyncio.create_task(
-        ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01)
-    )
+    task = asyncio.create_task(ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01))
     try:
         await asyncio.sleep(0.08)
     finally:

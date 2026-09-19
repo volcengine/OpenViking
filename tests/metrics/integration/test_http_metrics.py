@@ -22,10 +22,11 @@ from openviking.observability.context import (
 )
 from openviking.observability.http_observability_middleware import (
     _INFLIGHT_COUNTER,
+    HTTPObservabilityMiddleware,
     _get_route_template,
     _inflight_delta,
-    create_http_observability_middleware,
 )
+from openviking.server.request_id import RequestIdMiddleware
 from openviking.telemetry.span_models import RootSpanAttributes
 
 
@@ -35,13 +36,11 @@ def _bind_root_context_for_account(account_id: str | None):
     return bind_root_observability_context(root)
 
 
-def _build_test_app(middleware_factory, *, route_path: str, method: str, handler):
+def _build_test_app(middleware_class, *, route_path: str, method: str, handler):
     app = FastAPI()
 
-    @app.middleware("http")
-    async def middleware_entry(request, call_next):
-        request.state.request_id = "test-request"
-        return await middleware_factory(request, call_next)
+    app.add_middleware(middleware_class)
+    app.add_middleware(RequestIdMiddleware)
 
     if method == "GET":
         app.get(route_path)(handler)
@@ -156,13 +155,9 @@ def test_inflight_delta_removes_zero_value_entries():
     assert _INFLIGHT_COUNTER.get("/api/v1/resources", None) == 0
 
 
-def test_http_metrics_module_exposes_only_unified_middleware_entrypoint():
-    assert not hasattr(http_middleware, "create_http_metrics_middleware")
-
-
 def test_http_metrics_middleware_emits_authenticated_account_id(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_observability_middleware()
+    middleware = HTTPObservabilityMiddleware
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
@@ -203,7 +198,7 @@ def test_http_metrics_middleware_emits_authenticated_account_id(monkeypatch):
 
 def test_http_metrics_middleware_ignores_internal_metrics_route(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_observability_middleware()
+    middleware = HTTPObservabilityMiddleware
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
@@ -230,7 +225,7 @@ def test_http_metrics_middleware_ignores_internal_metrics_route(monkeypatch):
 
 def test_http_metrics_middleware_still_records_business_route(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_observability_middleware()
+    middleware = HTTPObservabilityMiddleware
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
@@ -258,7 +253,7 @@ def test_http_metrics_middleware_still_records_business_route(monkeypatch):
 
 def test_http_metrics_middleware_uses_route_bound_during_call_next(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_observability_middleware()
+    middleware = HTTPObservabilityMiddleware
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
@@ -286,7 +281,7 @@ def test_http_metrics_middleware_uses_route_bound_during_call_next(monkeypatch):
 
 
 def test_http_metrics_middleware_logs_error_when_metrics_write_fails(monkeypatch):
-    middleware = create_http_observability_middleware()
+    middleware = HTTPObservabilityMiddleware
     error_calls: list[tuple[str, tuple, dict]] = []
 
     def _boom(**_kwargs):

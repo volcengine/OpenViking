@@ -44,7 +44,7 @@ Existing nodes keep their current ACL after restore. Newly restored nodes inheri
 
 - HTTP routes: [snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py), prefix `/api/v1/snapshot`.
 - SDK namespace: [client.py](https://github.com/volcengine/OpenViking/blob/main/sdk/python/openviking_sdk/client.py), exposed as `client.snapshot.*`.
-- Underlying semantics: `commit` / `restore` / `show` / `log` / `diff` in [viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py).
+- Underlying semantics: `commit` / `restore` / `show` / `log` / `diff` in [_snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs/_snapshot.py).
 - CLI: the `SnapshotCmd` in [main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs), subcommands in [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs).
 
 ## API Reference
@@ -52,6 +52,8 @@ Existing nodes keep their current ACL after restore. Newly restored nodes inheri
 ### commit()
 
 Save the current workspace state as a new snapshot.
+
+Partial commits preserve the previous snapshot outside the requested scope. After deleting a file or directory, include that URI or its parent in `paths` to record the deletion. A trailing `/` does not declare its type. Non-ROOT commits use Exact for existing files and Tree for existing directories; missing targets are unlocked with the filesystem lock provider and use Tree with the cache provider. Concurrent recreation of a missing target is not guaranteed to be fully captured; see [commit scope and concurrency](../guides/15-snapshot.md#commit-scope-and-concurrency).
 
 **Parameters**
 
@@ -680,7 +682,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
     mode="create",
-    wait=True,
 )
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 
@@ -689,7 +690,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
     mode="replace",
-    wait=True,
 )
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 

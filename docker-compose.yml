@@ -17,6 +17,8 @@ version: "3.8"
 
 services:
   openviking:
+    # Prefer ghcr.io. If it is hard to reach, use the mirror:
+    #   image: openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
     image: ghcr.io/volcengine/openviking:latest
     container_name: openviking
     # Direct access (optional — caddy:1934 is the recommended single entry

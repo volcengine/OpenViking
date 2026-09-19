@@ -23,14 +23,14 @@ Skill 源码：[examples/compile/ov-compile-skills/knowledge-distillation](https
 ## 第一步：准备来源
 
 ```bash
-ov add-resource ./finance-reports --to viking://resources/finance-reports --wait
+ov add-resource ./finance-reports --to viking://resources/finance-reports
 ov ls -r viking://resources/finance-reports
 ```
 
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-distillation --wait
+ov add-skill examples/compile/ov-compile-skills/knowledge-distillation
 ov skills list
 # → viking://agent/skills/knowledge-distillation  （或 viking://user/<user_name>/skills/knowledge-distillation）
 ```

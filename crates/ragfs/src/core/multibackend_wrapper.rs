@@ -18,6 +18,7 @@ use futures::stream::{self, StreamExt};
 use regex::Regex;
 use serde_json::Value;
 use tokio::sync::{Mutex, Notify};
+use tracing::warn;
 
 use super::context::{FsContext, FS_CTX};
 use super::encryption_wrapper::EncryptionWrappedFS;
@@ -573,6 +574,11 @@ impl MultiWriteWrappedFSBuilder {
 }
 
 impl MultiWriteWrappedFS {
+    /// Return this wrapper's current background task count without scanning metadata.
+    pub(crate) fn background_task_count(&self) -> usize {
+        self.inner.background_tasks.load(Ordering::SeqCst)
+    }
+
     /// Start building a multi-write wrapper from a primary backend.
     pub fn builder(primary_backend: Arc<dyn FileSystem>) -> MultiWriteWrappedFSBuilder {
         MultiWriteWrappedFSBuilder {
@@ -814,9 +820,10 @@ impl Inner {
         };
 
         if let Some((dir, name, seq)) = prepared_entry {
+            let mut commit_superseded = false;
             inner
                 .meta_store
-                .update_dir_meta(&dir, &ctx, move |_redirect, sync_log| {
+                .update_dir_meta(&dir, &ctx, |_redirect, sync_log| {
                     let entry = sync_log.entries.get_mut(&name).ok_or_else(|| {
                         Error::internal(format!(
                             "prepared sync log entry missing while committing '{}'",
@@ -824,15 +831,24 @@ impl Inner {
                         ))
                     })?;
                     if entry.latest_seq != seq {
-                        return Err(Error::internal(format!(
-                            "prepared sync log entry seq mismatch while committing '{}'",
-                            name
-                        )));
+                        warn!(
+                            path = %path,
+                            name = %name,
+                            expected_seq = seq,
+                            actual_seq = entry.latest_seq,
+                            "prepared sync log entry was superseded while committing; skip stale backup fanout"
+                        );
+                        commit_superseded = true;
+                        return Ok(());
                     }
                     entry.mark_primary_committed();
                     Ok(())
                 })
                 .await?;
+            if commit_superseded {
+                inner.refresh_pending_dir(&dir, &ctx).await?;
+                return Ok(result);
+            }
             inner.mark_pending_dir(&dir).await;
         }
 

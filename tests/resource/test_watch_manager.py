@@ -881,7 +881,9 @@ class TestWatchManagerConcurrency:
                 to_uri=f"viking://resources/test{index}",
             )
 
-        tasks = await asyncio.gather(*[create_task(i) for i in range(10)])
+        tasks = await asyncio.gather(
+            *[asyncio.to_thread(lambda i=i: asyncio.run(create_task(i))) for i in range(10)]
+        )
 
         assert len(tasks) == 10
         assert len({task.task_id for task in tasks}) == 10
@@ -895,28 +897,33 @@ class TestWatchManagerConcurrency:
 
     @pytest.mark.asyncio
     async def test_concurrent_read_write(self, watch_manager: WatchManager):
-        """Test concurrent read and write operations."""
+        """A background result must preserve a concurrent HTTP pause, including on disk."""
         task = await watch_manager.create_task(path="/test/path")
 
-        async def update_task(index: int):
+        async def pause_task():
             await watch_manager.update_task(
                 task_id=task.task_id,
                 account_id=TEST_ACCOUNT_ID,
                 user_id=TEST_USER_ID,
                 role=TEST_ROLE,
-                reason=f"Update {index}",
+                is_active=False,
             )
 
-        async def read_task():
-            return await watch_manager.get_task(task.task_id)
-
-        operations = [update_task(i) for i in range(5)] + [read_task() for _ in range(5)]
-        results = await asyncio.gather(*operations, return_exceptions=True)
-
-        assert all(not isinstance(r, Exception) for r in results)
-
-        final_task = await watch_manager.get_task(task.task_id)
+        await asyncio.gather(
+            pause_task(),
+            asyncio.to_thread(
+                lambda: asyncio.run(
+                    watch_manager.record_execution(task.task_id, status="completed")
+                )
+            ),
+        )
+        restored = WatchManager(viking_fs=watch_manager._viking_fs)
+        await restored.initialize()
+        final_task = await restored.get_task(task.task_id)
         assert final_task is not None
+        assert final_task.is_active is False
+        assert final_task.last_status == "completed"
+        assert final_task.next_execution_time is None
 
 
 _CONNECTOR_AUTH = {"provider": "connector_encrypted", "ciphertext": "unused"}

@@ -143,9 +143,10 @@ viking://agent/tools/mcp/                           # MCP tool configuration (pl
 viking://agent/payments/ap2/                        # Payment configuration (planned)
 ```
 
-`viking://agent/...` is a global shared scope, accessible to all users under the account,
-without agent_id isolation. Legacy (0.3.x) data under `viking://agent/...` remains accessible
-via a read-only compatibility entry, but new data should be written according to the new directory semantics.
+`viking://agent/...` is an account-shared directory for capabilities and configuration,
+including skills, endpoints, tools, payments, and other subdirectories. Directory names
+do not identify agents, and `actor_peer_id` does not filter this scope. Sharing is limited
+to the current account. Peer data belongs under `viking://user/<user_id>/peers/<peer_id>/...`.
 
 The home alias `viking://~/...` is relative to the current request identity. OpenViking
 expands it internally to the explicit namespace path `viking://user/{user_id}/...` before
@@ -284,9 +285,9 @@ viking://
     └── history/
 ```
 
-`viking://agent/...` is a global shared scope for agent capabilities, accessible to all users under the account,
-without agent_id isolation. Legacy (0.3.x) data under `viking://agent/...` remains accessible
-via a read-only compatibility entry, but new data should be written according to the new directory semantics.
+`viking://agent/...` is an account-shared directory without an Agent ID identity layer.
+`actor_peer_id` filters only the current user's `peers` collection. Shared directories
+remain isolated by account.
 
 ## URI Operations
 

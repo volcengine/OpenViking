@@ -182,8 +182,7 @@ Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` �
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -205,7 +204,7 @@ recent_emails = client.find(
 # 仅搜索 memories 和 resources
 typed_results = client.find(
     query="authentication",
-    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
+    options={"context_type": ["memory", "resource"]},
 )
 
 # 按本地图片、bytes、data URI、HTTP URL 或 viking:// URI 搜索
@@ -461,8 +460,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -484,7 +482,7 @@ results = client.search(
     query="best practices",
     session_id=session.session_id,
     options={
-        "context_type": ContextType.SKILL,
+        "context_type": "skill",
         "since": "2h",
     },
 )
@@ -839,7 +837,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -981,7 +979,7 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1063,7 +1061,7 @@ openviking glob "**/*.md" -f tags
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1107,7 +1105,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 ### 使用具体的查询
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1122,7 +1120,7 @@ results = client.find(query="auth")
 ### 限定搜索范围
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1137,7 +1135,7 @@ results = client.find(
 ### 在对话中使用会话上下文
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")

@@ -108,13 +108,13 @@ export function CurrentUserMenu() {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         aria-label={t('header.currentUser.openMenu', { user: userLabel })}
-        className="group flex h-10 max-w-52 items-center gap-2 rounded-2xl border border-border/80 bg-muted/60 p-1 pr-2.5 text-left shadow-xs outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className="group flex h-8 max-w-48 items-center gap-2 rounded-lg border border-border/80 bg-muted/60 p-1 pr-2.5 text-left shadow-xs outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-foreground text-xs font-semibold text-background shadow-sm">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-foreground text-xs font-semibold text-background shadow-sm">
           {getUserInitial(userLabel)}
         </span>
         <span className="hidden min-w-0 flex-1 sm:block">
-          <span className="block truncate text-xs font-semibold leading-4 text-foreground">
+          <span className="block truncate text-xs font-semibold leading-3 text-foreground">
             {userLabel}
           </span>
           <span className="block truncate text-[10px] leading-3 text-muted-foreground">

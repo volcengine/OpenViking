@@ -13,7 +13,6 @@ from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
-    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -338,7 +337,7 @@ async def test_cp_directory_requires_recursive_before_locking(monkeypatch):
     agfs = _CopyAGFS(source_is_dir=True)
     fs = _viking_fs(monkeypatch, agfs)
 
-    with pytest.raises(FailedPreconditionError, match="recursive"):
+    with pytest.raises(InvalidArgumentError, match="recursive"):
         await fs.cp(
             "viking://resources/source",
             "viking://resources/target",

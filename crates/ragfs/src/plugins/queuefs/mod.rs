@@ -6,6 +6,7 @@
 //! - `/queue_name/dequeue` - Read from this file to remove and return the first message
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
+//! - `/queue_name/status` - Read pending and processing message counts
 //! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
 //! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
@@ -53,6 +54,10 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
     },
     ControlFileSpec {
         name: "size",
+        mode: 0o444,
+    },
+    ControlFileSpec {
+        name: "status",
         mode: 0o444,
     },
     ControlFileSpec {
@@ -176,6 +181,14 @@ impl QueueStorage {
             Self::Local(backend) => backend.lock().await.size(queue_name),
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.size(queue_name).await,
+        }
+    }
+
+    async fn status(&self, queue_name: &str) -> Result<backend::QueueState> {
+        match self {
+            Self::Local(backend) => backend.lock().await.status(queue_name),
+            #[cfg(feature = "cache")]
+            Self::Cache(storage) => storage.status(queue_name).await,
         }
     }
 
@@ -383,6 +396,10 @@ impl FileSystem for QueueFileSystem {
                 let size = self.storage.size(&queue_name).await?;
                 Ok(size.to_string().into_bytes())
             }
+            "status" => {
+                let status = self.storage.status(&queue_name).await?;
+                Ok(serde_json::to_vec(&status)?)
+            }
             "messages" => {
                 let messages = self
                     .storage
@@ -397,7 +414,7 @@ impl FileSystem for QueueFileSystem {
                 Ok(serde_json::to_vec(&messages)?)
             }
             _ => Err(Error::InvalidOperation(format!(
-                "Cannot read from '{}'. Use dequeue, peek, size, or messages",
+                "Cannot read from '{}'. Use dequeue, peek, size, status, or messages",
                 operation
             ))),
         }
@@ -812,6 +829,7 @@ impl ServicePlugin for QueueFSPlugin {
          - dequeue: Read to remove and return the first message\n\
          - peek: Read to view the first message without removing it\n\
          - size: Read to get the current queue size\n\
+         - status: Read pending and processing message counts\n\
          - clear: Write to clear all messages from the queue\n\
          - ack: Write message id to acknowledge and delete it\n\
          \n\
@@ -1008,13 +1026,14 @@ mod tests {
             .read_dir("/test", None, None, None, None)
             .await
             .unwrap();
-        assert_eq!(entries.len(), 7);
+        assert_eq!(entries.len(), 8);
 
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains(&"enqueue".to_string()));
         assert!(names.contains(&"dequeue".to_string()));
         assert!(names.contains(&"peek".to_string()));
         assert!(names.contains(&"size".to_string()));
+        assert!(names.contains(&"status".to_string()));
         assert!(names.contains(&"messages".to_string()));
         assert!(names.contains(&"clear".to_string()));
         assert!(names.contains(&"ack".to_string()));
@@ -1227,11 +1246,20 @@ mod tests {
         let dequeued: TestQueueMessage =
             serde_json::from_slice(&fs.read("/Semantic/dequeue", 0, 0).await.unwrap()).unwrap();
         assert_eq!(dequeued.data, "payload");
+        assert_eq!(
+            fs.read("/Semantic/status", 0, 0).await.unwrap(),
+            br#"{"pending":0,"processing":1}"#
+        );
         fs.write("/Semantic/ack", dequeued.id.as_bytes(), 0, WriteFlag::None)
             .await
             .unwrap();
+        assert_eq!(
+            fs.read("/Semantic/status", 0, 0).await.unwrap(),
+            br#"{"pending":0,"processing":0}"#
+        );
         assert_eq!(fs.read("/Semantic/size", 0, 0).await.unwrap(), b"0");
         fs.remove_all("/Semantic").await.unwrap();
+        assert!(fs.read("/Semantic/status", 0, 0).await.is_err());
         drop(fs);
         runtime.close().await.unwrap();
     }

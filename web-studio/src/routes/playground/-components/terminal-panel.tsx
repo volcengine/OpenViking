@@ -1,3 +1,14 @@
+import { prepareCompileHandoff } from '#/routes/compile/-lib/handoff'
+import { useQuery } from '@tanstack/react-query'
+import { fetchCompileSkills } from '#/routes/compile/-lib/api'
+import { compileSuggestions } from '#/routes/compile/-lib/suggestions'
+import { Link } from '@tanstack/react-router'
+import {
+  CompileCommandError,
+  isCompileCommand,
+  compileHistory,
+} from '#/routes/compile/-lib/commands'
+import { runCompileSubmission } from '#/routes/compile/-lib/terminal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -223,10 +234,7 @@ const SESSION_SUBCOMMANDS_BY_KEY = new Map(
 )
 
 type TerminalSuggestionGroup =
-  | TerminalCommandGroup
-  | 'history'
-  | 'resource'
-  | 'subcommand'
+  TerminalCommandGroup | 'history' | 'resource' | 'subcommand'
 
 type TerminalSuggestion = Omit<TerminalCommandView, 'group'> & {
   group: TerminalSuggestionGroup
@@ -306,6 +314,11 @@ function loadTerminalHistory(storageKey: string): TerminalEntry[] {
         kind: record.kind as TerminalEntry['kind'],
         refs: normalizeRefs(record.refs),
         title: record.title,
+        compileTaskId:
+          typeof record.compileTaskId === 'string'
+            ? record.compileTaskId
+            : undefined,
+        compileForm: record.compileForm === true,
       }
     },
     TERMINAL_ENTRY_HISTORY_LIMIT,
@@ -474,6 +487,13 @@ export function TerminalPanel({
   )
   const [command, setCommand] = useState('')
   const [running, setRunning] = useState(false)
+  const compileSkills = useQuery({
+    queryKey: ['compile-skills', identityScopeKey],
+    queryFn: ({ signal }) => fetchCompileSkills(signal),
+    enabled: /^(?:ov\s+)?\/?compile\s/.test(command),
+  })
+  const identityRef = useRef(identityScopeKey)
+  identityRef.current = identityScopeKey
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0)
   const [commandHistory, setCommandHistory] = useState(() =>
@@ -651,6 +671,21 @@ export function TerminalPanel({
 
     const seen = new Set<string>()
     return [
+      ...compileSuggestions(
+        rawQuery,
+        entries.filter((entry) => entry.isDir).map((entry) => entry.uri),
+        compileSkills.data?.map((skill) => skill.uri) || [],
+      ).map((insertText) => ({
+        adminOnly: false,
+        command: insertText,
+        description: t('compile:terminalHint'),
+        executable: false,
+        group: 'core' as const,
+        id: `compile:${insertText}`,
+        insertText,
+        key: 'compile',
+        usage: insertText,
+      })),
       ...commandMatches,
       ...resourceMatches,
       ...sessionSubcommandMatches,
@@ -660,7 +695,16 @@ export function TerminalPanel({
       seen.add(item.insertText)
       return true
     })
-  }, [activeCommand, command, commandHistory, commands, resourceCandidates, t])
+  }, [
+    activeCommand,
+    command,
+    commandHistory,
+    commands,
+    resourceCandidates,
+    t,
+    entries,
+    compileSkills.data,
+  ])
 
   const helpCommand = useMemo(() => {
     if (!activeCommand) return undefined
@@ -803,18 +847,73 @@ export function TerminalPanel({
     [commandHistoryStorageKey],
   )
 
+  const compileSubmission = useRef<{ raw: string; key: string } | null>(null)
+  useEffect(() => {
+    compileSubmission.current = null
+  }, [identityScopeKey])
   const runCommand = useCallback(
     async (raw: string) => {
       const trimmed = raw.trim()
       if (!trimmed || running) return
 
-      append({ kind: 'command', title: trimmed })
-      rememberCommand(trimmed)
+      const isCompile = isCompileCommand(trimmed)
+      const safeHistory = isCompile
+        ? compileHistory(trimmed)
+        : { title: trimmed, remember: true }
+      append({ kind: 'command', title: safeHistory.title })
+      if (safeHistory.remember) rememberCommand(safeHistory.title)
       setCommand('')
       setSuggestionsOpen(false)
       setRunning(true)
 
       try {
+        if (isCompile) {
+          if (/^(?:ov\s+)?\/?compile$/.test(trimmed)) {
+            append({
+              kind: 'info',
+              title: 'compile',
+              body: t('compile:terminalHelp'),
+              compileForm: true,
+            })
+            return
+          }
+          const recoveryKey = `compile-submission:${identityScopeKey}`
+          const result = await runCompileSubmission(
+            trimmed,
+            compileSubmission,
+            (status) =>
+              t(`compile:statuses.${status}`, { defaultValue: status }),
+            (key) => {
+              if (identityRef.current !== identityScopeKey)
+                throw new DOMException('Identity changed', 'AbortError')
+              try {
+                if (key) sessionStorage.setItem(recoveryKey, key)
+                else sessionStorage.removeItem(recoveryKey)
+              } catch {
+                /* optional recovery */
+              }
+            },
+            () => {
+              try {
+                return sessionStorage.getItem(recoveryKey)
+              } catch {
+                return null
+              }
+            },
+            (stage) =>
+              t(`compile:stages.${stage.replace(/^compile:\s*/, '')}`, {
+                defaultValue: stage,
+              }),
+          )
+          if (identityRef.current !== identityScopeKey) return
+          append({
+            kind: 'success',
+            title: 'compile',
+            body: result.body,
+            compileTaskId: result.taskId,
+          })
+          return
+        }
         const [name = '', ...args] = trimmed.split(/\s+/)
         const body = args.join(' ').trim()
 
@@ -1285,8 +1384,12 @@ export function TerminalPanel({
             throw new Error(t('terminal.unknownCommand'))
         }
       } catch (error) {
+        if (identityRef.current !== identityScopeKey) return
         append({
-          body: getErrorMessage(error),
+          body:
+            error instanceof CompileCommandError
+              ? t(`compile:commandErrors.${error.code}`)
+              : getErrorMessage(error),
           kind: 'error',
           title: t('terminal.commandFailed'),
         })
@@ -1423,6 +1526,20 @@ export function TerminalPanel({
         </div>
         <div className="border-t bg-background/80 p-3">
           <div className="mb-2 flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              className="rounded-md border px-2 py-1 font-mono text-[11px]"
+              onClick={() => setCommand('compile')}
+            >
+              {t('compile:title')}
+            </button>
+            <Link
+              to="/compile/new"
+              onClick={() => prepareCompileHandoff(identityScopeKey, command)}
+              className="rounded-md border px-2 py-1 text-[11px]"
+            >
+              {t('compile:openForm')}
+            </Link>
             {quickCommands.map((item) => (
               <button
                 key={item.command}
@@ -1823,6 +1940,7 @@ export function TerminalHistoryItem({
   onOpenResource: ResourceOpenHandler
   openingUri: string | null
 }) {
+  const { t } = useTranslation('playground')
   const Icon =
     entry.kind === 'command'
       ? TerminalIcon
@@ -1852,6 +1970,20 @@ export function TerminalHistoryItem({
           {entry.title}
         </span>
       </div>
+      {entry.compileTaskId && (
+        <Link
+          to="/compile/tasks/$taskId"
+          params={{ taskId: entry.compileTaskId }}
+          className="text-xs text-primary underline"
+        >
+          {t('compile:viewTask')}
+        </Link>
+      )}
+      {entry.compileForm && (
+        <Link to="/compile/new" className="text-xs text-primary underline">
+          {t('compile:openForm')}
+        </Link>
+      )}
       {entry.body ? (
         <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-2 text-xs leading-5 text-muted-foreground">
           {entry.body}

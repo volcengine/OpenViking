@@ -37,7 +37,8 @@ export function MarkdownContent({
   return (
     <div
       className={cn(
-        'prose prose-sm dark:prose-invert max-w-none',
+        'chat-markdown prose prose-sm dark:prose-invert max-w-none',
+        'prose-pre:text-foreground prose-pre:bg-transparent',
         // Headings
         'prose-headings:font-semibold prose-headings:tracking-tight',
         'prose-h1:text-lg prose-h2:text-base prose-h3:text-sm',

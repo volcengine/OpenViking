@@ -56,8 +56,6 @@ class RerankConfig(BaseModel):
         ),
     )
 
-    model_config = {"extra": "forbid"}
-
     def _effective_provider(self) -> Optional[str]:
         """Auto-detect provider from config fields when not explicitly set."""
         if self.provider:

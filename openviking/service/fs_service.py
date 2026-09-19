@@ -394,6 +394,11 @@ class FSService:
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
         result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
+        # A refresh on a parent that no longer exists would lock its sidecar
+        # paths and thereby recreate the deleted directory. Nothing to
+        # summarize there; skip it.
+        if refresh_parent_uri and not await viking_fs.exists(refresh_parent_uri, ctx=ctx):
+            refresh_parent_uri = None
         queue_status = None
         refresh_action: Optional[FreshnessAction] = None
         request_registered = False
@@ -473,9 +478,19 @@ class FSService:
 
     @staticmethod
     def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
-        if context_type != "resource":
+        if context_type not in {"resource", "skill"}:
             return None
         parent = VikingURI(uri).parent
+        if context_type == "skill":
+            if parent is None:
+                return None
+            classification = classify_uri(parent.uri)
+            if (
+                not classification.is_skill
+                or classification.is_skill_root
+                or classification.is_skill_namespace
+            ):
+                return None
         return parent.uri if parent and parent.scope else None
 
     @staticmethod
@@ -1064,15 +1079,21 @@ class FSService:
         viking_fs = self._ensure_initialized()
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         project_tags = bool(normalized_tags) or include_tags
+        tag_filter = None
+        if normalized_tags:
+            from openviking.utils.tags import build_search_tags_filter
+
+            tag_filter = build_search_tags_filter(normalized_tags)
         result = dict(
             await viking_fs.glob(
                 pattern,
                 uri=uri,
-                node_limit=None if normalized_tags else node_limit,
+                node_limit=node_limit,
                 ctx=ctx,
                 extra_fields=extra_fields
                 if extra_fields is not None
                 else ([] if project_tags else None),
+                tag_filter=tag_filter,
             )
         )
         if not project_tags:
@@ -1168,9 +1189,7 @@ class FSService:
         ctx: RequestContext,
         acl_mode: Optional[AclMode] = None,
     ) -> Dict[str, Any]:
-        return await self._ensure_initialized().set_acl(
-            uri, entries, ctx=ctx, acl_mode=acl_mode
-        )
+        return await self._ensure_initialized().set_acl(uri, entries, ctx=ctx, acl_mode=acl_mode)
 
     async def grant_acl(
         self, uri: str, principal: str, level: str, ctx: RequestContext

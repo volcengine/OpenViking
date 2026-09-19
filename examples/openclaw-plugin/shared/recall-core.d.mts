@@ -1,3 +1,6 @@
+// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
+import type { OvHttpRequestOptions } from "./ov-http.mjs";
+
 export type ContextSearchBody = {
   query: string;
   mode: "context";
@@ -37,3 +40,42 @@ export function contextRequestTimeoutMs(
 ): number | undefined;
 
 export function normalizeContextEntry(entry?: unknown): NormalizedContextEntry;
+
+export type RecallFetchJSON = (
+  path: string,
+  init?: RequestInit,
+  options?: OvHttpRequestOptions,
+) => Promise<{ ok: boolean; status?: number; result?: any; error?: any }>;
+
+export type RecallOptions = {
+  actorPeerId?: string;
+  legacyPeerId?: string;
+  sessionId?: string;
+  log?: (stage: string, data?: any) => void;
+};
+
+export type DetailedRecall = {
+  block: string;
+  contentCount: number;
+  hintCount: number;
+  budgetUsed: number;
+  stage: "server_assembled" | "ranked" | "no_results" | "filtered_out";
+};
+
+export function buildRecallBlockDetailed(
+  fetchJSON: RecallFetchJSON,
+  cfg: Record<string, any>,
+  query: string,
+  options?: RecallOptions,
+): Promise<DetailedRecall>;
+
+export function buildRecallBlock(
+  fetchJSON: RecallFetchJSON,
+  cfg: Record<string, any>,
+  query: string,
+  options?: RecallOptions,
+): Promise<string | null>;
+
+export function buildRecallEndpointBody(cfg?: Record<string, any>): Record<string, any>;
+export function estimateTokens(text: string): number;
+export function isRecallEnabled(cfg?: Record<string, any>): boolean;

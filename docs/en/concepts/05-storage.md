@@ -96,6 +96,20 @@ viking://resources/docs/auth/
 
 The vector index stores semantic indices, supporting vector search and scalar filtering.
 
+### Local Record Format Compatibility
+
+The local backend packs non-vector fields into a JSON payload. New candidate records and delta
+logs store that payload as `text` with a 32-bit byte length, removing the previous 65,535-byte
+limit on the combined JSON. The payload is preserved without truncation.
+
+New records carry a format version. Existing unversioned records remain readable, and updates
+write the new format; no full database rewrite, index rebuild, or embedding recomputation is
+required for this format upgrade. Delta replay also accepts both formats.
+
+This compatibility is one-way: older releases cannot read the new record format. To downgrade,
+restore a backup taken before the first write with the new format; changing the executable alone
+is insufficient.
+
 ### Context Collection Schema
 
 | Field | Type | Description |

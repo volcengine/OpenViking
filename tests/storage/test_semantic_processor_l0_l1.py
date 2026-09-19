@@ -93,6 +93,7 @@ def test_markdown_overview_uses_brief_description_as_abstract(monkeypatch):
     processor = SemanticProcessor()
     generated = (
         "# README\n\n"
+        "---\n\n"
         "This brief description is the retrieval abstract.\n\n"
         "## Quick Navigation\n\n"
         "- Read README.md"

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
@@ -57,3 +58,50 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
     )
 
     assert pathlock.release_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_type", ["resource", "memory", "skill"])
+async def test_missing_root_is_acked_before_lock_scope_is_resolved(monkeypatch, context_type):
+    """Resolving the lock for a deleted root would recreate it to hold lock metadata."""
+    processor = SemanticProcessor()
+    fs = _FakeVikingFS()
+
+    async def adopt(handoff):
+        return handoff
+
+    fs._async_agfs.pathlock_adopt = adopt
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: fs,
+    )
+
+    async def fail_resolve(*args, **kwargs):
+        raise AssertionError("lock scope must not be resolved for a missing root")
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        fail_resolve,
+    )
+
+    roots = {
+        "resource": "viking://resources/deleted-parent",
+        "memory": "viking://user/alice/memories/deleted-parent",
+        "skill": "viking://user/alice/skills/deleted-parent",
+    }
+    msg = SemanticMsg(
+        uri=roots[context_type],
+        context_type=context_type,
+        recursive=False,
+        account_id="default",
+        user_id="alice",
+        changes={"deleted": [f"{roots[context_type]}/a.md"]},
+        generation_trigger="content_delete",
+        lock_handoff={"id": "queued-skill-lock"} if context_type == "skill" else None,
+    )
+    result = await processor.on_dequeue(msg.to_dict())
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert fs._async_agfs.release_calls == (
+        ["queued-skill-lock"] if context_type == "skill" else []
+    )

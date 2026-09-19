@@ -23,12 +23,12 @@ If the material is not in OpenViking yet, import it. Use `ov add-resource` for d
 
 ```bash
 # Import a directory as a source
-ov add-resource ./my-research --to viking://resources/research --wait
+ov add-resource ./my-research --to viking://resources/research
 
 # Or write a single file
 ov mkdir viking://resources/research
 ov write viking://resources/research/notes.md \
-  --from-file ./notes.md --mode create --wait
+  --from-file ./notes.md --mode create
 ```
 
 Confirm the source is in place:
@@ -42,7 +42,7 @@ ov ls -r viking://resources/research
 Install the LLM Wiki Skill. By default it lands in your user-private skills namespace; use `-p viking://agent/skills` to make it shared across the team:
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/llm-wiki --wait
+ov add-skill examples/compile/ov-compile-skills/llm-wiki
 ```
 
 Find the installed Skill URI:

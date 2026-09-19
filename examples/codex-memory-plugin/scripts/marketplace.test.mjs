@@ -16,6 +16,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { MCP_PROXY_ENV_VARS } from "./shared/mcp-proxy-config.mjs";
+
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const pluginDir = resolve(scriptsDir, "..");
 const repoRoot = resolve(scriptsDir, "..", "..", "..");
@@ -125,6 +127,8 @@ test("required plugin files are present", () => {
     "skills/ov-memory-doctor/reference.md",
     "scripts/ov-memory-doctor.mjs",
     "scripts/shared/doctor-core.mjs",
+    "scripts/uri-guard.mjs",
+    "scripts/shared/uri-guard.mjs",
   ]) {
     assert.ok(existsSync(join(pluginDir, rel)), `missing required plugin file: ${rel}`);
   }
@@ -156,7 +160,7 @@ test("hooks.json uses Codex's native ${PLUGIN_ROOT}, not the legacy placeholder"
     .flat()
     .flatMap((group) => group.hooks || [])
     .map((h) => h.command || "");
-  assert.ok(commands.length >= 5, "expected at least 5 hook commands (SessionStart/UserPromptSubmit/Stop/SessionEnd/PreCompact)");
+  assert.ok(commands.length >= 6, "expected at least 6 hook commands (SessionStart/UserPromptSubmit/PreToolUse/Stop/SessionEnd/PreCompact)");
   for (const cmd of commands) {
     assert.match(
       cmd,
@@ -175,6 +179,18 @@ test("hooks.json registers SessionEnd within Codex's clamped budget", () => {
   assert.ok(entries[0].timeout <= 3, `SessionEnd timeout must be <= 3, got ${entries[0].timeout}`);
 });
 
+test("hooks.json registers the PreToolUse URI guard on Bash only", () => {
+  // Codex's Edit and Write matchers are aliases for apply_patch, whose input is
+  // a patch body with no path argument to guard.
+  const parsed = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf-8"));
+  const groups = parsed.hooks?.PreToolUse || [];
+  assert.deepEqual(groups.map((group) => group.matcher), ["Bash"]);
+  const entries = groups.flatMap((group) => group.hooks || []);
+  assert.equal(entries.length, 1, "expected exactly one PreToolUse hook");
+  assert.equal(entries[0].command, 'node "${PLUGIN_ROOT}/scripts/uri-guard.mjs"');
+  execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
+});
+
 test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   const mcp = readJson(join(pluginDir, ".mcp.json"));
   const server = mcp.mcpServers?.[PLUGIN_NAME];
@@ -189,11 +205,21 @@ test(".mcp.json starts the stdio MCP proxy from the plugin root", () => {
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
+test(".mcp.json forwards every env var that changes what the MCP proxy sends", () => {
+  // Hooks inherit Codex's whole environment, but a stdio MCP server only gets
+  // the names listed here; a missing one is a setting the proxy never sees.
+  const server = readJson(join(pluginDir, ".mcp.json")).mcpServers[PLUGIN_NAME];
+  const forwarded = new Set(server.env_vars);
+  for (const name of MCP_PROXY_ENV_VARS) {
+    assert.ok(forwarded.has(name), `.mcp.json env_vars must forward ${name}`);
+  }
+});
+
 test("Codex MCP entrypoint forwards only native OpenViking tools", () => {
   const entrypoint = readFileSync(join(pluginDir, "servers", "mcp-proxy.mjs"), "utf-8");
   assert.doesNotMatch(entrypoint, /createExperienceToolProvider/);
   assert.doesNotMatch(entrypoint, /localToolProvider/);
-  assert.match(entrypoint, /resolveMcpActorPeerId\(cfg\)/);
+  assert.match(entrypoint, /toMcpProxyConfig\(/);
   assert.doesNotMatch(entrypoint, /resolveEffectivePeerId|process\.cwd\(\)/);
 });
 

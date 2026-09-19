@@ -43,7 +43,7 @@ import { useAppConnection } from '#/hooks/use-app-connection'
 import { isOvClientError } from '#/lib/ov-client'
 import { cn } from '#/lib/utils'
 
-import { EvolutionSettingsPopover } from './-components/evolution-settings-popover'
+import { ExperienceSetupGuide } from './-components/experience-setup-guide'
 import { ExperiencePreviewSheet } from './-components/experience-preview-sheet'
 import { fetchExperiences } from './-lib/api'
 import {
@@ -278,11 +278,11 @@ function AgentExperienceRoute() {
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-6">
+    <div className="flex w-full min-w-0 flex-col gap-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="grid gap-1.5">
           <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            <h1 className="text-2xl font-semibold tracking-tight">
               {t('title')}
             </h1>
           </div>
@@ -291,7 +291,6 @@ function AgentExperienceRoute() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <EvolutionSettingsPopover />
           <Button
             type="button"
             variant="outline"
@@ -308,6 +307,8 @@ function AgentExperienceRoute() {
           </Button>
         </div>
       </header>
+
+      <ExperienceSetupGuide />
 
       {experiencesQuery.isLoading ? (
         <Card className="min-h-56 items-center justify-center">
@@ -387,8 +388,8 @@ function AgentExperienceRoute() {
           size="sm"
           className="rounded-xl bg-background shadow-none ring-border/70 data-[size=sm]:gap-0 data-[size=sm]:py-0"
         >
-          <div className="flex flex-wrap items-center justify-end gap-3 border-b border-border/60 px-5 py-4">
-            <div className="relative w-full sm:max-w-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
+            <div className="relative w-full sm:max-w-md">
               <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 aria-label={t('searchPlaceholder')}
@@ -414,6 +415,9 @@ function AgentExperienceRoute() {
                 </button>
               ) : null}
             </div>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {t('pageCount', { count: experiences.length })}
+            </span>
           </div>
 
           {experiences.length === 0 ? (
@@ -426,16 +430,16 @@ function AgentExperienceRoute() {
               </div>
             </div>
           ) : (
-            <Table>
+            <Table className="table-fixed">
               <TableHeader>
-                <TableRow className="bg-muted/20 hover:bg-muted/20">
-                  <TableHead className="h-10 pl-5 text-xs font-normal text-muted-foreground">
+                <TableRow className="bg-muted/15 hover:bg-muted/15">
+                  <TableHead className="h-10 pl-4 text-xs font-normal text-muted-foreground">
                     {t('columnFile')}
                   </TableHead>
-                  <TableHead className="h-10 w-44 text-xs font-normal text-muted-foreground">
+                  <TableHead className="hidden h-10 w-44 sm:table-cell text-xs font-normal text-muted-foreground">
                     {t('columnUpdated')}
                   </TableHead>
-                  <TableHead className="h-10 w-28 pr-5 text-right text-xs font-normal text-muted-foreground">
+                  <TableHead className="h-10 w-28 pr-4 text-right text-xs font-normal text-muted-foreground">
                     {t('columnActions')}
                   </TableHead>
                 </TableRow>
@@ -454,16 +458,17 @@ function AgentExperienceRoute() {
                       className="group cursor-pointer border-border/50 transition-colors hover:bg-muted/30"
                       onClick={() => handleOpenPreview(experience)}
                     >
-                      <TableCell className="max-w-0 py-2.5 pl-5">
+                      <TableCell className="min-w-0 py-3.5 pl-4">
                         <div className="flex min-w-0 items-center gap-3">
-                          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/70 text-muted-foreground transition-colors group-hover:border-primary/30 group-hover:text-primary">
+                          <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/60 transition-colors group-hover:text-foreground">
                             <FileTextIcon className="size-4" />
                           </span>
                           <div className="grid min-w-0 gap-1">
                             <div className="flex min-w-0 items-center gap-1.5">
                               <button
                                 type="button"
-                                className="min-w-0 truncate text-left font-medium underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                                title={experience.uri}
+                                className="min-w-0 truncate text-left text-sm font-medium underline-offset-4 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                                 onClick={(event) => {
                                   event.stopPropagation()
                                   handleOpenPreview(experience)
@@ -483,23 +488,28 @@ function AgentExperienceRoute() {
                                 </Badge>
                               ) : null}
                             </div>
-                            <span
-                              className="truncate font-mono text-[11px] text-muted-foreground/80"
-                              title={experience.uri}
-                            >
-                              <HighlightedText
-                                keyword={normalizedKeyword}
-                                text={experience.uri}
-                              />
-                            </span>
+                            {normalizedKeyword &&
+                            !experience.name
+                              .toLocaleLowerCase()
+                              .includes(normalizedKeyword) ? (
+                              <span
+                                className="truncate font-mono text-[11px] text-muted-foreground"
+                                title={experience.uri}
+                              >
+                                <HighlightedText
+                                  keyword={normalizedKeyword}
+                                  text={experience.uri}
+                                />
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="w-44 text-xs text-muted-foreground">
+                      <TableCell className="hidden w-44 text-xs tabular-nums text-muted-foreground sm:table-cell">
                         {updated ?? '-'}
                       </TableCell>
                       <TableCell
-                        className="w-28 pr-5 text-right"
+                        className="w-28 pr-4 text-right"
                         onClick={(event) => event.stopPropagation()}
                       >
                         <Button

@@ -9,14 +9,14 @@ Skill 源码：[examples/compile/ov-compile-skills/daily-report](https://github.
 日报的来源通常是已经在 OpenViking 里的会话、消息或文档。如果要从本地导入一批记录：
 
 ```bash
-ov add-resource ./work-logs --to viking://resources/work-logs --wait
+ov add-resource ./work-logs --to viking://resources/work-logs
 ov ls -r viking://resources/work-logs
 ```
 
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/daily-report --wait
+ov add-skill examples/compile/ov-compile-skills/daily-report
 ov skills list
 # → viking://agent/skills/daily-report  （或 viking://user/<你>/skills/daily-report）
 ```

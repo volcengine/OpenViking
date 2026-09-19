@@ -2,6 +2,7 @@
     "server": {
         "host": "0.0.0.0",
         "port": 1933,
+        "executor_threads": 0,
         "timeout_keep_alive": 5,
         "root_api_key": null,
         "cors_origins": ["*"],
@@ -184,7 +185,7 @@
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
         "provider": "openai-codex",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.6-terra",
         "api_base": "https://chatgpt.com/backend-api/codex",
         "reasoning_effort": "xhigh",
         "temperature": 0.0,
@@ -232,6 +233,7 @@
         "recall_rewrite_timeout_s": 30.0,
     },
     "grep": {"engine": "auto", "switch_to_remote_threshold": 10000},
+    "glob": {"engine": "fs", "switch_to_remote_threshold": 100},
     "auto_generate_l0": true,
     "auto_generate_l1": true,
     "default_search_mode": "thinking",

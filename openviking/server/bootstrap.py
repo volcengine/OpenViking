@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
-import asyncio
 import argparse
+import asyncio
 import json
 import os
 import shutil
@@ -276,6 +276,10 @@ def main():
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
+        import secrets
+
+        # Shared only by this server and its managed child, never returned to Studio.
+        os.environ["OPENVIKING_BOT_STUDIO_TOKEN"] = secrets.token_urlsafe(32)
         bot_port = args.bot_port
         config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
         _abort_if_port_in_use(bot_port, "vikingbot gateway")

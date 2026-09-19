@@ -202,16 +202,34 @@ async def test_account_overrides_are_isolated(fake_viking_fs):
 
 
 async def test_account_settings_update_backs_up_previous_file(fake_viking_fs):
-    await update_account_settings(fake_viking_fs, "default", _patch(False))
+    legacy_settings = json.dumps(
+        {
+            "namespace": {
+                "isolate_user_scope_by_agent": True,
+                "isolate_agent_scope_by_user": False,
+            },
+            "agent_evolution": {"enabled": False},
+            "acl": {"enabled": True, "retired_field": False},
+        }
+    ).encode("utf-8")
+    fake_viking_fs.agfs.files[account_settings_path("default")] = legacy_settings
+
+    settings = await read_account_settings(fake_viking_fs, "default")
+    assert settings.model_dump(exclude_none=True) == {
+        "agent_evolution": {"enabled": False},
+        "acl": {"enabled": True},
+    }
+    assert fake_viking_fs.agfs.files[account_settings_path("default")] == legacy_settings
+
     await update_account_settings(fake_viking_fs, "default", _patch(True))
 
     current = fake_viking_fs.agfs.files[account_settings_path("default")]
     backup = fake_viking_fs.agfs.files[account_settings_backup_path("default")]
-    current_payload = json.loads(current.decode("utf-8"))
-    backup_payload = json.loads(backup.decode("utf-8"))
-
-    assert current_payload["agent_evolution"]["enabled"] is True
-    assert backup_payload["agent_evolution"]["enabled"] is False
+    assert json.loads(current) == {
+        "agent_evolution": {"enabled": True},
+        "acl": {"enabled": True},
+    }
+    assert backup == legacy_settings
 
 
 async def test_account_settings_admin_api_reads_and_updates_effective_value(

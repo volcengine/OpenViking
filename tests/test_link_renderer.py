@@ -1,6 +1,28 @@
+import pytest
+
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+
+@pytest.mark.parametrize(
+    ("name", "encoded"),
+    [("a#one.md", "a%23one.md"), ("a%23one.md", "a%2523one.md")],
+)
+def test_hash_filename_links_round_trip_without_aliasing(name, encoded):
+    source = "viking://resources/wiki/index.md"
+    target = f"viking://resources/wiki/{name}"
+    assert (
+        LinkRenderer.render_links("Details", source, [{"match_text": "Details", "to_uri": target}])
+        == f"[Details](./{encoded})"
+    )
+    for prefix in ("./", "viking://resources/wiki/"):
+        content = f"[Details]({prefix}{encoded}#intro)"
+        assert LinkRenderer.can_render_link(content, "Details", source, target)
+        for other in {"a#one.md", "a#two.md", "a%23one.md", "a"} - {name}:
+            assert not LinkRenderer.can_render_link(
+                content, "Details", source, f"viking://resources/wiki/{other}"
+            )
 
 
 class TestRelativePath:

@@ -446,7 +446,7 @@ POST /api/v1/content/batch-write
 ```json
 {
   "root_uri": "viking://resources/团队知识库",
-  "wait": true,
+  "wait": false,
   "timeout": 300,
   "operations": [
     {

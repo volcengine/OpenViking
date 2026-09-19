@@ -197,6 +197,7 @@ When the variable is unset and inference is used, the tool response automaticall
 ```yaml
 services:
   openviking:
+    # Prefer ghcr.io. If it is hard to reach, use openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
     image: ghcr.io/volcengine/openviking:latest
     environment:
       OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"

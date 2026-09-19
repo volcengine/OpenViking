@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   CheckCircle2Icon,
   CheckIcon,
@@ -53,6 +53,7 @@ import { normalizeTaskStatus } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
 import { fetchTasks, MAX_TASKS } from './-lib/task-list'
+import { localizeSkippedCommit } from './-lib/localize-commit-result'
 import type { TaskStatusFilter, TaskTypeFilter } from './-lib/task-list'
 import { getTaskPipelineGroups } from './-lib/task-pipeline'
 
@@ -63,6 +64,7 @@ export const Route = createFileRoute('/tasks')({
 const DEFAULT_PAGE_SIZE = 20
 const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const TASK_TYPE_OPTIONS: Exclude<TaskTypeFilter, 'all'>[] = [
+  'compile',
   'session_commit',
   'add_resource',
   'add_skill',
@@ -82,7 +84,8 @@ const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
 ]
 
 function TasksRoute() {
-  const { i18n, t } = useTranslation('tasksPage')
+  const navigate = useNavigate()
+  const { t } = useTranslation('tasksPage')
   const { identityScopeKey } = useAppConnection()
   const queryClient = useQueryClient()
   const [page, setPage] = React.useState(1)
@@ -104,7 +107,10 @@ function TasksRoute() {
     if (!dedupByResource) return rawTasks
     const map = new Map<string, TaskRecord>()
     for (const t of rawTasks) {
-      const key = t.resource_id ? `res:${t.resource_id}` : `task:${t.task_id}`
+      const key =
+        t.resource_id && t.task_type !== 'compile'
+          ? `res:${t.resource_id}`
+          : `task:${t.task_id}`
       if (!map.has(key)) {
         map.set(key, t)
       }
@@ -123,23 +129,14 @@ function TasksRoute() {
         return { res: { ok: true }, task }
       }
       if (!task.resource_id) {
-        throw new Error(
-          i18n.language.startsWith('zh')
-            ? '任务缺少关联资源 ID，无法重新入队'
-            : 'Missing resource ID for task',
-        )
+        throw new Error(t('labels.missingResource'))
       }
 
       // ── 1. task_type 精确匹配优先（不受 URI 前缀干扰）──────────────────────
       if (task.task_type === 'session_commit') {
         const res = await commitSession(task.resource_id)
-        const resAny = res as any
-        if (resAny?.result?.reason === 'no_messages' || resAny?.reason === 'no_messages') {
-          toast.info(
-            i18n.language.startsWith('zh')
-              ? '该会话无未提交消息，已无需重复入队'
-              : 'Session has no pending uncommitted messages',
-          )
+        if (res.status === 'skipped' || res.reason === 'no_messages') {
+          return { res, task, skippedReason: res.reason ?? 'skipped' }
         }
         return { res, task }
       }
@@ -153,11 +150,7 @@ function TasksRoute() {
         const json = resp.data
         if (json.status === 'error' || json.error) {
           throw new Error(
-            json.error?.message ||
-              json.message ||
-              (i18n.language.startsWith('zh')
-                ? '重新入队失败'
-                : 'Re-queue failed'),
+            json.error?.message || json.message || t('labels.requeueFailed'),
           )
         }
         return { res: json, task }
@@ -183,11 +176,7 @@ function TasksRoute() {
       const json = resp.data
       if (json.status === 'error' || json.error) {
         throw new Error(
-          json.error?.message ||
-            json.message ||
-            (i18n.language.startsWith('zh')
-              ? '重新入队失败'
-              : 'Re-queue failed'),
+          json.error?.message || json.message || t('labels.requeueFailed'),
         )
       }
       return { res: json, task }
@@ -195,12 +184,12 @@ function TasksRoute() {
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : String(error))
     },
-    onSuccess: async () => {
-      toast.success(
-        i18n.language.startsWith('zh')
-          ? '重新入队请求已发送，后端正在处理新任务！'
-          : 'Re-queue request submitted successfully!',
-      )
+    onSuccess: async (result) => {
+      if ('skippedReason' in result && result.skippedReason) {
+        toast.info(localizeSkippedCommit(result.skippedReason, t))
+        return
+      }
+      toast.success(t('labels.requeueSubmitted'))
       await queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
   })
@@ -230,7 +219,10 @@ function TasksRoute() {
     if (status === 'pending') return 0
 
     // Extract real queue metrics from task.result
-    const resObj = (task.result && typeof task.result === 'object') ? (task.result as Record<string, any>) : {}
+    const resObj =
+      task.result && typeof task.result === 'object'
+        ? (task.result as Record<string, any>)
+        : {}
     const qStatus = resObj.queue_status
     const embeddingProcessed = qStatus?.Embedding?.processed
     const semanticProcessed = qStatus?.Semantic?.processed
@@ -239,14 +231,14 @@ function TasksRoute() {
       const totalEmbedding = 20
       const embedRatio = Math.min(1, embeddingProcessed / totalEmbedding)
       // Step 1 (20%) + Step 2 (30%) + Step 3 (50% * embedRatio)
-      return Math.round(20 + 30 + (50 * embedRatio))
+      return Math.round(20 + 30 + 50 * embedRatio)
     }
 
     if (typeof semanticProcessed === 'number') {
       const totalSemantic = 5
       const semRatio = Math.min(1, semanticProcessed / totalSemantic)
       // Step 1 (20%) + Step 2 (30% * semRatio)
-      return Math.round(20 + (30 * semRatio))
+      return Math.round(20 + 30 * semRatio)
     }
 
     const stage = task.stage?.toLowerCase()
@@ -258,7 +250,8 @@ function TasksRoute() {
 
   const getTaskTotalSteps = (taskType?: string): number => {
     if (taskType === 'session_commit') return 1
-    if (taskType === 'admin_reindex' || taskType === 'snapshot_restore_reindex') return 2
+    if (taskType === 'admin_reindex' || taskType === 'snapshot_restore_reindex')
+      return 2
     if (taskType === 'connector_import') return 4
     return 3
   }
@@ -267,7 +260,8 @@ function TasksRoute() {
     const taskId = task.task_id
     const status = normalizeTaskStatus(task.status)
     const pct = getTaskProgressPct(task)
-    const isRetrying = retryMutation.isPending && retryMutation.variables.task_id === taskId
+    const isRetrying =
+      retryMutation.isPending && retryMutation.variables.task_id === taskId
     const Icon =
       status === 'completed'
         ? CheckCircle2Icon
@@ -297,16 +291,14 @@ function TasksRoute() {
         />
         <span>{t(`status.${status}`)}</span>
         {status === 'running' && (
-          <span className="font-mono font-semibold ml-0.5">
-            {pct}%
-          </span>
+          <span className="font-mono font-semibold ml-0.5">{pct}%</span>
         )}
         {status === 'failed' && (
           <button
             type="button"
             disabled={isRetrying}
             className="ml-1 inline-flex items-center justify-center rounded p-0.5 hover:bg-white/25 active:scale-95 transition-all cursor-pointer text-destructive-foreground disabled:opacity-50"
-            title={i18n.language.startsWith('zh') ? '重新发起任务' : 'Re-trigger Task'}
+            title={t('actions.retrigger')}
             onClick={(e) => {
               e.stopPropagation()
               retryMutation.mutate(task)
@@ -336,7 +328,7 @@ function TasksRoute() {
       | { type: 'serial'; step: StepItem }
       | { type: 'parallel'; steps: StepItem[] }
 
-    const groups = getTaskPipelineGroups(task, i18n.language)
+    const groups = getTaskPipelineGroups(task, t)
 
     return (
       <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 min-w-[210px]">
@@ -346,13 +338,20 @@ function TasksRoute() {
           return (
             <React.Fragment key={i}>
               {i > 0 && (
-                <span title="串行工序流转" className="inline-flex shrink-0">
+                <span
+                  title={t('labels.serialFlow')}
+                  className="inline-flex shrink-0"
+                >
                   <ChevronRightIcon className="size-3 text-muted-foreground/40" />
                 </span>
               )}
               <span
                 className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium leading-none shrink-0 border border-border/60 bg-secondary/80 text-foreground shadow-2xs transition-all"
-                title={grp.type === 'parallel' ? '并发执行工序批次' : '串行工序批次'}
+                title={t(
+                  grp.type === 'parallel'
+                    ? 'labels.parallelBatch'
+                    : 'labels.serialBatch',
+                )}
               >
                 {stepsInGroup.map((st: StepItem, j: number) => {
                   const isDone = st.state === 'completed'
@@ -365,10 +364,18 @@ function TasksRoute() {
                       key={j}
                       className="inline-flex items-center gap-1 shrink-0 transition-colors text-foreground/90 font-medium"
                     >
-                      {isDone && <CheckIcon className="size-3 text-foreground/75 shrink-0" />}
-                      {isRun && <LoaderCircleIcon className="size-3 text-foreground/75 animate-spin shrink-0" />}
-                      {isPend && <CircleDashedIcon className="size-3 text-foreground/75 shrink-0" />}
-                      {isFail && <XIcon className="size-3 text-foreground/75 shrink-0" />}
+                      {isDone && (
+                        <CheckIcon className="size-3 text-foreground/75 shrink-0" />
+                      )}
+                      {isRun && (
+                        <LoaderCircleIcon className="size-3 text-foreground/75 animate-spin shrink-0" />
+                      )}
+                      {isPend && (
+                        <CircleDashedIcon className="size-3 text-foreground/75 shrink-0" />
+                      )}
+                      {isFail && (
+                        <XIcon className="size-3 text-foreground/75 shrink-0" />
+                      )}
                       <span>{st.name}</span>
                     </span>
                   )
@@ -531,7 +538,9 @@ function TasksRoute() {
 
     const baseTypeRows = Object.entries(typeCounts)
       .map(([typeKey, count]) => {
-        const matchingTasks = allTasks.filter((taskItem) => taskItem.task_type === typeKey)
+        const matchingTasks = allTasks.filter(
+          (taskItem) => taskItem.task_type === typeKey,
+        )
         const processing = matchingTasks.filter(
           (taskItem) => normalizeTaskStatus(taskItem.status) === 'running',
         ).length
@@ -559,7 +568,10 @@ function TasksRoute() {
       ...baseTypeRows,
       {
         name: 'TOTAL',
-        processing: baseTypeRows.reduce((sum, item) => sum + item.processing, 0),
+        processing: baseTypeRows.reduce(
+          (sum, item) => sum + item.processing,
+          0,
+        ),
         pending: baseTypeRows.reduce((sum, item) => sum + item.pending, 0),
         completed: baseTypeRows.reduce((sum, item) => sum + item.completed, 0),
         errors: baseTypeRows.reduce((sum, item) => sum + item.errors, 0),
@@ -612,9 +624,7 @@ function TasksRoute() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium">
-              {i18n.language.startsWith('zh') ? '任务成功率' : 'Success Rate'}
-            </span>
+            <span className="font-medium">{t('labels.successRate')}</span>
           </div>
           <div className="flex items-baseline gap-1">
             <span className="font-mono text-xl font-bold tabular-nums text-foreground">
@@ -622,17 +632,16 @@ function TasksRoute() {
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">
-            {i18n.language.startsWith('zh')
-              ? `共 ${kpiData.total} 条任务 (${kpiData.failed} 异常)`
-              : `Total ${kpiData.total} (${kpiData.failed} Failed)`}
+            {t('labels.taskSummary', {
+              total: kpiData.total,
+              failed: kpiData.failed,
+            })}
           </p>
         </Card>
 
         <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium">
-              {i18n.language.startsWith('zh') ? '平均处理耗时' : 'Avg Duration'}
-            </span>
+            <span className="font-medium">{t('labels.avgDuration')}</span>
           </div>
           <div className="flex items-baseline gap-1">
             <span className="font-mono text-xl font-bold tabular-nums text-foreground">
@@ -642,35 +651,27 @@ function TasksRoute() {
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">
-            {i18n.language.startsWith('zh')
-              ? '全流程平均处理时长'
-              : 'Avg Processing Time'}
+            {t('labels.avgProcessingTime')}
           </p>
         </Card>
 
         <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium">
-              {i18n.language.startsWith('zh') ? '任务总数' : 'Total Tasks'}
-            </span>
+            <span className="font-medium">{t('labels.totalTasks')}</span>
           </div>
           <div className="flex items-baseline gap-1">
             <span className="font-mono text-xl font-bold tabular-nums text-foreground">
-              {kpiData.total} 条
+              {t('labels.taskCount', { count: kpiData.total })}
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">
-            {i18n.language.startsWith('zh')
-              ? `已完成 ${kpiData.completed} 条`
-              : `Completed ${kpiData.completed} Tasks`}
+            {t('labels.completedTasks', { count: kpiData.completed })}
           </p>
         </Card>
 
         <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium">
-              {i18n.language.startsWith('zh') ? '并发与排队' : 'Active/Pending'}
-            </span>
+            <span className="font-medium">{t('labels.activePending')}</span>
           </div>
           <div className="flex items-baseline gap-1">
             <span className="font-mono text-xl font-bold tabular-nums text-foreground">
@@ -678,9 +679,7 @@ function TasksRoute() {
             </span>
           </div>
           <p className="text-[11px] text-muted-foreground truncate">
-            {i18n.language.startsWith('zh')
-              ? '进行中 / 等待中任务'
-              : 'Running / Pending Workloads'}
+            {t('labels.runningPending')}
           </p>
         </Card>
       </div>
@@ -690,7 +689,7 @@ function TasksRoute() {
         {/* 左侧 (50% 宽度 - 优先看上层任务): 任务队列状态 (Task Queues) */}
         <div>
           <QueueStatusCard
-            title={i18n.language.startsWith('zh') ? '任务队列状态' : 'Task Queue Status'}
+            title={t('labels.taskQueueStatus')}
             customRows={kpiData.typeRows}
             isHealthy={kpiData.failed === 0}
           />
@@ -699,7 +698,7 @@ function TasksRoute() {
         {/* 右侧 (50% 宽度 - 拆分出的下层工序): 工序队列状态 (Process Queues) */}
         <div>
           <QueueStatusCard
-            title={i18n.language.startsWith('zh') ? '工序队列状态' : 'Process Queue Status'}
+            title={t('labels.processQueueStatus')}
             customRows={queueRows}
             isHealthy={kpiData.failed === 0}
           />
@@ -787,13 +786,11 @@ function TasksRoute() {
           onClick={() => setDedupByResource((prev) => !prev)}
         >
           <LayersIcon className="size-3.5 text-muted-foreground" />
-          {i18n.language.startsWith('zh')
-            ? dedupByResource
-              ? '按资源收敛 (最新)'
-              : '逐条任务'
-            : dedupByResource
-              ? 'Latest per Resource'
-              : 'Individual Tasks'}
+          {t(
+            dedupByResource
+              ? 'labels.latestPerResource'
+              : 'labels.individualTasks',
+          )}
         </Button>
       </div>
 
@@ -843,9 +840,9 @@ function TasksRoute() {
                   <TableHead>{t('table.task')}</TableHead>
                   <TableHead>{t('table.type')}</TableHead>
                   <TableHead>{t('table.resource')}</TableHead>
-                  <TableHead>{i18n.language.startsWith('zh') ? '工序队列流转' : 'Queue Pipeline'}</TableHead>
+                  <TableHead>{t('labels.queuePipeline')}</TableHead>
                   <TableHead>{t('table.status')}</TableHead>
-                  <TableHead>{i18n.language.startsWith('zh') ? '耗时' : 'Duration'}</TableHead>
+                  <TableHead>{t('labels.duration')}</TableHead>
                   <TableHead className="text-right">
                     {t('table.createdAt')}
                   </TableHead>
@@ -866,7 +863,14 @@ function TasksRoute() {
                           'cursor-pointer outline-none hover:bg-muted/35 focus-visible:bg-muted/35 focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset',
                       )}
                       onClick={() => {
-                        if (taskId) setSelectedTaskId(taskId)
+                        if (taskId) {
+                          if (task.task_type === 'compile') {
+                            void navigate({
+                              to: '/compile/tasks/$taskId',
+                              params: { taskId },
+                            })
+                          } else setSelectedTaskId(taskId)
+                        }
                       }}
                       onKeyDown={(event) => {
                         if (
@@ -874,7 +878,12 @@ function TasksRoute() {
                           (event.key === 'Enter' || event.key === ' ')
                         ) {
                           event.preventDefault()
-                          setSelectedTaskId(taskId)
+                          if (task.task_type === 'compile') {
+                            void navigate({
+                              to: '/compile/tasks/$taskId',
+                              params: { taskId },
+                            })
+                          } else setSelectedTaskId(taskId)
                         }
                       }}
                     >
@@ -901,7 +910,7 @@ function TasksRoute() {
                       <TableCell>{renderQueuePipeline(task)}</TableCell>
                       <TableCell>{renderStatus(task)}</TableCell>
                       <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
-                        {formatTaskDuration(task, i18n.language.startsWith('zh'))}
+                        {formatTaskDuration(task)}
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-right text-muted-foreground">
                         {formatTime(task)}

@@ -30,7 +30,7 @@ from openviking.service.session_auto_commit import (
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.auto_commit_policy import AutoCommitPolicy
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -103,7 +103,7 @@ class SessionService:
             self._default_user_memory_policy = None
             return
         policy = MemoryPolicy.from_dict(memory_policy)
-        policy.validate_memory_types(set(MemoryTypeRegistry().list_names(include_disabled=False)))
+        policy.validate_memory_types(set(get_default_registry().list_names(include_disabled=False)))
         self._default_user_memory_policy = policy.to_dict()
 
     def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
@@ -257,7 +257,7 @@ class SessionService:
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
                 policy.validate_memory_types(
-                    set(MemoryTypeRegistry().list_names(include_disabled=False))
+                    set(get_default_registry().list_names(include_disabled=False))
                 )
                 session.meta.memory_policy = policy.to_dict()
             # Auto-commit is enabled when the caller supplies a policy, or when
@@ -373,6 +373,7 @@ class SessionService:
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -394,6 +395,7 @@ class SessionService:
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
             event_tags=event_tags,
+            reset_context=reset_context,
         )
 
     async def commit_async(
@@ -407,6 +409,7 @@ class SessionService:
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -436,6 +439,8 @@ class SessionService:
         )
         if event_tags is not None:
             commit_kwargs["event_tags"] = event_tags
+        if reset_context:
+            commit_kwargs["reset_context"] = True
         result = await session.commit_async(**commit_kwargs)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")

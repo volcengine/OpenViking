@@ -26,8 +26,9 @@ class StorageConfig(BaseModel):
     skip_process_lock: bool = Field(
         default=False,
         description=(
-            "Skip the startup PID lock for the workspace directory. Use only when you "
-            "explicitly accept the risk of multi-process storage contention."
+            "Skip the workspace file lock for embedded vector backends ('local', 'cuvs'). "
+            "Other backends do not acquire this lock. Use only when you explicitly accept "
+            "the risk of multi-process contention on embedded vector storage."
         ),
     )
 
@@ -46,8 +47,6 @@ class StorageConfig(BaseModel):
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
     @classmethod

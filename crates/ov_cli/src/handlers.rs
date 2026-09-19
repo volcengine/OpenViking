@@ -1,4 +1,3 @@
-use crate::CliContext;
 use crate::PrivacyCommands;
 use crate::client;
 use crate::commands;
@@ -10,6 +9,7 @@ use crate::terminal_ui::{
 };
 use crate::theme;
 use crate::tui;
+use crate::{CliContext, SkillAddArgs, UploadCliOptions};
 use colored::Colorize;
 use serde_json::{Map, Value};
 
@@ -320,23 +320,27 @@ mod add_resource_args_tests {
 }
 
 pub async fn handle_add_skill(
-    data: String,
-    wait: bool,
-    timeout: Option<f64>,
-    parent: Option<String>,
+    args: SkillAddArgs,
+    legacy_upload_options: UploadCliOptions,
     ctx: CliContext,
 ) -> Result<()> {
+    let ctx = ctx.with_upload_options(
+        args.upload_options
+            .merged_with_legacy(legacy_upload_options),
+    );
     let client = ctx.get_client();
-    commands::resources::add_skill(
+    commands::skills::add(
         &client,
-        &data,
-        wait,
-        timeout,
-        parent.as_deref(),
+        &args.source,
+        args.skills,
+        args.list,
+        args.wait,
+        args.yes,
         ctx.should_show_progress(),
         ctx.is_verbose(),
         ctx.output_format,
         ctx.compact,
+        args.parent.as_deref(),
     )
     .await
 }

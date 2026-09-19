@@ -136,6 +136,13 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
     assert config.reindex.file_vectorization_concurrency == 8
 
 
+def test_glob_uses_safe_defaults():
+    config = OpenVikingConfig.from_dict({})
+
+    assert config.glob.engine == "fs"
+    assert config.glob.switch_to_remote_threshold == 100
+
+
 def test_runtime_concurrency_accepts_separate_values():
     config = OpenVikingConfig.from_dict(
         {
@@ -169,10 +176,7 @@ def test_queue_worker_concurrency_rejects_non_positive_value(value):
 
 
 def test_parser_and_compile_api_validation():
-    with pytest.raises(ValueError) as exc_info:
-        ParserApiConfig(max_concurrent=9)
-
-    assert exc_info.value.errors()[0]["type"] == "extra_forbidden"
+    assert ParserApiConfig(max_concurrent=9) == ParserApiConfig()
     with pytest.raises(ValueError, match="compile_api.base_url must include scheme"):
         CompileApiConfig(base_url="compile.example.com")
 
@@ -277,20 +281,6 @@ def test_openviking_config_handles_nested_parser_compatibility(monkeypatch):
         OpenVikingConfigSingleton,
     )
 
-    with pytest.raises(ValueError, match="markdown"):
-        OpenVikingConfig.from_dict(
-            {
-                "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "api_key": "test-key",
-                        "model": "text-embedding-3-small",
-                    }
-                },
-                "parsers": {"markdwon": {}},
-            }
-        )
-
     errors: list[str] = []
     monkeypatch.setattr(
         config_module._get_config_logger(),
@@ -316,50 +306,36 @@ def test_openviking_config_handles_nested_parser_compatibility(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_rejects_unknown_top_level_section_with_suggestion(monkeypatch):
+def test_openviking_config_ignores_unknown_fields(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
-
-    from openviking_cli.utils.config.open_viking_config import (
-        OpenVikingConfig,
-        OpenVikingConfigSingleton,
+    config = OpenVikingConfig.from_dict(
+        {
+            "retired_section": {"enabled": True},
+            "default_user": "alice",
+            "glob": {"retired_field": True, "engine": "fs"},
+            "memory": {"unknown_memory_field": "value", "session_skill_extraction_enabled": True},
+            "storage": {"agfs": {"cache": {"enabled": True}}},
+            "parsers": {
+                "markdwon": {},
+                "memory": {"session_skill_extraction_enabled": False},
+                "markdown": {"unknown_field": True, "max_heading_depth": 4},
+                "code": {"unknown_field": True, "max_line_length": 120},
+                "anydoc": {"unknown_field": True, "max_table_rows": 20},
+            },
+        }
     )
 
-    with pytest.raises(
-        ValueError, match=r"Unknown config field 'erver' in OpenVikingConfig .*'server'"
-    ):
-        OpenVikingConfig.from_dict(
-            {
-                "erver": {
-                    "host": "127.0.0.1",
-                    "port": 1933,
-                    "root_api_key": "test",
-                    "cors_origins": ["*"],
-                },
-                "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "api_key": "test-key",
-                        "model": "text-embedding-3-small",
-                    }
-                },
-            }
-        )
-
-    OpenVikingConfigSingleton.reset_instance()
-
-
-def test_openviking_config_rejects_unknown_memory_field(monkeypatch):
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", "/tmp/codex-no-config.json")
-
-    from openviking_cli.utils.config.open_viking_config import (
-        OpenVikingConfig,
-        OpenVikingConfigSingleton,
-    )
-
-    with pytest.raises(ValueError, match="Unknown config field 'memory.unknown_memory_field'"):
-        OpenVikingConfig.from_dict({"memory": {"unknown_memory_field": "value"}})
-
-    OpenVikingConfigSingleton.reset_instance()
+    assert config.default_user == "alice"
+    assert config.glob.engine == "fs"
+    assert config.memory.session_skill_extraction_enabled is True
+    assert config.markdown.max_heading_depth == 4
+    assert config.code.max_line_length == 120
+    assert config.anydoc.max_table_rows == 20
+    dumped = config.to_dict()
+    assert "retired_section" not in dumped
+    assert "retired_field" not in dumped["glob"]
+    assert "unknown_memory_field" not in dumped["memory"]
+    assert "cache" not in dumped["storage"]["agfs"]
 
 
 def test_memory_extraction_output_format_defaults_to_python_and_accepts_json(monkeypatch):
@@ -506,12 +482,10 @@ def test_openviking_config_singleton_preserves_value_error_for_bad_config(tmp_pa
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
     config_path = tmp_path / "ov.conf"
-    config_path.write_text(
-        '{"erver": {"host": "127.0.0.1"}, "embedding": {"dense": {"provider": "openai", "api_key": "x", "model": "m"}}}'
-    )
+    config_path.write_text('{"retrieval": {"hotness_alpha": 1.5}}')
 
     OpenVikingConfigSingleton.reset_instance()
-    with pytest.raises(ValueError, match="server"):
+    with pytest.raises(ValueError, match="retrieval.hotness_alpha"):
         OpenVikingConfigSingleton.initialize(config_path=str(config_path))
     OpenVikingConfigSingleton.reset_instance()
 

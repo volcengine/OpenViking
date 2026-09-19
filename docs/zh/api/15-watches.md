@@ -6,7 +6,7 @@ Watch API 管理资源的周期检查、暂停、恢复和手动触发。
 
 ### Watch Management（监控任务管理）
 
-列出、查看、更新和触发通过 [`add_resource`](02-resources.md#add_resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
+列出、查看、更新和触发通过 [`add_resource`](02-resources.md#add-resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
 
 #### 1. API 实现介绍
 
@@ -209,7 +209,7 @@ list_watches()                                            # 每个任务一行�
 cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
 ```
 
-暂停 / 恢复 / 触发 / 更新故意不通过 MCP 暴露——这些 power-user 操作放在 CLI/REST 一侧，以保持 Agent 系统提示词的紧凑。Agent 侧若需创建监控任务或调整周期，仍走 [`add_resource`](02-resources.md#add_resource) 配合 `watch_interval`；可显式传 `to`，也可让系统绑定本次导入返回的 `root_uri`。
+暂停 / 恢复 / 触发 / 更新故意不通过 MCP 暴露——这些 power-user 操作放在 CLI/REST 一侧，以保持 Agent 系统提示词的紧凑。Agent 侧若需创建监控任务或调整周期，仍走 [`add_resource`](02-resources.md#add-resource) 配合 `watch_interval`；可显式传 `to`，也可让系统绑定本次导入返回的 `root_uri`。
 
 ---
 

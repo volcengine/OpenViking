@@ -42,9 +42,15 @@ from openviking.service.task_store import (
 from openviking.service.task_tracker import (
     get_task_tracker,
 )
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.account_templates import (
+    EDITABLE_MEMORY_TEMPLATE_FIELDS,
+    default_memory_template,
+    memory_template_result,
+    read_account_memory_template,
+    update_account_memory_template,
+)
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
-from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -161,6 +167,12 @@ def _should_expose_user_key(request: Request) -> bool:
     return config.get_effective_auth_mode() != "trusted"
 
 
+def _registry_watcher_running(request: Request) -> bool:
+    plugin = getattr(request.app.state, "auth_plugin", None)
+    watch_task = getattr(plugin, "_watch_task", None)
+    return watch_task is not None and not watch_task.done()
+
+
 def _check_account_access(ctx: RequestContext, account_id: str) -> None:
     """ADMIN can only operate on their own account."""
     if ctx.role == Role.ADMIN and ctx.account_id != account_id:
@@ -173,10 +185,15 @@ async def _check_account_exists(
     manager = getattr(request.app.state, "api_key_manager", None)
     if manager is None:
         return None
-    await manager.refresh_identity_registry_if_changed(refresh_scope)
+    watcher_running = _registry_watcher_running(request)
+    if not watcher_running:
+        await manager.refresh_accounts_from_store()
     accounts = manager.get_accounts()
     if not any(item.get("account_id") == account_id for item in accounts):
         raise NotFoundError(account_id, "account")
+    manager.ensure_account_active(account_id)
+    if refresh_scope is not None and not watcher_running:
+        await manager.refresh_account_users_from_store(refresh_scope)
     return manager
 
 
@@ -238,9 +255,7 @@ async def _write_initial_user_config(
     await write_user_config(service.viking_fs, user_ctx, user_config)
 
 
-async def _check_user_exists(
-    request: Request, account_id: str, user_id: str, manager=None
-) -> None:
+async def _check_user_exists(request: Request, account_id: str, user_id: str, manager=None) -> None:
     manager = manager or _get_api_key_manager(request)
     if not manager.has_user(account_id, user_id):
         raise NotFoundError(user_id, "user")
@@ -258,7 +273,7 @@ def _user_settings_result(
         else default_memory_policy
     )
     policy = MemoryPolicy.from_dict(memory_policy_config)
-    known_memory_types = set(MemoryTypeRegistry().list_names(include_disabled=False))
+    known_memory_types = set(get_default_registry().list_names(include_disabled=False))
     policy.validate_memory_types(known_memory_types)
     memory_policy = policy.to_dict()
     if policy.memory_types is None:
@@ -337,7 +352,8 @@ async def list_accounts(
 ):
     """List accounts in creation order. `name` supports wildcard (* and ?) matching."""
     manager = _get_api_key_manager(request)
-    await manager.refresh_identity_registry_if_changed()
+    if not _registry_watcher_running(request):
+        await manager.refresh_accounts_from_store()
     accounts = manager.get_accounts(name_filter=name, limit=limit, page=page)
     return Response(status="ok", result=accounts)
 
@@ -349,7 +365,7 @@ async def migrate_legacy_data(
     body: MigrateLegacyDataRequest | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Preflight and enqueue legacy agent/session data migration or cleanup."""
+    """Preflight and enqueue legacy session data migration or cleanup."""
     manager = _get_api_key_manager(request)
     service = get_service()
     if service.viking_fs is None:
@@ -392,37 +408,19 @@ async def migrate_legacy_data(
     return Response(status="ok", result={"task_id": task.task_id})
 
 
-@router.delete("/accounts/{account_id}")
+@router.delete("/accounts/{account_id}", status_code=202)
 @require_auth_root
 async def delete_account(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Delete an account and cascade-clean its storage (AGFS + VectorDB)."""
-    manager = _get_api_key_manager(request)
-
-    # Cascade: remove AGFS data for the account.
-    # Use the raw AGFS path to bypass the VikingFS namespace guard
-    # (viking://user is a protected namespace root, not a real directory).
-    viking_fs = get_viking_fs()
-    try:
-        await viking_fs._async_agfs.rm(f"/local/{account_id}", recursive=True)
-    except Exception as e:
-        logger.warning(f"AGFS cleanup for account {account_id}: {e}")
-
-    # Cascade: remove VectorDB records for the account
-    try:
-        storage = viking_fs._get_vector_store()
-        if storage:
-            deleted = await storage.delete_account_data(account_id, ctx=ctx)
-            logger.info(f"VectorDB cascade delete for account {account_id}: {deleted} records")
-    except Exception as e:
-        logger.warning(f"VectorDB cleanup for account {account_id}: {e}")
-
-    # Finally delete the account metadata
-    await manager.delete_account(account_id)
-    return Response(status="ok", result={"deleted": True})
+    """Revoke an account and submit durable cleanup of its data."""
+    deletion_service = request.app.state.deletion_service
+    if deletion_service is None:
+        raise FailedPreconditionError("Deletion service is not initialized.")
+    result = await deletion_service.delete(account_id, actor=ctx)
+    return Response(status="ok", result=result)
 
 
 @router.get("/accounts/{account_id}/settings")
@@ -463,6 +461,113 @@ async def patch_account_settings(
     return Response(
         status="ok",
         result=await _account_settings_result(account_id, settings),
+    )
+
+
+# ---- Account memory templates ----
+
+
+async def _memory_template_service(request: Request, ctx: RequestContext, account_id: str):
+    _check_account_access(ctx, account_id)
+    await _check_account_exists(request, account_id)
+    service = get_service()
+    if service.viking_fs is None:
+        raise FailedPreconditionError("OpenViking service is not initialized.")
+    return service
+
+
+@router.get("/accounts/{account_id}/memory-templates")
+@require_auth_root_or_admin
+async def list_memory_templates(
+    request: Request,
+    account_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """List full defaults and account overrides for the six editable memory templates."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    names = list(EDITABLE_MEMORY_TEMPLATE_FIELDS)
+    templates = await asyncio.gather(
+        *(read_account_memory_template(service.viking_fs, account_id, name) for name in names)
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "templates": [
+                memory_template_result(registry, template, name)
+                for name, template in zip(names, templates, strict=True)
+            ],
+        },
+    )
+
+
+@router.get("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def get_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Read one template's full defaults and effective account configuration."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    default_memory_template(registry, memory_type)
+    config = await read_account_memory_template(service.viking_fs, account_id, memory_type)
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
+    )
+
+
+@router.put("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def put_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    body: dict = Body(...),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Fill omitted values from deployment defaults and publish a complete YAML template."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    config = await update_account_memory_template(
+        service.viking_fs, account_id, memory_type, body, registry
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
+    )
+
+
+@router.delete("/accounts/{account_id}/memory-templates/{memory_type}")
+@require_auth_root_or_admin
+async def reset_memory_template(
+    request: Request,
+    account_id: str,
+    memory_type: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Remove one template override without rewriting existing memories."""
+    service = await _memory_template_service(request, ctx, account_id)
+    registry = get_default_registry()
+    config = await update_account_memory_template(
+        service.viking_fs, account_id, memory_type, None, registry
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            **memory_template_result(registry, config, memory_type),
+        },
     )
 
 
@@ -510,25 +615,44 @@ async def list_users(
     request: Request,
     account_id: str = Path(..., description="Account ID"),
     limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
+    include_credentials: bool = Query(
+        True,
+        description="Include credentials when permitted; false returns only credential availability",
+    ),
     name: str | None = None,
     role: str | None = None,
     page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
+    query: str | None = Query(None, description="Case-insensitive username substring"),
+    include_summary: bool = Query(
+        False, description="Return users, matching total and account statistics"
+    ),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List users in an account, in creation order. `name` supports wildcard (* and ?) matching."""
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
-    await manager.refresh_identity_registry_if_changed(account_id)
+    if not _registry_watcher_running(request):
+        await manager.refresh_account_users_from_store(account_id)
     expose_key = _should_expose_user_key(request)
-    users = manager.get_users(
+    users = manager.get_users_page(
         account_id,
         limit=limit,
         name_filter=name,
         role_filter=role,
-        expose_key=expose_key,
+        expose_key=expose_key or not include_credentials,
         page=page,
+        query_filter=query,
     )
-    return Response(status="ok", result=users)
+    if not include_credentials:
+        users["users"] = [
+            {
+                "user_id": user["user_id"],
+                "role": user["role"],
+                "api_key_available": bool(user.get("api_key")),
+            }
+            for user in users["users"]
+        ]
+    return Response(status="ok", result=users if include_summary else users["users"])
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")
@@ -605,10 +729,10 @@ async def remove_user(
 ):
     """Revoke a user and start durable cleanup of their owned data."""
     _check_account_access(ctx, account_id)
-    deletion_service = request.app.state.user_deletion_service
+    deletion_service = request.app.state.deletion_service
     if deletion_service is None:
-        raise FailedPreconditionError("User deletion service is not initialized.")
-    result = await deletion_service.delete_user(account_id, user_id, actor=ctx)
+        raise FailedPreconditionError("Deletion service is not initialized.")
+    result = await deletion_service.delete(account_id, user_id, actor=ctx)
     return Response(status="ok", result=result)
 
 
@@ -681,7 +805,9 @@ async def list_groups(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    result = _get_api_key_manager(request).get_groups(account_id)
+    manager = _get_api_key_manager(request)
+    await manager.ensure_account_groups_loaded(account_id)
+    result = manager.get_groups(account_id)
     return Response(status="ok", result=result)
 
 
@@ -707,7 +833,9 @@ async def list_group_members(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    members = _get_api_key_manager(request).get_group_members(account_id, group_id)
+    manager = _get_api_key_manager(request)
+    await manager.ensure_account_groups_loaded(account_id)
+    members = manager.get_group_members(account_id, group_id)
     return Response(status="ok", result={"group_id": group_id, "members": members})
 
 
@@ -721,9 +849,7 @@ async def add_group_member(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    added = await _get_api_key_manager(request).add_group_member(
-        account_id, group_id, user_id
-    )
+    added = await _get_api_key_manager(request).add_group_member(account_id, group_id, user_id)
     return Response(status="ok", result={"added": added})
 
 
@@ -737,7 +863,5 @@ async def remove_group_member(
     ctx: RequestContext = Depends(get_request_context),
 ):
     _check_account_access(ctx, account_id)
-    removed = await _get_api_key_manager(request).remove_group_member(
-        account_id, group_id, user_id
-    )
+    removed = await _get_api_key_manager(request).remove_group_member(account_id, group_id, user_id)
     return Response(status="ok", result={"removed": removed})

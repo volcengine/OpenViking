@@ -126,6 +126,10 @@ const resources = {
     tooManyFiles: '仅保留前 {{count}} 个文件，其余已忽略。',
     error: '请求失败',
     dirPicker: {
+      scope: '资源范围',
+      mine: '我的资源',
+      shared: '公共资源',
+
       title: '选择目录',
       select: '选择',
       cancel: '取消',
@@ -395,6 +399,12 @@ const resources = {
       },
     },
     filePreview: {
+      directoryLevels: {
+        abstractLabel: '摘要',
+        overviewLabel: '概览',
+        abstractDescription: '简短的语义摘要',
+        overviewDescription: '目录内容概览',
+      },
       cancel: '取消',
       edit: '编辑',
       emptyFile: '(空文件)',

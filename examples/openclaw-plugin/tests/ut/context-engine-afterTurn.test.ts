@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { OpenVikingClient } from "../../client.js";
+import { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
 
@@ -283,11 +283,25 @@ describe("context-engine afterTurn()", () => {
     expect(client.commitSession).not.toHaveBeenCalled();
   });
 
-  it("commits when pendingTokens >= threshold", async () => {
+  it.each([
+    { cfgOverrides: {}, expectedBody: { keep_recent_count: 10 } },
+    { cfgOverrides: { commitRetentionMode: "message_count", commitKeepRecentCount: 7 }, expectedBody: { keep_recent_count: 7 } },
+    { cfgOverrides: { commitKeepRecentCount: 0 }, expectedBody: {} },
+    { cfgOverrides: { commitRetentionMode: "turn_budget" }, expectedBody: { retention_mode: "turn_budget" } },
+  ])("commits with $expectedBody when pendingTokens >= threshold", async ({ cfgOverrides, expectedBody }) => {
     const { engine, client } = makeEngine({
       commitTokenThresholdRatio: 0.1,
       getSession: { pending_tokens: 25000 },
+      cfgOverrides,
     });
+    const transport = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      status: "ok", result: { status: "completed", archived: true },
+    })));
+    const commitClient = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "test-agent", 5000,
+      "", "", undefined, false, true, { transport },
+    );
+    client.commitSession.mockImplementation(commitClient.commitSession.bind(commitClient));
 
     const messages = [
       { role: "user", content: "some meaningful content here for testing" },
@@ -304,6 +318,11 @@ describe("context-engine afterTurn()", () => {
     expect(client.commitSession).toHaveBeenCalledTimes(1);
     const commitCall = client.commitSession.mock.calls[0];
     expect(commitCall[1]).toMatchObject({ wait: false });
+    expect(transport).toHaveBeenCalledTimes(1);
+    const [url, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/sessions\/s1\/commit$/);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual(expectedBody);
   });
 
   it("keeps afterTurn write and commit enabled when recall target types default to resources only", async () => {

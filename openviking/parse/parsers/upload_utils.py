@@ -70,6 +70,15 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
     return normalize_text_bytes(content, file_path)
 
 
+def is_empty_file(file_path: Path) -> bool:
+    """Return whether a file is empty or contains only ASCII whitespace."""
+    with file_path.open("rb") as source:
+        while chunk := source.read(8192):
+            if chunk.strip():
+                return False
+    return True
+
+
 def should_skip_file(
     file_path: Path,
     max_file_size: int = 10 * 1024 * 1024,
@@ -94,7 +103,7 @@ def should_skip_file(
         file_size = file_path.stat().st_size
         if file_size > max_file_size:
             return True, f"file too large: {file_size} bytes"
-        if file_size == 0:
+        if is_empty_file(file_path):
             return True, "empty file"
     except OSError as exc:
         return True, f"os error: {exc}"

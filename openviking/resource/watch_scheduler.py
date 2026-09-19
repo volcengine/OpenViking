@@ -7,6 +7,7 @@ Provides scheduled task execution for watch tasks.
 """
 
 import asyncio
+import threading
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
@@ -23,7 +24,7 @@ from openviking.resource.git_watch_auth import (
     is_git_http_auth_state,
 )
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
-from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
@@ -79,8 +80,8 @@ class WatchScheduler:
         self._running = False
         self._scheduler_task: Optional[asyncio.Task] = None
         self._executing_tasks: Set[str] = set()
-        self._execution_tasks: Set[asyncio.Task[None]] = set()
-        self._lock = asyncio.Lock()
+        self._execution_tasks: Dict[asyncio.Task, WatchTask] = {}
+        self._lock = threading.Lock()
 
     @property
     def watch_manager(self) -> Optional[WatchManager]:
@@ -161,16 +162,39 @@ class WatchScheduler:
             logger.warning(f"[WatchScheduler] Task {task_id} not found")
             return False
 
-        if not await self._try_mark_executing(task_id):
+        if not self._try_mark_executing(task_id):
             logger.info(f"[WatchScheduler] Task {task_id} is already executing, skipping")
             return False
 
+        execution = asyncio.current_task()
+        self._execution_tasks[execution] = task
         try:
             async with self._semaphore:
                 await self._execute_task(task)
             return True
         finally:
-            await asyncio.shield(self._discard_executing(task_id))
+            self._execution_tasks.pop(execution, None)
+            self._discard_executing(task_id)
+
+    async def delete_tasks(self, account_id: str, user_id: str | None = None) -> None:
+        """Remove an identity's watches and settle their current executions."""
+        manager = self._watch_manager
+        if manager is None:
+            return
+        actor_user_id = user_id or "root"
+        for watch in await manager.get_all_tasks(account_id, actor_user_id, Role.ROOT):
+            if watch.account_id == account_id and (user_id is None or watch.user_id == user_id):
+                await manager.delete_task(watch.task_id, account_id, actor_user_id, Role.ROOT)
+
+        executions = [
+            execution
+            for execution, watch in self._execution_tasks.items()
+            if watch.account_id == account_id and (user_id is None or watch.user_id == user_id)
+        ]
+        for execution in executions:
+            execution.cancel()
+        if executions:
+            await asyncio.gather(*executions, return_exceptions=True)
 
     async def _run_scheduler(self) -> None:
         """Background task loop that periodically checks and executes due tasks.
@@ -220,7 +244,7 @@ class WatchScheduler:
 
         tasks_to_run = []
         for task in due_tasks:
-            if not await self._try_mark_executing(task.task_id):
+            if not self._try_mark_executing(task.task_id):
                 logger.info(f"[WatchScheduler] Task {task.task_id} is already executing, skipping")
                 continue
             tasks_to_run.append(task)
@@ -230,15 +254,15 @@ class WatchScheduler:
                 async with self._semaphore:
                     await self._execute_task(t)
             finally:
-                await asyncio.shield(self._discard_executing(t.task_id))
+                self._discard_executing(t.task_id)
 
         for due_task in tasks_to_run:
             execution = asyncio.create_task(run_one(due_task))
-            self._execution_tasks.add(execution)
+            self._execution_tasks[execution] = due_task
             execution.add_done_callback(self._on_execution_done)
 
     def _on_execution_done(self, task: asyncio.Task[None]) -> None:
-        self._execution_tasks.discard(task)
+        self._execution_tasks.pop(task, None)
         if task.cancelled():
             return
         error = task.exception()
@@ -526,23 +550,23 @@ class WatchScheduler:
         Used while an import's first round runs so a due tick does not start an
         overlapping run; release with :meth:`release_execution`.
         """
-        held = await self._try_mark_executing(task_id)
+        held = self._try_mark_executing(task_id)
         logger.debug(f"[WatchScheduler] hold_execution task_id={task_id} held={held}")
         return held
 
     async def release_execution(self, task_id: str) -> None:
-        await self._discard_executing(task_id)
+        self._discard_executing(task_id)
         logger.debug(f"[WatchScheduler] release_execution task_id={task_id}")
 
-    async def _try_mark_executing(self, task_id: str) -> bool:
-        async with self._lock:
+    def _try_mark_executing(self, task_id: str) -> bool:
+        with self._lock:
             if task_id in self._executing_tasks:
                 return False
             self._executing_tasks.add(task_id)
             return True
 
-    async def _discard_executing(self, task_id: str) -> None:
-        async with self._lock:
+    def _discard_executing(self, task_id: str) -> None:
+        with self._lock:
             self._executing_tasks.discard(task_id)
 
     async def _prepare_feishu_auth_state(
@@ -604,4 +628,5 @@ class WatchScheduler:
     @property
     def executing_tasks(self) -> Set[str]:
         """Get the set of currently executing task IDs."""
-        return self._executing_tasks.copy()
+        with self._lock:
+            return self._executing_tasks.copy()

@@ -27,10 +27,10 @@ class _DummySpanCM:
 
 def test_http_observability_middleware_updates_route_template_after_routing(monkeypatch) -> None:
     """
-    Ensure `http_route` is finalized after routing has occurred (post-call_next).
+    Ensure `http_route` is finalized after routing has occurred (before response headers).
 
     Starlette/FastAPI route matching happens downstream of middleware, so reading
-    `request.scope["route"]` before `call_next` may yield no route.
+    `request.scope["route"]` before routing may yield no route.
     """
     from openviking.observability import http_observability_middleware as mw_mod
 
@@ -60,12 +60,8 @@ def test_http_observability_middleware_updates_route_template_after_routing(monk
     monkeypatch.setattr(mw_mod, "create_root_span_attributes", _capture_create_root_span_attributes)
 
     app = FastAPI()
-    http_mw = mw_mod.create_http_observability_middleware()
-
-    @app.middleware("http")
-    async def _mw(request, call_next):
-        request.state.request_id = "test-request"
-        return await http_mw(request, call_next)
+    app.add_middleware(mw_mod.HTTPObservabilityMiddleware)
+    app.add_middleware(RequestIdMiddleware)
 
     @app.get("/hello")
     async def hello():
@@ -97,12 +93,7 @@ def test_http_observability_captures_public_error_without_reading_response_body(
     monkeypatch.setattr(mw_mod, "maybe_start_root_span", lambda *_: None)
 
     app = FastAPI()
-    http_mw = mw_mod.create_http_observability_middleware()
-
-    @app.middleware("http")
-    async def _mw(request, call_next):
-        return await http_mw(request, call_next)
-
+    app.add_middleware(mw_mod.HTTPObservabilityMiddleware)
     app.add_middleware(RequestIdMiddleware)
 
     @app.get("/invalid")

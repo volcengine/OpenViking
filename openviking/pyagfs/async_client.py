@@ -8,6 +8,8 @@ import asyncio
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
+from openviking.service.task_tracker_concurrency import run_to_completion
+
 from .protocols import AGFSSyncClientProtocol
 
 _SYSTEM_ACCOUNT_ID = "_system"
@@ -93,15 +95,19 @@ class AsyncAGFSClient:
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run a sync client method in a worker thread, preserving ctx when supported."""
         try:
-            return await asyncio.to_thread(getattr(self._client, method_name), *args, **kwargs)
+            return await run_to_completion(
+                lambda: asyncio.to_thread(getattr(self._client, method_name), *args, **kwargs)
+            )
         except TypeError as exc:
             message = str(exc)
             if "ctx" not in kwargs or "unexpected keyword argument 'ctx'" not in message:
                 raise
             legacy_kwargs = dict(kwargs)
             legacy_kwargs.pop("ctx", None)
-            return await asyncio.to_thread(
-                getattr(self._client, method_name), *args, **legacy_kwargs
+            return await run_to_completion(
+                lambda: asyncio.to_thread(
+                    getattr(self._client, method_name), *args, **legacy_kwargs
+                )
             )
 
     async def ls(

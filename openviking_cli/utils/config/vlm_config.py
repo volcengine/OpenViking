@@ -73,8 +73,6 @@ class VLMCredential(BaseModel):
         ),
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="before")
     @classmethod
     def reject_stream_config(cls, data: Any) -> Any:
@@ -107,8 +105,6 @@ class VLMMediaConfig(BaseModel):
         le=5.0,
         description="Video frame sampling rate for providers that support preprocessing",
     )
-
-    model_config = {"extra": "forbid"}
 
 
 class VLMConfig(BaseModel):
@@ -208,7 +204,7 @@ class VLMConfig(BaseModel):
     ] = PrivateAttr(default_factory=weakref.WeakKeyDictionary)
     _media_semaphore_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
+    model_config = {"arbitrary_types_allowed": True}
 
     @model_validator(mode="before")
     @classmethod

@@ -42,7 +42,6 @@ async def test_add_resource_processor_cancelled_context_preserves_group_ids(monk
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         viking_fs,
     )
@@ -358,7 +357,6 @@ async def test_legacy_accessor_output_does_not_enable_lark_protocol(tmp_path: Pa
         feishu_access_token="u-test",
     )
 
-    api._create_file.assert_awaited_once_with(local_path=markdown_path)
     api._create_response_for_file.assert_awaited_once_with(file_id="file-1")
     api._create_response_for_url.assert_not_awaited()
 
@@ -1018,7 +1016,6 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         viking_fs,
     )
@@ -1157,7 +1154,6 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
             execute_add_resource_job=AsyncMock(side_effect=execute_add_resource_job),
             _link_resource_reason_memory=AsyncMock(),
         ),
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )
@@ -1221,7 +1217,6 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=async_agfs),
     )
@@ -1274,7 +1269,6 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )

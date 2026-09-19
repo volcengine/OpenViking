@@ -19,6 +19,7 @@ from openviking.parse.parsers.constants import (
     TYPESCRIPT_MPEG_TS_EXTENSION,
 )
 from openviking.parse.parsers.media.utils import is_mpeg_ts, read_mpeg_ts_probe
+from openviking.parse.parsers.upload_utils import is_empty_file
 from openviking.parse.registry import parse
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
@@ -242,12 +243,12 @@ class UnifiedResourceProcessor:
         than being parsed and indexed as an empty resource.
 
         Directories are skipped: their size is not meaningful, and
-        directory_scan already drops zero-byte members. content/write is a
+        directory_scan already drops empty or whitespace-only members. content/write is a
         different path and still allows an empty file, because creating one
         there is an explicit user action.
         """
         try:
-            if not resource.path.is_file() or resource.path.stat().st_size:
+            if not resource.path.is_file() or not is_empty_file(resource.path):
                 return
         except OSError:
             # An unreadable source is not this check's business; let the normal
@@ -262,7 +263,7 @@ class UnifiedResourceProcessor:
             or resource.path.name
         )
         raise InvalidArgumentError(
-            f"'{name}' is empty (0 bytes), so there is nothing to extract or index. "
+            f"'{name}' is empty or contains only whitespace, so there is nothing to extract or index. "
             "Add a resource with content, or use content/write if an empty file is "
             "what you want."
         )

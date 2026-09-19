@@ -22,7 +22,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
@@ -47,6 +47,7 @@ from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
     DEFAULT_MAX_TOKENS,
+    MAX_EXCLUDE_URIS,
     AssembleParams,
     assemble_context,
 )
@@ -75,6 +76,7 @@ from openviking_cli.exceptions import (
     UnauthenticatedError,
 )
 from openviking_cli.utils import get_logger
+from openviking.server.routers.search import context_only_fields_error
 
 logger = get_logger(__name__)
 
@@ -272,6 +274,14 @@ async def find(
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
+# This tool exposes two of the router's context-only fields as a pair each, so a caller
+# that sets either half has set the field the router names.
+_MCP_CONTEXT_ONLY_ALIASES = {
+    "detail_by_category": "detail",
+    "other_peer_penalties": "other_peer_penalty",
+}
+
+
 @mcp.tool()
 async def search(
     query: str,
@@ -283,18 +293,18 @@ async def search(
     context_type: Optional[Union[str, List[str]]] = None,
     mode: Literal["list", "context"] = "list",
     query_expansion: Literal["off", "auto"] = "auto",
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
     quotas: Optional[Dict[str, int]] = None,
     purpose: Optional[Literal["chat", "coding"]] = None,
     detail: Literal["auto", "abstract", "overview", "full"] = "auto",
     detail_by_category: Optional[Dict[str, str]] = None,
-    dedup_turns: int = 0,
-    exclude_uris: Optional[List[str]] = None,
+    dedup_turns: Annotated[int, Field(ge=0, le=100)] = 0,
+    exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
     peer_scope: Literal["actor", "all"] = "all",
     other_peer_penalty: Optional[float] = None,
     other_peer_penalties: Optional[Dict[str, float]] = None,
     rewrite: Literal["off", "auto"] = "off",
-    rewrite_max_bullets: int = 6,
+    rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis.
@@ -353,6 +363,40 @@ async def search(
         if result.rendered.strip():
             return result.rendered
         return "No matching context found."
+
+    # POST /search rejects these in list mode and this tool did not, so the two faces of
+    # one feature disagreed about whether the request was valid. The list path calls
+    # SearchService.search, whose signature has no parameter for any of them, so passing
+    # one here did nothing at all -- for exclude_uris that means excluded URIs come back
+    # in the results with no error.
+    #
+    # The names and the wording come from the router rather than being restated here, so
+    # a field added to CONTEXT_ONLY_FIELDS reaches both faces at once. This tool splits
+    # two of those fields in two, and each half maps back onto the one the router knows.
+    supplied_by_caller = {
+        name: value
+        for name, (value, default) in {
+            "query_expansion": (query_expansion, "auto"),
+            "max_tokens": (max_tokens, DEFAULT_MAX_TOKENS),
+            "quotas": (quotas, None),
+            "purpose": (purpose, None),
+            "detail": (detail, "auto"),
+            "detail_by_category": (detail_by_category, None),
+            "dedup_turns": (dedup_turns, 0),
+            "exclude_uris": (exclude_uris, None),
+            "peer_scope": (peer_scope, "all"),
+            "other_peer_penalty": (other_peer_penalty, None),
+            "other_peer_penalties": (other_peer_penalties, None),
+            "rewrite": (rewrite, "off"),
+            "rewrite_max_bullets": (rewrite_max_bullets, 6),
+        }.items() if value != default
+    }
+    as_named_by_caller: Dict[str, set] = {}
+    for name in supplied_by_caller:
+        as_named_by_caller.setdefault(_MCP_CONTEXT_ONLY_ALIASES.get(name, name), set()).add(name)
+    error = context_only_fields_error(as_named_by_caller, as_named_by_caller=as_named_by_caller)
+    if error:
+        raise InvalidArgumentError(error)
 
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
@@ -1226,8 +1270,16 @@ async def add_resource(
         "\n"
         f"  {upload_url}\n"
         "\n"
-        "The URL's token authorizes the upload (no API key needed); the server ingests "
-        "the file automatically once received — you do NOT need to call add_resource again.\n"
+        "The URL's token authorizes the upload against OpenViking itself (no OpenViking "
+        "API key needed); the server ingests the file automatically once received — you "
+        "do NOT need to call add_resource again.\n"
+        "\n"
+        "If the OpenViking server sits behind a private gateway or reverse proxy that "
+        "requires extra request headers (e.g. `openviking_name`, tenant/vault headers, "
+        "or a gateway API key), those headers are enforced on every request including "
+        "this upload — replay the same headers you use for MCP calls when POSTing the "
+        "file. A gateway rejection typically looks like HTTP 400/401/403 before the "
+        "token is even checked.\n"
         "\n"
         f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
     )
@@ -1342,7 +1394,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], Optional[str]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -1352,21 +1404,35 @@ async def grep(
                     case_insensitive=case_insensitive,
                     node_limit=node_limit,
                 )
-                return (p, result.get("matches", []))
-            except Exception:
-                return (p, [])
+                return (p, result.get("matches", []), None)
+            except Exception as exc:
+                # One bad pattern must not cost the others their matches -- that is what
+                # the fan-out is for -- but an empty list is indistinguishable from a real
+                # miss, so carry the reason instead of dropping it. POST /search/grep maps
+                # and re-raises these; reporting them is what keeps the two faces agreeing
+                # about whether a failure is a result.
+                return (p, [], f"{type(exc).__name__}: {exc}")
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
     merged: dict[str, list[tuple]] = {}
     total = 0
-    for p, matches in results:
+    failures: list[tuple[str, str]] = []
+    for p, matches, error in results:
+        if error is not None:
+            failures.append((p, error))
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
             merged.setdefault(m_uri, []).append((m.get("line", "?"), m.get("content", ""), p))
 
+    failure_lines = [f"  {p}: {error}" for p, error in failures]
+
     if not merged:
+        if failures:
+            # Nothing was searched successfully, so "no matches" would be an answer to a
+            # question that was never asked.
+            return "grep failed for every pattern:\n" + "\n".join(failure_lines)
         return f"No matches found for pattern(s): {', '.join(patterns)}"
 
     lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
@@ -1375,6 +1441,9 @@ async def grep(
         lines.append(f"\n{m_uri}")
         for line_no, content, p in hits:
             lines.append(f"  L{line_no} [{p}]: {content}")
+    if failures:
+        lines.append("\nPatterns that could not be searched:")
+        lines.extend(failure_lines)
     return "\n".join(lines)
 
 

@@ -30,7 +30,7 @@ from openviking.session.memory.extraction_output_protocol import (
     create_extraction_output_protocol,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
+from openviking.session.memory.merge_op import FieldType, ImmutableOp, MergeOp, PatchOp
 from openviking.session.memory.page_id_map import ResponsePageIdAllocator
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import MEMORY_TOOLS_REGISTRY
@@ -253,6 +253,7 @@ class ExtractLoop:
             link_enabled=self._link_enabled,
             role_scope=role_scope,
             available_tools=tuple(allowed_tools),
+            template_context={"language": output_language},
         )
         tracer.set("memory.extraction.output_format", output_format)
 
@@ -870,7 +871,7 @@ class ExtractLoop:
                                 if field.merge_op == MergeOp.IMMUTABLE
                             }
                             for field_name in immutable_fields:
-                                if field_name in old_content.extra_fields:
+                                if ImmutableOp.is_set(old_content.extra_fields.get(field_name)):
                                     resolved_op.memory_fields[field_name] = (
                                         old_content.extra_fields[field_name]
                                     )

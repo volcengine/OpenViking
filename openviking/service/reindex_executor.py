@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -30,8 +31,10 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
+from openviking.storage.errors import ResourceBusyError
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import get_viking_fs
@@ -42,9 +45,10 @@ from openviking.utils.embedding_utils import (
     _apply_ingest_options,
     _truncate_abstract_bytes,
     get_resource_content_type,
+    vectorize_directory_meta,
+    vectorize_file,
 )
 from openviking.utils.ingest_options import IngestOptions
-from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI, get_logger
@@ -294,25 +298,6 @@ class ReindexExecutor:
             return "user_namespace"
         if classification.is_user_namespace_root:
             return "user_namespace"
-        if parts[0] == "agent":
-            if len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}:
-                if classification.is_skill_namespace:
-                    return "skill_namespace"
-                if classification.is_skill_root:
-                    return "skill"
-                if classification.is_skill:
-                    raise OpenVikingError(
-                        f"Unsupported reindex URI: {uri}",
-                        code="UNSUPPORTED_URI",
-                        details={"uri": uri},
-                    )
-                return "resource"
-            raise OpenVikingError(
-                "viking://agent/{agent_id}/... is no longer supported; "
-                "use viking://agent/skills/... or viking://user/... instead.",
-                code="UNSUPPORTED_URI",
-                details={"uri": uri},
-            )
         if classification.is_memory:
             return "memory"
         if classification.is_skill_namespace:
@@ -325,7 +310,7 @@ class ReindexExecutor:
                 code="UNSUPPORTED_URI",
                 details={"uri": uri},
             )
-        if parts[0] in {"resources", "user"}:
+        if parts[0] in {"resources", "user"} or (parts[0] == "agent" and len(parts) >= 2):
             return "resource"
         raise OpenVikingError(
             f"Unsupported reindex URI: {uri}",
@@ -507,14 +492,25 @@ class ReindexExecutor:
         if telemetry_id:
             wait_tracker.register_request(telemetry_id)
 
-        acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
+        # prune_orphans only touches the vector store. A missing target has
+        # nothing on disk to protect, and acquiring a lock there would create
+        # the directory just to hold lock metadata. Refuse only when another
+        # owner is mid-write at that name (e.g. add_resource reserving it).
+        lease = None
         if mode != "prune_orphans" or await service.viking_fs.exists(uri, ctx=ctx):
+            acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
             stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
             if not stat.get("isDir", stat.get("is_dir")):
                 acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
-        lease = await acquire_lock(path)
+            lease = await acquire_lock(path)
+        elif await service.viking_fs._async_agfs.pathlock_is_locked(path):
+            raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
         try:
-            borrowed = await service.viking_fs._async_agfs.pathlock_as_borrowed(lease)
+            borrowed = (
+                await service.viking_fs._async_agfs.pathlock_as_borrowed(lease)
+                if lease is not None
+                else None
+            )
             run = _ReindexRunContext(
                 ctx=ctx,
                 counters=counters,
@@ -576,7 +572,8 @@ class ReindexExecutor:
                     wait_tracker.build_queue_status(telemetry_id),
                 )
         finally:
-            await service.viking_fs._async_agfs.pathlock_release(lease)
+            if lease is not None:
+                await service.viking_fs._async_agfs.pathlock_release(lease)
             if telemetry_id:
                 wait_tracker.cleanup(telemetry_id)
 
@@ -846,9 +843,26 @@ class ReindexExecutor:
                 )
             return True
 
+        if self._is_hidden_meta_file(uri):
+            return False
+        exists = await self._prune_source_exists(uri, ctx=owner_ctx)
+        if exists.error:
+            self._record_prune_source_error(
+                counters=counters,
+                uri=uri,
+                source_uri=uri,
+                error=exists.error,
+            )
+            return False
+        # A real filename can have the same spelling as a virtual chunk URI.
+        if exists.exists:
+            return False
+
         if "#" in uri:
-            if context_type == ContextType.MEMORY.value and "#chunk_" in uri:
-                base_uri = uri.split("#chunk_", 1)[0]
+            # Generated chunks append a zero-padded index to the full base URI.
+            chunk_match = re.fullmatch(r"(.+)#chunk_[0-9]{4,}", uri)
+            if context_type == ContextType.MEMORY.value and chunk_match:
+                base_uri = chunk_match.group(1)
                 base = await self._read_prune_source(base_uri, ctx=owner_ctx)
                 if base.error:
                     self._record_prune_source_error(
@@ -866,18 +880,7 @@ class ReindexExecutor:
                 return uri not in expected
             return False
 
-        if self._is_hidden_meta_file(uri):
-            return False
-        exists = await self._prune_source_exists(uri, ctx=owner_ctx)
-        if exists.error:
-            self._record_prune_source_error(
-                counters=counters,
-                uri=uri,
-                source_uri=uri,
-                error=exists.error,
-            )
-            return False
-        return not exists.exists
+        return True
 
     async def _read_prune_source(self, uri: str, *, ctx: RequestContext) -> _PruneSourceRead:
         viking_fs = get_viking_fs()
@@ -983,13 +986,46 @@ class ReindexExecutor:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            await self._regenerate_skill_semantics(uri=uri, ctx=ctx)
-            vector_kwargs = {"uri": uri, "counters": counters, "ctx": ctx}
-            if not recursive:
-                vector_kwargs["recursive"] = False
-            await self._reindex_skill_vectors(
-                **self._with_ingest_options(vector_kwargs, run.ingest_options)
+            processor = SemanticProcessor(
+                max_concurrent_llm=get_openviking_config().vlm.max_concurrent
             )
+            if not recursive:
+                await self._regenerate_skill_semantics(uri=uri, ctx=ctx, lock=run.lock)
+                await self._reindex_skill_vectors(
+                    uri=uri,
+                    counters=counters,
+                    ctx=ctx,
+                    recursive=False,
+                    ingest_options=run.ingest_options,
+                )
+                return
+            executor = SemanticDagExecutor(
+                processor=processor,
+                context_type="skill",
+                max_concurrent_llm=processor.max_concurrent_llm,
+                ctx=self._content_owner_ctx(uri, ctx),
+                lock=run.lock,
+                generation_trigger="reindex",
+                ingest_options=run.ingest_options,
+                source={
+                    "path": (await self._skill_meta(uri=uri, abstract="", ctx=ctx)).get(
+                        "source_path", ""
+                    )
+                },
+            )
+            try:
+                await executor.run(uri)
+            finally:
+                # Even a semantic error must settle already submitted Skill
+                # vectors before the caller releases its package lease.
+                await get_request_wait_tracker().wait_for_embeddings(
+                    get_current_telemetry().telemetry_id
+                )
+            stats = executor.get_stats()
+            counters.scanned_records += stats.total_nodes
+            counters.rebuilt_records += stats.indexed_records
+            counters.failed_records += len(stats.failures)
+            counters.warnings.extend(stats.failures)
             return
         await self._reindex_skill_vectors(
             **self._with_ingest_options(
@@ -1485,91 +1521,92 @@ class ReindexExecutor:
         ingest_options: IngestOptions | None = None,
     ) -> None:
         viking_fs = get_viking_fs()
-        counters.scanned_records += 1
-
-        abstract = await self._read_directory_abstract(uri, ctx=ctx)
-        overview = await self._read_directory_overview(uri, ctx=ctx)
-        if not abstract:
-            record = await self._fetch_existing_record(
-                uri=uri,
-                level=0,
-                ctx=self._content_owner_ctx(uri, ctx),
-            )
-            abstract = self._record_abstract(record)
-        if not overview:
-            record = await self._fetch_existing_record(
-                uri=uri,
-                level=1,
-                ctx=self._content_owner_ctx(uri, ctx),
-            )
-            overview = self._record_abstract(record) or abstract
-
-        if not abstract and not overview:
-            counters.unsupported_records += 1
-            counters.warnings.append(f"No semantic source found for {uri}")
-            return
-
-        parent_uri = VikingURI(uri).parent.uri
-        if abstract:
-            try:
-                await self._upsert_context(
-                    uri=uri,
-                    parent_uri=parent_uri,
-                    abstract=abstract,
-                    vector_text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract),
-                    is_leaf=False,
-                    context_type=ContextType.SKILL.value,
-                    level=ContextLevel.ABSTRACT,
-                    meta=await self._skill_meta(uri=uri, abstract=abstract, ctx=ctx),
-                    ctx=ctx,
-                    ingest_options=ingest_options,
-                )
-                counters.rebuilt_records += 1
-            except Exception as exc:
-                counters.failed_records += 1
-                counters.warnings.append(f"Failed to reindex {uri} L0 vector: {exc}")
-        if overview:
-            try:
-                await self._upsert_context(
-                    uri=uri,
-                    parent_uri=parent_uri,
-                    # L1 abstract scalar carries the overview for Rerank.
-                    abstract=_truncate_abstract_bytes(overview),
-                    vector_text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview),
-                    is_leaf=False,
-                    context_type=ContextType.SKILL.value,
-                    level=ContextLevel.OVERVIEW,
-                    meta=await self._skill_meta(uri=uri, abstract=abstract, ctx=ctx),
-                    ctx=ctx,
-                    ingest_options=ingest_options,
-                )
-                counters.rebuilt_records += 1
-            except Exception as exc:
-                counters.failed_records += 1
-                counters.warnings.append(f"Failed to reindex {uri} L1 vector: {exc}")
-
-        skill_file_uri = f"{uri}/SKILL.md"
-        if recursive and await viking_fs.exists(skill_file_uri, ctx=ctx):
+        owner_ctx = self._content_owner_ctx(uri, ctx)
+        pending = [uri]
+        while pending:
+            directory_uri = pending.pop()
             counters.scanned_records += 1
-            skill_content = await self._safe_read_text(skill_file_uri, ctx=ctx)
-            if skill_content:
-                detail_abstract = self._prefer_non_empty(abstract, skill_content)
+            abstract = await self._read_directory_abstract(directory_uri, ctx=ctx)
+            overview = await self._read_directory_overview(directory_uri, ctx=ctx)
+            for level in (0, 1):
+                if abstract if level == 0 else overview:
+                    continue
+                record = await self._fetch_existing_record(
+                    uri=directory_uri, level=level, ctx=owner_ctx
+                )
+                if level == 0:
+                    abstract = self._record_abstract(record)
+                else:
+                    overview = self._record_abstract(record)
+            if abstract or overview:
                 try:
-                    await self._upsert_context(
-                        uri=skill_file_uri,
-                        parent_uri=uri,
-                        abstract=detail_abstract,
-                        vector_text=skill_content,
-                        is_leaf=True,
-                        context_type=ContextType.SKILL.value,
-                        level=ContextLevel.DETAIL,
-                        ctx=ctx,
+                    await vectorize_directory_meta(
+                        directory_uri,
+                        abstract,
+                        overview,
+                        context_type="skill",
+                        ctx=owner_ctx,
+                        include_abstract=bool(abstract),
+                        include_overview=bool(overview),
                         ingest_options=ingest_options,
+                        content_is_body=True,
+                        **(
+                            {
+                                "meta": await self._skill_meta(
+                                    uri=directory_uri, abstract=abstract, ctx=ctx
+                                )
+                            }
+                            if classify_uri(directory_uri).is_skill_root
+                            else {}
+                        ),
                     )
-                    counters.rebuilt_records += 1
+                    counters.rebuilt_records += int(bool(abstract)) + int(bool(overview))
                 except Exception as exc:
                     counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {skill_file_uri} vector: {exc}")
+                    counters.warnings.append(f"Failed to reindex {directory_uri}: {exc}")
+            else:
+                counters.unsupported_records += 1
+                counters.warnings.append(f"No semantic source found for {directory_uri}")
+
+            if not recursive:
+                continue
+            from openviking.storage.queuefs.semantic_dag import _SKIP_FILENAMES
+            from openviking.storage.viking_fs import LS_ALL_NODES
+
+            entries = await viking_fs.ls(directory_uri, node_limit=LS_ALL_NODES, ctx=ctx)
+            for entry in entries:
+                name = entry.get("name", "")
+                if not name or name.startswith(".") or name in _SKIP_FILENAMES:
+                    continue
+                child_uri = VikingURI(directory_uri).join(name).uri
+                if entry.get("isDir", False):
+                    pending.append(child_uri)
+                    continue
+                counters.scanned_records += 1
+                try:
+                    record = await self._fetch_existing_record(
+                        uri=child_uri, level=2, ctx=owner_ctx
+                    )
+                    summary = self._record_abstract(record)
+                    if not summary:
+                        summary = await self._best_file_summary(child_uri, ctx=ctx)
+                    enqueued = await vectorize_file(
+                        file_path=child_uri,
+                        summary_dict={"name": name, "summary": summary},
+                        parent_uri=directory_uri,
+                        context_type="skill",
+                        ctx=owner_ctx,
+                        preserve_existing_created_at=True,
+                        ingest_options=ingest_options,
+                    )
+                    if enqueued:
+                        counters.rebuilt_records += 1
+                    else:
+                        counters.unsupported_records += 1
+                        counters.warnings.append(f"No vector source found for {child_uri}")
+                except Exception as exc:
+                    counters.failed_records += 1
+                    counters.warnings.append(f"Failed to reindex {child_uri}: {exc}")
 
     async def _reindex_memory_vectors(
         self,
@@ -1748,38 +1785,10 @@ class ReindexExecutor:
                     counters.failed_records += 1
                     counters.warnings.append(f"Failed to reindex {directory_uri} L1 vector: {exc}")
 
-    async def _regenerate_skill_semantics(self, *, uri: str, ctx: RequestContext) -> None:
-        service = get_service()
-        if service.viking_fs is None or service.vikingdb_manager is None:
-            raise RuntimeError("OpenVikingService not initialized")
-
-        viking_fs = service.viking_fs
-        skill_file_uri = f"{uri}/SKILL.md"
-        skill_content = await self._safe_read_text(skill_file_uri, ctx=ctx)
-        if not skill_content:
-            raise OpenVikingError(
-                f"SKILL.md not found for {uri}",
-                code="NOT_FOUND",
-                details={"uri": uri},
-            )
-
-        skill_dict, _, _, _ = SkillProcessor(service.vikingdb_manager)._parse_skill(
-            skill_content,
-            allow_local_path_resolution=False,
-        )
-        overview = await SkillProcessor(service.vikingdb_manager)._generate_overview(
-            skill_dict,
-            get_openviking_config(),
-        )
-        await viking_fs.write_context(
-            uri=uri,
-            content=skill_content,
-            abstract=skill_dict.get("description", ""),
-            overview=overview,
-            content_filename="SKILL.md",
-            is_leaf=False,
-            ctx=ctx,
-        )
+    async def _regenerate_skill_semantics(
+        self, *, uri: str, ctx: RequestContext, lock: dict | None = None
+    ) -> None:
+        await SemanticProcessor()._skill_root_semantics(uri, ctx=ctx, regenerate=True, lock=lock)
 
     async def _read_directory_abstract(self, uri: str, *, ctx: RequestContext) -> str:
         try:
@@ -1917,8 +1926,38 @@ class ReindexExecutor:
         abstract: str,
         ctx: RequestContext,
     ) -> dict[str, Any]:
-        name = uri.rstrip("/").split("/")[-1]
-        return {"name": name, "description": abstract}
+        import yaml
+
+        body = body_for_preview(abstract)
+        try:
+            parsed = yaml.safe_load(body)
+        except yaml.YAMLError:
+            parsed = None
+        record = await self._fetch_existing_record(
+            uri=uri, level=0, ctx=self._content_owner_ctx(uri, ctx)
+        )
+        previous_meta = (record or {}).get("meta") or {}
+        source_path = previous_meta.get("source_path", "")
+        if (
+            isinstance(parsed, dict)
+            and isinstance(parsed.get("name"), str)
+            and isinstance(parsed.get("description"), str)
+        ):
+            return {
+                "source_path": source_path,
+                **{
+                    key: parsed.get(key, [] if key in {"tags", "allowed_tools"} else "")
+                    for key in ("name", "description", "tags", "allowed_tools")
+                },
+            }
+        return {
+            **{
+                key: previous_meta[key] for key in ("tags", "allowed_tools") if key in previous_meta
+            },
+            "name": previous_meta.get("name") or uri.rstrip("/").split("/")[-1],
+            "description": body,
+            "source_path": source_path,
+        }
 
     def _record_abstract(self, record: Optional[dict[str, Any]]) -> str:
         if not record:

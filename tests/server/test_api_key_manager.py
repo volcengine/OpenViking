@@ -14,7 +14,6 @@ from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.api_keys.legacy import ACCOUNTS_PATH, USERS_PATH_TEMPLATE
 from openviking.server.identity import Role
-from openviking.service.core import OpenVikingService
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
@@ -22,7 +21,6 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
     UnauthenticatedError,
 )
-from openviking_cli.session.user_id import UserIdentifier
 
 
 def _uid() -> str:
@@ -38,14 +36,9 @@ ROOT_KEY = "test-root-key-abcdef1234567890abcdef1234567890"
 
 
 @pytest_asyncio.fixture(scope="function")
-async def manager_service(temp_dir):
-    """OpenVikingService for APIKeyManager tests."""
-    svc = OpenVikingService(
-        path=str(temp_dir / "mgr_data"), user=UserIdentifier.the_default_user("mgr_user")
-    )
-    await svc.initialize()
-    yield svc
-    await svc.close()
+async def manager_service(service):
+    """Use the shared service fixture with local fake models."""
+    yield service
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -244,6 +237,183 @@ async def test_account_registry_refresh_check_stats_only_accounts_file(
     assert stat_paths == [ACCOUNTS_PATH]
 
 
+async def test_refresh_accounts_from_store_does_not_read_user_registries(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """An account-list refresh reads only accounts.json and keeps cached users."""
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    cached_users = manager._legacy._accounts[acct].users
+    original_read_json = manager._legacy._read_json
+    read_paths: list[str] = []
+
+    async def _record_read(path: str):
+        read_paths.append(path)
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
+
+    await manager.refresh_accounts_from_store()
+
+    assert read_paths == [ACCOUNTS_PATH]
+    assert manager._legacy._accounts[acct].users is cached_users
+    account = next(item for item in manager.get_accounts() if item["account_id"] == acct)
+    assert account["user_count"] == 1
+
+
+async def test_refresh_account_users_from_store_reads_only_target_registry(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """A user-list refresh reads and replaces only the requested account's users."""
+    target = _uid()
+    unrelated = _uid()
+    await manager.create_account(target, "alice")
+    await manager.create_account(unrelated, "bob")
+    unrelated_users = manager._legacy._accounts[unrelated].users
+    original_read_json = manager._legacy._read_json
+    read_paths: list[str] = []
+
+    async def _record_read(path: str):
+        read_paths.append(path)
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
+
+    await manager.refresh_account_users_from_store(target)
+
+    assert read_paths == [USERS_PATH_TEMPLATE.format(account_id=target)]
+    assert manager._legacy._accounts[unrelated].users is unrelated_users
+
+
+async def test_refresh_account_users_from_store_is_atomic_on_invalid_data(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """An invalid persisted user must not partially replace authentication state."""
+    acct = _uid()
+    user_key = await manager.create_account(acct, "alice")
+    cached_users = manager._legacy._accounts[acct].users
+    users_path = USERS_PATH_TEMPLATE.format(account_id=acct)
+    original_read_json = manager._legacy._read_json
+
+    async def _read_invalid_role(path: str):
+        if path == users_path:
+            return {"users": {"mallory": {"role": "invalid", "key": "bad-key"}}}
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _read_invalid_role)
+
+    with pytest.raises(ValueError):
+        await manager.refresh_account_users_from_store(acct)
+
+    assert manager._legacy._accounts[acct].users is cached_users
+    identity = manager.resolve(user_key)
+    assert identity.account_id == acct
+    assert identity.user_id == "alice"
+
+
+async def test_scoped_store_refresh_observes_another_manager(
+    manager: APIKeyManager, manager_service
+):
+    """Scoped refreshes expose another manager's account and user changes."""
+    replica = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await replica.load()
+    acct = _uid()
+
+    key = await manager.create_account(acct, "alice")
+    await replica.refresh_accounts_from_store()
+    account = next(item for item in replica.get_accounts() if item["account_id"] == acct)
+    assert account["user_count"] == 0
+
+    await replica.refresh_account_users_from_store(acct)
+    assert replica.get_users(acct, expose_key=False) == [
+        {"user_id": "alice", "role": "admin"}
+    ]
+    account = next(item for item in replica.get_accounts() if item["account_id"] == acct)
+    assert account["user_count"] == 1
+
+    deletion, _ = await manager.begin_deletion(
+        acct, None, task_id="delete-account", owner_account_id="_system", owner_user_id="root"
+    )
+    await replica.refresh_accounts_from_store()
+    assert replica.get_deletion(acct) == deletion
+    with pytest.raises(UnauthenticatedError):
+        replica.resolve(key)
+
+
+async def test_account_only_refresh_loads_groups_before_group_write(manager_service):
+    """A partially discovered account must not overwrite persisted groups."""
+    writer = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    reader = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await writer.load()
+    await reader.load()
+    acct = _uid()
+
+    await writer.create_account(acct, "alice")
+    await writer.create_group(acct, "engineering")
+    await writer.add_group_member(acct, "engineering", "alice")
+
+    await reader.refresh_accounts_from_store()
+    discovered = reader._legacy._accounts[acct]
+    assert discovered.groups_loaded is False
+    assert discovered.groups == {}
+
+    await reader.create_group(acct, "finance")
+
+    verifier = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await verifier.load()
+    assert verifier.get_groups(acct) == [
+        {"group_id": "engineering", "member_count": 1},
+        {"group_id": "finance", "member_count": 0},
+    ]
+    assert verifier.get_group_members(acct, "engineering") == ["alice"]
+
+
+async def test_account_only_refresh_discards_recreated_account_state(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """A recreated account must not retain users or keys from its old incarnation."""
+    acct = _uid()
+    old_key = await manager.create_account(acct, "alice")
+    original_read_json = manager._legacy._read_json
+
+    async def _read_recreated_account(path: str):
+        if path == ACCOUNTS_PATH:
+            return {"accounts": {acct: {"created_at": "recreated"}}}
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _read_recreated_account)
+
+    await manager.refresh_accounts_from_store()
+
+    account = next(item for item in manager.get_accounts() if item["account_id"] == acct)
+    assert account == {
+        "account_id": acct,
+        "created_at": "recreated",
+        "user_count": 0,
+        "status": "active",
+    }
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve(old_key)
+
+
+async def test_refresh_known_account_without_users_file_returns_empty_users(
+    manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
+):
+    """A missing users.json is an empty registry for an account already in memory."""
+    original_read_json = manager._legacy._read_json
+
+    async def _missing_default_users(path: str):
+        if path == USERS_PATH_TEMPLATE.format(account_id="default"):
+            return None
+        return await original_read_json(path)
+
+    monkeypatch.setattr(manager._legacy, "_read_json", _missing_default_users)
+
+    await manager.refresh_account_users_from_store("default")
+
+    assert manager.get_users("default", expose_key=False) == []
+
+
 async def test_trusted_identity_merge_refreshes_only_affected_user_signatures(
     manager: APIKeyManager, monkeypatch: pytest.MonkeyPatch
 ):
@@ -330,7 +500,11 @@ async def test_management_registration_does_not_replace_a_trusted_user(
     verifier = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await verifier.load()
     assert verifier.get_users(acct, expose_key=True) == [
-        {"user_id": "admin", "role": "admin", "api_key": manager._accounts[acct].users["admin"]["key"]},
+        {
+            "user_id": "admin",
+            "role": "admin",
+            "api_key": manager._accounts[acct].users["admin"]["key"],
+        },
         {"user_id": "alice", "role": "user"},
     ]
 
@@ -402,15 +576,46 @@ async def test_create_account_rolls_back_when_user_persistence_fails(
 
 
 async def test_delete_account(manager: APIKeyManager):
-    """Deleting account should invalidate all its user keys."""
+    """The durable account fence revokes keys and survives reload until its owner finishes."""
+    from openviking_cli.exceptions import FailedPreconditionError
+
     acct = _uid()
     key = await manager.create_account(acct, "alice")
-    identity = manager.resolve(key)
-    assert identity.account_id == acct
-
-    await manager.delete_account(acct)
+    assert manager.resolve(key).account_id == acct
+    deletion, created = await manager.begin_deletion(
+        acct, None, task_id="delete-account-1", owner_account_id="_system", owner_user_id="root"
+    )
+    assert created
     with pytest.raises(UnauthenticatedError):
         manager.resolve(key)
+    assert manager.get_user_key_fingerprint(acct, "alice") is None
+    with pytest.raises(AlreadyExistsError):
+        await manager.create_account(acct, "bob")
+    with pytest.raises(FailedPreconditionError):
+        await manager.register_user(acct, "bob")
+    with pytest.raises(FailedPreconditionError):
+        await manager.regenerate_key(acct, "alice")
+    await manager.ensure_trusted_identities({acct: {"trusted-user"}})
+    assert not manager.has_user(acct, "trusted-user")
+
+    await manager.reload()
+    assert manager.get_deletion(acct) == deletion
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve(key)
+    assert await manager.finish_deletion(acct, None, "stale-task") is False
+    replacement = await manager.replace_deletion_task(
+        acct,
+        None,
+        expected_task_id="delete-account-1",
+        task_id="delete-account-2",
+        owner_account_id="_system",
+        owner_user_id="root",
+    )
+    assert replacement["task_id"] == "delete-account-2"
+    assert await manager.finish_deletion(acct, None, "delete-account-1") is False
+    assert await manager.finish_deletion(acct, None, "delete-account-2") is True
+    assert not manager.has_user(acct, "alice")
+    assert manager.get_deletion(acct) is None
 
 
 async def test_recreated_account_does_not_restore_deleted_users(manager: APIKeyManager):
@@ -529,7 +734,7 @@ async def test_user_deletion_fence_revokes_key_and_rejects_stale_finish(
     await manager.create_account(acct, "alice")
     bob_key = await manager.register_user(acct, "bob", "user")
 
-    deletion, created = await manager.begin_user_deletion(
+    deletion, created = await manager.begin_deletion(
         acct,
         "bob",
         task_id="delete-1",
@@ -539,18 +744,18 @@ async def test_user_deletion_fence_revokes_key_and_rejects_stale_finish(
 
     assert created is True
     assert deletion["task_id"] == "delete-1"
-    assert manager.is_user_deleting(acct, "bob")
+    assert manager.is_deleting(acct, "bob")
     with pytest.raises(UnauthenticatedError):
         manager.resolve(bob_key)
     with pytest.raises(AlreadyExistsError):
         await manager.register_user(acct, "bob", "user")
-    assert await manager.finish_user_deletion(acct, "bob", "stale") is False
+    assert await manager.finish_deletion(acct, "bob", "stale") is False
     assert manager.has_user(acct, "bob")
-    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is True
+    assert await manager.finish_deletion(acct, "bob", "delete-1") is True
     assert not manager.has_user(acct, "bob")
 
     new_key = await manager.register_user(acct, "bob", "user")
-    assert await manager.finish_user_deletion(acct, "bob", "delete-1") is False
+    assert await manager.finish_deletion(acct, "bob", "delete-1") is False
     assert manager.resolve(new_key).user_id == "bob"
 async def test_regenerate_key(manager: APIKeyManager):
     """Regenerating key should invalidate old key and return new valid key."""
@@ -591,7 +796,7 @@ async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManag
     assert fp2 != fp1
 
     # Deletion fence immediately removes the fingerprint.
-    await manager.begin_user_deletion(
+    await manager.begin_deletion(
         acct,
         "bob",
         task_id="delete-1",
@@ -635,7 +840,7 @@ async def test_get_users(manager: APIKeyManager):
     assert roles["alice"] == "admin"
     assert roles["bob"] == "user"
 
-    await manager.begin_user_deletion(
+    await manager.begin_deletion(
         acct,
         "bob",
         task_id="delete-bob",
@@ -762,14 +967,14 @@ async def test_user_and_group_persistence_across_reload(manager_service):
     assert identity.role == Role.ADMIN
     assert mgr2.get_user_group_ids(acct, "bob") == (group_id,)
 
-    await mgr2.begin_user_deletion(
+    await mgr2.begin_deletion(
         acct,
         "bob",
         task_id="delete-bob",
         owner_account_id=acct,
         owner_user_id="alice",
     )
-    await mgr2.finish_user_deletion(acct, "bob", "delete-bob")
+    await mgr2.finish_deletion(acct, "bob", "delete-bob")
 
     mgr3 = APIKeyManager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await mgr3.load()
@@ -1371,14 +1576,14 @@ async def test_reload_reflects_removed_user(manager_service):
     # Reader accepts bob at first.
     assert reader.resolve(user_key).user_id == "bob"
 
-    await writer.begin_user_deletion(
+    await writer.begin_deletion(
         acct,
         "bob",
         task_id="delete-1",
         owner_account_id=acct,
         owner_user_id="alice",
     )
-    await writer.finish_user_deletion(acct, "bob", "delete-1")
+    await writer.finish_deletion(acct, "bob", "delete-1")
     await reader.reload()
 
     with pytest.raises(UnauthenticatedError):

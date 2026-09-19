@@ -342,7 +342,6 @@ OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；
 
 - `auto-recall` 默认输出关键阶段 + 紧凑的 `ranking_summary`
 - 仅在排查每候选打分时才把 `claude_code.logRankingDetails` 设为 `true`，否则非常啰嗦
-- 深度排查请用 `scripts/debug-recall.mjs` / `scripts/debug-capture.mjs` 单跑示例输入，不要长期开 hook 日志
 
 ## 故障排除
 
@@ -363,7 +362,7 @@ node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claud
 | 远程鉴权 401 / 403                            | API key / account / user 头错配                      | 核对 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`（或 `ov.conf` 对应字段）    |
 | `Stop` hook 超时                              | 服务器慢 + 同步写路径                                 | 保持 `writePathAsync: true`（默认），或调大 `hooks/hooks.json` 里的 `Stop` 超时               |
 | 旧上下文反复出现在 OV 里                      | 早期版本把召回块当成用户消息回写了                    | 升级到当前版本——`auto-capture` 现在推送前会剥离 `<openviking-context>`                      |
-| 日志太吵                                      | `logRankingDetails: true` 没关                        | 设为 `false`；按需用 `debug-recall.mjs` / `debug-capture.mjs`                                  |
+| 日志太吵                                      | `logRankingDetails: true` 没关                        | 设为 `false`；日志里仍保留紧凑的 `ranking_summary`                                             |
 
 ## 与 Claude Code 内置记忆的对比
 
@@ -419,7 +418,8 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
-| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` 指向 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具                              |
+| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` / `Edit` / `Write` 的路径是 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具 |
+| `PreToolUse`          | `Bash` 命令里带 `viking://` URI | 照常执行命令，并附一条提醒：如果本意是访问 OpenViking 内容，应改用 OpenViking MCP 工具 |
 | `PostToolUse`         | `Read` 读到 `SKILL.md` 文件           | 可选（默认关闭）：OV 有相关 skill 经验记忆时注入经验块                                           |
 
 ### 异步写路径
@@ -464,8 +464,6 @@ claude-code-memory-plugin/
 │   ├── pre-compact.mjs      # PreCompact
 │   ├── subagent-start.mjs   # SubagentStart
 │   ├── subagent-stop.mjs    # SubagentStop
-│   ├── debug-recall.mjs     # 召回独立诊断
-│   ├── debug-capture.mjs    # 捕获独立诊断
 │   ├── ov-status.mjs        # /ov 状态报告
 │   ├── ov-memory-doctor.mjs # 体检脚本（ov-memory-doctor skill）
 │   └── lib/

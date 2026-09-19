@@ -8,10 +8,11 @@ import {
   getAdminAccounts,
   getOvResult,
   postAdminAccountIdUserIdKey,
-  postAdminAccountIdUsers,
   postAdminAccounts,
   putAdminAccountIdUserIdRole,
 } from '#/lib/ov-client'
+
+import type { UserMemoryPolicy } from './user-memory-policy'
 
 export type AdminUserRole = 'admin' | 'root' | 'user'
 
@@ -42,6 +43,7 @@ export type CreateAccountInput = {
 }
 
 export type CreateUserInput = {
+  memoryPolicy?: UserMemoryPolicy
   accountId: string
   role: string
   userId: string
@@ -296,7 +298,7 @@ export async function probeStudioConnection(
 }
 
 function normalizeAccount(value: unknown): AdminAccount | null {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || value.status === 'deleting') {
     return null
   }
 
@@ -366,14 +368,53 @@ export async function fetchAdminUsers(
       path: {
         account_id: accountId,
       },
-      query: {
-        limit: 500,
-      },
     }),
   )
   return result
     .map((item) => normalizeUser(accountId, item))
     .filter((item): item is AdminUser => Boolean(item))
+}
+
+export type AdminUserPage = {
+  users: AdminUser[]
+  total: number
+  accountTotal: number
+  managerCount: number
+  keyCount: number
+}
+
+export async function fetchAdminUsersPage(
+  connection: AdminConnection,
+  accountId: string,
+  options: { page: number; pageSize: number; search: string },
+): Promise<AdminUserPage> {
+  const result = await getOvResult<{
+    users: unknown[]
+    total: number
+    account_total: number
+    manager_count: number
+    key_count: number
+  }>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      path: { account_id: accountId },
+      query: {
+        page: options.page,
+        limit: options.pageSize,
+        query: options.search.trim() || undefined,
+        include_summary: true,
+      },
+    }),
+  )
+  return {
+    users: result.users
+      .map((item) => normalizeUser(accountId, item))
+      .filter((item): item is AdminUser => Boolean(item)),
+    total: result.total,
+    accountTotal: result.account_total,
+    managerCount: result.manager_count,
+    keyCount: result.key_count,
+  }
 }
 
 export async function createAdminAccount(
@@ -395,8 +436,8 @@ export async function createAdminAccount(
 export async function deleteAdminAccount(
   connection: AdminConnection,
   accountId: string,
-): Promise<void> {
-  await getOvResult<unknown>(
+): Promise<string> {
+  const result = await getOvResult<{ task_id: string }>(
     deleteAdminAccountByAccountId({
       client: createAdminClient(connection),
       path: {
@@ -404,6 +445,7 @@ export async function deleteAdminAccount(
       },
     }),
   )
+  return result.task_id
 }
 
 export async function createAdminUser(
@@ -411,12 +453,16 @@ export async function createAdminUser(
   input: CreateUserInput,
 ): Promise<KeyResult> {
   const result = await getOvResult<unknown>(
-    postAdminAccountIdUsers({
+    createAdminClient(connection).post({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      headers: { 'Content-Type': 'application/json' },
       body: {
         role: input.role,
         user_id: input.userId,
+        ...(input.memoryPolicy
+          ? { user_config: { memory_policy: input.memoryPolicy } }
+          : {}),
       },
-      client: createAdminClient(connection),
       path: {
         account_id: input.accountId,
       },
@@ -476,6 +522,37 @@ export async function updateAdminUserRole(
         account_id: input.accountId,
         user_id: input.userId,
       },
+    }),
+  )
+}
+
+export type UserMemorySettings = { memory_policy: UserMemoryPolicy }
+
+export async function fetchUserMemorySettings(
+  connection: AdminConnection,
+  accountId: string,
+  userId: string,
+): Promise<UserMemorySettings> {
+  return getOvResult<UserMemorySettings>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users/{user_id}/settings',
+      path: { account_id: accountId, user_id: userId },
+    }),
+  )
+}
+
+export async function updateUserMemorySettings(
+  connection: AdminConnection,
+  accountId: string,
+  userId: string,
+  memoryPolicy: UserMemoryPolicy,
+): Promise<UserMemorySettings> {
+  return getOvResult<UserMemorySettings>(
+    createAdminClient(connection).patch({
+      url: '/api/v1/admin/accounts/{account_id}/users/{user_id}/settings',
+      path: { account_id: accountId, user_id: userId },
+      headers: { 'Content-Type': 'application/json' },
+      body: { memory_policy: memoryPolicy },
     }),
   )
 }

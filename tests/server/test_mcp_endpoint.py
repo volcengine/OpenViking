@@ -1053,6 +1053,23 @@ async def test_add_resource_local_path_returns_upload_instruction(service):
     upload_token_store.clear()
 
 
+async def test_add_resource_local_path_mentions_gateway_headers(service):
+    """The prose must warn agents that private-gateway headers apply to the upload too.
+
+    Prevents the "no API key needed" line from being read as "no headers needed" when
+    the deployment sits behind a gateway that enforces tenant/vault headers.
+    """
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    result = await add_resource(path="/tmp/sample_local_file_xyz.pdf")
+    lower = result.lower()
+    assert "gateway" in lower or "reverse proxy" in lower
+    assert "openviking_name" in lower or "extra request headers" in lower
+    assert "replay" in lower or "same headers" in lower
+    upload_token_store.clear()
+
+
 async def test_add_resource_local_path_uses_env_var_when_set(service, monkeypatch):
     from openviking.server.upload_token_store import upload_token_store
 

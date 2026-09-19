@@ -28,4 +28,4 @@
 ## 参考
 
 - 手动配置文档：[Cursor](https://docs.openviking.net/zh/agent-integrations/12-cursor)
-- 源码：[examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)
+- 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)

@@ -10,13 +10,14 @@ import atexit
 import threading
 import time
 import traceback
-from typing import Any, Dict, Optional, Set, Union
+from typing import Any, Dict, Optional, Sequence, Set, Union
 
 from openviking.service.task_work_index import TaskWorkIndex
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
-from .named_queue import DequeueHandlerBase, EnqueueHookBase, NamedQueue, QueueStatus
+from .named_queue import DequeueHandlerBase, NamedQueue, QueueStatus
+from .queue_middleware import QueueMiddleware
 from .semantic_queue import SemanticQueue
 
 logger = get_logger(__name__)
@@ -37,6 +38,8 @@ def init_queue_manager(
     max_concurrent_add_resource: int = 4,
     max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
     max_concurrent_external_task: int = 10,
+    *,
+    middlewares: Sequence[QueueMiddleware] = (),
 ) -> "QueueManager":
     """Initialize QueueManager singleton.
 
@@ -49,6 +52,7 @@ def init_queue_manager(
         max_concurrent_external_parse: Max concurrent ExternalParse tasks.
         max_concurrent_add_resource: Max concurrent AddResource tasks.
         max_concurrent_session_commit: Max concurrent SessionCommit tasks.
+        middlewares: Additional middleware, fixed at construction for all queues.
     """
     global _instance
     _instance = QueueManager(
@@ -61,6 +65,7 @@ def init_queue_manager(
         max_concurrent_add_resource=max_concurrent_add_resource,
         max_concurrent_session_commit=max_concurrent_session_commit,
         max_concurrent_external_task=max_concurrent_external_task,
+        middlewares=middlewares,
     )
     return _instance
 
@@ -86,7 +91,9 @@ class QueueManager:
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
     EXTERNAL_TASK = "ExternalTask"
-    USER_DELETION = "UserDeletion"
+    # Account and user cleanup share one consumer. Retain the persisted name
+    # so user cleanup messages queued before this change resume in place.
+    DATA_CLEANUP = "UserDeletion"
     # Deferred work re-enqueues itself; throttle the next scheduling round.
     _REQUEUE_POLL_INTERVAL = 1.0
 
@@ -101,6 +108,8 @@ class QueueManager:
         max_concurrent_add_resource: int = 4,
         max_concurrent_session_commit: int = DEFAULT_MAX_CONCURRENT_SESSION_COMMIT,
         max_concurrent_external_task: int = 10,
+        *,
+        middlewares: Sequence[QueueMiddleware] = (),
     ):
         """Initialize QueueManager."""
         self._agfs = agfs
@@ -116,8 +125,16 @@ class QueueManager:
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
         self._queue_stop_events: Dict[str, threading.Event] = {}
+        self._embedding_worker_stopped = threading.Event()
         self._poll_interval = 0.2
         self._task_work_index = TaskWorkIndex()
+        # Import at composition time to avoid a service <-> queue package cycle.
+        from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
+
+        self._middlewares: tuple[QueueMiddleware, ...] = (
+            TaskWorkQueueMiddleware(self._task_work_index),
+            *middlewares,
+        )
 
         atexit.register(self.stop)
         logger.info(
@@ -169,7 +186,10 @@ class QueueManager:
         logger.info("Embedding queue initialized with TextEmbeddingHandler")
 
         # Semantic Queue
-        semantic_processor = SemanticProcessor(max_concurrent_llm=self._max_concurrent_semantic)
+        semantic_processor = SemanticProcessor(
+            max_concurrent_llm=self._max_concurrent_semantic,
+            embedding_worker_stopped=self._embedding_worker_stopped.is_set,
+        )
         self.get_queue(
             self.SEMANTIC,
             dequeue_handler=semantic_processor,
@@ -190,6 +210,8 @@ class QueueManager:
         max_concurrent = self._max_concurrent_for_queue(queue.name)
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
+        if queue.name == self.EMBEDDING:
+            self._embedding_worker_stopped.clear()
         thread = threading.Thread(
             target=self._queue_worker_loop,
             args=(queue, stop_event, max_concurrent),
@@ -200,7 +222,7 @@ class QueueManager:
 
     def _max_concurrent_for_queue(self, queue_name: str) -> int:
         """Return the worker concurrency limit for a named queue."""
-        if queue_name == self.USER_DELETION:
+        if queue_name == self.DATA_CLEANUP:
             return 1
         if queue_name == self.EMBEDDING:
             return self._max_concurrent_embedding
@@ -246,12 +268,29 @@ class QueueManager:
                                 stop_event.wait(poll_interval)
                         else:
                             stop_event.wait(poll_interval)
+                    except asyncio.CancelledError:
+                        if not stop_event.is_set():
+                            raise
+                        break
                     except Exception as e:
                         logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
                         traceback.print_exc()
                         stop_event.wait(poll_interval)
         finally:
+            # Consumers may own timers and async generators in addition to
+            # their active queue deliveries. Finish them on the worker loop.
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
+            if queue.name == self.EMBEDDING:
+                # No more deliveries can start and active handlers have exited,
+                # including protected writes. Pending messages remain durable.
+                self._embedding_worker_stopped.set()
 
     async def _worker_async_concurrent(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int
@@ -276,9 +315,7 @@ class QueueManager:
                     # Ack after successful processing (delete from persistent storage).
                     await queue.ack(msg_id, data)
                 except Exception as e:
-                    # Handler did not call report_error; decrement in_progress manually.
-                    # Do NOT ack — let RecoverStale re-queue on next startup.
-                    queue._on_process_error(str(e), data)
+                    # The message remains in processing and will be recovered.
                     logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
 
         while not stop_event.is_set():
@@ -287,18 +324,11 @@ class QueueManager:
 
             # While capacity remains, keep draining the queue
             while len(active_tasks) < max_concurrent:
-                try:
-                    queue_size = await queue.size()
-                except Exception:
-                    break
-                if not queue.has_dequeue_handler() or queue_size == 0:
+                if not queue.has_dequeue_handler():
                     break
                 data = await queue.dequeue_raw()
                 if data is None:
                     break
-                # Increment before task creation to close the race window where
-                # size=0 and in_progress=0 between dequeue_raw() and task execution.
-                queue._on_dequeue_start()
                 task = asyncio.create_task(process_one(data))
                 active_tasks.add(task)
                 logger.debug(
@@ -333,6 +363,8 @@ class QueueManager:
         # Stop queue workers
         for stop_event in self._queue_stop_events.values():
             stop_event.set()
+        if self.EMBEDDING not in self._queue_threads:
+            self._embedding_worker_stopped.set()
         for name, thread in self._queue_threads.items():
             thread.join(timeout=10.0)
             if thread.is_alive():
@@ -356,7 +388,6 @@ class QueueManager:
     def get_queue(
         self,
         name: str,
-        enqueue_hook: Optional[EnqueueHookBase] = None,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
         allow_create: bool = False,
     ) -> NamedQueue:
@@ -369,27 +400,24 @@ class QueueManager:
                     self._agfs,
                     self.mount_point,
                     name,
-                    enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
-                    task_work_index=self._task_work_index,
+                    middlewares=self._middlewares,
                 )
             elif name == self.SEMANTIC:
                 self._queues[name] = SemanticQueue(
                     self._agfs,
                     self.mount_point,
                     name,
-                    enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
-                    task_work_index=self._task_work_index,
+                    middlewares=self._middlewares,
                 )
             else:
                 self._queues[name] = NamedQueue(
                     self._agfs,
                     self.mount_point,
                     name,
-                    enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
-                    task_work_index=self._task_work_index,
+                    middlewares=self._middlewares,
                 )
             if self._started:
                 self._start_queue_worker(self._queues[name])

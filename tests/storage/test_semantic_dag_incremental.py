@@ -15,6 +15,7 @@ from openviking.storage.abstract_overview import (
     parse_abstract_overview,
     render_abstract_overview,
 )
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
@@ -37,7 +38,7 @@ class _FakeVikingFS:
     async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(self._norm(uri), [])
 
-    async def stat(self, uri, ctx=None):
+    async def stat(self, uri, ctx=None, skip_count=False):
         content = self._file_contents.get(self._norm(uri), "")
         return {"size": len(content)}
 
@@ -165,7 +166,8 @@ class _FakeProcessor:
 
 
 @pytest.mark.asyncio
-async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch):
+@pytest.mark.parametrize("sidecar_state", ["valid", "malformed_overview", "malformed_abstract"])
+async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypatch, sidecar_state):
     root_uri = "viking://resources/root"
     tree = {
         root_uri: [
@@ -193,6 +195,9 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
             f"{root_uri}/.abstract.md": "old-abstract",
         },
     )
+    if sidecar_state != "valid":
+        filename = ".overview.md" if sidecar_state == "malformed_overview" else ".abstract.md"
+        fake_fs._file_contents[f"{root_uri}/{filename}"] = "---\n"
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_dag.get_openviking_config",
@@ -208,17 +213,26 @@ async def test_direct_incremental_update_uses_changes_without_temp_sync(monkeypa
         ctx=ctx,
         incremental_update=True,
         target_uri=root_uri,
-        changes={"modified": [f"{root_uri}/a.txt"]},
+        changes={"modified": [f"{root_uri}/a.txt"]} if sidecar_state == "valid" else {},
     )
 
     await executor.run(root_uri)
 
-    assert processor.summarized_files == [f"{root_uri}/a.txt"]
-    assert processor.vectorized_files == [f"{root_uri}/a.txt"]
+    expected_files = {
+        "valid": [f"{root_uri}/a.txt"],
+        "malformed_overview": [f"{root_uri}/a.txt", f"{root_uri}/b.txt"],
+        "malformed_abstract": [],
+    }[sidecar_state]
+    assert processor.summarized_files == expected_files
+    assert processor.vectorized_files == expected_files
+    assert processor.vectorized_dirs == [root_uri]
     assert processor.sync_calls == []
     overview = parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.overview.md"]).body
-    assert "- a.txt: summary" in overview
-    assert "- b.txt: old-b" in overview
+    expected_a = "old-a" if sidecar_state == "malformed_abstract" else "summary"
+    expected_b = "summary" if sidecar_state == "malformed_overview" else "old-b"
+    assert f"- a.txt: {expected_a}" in overview
+    assert f"- b.txt: {expected_b}" in overview
+    assert parse_abstract_overview(fake_fs._file_contents[f"{root_uri}/.abstract.md"]).body.strip()
 
 
 @pytest.mark.asyncio
@@ -327,15 +341,7 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
     file_path = f"{root_uri}/a.txt"
     fake_fs = _FakeVikingFS(
         tree={root_uri: [{"name": "a.txt", "isDir": False}]},
-        file_contents={
-            file_path: "new content",
-            f"{root_uri}/.overview.md": render_abstract_overview(
-                ContextLevel.OVERVIEW, root_uri, "FILES:\n- a.txt: old-summary"
-            ),
-            f"{root_uri}/.abstract.md": render_abstract_overview(
-                ContextLevel.ABSTRACT, root_uri, "old abstract"
-            ),
-        },
+        file_contents={file_path: "new content"},
     )
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
@@ -359,6 +365,16 @@ async def test_directory_vectorization_retries_after_matching_sidecar_write(monk
             recursive=False,
             changes={"modified": [file_path]},
         )
+
+    acquire = fake_fs.pathlock_acquire_exact_batch
+    fake_fs.pathlock_acquire_exact_batch = AsyncMock(
+        side_effect=[{"paths": []}, LockAcquisitionError("parent sidecars are busy")]
+    )
+    await make_executor().run(root_uri)
+    assert fake_fs.writes == []
+    assert processor.vectorized_files == [file_path]
+    vectorize_directory.assert_not_awaited()
+    fake_fs.pathlock_acquire_exact_batch = acquire
 
     with pytest.raises(RuntimeError, match="temporary failure"):
         await make_executor().run(root_uri)

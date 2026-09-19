@@ -59,7 +59,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
@@ -181,8 +181,7 @@ Tags must use strict `k=v` strings. When multiple tags are provided, `find()` re
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -204,7 +203,7 @@ recent_emails = client.find(
 # Search only memories and resources
 typed_results = client.find(
     query="authentication",
-    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
+    options={"context_type": ["memory", "resource"]},
 )
 
 # Search by local image, bytes, data URI, HTTP URL, or viking:// URI
@@ -397,7 +396,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
@@ -459,8 +458,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -482,7 +480,7 @@ results = client.search(
     query="best practices",
     session_id=session.session_id,
     options={
-        "context_type": ContextType.SKILL,
+        "context_type": "skill",
         "since": "2h",
     },
 )
@@ -838,7 +836,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -980,7 +978,7 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1088,7 +1086,7 @@ Retrieval results usually only contain L0 summaries, you can progressively load 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1132,7 +1130,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 ### Use Specific Queries
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1147,7 +1145,7 @@ results = client.find(query="auth")
 ### Scope Your Searches
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1162,7 +1160,7 @@ results = client.find(
 ### Use Session Context for Conversations
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")

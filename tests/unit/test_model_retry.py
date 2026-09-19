@@ -219,10 +219,37 @@ def test_quota_exceeded_case_insensitive():
             "'input (8525 tokens) is too large to process. increase the physical batch size "
             "(current batch size: 2048)', 'type': 'server_error'}}"
         ),
+        # SiliconFlow generic 400 with structured code 20015, dict-repr form (#4676)
+        (
+            "Error code: 400 - {'code': 20015, 'message': "
+            "'The parameter is invalid. Please check again.', 'data': None}"
+        ),
+        # JSON string form
+        'Error code: 400 - {"code": 20015, "message": "The parameter is invalid."}',
     ],
 )
 def test_classify_input_too_large_errors(message):
     assert classify_api_error(RuntimeError(message)) == ERROR_CLASS_INPUT_TOO_LARGE
+
+
+def test_other_siliconflow_400_codes_stay_permanent():
+    """Only code 20015 is reclassified; other SiliconFlow parameter errors
+    (e.g. a bad model name) must remain permanent request-level failures."""
+    error = RuntimeError(
+        "Error code: 400 - {'code': 20012, 'message': 'Model not exists', 'data': None}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+
+
+def test_20015_inside_request_id_is_not_input_too_large():
+    """A rate-limit error whose request ID happens to contain 20015 must not
+    be misclassified as INPUT_TOO_LARGE."""
+    error = RuntimeError(
+        "Error code: 429 - {'error': {'code': 'TooManyRequests', "
+        "'message': 'RPM limit exceeded', "
+        "'request_id': '0217801248873024200158fe53d7c9130f34413480585e683685bc95'}}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
 def test_retry_sync_does_not_retry_input_too_large():
