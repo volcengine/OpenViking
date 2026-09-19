@@ -55,6 +55,8 @@ Edit `~/.openviking/ov.conf`:
 
 ### 3. Verify
 
+Restart the server after changing encryption settings, and run this example against that server. Install the [Python SDK](../getting-started/02-quickstart.md#run-the-script) in the environment running the script.
+
 ```python
 import asyncio
 from pathlib import Path
@@ -62,28 +64,29 @@ from openviking_sdk import AsyncHTTPClient
 
 
 async def test():
-    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-    await client.initialize()
-
-    # add_resource expects a file path or URL
-    sample = Path("./encrypted-sample.txt")
-    sample.write_text("Hello, encrypted world!", encoding="utf-8")
-    await client.add_resource(
-        path=str(sample),
-        options={"reason": "Test encryption"},
-    )
-
-    # Read resource (automatically decrypted)
-    results = await client.find(query="encrypted")
-    print(f"Found {len(results)} results")
-
-    await client.close()
+    # OPENVIKING_API_KEY: use a tenant-bound user/admin key when authentication is enabled.
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    try:
+        await client.initialize()
+        sample = Path("./encrypted-sample.txt")
+        sample.write_text("Hello, encrypted world!", encoding="utf-8")
+        imported = await client.add_resource(
+            path=str(sample),
+            wait=True,
+            timeout=120,
+        )
+        results = await client.find(
+            query="encrypted", target_uri=imported["root_uri"]
+        )
+        print(f"Found {len(results.get('resources', []))} resources")
+    finally:
+        await client.close()
 
 
 asyncio.run(test())
 ```
 
-Done! Now all written data is automatically encrypted.
+It waits for import processing and checks retrieval; successful retrieval alone does not prove encryption at rest. Use [Check File Content](#method-1-check-file-content) to inspect the stored file header.
 
 ## API Key Hashing Configuration
 
@@ -409,7 +412,7 @@ ov backup ./backups/before-encryption.ovpack
 ```
 
 2. Stop OpenViking. Enable encryption and point the storage configuration at a **new, empty** workspace/backend. Keep the original data and encryption key backup until verification is complete.
-3. Start the encrypted environment and restore the logical backup. Restore writes the package content through the encrypted storage layer:
+3. Start the encrypted environment. In API key mode, first create the target account and a restore operator with an admin key, then point the CLI at the target using that key, as described in [Full Backup and Restore](09-ovpack.md#full-backup-and-restore). Restore writes the package content through the encrypted storage layer:
 
 ```bash
 ov restore ./backups/before-encryption.ovpack --on-conflict fail

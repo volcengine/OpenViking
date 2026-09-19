@@ -10,6 +10,8 @@ validates the manifest, file list, directory list, and checksums so package
 content cannot drift from the manifest. If an attacker can rewrite both content
 and manifest, rely on external signatures, secure transport, and access control.
 
+Storage encryption does not encrypt the exported package. Export reads through the transparent decryption layer and writes plaintext content into a normal ZIP archive. Protect the `.ovpack` file independently during storage and transfer; possession of the archive is enough to read its content without the source storage key.
+
 ## Supported Scope
 
 Regular `export/import` handles one package root:
@@ -40,16 +42,22 @@ Multi-write storage only replicates writes that happen after it is enabled. It
 does not automatically copy historical files that already existed before
 `storage.agfs.backups` was turned on.
 
-When migrating an existing environment to multi-write mode, first move the
-existing dataset with OVPack, then enable multi-write storage.
+To seed the primary and replicas together, enable multi-write on the **empty target environment before restoring** the package:
 
-Recommended flow:
+1. Pause application writes and export or back up each source account.
+2. Configure the target primary and backup backends, including their write policies, then start the target server and provision its restore identity.
+3. Restore or import through that server so historical content passes through the configured write fanout.
+4. Check synchronization status for every restored scope and verify the expected files in each replica before switching traffic. Asynchronous replication can still be pending after restore returns.
+5. Resume writes after validating content and index integrity. Keep the source and backup until verification is complete.
 
-1. Use `ov backup` or `ov export` to export the current dataset.
-2. Restore or import the dataset into the target storage environment.
-3. Validate data and index integrity in the target environment.
-4. Configure and enable multi-write storage.
-5. Resume normal writes and let multi-write handle future incremental copies.
+For example, using the target account's admin key:
+
+```bash
+ov system backend sync-status viking://resources
+ov system backend sync-status viking://user
+```
+
+Restoring first and enabling backups afterwards only replicates subsequent writes; it does not seed historical content into replicas.
 
 For more details, see the [Multi-Write Storage Guide](./13-multi-write-storage.md).
 
@@ -165,10 +173,32 @@ Backup reads live files and is not an atomic point-in-time snapshot. Content
 that changes during backup may represent different moments. Pause writes during
 the backup window when strict consistency is required.
 
-When restoring into a new environment, restore content first and then create
-users with the same `user_id` values found in the package. Existing user
-directories do not mean that user accounts exist, and the target environment
-generates new API keys.
+In API key mode, a new target needs an account and an admin identity **before** restore. The root key can create that identity but cannot call tenant-scoped pack APIs. Set `OPENVIKING_ROOT_API_KEY` to the target root key, then call the target server to create the account with a restore operator whose user ID is absent from the package:
+
+```bash
+curl -f -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: $OPENVIKING_ROOT_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "acme", "admin_user_id": "restore-operator"}'
+```
+
+Use the returned `user_key` as `api_key` in a dedicated target client config, for example `restore.ovcli.conf`:
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "<target-admin-user-key>"
+}
+```
+
+```bash
+OPENVIKING_CLI_CONFIG_FILE=./restore.ovcli.conf \
+  ov restore ./backups/openviking.ovpack --on-conflict fail
+```
+
+For an existing target account, use its admin key instead of creating it again. Review conflicts before choosing `overwrite`, which replaces matching package paths. Each backup/restore is account-scoped; repeat with the appropriate identity for other accounts.
+
+After restoring content, register the remaining users with the same `user_id` values found in the package. Existing user directories do not mean that user accounts exist. The target generates new API keys; source keys are not restored. Verify reads with each target user's key before switching clients.
 
 ## Python SDK
 

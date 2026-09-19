@@ -108,7 +108,7 @@ User=your-username
 Group=your-group
 # 替换为工作目录
 WorkingDirectory=/var/lib/openviking
-# 以下两种启动方式二选一
+# 使用实际安装位置中的绝对路径
 ExecStart=/path/to/your/python/bin/openviking-server
 Restart=always
 RestartSec=5
@@ -118,6 +118,8 @@ Environment="OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf"
 [Install]
 WantedBy=multi-user.target
 ```
+
+启动前替换所有占位值。以服务用户运行 `command -v openviking-server` 确认可执行文件路径，创建工作目录，并让该用户能够访问配置、workspace 及本地加密密钥。此 unit 使用 `/etc/openviking/ov.conf`，不会自动使用你个人 home 目录下生成的配置。系统服务省略 `User` 会以 root 运行。
 
 ### 管理服务
 

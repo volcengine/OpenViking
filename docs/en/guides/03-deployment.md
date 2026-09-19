@@ -102,10 +102,13 @@ After=network.target
 
 [Service]
 Type=simple
+# Replace with the user and group that run OpenViking
+User=your-username
+Group=your-group
 # Replace with your working directory
 WorkingDirectory=/var/lib/openviking
-# Choose one of the following start methods
-ExecStart=/usr/bin/openviking-server
+# Use the absolute executable path from your installation
+ExecStart=/path/to/your/python/bin/openviking-server
 Restart=always
 RestartSec=5
 # Path to config file
@@ -114,6 +117,8 @@ Environment="OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf"
 [Install]
 WantedBy=multi-user.target
 ```
+
+Before starting, replace every placeholder. Run `command -v openviking-server` as the service user to find the executable, create the working directory, and grant that user access to the config, workspace, and any local encryption key. The config shown here is `/etc/openviking/ov.conf`; a config generated under your own home directory is not automatically used by this unit. Omitting `User` from a system service runs it as root.
 
 ### Manage the Service
 

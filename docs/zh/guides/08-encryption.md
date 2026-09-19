@@ -55,6 +55,8 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 
 ### 3. 验证
 
+修改加密配置后重启服务，再对该服务运行示例。在运行脚本的环境中安装 [Python SDK](../getting-started/02-quickstart.md#运行脚本)。
+
 ```python
 import asyncio
 from pathlib import Path
@@ -62,28 +64,29 @@ from openviking_sdk import AsyncHTTPClient
 
 
 async def test():
-    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-    await client.initialize()
-
-    # add_resource 接收文件路径或 URL
-    sample = Path("./encrypted-sample.txt")
-    sample.write_text("Hello, encrypted world!", encoding="utf-8")
-    await client.add_resource(
-        path=str(sample),
-        options={"reason": "测试加密"},
-    )
-
-    # 读取资源（自动解密）
-    results = await client.find(query="encrypted")
-    print(f"找到 {len(results)} 个结果")
-
-    await client.close()
+    # 启用认证时，将 OPENVIKING_API_KEY 设置为绑定租户身份的 user/admin key。
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    try:
+        await client.initialize()
+        sample = Path("./encrypted-sample.txt")
+        sample.write_text("Hello, encrypted world!", encoding="utf-8")
+        imported = await client.add_resource(
+            path=str(sample),
+            wait=True,
+            timeout=120,
+        )
+        results = await client.find(
+            query="encrypted", target_uri=imported["root_uri"]
+        )
+        print(f"找到 {len(results.get('resources', []))} 个资源")
+    finally:
+        await client.close()
 
 
 asyncio.run(test())
 ```
 
-完成！现在所有写入的数据都会自动加密。
+示例会等待导入处理完成并检查检索；检索成功本身不能证明文件已加密。请按下方“验证加密”的文件内容检查步骤确认存储文件头。
 
 ## API Key 哈希配置
 
@@ -409,7 +412,7 @@ ov backup ./backups/before-encryption.ovpack
 ```
 
 2. 停止 OpenViking，启用加密，并将存储配置指向**全新的空** workspace/backend。验证完成前保留原数据和加密密钥备份。
-3. 启动加密环境后恢复逻辑备份。恢复过程会通过加密存储层写入 package 内容：
+3. 启动加密环境。API Key 模式下，先创建目标 account 和持有 admin key 的恢复操作用户，再让 CLI 使用该 key 连接目标环境，参见 [全量备份与恢复](09-ovpack.md#全量备份与恢复)。恢复过程会通过加密存储层写入 package 内容：
 
 ```bash
 ov restore ./backups/before-encryption.ovpack --on-conflict fail
