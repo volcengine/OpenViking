@@ -220,6 +220,7 @@ openviking = [
     "web_studio/dist/**/*",
     "lib/ragfs_python*.so",
     "lib/ragfs_python*.pyd",
+    "lib/ragfs_python.pyi",
     "bin/ov",
     "bin/ov.exe",
     "storage/vectordb/engine/*.abi3.so",
@@ -244,6 +245,10 @@ no_implicit_optional = false
 warn_redundant_casts = true
 warn_unused_ignores = true
 ignore_missing_imports = true
+
+[tool.pyright]
+stubPath = "crates/ragfs-python"
+extraPaths = ["openviking/lib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
