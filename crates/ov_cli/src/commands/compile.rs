@@ -3,6 +3,9 @@ use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use serde_json::{Map, Value};
 
+/// Sentinel `--skill` value that routes to in-place memory consolidation.
+const MEMORY_COMPILE_SKILL: &str = "memory";
+
 pub async fn run(
     client: &HttpClient,
     from_uris: Vec<String>,
@@ -13,7 +16,9 @@ pub async fn run(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let sources = normalize_sources(from_uris)?;
+    let skill = skill.trim().to_string();
+    let memory_mode = skill == MEMORY_COMPILE_SKILL;
+    let sources = normalize_sources(from_uris, memory_mode)?;
     let args = parse_args(args.as_deref())?;
     let instruction = instruction
         .as_deref()
@@ -23,7 +28,7 @@ pub async fn run(
         .create_compile(
             &sources,
             to.trim(),
-            skill.trim(),
+            skill.as_str(),
             instruction,
             args.as_ref(),
         )
@@ -44,7 +49,7 @@ fn parse_args(value: Option<&str>) -> Result<Option<Map<String, Value>>> {
     Ok((!args.is_empty()).then_some(args))
 }
 
-fn normalize_sources(values: Vec<String>) -> Result<Vec<String>> {
+fn normalize_sources(values: Vec<String>, memory_mode: bool) -> Result<Vec<String>> {
     let mut result = Vec::new();
     for value in values {
         for item in value.split(',') {
@@ -56,6 +61,14 @@ fn normalize_sources(values: Vec<String>) -> Result<Vec<String>> {
                 result.push(item.to_string());
             }
         }
+    }
+    if memory_mode {
+        if !result.is_empty() {
+            return Err(Error::Client(
+                "--skill memory consolidates --to in place and takes no --from".into(),
+            ));
+        }
+        return Ok(result);
     }
     if result.is_empty() {
         return Err(Error::Client(
@@ -86,21 +99,33 @@ mod tests {
 
     #[test]
     fn expands_comma_separated_and_repeated_sources_stably() {
-        let result = normalize_sources(vec![
-            "viking://resources/a,viking://resources/b".into(),
-            "viking://resources/a".into(),
-        ])
+        let result = normalize_sources(
+            vec![
+                "viking://resources/a,viking://resources/b".into(),
+                "viking://resources/a".into(),
+            ],
+            false,
+        )
         .expect("sources should be valid");
         assert_eq!(result, vec!["viking://resources/a", "viking://resources/b"]);
     }
 
     #[test]
     fn rejects_empty_source_items() {
-        assert!(normalize_sources(vec!["viking://resources/a,".into()]).is_err());
+        assert!(normalize_sources(vec!["viking://resources/a,".into()], false).is_err());
         let args = parse_args(Some(r#"{"model_name":"endpoint-1"}"#))
             .expect("args should be valid")
             .expect("args should not be empty");
         assert_eq!(args["model_name"], "endpoint-1");
         assert!(parse_args(Some("[]")).is_err());
+    }
+
+    #[test]
+    fn memory_mode_allows_no_sources_but_rejects_any() {
+        assert!(normalize_sources(vec![], true)
+            .expect("memory mode allows empty sources")
+            .is_empty());
+        assert!(normalize_sources(vec!["viking://resources/a".into()], true).is_err());
+        assert!(normalize_sources(vec![], false).is_err());
     }
 }

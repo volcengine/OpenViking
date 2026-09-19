@@ -491,6 +491,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
         )
+        self._compile_service.configure_memory_runner(vikingdb=self._vikingdb_manager)
 
         if self._queue_manager:
             for queue_name in (

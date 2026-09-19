@@ -326,13 +326,19 @@ def _format_size(size_bytes: int) -> str:
 class MemoryLsTool(MemoryTool):
     """Tool to list directory contents."""
 
+    # Cap on recursive listing so a huge directory cannot flood the context.
+    _RECURSIVE_NODE_LIMIT = 500
+
     @property
     def name(self) -> str:
         return "ls"
 
     @property
     def description(self) -> str:
-        return "List directory content, includes abstract field when output='agent'"
+        return (
+            "List directory content. Pass recursive=true to include files in "
+            "subdirectories (returns 'relative/path size' per line)."
+        )
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -342,6 +348,14 @@ class MemoryLsTool(MemoryTool):
                 "uri": {
                     "type": "string",
                     "description": "Directory URI to list, e.g., 'viking://user/user123/memories'",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": (
+                        "List files in all subdirectories with relative paths. "
+                        "Use this for memory directories organized into subfolders."
+                    ),
+                    "default": False,
                 },
             },
             "required": ["uri"],
@@ -354,6 +368,8 @@ class MemoryLsTool(MemoryTool):
     ) -> Any:
         try:
             uri = kwargs.get("uri", "")
+            if kwargs.get("recursive"):
+                return await self._execute_recursive(ctx, uri)
             entries = await ctx.viking_fs.ls(
                 uri,
                 output="agent",
@@ -362,23 +378,57 @@ class MemoryLsTool(MemoryTool):
                 node_limit=1000,
                 ctx=ctx.request_ctx,
             )
-            # Format: filename size (e.g., "file.md 1.2K")
+            # Format: filename size (e.g., "file.md 1.2K"). Directories are
+            # surfaced with a trailing slash so a subfoldered directory does not
+            # look empty; the model can ls into them or use recursive=true.
             result_lines = []
             for e in entries:
-                if not e.get("isDir", False):
-                    # Extract name from entry or fallback to uri
-                    name = e.get("name", "")
-                    if not name:
-                        uri = e.get("uri", "")
-                        name = uri.rsplit("/", 1)[-1] if "/" in uri else uri
-                    size = e.get("size", 0)
-                    result_lines.append(f"{name} {_format_size(size)}")
+                name = e.get("name", "")
+                if not name:
+                    entry_uri = e.get("uri", "")
+                    name = entry_uri.rsplit("/", 1)[-1] if "/" in entry_uri else entry_uri
+                if e.get("isDir", False):
+                    result_lines.append(f"{name}/")
+                else:
+                    result_lines.append(f"{name} {_format_size(e.get('size', 0))}")
             if not result_lines:
                 return "Directory is empty. You can write new files to create memory content."
             return "\n".join(result_lines)
         except Exception as e:
             tracer.info(f"Failed to execute ls: {e}")
             return {"error": str(e)}
+
+    async def _execute_recursive(self, ctx: Optional["ToolContext"], uri: str) -> Any:
+        base = uri.rstrip("/")
+        result = await ctx.viking_fs.glob(
+            "**/*",
+            uri=base,
+            node_limit=self._RECURSIVE_NODE_LIMIT + 1,
+            extra_fields=[],
+            ctx=ctx.request_ctx,
+        )
+        entries = result.get("matches", []) if isinstance(result, dict) else []
+        lines: list[str] = []
+        for e in entries:
+            if not isinstance(e, dict) or e.get("isDir", False):
+                continue
+            entry_uri = str(e.get("uri", ""))
+            name = entry_uri.rsplit("/", 1)[-1] if "/" in entry_uri else entry_uri
+            if name in {".overview.md", ".abstract.md"}:
+                continue
+            rel = entry_uri[len(base) + 1 :] if entry_uri.startswith(base + "/") else name
+            lines.append(f"{rel} {_format_size(e.get('size', 0))}")
+        if not lines:
+            return "Directory is empty. You can write new files to create memory content."
+        truncated = len(lines) > self._RECURSIVE_NODE_LIMIT
+        lines = lines[: self._RECURSIVE_NODE_LIMIT]
+        text = "\n".join(lines)
+        if truncated:
+            text += (
+                f"\n... (listing truncated at {self._RECURSIVE_NODE_LIMIT} files; "
+                "use ls on a subdirectory or search to narrow down)"
+            )
+        return text
 
 
 # Tool registry

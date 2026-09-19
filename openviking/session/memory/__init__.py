@@ -7,6 +7,10 @@ This module provides a YAML-configurable memory templating system with
 ReAct (Reasoning + Action) pattern for memory updates.
 """
 
+from openviking.session.memory.consolidation_context_provider import (
+    ConsolidationExtractContextProvider,
+    build_consolidation_isolation_handler,
+)
 from openviking.session.memory.dataclass import (
     MemoryData,
     MemoryField,
@@ -62,6 +66,8 @@ __all__ = [
     "StructuredMemoryOperations",
     "PatchMergeContextProvider",
     "PatchMergePatch",
+    "ConsolidationExtractContextProvider",
+    "build_consolidation_isolation_handler",
     # Registry
     "MemoryTypeRegistry",
     # Schema models

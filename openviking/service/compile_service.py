@@ -20,6 +20,7 @@ from openviking.service.external_task_service import (
     ExternalTaskSnapshot,
 )
 from openviking.service.fs_service import FSService
+from openviking.service.memory_compile import MemoryCompileRunner
 from openviking.service.task_tracker import SENSITIVE_TASK_KEYS, TaskRecord
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -32,15 +33,23 @@ from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 _ACTIVE_STATUSES = frozenset({"accepted", "pending", "running", "committing"})
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
+# Sentinel --skill value that routes a Compile request to in-process memory
+# consolidation instead of the VikingBot agent path. It is not a real Skill URI.
+MEMORY_COMPILE_SKILL = "memory"
+
 
 class CompileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    from_: list[str] = Field(alias="from", min_length=1)
+    from_: list[str] = Field(default_factory=list, alias="from")
     to: str = Field(min_length=1)
     skill: str = Field(min_length=1)
     instruction: str | None = None
     args: dict[str, Any] | None = None
+
+    @property
+    def is_memory_mode(self) -> bool:
+        return self.skill == MEMORY_COMPILE_SKILL
 
     @model_validator(mode="before")
     @classmethod
@@ -70,6 +79,12 @@ class CompileRequest(BaseModel):
             raise ValueError("to must not be empty")
         if not self.skill:
             raise ValueError("skill must not be empty")
+        # Memory mode consolidates the --to space in place and takes no sources;
+        # every other skill still requires at least one --from directory.
+        if not self.is_memory_mode and not self.from_:
+            raise ValueError("from must contain at least one directory")
+        if self.is_memory_mode and self.from_:
+            raise ValueError("--skill memory consolidates --to in place and takes no --from")
         return self
 
 
@@ -264,6 +279,11 @@ class CompileService:
         self._tasks = tasks
         self._fs = fs
         self._local_endpoint: _CompileEndpoint | None = None
+        self._memory_runner: MemoryCompileRunner | None = None
+
+    def configure_memory_runner(self, vikingdb: Any = None) -> None:
+        """Install the in-process memory-consolidation runner for `--skill memory`."""
+        self._memory_runner = MemoryCompileRunner(self._fs, vikingdb=vikingdb)
 
     @property
     def poll_interval_seconds(self) -> float:
@@ -318,6 +338,16 @@ class CompileService:
         ctx: RequestContext,
         idempotency_key: str | None = None,
     ) -> TaskRecord:
+        if request.is_memory_mode:
+            if self._memory_runner is None:
+                raise UnavailableError(
+                    "memory compile", "memory consolidation runner is not configured"
+                )
+            return await self._memory_runner.create(
+                target=request.to,
+                instruction=request.instruction,
+                ctx=ctx,
+            )
         request = self._normalize_request_uris(request, ctx)
         if idempotency_key:
             payload, private_payload = self._split_payload(request)

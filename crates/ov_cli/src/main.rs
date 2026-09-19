@@ -1128,10 +1128,10 @@ enum Commands {
     },
     /// [Interactive] Compile source materials with a VikingBot Skill
     Compile {
-        /// Source file or directory; repeat the flag or separate entries with commas
+        /// Source file or directory; repeat the flag or separate entries with commas.
+        /// Omitted with `--skill memory`, which consolidates `--to` in place.
         #[arg(
             long = "from",
-            required = true,
             value_delimiter = ',',
             value_name = "uri"
         )]
@@ -1139,7 +1139,7 @@ enum Commands {
         /// Target Wiki directory or skills namespace
         #[arg(long, value_name = "uri")]
         to: String,
-        /// Skill directory or SKILL.md Viking URI
+        /// Skill directory or SKILL.md Viking URI; the literal `memory` runs memory consolidation
         #[arg(long, value_name = "uri")]
         skill: String,
         /// Additional instructions for this Compile task
@@ -4106,6 +4106,28 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn cli_compile_memory_mode_parses_without_from() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "compile",
+            "--to",
+            "viking://user/u1/memories/entities",
+            "--skill",
+            "memory",
+        ])
+        .expect("memory-mode compile should parse without --from");
+        match cli.command {
+            Commands::Compile {
+                from_uris, skill, ..
+            } => {
+                assert!(from_uris.is_empty());
+                assert_eq!(skill, "memory");
+            }
+            _ => panic!("expected compile command"),
+        }
     }
 
     #[test]
