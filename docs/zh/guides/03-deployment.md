@@ -283,7 +283,7 @@ docker compose up -d
 
 点击下方按钮一键部署到 Railway：
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/9zDAop)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openviking)
 
 #### 预置资源与环境
 

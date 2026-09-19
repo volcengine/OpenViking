@@ -285,7 +285,7 @@ After startup, you can access:
 
 Click the badge below to deploy OpenViking on Railway:
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/9zDAop)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openviking)
 
 #### Provisioned Resources & Defaults
 
