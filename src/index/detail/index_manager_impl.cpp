@@ -545,12 +545,21 @@ int IndexManagerImpl::add_data(const std::vector<AddDataRequest>& data_list) {
 
   bool has_update = false;
   std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+  const size_t dim = vector_index_->get_embedding_dim();
   for (size_t i = 0; i < data_list.size(); ++i) {
     const auto& data = data_list[i];
     FloatValSparseDatapointLowLevel sparse_datapoint(&data.sparse_raw_terms,
                                                      &data.sparse_values);
-    vector_index_->stream_add_data(data.label, data.vector.data(),
-                                   &sparse_datapoint);
+    // The index reads exactly `dim` floats from this pointer, so a vector of
+    // any other length is indexed as if the record had none.
+    const float* vector = nullptr;
+    if (dim > 0 && data.vector.size() == dim) {
+      vector = data.vector.data();
+    } else if (!data.vector.empty()) {
+      SPDLOG_ERROR("IndexManagerImpl::add_data label={} vector dim {} != {}",
+                   data.label, data.vector.size(), dim);
+    }
+    vector_index_->stream_add_data(data.label, vector, &sparse_datapoint);
     int offset = vector_index_->get_offset_by_label(data.label);
     if (offset < 0) {
       SPDLOG_WARN("IndexManagerImpl::add_data label={} not found", data.label);
