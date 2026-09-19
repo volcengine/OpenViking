@@ -283,7 +283,7 @@ docker compose up -d
 
 一键部署：点击下方按钮，或打开模板页。
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/F5DdgR)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/uFbnhU)
 
 模板做了什么：
 

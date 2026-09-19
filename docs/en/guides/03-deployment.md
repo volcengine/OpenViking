@@ -285,7 +285,7 @@ After startup, you can access:
 
 One-click deploy: click the badge below or open the template page.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/F5DdgR)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/uFbnhU)
 
 What the template sets up:
 

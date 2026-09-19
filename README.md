@@ -19,7 +19,7 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 [![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
 [![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/F5DdgR)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/uFbnhU)
 
 👋 Join our Community
 
