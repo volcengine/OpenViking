@@ -29,7 +29,7 @@ openviking-server doctor
 openviking-server
 ```
 
-The setup wizard configures the server's models and writes `~/.openviking/ov.conf`. Prepare access to an embedding model and a VLM, then check the configuration with `doctor`. Keep the server running and use another terminal for the remaining steps.
+The setup wizard configures the server's models and writes `~/.openviking/ov.conf`. Prepare access to an embedding model and a VLM — Volcengine (Doubao) models are recommended; see the [Volcengine Purchase Guide](../guides/02-volcengine-purchase-guide.md) for purchase and activation — then check the configuration with `doctor`. Keep the server running and use another terminal for the remaining steps.
 
 The local endpoint is `http://127.0.0.1:1933`; the default local setup needs no API key. Web Studio is available at `/studio`. For Docker, persistent storage, and remote access, see [Deployment](../guides/03-deployment.md), [Model Configuration](../guides/01-configuration.md), and [Authentication](../guides/04-authentication.md).
 

@@ -29,7 +29,7 @@ openviking-server doctor
 openviking-server
 ```
 
-配置向导用于设置服务端模型并写入 `~/.openviking/ov.conf`。准备好 Embedding 模型和 VLM 的访问凭据，再用 `doctor` 检查配置。保持服务运行，另开终端完成后续步骤。
+配置向导用于设置服务端模型并写入 `~/.openviking/ov.conf`。准备好 Embedding 模型和 VLM 的访问凭据——推荐使用火山引擎（豆包）模型，购买和开通见[火山引擎购买指南](../guides/02-volcengine-purchase-guide.md)——再用 `doctor` 检查配置。保持服务运行，另开终端完成后续步骤。
 
 本地地址为 `http://127.0.0.1:1933`，默认本地配置不需要 API Key；Web Studio 位于 `/studio`。Docker、持久化存储和远程访问配置见[部署](../guides/03-deployment.md)、[模型配置](../guides/01-configuration.md)和[认证](../guides/04-authentication.md)。
 
