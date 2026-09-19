@@ -141,7 +141,7 @@ sudo journalctl -u openviking.service -f
 ### Python SDK
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()

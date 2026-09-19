@@ -43,7 +43,7 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 
 - 服务端 URL 由用户或服务端管理员提供。
 - 可能需要 API Key。
-- 只有 root key 的配置需要 `--account` 和 `--user`。
+- 仅用 root key 访问数据需要服务端采用 `trusted` 模式，并显式配置 `--account` 和 `--user`；`api_key` 模式的数据访问需要 user/admin key。
 
 ### 本地自定义
 
@@ -125,7 +125,7 @@ npm prefix -g
 OpenViking CLI 配置可以包含 user key、root key，或同时包含两者。
 
 - User key：用于普通数据命令，例如 `ov add-resource`、`ov find` 和 `ov tree`。服务端会从 key 推导身份，所以通常不需要传 `--account` 或 `--user`。这是大多数用户需要的方式。
-- Root key：用于管理操作和需要 `--sudo` 的命令。Root key 自身不包含租户身份。如果一个配置只有 root key，就必须同时包含 `--account` 和 `--user`；这个 root key 会同时服务于该身份下的普通命令和 `--sudo` 命令。
+- Root key：用于管理操作和需要 `--sudo` 的命令。`api_key` 模式下，即使传入 `--account` 和 `--user`，root key 也不能访问租户数据。只有 `trusted` 服务端接受 root key 认证的数据请求通过这些 header 指定身份。
 - User key + root key：适合一个配置同时支持日常数据操作和偶尔的管理操作。普通命令使用 user key，`--sudo` 命令使用 root key，并带上配置中的 account 和 user。
 
 ## 手动配置
@@ -302,13 +302,13 @@ printf '%s' "$API_KEY" | ov config add custom --name <CONFIG-NAME> --url <REMOTE
 
 把 API Key 写入 stdin。如果 key 已经存在于当前 shell 环境变量中，可以改用 `--api-key-env <API-KEY-ENV-VAR>`。
 
-如果用户只提供 root API key，需要同时提供目标 account 和 user：
+对于 `trusted` 模式的自建服务，仅配置 root key 时还需提供目标 account 和 user。若服务端采用 `api_key` 模式，普通数据命令应改用 user/admin key：
 
 ```bash
 ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
-把 root API key 写入 stdin。Root key 需要显式 `--account` 和 `--user`，这样普通 CLI 命令才知道以哪个身份执行。
+把 trusted 部署的 root API key 写入 stdin；account 和 user 用于指定 trusted 数据请求的调用者身份。
 
 如果用户同时拥有 user key 和 root key，可以把两者放在同一个配置里：
 

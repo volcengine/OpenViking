@@ -314,7 +314,7 @@ curl -X POST http://localhost:1933/api/v1/skills \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()

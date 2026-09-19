@@ -181,7 +181,7 @@ Tags must use strict `k=v` strings. When multiple tags are provided, `find()` re
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking.retrieve import ContextType
 from openviking_sdk import TextPart
 
@@ -459,7 +459,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking.retrieve import ContextType
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -838,7 +838,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -980,7 +980,7 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1088,7 +1088,7 @@ Retrieval results usually only contain L0 summaries, you can progressively load 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1132,7 +1132,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 ### Use Specific Queries
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1147,7 +1147,7 @@ results = client.find(query="auth")
 ### Scope Your Searches
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1162,7 +1162,7 @@ results = client.find(
 ### Use Session Context for Conversations
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")

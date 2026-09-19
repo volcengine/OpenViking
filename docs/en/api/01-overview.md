@@ -115,32 +115,32 @@ Configuration field description:
 | `api_key` | API Key | `null` (no auth) |
 | `account` | Default account header for tenant-scoped requests | `null` |
 | `user` | Default user header for tenant-scoped requests | `null` |
-| `timeout` | HTTP request timeout in seconds | `600.0` |
+| `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
 See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
 
 #### Using Python SDK Client Without Configuration File
 
-`SyncHTTPClient` and `AsyncHTTPClient` support operating completely without relying on the `ovcli.conf` configuration file, by **explicitly passing all parameters** during initialization:
+`SyncHTTPClient` and `AsyncHTTPClient` work without an `ovcli.conf` file. Install the standalone SDK in the Python environment that runs your code:
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
-    url="http://localhost:1933",          # Explicitly provided
-    api_key="your-key",                    # Explicitly provided (api_key usually identifies user identity)
-    timeout=30.0,                          # Don't use default 600.0
-    extra_headers={}                       # Pass empty dict instead of None, useful for gateway auth in some scenarios
+    url="http://localhost:1933",
+    api_key="your-key",
+    timeout=30.0,
+    extra_headers={},
 )
 client.initialize()
 ```
 
-⚠️ **Note**: The client will attempt to load the configuration file if any of the following conditions are met:
-- `url` is `None`
-- `api_key` is `None`
-- `timeout` equals `600.0` (default value)
-- `extra_headers` is `None`
+The SDK still reads an existing `ovcli.conf` when you pass explicit parameters. Explicit values override the corresponding settings; other settings may come from environment variables or the file. Invalid configuration can therefore fail client construction. The default timeout is 60 seconds. See [client configuration](../configuration/02-client.md) for the file location.
 
 #### HTTP Call Examples
 
@@ -186,7 +186,7 @@ openviking -o json ls viking://resources/
 ### Client-Server Mode
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
@@ -260,11 +260,17 @@ openviking ls viking://resources/
 
 ### JSON Mode (`--output json`)
 
-All commands output formatted JSON, matching the `result` structure of API responses:
+By default, `-o json` uses compact output with an `{ok, result}` wrapper:
 
 ```bash
 openviking -o json ls viking://resources/
-# [{ "name": "...", "size": 100, ... }, ...]
+# {"ok":true,"result":[{"name":"...","size":100,...},...]}
+```
+
+Use `--compact=false` to return the unwrapped result as formatted JSON:
+
+```bash
+openviking -o json --compact=false ls viking://resources/
 ```
 
 The default output format can be set in `ovcli.conf`:
@@ -276,7 +282,7 @@ The default output format can be set in `ovcli.conf`:
 }
 ```
 
-### Compact Mode (`--compact`, `-c`)
+### Compact Mode (`--compact`, `-c`, enabled by default)
 
 - When `--output=json`: Compact JSON format + `{ok, result}` wrapper, suitable for scripts
 - When `--output=table`: Simplified representation for table output (e.g., removing empty columns)

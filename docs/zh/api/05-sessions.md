@@ -96,7 +96,7 @@ curl -X POST http://localhost:1933/api/v1/sessions \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 # 使用 HTTP 客户端
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -305,7 +305,7 @@ curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -730,7 +730,7 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/context?token_budget
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -840,7 +840,7 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/archives/archive_002
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -958,7 +958,7 @@ curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -1116,7 +1116,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import ContextPart, TextPart
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")

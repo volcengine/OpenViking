@@ -182,7 +182,7 @@ Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` �
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking.retrieve import ContextType
 from openviking_sdk import TextPart
 
@@ -461,7 +461,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking.retrieve import ContextType
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -839,7 +839,7 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -981,7 +981,7 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1063,7 +1063,7 @@ openviking glob "**/*.md" -f tags
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1107,7 +1107,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 ### 使用具体的查询
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1122,7 +1122,7 @@ results = client.find(query="auth")
 ### 限定搜索范围
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1137,7 +1137,7 @@ results = client.find(
 ### 在对话中使用会话上下文
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")

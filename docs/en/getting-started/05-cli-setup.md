@@ -43,7 +43,7 @@ Choose this when you connect to a custom OpenViking server hosted somewhere othe
 
 - Server URL is provided by the user or server administrator.
 - API key may be required.
-- Root-key-only configs require `--account` and `--user`.
+- Root-key-only data access requires a `trusted` server and explicit `--account` and `--user`; `api_key` servers require a user/admin key for data access.
 
 ### Local Custom
 
@@ -125,7 +125,7 @@ On macOS and Linux, the global npm binary directory is usually `$(npm prefix -g)
 OpenViking CLI configs can hold a user key, a root key, or both.
 
 - User key: use this for normal data commands such as `ov add-resource`, `ov find`, and `ov tree`. The server derives the identity from the key, so you usually do not pass `--account` or `--user`. This is what most users want.
-- Root key: use this for admin work and commands that require `--sudo`. A root key has no built-in tenant identity. If a config only has a root key, it must also include `--account` and `--user`; that root key then serves normal commands for that identity and `--sudo` commands.
+- Root key: use this for admin work and commands that require `--sudo`. In `api_key` mode, root keys cannot access tenant data, even with `--account` and `--user`. Only a `trusted` server accepts those identity headers for root-key-authenticated data access.
 - User key plus root key: use this when the same config should support daily data work and occasional admin work. Normal commands use the user key. `--sudo` commands use the root key with the configured account and user.
 
 ## Manual Setup
@@ -302,13 +302,13 @@ printf '%s' "$API_KEY" | ov config add custom --name <CONFIG-NAME> --url <REMOTE
 
 Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env <API-KEY-ENV-VAR>` instead.
 
-For a custom server where the user gives you only a root API key, include the target account and user:
+For a custom server in `trusted` mode, a root-only config must include the target account and user. For an `api_key` server, obtain a user/admin key for normal data commands instead:
 
 ```bash
 ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
-Write the root API key to stdin. Root keys require explicit `--account` and `--user` so normal CLI commands know which identity to use.
+Write the trusted deployment's root API key to stdin. The account and user identify the caller for trusted data requests.
 
 For a custom server where the user has both a user key and a root key, store both in one config:
 

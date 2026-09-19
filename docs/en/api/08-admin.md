@@ -549,7 +549,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -684,7 +684,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -790,7 +790,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -900,7 +900,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1046,7 +1046,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&pag
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1150,7 +1150,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1250,7 +1250,7 @@ curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -1348,7 +1348,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
