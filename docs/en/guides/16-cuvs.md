@@ -4,7 +4,7 @@ The `cuvs` backend keeps OpenViking's embedded record store, scalar indexes, spa
 
 ## Requirements and installation
 
-Use Linux x86_64 or aarch64 with a supported NVIDIA GPU and a compatible CUDA driver. CUDA 12 packages require CUDA 12.2 or newer; CUDA 13 packages require the matching CUDA 13 environment. Check the [cuVS installation requirements](https://docs.nvidia.com/cuvs/installation) and [Python package guide](https://docs.nvidia.com/cuvs/installation/python) for the selected release. Current cuVS source builds require Ampere or newer GPUs.
+Use Linux x86_64 or aarch64 with a supported NVIDIA GPU and a compatible CUDA driver. Check the [cuVS installation requirements](https://docs.nvidia.com/cuvs/installation) and [Python package guide](https://docs.nvidia.com/cuvs/installation/python) for the selected release. Current cuVS source builds require CUDA Toolkit 12.2 or newer and Ampere or newer GPUs; package requirements depend on the chosen release.
 
 Install the package matching the host CUDA major version:
 
