@@ -1,31 +1,42 @@
-<div align="center">
-
-<a href="https://openviking.ai/" target="_blank">
-  <picture>
-    <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
-  </picture>
-</a>
-
-### OpenViking：AI 智能体的上下文数据库
-
-[English](README.md) / 中文 / [日本語](README_JA.md)
-
-<a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.ai/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a>
-
-[![](https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff\&labelColor=black\&logo=github\&style=flat-square)](https://github.com/volcengine/OpenViking/releases)
-[![](https://img.shields.io/github/stars/volcengine/OpenViking?labelColor\&style=flat-square\&color=ffcb47)](https://github.com/volcengine/OpenViking)
-[![](https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black\&style=flat-square\&color=ff80eb)](https://github.com/volcengine/OpenViking/issues)
-[![](https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/graphs/contributors)
-[![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
-[![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
-
-👋 加入我们的社区
-
-📱 <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群">飞书群</a> · <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
-
-<a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-</div>
+<table width="100%">
+  <tr>
+    <td align="center" valign="middle" width="30%">
+      <a href="https://openviking.ai/" target="_blank">
+        <picture>
+          <img alt="OpenViking" src="docs/images/ov-logo.png" width="180">
+        </picture>
+      </a>
+    </td>
+    <td align="center" valign="middle" width="70%">
+      <h3>OpenViking：AI 智能体的上下文数据库</h3>
+      <p>
+        <a href="README.md">English</a> / 中文 / <a href="README_JA.md">日本語</a>
+        <br>
+        <a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.ai/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a>
+      </p>
+      <p>
+        <a href="https://github.com/volcengine/OpenViking/releases"><img src="https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square" alt="release"></a>
+        <a href="https://github.com/volcengine/OpenViking"><img src="https://img.shields.io/github/stars/volcengine/OpenViking?labelColor&style=flat-square&color=ffcb47" alt="stars"></a>
+        <a href="https://github.com/volcengine/OpenViking/issues"><img src="https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black&style=flat-square&color=ff80eb" alt="issues"></a>
+        <a href="https://github.com/volcengine/OpenViking/graphs/contributors"><img src="https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square" alt="contributors"></a>
+        <a href="https://github.com/volcengine/OpenViking/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square" alt="license"></a>
+        <a href="https://github.com/volcengine/OpenViking/commits/main"><img src="https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square" alt="last commit"></a>
+      </p>
+      <p>
+        <a href="https://railway.com/deploy/openviking"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="30"></a>
+      </p>
+      <p>
+        <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群" title="飞书群"><img src="docs/images/community/lark.svg" width="24" height="24" alt="飞书群"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群" title="微信群"><img src="docs/images/community/wechat.svg" width="24" height="24" alt="微信群"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://discord.com/invite/eHvx8E9XF3" title="Discord"><img src="docs/images/community/discord.svg" width="24" height="24" alt="Discord"></a>&nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://x.com/openvikingai" title="X"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/community/x-dark.svg"><img src="docs/images/community/x.svg" width="24" height="24" alt="X"></picture></a>
+      </p>
+      <p>
+        <a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" width="250" height="55"></a>
+      </p>
+    </td>
+  </tr>
+</table>
 
 ***
 
