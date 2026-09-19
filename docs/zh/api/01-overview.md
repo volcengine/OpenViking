@@ -17,6 +17,12 @@ Client-Server 模式通过 HTTP API 连接 OpenViking 服务器，支持多租�
 
 #### Python SDK 客户端
 
+先在运行代码的 Python 环境中安装独立 SDK：
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
+
 ```python
 from openviking_sdk import SyncHTTPClient
 
@@ -155,12 +161,12 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI 模式
 
-OpenViking CLI （可简写为 ov 命令）连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。CLI 同样从 `ovcli.conf` 读取连接信息（与 HTTP 客户端共享）。
+OpenViking CLI 的命令是 `ov`（通过 `npm install -g @openviking/cli` 安装），连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。CLI 同样从 `ovcli.conf` 读取连接信息（与 HTTP 客户端共享）。
 
 基本用法：
 
 ```bash
-openviking [全局选项] <command> [参数] [命令选项]
+ov [全局选项] <command> [参数] [命令选项]
 ```
 
 全局选项（必须放在命令名之前）：
@@ -173,7 +179,7 @@ openviking [全局选项] <command> [参数] [命令选项]
 示例：
 
 ```bash
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## 生命周期
@@ -194,7 +200,7 @@ client.close()
 CLI 则直接通过命令行调用，需要先配置 ovcli.conf 文件，无需额外初始化客户端：
 
 ```
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## 认证
@@ -248,7 +254,7 @@ Python HTTP SDK（`SyncHTTPClient` 和 `AsyncHTTPClient`）会把该 envelope �
 列表数据渲染为表格，非列表数据 fallback 到格式化 JSON：
 
 ```bash
-openviking ls viking://resources/
+ov ls viking://resources/
 # name          size  mode  isDir  uri
 # .abstract.md  100   420   false  viking://resources/.abstract.md
 ```
@@ -258,14 +264,14 @@ openviking ls viking://resources/
 `-o json` 默认使用紧凑输出，并带有 `{ok, result}` 包装：
 
 ```bash
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 # {"ok":true,"result":[{"name":"...","size":100,...},...]}
 ```
 
 使用 `--compact=false` 返回不带包装的格式化 JSON：
 
 ```bash
-openviking -o json --compact=false ls viking://resources/
+ov -o json --compact=false ls viking://resources/
 ```
 
 可在 `ovcli.conf` 中设置默认输出格式：

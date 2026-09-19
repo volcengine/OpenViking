@@ -53,7 +53,7 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 - 本地无鉴权服务通常不需要 API Key。
 - 除非用户选择本地自定义配置，否则 Agent 不应探测本地端口、curl 本地 health endpoint，或运行启动服务端的命令。
 
-> **注意：** 最近的 CLI 版本（v0.3.23+）要求在运行大多数命令前先保存一个显示语言。在交互式终端中，CLI 会在首次使用时提示你选择；在非交互式 shell（Agent 或 CI）中，任何非豁免命令都会以 `2` 退出，直到你运行 `ov language en` 或 `ov language zh-CN`。只有 `ov language`/`ov lang`、`ov config add|edit|delete|list` 和 `ov config switch <name>` 是豁免的，因此请在上面的 `ov config validate`、`ov health` 和 `ov status` 之前先运行 `ov language <code>`。
+> **注意：** 最近的 CLI 版本（v0.3.23+）要求在运行大多数命令前先保存一个显示语言。在交互式终端中，CLI 会在首次使用时提示你选择；在非交互式 shell（Agent 或 CI）中，任何非豁免命令都会以 `2` 退出，直到你运行 `ov language en` 或 `ov language zh-CN`。只有 `ov language`/`ov lang`、`ov config add|edit|delete|list` 和 `ov config switch <name>` 是豁免的，因此请在下面的 `ov config validate`、`ov health` 和 `ov status` 检查之前先运行 `ov language <code>`。
 
 ## 开始前
 
@@ -98,13 +98,7 @@ npm i -g @openviking/cli
 cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
-npm 包是最轻量的独立 CLI 安装方式。如果你同时需要 Python SDK 或服务端包，Python 包也会提供 `ov`：
-
-```bash
-uv tool install openviking --upgrade
-# 或
-pip install openviking --upgrade --force-reinstall
-```
+npm 包是最轻量的独立 CLI 安装方式。Python SDK 是独立的包——只在有 Python 代码要 import 的地方安装 `openviking-sdk`，它不提供 `ov` 命令。如果这台机器本身跑服务端（`uv tool install openviking`），该安装自带 `ov`，无需再装 CLI。
 
 验证：
 

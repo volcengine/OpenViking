@@ -17,6 +17,12 @@ Client-Server mode connects to an OpenViking server via HTTP API, supporting mul
 
 #### Python SDK Client
 
+Install the standalone SDK in the Python environment that runs your code:
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
+
 ```python
 from openviking_sdk import SyncHTTPClient
 
@@ -160,12 +166,12 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI Mode
 
-The OpenViking CLI (can be abbreviated as `ov` command) connects to an OpenViking server and exposes all operations as shell commands. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
+The OpenViking CLI command is `ov` (installed with `npm install -g @openviking/cli`). It connects to an OpenViking server and exposes all operations as shell commands. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
 
 Basic usage:
 
 ```bash
-openviking [global options] <command> [arguments] [command options]
+ov [global options] <command> [arguments] [command options]
 ```
 
 Global options (must be placed before the command name):
@@ -178,7 +184,7 @@ Global options (must be placed before the command name):
 Example:
 
 ```bash
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## Lifecycle
@@ -199,7 +205,7 @@ client.close()
 The CLI is called directly via the command line, requiring the `ovcli.conf` file to be configured first, with no additional client initialization needed:
 
 ```
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## Authentication
@@ -253,7 +259,7 @@ Python HTTP SDKs (`SyncHTTPClient` and `AsyncHTTPClient`) raise the correspondin
 List data is rendered as tables; non-list data falls back to formatted JSON:
 
 ```bash
-openviking ls viking://resources/
+ov ls viking://resources/
 # name          size  mode  isDir  uri
 # .abstract.md  100   420   False  viking://resources/.abstract.md
 ```
@@ -263,14 +269,14 @@ openviking ls viking://resources/
 By default, `-o json` uses compact output with an `{ok, result}` wrapper:
 
 ```bash
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 # {"ok":true,"result":[{"name":"...","size":100,...},...]}
 ```
 
 Use `--compact=false` to return the unwrapped result as formatted JSON:
 
 ```bash
-openviking -o json --compact=false ls viking://resources/
+ov -o json --compact=false ls viking://resources/
 ```
 
 The default output format can be set in `ovcli.conf`:

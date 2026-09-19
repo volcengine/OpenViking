@@ -53,7 +53,7 @@ Choose this only when the user wants to connect to a custom OpenViking server on
 - API key is usually not needed for a local unauthenticated server.
 - Agents should not probe local ports, curl local health endpoints, or start server commands unless the user chose local custom setup.
 
-> **Note:** Recent CLI versions (v0.3.23+) require a saved display language before most commands will run. In an interactive terminal the CLI prompts you on first use; in a non-interactive shell (agent or CI) any non-exempt command exits `2` until you run `ov language en` or `ov language zh-CN`. Only `ov language`/`ov lang`, `ov config add|edit|delete|list`, and `ov config switch <name>` are exempt, so run `ov language <code>` before the `ov config validate`, `ov health`, and `ov status` checks above.
+> **Note:** Recent CLI versions (v0.3.23+) require a saved display language before most commands will run. In an interactive terminal the CLI prompts you on first use; in a non-interactive shell (agent or CI) any non-exempt command exits `2` until you run `ov language en` or `ov language zh-CN`. Only `ov language`/`ov lang`, `ov config add|edit|delete|list`, and `ov config switch <name>` are exempt, so run `ov language <code>` before the `ov config validate`, `ov health`, and `ov status` checks below.
 
 ## Before You Start
 
@@ -98,13 +98,7 @@ Or build the Rust CLI from source:
 cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
-The npm package is the simplest standalone CLI install. If you also want the Python SDK or server package, the Python package exposes `ov` too:
-
-```bash
-uv tool install openviking --upgrade
-# or
-pip install openviking --upgrade --force-reinstall
-```
+The npm package is the simplest standalone CLI install. The Python SDK is a separate package — install `openviking-sdk` only where Python code imports it; it does not provide the `ov` command. If the machine already runs the server (`uv tool install openviking`), that install ships `ov` as well, so no extra CLI install is needed there.
 
 Verify:
 
