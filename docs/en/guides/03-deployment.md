@@ -293,7 +293,11 @@ What the template sets up:
 - A persistent volume mounted at `/app/.openviking`. The preset config points `storage.workspace` at the volume, so accounts, resources and vector data survive redeploys.
 - An OpenAI-based default config. `OPENAI_API_KEY` is the only value you fill in at deploy time; the admin key `OPENVIKING_ROOT_API_KEY` is generated automatically. After the deploy, read it from the service Variables and connect with `ov config`: use the Railway domain as the server URL and that value as the API key.
 
-First use, no CLI required: open `https://<your-domain>/studio`, sign in with the root key, and use User Management to **Create account** and **Add user** — each user's API key is available there. A fresh deploy only has an empty `default` account, so creating your first account/user in Studio is the expected first step.
+First use — everything happens in the browser, no CLI required:
+
+1. Copy `OPENVIKING_ROOT_API_KEY` from the Railway service Variables and set it at `https://<your-domain>/studio/settings`.
+2. Create an account and user at `https://<your-domain>/studio/users` — the user's API key is shown right there. (A fresh deploy has only an empty `default` account; creating the first account/user is the expected first step.)
+3. Use that user key for everything else: Studio, the `ov` CLI, or the SDKs.
 
 Configuration route 1 (default, recommended): environment injection. The template presets the full `ov.conf` JSON in `OPENVIKING_CONF_CONTENT`, referencing `${OPENAI_API_KEY}` from the environment. To switch providers or models, edit that variable and redeploy. Note that once `ov.conf` exists on the volume it takes precedence: update the file on the volume (`railway ssh`, or `railway service files upload --overwrite`) instead of only changing the variable.
 

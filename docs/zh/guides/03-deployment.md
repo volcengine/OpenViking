@@ -291,7 +291,11 @@ docker compose up -d
 - 在 `/app/.openviking` 挂持久卷，预置配置把 `storage.workspace` 指到卷上，账户、资源和向量数据在 redeploy 后保留。
 - 默认配置走 OpenAI：部署时只需填 `OPENAI_API_KEY`；管理密钥 `OPENVIKING_ROOT_API_KEY` 自动生成，部署完成后在 service Variables 里查看，配合 `ov config` 连接：server URL 用 Railway 分配的域名，API key 用该值。
 
-首次使用不需要 CLI：打开 `https://<你的域名>/studio`，用 root key 登录，在 User Management 里 **Create account**、**Add user**，每个用户的 API key 都能在里面拿到。全新部署只有一个空的 `default` 账户，在 Studio 里建第一个账户和用户就是预期的第一步。
+首次使用全程在浏览器里完成，不需要 CLI：
+
+1. 从 Railway service Variables 复制 `OPENVIKING_ROOT_API_KEY`，在 `https://<你的域名>/studio/settings` 里填入。
+2. 到 `https://<你的域名>/studio/users` 创建账户和用户，用户的 API key 就显示在页面上。（全新部署只有一个空的 `default` 账户，建第一个账户和用户就是预期的第一步。）
+3. 之后拿这个 user key 正常使用：Studio、`ov` CLI 或 SDK 都用它。
 
 配置方法一（默认，推荐）：环境变量注入。模板已把完整 `ov.conf` JSON 预置在 `OPENVIKING_CONF_CONTENT`，其中 api key 以 `${OPENAI_API_KEY}` 引用环境变量。要换 provider/模型，改这个变量后 redeploy。注意卷上已有 `ov.conf` 时以卷上文件为准：用 `railway ssh` 或 `railway service files upload --overwrite` 更新卷上文件，只改环境变量不生效。
 
