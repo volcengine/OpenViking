@@ -281,34 +281,36 @@ docker compose up -d
 
 ### 部署到 Railway
 
-一键部署：点击下方按钮，或打开模板页。
+点击下方按钮一键部署到 Railway：
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/9zDAop)
 
-模板做了什么：
+#### 预置资源与环境
 
-- 拉取官方镜像 `ghcr.io/volcengine/openviking:latest`，监听 1933 端口，Railway 自动分配 HTTPS 域名。
-- 在 `/app/.openviking` 挂持久卷，预置配置把 `storage.workspace` 指到卷上，账户、资源和向量数据在 redeploy 后保留。
-- 默认配置走 OpenAI：部署时只需填 `OPENAI_API_KEY`；管理密钥 `OPENVIKING_ROOT_API_KEY` 自动生成，部署完成后在 service Variables 里查看，配合 `ov config` 连接：server URL 用 Railway 分配的域名，API key 用该值。
+- **服务镜像**：拉取官方镜像 `ghcr.io/volcengine/openviking:latest`，监听 1933 端口，Railway 自动分配 HTTPS 域名。
+- **持久化存储**：挂载持久卷至 `/app/.openviking`，`storage.workspace` 位于该卷上，保证重新部署后数据与配置不丢失。
+- **默认配置**：默认采用 OpenAI 预设。部署时仅需填写 `OPENAI_API_KEY`；管理员密钥 `OPENVIKING_ROOT_API_KEY` 自动生成，部署完成后可在 Railway 的 **Variables** 标签页查看。
 
-首次使用全程在浏览器里完成，不需要 CLI：
+#### 快速初始化（Web Studio）
 
-1. 从 Railway service Variables 复制 `OPENVIKING_ROOT_API_KEY`，在 `https://<你的域名>/studio/settings` 里填入。
-2. 到 `https://<你的域名>/studio/users` 创建账户和用户，用户的 API key 就显示在页面上。（全新部署只有一个空的 `default` 账户，建第一个账户和用户就是预期的第一步。）
-3. 之后拿这个 user key 正常使用：Studio、`ov` CLI 或 SDK 都用它。
+部署完成后，在浏览器中即可完成首次初始化：
 
-配置方法一（默认，推荐）：环境变量注入。模板已把完整 `ov.conf` JSON 预置在 `OPENVIKING_CONF_CONTENT`，其中 api key 以 `${OPENAI_API_KEY}` 引用环境变量。要换 provider/模型，改这个变量后 redeploy。注意卷上已有 `ov.conf` 时以卷上文件为准：用 `railway ssh` 或 `railway service files upload --overwrite` 更新卷上文件，只改环境变量不生效。
+1. **配置管理员密钥**：从 Railway 服务变量中复制 `OPENVIKING_ROOT_API_KEY`，访问 `https://<你的域名>/studio/settings` 并保存。
+2. **创建用户**：进入 `https://<你的域名>/studio/users` 创建首个账户与用户，系统将展示该用户的 API Key。
+3. **开始使用**：后续访问 Web Studio、`ov` CLI 或 SDK 时，均使用上述用户的 API Key。
 
-配置方法二（进阶）：容器内向导。清空 `OPENVIKING_CONF_CONTENT` 时，服务以 pending 状态启动，所有 HTTP 请求返回 503 + 修复指引 JSON。用 `railway ssh` 进容器执行 `openviking-server init` 生成配置，文件写入后约 5 秒内服务原地转入正常启动，无需重启。该路线下 Railway healthcheck 会在 pending 期间失败，需先移除 healthcheck path 或调大 `RAILWAY_HEALTHCHECK_TIMEOUT_SEC`。
+#### 配置管理
 
-成本（2026-09 官方价格，可能变动）：
+- **环境变量注入（推荐）**：模板在 `OPENVIKING_CONF_CONTENT` 中预置了完整配置并引用 `${OPENAI_API_KEY}`。如需切换模型或供应商，调整环境变量后重新部署即可。
+- **修改已有配置文件**：若持久卷中已生成 `ov.conf`，服务启动时将优先读取卷中配置。可通过 `railway ssh` 或 `railway service files upload --overwrite` 更新卷内文件。
 
-- 用量价：RAM $10/GB/月、vCPU $20/核/月、卷 $0.15/GB/月。
-- Free 计划每月只有 $1 额度，**不足以常驻运行 OpenViking**，不要按"免费部署"预期。
-- Trial（注册一次性 $5、单服务上限 1GB RAM）可短期评估数周；trial 额度过期 30 天后卷会被删除，注意及时导出数据（`ov export`）。
-- 常驻使用建议 Hobby（$5/月含 $5 用量）：以 0.5–1GB 常驻内存估算，实际月成本约 $5–15。模板默认 `OPENVIKING_WITH_BOT=0` 可降低占用，具体以部署后 Railway metrics 为准。
+#### 资源与费用参考
 
-安全提示：服务绑定 `0.0.0.0` 且暴露公网，`OPENVIKING_ROOT_API_KEY` 必须保密；对外分享 URL 前先阅读[公网访问](12-public-access.md)。
+- **推荐配置**：生产或长期运行建议选择 **Hobby** 计划（$5/月基础费用，含 $5 用量）。以 0.5–1 GB 常驻内存估算，月均成本约 $5–$15。
+- **内存优化**：模板默认设置 `OPENVIKING_WITH_BOT=0` 以降低常驻内存开销。
+- **免费额度说明**：Railway Free 计划（$1/月额度）不足以支持服务常驻运行；Trial 赠金适合短期体验评估，额度到期 30 天后持久卷将被清理，请注意按需备份数据。
+
+> **安全提示**：服务部署后默认监听并暴露于公网。请妥善保管 `OPENVIKING_ROOT_API_KEY`，在对外开放前请阅读[公网访问安全指南](12-public-access.md)。
 
 ### 多实例部署注意事项
 

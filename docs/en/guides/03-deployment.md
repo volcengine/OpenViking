@@ -283,34 +283,36 @@ After startup, you can access:
 
 ### Deploy on Railway
 
-One-click deploy: click the badge below or open the template page.
+Click the badge below to deploy OpenViking on Railway:
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/9zDAop)
 
-What the template sets up:
+#### Provisioned Resources & Defaults
 
-- The official image `ghcr.io/volcengine/openviking:latest`, listening on port 1933, with an HTTPS domain assigned by Railway.
-- A persistent volume mounted at `/app/.openviking`. The preset config points `storage.workspace` at the volume, so accounts, resources and vector data survive redeploys.
-- An OpenAI-based default config. `OPENAI_API_KEY` is the only value you fill in at deploy time; the admin key `OPENVIKING_ROOT_API_KEY` is generated automatically. After the deploy, read it from the service Variables and connect with `ov config`: use the Railway domain as the server URL and that value as the API key.
+- **Container Image**: Uses official image `ghcr.io/volcengine/openviking:latest`, listening on port 1933 with an automatically assigned HTTPS domain.
+- **Persistent Storage**: Mounts a persistent volume at `/app/.openviking` (`storage.workspace`), ensuring accounts, resources, and vector data persist across redeployments.
+- **Default Configuration**: Preconfigured with OpenAI defaults. `OPENAI_API_KEY` is the only required input during deployment. The admin key `OPENVIKING_ROOT_API_KEY` is generated automatically and viewable in the **Variables** tab.
 
-First use — everything happens in the browser, no CLI required:
+#### Quick Start (Web Studio)
 
-1. Copy `OPENVIKING_ROOT_API_KEY` from the Railway service Variables and set it at `https://<your-domain>/studio/settings`.
-2. Create an account and user at `https://<your-domain>/studio/users` — the user's API key is shown right there. (A fresh deploy has only an empty `default` account; creating the first account/user is the expected first step.)
-3. Use that user key for everything else: Studio, the `ov` CLI, or the SDKs.
+Initial bootstrap can be completed entirely within the browser:
 
-Configuration route 1 (default, recommended): environment injection. The template presets the full `ov.conf` JSON in `OPENVIKING_CONF_CONTENT`, referencing `${OPENAI_API_KEY}` from the environment. To switch providers or models, edit that variable and redeploy. Note that once `ov.conf` exists on the volume it takes precedence: update the file on the volume (`railway ssh`, or `railway service files upload --overwrite`) instead of only changing the variable.
+1. **Set Admin Key**: Copy `OPENVIKING_ROOT_API_KEY` from Railway Variables, open `https://<your-domain>/studio/settings`, and save it.
+2. **Create User**: Navigate to `https://<your-domain>/studio/users` to create your initial account and user. The user API key will be displayed immediately.
+3. **Start Using**: Use this user API key for subsequent access via Web Studio, the `ov` CLI, and SDKs.
 
-Configuration route 2 (advanced): the in-container wizard. Clear `OPENVIKING_CONF_CONTENT` and the service starts in a pending state where every HTTP request returns 503 with a fix-it JSON. Run `openviking-server init` inside the container via `railway ssh`; within about 5 seconds of the config file appearing, the real server starts in place — no restart needed. On this route the Railway healthcheck fails during the pending phase, so remove the healthcheck path or raise `RAILWAY_HEALTHCHECK_TIMEOUT_SEC` first.
+#### Configuration Management
 
-Cost (official prices as of 2026-09, subject to change):
+- **Environment Injection (Recommended)**: The template pre-populates `OPENVIKING_CONF_CONTENT` with a complete configuration referencing `${OPENAI_API_KEY}`. Update the variable and redeploy to switch models or providers.
+- **Volume Configuration**: If `ov.conf` already exists on the persistent volume, it takes precedence. Update the file directly using `railway ssh` or `railway service files upload --overwrite`.
 
-- Usage pricing: RAM $10/GB/month, vCPU $20/core/month, volume $0.15/GB/month.
-- The Free plan includes only $1 of monthly usage — **not enough to keep OpenViking running continuously**. Do not plan on a free deployment.
-- The Trial ($5 one-time, 1 GB RAM per service) is fine for a few weeks of evaluation; volumes are deleted 30 days after trial credits expire, so export your data (`ov export`) in time.
-- For continuous use, the Hobby plan ($5/month including $5 of usage) lands at roughly $5–15/month at 0.5–1 GB of resident memory. `OPENVIKING_WITH_BOT=0` (the template default) lowers the footprint; check Railway metrics after deploying.
+#### Pricing & Resource Sizing
 
-Security note: the server binds `0.0.0.0` and is exposed to the public internet. Keep `OPENVIKING_ROOT_API_KEY` secret, and read the [public access guide](12-public-access.md) before sharing the URL.
+- **Recommended Plan**: For continuous hosting, the **Hobby** plan ($5/mo including $5 usage credits) is recommended, typically running at $5–$15/month with 0.5–1 GB resident memory.
+- **Memory Footprint**: The template sets `OPENVIKING_WITH_BOT=0` by default to minimize memory consumption.
+- **Free/Trial Limitations**: Railway Free plan ($1/mo credit) is insufficient for continuous service. Trial credits ($5 one-time) are suitable for short-term evaluation; note that volumes are purged 30 days after trial expiration.
+
+> **Security Note**: The service is publicly accessible by default. Keep `OPENVIKING_ROOT_API_KEY` confidential and consult the [public access guide](12-public-access.md) before production rollout.
 
 ### Multi-instance notes
 
