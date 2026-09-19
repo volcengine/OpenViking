@@ -20,6 +20,46 @@ const results = await client.search("deployment guide", {
 });
 ```
 
+## HTTP proxies
+
+The SDK uses the runtime's global `fetch` by default. On Node.js 22.21+ or
+24.0+, enable [Node.js environment proxy support](https://nodejs.org/learn/http/enterprise-network-configuration)
+before the process starts:
+
+```bash
+HTTP_PROXY=http://proxy.example.com:8080 \
+HTTPS_PROXY=http://proxy.example.com:8080 \
+NO_PROXY=localhost,127.0.0.1 \
+NODE_USE_ENV_PROXY=1 node app.js
+```
+
+For Node.js 18.17+ versions without built-in environment proxy support, configure
+an [Undici `EnvHttpProxyAgent`](https://github.com/nodejs/undici/blob/v6.21.3/docs/docs/api/EnvHttpProxyAgent.md)
+before creating the client:
+
+```bash
+npm install undici@^6.21.3
+```
+
+```ts
+import { OpenVikingClient } from "@openviking/sdk";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+
+const proxyDispatcher = new EnvHttpProxyAgent();
+setGlobalDispatcher(proxyDispatcher);
+
+const client = new OpenVikingClient({
+  baseUrl: "https://openviking.example.com",
+  apiKey: process.env.OPENVIKING_API_KEY,
+});
+```
+
+Set `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` before constructing the
+dispatcher. This changes the process-wide Undici dispatcher. Applications that
+already own their transport policy can instead pass a WHATWG-compatible
+proxy-aware function through `ClientConfig.fetch`. Do not store proxy
+credentials in source code.
+
 The client follows the same HTTP API, identity headers, response envelope and error codes as `openviking-sdk` for Python and the Go SDK. It supports resources and skills, filesystem/content operations, retrieval, sessions, OVPack files, snapshots, tasks, watches, observer status and tenant administration.
 
 Existing local file paths are uploaded automatically, and local directories are zipped before upload. Other strings are sent to the server as URLs or server-side paths.
