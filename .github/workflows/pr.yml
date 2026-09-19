@@ -139,6 +139,7 @@ jobs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
+      mcp_changed: ${{ steps.check.outputs.mcp_changed }}
       openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
       sdk_python_changed: ${{ steps.check.outputs.sdk_python_changed }}
     steps:
@@ -190,6 +191,18 @@ jobs:
           else
             echo "No LangChain integration changes detected."
             echo "langchain_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+          MCP_PATTERN="bot/vikingbot/agent/tools/mcp\.py|openviking/server/mcp_endpoint\.py|tests/unit/test_vikingbot_mcp\.py|tests/unit/test_mcp_server_app\.py|pyproject\.toml|uv\.lock|\.github/workflows/pr\.yml"
+          MCP_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$MCP_PATTERN" || true)
+
+          if [ -n "$MCP_CHANGED_FILES" ]; then
+            echo "MCP client changes detected:"
+            echo "$MCP_CHANGED_FILES"
+            echo "mcp_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No MCP client changes detected."
+            echo "mcp_changed=false" >> $GITHUB_OUTPUT
           fi
 
           OPENCLAW_PATTERN="examples/openclaw-plugin/|examples/memory-plugin-shared/(lib/|sync\.mjs)|\.github/workflows/pr\.yml"
@@ -266,6 +279,30 @@ jobs:
     with:
       os_json: '["ubuntu-24.04"]'
       python_json: '["3.11"]'
+
+  mcp-tests:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.mcp_changed == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install test dependencies
+        run: uv sync --frozen --extra test
+
+      - name: Run MCP compatibility regression tests
+        run: >-
+          uv run pytest -q -o addopts=''
+          tests/unit/test_vikingbot_mcp.py
+          tests/unit/test_mcp_server_app.py
 
   langchain-tests:
     needs: check-deps

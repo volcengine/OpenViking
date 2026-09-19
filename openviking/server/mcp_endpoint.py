@@ -25,7 +25,7 @@ from pathlib import PurePosixPath
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
     AudioContent,
@@ -228,11 +228,7 @@ class _IdentityASGIMiddleware:
 # MCP server tools (aligned with vikingbot/agent/tools/ov_file.py)
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(
-    "openviking",
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    stateless_http=True,
-)
+mcp = MCPServer("openviking")
 
 
 # -- find / search ---------------------------------------------------------
@@ -1609,6 +1605,9 @@ def create_mcp_app() -> ASGIApp:
     IMPORTANT: call `mcp_lifespan()` inside the FastAPI lifespan BEFORE
     serving requests. The session manager task group must be initialized.
     """
-    starlette_app = mcp.streamable_http_app()
+    starlette_app = mcp.streamable_http_app(
+        stateless_http=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
     handler = starlette_app.routes[0].app
     return _IdentityASGIMiddleware(handler)

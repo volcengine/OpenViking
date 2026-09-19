@@ -10,7 +10,7 @@ import asyncio
 from contextlib import AsyncExitStack
 from typing import Any
 
-import httpx
+import httpx2
 from loguru import logger
 
 from vikingbot.agent.tools.base import Tool, ToolContext
@@ -86,7 +86,7 @@ class MCPToolWrapper(Tool):
         self._original_name = tool_def.name
         self._name = f"mcp_{server_name}_{tool_def.name}"
         self._description = tool_def.description or tool_def.name
-        raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
+        raw_schema = tool_def.input_schema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
         self._tool_timeout = tool_timeout
 
@@ -176,16 +176,16 @@ async def connect_mcp_servers(
 
                 def httpx_client_factory(
                     headers: dict[str, str] | None = None,
-                    timeout: httpx.Timeout | None = None,
-                    auth: httpx.Auth | None = None,
+                    timeout: httpx2.Timeout | None = None,
+                    auth: httpx2.Auth | None = None,
                     cfg_headers: dict[str, str] = cfg_headers,
-                ) -> httpx.AsyncClient:
+                ) -> httpx2.AsyncClient:
                     merged_headers = {
                         "Accept": "application/json, text/event-stream",
                         **cfg_headers,
                         **(headers or {}),
                     }
-                    return httpx.AsyncClient(
+                    return httpx2.AsyncClient(
                         headers=merged_headers or None,
                         follow_redirects=True,
                         timeout=timeout,
@@ -196,16 +196,16 @@ async def connect_mcp_servers(
                     sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
                 )
             elif transport_type == "streamableHttp":
-                # Always provide an explicit httpx client so MCP HTTP transport does not
-                # inherit httpx's default 5s timeout and preempt the higher-level tool timeout.
+                # Always provide an explicit httpx2 client so MCP HTTP transport does not
+                # apply a client timeout before the higher-level tool timeout.
                 http_client = await stack.enter_async_context(
-                    httpx.AsyncClient(
+                    httpx2.AsyncClient(
                         headers=cfg.headers or None,
                         follow_redirects=True,
                         timeout=None,
                     )
                 )
-                read, write, _ = await stack.enter_async_context(
+                read, write = await stack.enter_async_context(
                     streamable_http_client(cfg.url, http_client=http_client)
                 )
             else:
