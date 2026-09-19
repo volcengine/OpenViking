@@ -15,6 +15,7 @@ agent-plugins/
 │   └── shared/                          # 由 examples/memory-plugin-shared/lib 生成
 ├── skills/openviking-memory/SKILL.md    # 教模型完成「召回 + 沉淀」闭环
 ├── skills/ov-experience-memory/SKILL.md # 检索并应用以往任务的 Experience
+├── skills/ov-memory-troubleshoot/SKILL.md # 追溯记忆问题的会话依据
 └── plugin.test.mjs                      # node --test 规范一致性校验
 ```
 
@@ -25,7 +26,7 @@ agent-plugins/
 1. 准备一个可访问的 OpenViking 服务。还没有的话，先按 [快速开始](../getting-started/02-quickstart.md) 部署；本地默认端点是 `http://127.0.0.1:1933`。
 2. 让你的 Agent Plugins 客户端指向 `agent-plugins/` 目录。各客户端的安装命令或插件目录不同，请查阅其文档。加载时客户端会：
    - 按 `mcp.json` 注册名为 `openviking` 的 MCP server，以 stdio 方式运行 `node <plugin>/servers/mcp-proxy.mjs`；
-   - 从 `skills/` 发现 `openviking-memory` 和 `ov-experience-memory` 技能。
+   - 从 `skills/` 发现 `openviking-memory`、`ov-experience-memory` 和 `ov-memory-troubleshoot` 技能。
 3. 配置凭据（见下节）后开始会话。模型即可使用 `find` / `search` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`，较新的服务端还提供 `tree` / `write` / `edit`。
 
 ## 为什么用 stdio 代理，而不是 `streamable-http`
