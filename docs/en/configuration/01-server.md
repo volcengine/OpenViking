@@ -36,7 +36,7 @@ The server reads the file at startup. Restart the server after changing models, 
 }
 ```
 
-Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility. Known fields still validate types and values; misspelled field names are also ignored.
+Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility. Known fields still validate types and values. Misspelled field names are also ignored, but the server logs a warning listing every field it did not apply, with a suggestion when a near match exists.
 
 ## Top-Level Settings
 

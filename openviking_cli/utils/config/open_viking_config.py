@@ -13,7 +13,11 @@ from openviking_cli.session.user_id import UserIdentifier
 
 from .cache_config import CacheConfig
 from .config_loader import resolve_config_path
-from .config_utils import format_validation_error
+from .config_utils import (
+    format_validation_error,
+    warn_unknown_config_fields,
+    warn_unknown_fields,
+)
 from .consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -454,6 +458,13 @@ class OpenVikingConfig(BaseModel):
                 "webfeed",
             ]
 
+            warn_unknown_config_fields(
+                data=config_copy,
+                model=cls,
+                extra_valid_fields={"server", "bot", "parsers"},
+                logger=_get_config_logger(),
+            )
+
             # Remove sections managed by other loaders (e.g. server config)
             config_copy.pop("server", None)
             config_copy.pop("bot", None)
@@ -473,6 +484,12 @@ class OpenVikingConfig(BaseModel):
                         "Config field 'parsers.excel' was removed and is ignored; "
                         "spreadsheet parsing now uses 'parsers.anydoc'."
                     )
+                warn_unknown_fields(
+                    data=parser_configs,
+                    valid_fields=set(parser_types),
+                    path_prefix="parsers",
+                    logger=_get_config_logger(),
+                )
             for parser_type in parser_types:
                 if parser_type in config_copy:
                     parser_configs[parser_type] = config_copy.pop(parser_type)
@@ -511,6 +528,13 @@ class OpenVikingConfig(BaseModel):
                 if parser_type in parser_configs:
                     parser_data = parser_configs[parser_type]
                     config_class = getattr(instance, parser_type).__class__
+                    if isinstance(parser_data, dict):
+                        warn_unknown_fields(
+                            data=parser_data,
+                            valid_fields=set(config_class.__dataclass_fields__),
+                            path_prefix=f"parsers.{parser_type}",
+                            logger=_get_config_logger(),
+                        )
                     setattr(instance, parser_type, config_class.from_dict(parser_data))
 
             # Check dimension consistency
