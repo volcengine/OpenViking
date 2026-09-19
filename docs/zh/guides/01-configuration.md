@@ -414,7 +414,7 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 
 **gemini provider 配置示例:**
 
-> **注意：** 需安装 `pip install "google-genai>=1.0.0"`。异步批量嵌入：`pip install "openviking[gemini-async]"`。
+> **注意：** 需要在服务端环境安装 `google-genai>=1.0.0`——uv 安装：`uv tool install openviking --upgrade --with "google-genai>=1.0.0"`；pip 安装：`pip install "google-genai>=1.0.0"`。异步批量嵌入改用 extra：`uv tool install "openviking[gemini-async]" --upgrade` 或 `pip install "openviking[gemini-async]"`。
 
 ```json
 {
@@ -1496,7 +1496,7 @@ acl_inherited_grants
 <summary><b>openGauss</b></summary>
 
 需要 openGauss 服务端支持原生 `vector` 类型，并使用允许远程连接的数据库用户。
-可通过 `pip install "openviking[opengauss]"` 安装可选驱动。
+在服务端环境安装可选驱动：`uv tool install "openviking[opengauss]" --upgrade`（uv）或 `pip install "openviking[opengauss]"`（pip）。
 官方容器中的初始 `omm` 用户可能限制远程登录，必要时请为 OpenViking 创建普通数据库用户。
 
 ```json
@@ -1627,14 +1627,14 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
 trusted 网关部署下，也可以在单次命令里用 CLI 参数覆盖这些身份字段：
 
 ```bash
-openviking --account acme --user alice ls viking://
+ov --account acme --user alice ls viking://
 ```
 
 对于 `add-resource`，上传过滤参数会与 `ovcli.conf` 默认值做合并（追加），不会覆盖：
 
 ```bash
 # ovcli.conf: upload.exclude="*.log"
-openviking add-resource ./docs --exclude "*.tmp"
+ov add-resource ./docs --exclude "*.tmp"
 # 实际发送给服务端的 exclude: "*.log,*.tmp"
 ```
 

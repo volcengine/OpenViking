@@ -444,7 +444,7 @@ OpenViking also expects dense float vectors throughout storage and retrieval, so
 
 **gemini provider example:**
 
-> **Note:** Requires `pip install "google-genai>=1.0.0"`. For async batching: `pip install "openviking[gemini-async]"`.
+> **Note:** Requires `google-genai>=1.0.0` in the server environment — uv install: `uv tool install openviking --upgrade --with "google-genai>=1.0.0"`; pip install: `pip install "google-genai>=1.0.0"`. For async batching use the extra instead: `uv tool install "openviking[gemini-async]" --upgrade` or `pip install "openviking[gemini-async]"`.
 
 ```json
 {
@@ -1521,7 +1521,7 @@ For existing remote collections, including Volcengine VikingDB, provision these 
 <summary><b>openGauss</b></summary>
 
 Requires an openGauss server with native `vector` support and a remote-capable database user.
-Install the optional driver with `pip install "openviking[opengauss]"`.
+Install the optional driver in the server environment: `uv tool install "openviking[opengauss]" --upgrade` (uv) or `pip install "openviking[opengauss]"` (pip).
 In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
 
 ```json
@@ -1655,14 +1655,14 @@ Local directory uploads respect `.gitignore` files (root and nested). `ignore_di
 For trusted gateway deployments, CLI flags can override these identity fields per command:
 
 ```bash
-openviking --account acme --user alice ls viking://
+ov --account acme --user alice ls viking://
 ```
 
 For `add-resource`, upload filter flags are merged additively with `ovcli.conf` defaults:
 
 ```bash
 # ovcli.conf: upload.exclude="*.log"
-openviking add-resource ./docs --exclude "*.tmp"
+ov add-resource ./docs --exclude "*.tmp"
 # effective exclude sent to server: "*.log,*.tmp"
 ```
 
