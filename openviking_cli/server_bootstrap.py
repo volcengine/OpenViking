@@ -95,6 +95,14 @@ def main():
             ingest_app(args=sys.argv[2:], prog_name="openviking-server ingest")
         return
 
+    # `openviking-server scan ...` reports on a local directory (read-only, server-free).
+    if len(sys.argv) > 1 and sys.argv[1] == "scan":
+        from openviking.scan.cli import app as scan_app
+
+        with bind_log_execution_trace():
+            scan_app(args=sys.argv[2:], prog_name="openviking-server scan")
+        return
+
     if not any(arg in ("-h", "--help", "--version") for arg in sys.argv[1:]):
         _maybe_offer_init()
 
