@@ -331,9 +331,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false,
-    "v2_lock_retry_interval_seconds": 0.2,
-    "v2_lock_max_retries": 0
+    "link_enabled": false
   }
 }
 ```
@@ -349,8 +347,6 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
-| `v2_lock_retry_interval_seconds` | number，`>= 0` | `0.2` | 记忆锁获取失败后的重试间隔 |
-| `v2_lock_max_retries` | integer，`>= 0` | `0` | 最大重试次数；`0` 表示不限次数 |
 
 ## 解析器配置
 
