@@ -414,8 +414,10 @@ ov backup ./backups/before-encryption.ovpack
 2. Stop OpenViking. Enable encryption and point the storage configuration at a **new, empty** workspace/backend. Keep the original data and encryption key backup until verification is complete.
 3. Start the encrypted environment. In API key mode, first create the target account and a restore operator with an admin key, then point the CLI at the target using that key, as described in [Full Backup and Restore](09-ovpack.md#full-backup-and-restore). Restore writes the package content through the encrypted storage layer:
 
+Account initialization creates scope directories, so `fail` would reject this restore. Confirm that the target contains only the newly created account's initial content before using `overwrite` below. If it already contains business data, stop and follow the target-backup and conflict-review steps in the OVPack guide instead.
+
 ```bash
-ov restore ./backups/before-encryption.ovpack --on-conflict fail
+ov restore ./backups/before-encryption.ovpack --on-conflict overwrite
 ```
 
 4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, and watches; recreate or validate those separately.

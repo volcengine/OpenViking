@@ -171,12 +171,14 @@ curl -f -X POST http://localhost:1933/api/v1/admin/accounts \
 }
 ```
 
+创建 account 已会生成 scope 目录。因此，即使新 account 还没有业务数据，`fail` 也会拒绝恢复；使用不同的恢复操作用户不能避开这个 scope 级检查。确认目标**只有新建 account 的预置内容**后，再使用 `overwrite`：
+
 ```bash
 OPENVIKING_CLI_CONFIG_FILE=./restore.ovcli.conf \
-  ov restore ./backups/openviking.ovpack --on-conflict fail
+  ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ```
 
-如果目标 account 已存在，使用它的 admin key，不要重复创建。选择 `overwrite` 前检查冲突，它会替换备份包中的同路径内容。每次备份/恢复均以 account 为边界；其他 account 需要使用对应身份分别处理。
+如果目标 account 已存在，使用它的 admin key，不要重复创建。如果其中已有业务数据，不要直接照抄这条恢复命令：先暂停写入、备份目标，并比对包内路径和目标内容，明确允许覆盖的内容，或使用独立的干净目标。`overwrite` 会替换同路径内容；文件与目录的类型冲突可能删除已有子树。`fail` 检查 scope 根是否存在，不是逐文件冲突预检；`skip` 在 scope 已存在时跳过整次恢复。每次备份/恢复均以 account 为边界；其他 account 需要使用对应身份分别处理。
 
 恢复内容后，再按备份中的相同 `user_id` 注册其余用户。用户目录已存在不代表用户账号已创建。目标会生成新 API Key，不会恢复源 key；切换客户端前，应使用各目标用户的 key 验证读取。
 
@@ -333,6 +335,8 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
 | `skip` | 目标 root 已存在时直接返回该 URI，不写入任何包内容。 |
 
 `skip` 是 root 级跳过，不是文件级补齐导入。
+
+文件和目录类型冲突是合并覆盖的例外：如果包内文件替换目标目录（或反向替换），恢复会先删除冲突目标；该目录已有的后代也会被删除。
 
 上表描述普通 `import`。全量 `restore` 的 `overwrite` 使用合并覆盖：包内不存在的目标路径会
 创建，同路径内容会覆盖，目标环境中仅有而备份中没有的路径会保留。恢复不会删除整个

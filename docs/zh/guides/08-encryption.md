@@ -412,15 +412,17 @@ ov backup ./backups/before-encryption.ovpack
 ```
 
 2. 停止 OpenViking，启用加密，并将存储配置指向**全新的空** workspace/backend。验证完成前保留原数据和加密密钥备份。
-3. 启动加密环境。API Key 模式下，先创建目标 account 和持有 admin key 的恢复操作用户，再让 CLI 使用该 key 连接目标环境，参见 [全量备份与恢复](09-ovpack.md#全量备份与恢复)。恢复过程会通过加密存储层写入 package 内容：
+3. 启动加密环境。API Key 模式下，先创建目标 account 和持有 admin key 的恢复操作用户，再让 CLI 使用该 key 连接目标环境，参见 [全量备份和恢复](09-ovpack.md#全量备份和恢复)。恢复过程会通过加密存储层写入 package 内容：
+
+创建 account 会生成 scope 目录，因此 `fail` 会拒绝这次恢复。仅在确认目标只有新建 account 的预置内容后，使用下方的 `overwrite`。如果已有业务数据，先停止操作，按 OVPack 指南备份目标并审查冲突。
 
 ```bash
-ov restore ./backups/before-encryption.ovpack --on-conflict fail
+ov restore ./backups/before-encryption.ovpack --on-conflict overwrite
 ```
 
 4. 切流前验证资源、用户、session 和索引数据。OVPack 不包含 queue、upload、lock、watch 和 relation 文件等运行时/内部状态，这些内容需要单独重建或验证。
 
-支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份与恢复)。
+支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份和恢复)。
 
 ### 切换密钥提供程序
 

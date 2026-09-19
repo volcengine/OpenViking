@@ -191,12 +191,14 @@ Use the returned `user_key` as `api_key` in a dedicated target client config, fo
 }
 ```
 
+Account initialization already creates scope directories. Consequently, `fail` rejects a restore even when this new account contains no business data; choosing a different restore operator does not avoid that scope-level check. Confirm that the target contains **only the newly created account's initial content**, then restore with `overwrite`:
+
 ```bash
 OPENVIKING_CLI_CONFIG_FILE=./restore.ovcli.conf \
-  ov restore ./backups/openviking.ovpack --on-conflict fail
+  ov restore ./backups/openviking.ovpack --on-conflict overwrite
 ```
 
-For an existing target account, use its admin key instead of creating it again. Review conflicts before choosing `overwrite`, which replaces matching package paths. Each backup/restore is account-scoped; repeat with the appropriate identity for other accounts.
+For an existing target account, use its admin key instead of creating it again. If it contains business data, do not run this command unchanged: pause writes, back up the target, and review the package paths against target content before deciding what may be overwritten, or use a separate clean target. `overwrite` replaces matching paths; a file/directory type conflict can remove the existing subtree. `fail` checks for existing scope roots, not individual file conflicts, and `skip` skips the whole restore when a scope exists. Each backup/restore is account-scoped; repeat with the appropriate identity for other accounts.
 
 After restoring content, register the remaining users with the same `user_id` values found in the package. Existing user directories do not mean that user accounts exist. The target generates new API keys; source keys are not restored. Verify reads with each target user's key before switching clients.
 
@@ -356,7 +358,7 @@ curl -X POST http://localhost:1933/api/v1/pack/backup \
 
 The table above describes regular `import`. For full `restore`, `overwrite`
 performs a merge-upsert: missing target paths are created, matching paths are
-overwritten, and target-only paths absent from the backup are preserved. Restore
+overwritten, and target-only paths absent from the backup are normally preserved. If a package file replaces an existing directory (or vice versa), restore removes the conflicting target first; existing descendants of that directory are also removed. Restore
 does not delete the full `viking://resources` or `viking://user` tree, and it
 does not create or write the aggregate `viking://user` container itself.
 Vectors are restored or recomputed only for package content that is added or
