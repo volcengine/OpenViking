@@ -281,6 +281,31 @@ After startup, you can access:
 - Web Studio: `http://localhost:1933/studio` (same origin as the API)
 - Legacy entry point: `http://localhost:1934` (Caddy reverse proxy to 1933, kept for existing deployments)
 
+### Deploy on Railway
+
+One-click deploy: click the badge below or open the template page.
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/F5DdgR)
+
+What the template sets up:
+
+- The official image `ghcr.io/volcengine/openviking:latest`, listening on port 1933, with an HTTPS domain assigned by Railway.
+- A persistent volume mounted at `/app/.openviking`. The preset config points `storage.workspace` at the volume, so accounts, resources and vector data survive redeploys.
+- An OpenAI-based default config. `OPENAI_API_KEY` is the only value you fill in at deploy time; the admin key `OPENVIKING_ROOT_API_KEY` is generated automatically. After the deploy, read it from the service Variables and connect with `ov config`: use the Railway domain as the server URL and that value as the API key.
+
+Configuration route 1 (default, recommended): environment injection. The template presets the full `ov.conf` JSON in `OPENVIKING_CONF_CONTENT`, referencing `${OPENAI_API_KEY}` from the environment. To switch providers or models, edit that variable and redeploy. Note that once `ov.conf` exists on the volume it takes precedence: update the file on the volume (`railway ssh`, or `railway service files upload --overwrite`) instead of only changing the variable.
+
+Configuration route 2 (advanced): the in-container wizard. Clear `OPENVIKING_CONF_CONTENT` and the service starts in a pending state where every HTTP request returns 503 with a fix-it JSON. Run `openviking-server init` inside the container via `railway ssh`; within about 5 seconds of the config file appearing, the real server starts in place — no restart needed. On this route the Railway healthcheck fails during the pending phase, so remove the healthcheck path or raise `RAILWAY_HEALTHCHECK_TIMEOUT_SEC` first.
+
+Cost (official prices as of 2026-09, subject to change):
+
+- Usage pricing: RAM $10/GB/month, vCPU $20/core/month, volume $0.15/GB/month.
+- The Free plan includes only $1 of monthly usage — **not enough to keep OpenViking running continuously**. Do not plan on a free deployment.
+- The Trial ($5 one-time, 1 GB RAM per service) is fine for a few weeks of evaluation; volumes are deleted 30 days after trial credits expire, so export your data (`ov export`) in time.
+- For continuous use, the Hobby plan ($5/month including $5 of usage) lands at roughly $5–15/month at 0.5–1 GB of resident memory. `OPENVIKING_WITH_BOT=0` (the template default) lowers the footprint; check Railway metrics after deploying.
+
+Security note: the server binds `0.0.0.0` and is exposed to the public internet. Keep `OPENVIKING_ROOT_API_KEY` secret, and read the [public access guide](12-public-access.md) before sharing the URL.
+
 ### Multi-instance notes
 
 With an embedded vector backend (`local` or `cuvs`), OpenViking holds an exclusive OS file lock on `storage.workspace` by default. The `.openviking.lock` file remains on disk; its presence does not mean a server is running. The OS releases the lock when the server closes it or the process terminates. Do not manually delete a running server's lock file.
