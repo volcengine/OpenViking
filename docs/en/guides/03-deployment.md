@@ -309,7 +309,6 @@ Initial bootstrap can be completed entirely within the browser:
 #### Pricing & Resource Sizing
 
 - **Recommended Plan**: For continuous hosting, the **Hobby** plan ($5/mo including $5 usage credits) is recommended, typically running at $5–$15/month with 0.5–1 GB resident memory.
-- **Memory Footprint**: The template sets `OPENVIKING_WITH_BOT=0` by default to minimize memory consumption.
 - **Free/Trial Limitations**: Railway Free plan ($1/mo credit) is insufficient for continuous service. Trial credits ($5 one-time) are suitable for short-term evaluation; note that volumes are purged 30 days after trial expiration.
 
 > **Security Note**: The service is publicly accessible by default. Keep `OPENVIKING_ROOT_API_KEY` confidential and consult the [public access guide](12-public-access.md) before production rollout.
