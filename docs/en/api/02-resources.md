@@ -40,8 +40,10 @@ OpenViking supports various resource types, categorized by functionality:
 | Type | Resource Name | Description |
 |------|---------------|-------------|
 | Images | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | Various image formats, descriptions generated via VLM (Experimental) |
-| Video | `*.mp4`, `*.avi`, `*.mov` ... | Extracts keyframes and analyzes with VLM (Planning) |
-| Audio | `*.mp3`, `*.wav`, `*.m4a` ... | Performs speech transcription (Planning) |
+| Video | `*.mp4`, `*.avi`, `*.mov` ... | Stores the original file; optional VLM understanding requires compatible media configuration |
+| Audio | `*.mp3`, `*.wav`, `*.m4a` ... | Stores the original file; optional VLM understanding requires compatible media configuration |
+
+Audio/video parsers validate and store the original files. Content understanding runs later during semantic processing and is disabled by default (`vlm.media.enabled=false`). Enable it with a compatible provider/model; understanding formats and size limits differ from import formats. This is not a built-in Whisper transcription or local keyframe-extraction pipeline. See [audio/video configuration](../guides/01-configuration.md).
 
 **Cloud Documents**
 
@@ -112,7 +114,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 #### Watch Task Creation
 - Set `watch_interval > 0` (in minutes) when calling `add_resource` with a re-readable source, such as a URL, sitemap, or RSS feed, to create a watch task
-- Uploaded content referenced by `temp_file_id` is a static snapshot and cannot be watched; re-add it when the local source changes
+- Uploaded content referenced by `temp_file_id` is a static snapshot and cannot be watched. The Python HTTP SDK also uploads local files/directories as snapshots, so do not combine a local path with `watch_interval > 0`; re-add it when the local source changes
 - You may specify `to` to define the target URI; if omitted, the task binds to the `root_uri` returned by this import
 - Pointing a watch at a sitemap/RSS/Atom URL keeps the **whole site** in sync: each refresh re-reads the feed and rebuilds the tree, so newly published pages are added and removed pages drop automatically
 - `WatchManager` handles task persistence
@@ -395,9 +397,9 @@ result = client.add_resource(
 # Check the latest import task; use its results after it reaches completed
 print(client.get_task(result["task_id"]))
 
-# Enable scheduled updates
+# Enable scheduled updates for a re-readable URL
 client.add_resource(
-    path="./documents/guide.md",
+    path="https://example.com/guide.md",
     to="viking://resources/guide.md",
     options={
         "watch_interval": 60,  # Update every 60 minutes

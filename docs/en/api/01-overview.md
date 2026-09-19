@@ -302,12 +302,13 @@ JSON output - error:
 
 **Note**: Exit codes are return codes from the CLI (command line tool), not HTTP API status codes.
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error |
-| 2 | Configuration error |
-| 3 | Connection error |
+| Code | Meaning | Trigger |
+|------|---------|---------|
+| 0 | Success | Command completed successfully |
+| 1 | Runtime error | Command execution failed, including API or connection errors |
+| 2 | Arguments or configuration error | Invalid command-line arguments, configuration loading failed, missing required credentials, or `--sudo` used with an unsupported command |
+
+The current Rust CLI reports connection failures with exit code `1`; it does not use a separate connection-error exit code `3`.
 
 ## Error Codes
 

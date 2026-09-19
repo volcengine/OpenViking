@@ -27,9 +27,10 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 | limit | int | 否 | None | `node_limit` 的别名 |
 | sort_by | str | 否 | None | 在分页前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
 | sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
+| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
 
-`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。`simple=true` 保持仅返回路径。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
 
 **条目结构**
 
@@ -139,12 +140,20 @@ curl -G "http://localhost:1933/api/v1/fs/ls" \
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f tags]
-openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f tags]
+openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f FIELDS]
+openviking tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
+openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 
-# 在人类可读列表中显示 tags；不能与 --simple 一起使用
-openviking ls viking://resources/ --fields tags
+# 在对齐的表格中显示名称和 tags
+openviking ls viking://resources/ --fields name,tags
+
+# 无表头，每行输出逗号分隔的 URI 和 tags
+openviking ls viking://resources/ --simple --fields uri,tags
 ```
+
+`-f` / `--fields` 接受逗号分隔的列名。在默认的 table 输出模式下，结果为带表头、按列对齐的表格。支持的字段为 `name`、`uri`、`path`、`type`、`size`、`mode`、`mtime`、`locked`、`id`、`count`、`abstract`、`tags`。同时指定 `--simple` 和 `-f` 时，每行输出逗号分隔的字段值，不带表头或树缩进；仅使用 `--simple` 时仍每行输出一个 URI。若未选择 `name`、`uri` 或 `path`，列表会自动补充 `name` 列，树会补充 `path` 列。
+
+CLI 会按所选列请求 `extra_fields`（`locked`、`id`、`count`）；选择 `tags` 列时会请求 `include_tags=true`。这些列选择不改变 `tags` 的 AND 过滤语义。
 
 
 **响应**
@@ -185,6 +194,7 @@ openviking ls viking://resources/ --fields tags
 | offset | int | 否 | 0 | 跳过的可见节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
+| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
 `tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们，否则会省略 tags 以避免额外的向量库读取。
@@ -249,7 +259,10 @@ curl -G "http://localhost:1933/api/v1/fs/tree" \
 **CLI**
 
 ```bash
-openviking tree viking://resources/my-project/ --fields tags
+openviking tree viking://resources/my-project/ --fields path,type,tags
+
+# 与 ls、glob 一样支持 --simple 和列选择组合
+openviking tree viking://resources/my-project/ --simple --fields path,tags
 ```
 
 

@@ -36,8 +36,10 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
 | 图片 | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | 多种图片格式，通过 VLM 生成描述（实验特性） |
-| 视频 | `*.mp4`, `*.avi`, `*.mov` ... | 提取关键帧后使用 VLM 分析（规划） |
-| 音频 | `*.mp3`, `*.wav`, `*.m4a` ... | 进行语音转录处理（规划） |
+| 视频 | `*.mp4`, `*.avi`, `*.mov` ... | 保存原文件；可选 VLM 内容理解需要兼容的媒体配置 |
+| 音频 | `*.mp3`, `*.wav`, `*.m4a` ... | 保存原文件；可选 VLM 内容理解需要兼容的媒体配置 |
+
+音视频解析器负责校验并保存原文件。内容理解在后续语义处理阶段执行，默认关闭（`vlm.media.enabled=false`），需启用兼容的供应商和模型；理解支持的格式与大小限制和导入格式不同。这不代表内置了 Whisper 转写或本地关键帧提取流程。详见[音视频配置](../guides/01-configuration.md)。
 
 云文档类
 | 类型 | 说明 |
@@ -105,7 +107,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 #### 监控任务创建
 - 调用 `add_resource` 时，为 URL、sitemap、RSS 等可重新读取的来源设置 `watch_interval > 0`（单位：分钟），即可创建监控任务
-- `temp_file_id` 引用的上传内容只会作为一次性快照处理，不能创建监控任务；本地来源变化后请重新添加
+- `temp_file_id` 引用的上传内容是一次性快照，不能创建监控任务。Python HTTP SDK 也会将本地文件/目录上传为快照，因此本地路径不能与 `watch_interval > 0` 组合使用；本地来源变化后请重新添加
 - 可指定 `to` 参数确定目标 URI；未指定时，系统会使用本次导入返回的 `root_uri` 作为监控目标
 - 把监控对象设为 sitemap/RSS/Atom URL，即可让**整站**保持同步：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
 - `WatchManager` 负责任务持久化存储
@@ -400,9 +402,9 @@ result = client.add_resource(
 ## 查询最近一次导入任务；状态为 completed 后再使用处理结果
 print(client.get_task(result["task_id"]))
 
-## 开启定时更新
+## 为可重复读取的 URL 开启定时更新
 client.add_resource(
-    path="./documents/guide.md",
+    path="https://example.com/guide.md",
     to="viking://resources/guide.md",
     options={
         "watch_interval": 60,  # 每60分钟更新一次

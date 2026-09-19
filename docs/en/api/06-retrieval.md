@@ -59,7 +59,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
@@ -397,7 +397,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
