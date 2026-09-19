@@ -182,7 +182,6 @@ Tags must use strict `k=v` strings. When multiple tags are provided, `find()` re
 
 ```python
 import openviking_sdk as ov
-from openviking.retrieve import ContextType
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -204,7 +203,7 @@ recent_emails = client.find(
 # Search only memories and resources
 typed_results = client.find(
     query="authentication",
-    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
+    options={"context_type": ["memory", "resource"]},
 )
 
 # Search by local image, bytes, data URI, HTTP URL, or viking:// URI
@@ -460,7 +459,6 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```python
 import openviking_sdk as ov
-from openviking.retrieve import ContextType
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -482,7 +480,7 @@ results = client.search(
     query="best practices",
     session_id=session.session_id,
     options={
-        "context_type": ContextType.SKILL,
+        "context_type": "skill",
         "since": "2h",
     },
 )

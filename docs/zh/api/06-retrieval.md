@@ -183,7 +183,6 @@ Tags 必须使用严格的 `k=v` 字符串。传入多个 tags 时，`find()` �
 
 ```python
 import openviking_sdk as ov
-from openviking.retrieve import ContextType
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -205,7 +204,7 @@ recent_emails = client.find(
 # 仅搜索 memories 和 resources
 typed_results = client.find(
     query="authentication",
-    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
+    options={"context_type": ["memory", "resource"]},
 )
 
 # 按本地图片、bytes、data URI、HTTP URL 或 viking:// URI 搜索
@@ -462,7 +461,6 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```python
 import openviking_sdk as ov
-from openviking.retrieve import ContextType
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -484,7 +482,7 @@ results = client.search(
     query="best practices",
     session_id=session.session_id,
     options={
-        "context_type": ContextType.SKILL,
+        "context_type": "skill",
         "since": "2h",
     },
 )
