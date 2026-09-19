@@ -21,7 +21,7 @@ IMPORTANT (v5.0 Architecture):
 - Content splitting is handled by Parser, not TreeBuilder
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from openviking.core.building_tree import BuildingTree
 from openviking.core.context import Context
@@ -145,6 +145,8 @@ class TreeBuilder:
         source_format: Optional[str] = None,
         create_parent: bool = False,
         flatten_single_file: bool = False,
+        artifact_ref: Optional[Any] = None,
+        output_store: Optional[Any] = None,
     ) -> "BuildingTree":
         """
         Finalize URI metadata for a temp parse result.
@@ -153,38 +155,57 @@ class TreeBuilder:
             to_uri: Exact target URI, or resources root to import under
             parent_uri: Target parent URI (must exist unless create_parent is True)
             create_parent: Whether to automatically create parent directory if it doesn't exist
+            artifact_ref / output_store: When provided, the artifact structure is
+                read through the backend-agnostic store (supporting local
+                artifacts); otherwise the legacy AGFS ``ls(temp_uri)`` path is
+                used. Either way the resulting ``temp_doc_uri`` keeps the AGFS URI
+                shape and target-URI resolution stays on VikingFS.
         """
 
         viking_fs = get_viking_fs()
         temp_uri = temp_dir_path
 
-        # 1. Find document root directory
-        entries = await viking_fs.ls(temp_uri, ctx=ctx)
-        doc_dirs = [e for e in entries if e.get("isDir") and e["name"] not in [".", ".."]]
+        # 1. Find the single document root. The structural walk is identical for
+        # AGFS and local artifacts, so it is delegated to resolve_artifact_doc_root
+        # when a store/ref is available. ``temp_doc_uri`` remains an AGFS-shaped
+        # URI relative to temp_uri for downstream persistence.
+        if output_store is not None and artifact_ref is not None:
+            from openviking.parse.output import resolve_artifact_doc_root
 
-        if len(doc_dirs) != 1:
-            logger.error(
-                f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
+            resolved = await resolve_artifact_doc_root(
+                output_store, artifact_ref, flatten_single_file=flatten_single_file
             )
-            raise ValueError(
-                f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
-            )
+            original_name = resolved.doc_name
+            doc_name = VikingURI.sanitize_segment(original_name)
+            temp_doc_uri = f"{temp_uri.rstrip('/')}/{resolved.doc_rel}"
+            root_is_file = resolved.root_is_file
+        else:
+            entries = await viking_fs.ls(temp_uri, ctx=ctx)
+            doc_dirs = [e for e in entries if e.get("isDir") and e["name"] not in [".", ".."]]
 
-        original_name = doc_dirs[0]["name"]
-        doc_name = VikingURI.sanitize_segment(original_name)
-        temp_doc_uri = f"{temp_uri}/{original_name}"  # use original name to find temp dir
-        root_is_file = False
-        if flatten_single_file:
-            doc_entries = [
-                entry
-                for entry in await viking_fs.ls(temp_doc_uri, ctx=ctx)
-                if entry.get("name") not in [".", ".."]
-            ]
-            if len(doc_entries) == 1 and not doc_entries[0].get("isDir"):
-                original_name = doc_entries[0]["name"]
-                doc_name = VikingURI.sanitize_segment(original_name)
-                temp_doc_uri = f"{temp_doc_uri}/{original_name}"
-                root_is_file = True
+            if len(doc_dirs) != 1:
+                logger.error(
+                    f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
+                )
+                raise ValueError(
+                    f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
+                )
+
+            original_name = doc_dirs[0]["name"]
+            doc_name = VikingURI.sanitize_segment(original_name)
+            temp_doc_uri = f"{temp_uri}/{original_name}"  # use original name to find temp dir
+            root_is_file = False
+            if flatten_single_file:
+                doc_entries = [
+                    entry
+                    for entry in await viking_fs.ls(temp_doc_uri, ctx=ctx)
+                    if entry.get("name") not in [".", ".."]
+                ]
+                if len(doc_entries) == 1 and not doc_entries[0].get("isDir"):
+                    original_name = doc_entries[0]["name"]
+                    doc_name = VikingURI.sanitize_segment(original_name)
+                    temp_doc_uri = f"{temp_doc_uri}/{original_name}"
+                    root_is_file = True
         if original_name != doc_name:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 

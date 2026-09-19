@@ -303,7 +303,7 @@ graph LR
 | `ResourceIngestionEventDataSource` | `EventMetricDataSource` | ResourceProcessor、ResourceService、watch / wait 流程 | 资源处理事件与阶段摘要 | parse / finalize / summarize / wait / watch duration |
 | `SessionLifecycleDataSource` | `EventMetricDataSource` | session create / used / commit / archive | 会话生命周期状态与事件 | commit 生命周期、contexts_used、archive 状态 |
 | `EncryptionEventDataSource` | `EventMetricDataSource` | Encryptor、API Key 验证路径、KDF / Key Loader | 加密操作事件与密钥处理事件 | encrypt / decrypt / verify count、duration、bytes、kdf / key_load 耗时、auth_failed |
-| `QueuePipelineStateDataSource` | `StateMetricDataSource` | `QueueManager`、Semantic DAG、request queue stats | 队列与流水线状态 | pending、in_progress、processed、error_count、semantic_nodes |
+| `QueuePipelineStateDataSource` | `StateMetricDataSource` | `QueueManager`、Semantic tree、request queue stats | 队列与流水线状态 | pending、in_progress、processed、error_count、semantic_nodes |
 | `TaskStateDataSource` | `StateMetricDataSource` | `TaskTracker` | 当前任务状态 | pending、running、completed、failed 数量 |
 | `RetrievalStatsDataSource` | `DomainStatsMetricDataSource` | `RetrievalStatsCollector` | 检索累计统计 | query count、zero result、latency、rerank 情况 |
 | `ModelUsageDataSource` | `DomainStatsMetricDataSource` | VLM / Embedding / Rerank token tracker | 模型使用统计 | 调用次数、耗时、token 消耗 |
@@ -415,7 +415,7 @@ Collector 与 DataSource 的主映射关系如下：
 | `VLMCollector` | `EventMetricCollector` | token / duration 事件 | 调用数、耗时、token 统计 |
 | `CacheCollector` | `EventMetricCollector` | cache 命中或未命中事件 | hit / miss |
 | `EncryptionCollector` | `EventMetricCollector` | encrypt / decrypt / verify / kdf / key_load 事件 | 加密次数、认证失败、耗时、字节量、密钥处理统计 |
-| `QueueCollector` | `StateMetricCollector` | QueueManager / DAG 当前状态 | pending、in_progress、processed、errors |
+| `QueueCollector` | `StateMetricCollector` | QueueManager / tree 当前状态 | pending、in_progress、processed、errors |
 | `RagfsMetricCollector` | `DomainStatsMetricCollector` | `RagfsMetricDataSource`，一次 RAGFS `metrics()` 调用 | 文件操作、Cache、multi-backend、Lock |
 | `VikingDBCollector` | `StateMetricCollector` | VikingDB collection 当前状态 | health、vectors、collections |
 | `ObserverHealthCollector` | `StateMetricCollector` | ObserverService 结果 | component health、component errors |

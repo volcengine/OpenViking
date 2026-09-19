@@ -24,6 +24,10 @@ class _RequestWaitState:
     embedding_requeue_count: int = 0
     embedding_error_count: int = 0
     embedding_errors: List[str] = field(default_factory=list)
+    semantic_queue_wait_ms: float = 0.0
+    semantic_execute_ms: float = 0.0
+    embedding_queue_wait_ms: float = 0.0
+    embedding_execute_ms: float = 0.0
     created_at: float = field(default_factory=time.time)
     retained_roots: Set[str] = field(default_factory=set)
     cleanup_requested: bool = False
@@ -104,6 +108,48 @@ class RequestWaitTracker:
                 return
             state.embedding_requeue_count += max(delta, 0)
 
+    def record_semantic_timing(
+        self, telemetry_id: str, *, queue_wait_ms: float = 0.0, execute_ms: float = 0.0
+    ) -> None:
+        self._record_timing(
+            telemetry_id,
+            queue_wait_ms=queue_wait_ms,
+            execute_ms=execute_ms,
+            queue_wait_attr="semantic_queue_wait_ms",
+            execute_attr="semantic_execute_ms",
+        )
+
+    def record_embedding_timing(
+        self, telemetry_id: str, *, queue_wait_ms: float = 0.0, execute_ms: float = 0.0
+    ) -> None:
+        self._record_timing(
+            telemetry_id,
+            queue_wait_ms=queue_wait_ms,
+            execute_ms=execute_ms,
+            queue_wait_attr="embedding_queue_wait_ms",
+            execute_attr="embedding_execute_ms",
+        )
+
+    def _record_timing(
+        self,
+        telemetry_id: str,
+        *,
+        queue_wait_ms: float,
+        execute_ms: float,
+        queue_wait_attr: str,
+        execute_attr: str,
+    ) -> None:
+        if not telemetry_id:
+            return
+        with self._lock:
+            state = self._states.get(telemetry_id)
+            if state is None:
+                return
+            setattr(
+                state, queue_wait_attr, getattr(state, queue_wait_attr) + max(queue_wait_ms, 0.0)
+            )
+            setattr(state, execute_attr, getattr(state, execute_attr) + max(execute_ms, 0.0))
+
     def get_embedding_context_count(self, telemetry_id: str) -> int:
         """Return contexts successfully indexed for one request."""
         if not telemetry_id:
@@ -111,6 +157,30 @@ class RequestWaitTracker:
         with self._lock:
             state = self._states.get(telemetry_id)
             return state.embedding_context_count if state is not None else 0
+
+    def get_queue_timing(self, telemetry_id: str) -> Dict[str, Dict[str, float]]:
+        if not telemetry_id:
+            return {
+                "semantic": {"queue_wait_ms": 0.0, "execute_ms": 0.0},
+                "embedding": {"queue_wait_ms": 0.0, "execute_ms": 0.0},
+            }
+        with self._lock:
+            state = self._states.get(telemetry_id)
+            if state is None:
+                return {
+                    "semantic": {"queue_wait_ms": 0.0, "execute_ms": 0.0},
+                    "embedding": {"queue_wait_ms": 0.0, "execute_ms": 0.0},
+                }
+            return {
+                "semantic": {
+                    "queue_wait_ms": state.semantic_queue_wait_ms,
+                    "execute_ms": state.semantic_execute_ms,
+                },
+                "embedding": {
+                    "queue_wait_ms": state.embedding_queue_wait_ms,
+                    "execute_ms": state.embedding_execute_ms,
+                },
+            }
 
     def mark_semantic_done(
         self,

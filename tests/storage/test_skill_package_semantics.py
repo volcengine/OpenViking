@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.storage.queuefs.semantic_dag import DagStats
+from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry import get_current_telemetry, register_telemetry
@@ -47,10 +47,10 @@ async def test_skill_worker_keeps_package_locked_until_embeddings_finish(monkeyp
             emitted.set()
 
         def get_stats(self):
-            return DagStats()
+            return SemanticTreeStats()
 
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor", Executor
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor", Executor
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",

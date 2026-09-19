@@ -54,7 +54,7 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
     transport, monkeypatch, concurrency
 ):
     from openviking.service.task_tracker_concurrency import run_to_completion
-    from openviking.storage.queuefs.semantic_dag import DagStats
+    from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
     from openviking.storage.queuefs.semantic_msg import SemanticMsg
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
     from openviking.telemetry import OperationTelemetry
@@ -87,7 +87,7 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
             queued.set()
 
         def get_stats(self):
-            return DagStats()
+            return SemanticTreeStats()
 
     async def write(data):
         async def finish():
@@ -127,7 +127,7 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
             await self.process_dequeued(data)
             await self.ack(data)
 
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.SemanticDagExecutor", Dag)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor", Dag)
     monkeypatch.setattr(
         SemanticProcessor, "_resolve_skill_semantic_lock", AsyncMock(return_value=Lease())
     )

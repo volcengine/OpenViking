@@ -52,7 +52,7 @@
 
 ### 3. 采样发生在子项摘要工作之后
 
-当前目录 DAG 会先生成或读取所有直接子项的摘要，最后才使用 `overview_sample_limit` 选出进入父目录 overview prompt 的部分输入。
+当前目录语义树会先生成或读取所有直接子项的摘要，最后才使用 `overview_sample_limit` 选出进入父目录 overview prompt 的部分输入。
 
 这能够限制 prompt 大小，却没有避免未参与本次聚合的子项摘要工作。对于宽目录，如果我们的目标是降低重新摘要成本，就应当在调度本轮父目录聚合所需的子项摘要之前完成有界采样。
 
@@ -324,7 +324,7 @@ metadata 从 `pending_child_changes > 0` 重置或减少，也可能造成 raw s
 | --- | --- |
 | `openviking/storage/queuefs/semantic_ops/freshness_policy.py` | 纯粹的 `NOOP` / `MARK_PENDING` / `REFRESH_NOW` 判断 |
 | `openviking/storage/semantic_sidecar.py` | 在 lease 下原子累加、读取和消费现有 freshness 计数 |
-| `SemanticDagExecutor` | 在宽目录聚合前完成本轮采样，并返回 L0/L1 正文变化结果 |
+| `SemanticTreeExecutor` | 在宽目录聚合前完成本轮采样，并返回 L0/L1 正文变化结果 |
 | `SemanticProcessor` | 根据 L0 是否变化决定是否继续向父目录冒泡 |
 | content write、delete、resource 路径 | 将文件增删改统一记录为所在目录的变化计数 |
 

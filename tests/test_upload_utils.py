@@ -20,46 +20,6 @@ from openviking.utils.path_safety import sanitize_relative_viking_path
 # ---------------------------------------------------------------------------
 
 
-class FakeAGFS:
-    """Minimal AGFS mock that stores files and directories by path key."""
-
-    def __init__(self, storage: Dict[str, bytes]) -> None:
-        self._storage = storage
-        self.dirs: List[str] = []
-
-    def mkdir(self, path: str) -> None:
-        self.dirs.append(path)
-
-    def write(self, path: str, content: bytes) -> None:
-        self._storage[path] = content
-
-
-class FakeVikingFS:
-    """Minimal VikingFS mock for testing upload functions."""
-
-    def __init__(self) -> None:
-        self.files: Dict[str, bytes] = {}
-        self.dirs: List[str] = []
-        self.write_file_bytes_calls: List[str] = []
-        self.agfs = FakeAGFS(self.files)
-
-    def _uri_to_path(self, uri: str) -> str:
-        # Simplified: use the URI itself as the storage key so test assertions work.
-        return uri
-
-    async def write_file_bytes(self, uri: str, content: bytes) -> None:
-        self.write_file_bytes_calls.append(uri)
-        self.files[uri] = content
-
-    async def mkdir(self, uri: str, exist_ok: bool = False) -> None:
-        self.dirs.append(uri)
-
-
-@pytest.fixture
-def viking_fs() -> FakeVikingFS:
-    return FakeVikingFS()
-
-
 @pytest.fixture
 def tmp_dir(tmp_path: Path) -> Path:
     """Create a temporary directory with sample files for testing."""
@@ -257,96 +217,106 @@ class TestShouldSkipFile:
 # ---------------------------------------------------------------------------
 
 
+class _RecordingStore:
+    """Minimal parse output store recording writes/mkdirs by relative path."""
+
+    def __init__(self) -> None:
+        self.writes: Dict[str, bytes] = {}
+        self.dirs: List[str] = []
+
+    async def mkdir(self, ref, rel_path: str = "") -> None:
+        self.dirs.append(rel_path)
+
+    async def write_bytes(self, ref, rel_path: str, content: bytes) -> None:
+        self.writes[rel_path] = content
+
+    async def read_bytes(self, ref, rel_path: str) -> bytes:
+        return self.writes[rel_path]
+
+
 class TestUploadDirectory:
     @pytest.mark.asyncio
-    async def test_basic_upload(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
-        count, warnings = await upload_directory(tmp_dir, "viking://temp/test", viking_fs)
+    async def test_basic_upload(self, tmp_dir: Path) -> None:
+        store = _RecordingStore()
+        count, warnings = await upload_directory(
+            tmp_dir, "repo", store=store, artifact_ref=object()
+        )
 
         # Should upload: hello.py, readme.md, config.yaml, src/main.go
         # Should skip: .hidden, image.png, empty.txt, __pycache__/mod.pyc
         assert count == 4
-        assert "viking://temp/test/hello.py" in viking_fs.files
-        assert "viking://temp/test/readme.md" in viking_fs.files
-        assert "viking://temp/test/config.yaml" in viking_fs.files
-        assert "viking://temp/test/src/main.go" in viking_fs.files
-        assert "viking://temp/test/hello.py" in viking_fs.write_file_bytes_calls
+        assert "repo/hello.py" in store.writes
+        assert "repo/readme.md" in store.writes
+        assert "repo/config.yaml" in store.writes
+        assert "repo/src/main.go" in store.writes
 
     @pytest.mark.asyncio
-    async def test_uses_vikingfs_write_api_for_file_content(self, tmp_path: Path) -> None:
-        class GuardedAGFS(FakeAGFS):
-            def write(self, path: str, content: bytes) -> None:
-                raise AssertionError("upload_directory must not bypass VikingFS writes")
-
-        class GuardedVikingFS(FakeVikingFS):
-            def __init__(self) -> None:
-                super().__init__()
-                self.agfs = GuardedAGFS(self.files)
-
-        (tmp_path / "hello.py").write_text("print('hello')", encoding="utf-8")
-        viking_fs = GuardedVikingFS()
-
-        count, warnings = await upload_directory(tmp_path, "viking://temp/guarded", viking_fs)
-
-        assert count == 1
-        assert warnings == []
-        assert viking_fs.files["viking://temp/guarded/hello.py"] == b"print('hello')"
+    async def test_skips_hidden_files(self, tmp_dir: Path) -> None:
+        store = _RecordingStore()
+        await upload_directory(tmp_dir, "repo", store=store, artifact_ref=object())
+        assert all(".hidden" not in rel for rel in store.writes)
 
     @pytest.mark.asyncio
-    async def test_skips_hidden_files(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
-        await upload_directory(tmp_dir, "viking://temp/test", viking_fs)
-        assert all(".hidden" not in uri for uri in viking_fs.files)
+    async def test_skips_ignored_dirs(self, tmp_dir: Path) -> None:
+        store = _RecordingStore()
+        await upload_directory(tmp_dir, "repo", store=store, artifact_ref=object())
+        assert all("__pycache__" not in rel for rel in store.writes)
 
     @pytest.mark.asyncio
-    async def test_skips_ignored_dirs(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
-        await upload_directory(tmp_dir, "viking://temp/test", viking_fs)
-        assert all("__pycache__" not in uri for uri in viking_fs.files)
+    async def test_skips_ignored_extensions(self, tmp_dir: Path) -> None:
+        store = _RecordingStore()
+        await upload_directory(tmp_dir, "repo", store=store, artifact_ref=object())
+        assert all(".png" not in rel for rel in store.writes)
 
     @pytest.mark.asyncio
-    async def test_skips_ignored_extensions(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
-        await upload_directory(tmp_dir, "viking://temp/test", viking_fs)
-        assert all(".png" not in uri for uri in viking_fs.files)
-
-    @pytest.mark.asyncio
-    async def test_skips_empty_files(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
+    async def test_skips_empty_files(self, tmp_dir: Path) -> None:
         (tmp_dir / "application.properties").write_bytes(b"\n")
         (tmp_dir / "blank.txt").write_bytes(b" \t\r\n")
-        await upload_directory(tmp_dir, "viking://temp/test", viking_fs)
-        assert all("empty.txt" not in uri for uri in viking_fs.files)
-        assert "viking://temp/test/application.properties" not in viking_fs.files
-        assert "viking://temp/test/blank.txt" not in viking_fs.files
+        store = _RecordingStore()
+        await upload_directory(tmp_dir, "repo", store=store, artifact_ref=object())
+        assert all("empty.txt" not in rel for rel in store.writes)
+        assert "repo/application.properties" not in store.writes
+        assert "repo/blank.txt" not in store.writes
 
     @pytest.mark.asyncio
-    async def test_creates_root_dir(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
-        await upload_directory(tmp_dir, "viking://temp/root", viking_fs)
-        assert "viking://temp/root" in viking_fs.dirs
+    async def test_precreates_subdirectories(self, tmp_dir: Path) -> None:
+        store = _RecordingStore()
+        await upload_directory(tmp_dir, "repo", store=store, artifact_ref=object())
+        # The nested src/ dir is pre-created before its files are written.
+        assert "repo/src" in store.dirs
 
     @pytest.mark.asyncio
-    async def test_custom_ignore_dirs(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
+    async def test_custom_ignore_dirs(self, tmp_dir: Path) -> None:
+        store = _RecordingStore()
         count, _ = await upload_directory(
-            tmp_dir, "viking://temp/test", viking_fs, ignore_dirs={"src"}
+            tmp_dir, "repo", store=store, artifact_ref=object(), ignore_dirs={"src"}
         )
-        assert all("src/" not in uri for uri in viking_fs.files)
+        assert all("src/" not in rel for rel in store.writes)
         # Positive assertion: non-ignored files should still be uploaded
         assert count > 0
-        assert "viking://temp/test/hello.py" in viking_fs.files
+        assert "repo/hello.py" in store.writes
 
     @pytest.mark.asyncio
-    async def test_custom_max_file_size(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
-        count, _ = await upload_directory(tmp_dir, "viking://temp/test", viking_fs, max_file_size=5)
+    async def test_custom_max_file_size(self, tmp_dir: Path) -> None:
+        store = _RecordingStore()
+        count, _ = await upload_directory(
+            tmp_dir, "repo", store=store, artifact_ref=object(), max_file_size=5
+        )
         # Most files are > 5 bytes, so fewer uploads
         assert count < 4
 
     @pytest.mark.asyncio
-    async def test_respects_gitignore(self, tmp_path: Path, viking_fs: FakeVikingFS) -> None:
+    async def test_respects_gitignore(self, tmp_path: Path) -> None:
         (tmp_path / ".gitignore").write_text("*.tmp\n", encoding="utf-8")
         (tmp_path / "keep.txt").write_text("ok", encoding="utf-8")
         (tmp_path / "skip.tmp").write_text("no", encoding="utf-8")
 
-        count, _ = await upload_directory(tmp_path, "viking://temp/gi", viking_fs)
+        store = _RecordingStore()
+        count, _ = await upload_directory(tmp_path, "gi", store=store, artifact_ref=object())
 
         assert count == 1
-        assert "viking://temp/gi/keep.txt" in viking_fs.files
-        assert "viking://temp/gi/skip.tmp" not in viking_fs.files
+        assert "gi/keep.txt" in store.writes
+        assert "gi/skip.tmp" not in store.writes
 
 
 # ---------------------------------------------------------------------------
@@ -429,36 +399,55 @@ class TestSanitizeRelPath:
 
 
 # ---------------------------------------------------------------------------
-# upload_directory (additional edge cases)
+# upload_directory (failure handling + md5 manifest)
 # ---------------------------------------------------------------------------
 
 
 class TestUploadDirectoryEdgeCases:
     @pytest.mark.asyncio
-    async def test_write_failure_produces_warning(self, tmp_path: Path) -> None:
-        class FailingAGFS:
-            def mkdir(self, path: str) -> None:
+    async def test_writes_content_md5_manifest(self, tmp_dir: Path) -> None:
+        import hashlib
+        import json
+
+        from openviking.parse.parsers.upload_utils import ARTIFACT_MANIFEST_NAME
+
+        store = _RecordingStore()
+
+        await upload_directory(tmp_dir, "repo", store=store, artifact_ref=object())
+
+        # A manifest of final-byte md5 keyed by artifact-relative path is written
+        # so the incremental diff can compare fingerprints without re-reading.
+        assert ARTIFACT_MANIFEST_NAME in store.writes
+        manifest = json.loads(store.writes[ARTIFACT_MANIFEST_NAME].decode("utf-8"))
+        assert manifest["repo/hello.py"] == hashlib.md5(b"print('hello')").hexdigest()
+        # Every uploaded business file has an md5; the manifest itself is excluded.
+        assert "repo/src/main.go" in manifest
+        assert ARTIFACT_MANIFEST_NAME not in manifest
+
+    @pytest.mark.asyncio
+    async def test_store_write_failure_produces_warning_and_skips_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        from openviking.parse.parsers.upload_utils import ARTIFACT_MANIFEST_NAME
+
+        class FailingStore:
+            async def mkdir(self, ref, rel_path: str = "") -> None:
                 pass
 
-        class FailingWriteFS:
-            agfs = FailingAGFS()
-
-            def _uri_to_path(self, uri: str) -> str:
-                return uri
-
-            async def mkdir(self, uri: str, exist_ok: bool = False) -> None:
-                pass
-
-            async def write_file_bytes(self, uri: str, content: bytes) -> None:
-                raise IOError("write error")
+            async def write_bytes(self, ref, rel_path: str, content: bytes) -> None:
+                if rel_path == ARTIFACT_MANIFEST_NAME:
+                    raise AssertionError("manifest must not be written after a failed upload")
+                raise IOError("store write error")
 
         (tmp_path / "ok.py").write_text("print(1)", encoding="utf-8")
 
-        count, warnings = await upload_directory(tmp_path, "viking://temp/fail", FailingWriteFS())
+        count, warnings = await upload_directory(
+            tmp_path, "repo", store=FailingStore(), artifact_ref=object()
+        )
 
         assert count == 0
         assert len(warnings) == 1
-        assert "write error" in warnings[0]
+        assert "store write error" in warnings[0]
 
 
 # ---------------------------------------------------------------------------

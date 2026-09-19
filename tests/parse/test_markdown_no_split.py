@@ -69,7 +69,7 @@ async def test_flattened_no_split_markdown_creates_temp_root_once(
 
     assert result.warnings == []
     assert fake_fs.directories == {"viking://temp/pdf-no-split"}
-    assert fake_fs.files == {"viking://temp/pdf-no-split/document.md": content}
+    assert fake_fs.files["viking://temp/pdf-no-split/document.md"] == content
 
 
 @pytest.mark.asyncio
@@ -142,7 +142,8 @@ async def test_pdf_no_split_converts_to_one_complete_markdown(
     )
 
     assert result.parser_name == "PDFParser"
-    assert fake_fs.files == {
-        ("viking://temp/pdf-no-split/社交网络中英文剧本/社交网络中英文剧本.md"): content
-    }
+    assert (
+        fake_fs.files["viking://temp/pdf-no-split/社交网络中英文剧本/社交网络中英文剧本.md"]
+        == content
+    )
     assert not any(uri.endswith(".pdf") for uri in fake_fs.files)

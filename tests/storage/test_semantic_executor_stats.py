@@ -23,11 +23,11 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.named_queue import NamedQueue
-from openviking.storage.queuefs.semantic_dag import (
-    DagStats,
-    DagWork,
-    SemanticDagExecutor,
-    SemanticNodeScheduler,
+from openviking.storage.queuefs.semantic_executor import (
+    SemanticTreeExecutor,
+    SemanticTreeScheduler,
+    SemanticTreeStats,
+    SemanticTreeWork,
 )
 from openviking.telemetry import (
     OperationTelemetry,
@@ -114,6 +114,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        file_md5=None,
     ):
         if self.verify_streaming:
             assert summary_dict["content"]
@@ -165,7 +166,7 @@ class _ScheduledExecutor:
 
 def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
         ),
@@ -173,7 +174,7 @@ def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
 
 
 @pytest.mark.asyncio
-async def test_semantic_dag_stats_collects_nodes(monkeypatch):
+async def test_semantic_executor_stats_collects_nodes(monkeypatch):
     root_uri = "viking://resources/root"
     tree = {
         root_uri: [
@@ -186,12 +187,14 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
         ],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
     _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor(verify_streaming=True)
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",
         max_concurrent_llm=2,
@@ -201,7 +204,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     await asyncio.sleep(0)
 
     stats = executor.get_stats()
-    assert isinstance(stats, DagStats)
+    assert isinstance(stats, SemanticTreeStats)
     assert stats.total_nodes == 5  # 2 dirs + 3 files
     assert stats.pending_nodes == 0
     assert stats.done_nodes == 5
@@ -217,18 +220,20 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_semantic_dag_bounds_active_node_work(monkeypatch):
+async def test_semantic_executor_bounds_active_node_work(monkeypatch):
     root_uri = "viking://resources/root"
     tree = {
         root_uri: [{"name": f"file-{idx}.txt", "isDir": False} for idx in range(40)],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
     _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",
         max_concurrent_llm=3,
@@ -259,12 +264,14 @@ async def test_incremental_wide_directory_samples_before_summary_work(monkeypatc
         root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
     _patch_semantic_config(monkeypatch, overview_sample_limit=4)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",
         max_concurrent_llm=2,
@@ -302,12 +309,14 @@ async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monk
         child_d: [{"name": "nested.md", "isDir": False}],
     }
     fake_fs = _FakeVikingFS(tree, abstracts={child_a: "child a abstract"})
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
     _patch_semantic_config(monkeypatch, overview_sample_limit=3)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "alice"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="memory",
         max_concurrent_llm=2,
@@ -350,7 +359,9 @@ async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
         raise FileNotFoundError(uri)
 
     monkeypatch.setattr(fake_fs, "read_file", read_file, raising=False)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
     _patch_semantic_config(monkeypatch, overview_sample_limit=4)
     monkeypatch.setattr(
         fake_fs, "pathlock_acquire_exact_batch", AsyncMock(side_effect=LockAcquisitionError("busy"))
@@ -358,7 +369,7 @@ async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",
         max_concurrent_llm=2,
@@ -378,7 +389,7 @@ async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
+async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch):
     root_a = "viking://resources/root-a"
     root_b = "viking://resources/root-b"
     tree = {
@@ -386,7 +397,9 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
         root_b: [{"name": f"b-{idx}.txt", "isDir": False} for idx in range(20)],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
     _patch_semantic_config(monkeypatch)
 
     processor = _TrackingProcessor()
@@ -397,7 +410,7 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
         bind_task_context("task-a", "acc1", "user1"),
         bind_telemetry(telemetry_a),
     ):
-        executor_a = SemanticDagExecutor(
+        executor_a = SemanticTreeExecutor(
             processor=processor,
             context_type="resource",
             max_concurrent_llm=1,
@@ -407,7 +420,7 @@ async def test_semantic_dag_shares_node_scheduler_across_roots(monkeypatch):
         bind_task_context("task-b", "acc1", "user1"),
         bind_telemetry(telemetry_b),
     ):
-        executor_b = SemanticDagExecutor(
+        executor_b = SemanticTreeExecutor(
             processor=processor,
             context_type="resource",
             max_concurrent_llm=1,
@@ -461,9 +474,9 @@ async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
 
     rejected = _ScheduledExecutor(rejected_work)
     unrelated = _ScheduledExecutor(unrelated_work)
-    scheduler = SemanticNodeScheduler(max_workers=1)
-    scheduler.submit(rejected, DagWork(kind="vectorize", dir_uri="a"))
-    scheduler.submit(unrelated, DagWork(kind="vectorize", dir_uri="b"))
+    scheduler = SemanticTreeScheduler(max_workers=1)
+    scheduler.submit(rejected, SemanticTreeWork(kind="vectorize", dir_uri="a"))
+    scheduler.submit(unrelated, SemanticTreeWork(kind="vectorize", dir_uri="b"))
 
     await asyncio.wait_for(unrelated_ran.wait(), timeout=0.5)
     await asyncio.wait_for(scheduler._queue.join(), timeout=0.5)
@@ -476,7 +489,7 @@ async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
 
 
 @pytest.mark.asyncio
-async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypatch):
+async def test_semantic_executor_skip_vectorization_does_not_schedule_tasks(monkeypatch):
     root_uri = "viking://resources/root"
     tree = {
         root_uri: [
@@ -488,12 +501,14 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
         ],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
     _patch_semantic_config(monkeypatch)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="resource",
         max_concurrent_llm=2,

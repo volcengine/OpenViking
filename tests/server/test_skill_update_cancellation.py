@@ -64,7 +64,7 @@ async def _indexed_record(client, uri, level):
 async def test_update_cancellation_restores_package_and_index(
     client, tmp_path, monkeypatch, cancel_mode
 ):
-    from openviking.storage.queuefs import semantic_dag
+    from openviking.storage.queuefs import semantic_executor
 
     name = "timeout-package-rollback"
     old_upload = await _upload_package(
@@ -109,7 +109,7 @@ async def test_update_cancellation_restores_package_and_index(
     finished = set()
     task_owners = {}
     original_summary = SemanticProcessor._generate_single_file_summary
-    original_scheduler = semantic_dag.get_semantic_node_scheduler
+    original_scheduler = semantic_executor.get_semantic_tree_scheduler
 
     async def hold_summary(self, file_path, *args, **kwargs):
         task_context = get_task_context()
@@ -130,7 +130,7 @@ async def test_update_cancellation_restores_package_and_index(
 
     monkeypatch.setattr(SemanticProcessor, "_generate_single_file_summary", hold_summary)
     monkeypatch.setattr(
-        semantic_dag, "get_semantic_node_scheduler", lambda _workers: original_scheduler(2)
+        semantic_executor, "get_semantic_tree_scheduler", lambda _workers: original_scheduler(2)
     )
     updating = asyncio.create_task(
         client.put(

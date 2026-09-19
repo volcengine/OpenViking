@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.queuefs.process_result import ProcessResult
-from openviking.storage.queuefs.semantic_dag import DagStats
+from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
@@ -63,7 +63,7 @@ class SemanticMessageWork:
         assert self.scope is not None
         await self.scope.close()
 
-    def failure_result(self, stats: DagStats | None) -> ProcessResult | None:
+    def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
         return None
 
     async def reenqueue(self) -> None:
@@ -151,7 +151,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
         # On failure retain the lease until reenqueue hands it to the retry.
         await run_to_completion(finish)
 
-    def failure_result(self, stats: DagStats | None) -> ProcessResult | None:
+    def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
         if stats is None or not stats.failures:
             return None
         for failure in stats.failures:

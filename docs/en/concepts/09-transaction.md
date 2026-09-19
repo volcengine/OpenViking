@@ -134,51 +134,38 @@ Operation flow:
 | File moved from temp to final directory, then crash -> file exists but never searchable | Two separate paths for first-time add vs incremental update |
 | Resource already on disk but rm deletes it while semantic processing / vectorization is still running -> wasted work | Lifecycle TreeLock held from finalization through processing completion |
 
-**First-time add** (target does not exist) — handled in `ResourceProcessor.process_resource` Phase 3.5:
+**First-time add and incremental update** use the same planned commit path:
 
 ```
-1. Acquire TreeLock on final_uri
-   - If final_uri does not exist, check ancestor/descendant/same-path conflicts first
-   - If there is no conflict, create final_uri and write final_uri/.path.ovlock as a T lock
-2. Keep temp as the source directory and enqueue SemanticMsg(uri=temp, target_uri=final_uri, lifecycle_lock_handle_id=...)
-3. DAG runs on temp and syncs temp content into final_uri after completion
-   - Do not use raw agfs.mv(temp -> final_uri), because final_uri already exists for the lock file
-4. Clean up temp directory
-5. DAG starts lock refresh loop (refreshes the lock token and updates handle activity every lock_expire/2 seconds)
-6. DAG complete + all embeddings done -> release TreeLock
+1. Acquire the resource lock on final_uri.
+2. Build the R/N/F/V snapshot while holding the lock:
+   - R: normalized request intent
+   - N: parsed artifact inventory
+   - F: current formal resource tree
+   - V: current vector records, unless build_index=false
+3. Compile a ContextUpdatePlan.
+4. Apply the plan's content actions to final_uri synchronously.
+5. Clean up the parser artifact.
+6. Enqueue direct index actions and, when needed, a SemanticMsg containing the remaining SemanticPlan.
+7. Hand off the resource lock to semantic processing, or release it when there is no semantic work.
 ```
 
-If summarization and indexing are both disabled, no downstream DAG takes over.
-In that case `ResourceProcessor` copies temp directory content into `final_uri`
-under the same TreeLock, deletes temp, then releases the lock. It does not call
-`VikingFS.mv(temp, final_uri, lock_handle=handle)`, because move cleanup can
-remove the directory lock file.
+The formal content tree is therefore updated before semantic or embedding work
+runs. A successful content commit may temporarily be ahead of its derived
+summaries and vectors. Queue-backed work repairs that derived state; it no
+longer copies the parser temp tree into the formal tree.
 
 During this period, `rm` attempting to acquire a TreeLock on the same path will fail with `ResourceBusyError`.
-
-**Incremental update** (target already exists) — temp stays in place:
-
-```
-1. Acquire TreeLock on target_uri (protect existing resource)
-2. Enqueue SemanticMsg(uri=temp, target_uri=final, lifecycle_lock_handle_id=...)
-3. DAG runs on temp, lock refresh loop active
-4. DAG completion triggers sync_diff_callback or move_temp_to_target_callback
-5. Callback completes -> release TreeLock
-```
-
-Note: DAG callbacks do NOT wrap operations in an outer lock. Each `VikingFS.rm` and `VikingFS.mv` has its own lock internally. An outer lock would conflict with these inner locks causing deadlock.
-
-Both first-time add and incremental update hold only `TreeLock(resource_dir)`.
-There is no `ExactPathLock(resource_dir) -> TreeLock(resource_dir)` handoff, so
-the two modes cannot accidentally release the same `.path.ovlock` file in the
-wrong scope.
 
 Automatic naming is handled by the resource layer, not the lock service:
 `ResourceProcessor` checks `exists(candidate_uri)` first; occupied candidates
 try `_1`, `_2`, and so on. Only a non-existing candidate attempts `TreeLock`,
 without waiting. If that candidate is busy, the next suffix is tried.
 
-**Server restart recovery**: SemanticMsg is persisted in QueueFS. On restart, `SemanticProcessor` detects that the `lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and re-acquires a TreeLock.
+**Server restart recovery**: `SemanticMsg` and its `SemanticPlan` are persisted
+in QueueFS. On restart, `SemanticProcessor` detects that the
+`lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and
+re-acquires a TreeLock before continuing derived work.
 
 ### Derived Semantic Files (.abstract.md / .overview.md)
 

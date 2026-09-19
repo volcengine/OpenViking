@@ -107,7 +107,6 @@ async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     fs = FakeVikingFS()
     parser = DirectoryParser()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/import")
     calls = []
 
     async def parse_api(self, source, **options):
@@ -143,8 +142,8 @@ async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     assert calls[0][1].get("understanding_response_id") == ("old" if resume else None)
     save.assert_awaited_once_with(plan.entries[0].checkpoint_key(plan.root), "response-1")
     assert result.meta["failed_files"] == []
-    assert "viking://temp/import/Folder/nested/Cloud/0.md" in fs.files
-    assert "viking://temp/import/Folder/empty" not in fs.dirs
+    assert f"{result.temp_dir_path}/Folder/nested/Cloud/0.md" in fs.files
+    assert f"{result.temp_dir_path}/Folder/empty" not in fs.dirs
     assert "secret" not in str(result.meta)
 
 
@@ -172,7 +171,6 @@ async def test_directory_omits_source_directories_without_imported_content(
     fs = FakeVikingFS()
     parser = DirectoryParser()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/empty-filter")
     parse = AsyncMock(side_effect=ValueError("document parse failed"))
     monkeypatch.setattr(DirectoryParser, "_parse_file_with_parser", parse)
     result = await parser.parse(
@@ -186,7 +184,7 @@ async def test_directory_omits_source_directories_without_imported_content(
     assert result.meta["file_count"] == 1
     assert len(result.meta["failed_files"]) == 1
     assert result.meta["failed_files"][0]["path"] == "failed/Broken.md"
-    target = "viking://temp/empty-filter/Folder"
+    target = f"{result.temp_dir_path}/Folder"
     assert fs.files[f"{target}/kept/nested/data.json"] == b'{"body": "keep"}'
     assert [entry["name"] for entry in await fs.ls(target)] == ["kept"]
 
@@ -199,7 +197,6 @@ async def test_directory_virtual_url_obeys_include_filter(monkeypatch, tmp_path)
     parser = DirectoryParser()
     fs = FakeVikingFS()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/filter")
     parse = AsyncMock(side_effect=AssertionError("excluded URL was submitted"))
     monkeypatch.setattr(UnderstandingAPI, "parse", parse)
     result = await parser.parse(tmp_path, _feishu_import_plan=plan, include="*.pdf")
@@ -374,7 +371,6 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
     processor._accessor_registry = SimpleNamespace(access=access)
     fs = FakeVikingFS()
     monkeypatch.setattr(DirectoryParser, "_get_viking_fs", lambda self: fs)
-    monkeypatch.setattr(DirectoryParser, "_create_temp_uri", lambda self: "viking://temp/tree")
     calls = []
 
     async def parse_api(self, source, **options):
@@ -414,9 +410,9 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
         )
         assert "feishu_access_token" not in binary_options
         assert "lark_file" not in binary_options
-        assert "viking://temp/tree/Root/Root/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Leaf/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Report/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Root/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Leaf/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Report/0.md" in fs.files
     finally:
         for resource in resources:
             resource.is_temporary = True
@@ -568,7 +564,6 @@ async def test_directory_failure_cleans_unmerged_artifacts(
     fs = FakeVikingFS()
     parser = DirectoryParser()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/import")
 
     async def parse_api(self, source, **options):
         name = source.rsplit("/", 1)[-1]
@@ -830,7 +825,6 @@ async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monke
     processor._accessor_registry = SimpleNamespace(access=access)
     fs = FakeVikingFS()
     monkeypatch.setattr(DirectoryParser, "_get_viking_fs", lambda self: fs)
-    monkeypatch.setattr(DirectoryParser, "_create_temp_uri", lambda self: "viking://temp/tree")
     calls = []
 
     async def parse_api(self, source, **options):
@@ -871,9 +865,9 @@ async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monke
         )
         assert "feishu_access_token" not in binary_options
         assert "lark_file" not in binary_options
-        assert "viking://temp/tree/Root/Root/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Leaf/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Report/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Root/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Leaf/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Report/0.md" in fs.files
     finally:
         for resource in resources:
             resource.is_temporary = True

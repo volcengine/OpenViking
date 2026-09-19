@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
 
 from openviking.parse.gitignore import GitignoreMatcher
+from openviking.parse.output import (
+    ARTIFACT_MANIFEST_NAME as ARTIFACT_MANIFEST_NAME,
+)
+from openviking.parse.output import (
+    write_artifact_manifest,
+)
 from openviking.parse.parsers.constants import (
     ADDITIONAL_TEXT_EXTENSIONS,
     CODE_EXTENSIONS,
@@ -15,7 +21,7 @@ from openviking.parse.parsers.constants import (
     IGNORE_EXTENSIONS,
 )
 from openviking.parse.parsers.text_encoding import normalize_text_bytes
-from openviking.utils.path_safety import safe_join_viking_uri
+from openviking.utils.content_hash import content_md5
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -116,18 +122,24 @@ _UPLOAD_CONCURRENCY = 8
 
 async def upload_directory(
     local_dir: Path,
-    viking_uri_base: str,
-    viking_fs: Any,
+    base_rel: str,
+    *,
+    store: Any,
+    artifact_ref: Any,
     ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
     ignore_extensions: Optional[Set[str]] = None,
     max_file_size: int = 10 * 1024 * 1024,
     include: Optional[str] = None,
     exclude: Optional[str] = None,
 ) -> Tuple[int, List[str]]:
-    """Upload an entire directory recursively and return uploaded count with warnings.
+    """Upload a directory into a parse output store, returning (count, warnings).
 
-    Optimized: collects all files in one pass, pre-creates directories upfront,
-    then uploads all files concurrently (up to _UPLOAD_CONCURRENCY at a time).
+    Artifacts are written through the backend-agnostic :class:`ParseOutputStore`,
+    so AGFS and local backends share one path with no branching. Files land under
+    ``base_rel`` (e.g. ``repository``) as artifact-relative paths the store
+    resolves to a local dir or an AGFS temp URI. An md5 manifest of the final
+    (encoding-normalized) bytes is written at the artifact root so the incremental
+    diff can compare fingerprints without re-reading file contents.
     """
     effective_ignore_extensions = (
         ignore_extensions if ignore_extensions is not None else IGNORE_EXTENSIONS
@@ -153,9 +165,10 @@ async def upload_directory(
 
     warnings: List[str] = []
 
-    # --- Phase 1: Collect files and unique parent directory URIs in one pass ---
-    files_to_upload: List[Tuple[Path, str]] = []  # (local_path, target_uri)
-    parent_uris: Set[str] = {viking_uri_base}
+    # --- Phase 1: Collect files and their artifact-relative parent dirs ---
+    base = base_rel.strip("/")
+    files_to_upload: List[Tuple[Path, str]] = []
+    parent_dirs: Set[str] = set()
 
     for root, dirs, files in os.walk(local_dir):
         dir_path = Path(root)
@@ -202,39 +215,29 @@ async def upload_directory(
                 exclude_patterns,
             ):
                 continue
-            try:
-                target_uri = safe_join_viking_uri(viking_uri_base, rel_path_str)
-            except ValueError as exc:
-                warning = f"Skipping {file_path}: {exc}"
-                warnings.append(warning)
-                logger.warning(warning)
-                continue
-            files_to_upload.append((file_path, target_uri))
-            parent_uris.add(target_uri.rsplit("/", 1)[0])
+            # Artifact-relative path under the resource root; the store resolves it
+            # to a local/agfs location.
+            target = f"{base}/{rel_path_str}" if base else rel_path_str
+            files_to_upload.append((file_path, target))
+            if "/" in target:
+                parent_dirs.add(target.rsplit("/", 1)[0])
 
-    # --- Phase 2: Pre-create all directories ---
-    # Memoized mkdir: each unique VikingFS path is created at most once.
-    # This is equivalent to _ensure_parent_dirs but avoids redundant HTTP calls
-    # by tracking already-processed paths across all directories.
-    _created: Set[str] = set()
-
-    for dir_uri in sorted(parent_uris):
-        if dir_uri in _created:
-            continue
+    # --- Phase 2: Pre-create unique parent dirs (shallowest first) ---
+    # store.write_bytes also creates parents implicitly; this batches the unique
+    # directories once to avoid redundant per-file creation on remote backends.
+    for rel_dir in sorted(parent_dirs, key=lambda value: (value.count("/"), value)):
         try:
-            await viking_fs.mkdir(dir_uri, exist_ok=True)
-            _created.add(dir_uri)
+            await store.mkdir(artifact_ref, rel_dir)
         except Exception as e:
-            if "already" in str(e).lower():
-                _created.add(dir_uri)
-            else:
-                logger.warning(f"Failed to create directory {dir_uri}: {e}")
+            logger.warning(f"Failed to create artifact directory {rel_dir}: {e}")
 
     # --- Phase 3: Upload files concurrently ---
     sem = asyncio.Semaphore(_UPLOAD_CONCURRENCY)
     errors: List[Optional[str]] = [None] * len(files_to_upload)
+    # rel_path -> md5 of final bytes, collected for the manifest.
+    md5_by_target: dict[str, str] = {}
 
-    async def _upload_one(idx: int, file_path: Path, target_uri: str) -> None:
+    async def _upload_one(idx: int, file_path: Path, target: str) -> None:
         async with sem:
 
             def _read_and_encode() -> bytes:
@@ -243,16 +246,25 @@ async def upload_directory(
 
             try:
                 encoded = await asyncio.to_thread(_read_and_encode)
-                await viking_fs.write_file_bytes(target_uri, encoded)
+                await store.write_bytes(artifact_ref, target, encoded)
+                # Fingerprint the final (normalized) bytes at the write point; this
+                # is a local read, no extra remote IO.
+                md5_by_target[target] = content_md5(encoded)
             except Exception as exc:
                 errors[idx] = f"Failed to upload {file_path}: {exc}"
 
-    await asyncio.gather(*[_upload_one(i, fp, uri) for i, (fp, uri) in enumerate(files_to_upload)])
+    await asyncio.gather(*[_upload_one(i, fp, tgt) for i, (fp, tgt) in enumerate(files_to_upload)])
 
     for err in errors:
         if err:
             warnings.append(err)
             logger.warning(err)
+
+    # Persist the md5 manifest at the artifact root so the incremental diff can
+    # compare fingerprints without re-reading files. Only write it when every file
+    # uploaded cleanly, so a partial manifest never masquerades as complete.
+    if not any(errors):
+        await write_artifact_manifest(store, artifact_ref, md5_by_target)
 
     uploaded_count = sum(1 for e in errors if e is None)
     return uploaded_count, warnings

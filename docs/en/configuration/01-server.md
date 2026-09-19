@@ -185,6 +185,9 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
     },
     "vectordb": {
       "backend": "local"
+    },
+    "parse_output": {
+      "mode": "agfs"
     }
   }
 }
@@ -198,9 +201,16 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
+| `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
+| `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
+
+`parse_output.mode=local` avoids writing parser intermediates to shared AGFS.
+The same worker must commit the required bytes to the formal resource tree before
+enqueueing downstream work. Artifacts are temporary and are removed after the
+content commit; provision `local_root` with enough space for concurrent imports.
 
 ## Queue Worker Settings
 
@@ -217,9 +227,10 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+| `file_operation_concurrency` | integer | `16` | Maximum concurrent file-level commit and fallback comparison operations within one AddResource job; must be greater than `0`; requires a server restart after changes |
 | `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
-`max_concurrent` controls independent AddResource jobs, while `file_vectorization_concurrency` controls files within one vectors-only directory job. It does not affect single-file resources or `semantic_and_vectors` processing.
+`max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
 
 ### `queue_workers.session_commit`
 

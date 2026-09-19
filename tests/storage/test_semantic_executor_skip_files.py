@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -89,6 +89,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         creator_acl_grant=None,
+        file_md5=None,
     ):
         self.vectorized_files.append(file_path)
 
@@ -105,11 +106,13 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
         ],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="session",
         max_concurrent_llm=2,
@@ -137,11 +140,13 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
         ],
     }
     fake_fs = _FakeVikingFS(tree)
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="session",
         max_concurrent_llm=2,
@@ -165,15 +170,17 @@ async def test_unlistable_semantic_root_is_not_materialized_as_directory(
         fail_sidecar_write=fail_sidecar_write,
         list_error=list_error,
     )
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="memory",
         max_concurrent_llm=2,
@@ -192,15 +199,17 @@ async def test_unlistable_semantic_root_is_not_materialized_as_directory(
 async def test_empty_semantic_directory_still_receives_sidecars(monkeypatch):
     root_uri = "viking://user/user1/memories/empty"
     fake_fs = _FakeVikingFS({root_uri: []})
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
-    executor = SemanticDagExecutor(
+    executor = SemanticTreeExecutor(
         processor=processor,
         context_type="memory",
         max_concurrent_llm=2,

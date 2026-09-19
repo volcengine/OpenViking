@@ -44,6 +44,10 @@ class _FakeVikingFS:
     async def write_file_bytes(self, uri: str, content: bytes) -> None:
         self.files[uri] = content
 
+    async def delete_temp(self, uri: str) -> None:
+        prefix = uri.rstrip("/") + "/"
+        self.files = {key: value for key, value in self.files.items() if not key.startswith(prefix)}
+
 
 def _configure_understanding(
     monkeypatch,
@@ -542,7 +546,13 @@ async def test_direct_upload_failure_includes_file_error(
     video = tmp_path / "video.mp4"
     video.write_bytes(b"01234567")
     fake_fs = _FakeVikingFS()
-    fake_fs.write_file = AsyncMock(side_effect=OSError("storage rejected video.mp4"))
+
+    async def write_file_bytes(uri, content):
+        if uri.endswith("video.mp4"):
+            raise OSError("storage rejected video.mp4")
+        fake_fs.files[uri] = content
+
+    fake_fs.write_file_bytes = AsyncMock(side_effect=write_file_bytes)
 
     with patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs):
         result = await DirectoryParser().parse(str(tmp_path), strict=True)

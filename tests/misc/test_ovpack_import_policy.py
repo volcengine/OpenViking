@@ -339,6 +339,7 @@ class FakeVectorStore:
                     "context_type": "resource",
                     "level": 2,
                     "abstract": "note summary",
+                    "md5": "note-md5",
                     "tags": ["snapshot"],
                     "vector": [0.1, 0.2, 0.3],
                 }
@@ -564,11 +565,13 @@ def test_index_consistency_report_limits_public_and_error_records():
 async def test_export_ovpack_writes_v3_manifest_with_abstract_overviews(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
+    vector_store = FakeVectorStore()
     await export_ovpack(
         FakeExportVikingFS(),
         "viking://resources/demo",
         str(temp_ovpack_path),
         ctx=request_ctx,
+        vector_store=vector_store,
     )
 
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
@@ -599,6 +602,8 @@ async def test_export_ovpack_writes_v3_manifest_with_abstract_overviews(
     assert manifest["index"]["records"]["count"] == len(index_records)
     assert index_records[0]["path"] == ""
     assert index_records[0]["text"] == "root abstract"
+    note_record = next(record for record in index_records if record["path"] == "notes.txt")
+    assert note_record["scalars"]["md5"] == "note-md5"
 
 
 @pytest.mark.asyncio
@@ -745,6 +750,7 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
                     "abstract": "portable summary",
                     "description": "portable description",
                     "tags": ["portable"],
+                    "md5": "portable-md5",
                 },
             }
         ],
@@ -768,6 +774,7 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
         "summary": "portable summary",
     }
     assert vectorized_files[0]["scalar_override"]["tags"] == ["portable"]
+    assert vectorized_files[0]["scalar_override"]["md5"] == "portable-md5"
 
 
 @pytest.mark.asyncio

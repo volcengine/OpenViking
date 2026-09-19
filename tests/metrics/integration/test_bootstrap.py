@@ -99,7 +99,7 @@ def test_create_default_collector_manager_propagates_construction_failures(monke
 def test_optional_cache_datasource_instrumentation_is_wired_into_key_call_sites():
     project_root = Path(__file__).resolve().parents[3]
     targets = [
-        project_root / "openviking" / "storage" / "queuefs" / "semantic_dag.py",
+        project_root / "openviking" / "storage" / "queuefs" / "semantic_executor.py",
         project_root / "openviking" / "storage" / "queuefs" / "semantic_processor.py",
         project_root / "openviking" / "session" / "memory" / "extract_loop.py",
     ]

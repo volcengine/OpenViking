@@ -130,6 +130,7 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
 
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.add_resource.file_operation_concurrency == 16
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
     assert config.queue_workers.session_commit.max_concurrent == 8
     assert config.queue_workers.external_task.max_concurrent == 10
@@ -150,6 +151,7 @@ def test_runtime_concurrency_accepts_separate_values():
                 "external_parse": {"max_concurrent": 9},
                 "add_resource": {
                     "max_concurrent": 7,
+                    "file_operation_concurrency": 20,
                     "file_vectorization_concurrency": 12,
                 },
                 "session_commit": {"max_concurrent": 50},
@@ -161,6 +163,7 @@ def test_runtime_concurrency_accepts_separate_values():
 
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.add_resource.file_operation_concurrency == 20
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
     assert config.queue_workers.session_commit.max_concurrent == 50
     assert config.queue_workers.external_task.max_concurrent == 11

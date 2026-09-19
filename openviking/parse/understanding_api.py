@@ -8,7 +8,7 @@ Workflow:
 2. Submit a parse request to Responses API (response_id)
 3. Poll Responses API until completed/failed
 4. Download result zip (zip_url)
-5. Materialize the result into VikingFS temp directory
+5. Materialize the result through the configured ParseOutputStore
 6. Return ParseResult for downstream TreeBuilder/SemanticQueue processing
 """
 
@@ -27,6 +27,10 @@ from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
     build_artifact_image_mappings,
+)
+from openviking.parse.output import (
+    ParseArtifactRef,
+    create_parse_artifact_writer,
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.constants import MPEG_TS_EXTENSION_ALIAS, TYPESCRIPT_MPEG_TS_EXTENSION
@@ -229,10 +233,15 @@ class UnderstandingAPI(BaseParser):
                     if archive_root:
                         doc_name = archive_root
                         task_meta["doc_name"] = doc_name
-                temp_dir_path = await self._unpack_zip_to_temp_dir(
-                    zip_path=zip_path,
-                    resource_name=doc_name,
-                )
+                unpack_kwargs = {
+                    "zip_path": zip_path,
+                    "resource_name": doc_name,
+                }
+                if kwargs.get("parse_output_store") is not None:
+                    unpack_kwargs["parse_output_store"] = kwargs["parse_output_store"]
+                unpacked = await self._unpack_zip_to_temp_dir(**unpack_kwargs)
+                artifact_ref = unpacked if isinstance(unpacked, ParseArtifactRef) else None
+                temp_dir_path = artifact_ref.root if artifact_ref is not None else unpacked
             finally:
                 try:
                     zip_path.unlink()
@@ -276,6 +285,7 @@ class UnderstandingAPI(BaseParser):
                 content_type if content_type in {"image", "audio", "video"} else doc_type
             ),
             temp_dir_path=temp_dir_path,
+            artifact_ref=artifact_ref,
             parser_name="UnderstandingAPI",
             meta={key: task_meta[key] for key in ("file_id", "response_id") if task_meta.get(key)},
         )
@@ -762,14 +772,20 @@ class UnderstandingAPI(BaseParser):
             f.write(rsp.content)
             return Path(f.name)
 
-    async def _unpack_zip_to_temp_dir(self, zip_path: Path, resource_name: str) -> str:
-        viking_fs = get_viking_fs()
-        temp_uri = viking_fs.create_temp_uri()
+    async def _unpack_zip_to_temp_dir(
+        self,
+        zip_path: Path,
+        resource_name: str,
+        *,
+        parse_output_store: Any = None,
+    ) -> ParseArtifactRef:
+        writer = await create_parse_artifact_writer(
+            parse_output_store,
+            viking_fs=get_viking_fs() if parse_output_store is None else None,
+        )
+        resource_rel = str(resource_name).strip("/")
         try:
-            await viking_fs.mkdir(temp_uri)
-
-            temp_doc_uri = f"{temp_uri}/{resource_name}"
-            await viking_fs.mkdir(temp_doc_uri)
+            await writer.mkdir(resource_rel)
 
             with tempfile.TemporaryDirectory() as extract_dir:
                 with zipfile.ZipFile(zip_path, "r") as zf:
@@ -783,51 +799,32 @@ class UnderstandingAPI(BaseParser):
 
                 image_mappings = await asyncio.to_thread(build_artifact_image_mappings, root_dir)
 
-                for child in root_dir.iterdir():
+                for child in root_dir.rglob("*"):
+                    rel = child.relative_to(root_dir).as_posix()
                     if child.name in {".", "..", IMAGE_MAPPINGS_FILENAME}:
                         continue
                     if child.is_dir():
-                        sub_uri = f"{temp_doc_uri}/{child.name}"
-                        await viking_fs.mkdir(sub_uri)
-                        await self._copy_dir_to_fs(child, sub_uri)
+                        await writer.mkdir(f"{resource_rel}/{rel}")
                     else:
-                        await viking_fs.write_file_bytes(
-                            f"{temp_doc_uri}/{child.name}", child.read_bytes()
+                        await writer.write_bytes(
+                            f"{resource_rel}/{rel}",
+                            await asyncio.to_thread(child.read_bytes),
                         )
 
                 if image_mappings:
-                    await viking_fs.write_file(
-                        f"{temp_doc_uri}/{IMAGE_MAPPINGS_FILENAME}",
+                    await writer.write_text(
+                        f"{resource_rel}/{IMAGE_MAPPINGS_FILENAME}",
                         json.dumps(image_mappings, ensure_ascii=False),
                     )
         except BaseException:
             try:
-                await viking_fs.delete_temp(temp_uri)
+                await writer.cleanup()
             except Exception as cleanup_exc:
                 logger.warning(
                     "[UnderstandingAPI] Failed to clean temporary artifact %s: %s",
-                    temp_uri,
+                    writer.ref.root,
                     cleanup_exc,
                 )
             raise
 
-        return temp_uri
-
-    async def _copy_dir_to_fs(self, local_dir: Path, fs_uri: str):
-        """
-        Recursively copy a local directory to VikingFS.
-        """
-        viking_fs = get_viking_fs()
-
-        for item in local_dir.iterdir():
-            if item.name in [".", "..", IMAGE_MAPPINGS_FILENAME]:
-                continue
-
-            if item.is_dir():
-                sub_uri = f"{fs_uri}/{item.name}"
-                await viking_fs.mkdir(sub_uri)
-                await self._copy_dir_to_fs(item, sub_uri)
-            else:
-                file_content = item.read_bytes()
-                file_uri = f"{fs_uri}/{item.name}"
-                await viking_fs.write_file_bytes(file_uri, file_content)
+        return await writer.finalize(resource_rel=resource_rel)

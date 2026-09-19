@@ -23,13 +23,13 @@ from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome
-from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
+from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.session.user_id import UserIdentifier
 from tests.storage.test_collection_schemas import _DummyConfig, _DummyEmbedder
-from tests.storage.test_semantic_dag_skip_files import _FakeVikingFS
+from tests.storage.test_semantic_executor_skip_files import _FakeVikingFS
 
 
 def _ctx():
@@ -57,7 +57,7 @@ async def test_cancel_skill_stops_model_work_without_cancelling_other_packages(m
             resource: [{"name": "resource.md"}],
         }
     )
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fs)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     processor = _processor()
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -82,13 +82,13 @@ async def test_cancel_skill_stops_model_work_without_cancelling_other_packages(m
     processor._generate_single_file_summary = summarize
     processor._vectorize_single_file = vectorize
     with bind_task_context("skill-a", "acc", "alice"):
-        executor_a = SemanticDagExecutor(processor, "skill", 1, _ctx())
+        executor_a = SemanticTreeExecutor(processor, "skill", 1, _ctx())
         task_a = asyncio.create_task(executor_a.run(root_a))
     await asyncio.wait_for(started.wait(), 1)
     with bind_task_context("skill-b", "acc", "alice"):
-        executor_b = SemanticDagExecutor(processor, "skill", 1, _ctx())
+        executor_b = SemanticTreeExecutor(processor, "skill", 1, _ctx())
         task_b = asyncio.create_task(executor_b.run(root_b))
-    executor_resource = SemanticDagExecutor(processor, "resource", 1, _ctx())
+    executor_resource = SemanticTreeExecutor(processor, "resource", 1, _ctx())
     task_resource = asyncio.create_task(executor_resource.run(resource))
     task_a.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -104,7 +104,7 @@ async def test_cancel_skill_stops_model_work_without_cancelling_other_packages(m
 async def test_cancel_skill_waits_for_started_threaded_sidecar_write(monkeypatch):
     root = "viking://agent/skills/demo/reference"
     fs = _FakeVikingFS({root: []})
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fs)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     started = asyncio.Event()
     release = threading.Event()
     loop = asyncio.get_running_loop()
@@ -119,7 +119,7 @@ async def test_cancel_skill_waits_for_started_threaded_sidecar_write(monkeypatch
 
     fs.write_file = write
     processor = _processor()
-    executor = SemanticDagExecutor(processor, "skill", 1, _ctx())
+    executor = SemanticTreeExecutor(processor, "skill", 1, _ctx())
     worker = asyncio.create_task(executor.run(root))
     try:
         await asyncio.wait_for(started.wait(), 1)
@@ -251,7 +251,7 @@ async def test_semantic_cancel_drains_embeddings_before_releasing_package(monkey
             started.set()
 
         def get_stats(self):
-            return DagStats()
+            return SemanticTreeStats()
 
     class Lease:
         lock = {"lease_ref": "skill"}
@@ -260,7 +260,7 @@ async def test_semantic_cancel_drains_embeddings_before_releasing_package(monkey
             events.append("released")
 
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor", Executor
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor", Executor
     )
     monkeypatch.setattr(
         SemanticProcessor, "_resolve_skill_semantic_lock", AsyncMock(return_value=Lease())

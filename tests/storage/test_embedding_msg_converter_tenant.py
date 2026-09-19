@@ -6,6 +6,7 @@
 import pytest
 
 from openviking.core.context import Context, Vectorize
+from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -45,6 +46,7 @@ def test_embedding_msg_converter_backfills_account_and_owner_fields(
         expected_owner_user_id(user) if callable(expected_owner_user_id) else expected_owner_user_id
     )
     assert msg.context_data["owner_user_id"] == expected_user
+    assert msg.action is IndexAction.MERGE
 
 
 def test_embedding_msg_converter_keeps_only_embedding_input():
@@ -56,3 +58,4 @@ def test_embedding_msg_converter_keeps_only_embedding_input():
     assert msg is not None
     assert msg.message == "bounded embedding text"
     assert "content" not in msg.context_data
+    assert msg.action is IndexAction.MERGE
