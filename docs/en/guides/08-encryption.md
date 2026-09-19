@@ -55,7 +55,7 @@ Edit `~/.openviking/ov.conf`:
 
 ### 3. Verify
 
-Restart the server after changing encryption settings, and run this example against that server. Install the [Python SDK](../getting-started/02-quickstart.md#run-the-script) in the environment running the script.
+Restart the server after changing encryption settings, and run this example against that server. Install the [Python SDK](../api/01-overview.md#using-python-sdk-client-without-configuration-file) in the environment running the script.
 
 ```python
 import asyncio

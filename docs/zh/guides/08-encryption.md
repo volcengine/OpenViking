@@ -55,7 +55,7 @@ ov system crypto init-key --output-file ~/.openviking/master.key
 
 ### 3. 验证
 
-修改加密配置后重启服务，再对该服务运行示例。在运行脚本的环境中安装 [Python SDK](../getting-started/02-quickstart.md#运行脚本)。
+修改加密配置后重启服务，再对该服务运行示例。在运行脚本的环境中安装 [Python SDK](../api/01-overview.md#完全不依赖配置文件使用-python-sdk-客户端)。
 
 ```python
 import asyncio

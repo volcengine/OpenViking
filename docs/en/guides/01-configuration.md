@@ -1517,39 +1517,6 @@ Local backends add the fields to an existing collection and rebuild the scalar i
 
 For existing remote collections, including Volcengine VikingDB, provision these fields and scalar indexes before startup; OpenViking validates but does not alter the remote schema. Volcengine API-key data-plane mode also requires the context collection and configured index to exist. See [Resource Access Control (ACL)](../concepts/15-acl.md) for permission semantics.
 
-<details>
-<summary><b>openGauss</b></summary>
-
-Requires an openGauss server with native `vector` support and a remote-capable database user.
-Install the optional driver in the server environment: `uv tool install "openviking[opengauss]" --upgrade` (uv) or `pip install "openviking[opengauss]"` (pip).
-In the official container, the initial `omm` user may be restricted for remote login; create a normal user for OpenViking if needed.
-
-```json
-{
-  "storage": {
-    "vectordb": {
-      "name": "context",
-      "backend": "opengauss",
-      "project": "default",
-      "distance_metric": "cosine",
-      "dimension": 1024,
-      "opengauss": {
-        "host": "127.0.0.1",
-        "port": 5432,
-        "user": "openviking",
-        "password": "your-password",
-        "db_name": "postgres",
-        "schema": "public",
-        "mode": "standalone"
-      }
-    }
-  }
-}
-```
-
-Set `mode` to `"distributed"` for openGauss distributed deployments; OpenViking will attempt to mark metadata tables as reference tables and distribute collection tables by `id`.
-</details>
-
 
 ## Config Files
 
