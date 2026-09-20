@@ -249,21 +249,22 @@ class StoreManager:
         """Clear all data from the store."""
         self.storage.clear()
 
-    def get_delta_data_after_ts(self, ns_ts: int) -> List[DeltaRecord]:
+    def get_delta_data_after_ts(self, ns_ts: int) -> Iterator[DeltaRecord]:
         """Get delta records created after a specific timestamp.
 
         Args:
             ns_ts (int): Timestamp in nanoseconds.
 
         Returns:
-            List[DeltaRecord]: List of delta records.
+            Iterator[DeltaRecord]: Delta records replayed in bounded pages; only one
+            page and one deserialized record are held in memory at a time, so a large
+            delta table can be replayed on memory-constrained hosts.
         """
-        delta_kv_list = self.storage.seek_to_end(
+        for _, bytes_data in self.storage.iter_seek_to_end(
             str(ns_ts),
             StoreManager.DeltaTable,
-        )
-        delta_list = [DeltaRecord.from_bytes(data=data[1]) for data in delta_kv_list]
-        return delta_list
+        ):
+            yield DeltaRecord.from_bytes(bytes_data)
 
     def delete_delta_data_before_ts(self, ns_ts: int) -> List[DeltaRecord]:
         """Delete delta records created before a specific timestamp.

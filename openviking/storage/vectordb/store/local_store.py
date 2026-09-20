@@ -122,6 +122,37 @@ class StoreEngineProxy(IMutiTableStore):
         page is internally consistent, but separate page calls do not share a
         snapshot; collection recovery invokes this while the store is quiescent.
         """
+        yield from self._iter_page_scan(table_name, "", page_size, page_bytes)
+
+    def iter_seek_to_end(
+        self,
+        start_key: str,
+        table_name: str,
+        page_size: int = STORE_SCAN_PAGE_SIZE,
+        page_bytes: int = STORE_SCAN_PAGE_BYTES,
+    ) -> Iterator[Tuple[str, bytes]]:
+        """Scan a table in bounded native pages, starting at ``start_key``.
+
+        Same bounded paging as :meth:`iter_all`; only the initial cursor differs
+        (``table_name + start_key``, inclusive), matching :meth:`seek_to_end`
+        while never materializing the scanned range at once.
+        """
+        yield from self._iter_page_scan(table_name, start_key, page_size, page_bytes)
+
+    def _iter_page_scan(
+        self,
+        table_name: str,
+        start_key: str,
+        page_size: int,
+        page_bytes: int,
+    ) -> Iterator[Tuple[str, bytes]]:
+        """Page a table scan in bounded native pages.
+
+        Pages are capped by row count and ``max(byte budget, one encoded row)``
+        so an oversized row cannot cause a false end-of-scan.  Each native
+        page is internally consistent, but separate page calls do not share a
+        snapshot; collection recovery invokes this while the store is quiescent.
+        """
         if page_size <= 0:
             raise ValueError("Store scan page size must be positive")
         if page_bytes <= 0:
@@ -135,7 +166,7 @@ class StoreEngineProxy(IMutiTableStore):
             )
 
         end_key = table_name + MAX_UNICODE_CHAR
-        cursor = table_name
+        cursor = table_name + start_key
         start_exclusive = False
         try:
             page = seek_page(cursor, end_key, page_size, page_bytes, start_exclusive)
