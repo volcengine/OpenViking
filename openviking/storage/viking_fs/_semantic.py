@@ -3,7 +3,7 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
@@ -190,6 +190,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        stats_context_type: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -199,6 +200,10 @@ class _SemanticMixin:
             limit: Return count
             score_threshold: Score threshold
             filter: Metadata filter
+            stats_context_type: Statistics-only observer label (see
+                HierarchicalRetriever.retrieve). Carried alongside the query so
+                the "Context Type" breakdown can name the requested type(s)
+                without that label ever affecting retrieval.
 
         Returns:
             FindResult
@@ -235,6 +240,10 @@ class _SemanticMixin:
 
         typed_query = TypedQuery(
             query=query,
+            # Statistics-only labelling must not touch retrieval. The request's
+            # context_type already narrows results through the scope filter
+            # (scope_dsl), so TypedQuery.context_type stays None and directory
+            # selection plus the vector filter behave exactly as before.
             context_type=None,
             intent="",
             target_directories=retrieval_targets.target_directories,
@@ -256,6 +265,7 @@ class _SemanticMixin:
             score_threshold=score_threshold,
             scope_dsl=filter,
             level=level,
+            stats_context_type=stats_context_type,
         )
 
         # Convert QueryResult to FindResult
@@ -287,6 +297,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        stats_context_type: Optional[str] = None,
     ):
         """Complex search with session context.
 
@@ -296,6 +307,8 @@ class _SemanticMixin:
             session_info: Session information
             limit: Return count
             filter: Metadata filter
+            stats_context_type: Statistics-only observer label (see
+                HierarchicalRetriever.retrieve). Never changes retrieval.
 
         Returns:
             FindResult
@@ -337,7 +350,12 @@ class _SemanticMixin:
             bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
         )
 
-        # With session context: optional intent analysis
+        # With session context: optional intent analysis.
+        # Every TypedQuery below keeps context_type=None: the request's
+        # context_type is a statistics-only label here (see `stats_context_type`)
+        # and is already enforced on results by the scope filter, so the
+        # retrieval-side type keeps its existing sources only — the intent
+        # analyzer's assignment and the retriever's image->RESOURCE default.
         if image_url:
             typed_queries = [
                 TypedQuery(
@@ -398,6 +416,7 @@ class _SemanticMixin:
                 score_threshold=score_threshold,
                 scope_dsl=filter,
                 level=level,
+                stats_context_type=stats_context_type,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])

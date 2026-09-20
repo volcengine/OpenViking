@@ -95,6 +95,25 @@ def resolve_context_types(context_type: Optional[SearchContextTypeInput]) -> Lis
     return normalized_values
 
 
+def stats_context_type_label(
+    context_type: Optional[SearchContextTypeInput] = None,
+) -> Optional[str]:
+    """Return the observer's statistics label for a request's context_type.
+
+    The retrieval observer's "Context Type" breakdown reports what the caller
+    asked for, so this label is carried alongside the request instead of onto
+    ``TypedQuery.context_type`` — that field is read by retrieval (directory
+    selection and the vector filter), and labelling a request must never change
+    what is retrieved. A multi-type request keeps every requested type
+    (``"memory+resource"``) rather than collapsing to one, and a request that
+    names no type returns None so the retriever can fall back to its own
+    classification (intent analysis, image RESOURCE default) and finally to
+    "unknown". Values are normalized by :func:`resolve_context_types` — the same
+    helper the scope filter uses — so the label cannot disagree with the filter.
+    """
+    return "+".join(resolve_context_types(context_type)) or None
+
+
 def merge_time_filter(
     existing_filter: Optional[Dict[str, Any]],
     since: Optional[str] = None,

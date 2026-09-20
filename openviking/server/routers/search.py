@@ -40,6 +40,7 @@ from openviking.utils.search_filters import (
     SearchContextTypeInput,
     _resolve_levels,
     merge_search_filter,
+    stats_context_type_label,
 )
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
@@ -316,6 +317,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            stats_context_type=stats_context_type_label(request.context_type),
         ),
     )
     result = execution.result
@@ -428,6 +430,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            stats_context_type=stats_context_type_label(request.context_type),
         )
 
     execution = await run_operation(

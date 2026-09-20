@@ -107,6 +107,7 @@ class HierarchicalRetriever:
         score_gte: bool = False,
         scope_dsl: Optional[FilterExpr | Dict[str, Any]] = None,
         level: Optional[List[int]] = None,
+        stats_context_type: Optional[str] = None,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
@@ -117,6 +118,11 @@ class HierarchicalRetriever:
             score_gte: True uses >=, False uses >
             scope_dsl: Additional scope constraints passed from public find/search filter
             level: Optional result level filter (0=L0, 1=L1, 2=L2)
+            stats_context_type: Statistics-only label for the observer's
+                "Context Type" breakdown. Never influences retrieval: it is
+                never written to TypedQuery.context_type and never reaches the
+                vector filter or directory selection. May carry more than one
+                requested type joined with "+" (e.g. "memory+resource").
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
@@ -310,8 +316,14 @@ class HierarchicalRetriever:
         final = matched[:limit]
 
         elapsed_ms = (time.monotonic() - t0) * 1000
+        # Observer classification is a statistics-only signal. The caller's
+        # requested type arrives on `stats_context_type` (carried alongside the
+        # query, never onto TypedQuery) so labelling a request cannot change what
+        # is retrieved. When the caller named nothing, fall back to the
+        # retrieval-side type — the intent analyzer's assignment or the
+        # image->RESOURCE default — so that classification keeps working.
         get_stats_collector().record_query(
-            context_type=context_type or "unknown",
+            context_type=stats_context_type or context_type or "unknown",
             result_count=len(final),
             scores=[m.score for m in final],
             latency_ms=elapsed_ms,

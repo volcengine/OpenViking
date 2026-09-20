@@ -273,6 +273,7 @@ async def gather_candidates(
         target_uri: str,
         find_limit: int,
         find_filter: Optional[Dict[str, Any]] = None,
+        stats_context_type: Optional[str] = None,
     ) -> Any:
         return _safe_find(
             service,
@@ -285,6 +286,7 @@ async def gather_candidates(
             filter=find_filter if find_filter is not None else filter,
             image_url=image_url,
             level=None,
+            stats_context_type=stats_context_type,
         )
 
     async def gather_bucket(bucket: str, quota: int) -> List[Candidate]:
@@ -294,6 +296,10 @@ async def gather_candidates(
             "skills": ContextType.SKILL,
         }.get(bucket, ContextType.MEMORY)
         bucket_filter = merge_context_type_filter(filter, context_type)
+        # Statistics-only observer label for this bucket's searches: the bucket
+        # type already scopes results through bucket_filter, so the label is
+        # carried alongside the find instead of onto the query.
+        stats_context_type = context_type.value
         searches = [
             _find(
                 query=query,
@@ -301,6 +307,7 @@ async def gather_candidates(
                 target_uri=target,
                 find_limit=_overfetch(quota),
                 find_filter=bucket_filter,
+                stats_context_type=stats_context_type,
             )
             for query in planned
             for target in targets
@@ -314,6 +321,7 @@ async def gather_candidates(
                     target_uri=f"{user_root}/peers",
                     find_limit=_overfetch(max(quota * OTHER_PEER_OVERFETCH, quota)),
                     find_filter=bucket_filter,
+                    stats_context_type=stats_context_type,
                 )
                 for query in planned
             )

@@ -53,6 +53,7 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
             score_threshold,
             scope_dsl,
             level,
+            stats_context_type=None,
         ):
             captured["typed_query"] = typed_query
             captured["ctx"] = ctx
@@ -120,6 +121,7 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
             score_threshold,
             scope_dsl,
             level,
+            stats_context_type=None,
         ):
             captured["typed_query"] = typed_query
             return QueryResult(
