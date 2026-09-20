@@ -389,7 +389,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 ```
 
 `parsers.directory.max_files` 默认是 `1000`；显式设为 `null` 表示不限文件数，
-其他值必须是正整数。该限制不适用于 `ov import` / `import_ovpack`。
+其他值必须是正整数。
 
 `parsers.directory.max_concurrent` 由服务事件循环中的所有目录导入共享。默认值为
 `4` 时，单个目录可以并发执行 4 个 Understanding 任务；多个目录同时导入时，合计仍最多

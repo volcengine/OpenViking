@@ -390,7 +390,6 @@ Parsers live under `parsers`:
 
 `parsers.directory.max_files` defaults to `1000`; explicitly set it to `null`
 to disable the file-count limit. Other values must be positive integers.
-This limit does not apply to `ov import` / `import_ovpack`.
 
 `parsers.directory.max_concurrent` is shared by all directory imports in the
 server event loop. With the default value `4`, one directory can run four
