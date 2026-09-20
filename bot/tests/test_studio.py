@@ -230,6 +230,65 @@ async def test_private_gateway_rejects_loopback_without_secret(tmp_path, monkeyp
         assert response.status_code == 200
 
 
+async def test_private_gateway_accepts_a_remote_proxy_with_the_secret(tmp_path, monkeypatch):
+    """A gateway deployed away from the OpenViking Server stays manageable.
+
+    The shared token is mandatory for any non-loopback bind, so it is the whole
+    gate. Requiring loopback on top would force an independently deployed
+    gateway back onto the server's host, which is what external mode exists to
+    avoid.
+    """
+    import httpx
+    from fastapi import FastAPI
+    from vikingbot.studio.router import create_router
+
+    monkeypatch.delenv("OPENVIKING_BOT_STUDIO_TOKEN", raising=False)
+    channel = SimpleNamespace(
+        _gateway_token=lambda: "internal", _is_loopback_request=lambda r: False
+    )
+    service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
+    app = FastAPI()
+    app.include_router(create_router(channel, service))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for token in ["", "wrong"]:
+            response = await client.post(
+                "/studio/dispatch",
+                headers={"X-Gateway-Token": token},
+                json={"account": "a", "action": "list"},
+            )
+            assert response.status_code == 403
+        response = await client.post(
+            "/studio/dispatch",
+            headers={"X-Gateway-Token": "internal"},
+            json={"account": "a", "action": "list"},
+        )
+        assert response.status_code == 200
+
+
+async def test_private_gateway_requires_a_configured_secret(tmp_path, monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from vikingbot.studio.router import create_router
+
+    monkeypatch.delenv("OPENVIKING_BOT_STUDIO_TOKEN", raising=False)
+    channel = SimpleNamespace(_gateway_token=lambda: "", _is_loopback_request=lambda r: True)
+    service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
+    app = FastAPI()
+    app.include_router(create_router(channel, service))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/studio/dispatch",
+            headers={"X-Gateway-Token": ""},
+            json={"account": "a", "action": "list"},
+        )
+
+    assert response.status_code == 403
+
+
 async def test_duplicate_message_does_not_rerun_agent(channel):
     for _ in range(2):
         await channel._handle_message("s", "group", "hello", metadata={"message_id": "same"})

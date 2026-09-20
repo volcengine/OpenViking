@@ -1,6 +1,6 @@
 # VikingBot API
 
-When OpenViking Server starts with `--with-bot`, it proxies VikingBot's core interaction endpoints below `/bot/v1`. These endpoints return `503` when Bot is not enabled.
+When OpenViking Server starts with `--with-bot` (managed gateway) or has `server.bot_api_url` configured (independently deployed gateway), it proxies VikingBot's core interaction endpoints below `/bot/v1`. These endpoints return `503` when neither mode is configured. See "VikingBot gateway modes" in the [server configuration](../configuration/01-server.md) reference.
 
 **Code entry points**:
 

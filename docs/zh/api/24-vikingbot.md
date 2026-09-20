@@ -1,6 +1,6 @@
 # VikingBot API
 
-OpenViking Server 启用 `--with-bot` 后，会在 `/bot/v1` 下代理 VikingBot 的核心交互接口。未启用 Bot 时，这些端点返回 `503`。
+OpenViking Server 启用 `--with-bot`（托管网关）或配置 `server.bot_api_url`（独立部署的网关）后，会在 `/bot/v1` 下代理 VikingBot 的核心交互接口。两种模式都未配置时，这些端点返回 `503`。详见[服务端配置](../configuration/01-server.md)中的「VikingBot 网关的三种模式」。
 
 **代码入口**：
 

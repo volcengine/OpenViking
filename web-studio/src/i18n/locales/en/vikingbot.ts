@@ -127,7 +127,7 @@ export default {
   manageBots: 'Manage bots',
   enable: 'Enable VikingBot to begin',
   enableHint:
-    'Ask your administrator to start OpenViking with Bot support and configure a conversation model.',
+    'Ask your administrator to start OpenViking with Bot support (--with-bot), or to point server.bot_api_url at an independently deployed VikingBot gateway, and configure a conversation model.',
   modelHint: 'VikingBot inherits the root vlm model configuration by default.',
   retry: 'Retry',
   loading: 'Loading…',
@@ -136,6 +136,8 @@ export default {
   comingSoon: 'Coming soon',
   adminOnly:
     'Only the server administrator can manage connections and view Feishu history.',
+  externalGateway:
+    'Connected to an independently deployed VikingBot gateway (server.bot_api_url). Its lifecycle is managed outside this server.',
   webReady: 'Web conversations use your current OpenViking identity.',
   manageHint:
     'Connect an application once, then add its bot to multiple groups.',

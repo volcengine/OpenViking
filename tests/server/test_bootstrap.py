@@ -125,6 +125,91 @@ def test_main_coerces_cli_host_all_to_none(monkeypatch):
     assert captured["port"] == 1933
 
 
+def _stub_main_args(monkeypatch, **overrides):
+    """Stub the CLI args bootstrap.main() reads, keeping tests focused."""
+    values = {
+        "host": None,
+        "port": None,
+        "config": None,
+        "workers": None,
+        "bot": False,
+        "with_bot": False,
+        "bot_port": bootstrap.VIKINGBOT_DEFAULT_PORT,
+        "enable_bot_logging": None,
+        "bot_log_dir": "/tmp/bot-logs",
+    }
+    values.update(overrides)
+    monkeypatch.setattr(
+        bootstrap.argparse.ArgumentParser,
+        "parse_args",
+        lambda self: SimpleNamespace(**values),
+    )
+
+
+def _stub_managed_config(monkeypatch, config):
+    """Common patches so bootstrap.main() runs without a real server."""
+    monkeypatch.setattr(bootstrap, "load_server_config", lambda config_path: config)
+    monkeypatch.setattr(bootstrap, "create_app", lambda config, **kwargs: "app")
+    monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
+    monkeypatch.setattr(
+        OpenVikingConfigSingleton,
+        "initialize",
+        classmethod(lambda cls, config_path: None),
+    )
+    monkeypatch.setattr(bootstrap.uvicorn, "run", lambda *args, **kwargs: None)
+
+
+def test_main_does_not_spawn_a_gateway_for_an_external_bot_url(monkeypatch, capsys):
+    config = ServerConfig(
+        host="127.0.0.1",
+        port=1933,
+        bot_api_url="http://127.0.0.1:18790",
+        bot_gateway_token="gateway-token",
+    )
+    spawned: list[object] = []
+    abort_checks: list[int] = []
+
+    _stub_managed_config(monkeypatch, config)
+    _stub_main_args(monkeypatch)
+    monkeypatch.setattr(
+        bootstrap, "_abort_if_port_in_use", lambda port, label: abort_checks.append(port)
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_start_vikingbot_gateway",
+        lambda *args, **kwargs: spawned.append(args) or object(),
+    )
+    monkeypatch.setattr(bootstrap, "_is_bot_gateway_reachable", lambda url, timeout=0.5: True)
+
+    bootstrap.main()
+
+    assert spawned == []
+    assert abort_checks == []
+    assert "external" in capsys.readouterr().out
+
+
+def test_main_warns_when_the_external_gateway_is_unreachable(monkeypatch, capsys):
+    config = ServerConfig(
+        host="127.0.0.1",
+        port=1933,
+        bot_api_url="http://127.0.0.1:18790",
+        bot_gateway_token="gateway-token",
+    )
+
+    _stub_managed_config(monkeypatch, config)
+    _stub_main_args(monkeypatch)
+    monkeypatch.setattr(bootstrap, "_is_bot_gateway_reachable", lambda url, timeout=0.5: False)
+
+    bootstrap.main()
+
+    assert "no VikingBot gateway is answering" in capsys.readouterr().err
+
+
+def test_is_bot_gateway_reachable_rejects_unparseable_urls():
+    assert bootstrap._is_bot_gateway_reachable("") is False
+    assert bootstrap._is_bot_gateway_reachable("127.0.0.1:18790") is False
+
+
 def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
     config = ServerConfig(host="127.0.0.1", port=1933, with_bot=True)
     captured: dict[str, object] = {}

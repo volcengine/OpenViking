@@ -1,4 +1,4 @@
-"""Private gateway endpoints, callable only by the authenticated server proxy."""
+"""Private gateway endpoints, callable only by an authenticated server proxy."""
 
 import os
 import secrets
@@ -7,13 +7,16 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 
 def create_router(channel, service):
-    async def authorize(request: Request, x_gateway_token: str = Header(default="")):
+    async def authorize(x_gateway_token: str = Header(default="")):
+        # The shared token is the whole gate. It is mandatory for any
+        # non-loopback gateway bind (see ``_verify_gateway_request``), and it is
+        # the only credential a server proxy can present, so requiring loopback
+        # on top would just force an independently deployed gateway onto the
+        # OpenViking Server's host. Operators exposing the gateway on a network
+        # must terminate TLS in front of it; the token never travels in clear
+        # text otherwise.
         token = os.environ.get("OPENVIKING_BOT_STUDIO_TOKEN") or channel._gateway_token()
-        if not (
-            token
-            and secrets.compare_digest(token, x_gateway_token)
-            and channel._is_loopback_request(request)
-        ):
+        if not (token and secrets.compare_digest(token, x_gateway_token)):
             raise HTTPException(403, "Studio management requires the internal gateway token")
 
     router = APIRouter(prefix="/studio", dependencies=[Depends(authorize)], include_in_schema=False)

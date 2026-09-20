@@ -5,6 +5,14 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **独立部署的 VikingBot Gateway**：`server.bot_api_url` 现在自身即可启用 Bot API 代理，独立运行的
+  `vikingbot gateway`（自己的 systemd 服务、容器或另一台主机）不再需要 `--with-bot`。该字段默认值由
+  `http://localhost:18790` 改为空；`with_bot` 保持托管语义，两者同时配置时以 `with_bot` 为准。把
+  `server.bot_gateway_token` 设为网关的 `bot.gateway.token` 即可启用 Web Studio 的机器人管理。网关不再
+  必须与 OpenViking Server 同主机：管理通道改为以共享令牌为准、不再要求 loopback（暴露到网络时需在网关前
+  终止 TLS）；跨主机时服务端转发调用方的 `X-API-Key`/`X-OpenViking-*` 头，请求体内的身份断言仍然只对
+  loopback 网关有效。`/api/v1/admin/bot/capabilities` 新增 `mode` 字段
+  （`managed`/`external`/`disabled`），外部模式下 `enabled` 为 `true`。
 - **Watch API 迁移（不兼容变更）**：使用 `watch_interval > 0` 重新导入不再更新或恢复已有 Watch。
   原生 Watch 暂停后仍独占目标，不兼容的目标复用返回 `409 Conflict`。
   依赖重新导入来更新 Watch 的脚本应改用 `PATCH /api/v1/watches/{task_id}`

@@ -39,10 +39,20 @@ export function botAccountBase() {
   if (!accountId) throw new Error('Select an account before managing bots')
   return `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/bot`
 }
+/** How the OpenViking server reaches a VikingBot gateway. */
+export type BotProxyMode = 'managed' | 'external' | 'disabled'
+
 export function getCapabilities() {
-  return getOvResult<{ enabled: boolean; can_manage: boolean }>(
-    ovClient.client.get({ url: '/api/v1/admin/bot/capabilities' }),
-  )
+  return getOvResult<{
+    enabled: boolean
+    can_manage: boolean
+    /**
+     * `managed`: this server runs the gateway itself.
+     * `external`: `server.bot_api_url` points at an independent deployment.
+     * `disabled`: no gateway is configured.
+     */
+    mode?: BotProxyMode
+  }>(ovClient.client.get({ url: '/api/v1/admin/bot/capabilities' }))
 }
 export function getConnections() {
   return getOvResult<Connection[]>(

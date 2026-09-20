@@ -146,6 +146,8 @@ VikingBot 本地 Session 保存运行历史和渠道状态；OpenViking Session 
 
 安装、配置和每种入口的启动步骤见 [VikingBot 安装与配置](../guides/17-vikingbot.md)。
 
+当 `vikingbot gateway` 独立部署（不随 OpenViking Server 启动，例如独立的 systemd 服务或另一台主机）时，把 OpenViking 的 `server.bot_api_url` 指向该网关，`/bot/v1/*` 代理与 Web Studio 的机器人管理即可继续工作；服务端不会启动或重启该网关。
+
 ## 身份与安全边界
 
 VikingBot 的访问控制分为多层：

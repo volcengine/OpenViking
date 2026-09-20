@@ -47,6 +47,89 @@ async def test_create_bot_proxy_client_disables_env_proxy():
 
 
 @pytest.mark.asyncio
+async def test_chat_proxy_forwards_identity_headers_to_a_remote_gateway(monkeypatch):
+    """A gateway on another host cannot verify a body-level assertion.
+
+    It resolves the caller from the forwarded credentials instead, exactly as it
+    does for a client that talks to it directly, so the gateway token never
+    becomes an identity credential.
+    """
+    forwarded = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"session_id": "session-1", "message": "ok"}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"session_id": "session-1", "message": "ok"}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, json, headers, timeout):
+            forwarded["url"] = url
+            forwarded["json"] = json
+            forwarded["headers"] = headers
+            forwarded["timeout"] = timeout
+            return FakeResponse()
+
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", "https://bot.internal:18790")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "gateway-secret")
+    monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
+
+    app = FastAPI()
+    app.state.config = ServerConfig(auth_mode="trusted", host="127.0.0.1", port=1944)
+    app.state.auth_plugin = TrustedAuthPlugin()
+    app.include_router(bot_router_module.router, prefix="/bot/v1")
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/bot/v1/chat",
+            headers={
+                "X-API-Key": "active-user-key",
+                "X-OpenViking-Account": "acct",
+                "X-OpenViking-User": "alice",
+                "X-OpenViking-Actor-Peer": "tester",
+            },
+            json={"message": "hello", "user_id": "ignored-by-proxy-identity"},
+        )
+
+    assert response.status_code == 200
+    assert forwarded["url"] == "https://bot.internal:18790/bot/v1/chat"
+    assert "openviking_connection" not in forwarded["json"]
+    assert forwarded["headers"]["X-API-Key"] == "active-user-key"
+    assert forwarded["headers"]["X-OpenViking-Account"] == "acct"
+    assert forwarded["headers"]["X-OpenViking-User"] == "alice"
+    assert forwarded["headers"]["X-OpenViking-Actor-Peer"] == "tester"
+    assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("http://127.0.0.1:18790", True),
+        ("http://localhost:18790", True),
+        ("http://[::1]:18790", True),
+        ("https://bot.internal:18790", False),
+        ("https://viking.example.com", False),
+        (None, False),
+    ],
+)
+def test_bot_gateway_loopback_detection(monkeypatch, url, expected):
+    monkeypatch.setattr(bot_router_module, "BOT_API_URL", url)
+
+    assert bot_router_module._bot_gateway_is_loopback() is expected
+
+
+@pytest.mark.asyncio
 async def test_feedback_proxy_forwards_request(monkeypatch):
     forwarded = {}
 

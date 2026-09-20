@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import uvicorn
 
@@ -22,7 +23,11 @@ from openviking.server.app import (
     WORKER_WITH_BOT_ENV,
     create_app,
 )
-from openviking.server.config import get_server_url_from_server_data, load_server_config
+from openviking.server.config import (
+    BOT_STUDIO_TOKEN_ENV,
+    get_server_url_from_server_data,
+    load_server_config,
+)
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.consts import (
@@ -76,6 +81,24 @@ def _abort_if_port_in_use(port: int, label: str) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+def _is_bot_gateway_reachable(url: str, timeout: float = 0.5) -> bool:
+    """Best-effort TCP liveness check for a configured Bot gateway URL.
+
+    Only used to warn about an unreachable *external* gateway: the server must
+    keep starting when the operator restarts the two processes independently.
+    """
+    parsed = urlparse(str(url or ""))
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def _normalize_host_arg(host: Optional[str]) -> Optional[str]:
@@ -279,11 +302,11 @@ def main():
         import secrets
 
         # Shared only by this server and its managed child, never returned to Studio.
-        os.environ["OPENVIKING_BOT_STUDIO_TOKEN"] = secrets.token_urlsafe(32)
+        os.environ[BOT_STUDIO_TOKEN_ENV] = secrets.token_urlsafe(32)
         bot_port = args.bot_port
         config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
         _abort_if_port_in_use(bot_port, "vikingbot gateway")
-        print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
+        print(f"Bot API proxy enabled (managed), forwarding to {config.bot_api_url}")
         # Determine if bot logging should be enabled
         enable_bot_logging = args.enable_bot_logging
         if enable_bot_logging is None:
@@ -308,6 +331,20 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
+    elif config.get_bot_proxy_mode() == "external":
+        # The gateway lifecycle belongs to the operator (separate systemd unit,
+        # container or host). This server only proxies to it, so a gateway that
+        # is down must not block startup.
+        print(
+            "Bot API proxy enabled (external), forwarding to "
+            f"{config.bot_api_url} — gateway lifecycle is not managed by this process"
+        )
+        if not _is_bot_gateway_reachable(config.bot_api_url):
+            print(
+                f"Warning: no VikingBot gateway is answering at {config.bot_api_url}. "
+                "Bot endpoints will fail until it is started.",
+                file=sys.stderr,
+            )
 
     # Create and run server app
     app = create_app(

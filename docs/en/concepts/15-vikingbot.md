@@ -147,6 +147,8 @@ Ordinary conversations are synchronized according to policy. The Agent actively 
 
 For installation, configuration, and startup instructions for each entry point, see [VikingBot Installation and Configuration](../guides/17-vikingbot.md).
 
+When `vikingbot gateway` is deployed independently (not started by OpenViking Server — for example its own systemd service or another host), point OpenViking's `server.bot_api_url` at that gateway and the `/bot/v1/*` proxy plus Web Studio bot management keep working. The server never starts or restarts that gateway.
+
 ## Identity and Security Boundaries
 
 VikingBot applies access control at several layers:

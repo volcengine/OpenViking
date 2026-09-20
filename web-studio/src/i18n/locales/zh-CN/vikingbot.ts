@@ -115,7 +115,8 @@ export default {
   emptyHint: '提出问题、探索资源，或将机器人接入你使用的消息平台。',
   manageBots: '管理机器人',
   enable: '先启用 VikingBot',
-  enableHint: '请管理员以 Bot 模式启动 OpenViking，并配置对话模型。',
+  enableHint:
+    '请管理员以 Bot 模式启动 OpenViking（--with-bot），或将 server.bot_api_url 指向已独立运行的 VikingBot Gateway，并配置对话模型。',
   modelHint: 'VikingBot 默认继承根级 vlm 模型配置。',
   retry: '重试',
   loading: '加载中…',
@@ -123,6 +124,8 @@ export default {
   addFeishu: '连接飞书',
   comingSoon: '开发中',
   adminOnly: '仅服务管理员可以管理连接和查看飞书历史。',
+  externalGateway:
+    '当前连接的是独立部署的 VikingBot Gateway（server.bot_api_url），其进程由部署方管理，本服务不会启动或重启它。',
   webReady: '网页对话使用当前 OpenViking 身份。',
   manageHint: '连接一个应用后，可将它的机器人加入多个群。',
   steps: [
