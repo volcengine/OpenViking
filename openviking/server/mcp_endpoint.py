@@ -53,7 +53,11 @@ from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
 from openviking.telemetry.span_models import update_root_span_identity
-from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
+from openviking.utils.search_filters import (
+    SearchContextTypeInput,
+    merge_search_filter,
+    stats_context_type_label,
+)
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -273,6 +277,7 @@ async def find(
         score_threshold=min_score,
         filter=_resolve_context_type_filter(context_type),
         level=level,
+        stats_context_type=stats_context_type_label(context_type),
     )
     return _format_search_result(result)
 
@@ -368,6 +373,7 @@ async def search(
         score_threshold=0.35 if min_score is None else min_score,
         filter=context_filter,
         level=level,
+        stats_context_type=stats_context_type_label(context_type),
     )
     return _format_search_result(result)
 
