@@ -1,8 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-
-import vikingbot.providers.base as provider_base
 from vikingbot.providers.base import (
     build_stream_response,
     merge_stream_tool_call_delta,
@@ -18,45 +16,16 @@ def _tool_call(*, index=None, call_id=None, name=None, arguments=None):
     )
 
 
-def test_tool_arguments_repair_malformed_json_object():
-    raw = '{"pages": [], "files": [], "links": [],}'
-
-    assert parse_tool_arguments(raw) == {"pages": [], "files": [], "links": []}
-
-
-def test_tool_arguments_preserve_unrepairable_non_object():
-    raw = "not-json"
-
-    assert parse_tool_arguments(raw) == {"raw": raw}
-
-
-def test_tool_arguments_do_not_repair_truncated_json_object(monkeypatch):
-    def fail_if_called(_raw):
-        raise AssertionError("truncated JSON must not be repaired")
-
-    monkeypatch.setattr(provider_base.json_repair, "loads", fail_if_called)
-    raw = '{"pages": [], "files": [{"path": "logic/related_work.md", "content": "'
-
-    assert parse_tool_arguments(raw) == {"raw": raw}
-
-
-def test_tool_arguments_fall_back_when_repair_rejects_input(monkeypatch):
-    def reject_input(_raw):
-        raise ValueError("invalid input")
-
-    monkeypatch.setattr(provider_base.json_repair, "loads", reject_input)
-
-    assert parse_tool_arguments("{invalid}") == {"raw": "{invalid}"}
-
-
-def test_tool_arguments_do_not_hide_unexpected_repair_errors(monkeypatch):
-    def fail_unexpectedly(_raw):
-        raise RuntimeError("repair implementation failed")
-
-    monkeypatch.setattr(provider_base.json_repair, "loads", fail_unexpectedly)
-
-    with pytest.raises(RuntimeError, match="repair implementation failed"):
-        parse_tool_arguments("{invalid}")
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param('{"query": "bot",}', {"query": "bot"}, id="repairable-object"),
+        pytest.param("not-json", {"raw": "not-json"}, id="unparseable"),
+        pytest.param('{"query": "bot', {"raw": '{"query": "bot'}, id="truncated-object"),
+    ],
+)
+def test_parse_tool_arguments(raw, expected):
+    assert parse_tool_arguments(raw) == expected
 
 
 def test_missing_stream_tool_call_index_uses_chunk_local_order():

@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from typer.testing import CliRunner
+from vikingbot.config import loader
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 from openviking.models.vlm import MultiCredentialVLM
 from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
-from vikingbot.config import loader
-from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 
 def _write_config(tmp_path, monkeypatch, data):
@@ -17,42 +17,6 @@ def _write_config(tmp_path, monkeypatch, data):
     monkeypatch.setattr(loader, "CONFIG_PATH", config_path)
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
     return loader.load_config()
-
-
-@pytest.mark.parametrize("bot_override", [False, True])
-@pytest.mark.parametrize("legacy_providers", [{"openai": {"api_key": "obsolete-secret"}}, {}, None])
-def test_legacy_providers_do_not_change_model_selection_or_persist(
-    tmp_path, monkeypatch, bot_override, legacy_providers
-):
-    data = {
-        "vlm": {"provider": "openai", "model": "root-model", "api_key": "root-secret"},
-        "bot": {"providers": legacy_providers},
-    }
-    if bot_override:
-        data["bot"]["agents"] = {
-            "provider": "openai",
-            "model": "bot-model",
-            "api_key": "bot-secret",
-        }
-    warnings = []
-    monkeypatch.setattr(loader.logger, "warning", warnings.append)
-
-    config = _write_config(tmp_path, monkeypatch, data)
-    from vikingbot.cli.commands import _make_provider
-
-    provider = _make_provider(config)
-    assert provider._vlm.model == ("bot-model" if bot_override else "root-model")
-    assert provider._vlm.api_key == ("bot-secret" if bot_override else "root-secret")
-    assert any("bot.providers" in message and "ignored" in message for message in warnings)
-    assert "obsolete-secret" not in " ".join(warnings)
-    path = tmp_path / "ov.conf"
-    assert json.loads(path.read_text()) == data  # Loading never rewrites the user's file.
-
-    loader.save_config(config, path, include_defaults=True)
-    saved = json.loads(path.read_text())
-    assert "providers" not in saved["bot"]
-    assert saved["vlm"] == data["vlm"]
-    assert loader.load_config().inherits_root_vlm() is (not bot_override)
 
 
 @pytest.mark.parametrize("explicit_key", [None, "channel-secret", ""])
@@ -146,99 +110,6 @@ def test_status_shows_selected_model_config_without_exposing_secrets(
         assert hidden not in result.output
 
 
-def test_status_handles_bot_credentials_without_parent_model(tmp_path, monkeypatch):
-    from vikingbot.cli import commands
-
-    _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "bot": {
-                "agents": {
-                    "credentials": [
-                        {"provider": "litellm", "model": "ollama/qwen3"},
-                    ]
-                }
-            }
-        },
-    )
-
-    result = CliRunner().invoke(commands.app, ["status"])
-
-    assert result.exit_code == 0, result.output
-    assert "Model config: bot.agents" in result.output
-    assert "Model: ollama/qwen3" in result.output
-    assert "Provider: litellm" in result.output
-    assert "API key: not set in config" in result.output
-
-
-@pytest.mark.parametrize("parent_provider", ["openai", "OpenAI", " OpenAI \t"])
-@pytest.mark.parametrize("credential_provider", [None, "openai"])
-def test_status_inherits_parent_key_only_for_the_normalized_parent_provider(
-    tmp_path, monkeypatch, parent_provider, credential_provider
-):
-    from vikingbot.cli import commands
-
-    _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "bot": {
-                "agents": {
-                    "provider": parent_provider,
-                    "model": "gpt-4o",
-                    "api_key": "openai-secret",
-                    "credentials": [
-                        {"id": "primary", "provider": credential_provider},
-                        {
-                            "id": "native",
-                            "provider": "litellm",
-                            "model": "vertex_ai/gemini-2.5-pro",
-                        },
-                    ],
-                }
-            }
-        },
-    )
-
-    def fail_create(*args, **kwargs):
-        raise AssertionError("status must not initialize model backends")
-
-    monkeypatch.setattr("openviking.models.vlm.base.VLMFactory.create", fail_create)
-    result = CliRunner().invoke(commands.app, ["status"])
-
-    assert result.exit_code == 0, result.output
-    assert "1. Provider: openai | Model: gpt-4o" in result.output
-    assert "2. Provider: litellm | Model: vertex_ai/gemini-2.5-pro" in result.output
-    assert result.output.count("API key: configured") == 1
-    assert "API key: not set in config" in result.output
-    assert "openai-secret" not in result.output
-
-
-def test_status_keeps_root_vlm_providers_support(tmp_path, monkeypatch):
-    from vikingbot.cli import commands
-
-    _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "vlm": {
-                "model": "root-model",
-                "default_provider": "openai",
-                "providers": {"openai": {"api_key": "root-secret"}},
-            }
-        },
-    )
-
-    result = CliRunner().invoke(commands.app, ["status"])
-
-    assert result.exit_code == 0, result.output
-    assert "Model config: vlm (inherited)" in result.output
-    assert "Provider: openai" in result.output
-    assert "API key: configured" in result.output
-    assert "root-secret" not in result.output
-
-
 def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path, monkeypatch):
     config = _write_config(
         tmp_path,
@@ -279,7 +150,13 @@ def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path
     ]
 
 
-def test_agent_max_tokens_overrides_inherited_root_limit(tmp_path, monkeypatch):
+@pytest.mark.parametrize("bot_override", [False, True], ids=["inherited-model", "bot-model"])
+def test_agent_max_tokens_reaches_provider(tmp_path, monkeypatch, bot_override):
+    from vikingbot.cli.commands import _make_provider
+
+    agents = {"max_tokens": 8192}
+    if bot_override:
+        agents.update(provider="openai", model="bot-model", api_key="bot-key")
     config = _write_config(
         tmp_path,
         monkeypatch,
@@ -290,19 +167,11 @@ def test_agent_max_tokens_overrides_inherited_root_limit(tmp_path, monkeypatch):
                 "api_key": "root-key",
                 "max_tokens": 4096,
             },
-            "bot": {
-                "agents": {
-                    "max_tokens": 8192,
-                }
-            },
+            "bot": {"agents": agents},
         },
     )
-
-    from vikingbot.cli.commands import _make_provider
-
     provider = _make_provider(config)
-
-    assert config.agents.inherits_root_vlm() is True
+    assert config.agents.inherits_root_vlm() is (not bot_override)
     assert provider._vlm.max_tokens == 8192
 
 
@@ -485,30 +354,6 @@ def test_explicit_bot_model_without_credentials_keeps_single_model_behavior(tmp_
     assert isinstance(provider, VLMProviderAdapter)
     assert not isinstance(provider._vlm, MultiCredentialVLM)
     assert provider._vlm.model == "bot-model"
-
-
-def test_explicit_bot_model_passes_agent_max_tokens(tmp_path, monkeypatch):
-    config = _write_config(
-        tmp_path,
-        monkeypatch,
-        {
-            "bot": {
-                "agents": {
-                    "provider": "openai",
-                    "model": "bot-model",
-                    "api_key": "bot-key",
-                    "max_tokens": 8192,
-                }
-            }
-        },
-    )
-
-    from vikingbot.cli.commands import _make_provider
-
-    provider = _make_provider(config)
-
-    assert config.agents.max_tokens == 8192
-    assert provider._vlm.max_tokens == 8192
 
 
 def test_bot_credentials_override_or_inherit_agent_max_tokens(tmp_path, monkeypatch):

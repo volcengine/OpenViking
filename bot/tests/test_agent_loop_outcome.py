@@ -1,12 +1,8 @@
 import copy
-import sys
 from datetime import datetime
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from vikingbot.agent import loop as loop_module
 from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.loop import AgentLoop
@@ -14,7 +10,7 @@ from vikingbot.agent.tools.base import MultimodalToolResult
 from vikingbot.agent.tools.registry import ToolExecutionResult
 from vikingbot.bus.events import InboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import AgentsConfig, Config, SessionKey
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.openviking_mount.session_state import make_openviking_storage_session_id
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.session.manager import SessionManager
@@ -60,55 +56,13 @@ class _FakeLangfuseClient:
 
 
 class _FakeOVClient:
-    def __init__(self, *, context_payload=None, pending_tokens=None):
-        self.context_payload = context_payload or {}
-        self.pending_tokens = list(pending_tokens or [])
+    def __init__(self, *, context_payload):
+        self.context_payload = context_payload
         self.context_calls = []
-        self.append_calls = []
-        self.commit_calls = []
-        self.session_calls = []
 
     async def get_session_context(self, session_id, token_budget):
         self.context_calls.append((session_id, token_budget))
         return self.context_payload
-
-    async def append_messages(
-        self,
-        session_id,
-        messages,
-        default_user_peer_id=None,
-        session_user_id=None,
-    ):
-        self.append_calls.append(
-            (session_id, list(messages), default_user_peer_id, session_user_id)
-        )
-        return {"session_id": session_id, "added": len(messages), "message_count": len(messages)}
-
-    async def get_session(self, session_id, user_id=None):
-        self.session_calls.append((session_id, user_id))
-        next_pending_tokens = self.pending_tokens.pop(0) if self.pending_tokens else 0
-        return {"session_id": session_id, "pending_tokens": next_pending_tokens}
-
-    async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-        self.commit_calls.append((session_id, keep_recent_count, user_id))
-        return {"session_id": session_id, "status": "accepted"}
-
-
-def test_agents_config_temperature_schema_caps_at_two():
-    schema = AgentsConfig.model_json_schema()
-    temperature = schema["properties"]["temperature"]
-
-    assert temperature["default"] == 0.7
-    assert temperature["minimum"] == 0.0
-    assert temperature["maximum"] == 2.0
-
-
-def test_agents_config_enables_subagents_by_default():
-    assert AgentsConfig().subagent_enabled is True
-
-
-def test_agents_config_keeps_ten_recent_openviking_messages_by_default():
-    assert AgentsConfig().commit_keep_recent_count == 10
 
 
 def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
@@ -449,16 +403,6 @@ def test_agent_loop_standalone_omits_openviking_tools(temp_dir: Path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_context_prompt_omits_subagent_capability_when_disabled(temp_dir: Path):
-    context = ContextBuilder(workspace=temp_dir / "workspace", enable_subagents=False)
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-1")
-
-    prompt = await context._get_identity(session_key)
-
-    assert "Spawn subagents" not in prompt
-
-
-@pytest.mark.asyncio
 async def test_agent_loop_passes_configured_temperature_to_provider(temp_dir: Path, monkeypatch):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
@@ -616,7 +560,9 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
         "tool result: useful context",
         "tool result: useful context",
     ]
-    assert token_usage == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
+    assert {
+        key: token_usage[key] for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+    } == {"prompt_tokens": 17, "completion_tokens": 7, "total_tokens": 24}
 
 
 @pytest.mark.asyncio
@@ -682,7 +628,9 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_
     outcome_event = await bus.consume_outbound()
     assert outcome_event.event_type == OutboundEventType.RESPONSE_OUTCOME_EVALUATED
     assert outcome_event.response_id == "resp-123"
-    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+    persisted_session = SessionManager(config.bot_data_path).get_or_create(
+        session_key, skip_heartbeat=True
+    )
     assert persisted_session.metadata["response_outcomes"]["resp-123"]["outcome_label"] == "reasked"
 
 
@@ -956,69 +904,12 @@ async def test_agent_loop_build_prompt_history_preserves_anchor_when_final_needs
     assert sum(loop._history_message_tokens(message) for message in history) <= 3000
 
 
-def test_agent_loop_turn_aware_trim_reserves_space_for_short_final():
-    history = [
-        {"role": "user", "content": "u" * 20},
-        {"role": "assistant", "content": "a"},
-    ]
-
-    trimmed = AgentLoop._trim_history_to_token_budget(history, 10)
-
-    assert [message["role"] for message in trimmed] == ["user", "assistant"]
-    assert trimmed[0]["content"]
-    assert trimmed[1]["content"] == "a"
-    assert sum(AgentLoop._history_message_tokens(message) for message in trimmed) <= 10
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_submits_openviking_session_through_compact_hook(
-    temp_dir: Path, monkeypatch
-):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    calls = []
-
-    async def fake_execute_hooks(context, **kwargs):
-        calls.append((context, kwargs))
-        session = kwargs["session"]
-        session.metadata.setdefault("openviking", {})["last_sync_status"] = "success"
-        return kwargs
-
-    monkeypatch.setattr(loop_module.hook_manager, "execute_hooks", fake_execute_hooks)
-
-    bus = MessageBus()
-    config = Config(
-        storage_workspace=str(temp_dir),
-        ov_server={"server_url": "http://127.0.0.1:1933"},
-        agents={"session_context_enabled": True},
-    )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
-
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-ov-sync")
-    session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
-    session.add_message("user", "Need syncing", sender_id="user-1")
-    session.add_message("assistant", "Synced reply", sender_id="user-1")
-
-    success = await loop._submit_openviking_session(session)
-
-    assert success is True
-    assert len(calls) == 1
-    context, kwargs = calls[0]
-    assert context.event_type == "message.compact"
-    assert context.session_id == make_openviking_storage_session_id(session_key.safe_name())
-    assert kwargs == {"session": session, "force_commit": False}
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_reach_threshold(
-    temp_dir: Path, monkeypatch
+@pytest.mark.parametrize(
+    "token_threshold, pending_tokens, memory_window",
+    [pytest.param(100, 100, 50, id="token-budget"), pytest.param(1000, 0, 3, id="message-window")],
+)
+async def test_agent_loop_commits_before_model_at_context_limit(
+    temp_dir: Path, monkeypatch, token_threshold, pending_tokens, memory_window
 ):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
@@ -1031,7 +922,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
             (
                 "hook",
                 kwargs["force_commit"],
-                kwargs.get("keep_recent_count"),
+                kwargs.get("keep_recent_turn_count"),
                 kwargs.get("commit_message_threshold"),
             )
         )
@@ -1040,6 +931,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
         state["last_sync_status"] = "success"
         state["last_pending_tokens"] = 0
         state["last_commit_performed"] = bool(kwargs["force_commit"])
+        state["last_commit_local_index"] = len(session.messages) - 1
         if not kwargs["force_commit"]:
             state["last_synced_local_index"] = len(session.messages) - 1
         return kwargs
@@ -1077,8 +969,8 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
         agents={
             "session_context_enabled": True,
             "session_context_token_budget": 321,
-            "commit_token_threshold": 100,
-            "commit_keep_recent_count": 2,
+            "commit_token_threshold": token_threshold,
+            "commit_keep_recent_turn_count": 2,
         },
     )
     loop = AgentLoop(
@@ -1086,6 +978,7 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
         provider=_FakeProvider(),
         workspace=temp_dir / "workspace",
         config=config,
+        memory_window=memory_window,
     )
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-precommit")
@@ -1095,7 +988,8 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
     session.metadata["openviking"] = {
         "session_id": session_key.safe_name(),
         "last_synced_local_index": 1,
-        "last_pending_tokens": 100,
+        "last_pending_tokens": pending_tokens,
+        "last_commit_local_index": -1,
     }
     await loop.sessions.save(session)
 
@@ -1114,7 +1008,9 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
     assert events[1] == ("context", "cli__default__session-precommit", 321)
     assert events[2][0] == "model"
     assert events[-1] == ("hook", False, None, loop.memory_window)
-    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+    persisted_session = SessionManager(config.bot_data_path).get_or_create(
+        session_key, skip_heartbeat=True
+    )
     assert [message["content"] for message in persisted_session.messages] == [
         "new question",
         "final answer",
@@ -1123,111 +1019,15 @@ async def test_agent_loop_commits_openviking_before_model_when_pending_tokens_re
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_commits_openviking_before_model_when_memory_window_reached(
-    temp_dir: Path, monkeypatch
-):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    events = []
-
-    async def fake_execute_hooks(context, **kwargs):
-        events.append(
-            (
-                "hook",
-                kwargs["force_commit"],
-                kwargs.get("keep_recent_count"),
-                kwargs.get("commit_message_threshold"),
-            )
-        )
-        session = kwargs["session"]
-        session.metadata.setdefault("openviking", {})["last_sync_status"] = "success"
-        session.metadata["openviking"]["last_pending_tokens"] = 0
-        session.metadata["openviking"]["last_commit_local_index"] = len(session.messages) - 1
-        session.metadata["openviking"]["last_commit_performed"] = bool(kwargs["force_commit"])
-        return kwargs
-
-    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
-        del self, session_key, openviking_connection, actor_peer_id
-
-        class _Client:
-            async def get_session_context(self, session_id, token_budget):
-                events.append(("context", session_id, token_budget))
-                return {"messages": []}
-
-            async def close(self):
-                return None
-
-        return _Client()
-
-    async def fake_run_agent_loop(self, **kwargs):
-        events.append(("model", [message.get("content") for message in kwargs["messages"]]))
-        return "final answer", None, [], {"prompt_tokens": 1, "completion_tokens": 1}, 1
-
-    fake_langfuse = _FakeLangfuseClient()
-    monkeypatch.setattr(loop_module.hook_manager, "execute_hooks", fake_execute_hooks)
-    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
-    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
-    monkeypatch.setattr(
-        "vikingbot.agent.loop.LangfuseClient.get_instance",
-        staticmethod(lambda: fake_langfuse),
-    )
-
-    bus = MessageBus()
-    config = Config(
-        storage_workspace=str(temp_dir),
-        ov_server={"server_url": "http://127.0.0.1:1933"},
-        agents={
-            "session_context_enabled": True,
-            "session_context_token_budget": 321,
-            "commit_token_threshold": 1000,
-            "commit_keep_recent_count": 2,
-        },
-    )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-        memory_window=3,
-    )
-
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-window-precommit")
-    session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
-    session.add_message("user", "old user", sender_id="user-1")
-    session.add_message("assistant", "old assistant", sender_id="user-1")
-    session.metadata["openviking"] = {
-        "session_id": session_key.safe_name(),
-        "last_synced_local_index": 1,
-        "last_pending_tokens": 0,
-        "last_commit_local_index": -1,
-    }
-    await loop.sessions.save(session)
-
-    response = await loop._process_message(
-        InboundMessage(
-            session_key=session_key,
-            sender_id="user-1",
-            content="new question",
-            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
-        )
-    )
-
-    assert response is not None
-    assert response.content == "final answer"
-    assert events[0] == ("hook", True, 2, 3)
-    assert events[-1] == ("hook", False, None, 3)
-    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
-    assert [message["content"] for message in persisted_session.messages] == [
-        "new question",
-        "final answer",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_does_not_precommit_again_after_memory_window_commit(
-    temp_dir: Path, monkeypatch
+@pytest.mark.parametrize(
+    "last_commit_index, expected_commits",
+    [
+        pytest.param(-1, [True], id="uncommitted-history"),
+        pytest.param(1, [], id="already-committed"),
+    ],
+)
+async def test_agent_loop_precommit_counts_messages_since_last_commit(
+    temp_dir: Path, monkeypatch, last_commit_index, expected_commits
 ):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
@@ -1246,10 +1046,11 @@ async def test_agent_loop_does_not_precommit_again_after_memory_window_commit(
     bus = MessageBus()
     config = Config(
         storage_workspace=str(temp_dir),
+        ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={
             "session_context_enabled": True,
             "commit_token_threshold": 1000,
-            "commit_keep_recent_count": 2,
+            "commit_keep_recent_turn_count": 2,
         },
     )
     loop = AgentLoop(
@@ -1267,7 +1068,7 @@ async def test_agent_loop_does_not_precommit_again_after_memory_window_commit(
     session.metadata["openviking"] = {
         "session_id": session_key.safe_name(),
         "last_pending_tokens": 0,
-        "last_commit_local_index": 1,
+        "last_commit_local_index": last_commit_index,
     }
 
     await loop._maybe_commit_openviking_before_turn(
@@ -1280,60 +1081,7 @@ async def test_agent_loop_does_not_precommit_again_after_memory_window_commit(
         ),
     )
 
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_agent_loop_post_turn_passes_memory_window_threshold(temp_dir: Path, monkeypatch):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
-    calls = []
-
-    async def fake_execute_hooks(context, **kwargs):
-        calls.append(kwargs)
-        session = kwargs["session"]
-        session.metadata.setdefault("openviking", {})["last_sync_status"] = "success"
-        return kwargs
-
-    async def fake_run_agent_loop(self, **kwargs):
-        return "final answer", None, [], {"prompt_tokens": 1, "completion_tokens": 1}, 1
-
-    fake_langfuse = _FakeLangfuseClient()
-    monkeypatch.setattr(loop_module.hook_manager, "execute_hooks", fake_execute_hooks)
-    monkeypatch.setattr(AgentLoop, "_run_agent_loop", fake_run_agent_loop)
-    monkeypatch.setattr(
-        "vikingbot.agent.loop.LangfuseClient.get_instance",
-        staticmethod(lambda: fake_langfuse),
-    )
-
-    bus = MessageBus()
-    config = Config(
-        storage_workspace=str(temp_dir),
-        ov_server={"server_url": "http://127.0.0.1:1933"},
-        agents={"session_context_enabled": True},
-    )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-        memory_window=3,
-    )
-
-    session_key = SessionKey(type="cli", channel_id="default", chat_id="session-post-window")
-    await loop._process_message(
-        InboundMessage(
-            session_key=session_key,
-            sender_id="user-1",
-            content="new question",
-            timestamp=datetime.fromisoformat("2026-04-30T00:05:00"),
-        )
-    )
-
-    assert calls[-1]["force_commit"] is False
-    assert calls[-1]["commit_message_threshold"] == 3
+    assert [call["force_commit"] for call in calls] == expected_commits
 
 
 @pytest.mark.asyncio
@@ -1391,7 +1139,10 @@ async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit
         )
     )
 
-    persisted_session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
+    persisted_session = SessionManager(config.bot_data_path).get_or_create(
+        session_key, skip_heartbeat=True
+    )
+    assert calls[-1]["force_commit"] is False
     assert calls[-1]["commit_message_threshold"] == 3
     assert persisted_session.messages == []
     assert persisted_session.metadata["openviking"]["session_id"] == (

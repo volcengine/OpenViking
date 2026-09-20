@@ -1,9 +1,9 @@
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 from openviking.models.vlm import FailoverVLM, MultiCredentialVLM, OpenAIVLM, VolcEngineVLM
-from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 
 class FakeCompletions:

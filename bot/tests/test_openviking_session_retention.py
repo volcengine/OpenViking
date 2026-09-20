@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import pytest
-
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks.base import HookContext
@@ -115,9 +114,5 @@ def test_prompt_history_consumes_overview_checkpoint_and_raw_tail_in_order():
         "[Earlier conversation summary]\nEarlier turns were compacted."
     )
     assert history[1]["content"] == "Investigate the outage"
-    assert history[2]["content"] == (
-        "Checked early signals and confirmed pool saturation."
-    )
-    assert history[3]["content"] == (
-        "I will verify the recovery setting.\nrecovery_timeout=30"
-    )
+    assert history[2]["content"] == ("Checked early signals and confirmed pool saturation.")
+    assert history[3]["content"] == ("I will verify the recovery setting.\nrecovery_timeout=30")

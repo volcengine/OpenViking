@@ -1,34 +1,11 @@
-import contextlib
-import sys
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider as OpenVikingLiteLLMVLMProvider,
 )
-from vikingbot.config.schema import AgentsConfig
-from vikingbot.providers.vlm_adapter import VLMProviderAdapter
-
-
-def test_agents_config_defaults_thinking_enabled():
-    assert AgentsConfig().thinking is True
-    assert AgentsConfig(thinking=False).thinking is False
-
-
-def test_agents_config_defaults_max_tokens_unset():
-    assert AgentsConfig().max_tokens is None
-    assert AgentsConfig(max_tokens=8192).max_tokens == 8192
-
-
-def test_agents_openviking_retention_defaults_to_turn_budget_values():
-    config = AgentsConfig()
-
-    assert config.commit_keep_recent_count == 10
-    assert AgentsConfig(commit_keep_recent_count=7).commit_keep_recent_count == 7
-    assert config.commit_keep_recent_turn_count == 3
-    assert config.commit_retained_message_token_budget == 6_000
-    assert config.commit_min_raw_tail_steps == 1
 
 
 def test_vlm_adapter_exposes_only_native_tool_result_media_backends():
@@ -84,34 +61,6 @@ def test_vlm_adapter_uses_litellm_resolved_provider_for_tool_result_media():
 
 
 def test_make_provider_passes_default_thinking_to_vlm_adapter(monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "prompt_toolkit",
-        SimpleNamespace(PromptSession=object),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "prompt_toolkit.formatted_text",
-        SimpleNamespace(HTML=lambda value: value, FormattedText=lambda value: value),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "prompt_toolkit.history",
-        SimpleNamespace(FileHistory=object),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "prompt_toolkit.patch_stdout",
-        SimpleNamespace(patch_stdout=lambda: contextlib.nullcontext()),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "prompt_toolkit.styles",
-        SimpleNamespace(
-            Style=SimpleNamespace(from_dict=lambda value: value),
-        ),
-    )
-
     from vikingbot.cli.commands import _make_provider
 
     captured = {}

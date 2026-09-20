@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob, CronStore
 
