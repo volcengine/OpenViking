@@ -511,6 +511,18 @@ def gateway(
     async def run():
         import uvicorn
 
+        longtask_service = None
+        longtask_runner = None
+        if config.longtask.enabled:
+            from vikingbot.longtask.runner import LongTaskService
+
+            longtask_service = LongTaskService(agent_loop)
+            try:
+                await longtask_service.initialize()
+            except BaseException:
+                await longtask_service.close()
+                raise
+
         # Start uvicorn server for OpenAPI
         config_uvicorn = uvicorn.Config(
             fastapi_app,
@@ -529,9 +541,17 @@ def gateway(
         ]
         if cron is not None:
             tasks.append(cron.start())
+        if longtask_service is not None:
+            longtask_runner = asyncio.create_task(longtask_service.run(), name="vikingbot-longtasks")
+            tasks.append(longtask_runner)
         try:
             await asyncio.gather(*tasks)
         finally:
+            if longtask_runner is not None:
+                longtask_runner.cancel()
+                await asyncio.gather(longtask_runner, return_exceptions=True)
+            if longtask_service is not None:
+                await longtask_service.close()
             await agent_loop.close_mcp()
 
     asyncio.run(run())
@@ -836,6 +856,11 @@ def chat(
 
     validate_openviking_auth(config)
     _warn_deprecated_memory_user(memory_user)
+    if config.longtask.enabled:
+        raise typer.BadParameter(
+            "Long tasks require the persistent gateway. Start vikingbot gateway or "
+            "OpenViking --with-bot; use a chat-only config with longtask.enabled=false here."
+        )
     _init_bot_data(config)
 
     logger.remove()

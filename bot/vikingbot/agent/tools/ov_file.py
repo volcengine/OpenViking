@@ -51,6 +51,13 @@ class OVFileTool(Tool, ABC):
         self._clients = {}
         self._config = config
 
+    async def close(self) -> None:
+        """Release cached Bot-identity clients when a tool registry is discarded."""
+        clients = list(self._clients.values())
+        self._clients.clear()
+        for client in clients:
+            await client.close()
+
     @staticmethod
     def _has_request_connection(tool_context: ToolContext) -> bool:
         return bool(getattr(tool_context, "openviking_connection", None))

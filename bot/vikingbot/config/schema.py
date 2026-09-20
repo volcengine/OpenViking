@@ -553,6 +553,18 @@ class HeartbeatConfig(BaseModel):
     interval_seconds: int = 10 * 60  # Default: 5 minutes
 
 
+class LongTaskConfig(BaseModel):
+    """Opt-in LoopX host. Limits apply to real execution, not LoopX quota slots."""
+
+    enabled: bool = False
+    max_rounds: int = Field(default=20, ge=1)
+    model_calls_per_round: int = Field(default=10, ge=1)
+    tools_per_round: int = Field(default=30, ge=1)
+    round_timeout_seconds: int = Field(default=600, ge=1)
+    max_no_progress_rounds: int = Field(default=3, ge=1)
+    cli_timeout_seconds: int = Field(default=60, ge=1)
+
+
 LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -871,6 +883,7 @@ class Config(BaseSettings):
     remote_skills: RemoteSkillsConfig = Field(default_factory=RemoteSkillsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    longtask: LongTaskConfig = Field(default_factory=LongTaskConfig)
     langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
     hooks: list[str] = Field(["vikingbot.hooks.builtins.openviking_hooks.hooks"])
     skills: list[str] = Field(

@@ -3,7 +3,7 @@
 import shlex
 from typing import TYPE_CHECKING, Any
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import TextToolResult, Tool
 
 if TYPE_CHECKING:
     from vikingbot.agent.tools.base import ToolContext
@@ -46,7 +46,7 @@ class ExecTool(Tool):
         command: str,
         working_dir: str | None = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> TextToolResult:
         # Always use sandbox manager (includes direct mode)
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
@@ -54,8 +54,9 @@ class ExecTool(Tool):
             if working_dir:
                 command = f"cd {shlex.quote(working_dir)} && {command}"
             elif command.strip() == "pwd":
-                return sandbox.sandbox_cwd
+                return TextToolResult(sandbox.sandbox_cwd, True)
 
-            return await sandbox.execute(command, timeout=self.timeout)
+            result = await sandbox.execute_result(command, timeout=self.timeout)
+            return TextToolResult(result.output, result.success)
         except Exception as e:
-            return f"Error executing: {str(e)}"
+            return TextToolResult(f"Error executing: {str(e)}", False)

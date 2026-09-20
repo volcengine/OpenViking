@@ -466,7 +466,7 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 |------|------|
 | `direct` | 默认，直接在 Bot 宿主机执行，不是强隔离环境 |
 | `srt` | 支持网络和文件允许/拒绝策略 |
-| `opensandbox` | 连接 OpenSandbox Server |
+| `opensandbox` | 连接 OpenSandbox Server；SDK ≥ 0.1.5，执行服务需支持命令状态查询 |
 | `aiosandbox` | 连接 AIO Sandbox 服务 |
 
 工作区模式支持：
@@ -542,6 +542,7 @@ Gateway 的 Bot API 前缀为 `/bot/v1`：
 
 ## 更多文档
 
+- [LoopX 长任务：安装、启用与运行边界](docs/zh/concepts/07-long-tasks.md)
 - [VikingBot 架构](docs/zh/concepts/01-architecture.md)
 - [Agent 能力体系](docs/zh/concepts/02-agent-capabilities.md)
 - [渠道、Gateway 与运行管理](docs/zh/concepts/03-channels-and-gateway.md)

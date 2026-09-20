@@ -80,7 +80,7 @@ class WhatsAppChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through WhatsApp."""
         # Only send normal response messages, skip thinking/tool_call/etc.
-        if not msg.is_normal_message:
+        if not msg.is_user_message:
             return
 
         if not self._ws or not self._connected:

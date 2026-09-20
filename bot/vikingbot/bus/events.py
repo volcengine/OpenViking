@@ -12,6 +12,7 @@ class OutboundEventType(str, Enum):
     """Type of outbound message/event."""
 
     RESPONSE = "response"  # Normal response message
+    NOTIFICATION = "notification"  # Background message, never a request's final answer
     TOOL_CALL = "tool_call"  # Tool being called
     TOOL_RESULT = "tool_result"  # Result from tool execution
     REASONING = "reasoning"  # Reasoning content
@@ -67,3 +68,8 @@ class OutboundMessage:
     def is_normal_message(self) -> bool:
         """Check if this is a normal response message."""
         return self.event_type == OutboundEventType.RESPONSE
+
+    @property
+    def is_user_message(self) -> bool:
+        """Messages deliverable by push channels, including background notifications."""
+        return self.event_type in {OutboundEventType.RESPONSE, OutboundEventType.NOTIFICATION}

@@ -9,6 +9,17 @@ from vikingbot.sandbox.manager import SandboxManager
 
 
 @dataclass(frozen=True)
+class TextToolResult:
+    """Tool-owned execution status, separate from model-facing text."""
+
+    text: str
+    success: bool
+
+    def __str__(self) -> str:
+        return self.text
+
+
+@dataclass(frozen=True)
 class MultimodalToolResult:
     """A tool result with model-facing content and a text-only representation."""
 
@@ -163,7 +174,9 @@ class Tool(ABC):
         return {}
 
     @abstractmethod
-    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str | MultimodalToolResult:
+    async def execute(
+        self, tool_context: ToolContext, **kwargs: Any
+    ) -> str | TextToolResult | MultimodalToolResult:
         """
         Execute the tool with given parameters.
 

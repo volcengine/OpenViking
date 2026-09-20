@@ -15,6 +15,27 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.session.manager import Session
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interactive", [False, True])
+async def test_background_notification_does_not_finish_cli_question(tmp_path, interactive):
+    from vikingbot.bus.events import OutboundEventType
+
+    channel = (
+        ChatChannel(ChatChannelConfig(), MessageBus(), workspace_path=tmp_path)
+        if interactive
+        else SingleTurnChannel(SingleTurnChannelConfig(), MessageBus(), workspace_path=tmp_path)
+    )
+    await channel.send(
+        OutboundMessage(
+            session_key=SessionKey(type="cli", channel_id="default", chat_id="test"),
+            content="Task completed",
+            event_type=OutboundEventType.NOTIFICATION,
+        )
+    )
+    assert channel._last_response is None
+    assert not channel._response_received.is_set()
+
+
 @pytest.fixture
 def temp_workspace():
     """Create a temporary workspace directory."""

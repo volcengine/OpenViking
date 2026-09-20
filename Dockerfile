@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1.9
+ARG INSTALL_LONGTASK=false
 
 # Stage 1: provide Rust toolchain (required by setup.py -> build_ov_cli_artifact -> cargo build)
 # ragfs-python's default S3-enabled dependency set currently requires rustc >= 1.91.1.
@@ -7,6 +8,7 @@ FROM rust:1.91.1-trixie AS rust-toolchain
 # Stage 2: build Studio separately so npm failures stop the Docker build.
 FROM node:24-trixie-slim AS web-studio-builder
 ARG TARGETPLATFORM
+ARG INSTALL_LONGTASK
 WORKDIR /app/web-studio
 
 # Keep npm install cached when only Studio sources change.
@@ -15,6 +17,14 @@ RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETPLATFORM} npm ci
 COPY web-studio/ ./
 RUN npm run build -- --base=/studio/ \
  && test -f dist/index.html
+
+# Stage only the Node executable when building the optional long-task image.
+RUN mkdir -p /opt/longtask-bin \
+ && case "${INSTALL_LONGTASK}" in \
+      true) cp /usr/local/bin/node /opt/longtask-bin/node ;; \
+      false) ;; \
+      *) echo "INSTALL_LONGTASK must be true or false" >&2; exit 2 ;; \
+    esac
 
 # Stage 3: build Python environment with uv (builds Rust CLI + C++ extension)
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim AS py-builder
@@ -28,6 +38,7 @@ ENV PATH="/app/.venv/bin:/usr/local/cargo/bin:${PATH}"
 ARG OPENVIKING_VERSION=
 ARG TARGETPLATFORM
 ARG UV_LOCK_STRATEGY=auto
+ARG INSTALL_LONGTASK
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -72,6 +83,12 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry-${TARGETPLATFORM} \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git-${TARGETPLATFORM} \
     --mount=type=cache,target=/root/.ccache,id=ccache-${TARGETPLATFORM} \
+    set -- --extra bot --extra gemini; \
+    case "${INSTALL_LONGTASK}" in \
+        true) set -- "$@" --extra longtask ;; \
+        false) ;; \
+        *) echo "INSTALL_LONGTASK must be true or false" >&2; exit 2 ;; \
+    esac; \
     if [ -n "${OPENVIKING_VERSION:-}" ]; then \
         export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="${OPENVIKING_VERSION}"; \
     elif [ -f openviking/_version.py ]; then \
@@ -82,13 +99,13 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini \
+            uv sync --locked --no-editable --reinstall-package openviking "$@" \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini \
+            uv sync --locked --no-editable --reinstall-package openviking "$@" \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
@@ -111,6 +128,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app/.openviking
 
 COPY --from=py-builder /app/.venv /app/.venv
+COPY --from=web-studio-builder /opt/longtask-bin/ /usr/local/bin/
 # Fail the image build if VikingBot and the separately released SDK drift apart.
 RUN /app/.venv/bin/python -I -c "import inspect; from importlib.metadata import version; from openviking_sdk.client import AsyncHTTPClient; signature = inspect.signature(AsyncHTTPClient.get_skill); raise SystemExit(0 if 'include_integrity' in signature.parameters else f\"incompatible openviking-sdk {version('openviking-sdk')}: AsyncHTTPClient.get_skill{signature} lacks include_integrity\")"
 RUN /app/.venv/bin/python -I -c "from importlib.util import find_spec; from pathlib import Path; spec = find_spec('openviking.web_studio'); locations = list(spec.submodule_search_locations or ()) if spec else []; root = Path('/app/.venv').resolve(); p = (Path(locations[0]).resolve() / 'dist/index.html').resolve() if len(locations) == 1 else None; valid = p is not None and p.is_file() and p.is_relative_to(root); raise SystemExit(0 if valid else f'missing or misplaced Studio bundle: spec_found={spec is not None}, locations={locations!r}, resource={p}')"

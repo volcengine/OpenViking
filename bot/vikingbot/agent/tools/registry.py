@@ -8,7 +8,7 @@ from typing import Any
 from loguru import logger
 
 from vikingbot.agent.remote_skills import SkillRuntimeError
-from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
+from vikingbot.agent.tools.base import MultimodalToolResult, TextToolResult, Tool, ToolContext
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
@@ -24,6 +24,8 @@ class ToolExecutionResult:
     result: Any
     effective_params: dict[str, Any]
     skill_uris: tuple[str, ...] = ()
+    success: bool = True
+    execution_started: bool = False
 
 
 class ToolRegistry:
@@ -197,7 +199,9 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if not tool:
             return ToolExecutionResult(
-                result=f"Error: Tool '{name}' not found", effective_params=dict(params)
+                result=f"Error: Tool '{name}' not found",
+                effective_params=dict(params),
+                success=False,
             )
 
         tool_context = ToolContext(
@@ -217,6 +221,8 @@ class ToolRegistry:
         tool_span = None
         start_time = time.time()
         result = None
+        execution_started = False
+        execution_success = None
         effective_params = dict(params)
         skill_uris: tuple[str, ...] = ()
         response_id = get_current_response_id()
@@ -250,7 +256,11 @@ class ToolRegistry:
                             default=str,
                         )
                         logger.info("[TOOL_PREPARED]: {}({})", name, prepared_args[:600])
+                execution_started = True
                 result = await tool.execute(tool_context, **effective_params)
+                if isinstance(result, TextToolResult):
+                    execution_success = result.success
+                    result = result.text
                 if skill_runtime is not None:
                     skill_uris = skill_runtime.skill_uris_for_tool(
                         name,
@@ -258,9 +268,11 @@ class ToolRegistry:
                         skill_uris,
                     )
         except SkillRuntimeError as e:
+            execution_success = False
             result = e
             logger.warning("Remote Skill tool call rejected: tool={} error={}", name, e)
         except Exception as e:
+            execution_success = False
             result = e
             logger.exception("Tool call failed: {}", e)
         finally:
@@ -268,8 +280,11 @@ class ToolRegistry:
             duration_ms = (time.time() - start_time) * 1000
             if tool_span is not None:
                 try:
-                    execute_success = not isinstance(result, Exception) and not (
-                        isinstance(result, str) and result.lstrip().startswith("Error:")
+                    execute_success = (
+                        execution_success
+                        if execution_success is not None
+                        else not isinstance(result, Exception)
+                        and not (isinstance(result, str) and result.lstrip().startswith("Error:"))
                     )
                     output_str = str(result) if result is not None else None
                     self.langfuse.end_tool_call(
@@ -302,12 +317,21 @@ class ToolRegistry:
             result=result,
         )
         result = hook_result.get("result")
+        success = (
+            execution_success
+            if execution_success is not None
+            else result is not None
+            and not isinstance(result, Exception)
+            and not (isinstance(result, str) and result.lstrip().startswith(("Error:", "Error ")))
+        )
         if isinstance(result, Exception):
             result = f"Error executing {name}: {str(result)}"
         return ToolExecutionResult(
             result=result,
             effective_params=effective_params,
             skill_uris=skill_uris,
+            success=success,
+            execution_started=execution_started,
         )
 
     async def execute(

@@ -1351,6 +1351,7 @@ class AgentLoop:
         context_compact_budget: int | None = None,
         status_note_provider: Any | None = None,
         skill_runtime: Any | None = None,
+        serial_tools: bool = False,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -1392,6 +1393,8 @@ class AgentLoop:
                 every model call. Compile uses this to inject the per-iteration budget
                 countdown and read/unread summary; ordinary chat leaves it ``None`` so its
                 behavior is unchanged.
+            serial_tools: Execute work tools in order and reject batches mixing a
+                submission tool with other tools. Ordinary chat stays parallel.
 
         Returns:
             tuple of (final_content, final_reasoning_content, tools_used, token_usage, iteration)
@@ -1541,6 +1544,13 @@ class AgentLoop:
                 ):
                     """Execute a single tool and track execution time."""
                     tool_execute_start_time = time.time()
+                    if serial_tools and len(response.tool_calls) > 1 and any(
+                        call.name in stop_tools for call in response.tool_calls
+                    ):
+                        return idx, tool_call, ToolExecutionResult(
+                            result="Error: Call the round submission tool alone, without other tools",
+                            effective_params=dict(tool_call.arguments),
+                        ), 0.0
                     if tool_call.name not in allowed_names:
                         result = f"Error: Tool '{tool_call.name}' is not available in this turn"
                         return (
@@ -1657,6 +1667,10 @@ class AgentLoop:
                         )
                         for index, call in regular_calls
                     ]
+                elif serial_tools:
+                    regular_results = []
+                    for index, call in regular_calls:
+                        regular_results.append(await execute_single_tool(index, call))
                 else:
                     regular_results = await asyncio.gather(
                         *(execute_single_tool(index, call) for index, call in regular_calls)
@@ -1880,6 +1894,72 @@ class AgentLoop:
                 final_content = "I've completed processing but have no response to give."
 
         return final_content, final_reasoning_content, tools_used, token_usage, iteration
+
+    async def run_background_turn(
+        self,
+        *,
+        session_key: SessionKey,
+        prompt: str,
+        instructions: str,
+        tool_registry: ToolRegistry,
+        before_model: Any,
+    ) -> dict[str, Any]:
+        """Run one bounded background slice using the Bot-managed OV identity.
+
+        The caller owns scheduling, authorization and a task-specific AgentLoop.
+        Session persistence and OV synchronization stay here beside normal chat.
+        """
+        session = self.sessions.get_or_create(session_key)
+        history = await self._build_prompt_history(session)
+        messages = await self.context.build_messages(
+            history=history,
+            current_message=prompt,
+            session_key=session_key,
+        )
+        messages[0]["content"] += "\n\n" + instructions
+        turns: list[dict[str, Any]] = []
+        session.add_message("user", prompt)
+        await self.sessions.save(session)
+        try:
+            text, reasoning, tools, usage, iterations = await self._run_agent_loop(
+                messages=messages,
+                session_key=session_key,
+                publish_events=False,
+                tool_registry=tool_registry,
+                captured_turns=turns,
+                allow_final_fallback=False,
+                inject_write_experience=False,
+                status_note_provider=before_model,
+                serial_tools=True,
+                stop_tool_names=["submit_long_task_turn"],
+            )
+            result = {"text": text, "tools": tools, "usage": usage, "iterations": iterations}
+            session.add_message(
+                "assistant",
+                text or "Background slice ended.",
+                token_usage=usage,
+                tools_used=tools,
+                agent_turns=turns,
+                reasoning_content=reasoning,
+            )
+            return result
+        except BaseException:
+            session.add_message(
+                "assistant",
+                "Background round interrupted; inspect recorded results before continuing.",
+                agent_turns=turns,
+            )
+            raise
+        finally:
+            try:
+                await self.sessions.save(session)
+                if self._ov_session_context_enabled():
+                    await self._submit_openviking_session_and_clear_if_committed(session)
+            finally:
+                clients = list(self._ov_clients.values())
+                self._ov_clients.clear()
+                for client in clients:
+                    await client.close()
 
     async def run_structured_task(
         self,

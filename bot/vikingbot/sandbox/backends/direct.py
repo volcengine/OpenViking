@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,9 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend
+from vikingbot.sandbox.base import CommandResult, SandboxBackend
+
+_PROCESS_CLEANUP_TIMEOUT_SECONDS = 1.0
 
 
 @register_backend("direct")
@@ -30,7 +33,7 @@ class DirectBackend(SandboxBackend):
         self._running = True
         # logger.info("Direct backend started")
 
-    async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
+    async def execute_result(self, command: str, timeout: int = 60, **kwargs: Any) -> CommandResult:
         """Execute a command directly on the host."""
         if not self._running:
             raise RuntimeError("Direct backend not started")
@@ -62,13 +65,17 @@ class DirectBackend(SandboxBackend):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=env,
+                start_new_session=True,
             )
 
             try:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
             except asyncio.TimeoutError:
-                process.kill()
-                return f"Error: Command timed out after {timeout} seconds"
+                await self._terminate_process_group(process)
+                return CommandResult(f"Error: Command timed out after {timeout} seconds", None)
+            except asyncio.CancelledError:
+                await self._terminate_process_group(process)
+                raise
 
             output_parts = []
 
@@ -92,7 +99,7 @@ class DirectBackend(SandboxBackend):
             if len(result) > max_len:
                 result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"
 
-            return result
+            return CommandResult(result, process.returncode)
 
         except Exception as e:
             logger.error(f"[Direct] Error: {e}")
@@ -100,6 +107,20 @@ class DirectBackend(SandboxBackend):
 
             logger.error(f"[Direct] Traceback:\n{traceback.format_exc()}")
             raise
+
+    @staticmethod
+    async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
+        # start_new_session makes this command's PID its process-group ID.
+        # Kill descendants even if the shell has already exited: they can keep
+        # stdout/stderr open and prevent communicate()/wait() from finishing.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(process.communicate(), timeout=_PROCESS_CLEANUP_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning("Command process-group cleanup timed out: pid={}", process.pid)
 
     async def stop(self) -> None:
         """Stop the backend (no-op for direct backend)."""

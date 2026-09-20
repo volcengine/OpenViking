@@ -100,7 +100,7 @@ class QQChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through QQ."""
         # Only send normal response messages, skip thinking/tool_call/etc.
-        if not msg.is_normal_message:
+        if not msg.is_user_message:
             return
 
         if not self._client:

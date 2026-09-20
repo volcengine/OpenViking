@@ -253,6 +253,10 @@ class OpenAPIChannel(BaseChannel):
         Handle outbound messages - routes to pending responses.
         This is called by the message bus dispatcher.
         """
+        # HTTP requests only receive their own answer. Background task status
+        # remains queryable through long_task; it must not close another stream.
+        if msg.event_type == OutboundEventType.NOTIFICATION:
+            return
         # Check if this message is for a BotChannel
         if msg.session_key.type == "bot_api":
             channel_id = msg.session_key.channel_id

@@ -469,7 +469,7 @@ Supported transports are `stdio`, `sse`, and `streamableHttp`. Tool names use th
 |---------|-------------|
 | `direct` | Default; executes directly on the Bot host and is not a strong isolation boundary |
 | `srt` | Supports file and network allow/deny policies |
-| `opensandbox` | Connects to OpenSandbox Server |
+| `opensandbox` | Connects to OpenSandbox Server; requires SDK ≥ 0.1.5 and an execution service supporting command status queries |
 | `aiosandbox` | Connects to an AIO Sandbox service |
 
 Workspace modes:
@@ -545,6 +545,7 @@ The repository includes `deploy/docker/deploy_langfuse.sh` for local deployment.
 
 ## More Documentation
 
+- [LoopX Long Tasks: Setup and Runtime Boundaries (中文)](docs/zh/concepts/07-long-tasks.md)
 - [VikingBot Architecture](docs/en/concepts/01-architecture.md)
 - [Agent Capabilities](docs/en/concepts/02-agent-capabilities.md)
 - [Channels, Gateway, and Operations](docs/en/concepts/03-channels-and-gateway.md)

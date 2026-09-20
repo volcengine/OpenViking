@@ -74,9 +74,10 @@ class ChatChannel(BaseChannel):
 
         from vikingbot.cli.commands import console
 
-        if msg.is_normal_message:
-            self._last_response = msg.content
-            self._response_received.set()
+        if msg.is_user_message:
+            if msg.is_normal_message:
+                self._last_response = msg.content
+                self._response_received.set()
             # Print Bot: response
             console.print()
             content = msg.content or ""

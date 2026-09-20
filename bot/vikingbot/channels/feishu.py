@@ -548,7 +548,7 @@ class FeishuChannel(BaseChannel):
             return False
 
         # Only send normal response messages, skip thinking/tool_call/etc.
-        if not msg.is_normal_message:
+        if not msg.is_user_message:
             return False
 
         try:

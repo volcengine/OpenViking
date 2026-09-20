@@ -316,6 +316,34 @@ async def test_feishu_send_skips_normal_message_without_reply_to():
 
 
 @pytest.mark.asyncio
+async def test_feishu_delivers_background_notification():
+    from unittest.mock import AsyncMock, Mock
+
+    from vikingbot.bus.events import OutboundEventType
+
+    channel = FeishuChannel(FeishuChannelConfig(app_id="cli_app"), MessageBus())
+    create = Mock(return_value=SimpleNamespace(success=lambda: True))
+    channel._client = SimpleNamespace(
+        im=SimpleNamespace(
+            v1=SimpleNamespace(
+                message=SimpleNamespace(create=create),
+            )
+        )
+    )
+    channel._extract_and_upload_images = AsyncMock(return_value=("Task completed", []))
+    delivered = await channel.send(
+        OutboundMessage(
+            session_key=SessionKey(type="feishu", channel_id="cli_app", chat_id="oc_chat"),
+            content="Task completed",
+            event_type=OutboundEventType.NOTIFICATION,
+            metadata={"reply_to": "oc_chat"},
+        )
+    )
+    assert delivered
+    assert create.call_args.args[0].request_body.receive_id == "oc_chat"
+
+
+@pytest.mark.asyncio
 async def test_feishu_upload_image_uses_detected_jpeg_format(monkeypatch):
     channel = FeishuChannel(FeishuChannelConfig(app_id="cli_app"), MessageBus())
     jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01fake-jpeg"

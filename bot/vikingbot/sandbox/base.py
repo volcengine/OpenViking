@@ -14,6 +14,18 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class CommandResult:
+    """Command output and its actual exit status; None means no confirmed exit."""
+
+    output: str
+    exit_code: int | None
+
+    @property
+    def success(self) -> bool:
+        return self.exit_code == 0
+
+
+@dataclass(frozen=True)
 class SandboxFileInfo:
     """A regular file in the sandbox workspace."""
 
@@ -31,9 +43,13 @@ class SandboxBackend(ABC):
     async def start(self) -> None:
         """Start the sandbox instance."""
 
-    @abstractmethod
     async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
-        """Execute a command in the sandbox."""
+        """Text interface for callers that only need command output."""
+        return (await self.execute_result(command, timeout=timeout, **kwargs)).output
+
+    @abstractmethod
+    async def execute_result(self, command: str, timeout: int = 60, **kwargs: Any) -> CommandResult:
+        """Execute and retain exit status independently of output formatting."""
 
     @abstractmethod
     async def stop(self) -> None:

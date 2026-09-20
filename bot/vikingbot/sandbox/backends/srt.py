@@ -10,7 +10,7 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
+from vikingbot.sandbox.base import CommandResult, SandboxBackend, SandboxNotStartedError
 from vikingbot.utils.session_paths import portable_path_component
 
 
@@ -121,13 +121,13 @@ class SrtBackend(SandboxBackend):
         else:
             raise RuntimeError(f"Unexpected response from wrapper: {response}")
 
-    async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
+    async def execute_result(self, command: str, timeout: int = 60, **kwargs: Any) -> CommandResult:
         """Execute command in sandbox."""
         if not self._process:
             raise SandboxNotStartedError()
 
         if command.strip() == "pwd":
-            return str(self._workspace.resolve())
+            return CommandResult(str(self._workspace.resolve()), 0)
 
         # Execute via wrapper
         custom_config = kwargs.get("custom_config")
@@ -151,7 +151,7 @@ class SrtBackend(SandboxBackend):
         output_parts = []
         stdout = response.get("stdout", "")
         stderr = response.get("stderr", "")
-        exit_code = response.get("exitCode", 0)
+        exit_code = response.get("exitCode")
 
         if stdout:
             output_parts.append(stdout)
@@ -175,7 +175,7 @@ class SrtBackend(SandboxBackend):
         if len(result) > max_len:
             result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"
 
-        return result
+        return CommandResult(result, exit_code)
 
     async def stop(self) -> None:
         """Stop sandbox process."""

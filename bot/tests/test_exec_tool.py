@@ -8,6 +8,7 @@ import pytest
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.backends.direct import DirectBackend
+from vikingbot.sandbox.base import CommandResult
 
 
 class _SandboxManager:
@@ -25,9 +26,9 @@ async def test_exec_tool_applies_working_dir_for_all_sandbox_backends():
     class Sandbox:
         sandbox_cwd = "/workspace"
 
-        async def execute(self, command, timeout):
+        async def execute_result(self, command, timeout):
             calls.append((command, timeout))
-            return "ok"
+            return CommandResult("ok", 0)
 
     context = SimpleNamespace(
         sandbox_manager=_SandboxManager(Sandbox()),
@@ -40,7 +41,7 @@ async def test_exec_tool_applies_working_dir_for_all_sandbox_backends():
         working_dir="directory with spaces",
     )
 
-    assert result == "ok"
+    assert result.text == "ok" and result.success
     assert calls == [("cd 'directory with spaces' && pwd", 7)]
 
 
@@ -49,7 +50,7 @@ async def test_exec_tool_pwd_without_working_dir_uses_sandbox_root():
     class Sandbox:
         sandbox_cwd = "/workspace"
 
-        async def execute(self, command, timeout):
+        async def execute_result(self, command, timeout):
             raise AssertionError((command, timeout))
 
     context = SimpleNamespace(
@@ -59,7 +60,7 @@ async def test_exec_tool_pwd_without_working_dir_uses_sandbox_root():
 
     result = await ExecTool().execute(context, command="pwd")
 
-    assert result == "/workspace"
+    assert result.text == "/workspace" and result.success
 
 
 @pytest.mark.asyncio
@@ -86,4 +87,4 @@ async def test_exec_tool_working_dir_changes_real_command_cwd(tmp_path):
     finally:
         await sandbox.stop()
 
-    assert result.strip() == str(working_dir)
+    assert result.text.strip() == str(working_dir) and result.success

@@ -18,7 +18,12 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
+from vikingbot.sandbox.base import (
+    CommandResult,
+    SandboxBackend,
+    SandboxFileInfo,
+    SandboxNotStartedError,
+)
 
 # Global to track the opensandbox-server process
 _OSB_SERVER_PROCESS: "subprocess.Popen | None" = None
@@ -218,14 +223,14 @@ class OpenSandboxBackend(SandboxBackend):
             logger.error("Full traceback:\n{}", traceback.format_exc())
             raise
 
-    async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
+    async def execute_result(self, command: str, timeout: int = 60, **kwargs: Any) -> CommandResult:
         if not self._sandbox:
             raise SandboxNotStartedError()
 
         logger.info("[OpenSandbox] Executing: {}", repr(command))
 
         if command.strip() == "pwd":
-            return "/workspace" if self._is_vke else "/"
+            return CommandResult("/workspace" if self._is_vke else "/", 0)
 
         try:
             from opensandbox.models.execd import RunCommandOpts
@@ -247,7 +252,16 @@ class OpenSandboxBackend(SandboxBackend):
                     [chunk.text for chunk in execution.logs.stderr if chunk.text]
                 )
 
-            exit_code = execution.exit_code if hasattr(execution, "exit_code") else 0
+            # Execution holds logs/errors, not an exit_code field. The official
+            # command-status endpoint is the authority for process termination.
+            if not execution.id:
+                raise RuntimeError("OpenSandbox returned no command execution ID")
+            status = await self._sandbox.commands.get_command_status(execution.id)
+            exit_code = status.exit_code if status.running is False else None
+            if execution.error is not None:
+                output_parts.append(f"Error: {execution.error.value}")
+                if exit_code == 0:
+                    exit_code = None
 
             if stdout_text:
                 output_parts.append(stdout_text)
@@ -263,7 +277,7 @@ class OpenSandboxBackend(SandboxBackend):
                 result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"
 
             logger.info("[OpenSandbox] Output:\n{}", result)
-            return result
+            return CommandResult(result, exit_code)
 
         except Exception as e:
             logger.error("[OpenSandbox] Error: {}", e)

@@ -10,7 +10,12 @@ from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
-from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
+from vikingbot.sandbox.base import (
+    CommandResult,
+    SandboxBackend,
+    SandboxFileInfo,
+    SandboxNotStartedError,
+)
 
 
 @register_backend("aiosandbox")
@@ -44,13 +49,13 @@ class AioSandboxBackend(SandboxBackend):
             logger.error("[AioSandbox] Failed to start: {}", e)
             raise
 
-    async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
+    async def execute_result(self, command: str, timeout: int = 60, **kwargs: Any) -> CommandResult:
         """Execute command in AIO Sandbox."""
         if not self._client:
             raise SandboxNotStartedError()
 
         if command.strip() == "pwd":
-            return "/home/gem"
+            return CommandResult("/home/gem", 0)
 
         try:
             result = await self._client.shell.exec_command(command=command, timeout=timeout)
@@ -77,7 +82,7 @@ class AioSandboxBackend(SandboxBackend):
                     + f"\n... (truncated, {len(result_text) - max_len} more chars)"
                 )
 
-            return result_text
+            return CommandResult(result_text, result.data.exit_code)
         except Exception as e:
             logger.error(f"[AioSandbox] Error: {e}")
             import traceback
