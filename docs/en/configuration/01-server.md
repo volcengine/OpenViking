@@ -373,7 +373,7 @@ Parsers live under `parsers`:
     "text": {},
     "directory": {
       "preserve_structure": true,
-      "max_files": 1000,
+      "max_files": null,
       "max_depth": 10,
       "max_concurrent": 4
     },
@@ -388,6 +388,14 @@ Parsers live under `parsers`:
 }
 ```
 
+`parsers.directory.max_files` defaults to `null` (no file-count limit). Omit it
+or set it to `null` to import directories of any file count; set a positive integer
+such as `10000` to enforce a limit. `0` and negative values, including `-1`, are
+invalid. Exceeding an explicit limit rejects the scan before parsing, rather than
+importing only the first N files. Existing positive limits remain effective.
+Cloud deployments can set an explicit limit to match their capacity; local and
+self-hosted deployments use the same configuration semantics.
+
 `parsers.directory.max_concurrent` is shared by all directory imports in the
 server event loop. With the default value `4`, one directory can run four
 Understanding jobs concurrently, while multiple concurrent directories still
@@ -397,8 +405,11 @@ run at most four in total.
 Each `DirectoryParser` scan applies these limits independently before submitting its
 own Understanding requests. A nested ZIP starts a new directory scan and does not
 share the outer scan's file-count or depth budget.
-When Understanding is disabled, native OpenViking directory parsing does not apply
-these two limits.
+Ordinary native OpenViking directory parsing does not apply these two limits.
+Feishu directory imports also enforce an explicitly configured `max_files`,
+including remote document entries, even when using native parsing.
+`max_depth` still defaults to `10`, and `max_concurrent` to `4`; removing the
+file-count limit does not remove depth or concurrency limits.
 
 When a local directory is added through the client, the complete directory ZIP is
 subject to the `/resources/temp_upload` size limit. After extraction,

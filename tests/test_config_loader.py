@@ -195,10 +195,10 @@ def test_parser_api_upload_defaults():
     assert config.upload_part_size_bytes == 8 * 1024 * 1024
 
 
-def test_directory_safety_limits_have_bounded_defaults():
+def test_directory_defaults_to_unlimited_files_with_bounded_depth_and_concurrency():
     config = DirectoryConfig()
 
-    assert config.max_files == 1000
+    assert config.max_files is None
     assert config.max_depth == 10
     assert config.max_concurrent == 4
 

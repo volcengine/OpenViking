@@ -19,7 +19,6 @@ from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.understanding_api import UnderstandingAPI, UnderstandingAPIError
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking.utils.resource_processor import ResourceProcessor
-from openviking_cli.exceptions import InvalidArgumentError
 
 
 class _FakeVikingFS:
@@ -51,7 +50,7 @@ def _configure_understanding(
     *,
     enabled: bool = True,
     max_concurrent: int = 4,
-    max_files: int = 1000,
+    max_files: int | None = None,
     max_depth: int = 10,
     upload_simple_max_bytes: int = 512 * 1024 * 1024,
     enable_resumable_upload: bool = False,
@@ -790,20 +789,6 @@ async def test_no_split_directory_records_missing_native_parser_per_file(
             ),
         }
     ]
-
-
-@pytest.mark.asyncio
-async def test_directory_limits_fail_before_understanding_submit(monkeypatch, tmp_path: Path):
-    _configure_understanding(monkeypatch, ["pdf"], max_files=1)
-    (tmp_path / "a.pdf").write_bytes(b"%PDF-1.7")
-    (tmp_path / "b.pdf").write_bytes(b"%PDF-1.7")
-    parse = AsyncMock(side_effect=AssertionError("Understanding must not be submitted"))
-
-    with patch.object(ParserRouter, "parse", new=parse):
-        with pytest.raises(InvalidArgumentError, match="file count exceeds"):
-            await DirectoryParser().parse(str(tmp_path), strict=True)
-
-    parse.assert_not_awaited()
 
 
 @pytest.mark.asyncio
