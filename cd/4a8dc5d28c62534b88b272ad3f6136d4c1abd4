@@ -1,0 +1,70 @@
+bot/tests/test_compile_incremental.py
+  h_b34c679d17e2ac 3-5,10-25,27-161,184-458
+bot/tests/test_compile_shuffle.py
+  h_b34c679d17e2ac 1-329
+bot/vikingbot/agent/loop.py
+  h_b34c679d17e2ac 2172-2174
+bot/vikingbot/agent/tools/compile.py
+  h_b34c679d17e2ac 15,53,58-59,138,170,270,298-299,321,332-333,361-362,376,378,384,399,437,454,479,519
+bot/vikingbot/agent/tools/spawn.py
+  h_b34c679d17e2ac 73,114
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 26,30,37-40,207-208
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 1,7-10,15-34,37-38,40-41,45-166,168-192,194-208,211,213-220,222-235,237-270,272-294,296-383,385-422,424-430,433-464,466-524,526-529,531-547,549-660,662-668,671-684,686-709,711-750,752-757,759-776,778-821,823-860,862-908,910-924,926,928-945,947-978,980-981,983-985,987-1023,1025-1044,1046-1125,1127-1209
+bot/vikingbot/compile/pipeline_agent.py
+  h_b34c679d17e2ac 1-267
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 1-463
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 1-469
+bot/vikingbot/compile/renderer.py
+  h_b34c679d17e2ac 220-221,228-238,262,280-284,342-372,374-379,382-395,432,446-450,514-516,590,592,603-606,632-634
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 1,24,60-62,64,200-203,655,706-736,809,817,822-832,834-837,868,897-898,918-1088,1127-1128,1198,1200-1218,1220,1222-1226,1235,1246,1250-1252,1254-1260,1262,1265-1278,1280-1281,1284-1285,1287-1290,1324-1329,1331,1347-1366,1370-1371,1428-1429,1432-1434,1473,1524,1533,1537-1538,1540,1562-1563,1611-1614
+bot/vikingbot/compile/shuffle.py
+  h_b34c679d17e2ac 1-390
+bot/vikingbot/compile/skill_resources.py
+  h_b34c679d17e2ac 1-222
+bot/vikingbot/openviking_mount/ov_server.py
+  h_b34c679d17e2ac 535-545,675,677,683
+bot/vikingbot/providers/base.py
+  h_b34c679d17e2ac 90,155,167
+bot/vikingbot/providers/vlm_adapter.py
+  h_b34c679d17e2ac 260,295-297,300,597,634-640,722-727
+bot/vikingbot/tests/unit/test_stream_tool_calls.py
+  h_b34c679d17e2ac 22,24,34,44,53
+crates/ov_cli/src/help_ui.rs
+  h_b34c679d17e2ac 877
+crates/ov_cli/src/main.rs
+  h_b34c679d17e2ac 1145
+docs/design/compile-pipeline.md
+  h_b34c679d17e2ac 1-302
+openviking/server/routers/content.py
+  h_b34c679d17e2ac 10,61-62,79-80,287
+openviking/server/routers/search.py
+  h_b34c679d17e2ac 6-7,68-143,270-273
+openviking/service/fs_service.py
+  h_b34c679d17e2ac 1141,1152
+openviking/storage/content_write.py
+  h_b34c679d17e2ac 9,56,213,223-225,251,259,272-296,402-403,500-506,521
+sdk/python/openviking_sdk/options.py
+  h_b34c679d17e2ac 98-99
+tests/unit/test_batch_write_conflicts.py
+  h_b34c679d17e2ac 1-143
+tests/unit/test_vikingbot_vlm_adapter_retry.py
+  h_b34c679d17e2ac 473-490
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "cd4a8dc5d28c62534b88b272ad3f6136d4c1abd4",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
