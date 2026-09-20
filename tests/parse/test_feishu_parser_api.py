@@ -1071,28 +1071,30 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         "resource_id": final_uri,
     }
     final_complete = task_tracker.complete.await_args_list[-1]
-    assert final_complete.args == (
-        "task-1",
-        {
-            "status": "success",
-            "root_uri": final_uri,
-            "context_count": 9,
-            "queue_status": {
-                "Semantic": {
-                    "processed": 0,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
-                "Embedding": {
-                    "processed": 9,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
+    final_result = dict(final_complete.args[1])
+    telemetry = final_result.pop("telemetry")
+    assert telemetry["id"] == telemetry_id
+    assert telemetry["summary"]["operation"] == "add_resource_job"
+    assert final_complete.args[0] == "task-1"
+    assert final_result == {
+        "status": "success",
+        "root_uri": final_uri,
+        "context_count": 9,
+        "queue_status": {
+            "Semantic": {
+                "processed": 0,
+                "requeue_count": 0,
+                "error_count": 0,
+                "errors": [],
+            },
+            "Embedding": {
+                "processed": 9,
+                "requeue_count": 0,
+                "error_count": 0,
+                "errors": [],
             },
         },
-    )
+    }
     assert final_complete.kwargs == {
         "account_id": "account-1",
         "user_id": "user-1",

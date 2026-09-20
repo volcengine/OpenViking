@@ -1572,7 +1572,7 @@ async def test_reindex_resource_vectors_non_recursive_skips_tree(monkeypatch):
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat(self, uri, ctx=None, skip_count=True):
             return {"isDir": True}
 
     async def fail_tree_all(*args, **kwargs):
@@ -2029,7 +2029,9 @@ async def test_reindex_upsert_context_omits_search_tags_without_ingest_options(m
 
     def fake_from_context(context):
         captured["meta"] = dict(context.meta or {})
-        return _FakeMsg()
+        msg = _FakeMsg()
+        msg.context_data = context.to_dict()
+        return msg
 
     monkeypatch.setattr(
         "openviking.service.reindex_executor.EmbeddingMsgConverter.from_context",
@@ -2051,10 +2053,12 @@ async def test_reindex_upsert_context_omits_search_tags_without_ingest_options(m
         context_type="resource",
         level=ContextLevel.DETAIL,
         ctx=ctx,
+        md5="final-md5",
     )
 
     assert "search_tags" not in captured["meta"]
     assert "search_tags" not in captured["msg"].context_data
+    assert captured["msg"].context_data["md5"] == "final-md5"
 
 
 @pytest.mark.asyncio
@@ -2066,8 +2070,11 @@ async def test_reindex_resource_vectors_parallelize_files_and_isolate_failures(m
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat(self, uri, ctx=None, skip_count=True):
             return {"isDir": True}
+
+        async def read_file_bytes(self, uri, ctx=None):
+            return uri.encode()
 
         async def tree(
             self,
@@ -2094,7 +2101,7 @@ async def test_reindex_resource_vectors_parallelize_files_and_isolate_failures(m
     async def fake_best_file_summary(self, uri, *, ctx):
         return f"summary:{uri.rsplit('/', 1)[-1]}"
 
-    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx, file_content=None):
         return summary
 
     seen = []
@@ -2281,8 +2288,11 @@ async def test_reindex_resource_l2_falls_back_to_vector_text_when_summary_missin
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat(self, uri, ctx=None, skip_count=True):
             return {"isDir": True}
+
+        async def read_file_bytes(self, uri, ctx=None):
+            return b"raw file body"
 
         async def tree(
             self,
@@ -2308,7 +2318,7 @@ async def test_reindex_resource_l2_falls_back_to_vector_text_when_summary_missin
     async def fake_best_file_summary(self, uri, *, ctx):
         return ""
 
-    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx, file_content=None):
         return "raw file body"
 
     async def fake_upsert_context(self, **kwargs):
@@ -2339,6 +2349,52 @@ async def test_reindex_resource_l2_falls_back_to_vector_text_when_summary_missin
     )
 
     assert seen["viking://resources/demo/file.txt"]["abstract"] == "raw file body"
+
+
+@pytest.mark.asyncio
+async def test_reindex_resource_file_writes_md5_from_same_bytes(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+    from openviking.utils.content_hash import content_md5
+
+    file_uri = "viking://resources/demo/file.txt"
+    raw = b"current body"
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+        async def stat(self, uri, ctx=None, skip_count=True):
+            return {"isDir": False}
+
+        async def read_file_bytes(self, uri, ctx=None):
+            assert uri == file_uri
+            return raw
+
+    seen = {}
+
+    async def fake_best_file_summary(self, uri, *, ctx):
+        return "summary"
+
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx, file_content=None):
+        return "current body"
+
+    async def fake_upsert_context(self, **kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(
+        ReindexExecutor,
+        "_best_resource_file_vector_text",
+        fake_best_resource_file_vector_text,
+    )
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
+
+    counters = _ReindexCounters()
+    ctx = RequestContext(user=UserIdentifier(account_id="test", user_id="alice"), role=Role.ROOT)
+    await ReindexExecutor()._reindex_resource_vectors(uri=file_uri, counters=counters, ctx=ctx)
+
+    assert seen["md5"] == content_md5(raw)
 
 
 @pytest.mark.asyncio
@@ -2602,8 +2658,11 @@ async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat(self, uri, ctx=None, skip_count=True):
             return {"isDir": False}
+
+        async def read_file_bytes(self, uri, ctx=None):
+            return b"file summary"
 
         async def tree(self, *args, **kwargs):
             raise AssertionError("single-file reindex should not call tree")
@@ -2613,7 +2672,7 @@ async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
     async def fake_best_file_summary(self, uri, *, ctx):
         return "file summary"
 
-    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
+    async def fake_best_resource_file_vector_text(self, uri, summary, ctx, file_content=None):
         return summary
 
     async def fake_upsert_context(self, **kwargs):

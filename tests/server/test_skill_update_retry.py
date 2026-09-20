@@ -9,7 +9,7 @@ import threading
 import pytest
 
 from openviking.storage.queuefs import get_queue_manager
-from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from tests.server.test_api_skills import _add_skill, _skill_md
 from tests.server.test_api_skills import _stub_mcp_endpoint as _stub_mcp_endpoint
 from tests.server.test_skill_update_cancellation import _download, _wait_until
@@ -17,7 +17,7 @@ from tests.server.test_skill_update_lock import _assert_locked, _ctx
 
 
 def _fail_first_run(monkeypatch, root, *, block_retries=False):
-    original = SemanticDagExecutor.run
+    original = SemanticTreeExecutor.run
     attempts = []
 
     async def fail_once(self, root_uri):
@@ -29,7 +29,7 @@ def _fail_first_run(monkeypatch, root, *, block_retries=False):
                 await asyncio.Event().wait()
         return await original(self, root_uri)
 
-    monkeypatch.setattr(SemanticDagExecutor, "run", fail_once)
+    monkeypatch.setattr(SemanticTreeExecutor, "run", fail_once)
     return attempts
 
 

@@ -227,14 +227,21 @@ This group appears on resource ingestion operations such as `resources.add_resou
 
 | Field | Meaning |
 | --- | --- |
-| `summary.resource.request.duration_ms` | Total request-side duration for the add-resource flow |
-| `summary.resource.process.duration_ms` | Duration of the main resource-processing flow |
-| `summary.resource.process.parse.duration_ms` | Time spent parsing the resource |
-| `summary.resource.process.parse.warnings_count` | Number of parse warnings |
-| `summary.resource.process.finalize.duration_ms` | Time spent finalizing the resource tree |
-| `summary.resource.process.summarize.duration_ms` | Time spent on summarize/vectorize processing |
-| `summary.resource.wait.duration_ms` | Time spent waiting for downstream processing when `wait=true` |
-| `summary.resource.watch.duration_ms` | Time spent creating, updating, or removing watch tasks |
+| `summary.resource.total.duration_ms` | Total duration of the add-resource operation |
+| `summary.resource.source_execute.duration_ms` | Time spent executing the source operation |
+| `summary.resource.source_prepare.duration_ms` | Time spent preparing a durable source |
+| `summary.resource.parse_artifact.duration_ms` | Time spent producing the parser artifact |
+| `summary.resource.target_resolve.duration_ms` | Time spent resolving the final resource target |
+| `summary.resource.update_plan.duration_ms` | Total time spent building the incremental update plan |
+| `summary.resource.update_plan.artifact_inventory.duration_ms` | Time spent scanning and normalizing the parser artifact |
+| `summary.resource.update_plan.rnfv_snapshot.duration_ms` | Time spent reading the R/N/F/V snapshot |
+| `summary.resource.update_plan.diff_and_compile.duration_ms` | Time spent resolving the diff and compiling actions |
+| `summary.resource.content_commit.duration_ms` | Time spent applying content actions to the formal tree |
+| `summary.resource.derived_enqueue.duration_ms` | Time spent enqueueing semantic and index work |
+| `summary.resource.semantic.queue_wait.duration_ms` | Time semantic work spent waiting in QueueFS |
+| `summary.resource.semantic.execute.duration_ms` | Time spent executing semantic work |
+| `summary.resource.embedding.queue_wait.duration_ms` | Time embedding work spent waiting in QueueFS |
+| `summary.resource.embedding.execute.duration_ms` | Time spent executing embedding work |
 | `summary.resource.flags.wait` | Whether the request used `wait=true` |
 | `summary.resource.flags.build_index` | Whether the request enabled `build_index` |
 | `summary.resource.flags.summarize` | Whether the request explicitly enabled `summarize` |
@@ -247,15 +254,17 @@ This group appears when OpenViking waits for queue-backed work to complete.
 | Field | Meaning |
 | --- | --- |
 | `summary.queue.semantic.processed` | Number of semantic-queue messages processed |
+| `summary.queue.semantic.requeue_count` | Number of semantic messages re-enqueued for retry |
 | `summary.queue.semantic.error_count` | Number of semantic-queue errors |
 | `summary.queue.embedding.processed` | Number of embedding-queue messages processed |
+| `summary.queue.embedding.requeue_count` | Number of embedding messages re-enqueued for retry |
 | `summary.queue.embedding.error_count` | Number of embedding-queue errors |
 
 ### `summary.semantic_nodes`
 
 | Field | Meaning |
 | --- | --- |
-| `summary.semantic_nodes.total` | Total DAG or semantic-node count |
+| `summary.semantic_nodes.total` | Total semantic-tree node count |
 | `summary.semantic_nodes.done` | Number of completed nodes |
 | `summary.semantic_nodes.pending` | Number of pending nodes |
 | `summary.semantic_nodes.running` | Number of nodes still running |
