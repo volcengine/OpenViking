@@ -15,6 +15,7 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
+STOP_TOKEN = "###STOP###"
 DEFAULT_TAU2_USER_LLM = "openai/doubao-seed-2-0-code-preview-260215"
 _TAU2_MODEL_MAX_RETRIES = 3
 
@@ -285,7 +286,7 @@ class _GymTau2BenchEnv:
 
     def tool_call(self, tool_name: str, arguments: dict) -> str:
         if self.terminated:
-            return "Task Terminated"
+            return STOP_TOKEN
 
         if tool_name == CommunicateWithUser.name:
             obs, reward, terminated, truncated, info = self.env.step(arguments["content"])
@@ -294,7 +295,10 @@ class _GymTau2BenchEnv:
             obs, reward, terminated, truncated, info = self.env.step(json.dumps(action))
 
         self.terminated = terminated
-        return _clean_obs(obs)
+        obs = _clean_obs(obs)
+        if terminated and STOP_TOKEN not in obs:
+            obs = f"{obs}\n{STOP_TOKEN}" if obs else STOP_TOKEN
+        return obs
 
     def append_agent_message(self, content: str) -> None:
         if not content.strip():

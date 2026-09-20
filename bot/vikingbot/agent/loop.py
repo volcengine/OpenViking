@@ -1800,7 +1800,9 @@ class AgentLoop:
                                 }
                             )
                         if route.user_terminates:
-                            final_content = ""
+                            # Already delivered; retain it so the iteration-limit
+                            # fallback does not ask the model to speak again.
+                            final_content = text
                             break
                         messages.append(
                             {
