@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
+import { extractStopCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -170,7 +170,11 @@ async function main() {
     }
 
     const messages = parseTranscript(transcript);
-    const turns = extractCaptureTurns(messages, cfg);
+    // This is closing text, not the separate SubagentHandback tool report.
+    // Preserve tool parts from the transcript; never infer a report from text.
+    const { newTurns } = extractStopCaptureTurns(messages, cfg, input.last_assistant_message);
+    const turns = cfg.captureAssistantTurns
+      ? newTurns : newTurns.filter((turn) => turn.role === "user");
     log("transcript_parse", {
       subagentId,
       ovSessionId,

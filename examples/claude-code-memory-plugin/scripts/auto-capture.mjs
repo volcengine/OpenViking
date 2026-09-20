@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
+import { extractStopCaptureTurns, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -124,6 +124,7 @@ async function reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state) {
       status: res.status || 200,
     });
     state.capturedTurnCount = 0;
+    state.stopAssistant = null;
     await saveState(sessionId, state);
   }
 }
@@ -249,21 +250,17 @@ async function main({ cfg, input, cwd }) {
     return;
   }
 
-  if (!transcriptContent.trim()) {
-    log("skip", { stage: "transcript_read", reason: "empty transcript" });
-    return;
-  }
-
   const messages = parseTranscript(transcriptContent);
-  const allTurns = extractCaptureTurns(messages, cfg);
-  if (allTurns.length === 0) {
+  const state = await loadState(sessionId);
+  await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
+  const { allTurns, newTurns, stopAssistant } = extractStopCaptureTurns(
+    messages, cfg, input.last_assistant_message, state,
+  );
+  if (allTurns.length === 0 && newTurns.length === 0) {
     log("skip", { stage: "transcript_parse", reason: "no user/assistant turns found" });
     return;
   }
 
-  const state = await loadState(sessionId);
-  await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
-  const newTurns = allTurns.slice(state.capturedTurnCount);
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns
     : newTurns.filter(turn => turn.role === "user");
@@ -284,6 +281,7 @@ async function main({ cfg, input, cwd }) {
     await saveState(sessionId, {
       ...state,
       capturedTurnCount: allTurns.length,
+      stopAssistant,
     });
     log("state_update", { newCapturedTurnCount: allTurns.length, reason: "assistant_only_increment" });
     return;
@@ -306,6 +304,7 @@ async function main({ cfg, input, cwd }) {
     await saveState(sessionId, {
       ...state,
       capturedTurnCount: allTurns.length,
+      stopAssistant,
     });
     return;
   }
@@ -321,6 +320,7 @@ async function main({ cfg, input, cwd }) {
       await saveState(sessionId, {
         ...state,
         capturedTurnCount: allTurns.length,
+        stopAssistant,
       });
       return;
     }
@@ -352,6 +352,7 @@ async function main({ cfg, input, cwd }) {
     await saveState(sessionId, {
       ...state,
       capturedTurnCount: allTurns.length,
+      stopAssistant,
     });
     log("state_update", { newCapturedTurnCount: allTurns.length, reason: "pending_queued" });
     writeJsonState("last-capture.json", {
@@ -410,6 +411,8 @@ async function main({ cfg, input, cwd }) {
   await saveState(sessionId, {
     ...state,
     capturedTurnCount: allTurns.length,
+    // A failed suffix includes the hook final: it has not been sent or queued.
+    stopAssistant: result.failed > 0 ? null : stopAssistant,
   });
   log("state_update", { newCapturedTurnCount: allTurns.length });
 
