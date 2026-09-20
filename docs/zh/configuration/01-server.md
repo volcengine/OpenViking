@@ -373,7 +373,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "text": {},
     "directory": {
       "preserve_structure": true,
-      "max_files": null,
+      "max_files": 1000,
       "max_depth": 10,
       "max_concurrent": 4
     },
@@ -388,10 +388,10 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 }
 ```
 
-`parsers.directory.max_files` 默认是 `null`，表示不限制文件数量。不填或设为 `null`
-均不限文件数；设置为 `10000` 等正整数时应用指定上限。`0` 和负数（包括 `-1`）不合法。
-超过显式上限会在解析前拒绝这次扫描，不会只导入前 N 个文件。已有的正整数配置继续生效。
-云上部署可根据自身容量显式设置上限，本地和私有化部署使用相同的配置语义。
+`parsers.directory.max_files` 不填时默认是 `1000`；显式设为 `null` 时不限制文件数量，
+设置为其他正整数时应用指定上限。`0` 和负数（包括 `-1`）不合法。
+超过上限会在解析前拒绝这次扫描，不会只导入前 N 个文件。已有的正整数配置继续生效。
+云上、本地和私有化部署使用相同的配置语义。
 
 `parsers.directory.max_concurrent` 由服务事件循环中的所有目录导入共享。默认值为
 `4` 时，单个目录可以并发执行 4 个 Understanding 任务；多个目录同时导入时，合计仍最多
@@ -400,9 +400,12 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 启用 Understanding 目录路由时，`max_files` 和 `max_depth` 约束目录导入。每次
 `DirectoryParser` 扫描会在提交该层 Understanding 请求前独立应用限制；嵌套 ZIP 会启动
 新的目录扫描，不与外层共享文件数量和深度预算。普通 OpenViking 原生目录解析不应用
-这两个限制。飞书目录导入即使使用原生解析，也会检查显式配置的 `max_files`，远程文档
+这两个限制。飞书目录导入即使使用原生解析，也会应用 `max_files`（包括默认值），远程文档
 条目同样计入文件数量。`max_depth` 仍默认是 `10`，`max_concurrent` 仍默认是 `4`；
 取消文件数量上限不会取消深度和并发限制。
+
+这些目录解析限制不适用于通过 `ov import` / `import_ovpack` 导入的 `.ovpack`；
+OVPack 使用独立的包恢复流程，HTTP 上传仍受临时上传大小限制。
 
 客户端导入本地目录时，完整目录 ZIP 受 `/resources/temp_upload` 上传大小限制。ZIP
 解压后，`DirectoryParser` 不再设置统一的单文件字节限制；每个入选文件遵循对应内置

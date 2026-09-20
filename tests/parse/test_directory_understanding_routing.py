@@ -50,7 +50,7 @@ def _configure_understanding(
     *,
     enabled: bool = True,
     max_concurrent: int = 4,
-    max_files: int | None = None,
+    max_files: int | None = 1000,
     max_depth: int = 10,
     upload_simple_max_bytes: int = 512 * 1024 * 1024,
     enable_resumable_upload: bool = False,
