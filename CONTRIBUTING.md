@@ -170,6 +170,34 @@ If a local edge case starts changing task boundaries, public semantics, or the
 overall architecture, stop and return to the design discussion instead of adding
 special branches throughout the main path.
 
+### Security Requirements
+
+These requirements define the security boundaries that OpenViking changes must preserve. They are review and remediation requirements, not a claim that every existing feature or released version already satisfies them.
+
+#### Untrusted input must not become executable commands
+
+Treat external requests, tool arguments, imported data, metadata, and model-generated output as untrusted. Authentication or access to a resource does not grant permission to execute commands on the server.
+
+- Do not interpolate untrusted values into shell commands or executable code. Data operations must preserve the distinction between data and instructions, including in downstream tools and integrations.
+- When an external program is necessary, use a server-controlled executable and structured arguments. Disabling the shell is not sufficient: validate values according to their domain and prevent them from being interpreted as options. Use option terminators where supported; do not expose arbitrary command or extra-argument passthrough through ordinary data APIs.
+- Control executable lookup, child-process environment, and tool configuration. Untrusted input must not enable additional execution capabilities through configuration or other indirect mechanisms. Ambient configuration must not silently expand the privileges or behavior of a server operation.
+- Agent and Skill execution exposed through server workflows must run in an isolated environment with explicitly scoped filesystem, network, and credential access. Do not default or fall back to host execution. A working directory, prompt instruction, or command denylist is not a sandbox. Disabling command execution must also prevent execution through file tools or other indirect paths.
+
+#### Remote operations must not access arbitrary server files
+
+Server APIs operate on authorized OpenViking resources and uploads, not arbitrary host paths. Legitimate access to service-managed storage must remain scoped to the authenticated account, user, and resource permissions.
+
+- Do not accept server-local paths or `file://` URLs as a way to ingest, read, search, preview, or export host files. Remote clients must use authorized resource URIs or uploads owned by the requesting principal. Do not expose server configuration, credentials, process-environment files, or another tenant's data through these operations or their error responses.
+- Enforce containment and authorization at the layer that resolves and performs the actual file operation. Validate the resolved target, including traversal, encoded paths, absolute paths, symbolic links, and archive entries. Checking only the original path string or a caller's initial directory is insufficient; every accessed file must remain inside its permitted boundary.
+- Apply the same boundary to indirect access: imported repositories and archives, uploaded files, generated artifacts, search results, and agent tools must not bypass it. Remote fetches and redirects must not turn into local-file access or unauthorized access to internal services.
+- Local operator workflows may intentionally access local files or run administrative commands. Such privileges must be explicit and must not become remotely selectable through request parameters, tool arguments, or imported content.
+
+#### Validation and reporting
+
+For changes affecting these boundaries, trace untrusted input through the real API, service, native binding, external program, and filesystem paths that apply. Validate option-like values, shell metacharacters, crafted file contents, traversal and symlink cases, and cross-tenant access at the relevant boundary. Use focused contract coverage or bounded reproductions; a successful normal request alone does not establish isolation.
+
+Command or argument injection, arbitrary server-file access, and escapes from the intended execution or tenant boundary are security issues. Report suspected violations through the private channels in [SECURITY.md](SECURITY.md). Public documentation and pull requests should describe the required boundary without disclosing an unremediated exploit or sensitive data.
+
 ### Code Style
 
 Python uses Ruff for formatting and linting, and mypy for type checking. The
