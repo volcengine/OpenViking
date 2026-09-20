@@ -1674,59 +1674,85 @@ async def merge_one_memory_type_operations(
                 f"error={exc}",
                 console=trace_console,
             )
-            correction_prompt = (
-                "The previous MERGE_PLAN failed server validation: "
-                f"{exc}. Return one corrected complete MERGE_PLAN JSON object. "
-                "Preserve valid case_comparisons and use the exact deterministic group "
-                "assignment stated by the server error. For every group that requires "
-                "compaction, replace task_signature, input, situation, rubric, and "
-                "evidence together. When promoting a draft, also provide a "
-                "generalized_case_identity derived from the semantic intersection of all "
-                "independent sources. Remove exact one-run values. Output JSON only."
-            )
-            response = await vlm.get_completion_async(
-                messages=[
-                    *merge_messages,
-                    {"role": "assistant", "content": content},
-                    {"role": "user", "content": correction_prompt},
-                ],
-                tools=None,
-                thinking=False,
-            )
-            retry_finish_reason = str(getattr(response, "finish_reason", "") or "").lower()
-            if retry_finish_reason in {"length", "max_tokens"}:
-                tracer.info(
-                    "[streaming_memory_updater] retrying truncated corrected Case merge "
-                    "with ultra-concise output",
-                    console=trace_console,
+            previous_content = content
+            validation_error = exc
+            for correction_attempt in range(2):
+                if correction_attempt:
+                    tracer.info(
+                        "[streaming_memory_updater] retrying Case merge after corrected "
+                        f"plan still failed validation error={validation_error}",
+                        console=trace_console,
+                    )
+                attempt_prompt = (
+                    "The previous MERGE_PLAN failed server validation: "
+                    f"{validation_error}. Return one corrected complete MERGE_PLAN JSON object. "
+                    "Preserve valid case_comparisons and use the exact deterministic group "
+                    "assignment stated by the server error. For every group that requires "
+                    "compaction, replace task_signature, input, situation, rubric, and "
+                    "evidence together. When promoting a draft, also provide a "
+                    "generalized_case_identity derived from the semantic intersection of all "
+                    "independent sources. Remove exact one-run values. Output JSON only."
                 )
                 response = await vlm.get_completion_async(
                     messages=[
                         *merge_messages,
-                        {
-                            "role": "user",
-                            "content": (
-                                f"{correction_prompt} The corrected output was truncated. "
-                                "Recreate it without quoting the previous output. Use no "
-                                "explanations. Limit task_signature to 40 words, situation to "
-                                "45 words, evidence to 60 words, and each rubric criterion "
-                                "description to 20 words; use at most three rubric criteria. "
-                                "Keep compact JSON strings on one line."
-                            ),
-                        },
+                        {"role": "assistant", "content": previous_content},
+                        {"role": "user", "content": attempt_prompt},
                     ],
                     tools=None,
                     thinking=False,
                 )
-                retry_finish_reason = str(getattr(response, "finish_reason", "") or "").lower()
-            if retry_finish_reason in {"length", "max_tokens"}:
-                raise MemoryMergePlanError(
-                    "LLM corrected Case merge output truncated after concise retry: "
-                    f"finish_reason={retry_finish_reason}"
+                retry_finish_reason = str(
+                    getattr(response, "finish_reason", "") or ""
+                ).lower()
+                if retry_finish_reason in {"length", "max_tokens"}:
+                    tracer.info(
+                        "[streaming_memory_updater] retrying truncated corrected Case merge "
+                        "with ultra-concise output",
+                        console=trace_console,
+                    )
+                    response = await vlm.get_completion_async(
+                        messages=[
+                            *merge_messages,
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"{attempt_prompt} The corrected output was truncated. "
+                                    "Recreate it without quoting the previous output. Use no "
+                                    "explanations. Limit task_signature to 40 words, situation to "
+                                    "45 words, evidence to 60 words, and each rubric criterion "
+                                    "description to 20 words; use at most three rubric criteria. "
+                                    "Keep compact JSON strings on one line."
+                                ),
+                            },
+                        ],
+                        tools=None,
+                        thinking=False,
+                    )
+                    retry_finish_reason = str(
+                        getattr(response, "finish_reason", "") or ""
+                    ).lower()
+                if retry_finish_reason in {"length", "max_tokens"}:
+                    raise MemoryMergePlanError(
+                        "LLM corrected Case merge output truncated after concise retry: "
+                        f"finish_reason={retry_finish_reason}"
+                    )
+                corrected_content = completion_content(response)
+                corrected_plan, corrected_content = await parse_merge_plan_with_json_repair(
+                    corrected_content
                 )
-            corrected_content = completion_content(response)
-            corrected_plan, _ = await parse_merge_plan_with_json_repair(corrected_content)
-            merged = await resolve_parsed_merge_plan(corrected_plan)
+                try:
+                    merged = await resolve_parsed_merge_plan(corrected_plan)
+                except MemoryMergePlanError as corrected_exc:
+                    if (
+                        correction_attempt >= 1
+                        or not str(corrected_exc).startswith(retryable_case_errors)
+                    ):
+                        raise
+                    previous_content = corrected_content
+                    validation_error = corrected_exc
+                    continue
+                break
     tracer.info(
         "[streaming_memory_updater] llm merge output "
         f"memory_type={memory_type} upserts={len(merged.upsert_operations)} "
