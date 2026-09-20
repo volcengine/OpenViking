@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from vikingbot.agent import memory as memory_module
@@ -109,9 +110,10 @@ class _DummyHTTPClient:
 class _SessionContextClient:
     """Record synchronization and simulate a retryable session commit failure."""
 
-    def __init__(self, *, pending_tokens, fail_commit=False):
+    def __init__(self, *, pending_tokens, fail_commit=False, fail_append=False):
         self.pending_tokens = pending_tokens
         self.fail_session_commit = fail_commit
+        self.fail_append = fail_append
         self.append_calls = []
         self.commit_calls = []
 
@@ -122,6 +124,8 @@ class _SessionContextClient:
         self, session_id, messages, default_user_peer_id=None, session_user_id=None
     ):
         self.append_calls.append((session_id, [message["content"] for message in messages]))
+        if self.fail_append:
+            raise RuntimeError("session append failed")
         return {"session_id": session_id, "added": len(messages)}
 
     async def get_session(self, session_id, user_id=None):
@@ -173,6 +177,20 @@ def _make_config(api_key_type: str, mode: str = "remote", **ov_overrides):
     return SimpleNamespace(
         ov_server=ov_server, agents=agents, ov_data_path=Path("/tmp/openviking-test")
     )
+
+
+@pytest.fixture
+def compact_hook(monkeypatch):
+    """Bind the real commit hook to an explicit client and session configuration."""
+
+    def create(client, **agent_options):
+        config = _make_config("root", session_context_enabled=True, **agent_options)
+        monkeypatch.setattr(openviking_hooks_module, "load_config", lambda: config)
+        hook = OpenVikingCompactHook()
+        monkeypatch.setattr(hook, "_get_client", AsyncMock(return_value=(client, False)))
+        return hook
+
+    return create
 
 
 @pytest.fixture(autouse=True)
@@ -1134,20 +1152,7 @@ async def test_compact_hook_user_mode_commits_once(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_compact_hook_session_context_commits_single_session_with_peer_messages(monkeypatch):
-    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
-
-    monkeypatch.setattr(
-        hooks_module,
-        "load_config",
-        lambda: _make_config(
-            "root",
-            session_context_enabled=True,
-            commit_token_threshold=100,
-            commit_keep_recent_count=2,
-        ),
-    )
-
+async def test_compact_hook_session_context_commits_single_session_with_peer_messages(compact_hook):
     class _FakeClient:
         def __init__(self):
             self.pending_tokens = [120, 0]
@@ -1191,12 +1196,7 @@ async def test_compact_hook_session_context_commits_single_session_with_peer_mes
             return {"session_id": session_id, "status": "accepted"}
 
     fake_client = _FakeClient()
-    hook = OpenVikingCompactHook()
-
-    async def _fake_get_client(_workspace_id):
-        return fake_client
-
-    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_count=2)
 
     session_key = SessionKey(
         type="cli",
@@ -1285,27 +1285,9 @@ async def test_reset_openviking_state_replaces_persisted_sender_cursors(temp_dir
 
 
 @pytest.mark.asyncio
-async def test_compact_hook_force_commit_does_not_resync_already_synced_messages(monkeypatch):
-    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
-
-    monkeypatch.setattr(
-        hooks_module,
-        "load_config",
-        lambda: _make_config(
-            "root",
-            session_context_enabled=True,
-            commit_token_threshold=100,
-            commit_keep_recent_turn_count=2,
-        ),
-    )
-
+async def test_compact_hook_force_commit_does_not_resync_already_synced_messages(compact_hook):
     fake_client = _SessionContextClient(pending_tokens=120, fail_commit=False)
-    hook = OpenVikingCompactHook()
-
-    async def _fake_get_client(_workspace_id, openviking_connection=None, config=None):
-        return fake_client, False
-
-    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_turn_count=2)
 
     context = HookContext(
         event_type="message.compact",
@@ -1337,28 +1319,10 @@ async def test_compact_hook_force_commit_does_not_resync_already_synced_messages
 
 @pytest.mark.asyncio
 async def test_compact_hook_force_commit_commits_current_session_without_unsynced_messages(
-    monkeypatch,
+    compact_hook,
 ):
-    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
-
-    monkeypatch.setattr(
-        hooks_module,
-        "load_config",
-        lambda: _make_config(
-            "root",
-            session_context_enabled=True,
-            commit_token_threshold=1000,
-            commit_keep_recent_turn_count=2,
-        ),
-    )
-
     fake_client = _SessionContextClient(pending_tokens=120, fail_commit=False)
-    hook = OpenVikingCompactHook()
-
-    async def _fake_get_client(_workspace_id, openviking_connection=None, config=None):
-        return fake_client, False
-
-    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+    hook = compact_hook(fake_client, commit_token_threshold=1000, commit_keep_recent_turn_count=2)
 
     context = HookContext(
         event_type="message.compact",
@@ -1389,55 +1353,10 @@ async def test_compact_hook_force_commit_commits_current_session_without_unsynce
 
 @pytest.mark.asyncio
 async def test_compact_hook_session_context_append_failure_does_not_advance_sync_cursor(
-    monkeypatch,
+    compact_hook,
 ):
-    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
-
-    monkeypatch.setattr(
-        hooks_module,
-        "load_config",
-        lambda: _make_config(
-            "root",
-            session_context_enabled=True,
-            commit_token_threshold=100,
-            commit_keep_recent_count=2,
-        ),
-    )
-
-    class _FakeClient:
-        def __init__(self):
-            self.append_calls = []
-            self.commit_calls = []
-
-        def session_owner_user_id(self):
-            return "admin"
-
-        async def append_messages(
-            self,
-            session_id,
-            messages,
-            default_user_peer_id=None,
-            session_user_id=None,
-        ):
-            self.append_calls.append((session_id, [message["content"] for message in messages]))
-            if session_id == "cli__default__chat-1":
-                raise RuntimeError("session append failed")
-            return {"session_id": session_id, "added": len(messages)}
-
-        async def get_session(self, session_id, user_id=None):
-            return {"session_id": session_id, "pending_tokens": 120}
-
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
-            return {"session_id": session_id, "status": "accepted"}
-
-    fake_client = _FakeClient()
-    hook = OpenVikingCompactHook()
-
-    async def _fake_get_client(_workspace_id):
-        return fake_client
-
-    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+    fake_client = _SessionContextClient(pending_tokens=120, fail_append=True)
+    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_count=2)
 
     context = HookContext(
         event_type="message.compact",
@@ -1469,28 +1388,10 @@ async def test_compact_hook_session_context_append_failure_does_not_advance_sync
 
 @pytest.mark.asyncio
 async def test_compact_hook_session_context_commits_when_message_threshold_reached(
-    monkeypatch,
+    compact_hook,
 ):
-    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
-
-    monkeypatch.setattr(
-        hooks_module,
-        "load_config",
-        lambda: _make_config(
-            "root",
-            session_context_enabled=True,
-            commit_token_threshold=1000,
-            commit_keep_recent_turn_count=2,
-        ),
-    )
-
     fake_client = _SessionContextClient(pending_tokens=0, fail_commit=False)
-    hook = OpenVikingCompactHook()
-
-    async def _fake_get_client(_workspace_id, openviking_connection=None, config=None):
-        return fake_client, False
-
-    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+    hook = compact_hook(fake_client, commit_token_threshold=1000, commit_keep_recent_turn_count=2)
 
     context = HookContext(
         event_type="message.compact",
@@ -1524,28 +1425,10 @@ async def test_compact_hook_session_context_commits_when_message_threshold_reach
 
 @pytest.mark.asyncio
 async def test_compact_hook_session_commit_failure_retries_without_resyncing_messages(
-    monkeypatch,
+    compact_hook,
 ):
-    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
-
-    monkeypatch.setattr(
-        hooks_module,
-        "load_config",
-        lambda: _make_config(
-            "root",
-            session_context_enabled=True,
-            commit_token_threshold=100,
-            commit_keep_recent_turn_count=2,
-        ),
-    )
-
     fake_client = _SessionContextClient(pending_tokens=120, fail_commit=True)
-    hook = OpenVikingCompactHook()
-
-    async def _fake_get_client(_workspace_id, openviking_connection=None, config=None):
-        return fake_client, False
-
-    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+    hook = compact_hook(fake_client, commit_token_threshold=100, commit_keep_recent_turn_count=2)
 
     context = HookContext(
         event_type="message.compact",
@@ -1585,53 +1468,10 @@ async def test_compact_hook_session_commit_failure_retries_without_resyncing_mes
 
 @pytest.mark.asyncio
 async def test_compact_hook_session_context_skips_message_threshold_after_recent_commit(
-    monkeypatch,
+    compact_hook,
 ):
-    from vikingbot.hooks.builtins import openviking_hooks as hooks_module
-
-    monkeypatch.setattr(
-        hooks_module,
-        "load_config",
-        lambda: _make_config(
-            "root",
-            session_context_enabled=True,
-            commit_token_threshold=1000,
-            commit_keep_recent_count=2,
-        ),
-    )
-
-    class _FakeClient:
-        def __init__(self):
-            self.append_calls = []
-            self.commit_calls = []
-
-        def session_owner_user_id(self):
-            return "admin"
-
-        async def append_messages(
-            self,
-            session_id,
-            messages,
-            default_user_peer_id=None,
-            session_user_id=None,
-        ):
-            self.append_calls.append((session_id, [message["content"] for message in messages]))
-            return {"session_id": session_id, "added": len(messages)}
-
-        async def get_session(self, session_id, user_id=None):
-            return {"session_id": session_id, "pending_tokens": 0}
-
-        async def commit_session(self, session_id, keep_recent_count=0, user_id=None):
-            self.commit_calls.append((session_id, keep_recent_count, user_id))
-            return {"session_id": session_id, "status": "accepted"}
-
-    fake_client = _FakeClient()
-    hook = OpenVikingCompactHook()
-
-    async def _fake_get_client(_workspace_id):
-        return fake_client
-
-    monkeypatch.setattr(hook, "_get_client", _fake_get_client)
+    fake_client = _SessionContextClient(pending_tokens=0)
+    hook = compact_hook(fake_client, commit_token_threshold=1000, commit_keep_recent_count=2)
 
     context = HookContext(
         event_type="message.compact",

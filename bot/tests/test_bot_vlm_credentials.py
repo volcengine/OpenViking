@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from typer.testing import CliRunner
+from vikingbot.cli.commands import _make_provider
 from vikingbot.config import loader
 from vikingbot.providers.vlm_adapter import VLMProviderAdapter
 
@@ -17,6 +18,18 @@ def _write_config(tmp_path, monkeypatch, data):
     monkeypatch.setattr(loader, "CONFIG_PATH", config_path)
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
     return loader.load_config()
+
+
+def _credential_chain(prefix):
+    return [
+        {
+            "id": f"{prefix}-{name}",
+            "provider": "openai",
+            "model": f"{prefix}-{name}",
+            "api_key": f"{prefix}-{name}-key",
+        }
+        for name in ("primary", "backup")
+    ]
 
 
 @pytest.mark.parametrize("explicit_key", [None, "channel-secret", ""])
@@ -117,25 +130,10 @@ def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path
         {
             "vlm": {
                 "model": "root-primary",
-                "credentials": [
-                    {
-                        "id": "root-primary",
-                        "provider": "openai",
-                        "model": "root-primary",
-                        "api_key": "root-primary-key",
-                    },
-                    {
-                        "id": "root-backup",
-                        "provider": "openai",
-                        "model": "root-backup",
-                        "api_key": "root-backup-key",
-                    },
-                ],
+                "credentials": _credential_chain("root"),
             }
         },
     )
-
-    from vikingbot.cli.commands import _make_provider
 
     provider = _make_provider(config)
 
@@ -152,8 +150,6 @@ def test_bot_inherits_root_vlm_credentials_when_agents_model_is_omitted(tmp_path
 
 @pytest.mark.parametrize("bot_override", [False, True], ids=["inherited-model", "bot-model"])
 def test_agent_max_tokens_reaches_provider(tmp_path, monkeypatch, bot_override):
-    from vikingbot.cli.commands import _make_provider
-
     agents = {"max_tokens": 8192}
     if bot_override:
         agents.update(provider="openai", model="bot-model", api_key="bot-key")
@@ -193,28 +189,13 @@ def test_explicit_bot_model_uses_bot_credentials_instead_of_root(tmp_path, monke
             "bot": {
                 "agents": {
                     "model": "bot-primary",
-                    "credentials": [
-                        {
-                            "id": "bot-primary",
-                            "provider": "openai",
-                            "model": "bot-primary",
-                            "api_key": "bot-primary-key",
-                        },
-                        {
-                            "id": "bot-backup",
-                            "provider": "openai",
-                            "model": "bot-backup",
-                            "api_key": "bot-backup-key",
-                        },
-                    ],
+                    "credentials": _credential_chain("bot"),
                     "failback_timeout_seconds": 30,
                     "failback_request_count": 5,
                 }
             },
         },
     )
-
-    from vikingbot.cli.commands import _make_provider
 
     provider = _make_provider(config)
 
@@ -240,26 +221,11 @@ async def test_bot_multi_credentials_preserve_thinking_for_chat(tmp_path, monkey
                 "agents": {
                     "model": "bot-primary",
                     "thinking": True,
-                    "credentials": [
-                        {
-                            "id": "bot-primary",
-                            "provider": "openai",
-                            "model": "bot-primary",
-                            "api_key": "bot-primary-key",
-                        },
-                        {
-                            "id": "bot-backup",
-                            "provider": "openai",
-                            "model": "bot-backup",
-                            "api_key": "bot-backup-key",
-                        },
-                    ],
+                    "credentials": _credential_chain("bot"),
                 }
             }
         },
     )
-
-    from vikingbot.cli.commands import _make_provider
 
     provider = _make_provider(
         config,
@@ -291,28 +257,9 @@ def test_bot_credentials_without_outer_model_use_bot_chain(tmp_path, monkeypatch
                     }
                 ],
             },
-            "bot": {
-                "agents": {
-                    "credentials": [
-                        {
-                            "id": "bot-primary",
-                            "provider": "openai",
-                            "model": "bot-primary",
-                            "api_key": "bot-primary-key",
-                        },
-                        {
-                            "id": "bot-backup",
-                            "provider": "openai",
-                            "model": "bot-backup",
-                            "api_key": "bot-backup-key",
-                        },
-                    ]
-                }
-            },
+            "bot": {"agents": {"credentials": _credential_chain("bot")}},
         },
     )
-
-    from vikingbot.cli.commands import _make_provider
 
     provider = _make_provider(config)
 
@@ -345,8 +292,6 @@ def test_explicit_bot_model_without_credentials_keeps_single_model_behavior(tmp_
             },
         },
     )
-
-    from vikingbot.cli.commands import _make_provider
 
     provider = _make_provider(config)
 
@@ -384,8 +329,6 @@ def test_bot_credentials_override_or_inherit_agent_max_tokens(tmp_path, monkeypa
         },
     )
 
-    from vikingbot.cli.commands import _make_provider
-
     provider = _make_provider(config)
 
     assert isinstance(provider._vlm, MultiCredentialVLM)
@@ -407,8 +350,6 @@ def test_explicit_litellm_provider_uses_vlm_adapter(tmp_path, monkeypatch):
         },
     )
 
-    from vikingbot.cli.commands import _make_provider
-
     provider = _make_provider(config)
 
     assert isinstance(provider, VLMProviderAdapter)
@@ -429,8 +370,6 @@ def test_bot_model_without_provider_rejects_legacy_fallback(tmp_path, monkeypatc
             }
         },
     )
-
-    from vikingbot.cli.commands import _make_provider
 
     with pytest.raises(RuntimeError, match="Set provider to 'litellm'"):
         _make_provider(config)

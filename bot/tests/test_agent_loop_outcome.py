@@ -1,6 +1,7 @@
 import copy
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from vikingbot.agent import loop as loop_module
@@ -65,6 +66,82 @@ class _FakeOVClient:
         return self.context_payload
 
 
+@pytest.fixture
+def make_loop(temp_dir, monkeypatch):
+    """Construct a real loop with external integrations stubbed for these tests."""
+    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
+    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+
+    def create(*, config=None, provider=None, bus=None, register_tools=False, **kwargs):
+        with monkeypatch.context() as setup:
+            if not register_tools:
+                setup.setattr(AgentLoop, "_register_default_tools", lambda self: None)
+            return AgentLoop(
+                bus=bus if bus is not None else MessageBus(),
+                provider=provider if provider is not None else _FakeProvider(),
+                workspace=temp_dir / "workspace",
+                config=config if config is not None else Config(storage_workspace=str(temp_dir)),
+                **kwargs,
+            )
+
+    return create
+
+
+def _image_call(call_id, label=None):
+    return ToolCallRequest(
+        id=call_id, name="read_image", arguments={"label": label} if label else {}, tokens=1
+    )
+
+
+class _MediaProvider(_FakeProvider):
+    def __init__(self, rounds, *, supports_media=True):
+        super().__init__()
+        self.calls = []
+        self.responses = iter(
+            [LLMResponse(content=None, tool_calls=calls) for calls in rounds]
+            + [LLMResponse(content="done")]
+        )
+        self.supports_media = supports_media
+
+    async def chat(self, messages, **kwargs):
+        self.calls.append(copy.deepcopy(messages))
+        return next(self.responses)
+
+    def supports_tool_result_media(self, model=None):
+        return self.supports_media
+
+
+class _ImageRegistry:
+    def __init__(self, content=None):
+        self.content = content
+
+    def get_definitions(self, **kwargs):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_image",
+                    "description": "Read an image",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+    async def execute_detailed(self, name, params, **kwargs):
+        label = params.get("label", "Image resource.")
+        content = (
+            self.content
+            if self.content is not None
+            else [
+                {"type": "text", "text": label},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZGF0YQ=="}},
+            ]
+        )
+        return ToolExecutionResult(
+            result=MultimodalToolResult(text=label, content=content), effective_params=params
+        )
+
+
 def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
     context = ContextBuilder(workspace=temp_dir / "workspace")
     content = [
@@ -93,13 +170,7 @@ def test_context_keeps_multimodal_tool_result_on_tool_message(temp_dir: Path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("supports_media", [False, True])
-async def test_agent_loop_gates_multimodal_result_by_provider(
-    temp_dir: Path, monkeypatch, supports_media: bool
-):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
+async def test_agent_loop_gates_multimodal_result_by_provider(make_loop, supports_media: bool):
     content = [
         {"type": "text", "text": "Source: viking://resources/image.png"},
         {
@@ -108,66 +179,14 @@ async def test_agent_loop_gates_multimodal_result_by_provider(
         },
     ]
 
-    class Provider(LLMProvider):
-        def __init__(self):
-            super().__init__()
-            self.calls = []
-
-        async def chat(self, messages, tools=None, **kwargs):
-            self.calls.append(messages)
-            if len(self.calls) == 1:
-                return LLMResponse(
-                    content=None,
-                    tool_calls=[
-                        ToolCallRequest(
-                            id="call-1",
-                            name="read_image",
-                            arguments={},
-                            tokens=1,
-                        )
-                    ],
-                )
-            return LLMResponse(content="done")
-
-        def get_default_model(self) -> str:
-            return "fake-model"
-
-        def supports_tool_result_media(self, model=None) -> bool:
-            return supports_media
-
-    class Registry:
-        def get_definitions(self, **kwargs):
-            return [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "read_image",
-                        "description": "Read an image",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                }
-            ]
-
-        async def execute_detailed(self, name, params, **kwargs):
-            return ToolExecutionResult(
-                result=MultimodalToolResult(text="Image resource.", content=content),
-                effective_params=params,
-            )
-
-    provider = Provider()
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=provider,
-        workspace=temp_dir / "workspace",
-        config=Config(storage_workspace=str(temp_dir)),
-        max_iterations=2,
-    )
+    provider = _MediaProvider([[_image_call("call-1")]], supports_media=supports_media)
+    loop = make_loop(provider=provider, max_iterations=2)
 
     final, _reasoning, tools_used, _usage, _iteration = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "read it"}],
         session_key=SessionKey(type="cli", channel_id="default", chat_id="multimodal"),
         publish_events=False,
-        tool_registry=Registry(),
+        tool_registry=_ImageRegistry(content),
     )
 
     assert final == "done"
@@ -181,88 +200,17 @@ async def test_agent_loop_gates_multimodal_result_by_provider(
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_limits_media_across_parallel_tool_results(temp_dir: Path, monkeypatch):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+async def test_agent_loop_limits_media_across_parallel_tool_results(make_loop, monkeypatch):
     monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
 
-    class Provider(LLMProvider):
-        def __init__(self):
-            super().__init__()
-            self.calls = []
-
-        async def chat(self, messages, tools=None, **kwargs):
-            self.calls.append(messages)
-            if len(self.calls) == 1:
-                return LLMResponse(
-                    content=None,
-                    tool_calls=[
-                        ToolCallRequest(
-                            id="call-1",
-                            name="read_image",
-                            arguments={"label": "first"},
-                            tokens=1,
-                        ),
-                        ToolCallRequest(
-                            id="call-2",
-                            name="read_image",
-                            arguments={"label": "second"},
-                            tokens=1,
-                        ),
-                    ],
-                )
-            return LLMResponse(content="done")
-
-        def get_default_model(self) -> str:
-            return "fake-model"
-
-        def supports_tool_result_media(self, model=None) -> bool:
-            return True
-
-    class Registry:
-        def get_definitions(self, **kwargs):
-            return [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "read_image",
-                        "description": "Read an image",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                }
-            ]
-
-        async def execute_detailed(self, name, params, **kwargs):
-            label = params["label"]
-            return ToolExecutionResult(
-                result=MultimodalToolResult(
-                    text=f"{label} image",
-                    content=[
-                        {"type": "text", "text": label},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": "data:image/png;base64,ZGF0YQ=="},
-                        },
-                    ],
-                ),
-                effective_params=params,
-            )
-
-    provider = Provider()
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=provider,
-        workspace=temp_dir / "workspace",
-        config=Config(storage_workspace=str(temp_dir)),
-        max_iterations=2,
-    )
+    provider = _MediaProvider([[_image_call("call-1", "first"), _image_call("call-2", "second")]])
+    loop = make_loop(provider=provider, max_iterations=2)
 
     final, *_ = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "read both"}],
         session_key=SessionKey(type="cli", channel_id="default", chat_id="media-budget"),
         publish_events=False,
-        tool_registry=Registry(),
+        tool_registry=_ImageRegistry(),
     )
 
     assert final == "done"
@@ -273,85 +221,19 @@ async def test_agent_loop_limits_media_across_parallel_tool_results(temp_dir: Pa
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(
-    temp_dir: Path, monkeypatch
-):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
+async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(make_loop, monkeypatch):
     monkeypatch.setattr(loop_module, "MAX_INLINE_TOOL_RESULT_MEDIA_BYTES", 5)
 
-    class Provider(LLMProvider):
-        def __init__(self):
-            super().__init__()
-            self.calls = []
-
-        async def chat(self, messages, tools=None, **kwargs):
-            self.calls.append(copy.deepcopy(messages))
-            call_number = len(self.calls)
-            if call_number <= 2:
-                return LLMResponse(
-                    content=None,
-                    tool_calls=[
-                        ToolCallRequest(
-                            id=f"call-{call_number}",
-                            name="read_image",
-                            arguments={"label": f"image-{call_number}"},
-                            tokens=1,
-                        )
-                    ],
-                )
-            return LLMResponse(content="done")
-
-        def get_default_model(self) -> str:
-            return "fake-model"
-
-        def supports_tool_result_media(self, model=None) -> bool:
-            return True
-
-    class Registry:
-        def get_definitions(self, **kwargs):
-            return [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "read_image",
-                        "description": "Read an image",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                }
-            ]
-
-        async def execute_detailed(self, name, params, **kwargs):
-            label = params["label"]
-            return ToolExecutionResult(
-                result=MultimodalToolResult(
-                    text=f"{label} result",
-                    content=[
-                        {"type": "text", "text": label},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": "data:image/png;base64,ZGF0YQ=="},
-                        },
-                    ],
-                ),
-                effective_params=params,
-            )
-
-    provider = Provider()
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=provider,
-        workspace=temp_dir / "workspace",
-        config=Config(storage_workspace=str(temp_dir)),
-        max_iterations=3,
+    provider = _MediaProvider(
+        [[_image_call("call-1", "image-1")], [_image_call("call-2", "image-2")]]
     )
+    loop = make_loop(provider=provider, max_iterations=3)
 
     final, *_ = await loop._run_agent_loop(
         messages=[{"role": "user", "content": "read two images in sequence"}],
         session_key=SessionKey(type="cli", channel_id="default", chat_id="media-rounds"),
         publish_events=False,
-        tool_registry=Registry(),
+        tool_registry=_ImageRegistry(),
     )
 
     assert final == "done"
@@ -364,37 +246,26 @@ async def test_agent_loop_prefers_new_media_across_consecutive_tool_rounds(
     assert isinstance(tool_messages[1]["content"], list)
 
 
-def test_agent_loop_omits_spawn_tool_when_subagents_disabled(temp_dir: Path, monkeypatch):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
+def test_agent_loop_omits_spawn_tool_when_subagents_disabled(make_loop, temp_dir: Path):
     bus = MessageBus()
     provider = _RecordingProvider()
     config = Config(storage_workspace=str(temp_dir), agents={"subagent_enabled": False})
 
-    loop = AgentLoop(
+    loop = make_loop(
         bus=bus,
         provider=provider,
-        workspace=temp_dir / "workspace",
         model=config.agents.model,
         temperature=config.agents.temperature,
         config=config,
+        register_tools=True,
     )
 
     assert "spawn" not in loop.tools.tool_names
 
 
-def test_agent_loop_standalone_omits_openviking_tools(temp_dir: Path, monkeypatch):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
+def test_agent_loop_standalone_omits_openviking_tools(make_loop, temp_dir: Path):
     config = Config(storage_workspace=str(temp_dir))
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=_RecordingProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
+    loop = make_loop(provider=_RecordingProvider(), config=config, register_tools=True)
 
     assert config.ov_server.server_url == ""
     assert not any(name.startswith("openviking_") for name in loop.tools.tool_names)
@@ -403,18 +274,13 @@ def test_agent_loop_standalone_omits_openviking_tools(temp_dir: Path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_passes_configured_temperature_to_provider(temp_dir: Path, monkeypatch):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
+async def test_agent_loop_passes_configured_temperature_to_provider(make_loop, temp_dir: Path):
     bus = MessageBus()
     provider = _RecordingProvider()
     config = Config(storage_workspace=str(temp_dir), agents={"temperature": 0.2})
-    loop = AgentLoop(
+    loop = make_loop(
         bus=bus,
         provider=provider,
-        workspace=temp_dir / "workspace",
         model=config.agents.model,
         temperature=config.agents.temperature,
         config=config,
@@ -435,12 +301,8 @@ async def test_agent_loop_passes_configured_temperature_to_provider(temp_dir: Pa
 
 @pytest.mark.asyncio
 async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     class _ToolLimitProvider(LLMProvider):
         def __init__(self):
             super().__init__()
@@ -511,13 +373,7 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
     tools = _ToolRegistry()
     bus = MessageBus()
     config = Config(storage_workspace=str(temp_dir))
-    loop = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=temp_dir / "workspace",
-        config=config,
-        max_iterations=1,
-    )
+    loop = make_loop(bus=bus, provider=provider, config=config, max_iterations=1)
     loop.tools = tools
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-limit")
@@ -567,12 +423,8 @@ async def test_agent_loop_makes_final_no_tool_call_when_iteration_limit_reached(
 
 @pytest.mark.asyncio
 async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_precommit_clear(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     async def fake_run_agent_loop(self, **kwargs):
         return "final answer", None, [], {"prompt_tokens": 1, "completion_tokens": 1}, 1
 
@@ -592,12 +444,7 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_
             "commit_keep_recent_count": 0,
         },
     )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
+    loop = make_loop(bus=bus, config=config)
 
     async def fake_precommit(session, msg):
         session.clear()
@@ -636,12 +483,8 @@ async def test_agent_loop_evaluates_previous_response_outcome_before_openviking_
 
 @pytest.mark.asyncio
 async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tail(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     fake_ov_client = _FakeOVClient(
         context_payload={
             "latest_archive_overview": "Earlier summary",
@@ -652,11 +495,7 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         }
     )
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
-        del session_key, openviking_connection, actor_peer_id
-        return fake_ov_client
-
-    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", AsyncMock(return_value=fake_ov_client))
 
     bus = MessageBus()
     config = Config(
@@ -664,12 +503,7 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
         ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={"session_context_enabled": True, "session_context_token_budget": 321},
     )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
+    loop = make_loop(bus=bus, config=config)
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-ov-history")
     session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
@@ -696,31 +530,18 @@ async def test_agent_loop_build_prompt_history_uses_ov_context_plus_unsynced_tai
 
 @pytest.mark.asyncio
 async def test_agent_loop_build_prompt_history_falls_back_to_loaded_local_history_when_ov_empty(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     fake_ov_client = _FakeOVClient(context_payload={"messages": []})
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
-        del self, session_key, openviking_connection, actor_peer_id
-        return fake_ov_client
-
-    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", AsyncMock(return_value=fake_ov_client))
 
     config = Config(
         storage_workspace=str(temp_dir),
         ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={"session_context_enabled": True, "session_context_token_budget": 321},
     )
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
+    loop = make_loop(config=config)
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-local-fallback")
     session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
@@ -748,21 +569,13 @@ async def test_agent_loop_build_prompt_history_falls_back_to_loaded_local_histor
 
 @pytest.mark.asyncio
 async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_past_local_messages(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     fake_ov_client = _FakeOVClient(
         context_payload={"messages": [{"role": "user", "content": "OV user turn"}]}
     )
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
-        del self, session_key, openviking_connection, actor_peer_id
-        return fake_ov_client
-
-    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", AsyncMock(return_value=fake_ov_client))
 
     bus = MessageBus()
     config = Config(
@@ -770,12 +583,7 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
         ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={"session_context_enabled": True, "session_context_token_budget": 321},
     )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-    )
+    loop = make_loop(bus=bus, config=config)
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-ov-cursor-past")
     session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
@@ -793,12 +601,8 @@ async def test_agent_loop_build_prompt_history_skips_tail_when_sync_cursor_is_pa
 
 @pytest.mark.asyncio
 async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_tool_outputs(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     tool_output = "x" * 10_000
     fake_ov_client = _FakeOVClient(
         context_payload={
@@ -819,21 +623,14 @@ async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_to
         }
     )
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
-        del self, session_key, openviking_connection, actor_peer_id
-        return fake_ov_client
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", AsyncMock(return_value=fake_ov_client))
 
-    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
-
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
+    loop = make_loop(
         config=Config(
             storage_workspace=str(temp_dir),
             ov_server={"server_url": "http://127.0.0.1:1933"},
             agents={"session_context_enabled": True, "session_context_token_budget": 3000},
-        ),
+        )
     )
     session = loop.sessions.get_or_create(
         SessionKey(type="cli", channel_id="default", chat_id="session-large-tools"),
@@ -855,12 +652,8 @@ async def test_agent_loop_build_prompt_history_enforces_token_budget_for_live_to
 
 @pytest.mark.asyncio
 async def test_agent_loop_build_prompt_history_preserves_anchor_when_final_needs_truncation(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     fake_ov_client = _FakeOVClient(
         context_payload={
             "messages": [
@@ -870,21 +663,14 @@ async def test_agent_loop_build_prompt_history_preserves_anchor_when_final_needs
         }
     )
 
-    async def fake_get_ov_client(self, session_key, openviking_connection=None, actor_peer_id=None):
-        del self, session_key, openviking_connection, actor_peer_id
-        return fake_ov_client
+    monkeypatch.setattr(AgentLoop, "_get_ov_client", AsyncMock(return_value=fake_ov_client))
 
-    monkeypatch.setattr(AgentLoop, "_get_ov_client", fake_get_ov_client)
-
-    loop = AgentLoop(
-        bus=MessageBus(),
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
+    loop = make_loop(
         config=Config(
             storage_workspace=str(temp_dir),
             ov_server={"server_url": "http://127.0.0.1:1933"},
             agents={"session_context_enabled": True, "session_context_token_budget": 3000},
-        ),
+        )
     )
     session = loop.sessions.get_or_create(
         SessionKey(type="cli", channel_id="default", chat_id="session-long-final"),
@@ -909,12 +695,8 @@ async def test_agent_loop_build_prompt_history_preserves_anchor_when_final_needs
     [pytest.param(100, 100, 50, id="token-budget"), pytest.param(1000, 0, 3, id="message-window")],
 )
 async def test_agent_loop_commits_before_model_at_context_limit(
-    temp_dir: Path, monkeypatch, token_threshold, pending_tokens, memory_window
+    make_loop, temp_dir: Path, monkeypatch, token_threshold, pending_tokens, memory_window
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     events = []
 
     async def fake_execute_hooks(context, **kwargs):
@@ -973,13 +755,7 @@ async def test_agent_loop_commits_before_model_at_context_limit(
             "commit_keep_recent_turn_count": 2,
         },
     )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-        memory_window=memory_window,
-    )
+    loop = make_loop(bus=bus, config=config, memory_window=memory_window)
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-precommit")
     session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
@@ -1027,12 +803,8 @@ async def test_agent_loop_commits_before_model_at_context_limit(
     ],
 )
 async def test_agent_loop_precommit_counts_messages_since_last_commit(
-    temp_dir: Path, monkeypatch, last_commit_index, expected_commits
+    make_loop, temp_dir: Path, monkeypatch, last_commit_index, expected_commits
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     calls = []
 
     async def fake_execute_hooks(context, **kwargs):
@@ -1053,13 +825,7 @@ async def test_agent_loop_precommit_counts_messages_since_last_commit(
             "commit_keep_recent_turn_count": 2,
         },
     )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-        memory_window=3,
-    )
+    loop = make_loop(bus=bus, config=config, memory_window=3)
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-window-no-repeat")
     session = loop.sessions.get_or_create(session_key, skip_heartbeat=True)
@@ -1086,12 +852,8 @@ async def test_agent_loop_precommit_counts_messages_since_last_commit(
 
 @pytest.mark.asyncio
 async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit(
-    temp_dir: Path, monkeypatch
+    make_loop, temp_dir: Path, monkeypatch
 ):
-    monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
-    monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", _FakeSubagentManager)
-
     calls = []
 
     async def fake_execute_hooks(context, **kwargs):
@@ -1121,13 +883,7 @@ async def test_agent_loop_post_turn_clears_local_session_after_openviking_commit
         ov_server={"server_url": "http://127.0.0.1:1933"},
         agents={"session_context_enabled": True},
     )
-    loop = AgentLoop(
-        bus=bus,
-        provider=_FakeProvider(),
-        workspace=temp_dir / "workspace",
-        config=config,
-        memory_window=3,
-    )
+    loop = make_loop(bus=bus, config=config, memory_window=3)
 
     session_key = SessionKey(type="cli", channel_id="default", chat_id="session-post-clear")
     await loop._process_message(
