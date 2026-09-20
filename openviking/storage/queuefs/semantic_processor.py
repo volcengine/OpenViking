@@ -1285,7 +1285,8 @@ class SemanticProcessor(DequeueHandlerBase):
             abstract = self._truncate_generated_text(abstract, semantic.abstract_max_chars)
         return overview, abstract
 
-    def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
+    @classmethod
+    def _parse_overview_md(cls, overview_content: str) -> Dict[str, str]:
         """Parse overview.md and extract file summaries.
 
         Args:
@@ -1312,7 +1313,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 if current_file and current_summary_lines:
                     summaries[current_file] = " ".join(current_summary_lines).strip()
 
-                file_name = self._overview_heading_cache_key(header_match.group(1).strip())
+                file_name = cls._overview_heading_cache_key(header_match.group(1).strip())
                 parts = file_name.split()
                 if len(parts) >= 2 and parts[0] == parts[1]:
                     file_name = parts[0]

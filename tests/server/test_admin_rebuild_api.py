@@ -2437,7 +2437,7 @@ async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypat
     raw = render_abstract_overview(
         ContextLevel.OVERVIEW,
         "viking://resources/demo",
-        "# Demo\n\n## image.png\nVisible file summary.",
+        "# Demo\n\n### [image.png](viking://resources/demo/image.png)\nVisible file summary.",
         {
             "source": {
                 "kind": "http",
@@ -2597,36 +2597,48 @@ async def test_reindex_resource_vector_text_skips_non_text_body_without_summary(
 @pytest.mark.asyncio
 async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+    from openviking_cli.utils.config.reindex_config import ReindexConfig
+
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_openviking_config",
+        lambda: SimpleNamespace(reindex=ReindexConfig()),
+    )
+    uri = "viking://resources/demo/file.plist"
+    summary = "Launch agent forwarding configuration."
+    overview = f"# Demo\n\n### [file.plist]({uri})\n{summary}"
+    reads = []
+    lookups = []
+    queued = []
 
     class FakeVikingFS:
         async def exists(self, uri, ctx=None):
             return True
 
-        async def stat(self, uri, ctx=None):
+        async def stat(self, uri, ctx=None, skip_count=False):
             return {"isDir": False}
 
         async def tree(self, *args, **kwargs):
             raise AssertionError("single-file reindex should not call tree")
 
-    seen = {}
+        async def read_file(self, uri, ctx=None):
+            reads.append((uri, ctx))
+            assert uri == "viking://resources/demo/.overview.md"
+            return overview.encode()
 
-    async def fake_best_file_summary(self, uri, *, ctx):
-        return "file summary"
+    class FakeVectorStore:
+        async def get_context_by_uri(self, **kwargs):
+            lookups.append(kwargs)
+            return []
 
-    async def fake_best_resource_file_vector_text(self, uri, summary, ctx):
-        return summary
-
-    async def fake_upsert_context(self, **kwargs):
-        seen[kwargs["uri"]] = kwargs
+        async def enqueue_embedding_msg(self, message):
+            queued.append(message)
+            return True
 
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
-    monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
     monkeypatch.setattr(
-        ReindexExecutor,
-        "_best_resource_file_vector_text",
-        fake_best_resource_file_vector_text,
+        "openviking.service.reindex_executor.get_service",
+        lambda: SimpleNamespace(vikingdb_manager=FakeVectorStore()),
     )
-    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
 
     service = ReindexExecutor()
     counters = _ReindexCounters()
@@ -2635,15 +2647,26 @@ async def test_reindex_resource_vectors_accepts_single_file_uri(monkeypatch):
         role=Role.ROOT,
     )
 
-    await service._reindex_resource_vectors(
-        uri="viking://resources/demo/file.txt",
-        counters=counters,
-        ctx=ctx,
-    )
+    await service._reindex_resource_vectors(uri=uri, counters=counters, ctx=ctx)
 
-    assert list(seen) == ["viking://resources/demo/file.txt"]
+    assert reads == [("viking://resources/demo/.overview.md", ctx)]
+    assert lookups
+    assert all(row == {"uri": uri, "level": 2, "limit": 1, "ctx": ctx} for row in lookups)
+    assert len(queued) == 1
+    assert queued[0].message == summary
+    data = queued[0].context_data
+    assert data["uri"] == uri
+    assert data["parent_uri"] == "viking://resources/demo"
+    assert data["abstract"] == summary
+    assert data["account_id"] == "test"
+    assert data["user"] == ctx.user.to_dict()
+    assert data["level"] == int(ContextLevel.DETAIL)
+    assert data["is_leaf"] is True
     assert counters.scanned_records == 1
     assert counters.rebuilt_records == 1
+    assert counters.unsupported_records == 0
+    assert counters.failed_records == 0
+    assert counters.warnings == []
 
 
 @pytest.mark.asyncio
