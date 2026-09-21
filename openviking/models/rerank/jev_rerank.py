@@ -11,6 +11,7 @@ Same interface as the other rerank clients:
 rerank_batch(query, documents) -> List[float]
 """
 
+import json
 import time
 from typing import Dict, List, Optional
 
@@ -84,10 +85,22 @@ class JevRerankClient(RerankBase):
         }
 
         try:
+            logger.info(
+                "[JevRerank] Request items=%s payload=%s",
+                len(documents),
+                json.dumps(body, ensure_ascii=False),
+            )
             started = time.monotonic()
             resp = self._client.post("/v1/systemone", json=body)
+            duration_seconds = time.monotonic() - started
             resp.raise_for_status()
             data = resp.json()
+            logger.info(
+                "[JevRerank] Response status=%s duration_ms=%.1f payload=%s",
+                resp.status_code,
+                duration_seconds * 1000,
+                json.dumps(data, ensure_ascii=False),
+            )
 
             answers = data.get("answers")
             if not isinstance(answers, dict):
@@ -114,7 +127,7 @@ class JevRerankClient(RerankBase):
                 or self._estimate_tokens(query)
                 + sum(self._estimate_tokens(doc) for doc in documents),
                 completion_tokens=int(usage.get("output_tokens", 0)),
-                duration_seconds=time.monotonic() - started,
+                duration_seconds=duration_seconds,
             )
 
             logger.debug(f"[JevRerank] Reranked {len(documents)} documents")

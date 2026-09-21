@@ -52,6 +52,21 @@ class TestJevRerankClient:
         assert body["questions"]["relevance_0"]["type"] == "noul"
         assert body["questions"]["relevance_2"]["instructions"]["candidate_index"] == 2
 
+    @patch("openviking.models.rerank.jev_rerank.logger.info")
+    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
+    def test_logs_request_and_response_without_api_key(self, mock_client_class, mock_log):
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_client.post.return_value = _mock_response(_systemone_payload([0.9]))
+
+        client = JevRerankClient(api_key="secret-key")
+        assert client.rerank_batch("query", ["document"]) == [0.9]
+
+        messages = [str(call) for call in mock_log.call_args_list]
+        assert any("[JevRerank] Request" in message for message in messages)
+        assert any("[JevRerank] Response" in message for message in messages)
+        assert all("secret-key" not in message for message in messages)
+
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")
     def test_rerank_batch_empty(self, mock_client_class):
         client = JevRerankClient(api_key="test-key")
