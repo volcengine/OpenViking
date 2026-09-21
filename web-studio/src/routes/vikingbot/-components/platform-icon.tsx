@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-const icons: Record<string, LucideIcon> = {
+const icons: Record<string, LucideIcon | undefined> = {
   feishu: FeatherIcon,
   slack: HashIcon,
   dingtalk: ZapIcon,

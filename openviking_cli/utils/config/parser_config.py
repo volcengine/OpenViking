@@ -587,7 +587,7 @@ class DirectoryConfig(ParserConfig):
             relative path hierarchy. When False, all files are flattened to a
             single level under the resource root.
         max_files: Optional maximum number of selected files admitted by one
-            Understanding or Feishu directory import. None means unlimited.
+            Understanding or Feishu directory import. None (default) means unlimited.
         max_depth: Maximum nested directory depth below an Understanding directory
             import root.
         max_concurrent: Maximum concurrent Understanding jobs shared by all
@@ -595,7 +595,7 @@ class DirectoryConfig(ParserConfig):
     """
 
     preserve_structure: bool = True
-    max_files: Optional[int] = 1000
+    max_files: Optional[int] = None
     max_depth: int = 10
     max_concurrent: int = 4
 

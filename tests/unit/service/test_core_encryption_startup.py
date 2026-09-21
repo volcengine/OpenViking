@@ -12,6 +12,7 @@ import pytest
 from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
 from openviking.utils.process_lock import LOCK_FILENAME
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class _FakeCacheConfig:
@@ -217,6 +218,8 @@ async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch
     released = []
     service = OpenVikingService.__new__(OpenVikingService)
     service._resource_service = _ResourceService()
+    service._config = SimpleNamespace(vlm=VLMConfig())
+    service._runtime_config_manager = None
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
     service._queue_manager = None

@@ -373,7 +373,7 @@ Parsers live under `parsers`:
     "text": {},
     "directory": {
       "preserve_structure": true,
-      "max_files": 1000,
+      "max_files": null,
       "max_depth": 10,
       "max_concurrent": 4
     },
@@ -388,8 +388,8 @@ Parsers live under `parsers`:
 }
 ```
 
-`parsers.directory.max_files` defaults to `1000`; explicitly set it to `null`
-to disable the file-count limit. Other values must be positive integers.
+`parsers.directory.max_files` defaults to `null`, meaning no file-count limit.
+Set it to a positive integer to limit the number of files per directory import.
 
 `parsers.directory.max_concurrent` is shared by all directory imports in the
 server event loop. With the default value `4`, one directory can run four
