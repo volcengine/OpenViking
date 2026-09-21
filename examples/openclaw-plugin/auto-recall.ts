@@ -12,6 +12,7 @@ import {
   type RecallTraceResult,
 } from "./recall-trace.js";
 import { sanitizeUserTextForCapture } from "./text-utils.js";
+import { selectRecallContent } from "./shared/recall-core.mjs";
 import { estimateTextTokens } from "./token-estimator.js";
 
 const RECALL_QUERY_MAX_CHARS = 4_000;
@@ -476,9 +477,8 @@ export async function buildAutoRecallContext(params: {
         params.traceRecorder?.record(entry);
       };
 
-      const noRelevant = contextResult?.stats?.rewrite === "no_relevant";
       const digest = contextResult?.digest?.trim() ?? "";
-      const rendered = noRelevant ? "" : digest || contextResult?.rendered?.trim() || "";
+      const rendered = selectRecallContent(contextResult);
       if (requestError || !rendered) {
         await recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };

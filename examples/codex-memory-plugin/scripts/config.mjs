@@ -9,8 +9,7 @@
  *   registry → ovcli.conf `plugin.codex` → ovcli.conf `plugin` → ov.conf's
  *   `codex` section (legacy) → the schema's defaults
  *
- * What stays here is what only this harness knows: how it reads the digest
- * switch, and what counts as having configured a compressor.
+ * What stays here is what only this harness knows: what counts as having configured a compressor.
  *
  * Credential source:
  *   - Default (auto): env-var credentials win when any credential env var is
@@ -40,7 +39,7 @@
  *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  */
 
-import { buildPluginConfig, normalizeRewriteMode } from "./shared/plugin-config.mjs";
+import { buildPluginConfig } from "./shared/plugin-config.mjs";
 
 const MANIFEST_URL = new URL("../.codex-plugin/plugin.json", import.meta.url);
 
@@ -60,14 +59,8 @@ export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
     logFile: "codex-hooks.log",
   });
 
-  const recallRewrite = normalizeRewriteMode(
-    env.OPENVIKING_RECALL_COMPRESS ?? env.OPENVIKING_RECALL_REWRITE ?? config.recallCompress,
-    "auto",
-  );
   return {
     ...config,
-    recallCompress: recallRewrite,
-    recallRewrite,
     // Not `configured.has`: what makes a compressor configured here is having
     // been told which model to run, not having named the switch.
     recallCompressConfigured: Boolean(config.recallCompressModel || config.recallCompressThinking),

@@ -24,13 +24,13 @@ const LOADERS = {
     harness: "claude-code",
     load: (cwd) => loadClaudeCode(cwd),
     options: { manifestUrl: new URL("../claude-code-memory-plugin/.claude-plugin/plugin.json", import.meta.url), logFile: "cc-hooks.log", rootKeyFallback: true },
-    owns: ["configPath", "credentialPath", "recallRewrite"],
+    owns: ["configPath", "credentialPath"],
   },
   codex: {
     harness: "codex",
     load: (cwd) => loadCodex(cwd),
     options: { manifestUrl: new URL("../codex-memory-plugin/.codex-plugin/plugin.json", import.meta.url), logFile: "codex-hooks.log" },
-    owns: ["recallCompress", "recallRewrite"],
+    owns: [],
   },
   opencode: {
     harness: "opencode",

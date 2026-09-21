@@ -114,3 +114,9 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — 提交（commit）决策树
 - [MCP 客户端](./06-mcp-clients.md) — MCP 协议、工具列表及其他客户端
 - [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置说明
+
+### 召回压缩
+
+设置 `OPENVIKING_RECALL_COMPRESS=server` 可让 OpenViking 服务端压缩召回内容，Codex 不启动本地压缩进程。`client` 仅用本地压缩，`auto`（默认）在本地压缩器不可用时走服务端，`off` 关闭压缩。服务端已有摘要时直接使用；明确返回无相关记忆时不注入。
+
+Codex 通过共享 `buildRecallBlockDetailed()` 执行召回、排序、预算和旧服务端回退，仅保留会话映射、模型调用与 hook 输出适配。本地压缩失败保留预算内的检索结果；原始检索回退在不使用本地压缩时遵循 `recallPreferAbstract`，不再固定读取所有叶子全文。预算包含正文、URI 和包装文本。配置详见 [共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)。

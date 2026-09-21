@@ -452,9 +452,12 @@ test("the ranked fallback reports what fitted the budget and what degraded", asy
   }, "what happened", { legacyCachePath: await tempPath("context-face.json") });
 
   assert.equal(detailed.stage, "ranked");
-  assert.equal(detailed.contentCount, 1);
-  assert.equal(detailed.hintCount, 1);
-  assert.equal(detailed.budgetUsed, estimateTokens(`- [memory 90%] ${"x".repeat(500)}`));
+  const visibleContent = ["x".repeat(500), "y".repeat(500)].filter((text) => detailed.block.includes(text));
+  const citedUris = [...detailed.block.matchAll(/viking:\/\/[^\s<>]+/g)].map((match) => match[0]);
+  assert.equal(detailed.contentCount, visibleContent.length);
+  assert.equal(detailed.hintCount, citedUris.length - visibleContent.length);
+  assert.equal(detailed.budgetUsed, estimateTokens(detailed.block));
+  assert.ok(detailed.budgetUsed <= 200, "budget includes the wrapper, citations, and body");
 });
 
 test("an empty recall says whether the server had nothing or the threshold took it", async () => {
@@ -469,3 +472,171 @@ test("an empty recall says whether the server had nothing or the threshold took 
   assert.equal(belowThreshold.stage, "filtered_out");
   assert.equal(await buildRecallBlock(fallbackFetch([]), {}, "hello", { legacyCachePath }), null);
 });
+
+for (const source of ["context", "legacy"]) {
+  test(`${source} recall keeps a server digest in client mode without recompressing`, async () => {
+    const paths = [];
+    let compressorCalls = 0;
+    const recalled = await buildRecallBlockDetailed(async (path) => {
+      paths.push(path);
+      if (source === "legacy" && path === "/api/v1/search/search") return { ok: false, status: 404 };
+      return { ok: true, result: {
+        rendered: "RAW_CONTENT_SHOULD_NOT_APPEAR",
+        digest: "- server fact viking://user/default/memories/a.md",
+        entries: [{ uri: "viking://user/default/memories/a.md", text: "raw fact" }],
+        stats: { rewrite: "ok" },
+      } };
+    }, { recallRewrite: "client", recallCompressMinInputChars: 0 }, "remember fact", {
+      legacyCachePath: await tempPath("context-face.json"),
+      digestCachePath: await tempPath("digest.json"),
+      localCompressorAvailable: true,
+      runCompressor: async () => { compressorCalls++; return "- unwanted local rewrite"; },
+    });
+    assert.equal(compressorCalls, 0);
+    assert.match(recalled.block, /server fact/);
+    assert.doesNotMatch(recalled.block, /RAW_CONTENT_SHOULD_NOT_APPEAR/);
+    assert.equal(paths.length, source === "context" ? 1 : 2);
+  });
+
+  test(`${source} no_relevant neither compresses nor falls back to raw entries`, async () => {
+    const paths = [];
+    let compressorCalls = 0;
+    const recalled = await buildRecallBlockDetailed(async (path) => {
+      paths.push(path);
+      if (source === "legacy" && path === "/api/v1/search/search") return { ok: false, status: 404 };
+      return { ok: true, result: {
+        rendered: "RAW_IRRELEVANT_CONTENT",
+        entries: [{ uri: "viking://user/default/memories/a.md", text: "raw fact" }],
+        stats: { rewrite: "no_relevant" },
+      } };
+    }, { recallRewrite: "client", recallCompressMinInputChars: 0 }, "unrelated question", {
+      legacyCachePath: await tempPath("context-face.json"),
+      localCompressorAvailable: true,
+      runCompressor: async () => { compressorCalls++; return "- unwanted local rewrite"; },
+    });
+    assert.equal(compressorCalls, 0);
+    assert.equal(recalled.block, "");
+    assert.equal(paths.length, source === "context" ? 1 : 2);
+  });
+}
+
+test("legacy recall feeds normalized entries to the shared local compressor", async () => {
+  const uri = "viking://user/default/memories/editor.md";
+  const prompts = [];
+  const recalled = await buildRecallBlockDetailed(async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 404 };
+    assert.equal(path, "/api/v1/search/recall");
+    return { ok: true, result: {
+      rendered: `LEGACY_FULL_CONTENT ${uri}`,
+      entries: [{ uri, type: "preferences", mode: "summary", summary: "Vim" }],
+    } };
+  }, { recallRewrite: "client", recallCompressMinInputChars: 0 }, "preferred editor", {
+    legacyCachePath: await tempPath("context-face.json"),
+    digestCachePath: await tempPath("digest.json"),
+    localCompressorAvailable: true,
+    runCompressor: async (prompt) => { prompts.push(prompt); return `- Choose Vim ${uri}`; },
+  });
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /LEGACY_FULL_CONTENT/);
+  assert.match(recalled.block, /Choose Vim/);
+  assert.match(recalled.block, /viking:\/\/user\/default\/memories\/editor\.md/);
+});
+
+test("raw fallback compresses bounded full content before injection truncation", async () => {
+  const uri = "viking://user/default/memories/detail.md";
+  const prompts = [];
+  const recalled = await buildRecallBlockDetailed(async (path, init) => {
+    if (path === "/api/v1/search/search" || path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/search/find") {
+      const body = JSON.parse(init.body);
+      return { ok: true, result: { memories: body.target_uri.endsWith("/memories")
+        ? [{ uri, level: 2, score: 0.9, abstract: "short summary" }] : [], skills: [] } };
+    }
+    if (path.startsWith("/api/v1/content/read?")) return { ok: true,
+      result: `${"x".repeat(320)}DETAIL_AFTER_INJECTION_LIMIT${"y".repeat(5000)}OUTSIDE_COMPRESSION_BUDGET` };
+    assert.fail(`unexpected request ${path}`);
+  }, {
+    recallRewrite: "client", recallCompressMinInputChars: 0,
+    recallMaxContentChars: 80, recallCompressMaxInputChars: 1200, recallTokenBudget: 200,
+  }, "use the full detail", {
+    legacyCachePath: await tempPath("context-face.json"),
+    digestCachePath: await tempPath("digest.json"),
+    localCompressorAvailable: true,
+    runCompressor: async (prompt) => { prompts.push(prompt); return `- retained detail ${uri}`; },
+  });
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /DETAIL_AFTER_INJECTION_LIMIT/);
+  assert.doesNotMatch(prompts[0], /OUTSIDE_COMPRESSION_BUDGET/);
+  assert.match(recalled.block, /retained detail/);
+});
+
+for (const user of ["zeus", "default"]) {
+  test(`raw session recall retries without session and keeps explicit ${user} then home alias`, async () => {
+    const requests = [];
+    const uri = `viking://user/${user}/memories/fact.md`;
+    const recalled = await buildRecallBlockDetailed(async (path, init) => {
+      const body = init?.body ? JSON.parse(init.body) : {};
+      if (path === "/api/v1/search/recall" || body.mode === "context") return { ok: false, status: 404 };
+      assert.equal(path, "/api/v1/search/search");
+      requests.push(body);
+      const hit = !body.session_id && body.target_uri === "viking://~/memories";
+      return { ok: true, result: { memories: hit
+        ? [{ uri, score: 0.9, level: 1, abstract: "recovered memory" }] : [], skills: [] } };
+    }, { user, recallPreferAbstract: true }, "recover the fact", {
+      sessionId: "cx-shared-session", legacyCachePath: await tempPath("context-face.json"),
+    });
+    const memoryRequests = requests.filter((body) => body.target_uri.endsWith("/memories"));
+    assert.deepEqual(memoryRequests.map((body) => [body.target_uri, body.session_id || ""]), [
+      [`viking://user/${user}/memories`, "cx-shared-session"],
+      ["viking://~/memories", "cx-shared-session"],
+      [`viking://user/${user}/memories`, ""],
+      ["viking://~/memories", ""],
+    ]);
+    assert.match(recalled.block, /recovered memory/);
+  });
+}
+
+test("raw session recall uses find when the search endpoint is unsupported", async () => {
+  const requests = [];
+  const recalled = await buildRecallBlockDetailed(async (path, init) => {
+    const body = init?.body ? JSON.parse(init.body) : {};
+    if (body.mode === "context" || path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    requests.push({ path, body });
+    if (path === "/api/v1/search/search") return { ok: false, status: 405 };
+    assert.equal(path, "/api/v1/search/find");
+    return { ok: true, result: { memories: body.target_uri.endsWith("/memories")
+      ? [{ uri: "viking://user/default/memories/a.md", score: 0.9, level: 1, abstract: "old server fact" }]
+      : [], skills: [] } };
+  }, { recallPreferAbstract: true }, "old server fact", {
+    sessionId: "cx-old-server", legacyCachePath: await tempPath("context-face.json"),
+  });
+  assert.ok(requests.some(({ path, body }) => path.endsWith("/search") && body.session_id === "cx-old-server"));
+  assert.ok(requests.some(({ path }) => path.endsWith("/find")));
+  assert.match(recalled.block, /old server fact/);
+});
+
+
+for (const textLength of [20, 500]) {
+  test(`raw fallback charges long URI citations and ${textLength}-character bodies to its whole-block budget`, async () => {
+    const items = Array.from({ length: 10 }, (_, index) => ({
+      uri: `viking://user/default/memories/${"long-path/".repeat(40)}${index}.md`,
+      abstract: `body-${index}-${"x".repeat(textLength)}`,
+      score: 0.9,
+      level: 1,
+    }));
+    const recalled = await buildRecallBlockDetailed(fallbackFetch(items), {
+      recallTokenBudget: 200, recallLimit: 10, recallMaxContentChars: 1000,
+      recallPreferAbstract: true,
+    }, "use remembered details", { legacyCachePath: await tempPath("context-face.json") });
+    assert.ok(recalled.block, "at least one complete URI fits the budget");
+    assert.ok(estimateTokens(recalled.block) <= 200, "URI-only hints cannot bypass the budget");
+    assert.equal(recalled.budgetUsed, estimateTokens(recalled.block));
+    const citedUris = [...recalled.block.matchAll(/viking:\/\/[^\s<>]+/g)].map((match) => match[0]);
+    const visibleContent = items.filter((item) => recalled.block.includes(item.abstract));
+    assert.ok(citedUris.length < items.length, "entries that do not fit must be omitted");
+    assert.ok(citedUris.every((uri) => items.some((item) => item.uri === uri)), "never truncate a URI to make it fit");
+    assert.ok(visibleContent.every((item) => citedUris.includes(item.uri)), "every included body retains its full source URI");
+    assert.equal(recalled.contentCount, visibleContent.length);
+    assert.equal(recalled.hintCount, citedUris.length - visibleContent.length);
+  });
+}

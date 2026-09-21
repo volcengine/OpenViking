@@ -115,3 +115,9 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — Commit decision tree.
 - [MCP Clients](./06-mcp-clients.md) — MCP protocol, tools, and other clients.
 - [Deployment Guide → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` setup instructions.
+
+### Recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to compress recalled context on the OpenViking server without launching a local Codex compressor. `client` uses local compression only; `auto` (the default) uses the server when the local compressor is unavailable; `off` disables compression. Existing server digests are used directly, and an explicit no-relevant result injects nothing.
+
+Codex calls the shared `buildRecallBlockDetailed()` pipeline for retrieval, ranking, budgets and old-server fallback. Only session mapping, model execution and hook output remain host-specific. Local compression failures preserve bounded retrieved context. Without local compression, raw fallback now honors `recallPreferAbstract` instead of always reading every leaf in full. Budgets include body text, URIs and wrapper text. See the [shared plugin configuration](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression).

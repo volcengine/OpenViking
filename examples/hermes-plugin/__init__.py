@@ -88,7 +88,12 @@ _CONFIG_SCHEMA = [
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
-    _cfg_field("recall_compress", "Cloud recall compression: off, server or auto (no local compressor)", type="string", default="off"),
+    _cfg_field(
+        "recall_compress",
+        "Cloud recall compression: off, server or auto (no local compressor)",
+        type="string",
+        default="off",
+    ),
     _cfg_field("recall_limit", "Maximum memories injected by automatic recall", type="integer", minimum=1, maximum=100, default=6),
     _cfg_field("recall_score_threshold", "Minimum relevance score for automatic recall", type="number", minimum=0.0, maximum=1.0, step=0.01, default=0.15),
     _cfg_field("recall_max_injected_chars", "Maximum total characters injected by recall", type="integer", minimum=100, maximum=50000, default=4000),
@@ -1598,7 +1603,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
             deadline = time.monotonic() + cfg["timeout_seconds"]
             if cfg["compress"] in ("server", "auto"):
                 payload = {
-                    "query": query_text, "mode": "context", "purpose": "coding",
+                    "query": query_text,
+                    "mode": "context",
+                    "purpose": "coding",
                     "rewrite": True if cfg["compress"] == "server" else "auto",
                     "score_threshold": cfg["score_threshold"],
                     "max_tokens": max(64, min(32000, cfg["max_injected_chars"] // 4)),
@@ -1607,23 +1614,40 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 if session_id:
                     payload["session_id"] = session_id
                 try:
-                    assembled = self._unwrap_result(client.post(
-                        "/api/v1/search/search", payload,
-                        timeout=self._remaining_recall_timeout(deadline, cfg["request_timeout_seconds"]),
-                    ))
-                    if isinstance(assembled, dict) and any(k in assembled for k in ("rendered", "digest", "entries")):
+                    assembled = self._unwrap_result(
+                        client.post(
+                            "/api/v1/search/search",
+                            payload,
+                            timeout=self._remaining_recall_timeout(
+                                deadline, cfg["request_timeout_seconds"]
+                            ),
+                        )
+                    )
+                    if isinstance(assembled, dict) and any(
+                        k in assembled for k in ("rendered", "digest", "entries")
+                    ):
                         if (assembled.get("stats") or {}).get("rewrite") == "no_relevant":
                             return ""
-                        return str(assembled.get("digest") or assembled.get("rendered") or "").strip()
+                        return str(
+                            assembled.get("digest") or assembled.get("rendered") or ""
+                        ).strip()
                 except TimeoutError:
                     raise
                 except Exception as e:
-                    logger.debug("OpenViking context rewrite unavailable, falling back to search: %s", e)
-            result = self._unwrap_result(self._post_prefetch_search(
-                client, query_text, session_id, limit=max(cfg["limit"] * 4, 20),
-                context_type=["memory", "resource"] if cfg["resources"] else "memory",
-                deadline=deadline, request_timeout=cfg["request_timeout_seconds"],
-            ))
+                    logger.debug(
+                        "OpenViking context rewrite unavailable, falling back to search: %s", e
+                    )
+            result = self._unwrap_result(
+                self._post_prefetch_search(
+                    client,
+                    query_text,
+                    session_id,
+                    limit=max(cfg["limit"] * 4, 20),
+                    context_type=["memory", "resource"] if cfg["resources"] else "memory",
+                    deadline=deadline,
+                    request_timeout=cfg["request_timeout_seconds"],
+                )
+            )
             if not isinstance(result, dict):
                 return ""
             candidates = [item for ctx_type in ("memories", "resources") for item in (result.get(ctx_type, []) or []) if isinstance(item, dict)]
@@ -1687,7 +1711,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _recall_config(self) -> Dict[str, Any]:
         cfg = _load_hermes_openviking_config()
-        resolved = {key.removeprefix("recall_"): self._setting(key, cfg) for key in _RECALL_SETTING_KEYS}
+        resolved = {
+            key.removeprefix("recall_"): self._setting(key, cfg) for key in _RECALL_SETTING_KEYS
+        }
         if resolved["compress"] in ("server", "auto"):
             # Retrieval plus server rewrite has a longer fuse. Keep explicit
             # user deadlines authoritative and the default off path unchanged.

@@ -139,18 +139,27 @@ def test_cancelled_external_setup_keeps_existing_config(external_provider, monke
 
 
 @pytest.mark.parametrize("mode,rewrite", [("server", True), ("auto", "auto")])
-@pytest.mark.parametrize("response,expected", [
-    ({"rendered": "raw", "digest": "compressed", "entries": []}, "compressed"),
-    ({"rendered": "raw", "entries": []}, "raw"),
-    ({"rendered": "raw", "stats": {"rewrite": "no_relevant"}}, ""),
-])
+@pytest.mark.parametrize(
+    "response,expected",
+    [
+        ({"rendered": "raw", "digest": "compressed", "entries": []}, "compressed"),
+        ({"rendered": "raw", "entries": []}, "raw"),
+        ({"rendered": "raw", "stats": {"rewrite": "no_relevant"}}, ""),
+    ],
+)
 def test_cloud_recall(external_provider, monkeypatch, mode, rewrite, response, expected):
     from unittest.mock import Mock
+
     _, provider, _, _ = external_provider("cloud-recall")
     monkeypatch.setenv("OPENVIKING_RECALL_COMPRESS", mode)
     client = Mock()
     client.post.return_value = {"result": response}
-    assert provider._search_prefetch_context("remember deployment preferences", session_id="session", client=client) == expected
+    assert (
+        provider._search_prefetch_context(
+            "remember deployment preferences", session_id="session", client=client
+        )
+        == expected
+    )
     client.post.assert_called_once()
     path, body = client.post.call_args.args
     assert path == "/api/v1/search/search"
@@ -162,6 +171,7 @@ def test_cloud_recall(external_provider, monkeypatch, mode, rewrite, response, e
 
 def test_cloud_recall_legacy_fallback(external_provider, monkeypatch):
     from unittest.mock import Mock
+
     _, provider, _, _ = external_provider("cloud-fallback")
     monkeypatch.setenv("OPENVIKING_RECALL_COMPRESS", "server")
     client = Mock()

@@ -98,7 +98,7 @@ export const KNOBS = [
   // off/client/server/auto through `normalizeRewriteMode`; Codex reads the same
   // key as on/off. Both spellings stay declared so neither harness's users are
   // told their config is a typo.
-  { name: "recallCompress", type: "string", default: "auto", env: "OPENVIKING_RECALL_COMPRESS", aliases: ["recallRewrite"], capability: "recall" },
+  { name: "recallCompress", type: "string", default: "off", harness: { claude_code: "auto", codex: "auto" }, env: "OPENVIKING_RECALL_COMPRESS", aliases: ["recallRewrite"], capability: "recall" },
   { name: "recallCompressModel", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_MODEL", capability: "recall" },
   { name: "recallCompressBaseUrl", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_BASE_URL", capability: "recall" },
   { name: "recallCompressThinking", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_THINKING", aliases: ["recallCompressReasoningEffort"], capability: "recall" },

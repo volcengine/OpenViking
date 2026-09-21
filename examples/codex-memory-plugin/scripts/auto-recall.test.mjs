@@ -331,7 +331,7 @@ test("auto-recall prefers the server recall endpoint when available", async () =
       );
 
       const output = JSON.parse(result.stdout.trim());
-      assert.match(output.hookSpecificOutput.additionalContext, /OpenViking memory digest/);
+      assert.match(output.hookSpecificOutput.additionalContext, /^<openviking-context>/);
       assert.match(output.hookSpecificOutput.additionalContext, /Launch summary/);
     });
 
@@ -340,7 +340,7 @@ test("auto-recall prefers the server recall endpoint when available", async () =
       "/api/v1/search/recall",
     ]);
     assert.equal(Object.values(requests[1].body.quotas).reduce((sum, quota) => sum + quota, 0), 3);
-    assert.equal(requests[1].body.max_chars, 6500);
+    assert.equal(requests[1].body.max_chars, 1000);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
@@ -655,6 +655,7 @@ test("auto-recall expands configured user in memory search target", async () => 
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
           OPENVIKING_USER: "zeus",
+          OPENVIKING_RECALL_PREFER_ABSTRACT: "0",
           OPENVIKING_RECALL_COMPRESS: "0",
           OPENVIKING_RECALL_LIMIT: "1",
           OPENVIKING_RECALL_TIMEOUT_MS: "10000",
@@ -741,6 +742,7 @@ test("auto-recall preserves explicit default user memory target", async () => {
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
           OPENVIKING_CREDENTIAL_SOURCE: "env",
           OPENVIKING_USER: "default",
+          OPENVIKING_RECALL_PREFER_ABSTRACT: "0",
           OPENVIKING_RECALL_COMPRESS: "0",
           OPENVIKING_RECALL_LIMIT: "1",
           OPENVIKING_RECALL_TIMEOUT_MS: "10000",
@@ -1105,3 +1107,34 @@ for (const scenario of [
     } finally { await rm(stateDir,{recursive:true,force:true}); }
   });
 }
+
+test("a failed local compressor is not relaunched for another peer in the same hook", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-compressor-latch-"));
+  try {
+    await withFakeCodex("unused", async ({ env, callLog }) => {
+      const script = `
+        const { loadConfig } = await import(${JSON.stringify(new URL('./config.mjs', import.meta.url).href)});
+        const { createCodexCompressor } = await import(${JSON.stringify(new URL('./host-compressor.mjs', import.meta.url).href)});
+        const run = await createCodexCompressor(loadConfig());
+        if (!run) throw new Error("missing compressor");
+        if (await run("primary peer") !== null) throw new Error("expected failure");
+        if (await run("legacy peer") !== null) throw new Error("expected disabled compressor");
+      `;
+      await new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
+          env: { ...process.env, ...env,
+            OPENVIKING_CODEX_STATE_DIR: stateDir, OPENVIKING_HOME: stateDir,
+            OPENVIKING_CONFIG_FILE: join(stateDir, 'missing'), OPENVIKING_CLI_CONFIG_FILE: join(stateDir, 'missing-cli'),
+            OPENVIKING_RECALL_COMPRESS: 'client', OPENVIKING_RECALL_COMPRESS_MODEL: 'test-model',
+            OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS: '1000',
+          }, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stderr = '';
+        child.stderr.on('data', data => { stderr += data; });
+        child.on('error', reject);
+        child.on('close', code => code === 0 ? resolve() : reject(new Error(stderr)));
+      });
+      assert.equal((await readFile(callLog, 'utf8')).trim().split('\n').length, 1);
+    }, { exitCode: 1 });
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
