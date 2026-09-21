@@ -44,7 +44,7 @@ Create a new session. Sessions are containers for conversations, storing message
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 | memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
-| auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If no policy is provided, auto commit is disabled unless `memory.session_auto_commit.default_enabled=true`. The policy can later be partially updated or disabled through `update_session_config()`. |
+| auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If omitted, the new Session inherits `server.user_config_defaults.auto_commit_policy`, then the existing `memory.session_auto_commit.default_enabled` behavior. The policy can later be partially updated or disabled through `update_session_config()`. |
 
 `auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
@@ -96,7 +96,7 @@ curl -X POST http://localhost:1933/api/v1/sessions \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 # Use HTTP client
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -842,7 +842,7 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/archives/archive_002
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -960,7 +960,7 @@ curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -1135,7 +1135,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import ContextPart, ImagePart, TextPart
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -1421,6 +1421,10 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
+| reset_context | bool | No | false | HTTP API: archive all live messages, then append a boundary archive containing only a `.done` marker with `context_reset`. Keeps the session ID and raw history, clears injected context and stops future summaries from inheriting pre-reset overviews. Requires `keep_recent_count=0` and no `retention_mode`. |
+
+`reset_context` is used by the OpenClaw plugin reset hook and `Session.commit_async()`. It also creates a boundary when there are no live messages, unless the newest archive is already a reset boundary. Memory extraction for older archives can finish independently; long-term memories are preserved. SDK/CLI convenience options are not added in this change.
+
 
 The effective policy is resolved in this order: Session `.meta.json`, latest
 `settings/user_config.json`, then the kernel default. The fully resolved policy
@@ -1448,7 +1452,7 @@ curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()

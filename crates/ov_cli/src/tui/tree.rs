@@ -139,7 +139,22 @@ impl TreeState {
 
     async fn fetch_children(client: &HttpClient, uri: &str) -> Result<Vec<TreeNode>, String> {
         let result = client
-            .ls(uri, false, false, "original", 256, false, 1000, &[], &[], false)
+            .ls(
+                uri,
+                false,
+                false,
+                "original",
+                256,
+                false,
+                1000,
+                0,
+                None,
+                None,
+                None,
+                &[],
+                &[],
+                false,
+            )
             .await
             .map_err(|e| e.to_string())?;
 

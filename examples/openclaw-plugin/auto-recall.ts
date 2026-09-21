@@ -331,6 +331,7 @@ export async function buildAutoRecallContext(params: {
   rawUserTextPreview?: string;
   queryTruncated?: boolean;
   resourceTypes?: RecallResourceType[];
+  dedupTurns?: number;
 }): Promise<{ block?: string; memoryCount: number; estimatedTokens: number }> {
   const { cfg, client, agentId, actorPeerId, queryText, logger, verbose } = params;
   const queryConfig = params.queryConfig;
@@ -373,7 +374,7 @@ export async function buildAutoRecallContext(params: {
           queryExpansion: "auto",
           maxTokens,
           detail: recallPreferAbstract ? "abstract" : undefined,
-          dedupTurns: params.ovSessionId ? AUTO_RECALL_DEDUP_TURNS : undefined,
+          dedupTurns: params.dedupTurns ?? (params.ovSessionId ? AUTO_RECALL_DEDUP_TURNS : undefined),
           peerScope: "actor",
           actorPeerId,
           requestTimeoutMs: cfg.autoRecallTimeoutMs,

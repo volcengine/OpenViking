@@ -23,12 +23,14 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 | abs_limit | int | 否 | 256 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
+| offset | int | 否 | 0 | 跳过的可见节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
-| sort_by | str | 否 | None | 在应用 `node_limit` 前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
+| sort_by | str | 否 | None | 在分页前，分别按 `name` 或 `mtime` 排序目录组和文件组；目录仍优先 |
 | sort_order | str | 否 | `asc` | 排序方向：`asc` 或 `desc` |
+| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | tags | string[] | 否 | 未设置 | 仅返回同时匹配全部 `k=v` 检索标签的条目 |
 
-`tags` 使用 AND 语义，并在 `node_limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。`simple=true` 保持仅返回路径。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true`（CLI：`-f tags`）才返回它们。HTTP 的 `simple=true` 保持仅返回路径；CLI 同时指定 `--simple` 和 `--fields` 时会获取条目对象，再按指定列输出。
 
 **条目结构**
 
@@ -68,7 +70,8 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 ```python
 entries = client.ls(
     uri="viking://resources/",
-    node_limit=200,
+    offset=100,
+    limit=100,
     sort_by="mtime",
     sort_order="desc",
     tags=["team=search", "env=prod"],
@@ -104,7 +107,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}&tags={k=v}&include_tags={bool}
+GET /api/v1/fs/ls?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash
@@ -137,12 +140,20 @@ curl -G "http://localhost:1933/api/v1/fs/ls" \
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f tags]
-openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f tags]
+openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f FIELDS]
+openviking tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
+openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 
-# 在人类可读列表中显示 tags；不能与 --simple 一起使用
-openviking ls viking://resources/ --fields tags
+# 在对齐的表格中显示名称和 tags
+openviking ls viking://resources/ --fields name,tags
+
+# 无表头，每行输出逗号分隔的 URI 和 tags
+openviking ls viking://resources/ --simple --fields uri,tags
 ```
+
+`-f` / `--fields` 接受逗号分隔的列名。在默认的 table 输出模式下，结果为带表头、按列对齐的表格。支持的字段为 `name`、`uri`、`path`、`type`、`size`、`mode`、`mtime`、`locked`、`id`、`count`、`abstract`、`tags`。同时指定 `--simple` 和 `-f` 时，每行输出逗号分隔的字段值，不带表头或树缩进；仅使用 `--simple` 时仍每行输出一个 URI。若未选择 `name`、`uri` 或 `path`，列表会自动补充 `name` 列，树会补充 `path` 列。
+
+CLI 会按所选列请求 `extra_fields`（`locked`、`id`、`count`）；选择 `tags` 列时会请求 `include_tags=true`。这些列选择不改变 `tags` 的 AND 过滤语义。
 
 
 **响应**
@@ -180,16 +191,24 @@ openviking ls viking://resources/ --fields tags
 | abs_limit | int | 否 | HTTP：256；SDK：128 | `agent` 输出中的摘要长度限制 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
+| offset | int | 否 | 0 | 跳过的可见节点数 |
+| limit | int | 否 | None | `node_limit` 的别名 |
 | level_limit | int | 否 | 3 | 最大目录遍历深度 |
+| extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
-`tags` 使用 AND 语义，并在 `node_limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们，否则会省略 tags 以避免额外的向量库读取。
+`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们，否则会省略 tags 以避免额外的向量库读取。
 
 
 **Python HTTP SDK**
 
 ```python
-entries = client.tree(uri="viking://resources/", tags=["team=search", "env=prod"])
+entries = client.tree(
+    uri="viking://resources/",
+    offset=100,
+    limit=100,
+    tags=["team=search", "env=prod"],
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
@@ -222,7 +241,7 @@ for _, entry := range entries {
 **HTTP API**
 
 ```
-GET /api/v1/fs/tree?uri={uri}&tags={k=v}&include_tags={bool}
+GET /api/v1/fs/tree?uri={uri}&offset={int}&limit={int}
 ```
 
 ```bash
@@ -240,7 +259,10 @@ curl -G "http://localhost:1933/api/v1/fs/tree" \
 **CLI**
 
 ```bash
-openviking tree viking://resources/my-project/ --fields tags
+openviking tree viking://resources/my-project/ --fields path,type,tags
+
+# 与 ls、glob 一样支持 --simple 和列选择组合
+openviking tree viking://resources/my-project/ --simple --fields path,tags
 ```
 
 
@@ -584,7 +606,7 @@ client.rm(uri="viking://resources/old-project/", recursive=True)
 **TypeScript SDK**
 
 ```typescript
-await client.remove("viking://resources/docs/old.md", { wait: true });
+await client.remove("viking://resources/docs/old.md");
 ```
 
 **Go SDK**
@@ -656,7 +678,9 @@ openviking rm viking://resources/old.md [--recursive]
 
 把文件或目录复制到新的 Viking URI，源内容保持不变。源 URI 下已有的向量记录会同步复制并改写为目标 URI，因此无需重新解析复制内容，也无需重新执行文件级 VLM 或 embedding。
 
-目标父目录必须已经存在，目标本身必须不存在。复制目录时必须设置 `recursive=true`（CLI 中使用 `-r`）。目标不能与源相同，也不能位于源目录子树内。
+目标父目录必须已经存在。目标文件存在时直接覆盖；目标目录存在时递归合并，保留目标独有文件。`to_uri` 就是实际目标位置，不额外追加源目录名；文件与目录类型冲突时拒绝。复制目录时必须设置 `recursive=true`（CLI 中使用 `-r`）。源、目标不能相同或互为祖先与后代。覆盖时保留目标原有访问权限；新目标继承目标父级权限。
+
+文件使用源、目标双 Exact Lock，目录使用双 Tree Lock，不锁父目录整树。复制失败可能保留部分目标；向量复制失败时尝试清理目标向量和目标数据。旧目标不备份，合并后发生向量失败可能删除整个目标目录，包括其原有内容；该操作不是原子事务。
 
 **参数**
 
@@ -732,13 +756,15 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 `semantic_status: "queued"` 表示复制已经提交，目标父目录的 overview 和 abstract 将根据目标目录中已有的摘要异步重建，接口不会等待刷新完成。若语义刷新入队失败，响应可能包含 `semantic_status: "failed"` 和 `semantic_error`；已经完成的文件和向量复制不会因此回滚。
 
-常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；目标已存在或路径锁繁忙时返回 `CONFLICT`；复制目录但未设置 `recursive=true` 时返回 `FAILED_PRECONDITION`；源和目标关系非法时返回 `INVALID_ARGUMENT`。
+常见错误包括：源或目标父目录不存在时返回 `NOT_FOUND`；路径锁繁忙时返回 `CONFLICT`；复制或删除目录但未设置 `recursive=true`、对文件执行目录操作、源和目标关系非法或类型冲突时返回 `INVALID_ARGUMENT`（HTTP 400）。
 
 ---
 
 ### mv()
 
-移动文件或目录。
+移动文件或目录。目标文件存在时覆盖，目标目录存在时递归合并并保留目标独有内容；`to_uri` 为实际目标位置，不追加源目录名。文件与目录类型冲突、源目标相同或互相包含时拒绝。
+
+文件使用双 Exact Lock，目录使用源、目标双 Tree Lock，不锁父目录整树。执行顺序为复制目标、迁移向量、删除源。复制失败不统一清理部分目标；向量迁移或 ACL 更新失败时尝试恢复源向量并删除目标；最后删除源失败时保留目标与残余源，不重建源。旧目标不备份，合并目标可能在回滚清理中被整体删除，因此不保证失败后恢复原状。
 
 **参数**
 

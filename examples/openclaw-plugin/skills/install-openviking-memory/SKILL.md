@@ -106,7 +106,7 @@ Send this message:
 > 我需要 3 条信息，不知道的可以问你的管理员：
 > 1. **OpenViking 服务地址** —— 例如 `https://ov.example.com` 或 `http://192.168.1.100:1933`，本机服务可以直接说"本机"
 > 2. **API Key** —— 用来鉴权；服务没开认证可以说"没有"
-> 3. **Agent 标识前缀**（可选） —— 用于区分多个 agent 的记忆命名空间，留空就用默认
+> 3. **记忆归属**（可选） —— 所有对话共用 user 记忆（默认），还是在 `peers/<assistant_id>` 或 `peers/<sender_id>` 下分开存放
 >
 > 先告诉我服务地址吧？
 
@@ -115,7 +115,7 @@ Send this message:
 > I need 3 things (ask your admin if unsure):
 > 1. **OpenViking server URL** — e.g. `https://ov.example.com` or `http://192.168.1.100:1933`. For a local server, just say "local".
 > 2. **API Key** — for auth. Say "none" if the server has no auth.
-> 3. **peer prefix** (optional) — used to namespace memories across agents. Leave blank for default.
+> 3. **Memory scope** (optional) — shared user memory (default), or peer memory under `peers/<assistant_id>` / `peers/<sender_id>`.
 >
 > What's the server URL?
 
@@ -141,15 +141,36 @@ Collect 3 values through natural conversation. Be flexible: if the user gives se
 - "no" / "none" / "没有" / "空" / empty → `API_KEY=""` (you will skip the flag later).
 - Otherwise store as-is.
 
-### 4c. `PEER_PREFIX` (OPTIONAL)
+### 4c. `PEER_ROLE` (OPTIONAL)
+
+> (CN) 记忆要存在哪一层？默认共享在 `viking://user/<user_id>/memories`（`none`）。也可以按 OpenClaw 助手存到 `.../peers/<assistant_id>/memories`（`assistant`），或按发送者存到 `.../peers/<sender_id>/memories`（`sender`）。
+> (EN) Where should memory live? The default is shared `viking://user/<user_id>/memories` (`none`). You can instead use `.../peers/<assistant_id>/memories` (`assistant`) or `.../peers/<sender_id>/memories` (`sender`).
+
+Default to `none`. **Never silently pick another value** — the three options mean different storage layouts and are awkward to change later:
+
+| Value | Concrete layout | Choose it when |
+|---|---|---|
+| `none` (default) | Shared memory under `viking://user/<user_id>/memories/...`; no concrete `peers/<peer_id>/memories` subtree is used. | General case. All conversations for this OpenViking user share user-level memory. |
+| `assistant` | Assistant-attributed peer memory under `viking://user/<user_id>/peers/<assistant_id>/memories/...`, keyed by the resolved OpenClaw agent id (fallback `main`; optional prefix supported). | **Human as OpenViking user**: one human uses multiple assistants and wants their peer memories separated. Example: Alice's `main` and `research` assistants use `.../peers/main/...` and `.../peers/research/...`. |
+| `sender` | Sender-attributed peer memory under `viking://user/<user_id>/peers/<sender_id>/memories/...`, keyed by the sender identity supplied by OpenClaw. | **Agent as OpenViking user**: one agent talks to multiple humans and wants their peer memories separated. Example: `support-agent` stores `customer-42` and `customer-99` under different peer subtrees. |
+
+`person` is a legacy alias for `sender`. Accept it from an existing config or explicit user input, but normalize/write new setup values as `sender`.
+
+OpenViking initializes the managed `peers/` container for every user. Do not tell the user that `none` removes that container: it only avoids a concrete peer memory subtree. With `assistant` or `sender`, actor-peer recall includes shared user memory plus the current peer memory; it hides other peer subtrees. Changing this setting does not move existing memories.
+
+- Empty / "default" / "默认" / "共用" → leave unset (plugin defaults to `none`).
+- Otherwise pass `--peer-role none|assistant|sender`. Treat explicit legacy `person` as `sender`. Any other value → ask again.
+
+### 4d. `PEER_PREFIX` (OPTIONAL, only when `PEER_ROLE=assistant`)
 
 > (CN) 想给这个 agent 一个记忆前缀吗？留空就用默认。只能用字母、数字、`_`、`-`。
 > (EN) Want to set an peer prefix? Leave blank for the default. Letters, digits, `_`, `-` only.
 
+- Only meaningful when `PEER_ROLE=assistant`; skip the question otherwise.
 - Empty / "default" / "默认" → leave unset (plugin defaults to `""`).
 - Otherwise validate against `/^[A-Za-z0-9_-]+$/`. If invalid, ask again.
 
-### 4d. (Conditional) Multi-Tenant Root-Key Fields
+### 4e. (Conditional) Multi-Tenant Root-Key Fields
 
 Only ask for these if STEP 7 detects a root key (`Root API key detected. Missing: --account-id, --user-id`). Don't ask up front.
 
@@ -259,14 +280,15 @@ Tell the user:
 Run the installer with `npx` (no global install needed):
 
 ```bash
-npx -y openclaw-openviking-setup-helper@latest --base-url BASE_URL [--api-key API_KEY] [--peer-prefix PEER_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID]
+npx -y openclaw-openviking-setup-helper@latest --base-url BASE_URL [--api-key API_KEY] [--peer-role PEER_ROLE] [--peer-prefix PEER_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID]
 ```
 
 Build the flag list according to what the user gave you:
 
 - Always pass `--base-url BASE_URL`.
 - Pass `--api-key API_KEY` only if `API_KEY` is non-empty.
-- Pass `--peer-prefix PEER_PREFIX` only if the user gave one.
+- Pass `--peer-role PEER_ROLE` only if the user chose `assistant` or `sender`; omit it for the `none` default. Normalize legacy `person` to `sender` first.
+- Pass `--peer-prefix PEER_PREFIX` only if the user gave one and `PEER_ROLE=assistant`.
 - `--account-id` / `--user-id` only if the root-key path requires them.
 
 `ov-install` will, in one shot:
@@ -287,14 +309,15 @@ If `ov-install` exits non-zero, capture the last 30 lines of its output, show th
 Run the setup wizard non-interactively. Build flags from collected values:
 
 ```bash
-openclaw openviking setup --base-url BASE_URL --json [--api-key API_KEY] [--peer-prefix PEER_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID] [--allow-offline] [--force-slot]
+openclaw openviking setup --base-url BASE_URL --json [--api-key API_KEY] [--peer-role PEER_ROLE] [--peer-prefix PEER_PREFIX] [--account-id ACCOUNT_ID] [--user-id USER_ID] [--allow-offline] [--force-slot]
 ```
 
 Rules:
 
 - `--base-url BASE_URL` is **required** under `--json`. Without it, the wizard prints `--json requires --base-url for non-interactive mode`.
 - `--api-key` only if `API_KEY` is non-empty.
-- `--peer-prefix` only if the user gave one. Use **`--peer-prefix`** for assistant peer prefixes; the old ID-style setup flag is no longer supported.
+- `--peer-role` only if the user chose `assistant` or `sender`; omit it for the `none` default. Normalize legacy `person` to `sender` first.
+- `--peer-prefix` only if the user gave one and `--peer-role assistant` is in play. Use **`--peer-prefix`** for assistant peer prefixes; the old ID-style setup flag is no longer supported.
 - `--account-id` / `--user-id` only after STEP 7 root-key detection (see below).
 - `--allow-offline` only if the user explicitly approved it in STEP 5.
 - `--force-slot` **never** in the first attempt. Add only after the user confirms (see slot_blocked handling below).
@@ -583,8 +606,8 @@ These are the keys under `plugins.entries.openviking.config` in `openclaw.json`.
 | `mode` | `"remote"` (forced by plugin) | Always remote in this skill. Don't set manually. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking server URL. |
 | `apiKey` | — | API key. Optional if server has no auth. |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
-| `peer_prefix` | `""` | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. Letters / digits / `_` / `-`. |
+| `peer_role` | `none` | Memory scope: `none` (shared `viking://user/<user_id>/memories`), `assistant` (`.../peers/<assistant_id>/memories`), or `sender` (`.../peers/<sender_id>/memories`). Legacy `person` is accepted as `sender`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_prefix` | `""` | Optional prefix for assistant `peer_id` / actor peer values. Only used when `peer_role=assistant`. Letters / digits / `_` / `-`. |
 | `accountId` | — | Required when `apiKey` is a root key. |
 | `userId` | — | Required when `apiKey` is a root key. |
 | `targetUri` | `viking://~/memories` | Default search scope URI. |

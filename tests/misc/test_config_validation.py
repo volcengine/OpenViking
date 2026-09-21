@@ -257,7 +257,7 @@ def test_queuefs_cache_uses_top_level_provider_without_enabling_cachefs():
     assert binding["cache"]["redis"]["endpoints"] == ["redis://redis:6379"]
 
 
-def test_top_level_cache_params_reject_removed_replica_read_config():
+def test_top_level_cache_params_ignore_removed_replica_read_config():
     config = OpenVikingConfig.model_validate(
         {
             "cache": {
@@ -276,11 +276,11 @@ def test_top_level_cache_params_reject_removed_replica_read_config():
         }
     )
 
-    with pytest.raises(ValueError, match="read_from_replica"):
-        RagfsBindingConfig(
-            agfs=config.storage.agfs,
-            cache=config.cache,
-        ).to_binding_dict()
+    binding = RagfsBindingConfig(
+        agfs=config.storage.agfs,
+        cache=config.cache,
+    ).to_binding_dict()
+    assert "read_from_replica" not in binding["cache"]["redis"]
 
 
 def test_cache_backend_requires_top_level_cache_config():
@@ -290,19 +290,6 @@ def test_cache_backend_requires_top_level_cache_config():
                 "storage": {
                     "workspace": "/tmp/ov-test",
                     "agfs": {"cachefs": {"backend": "cache"}},
-                }
-            }
-        )
-
-
-def test_top_level_cache_rejects_global_enabled_flag():
-    with pytest.raises(ValueError, match="enabled"):
-        OpenVikingConfig.model_validate(
-            {
-                "cache": {
-                    "enabled": True,
-                    "provider": "redis",
-                    "params": {},
                 }
             }
         )
@@ -337,19 +324,10 @@ def test_unused_top_level_cache_does_not_parse_provider_params():
     assert binding["cache"]["provider"] == "redis"
 
 
-def test_openviking_config_rejects_removed_nested_cache_schema():
-    with pytest.raises(ValueError, match="storage.agfs.cache has been removed"):
-        OpenVikingConfig.model_validate(
-            {
-                "storage": {"agfs": {"cache": {"enabled": True}}},
-            }
-        )
-
-
 def test_openviking_config_dump_uses_only_canonical_cache_schema():
     config = OpenVikingConfig.model_validate(
         {
-            "cache": {"provider": "redis", "params": {}},
+            "cache": {"provider": "redis", "params": {}, "enabled": True},
             "storage": {"agfs": {"cachefs": {"backend": "cache"}}},
         }
     )
@@ -390,9 +368,7 @@ def test_rediss_scheme_enables_tls_without_boolean_flag():
 
     binding = RagfsBindingConfig(config.storage.agfs, cache=config.cache).to_binding_dict()
 
-    assert binding["cache"]["redis"]["endpoints"] == [
-        "rediss://redis.example.com:6380"
-    ]
+    assert binding["cache"]["redis"]["endpoints"] == ["rediss://redis.example.com:6380"]
     assert "tls_enabled" not in binding["cache"]["redis"]
 
 
@@ -730,20 +706,65 @@ def test_ragfs_binding_enables_runtime_for_queuefs_cache_backend(tmp_path):
 
 
 def test_agfs_pathlock_config_validates_provider_and_expiry(tmp_path):
-    """PathLock config accepts built-ins and rejects unsafe expiry values."""
+    """PathLock config validates Redis namespace and expiry boundaries."""
     config = AGFSConfig(
         path=str(tmp_path),
         backend="local",
-        pathlock={"provider": "memory", "lock_expire_secs": 60.0},
+        pathlock={
+            "provider": "cache",
+            "namespace": "prod-a",
+            "lock_expire_secs": 60.0,
+        },
     )
 
-    assert config.pathlock.provider == "memory"
+    assert config.pathlock.provider == "cache"
+    assert config.pathlock.namespace == "prod-a"
     assert config.pathlock.lock_expire_secs == 60.0
 
-    with pytest.raises(ValueError, match="pathlock provider"):
-        AGFSConfig(path=str(tmp_path), pathlock={"provider": "redis"})
+    with pytest.raises(ValueError, match="namespace"):
+        AGFSConfig(path=str(tmp_path), pathlock={"provider": "cache"})
+    with pytest.raises(ValueError, match="namespace"):
+        AGFSConfig(
+            path=str(tmp_path),
+            pathlock={"provider": "cache", "namespace": "bad{name}"},
+        )
     with pytest.raises(ValueError, match="lock_expire_secs"):
         AGFSConfig(path=str(tmp_path), pathlock={"lock_expire_secs": 0.0})
+
+
+def test_redis_pathlock_enables_shared_runtime_without_cachefs(tmp_path):
+    """Redis PathLock alone should enable the configured Redis Runtime."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "cache": {
+                "provider": "redis",
+                "params": {"endpoints": ["redis://redis:6379"]},
+            },
+            "storage": {
+                "workspace": str(tmp_path),
+                "agfs": {
+                    "pathlock": {
+                        "provider": "cache",
+                        "namespace": "prod-a",
+                    }
+                },
+            },
+        }
+    )
+
+    binding = RagfsBindingConfig(
+        agfs=config.storage.agfs,
+        cache=config.cache,
+    ).to_binding_dict()
+
+    assert binding["cache"]["enabled"] is False
+    assert binding["cache"]["runtime_enabled"] is True
+    assert binding["pathlock"] == {
+        "provider": "cache",
+        "namespace": "prod-a",
+        "lock_expire_secs": 30.0,
+        "lock_timeout_secs": 0.0,
+    }
 
 
 def test_create_agfs_client_uses_single_binding_config_object(monkeypatch, tmp_path):

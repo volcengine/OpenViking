@@ -264,11 +264,29 @@ class TelemetrySummaryBuilder:
                     "processed": cls._i(gauges.get("queue.semantic.processed"), 0),
                     "requeue_count": cls._i(gauges.get("queue.semantic.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.semantic.error_count"), 0),
+                    "queue_wait": {
+                        "duration_ms": cls._f(
+                            gauges.get("queue.semantic.queue_wait.duration_ms"), 0.0
+                        )
+                    },
+                    "execute": {
+                        "duration_ms": cls._f(gauges.get("queue.semantic.execute.duration_ms"), 0.0)
+                    },
                 },
                 "embedding": {
                     "processed": cls._i(gauges.get("queue.embedding.processed"), 0),
                     "requeue_count": cls._i(gauges.get("queue.embedding.requeue_count"), 0),
                     "error_count": cls._i(gauges.get("queue.embedding.error_count"), 0),
+                    "queue_wait": {
+                        "duration_ms": cls._f(
+                            gauges.get("queue.embedding.queue_wait.duration_ms"), 0.0
+                        )
+                    },
+                    "execute": {
+                        "duration_ms": cls._f(
+                            gauges.get("queue.embedding.execute.duration_ms"), 0.0
+                        )
+                    },
                 },
             }
 
@@ -393,27 +411,68 @@ class TelemetrySummaryBuilder:
 
         if cls._has_metric_prefix("resource", counters, gauges):
             summary["resource"] = {
-                "request": {
-                    "duration_ms": cls._f(gauges.get("resource.request.duration_ms"), 0.0),
+                "total": {
+                    "duration_ms": cls._f(gauges.get("resource.total.duration_ms"), 0.0),
                 },
-                "process": {
-                    "duration_ms": cls._f(gauges.get("resource.process.duration_ms"), 0.0),
-                    "parse": {
-                        "duration_ms": cls._f(gauges.get("resource.parse.duration_ms"), 0.0),
-                        "warnings_count": cls._i(gauges.get("resource.parse.warnings_count"), 0),
+                "source_execute": {
+                    "duration_ms": cls._f(gauges.get("resource.source_execute.duration_ms"), 0.0),
+                },
+                "source_prepare": {
+                    "duration_ms": cls._f(gauges.get("resource.source_prepare.duration_ms"), 0.0),
+                },
+                "parse_artifact": {
+                    "duration_ms": cls._f(gauges.get("resource.parse_artifact.duration_ms"), 0.0),
+                },
+                "target_resolve": {
+                    "duration_ms": cls._f(gauges.get("resource.target_resolve.duration_ms"), 0.0),
+                },
+                "update_plan": {
+                    "duration_ms": cls._f(gauges.get("resource.update_plan.duration_ms"), 0.0),
+                    "artifact_inventory": {
+                        "duration_ms": cls._f(
+                            gauges.get("resource.update_plan.artifact_inventory.duration_ms"), 0.0
+                        ),
                     },
-                    "finalize": {
-                        "duration_ms": cls._f(gauges.get("resource.finalize.duration_ms"), 0.0),
+                    "rnfv_snapshot": {
+                        "duration_ms": cls._f(
+                            gauges.get("resource.update_plan.rnfv_snapshot.duration_ms"), 0.0
+                        ),
                     },
-                    "summarize": {
-                        "duration_ms": cls._f(gauges.get("resource.summarize.duration_ms"), 0.0),
+                    "diff_and_compile": {
+                        "duration_ms": cls._f(
+                            gauges.get("resource.update_plan.diff_and_compile.duration_ms"), 0.0
+                        ),
                     },
                 },
-                "wait": {
-                    "duration_ms": cls._f(gauges.get("resource.wait.duration_ms"), 0.0),
+                "content_commit": {
+                    "duration_ms": cls._f(gauges.get("resource.content_commit.duration_ms"), 0.0),
                 },
-                "watch": {
-                    "duration_ms": cls._f(gauges.get("resource.watch.duration_ms"), 0.0),
+                "derived_enqueue": {
+                    "duration_ms": cls._f(gauges.get("resource.derived_enqueue.duration_ms"), 0.0),
+                },
+                "semantic": {
+                    "queue_wait": {
+                        "duration_ms": cls._f(
+                            gauges.get("queue.semantic.queue_wait.duration_ms"), 0.0
+                        ),
+                    },
+                    "execute": {
+                        "duration_ms": cls._f(
+                            gauges.get("queue.semantic.execute.duration_ms"), 0.0
+                        ),
+                    },
+                },
+                "embedding": {
+                    "queue_wait": {
+                        "duration_ms": cls._f(
+                            gauges.get("queue.embedding.queue_wait.duration_ms"), 0.0
+                        ),
+                    },
+                    "execute": {
+                        "duration_ms": cls._f(
+                            gauges.get("queue.embedding.execute.duration_ms"), 0.0
+                        ),
+                    },
                 },
                 "flags": {
                     public_key: cls._bool(gauges.get(metric_key), False)
@@ -497,6 +556,10 @@ class OperationTelemetry:
 
     def set_value(self, key: str, value: Any) -> None:
         self.set(key, value)
+
+    def elapsed_ms(self) -> float:
+        """Return the current operation wall-clock duration without finishing it."""
+        return max((time.perf_counter() - self._start_time) * 1000.0, 0.0)
 
     @staticmethod
     def _metric_bucket(value: Any, allowed: set[str]) -> str:

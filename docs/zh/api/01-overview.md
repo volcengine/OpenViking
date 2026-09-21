@@ -17,6 +17,12 @@ Client-Server 模式通过 HTTP API 连接 OpenViking 服务器，支持多租�
 
 #### Python SDK 客户端
 
+先在运行代码的 Python 环境中安装独立 SDK：
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
+
 ```python
 from openviking_sdk import SyncHTTPClient
 
@@ -110,32 +116,32 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `api_key` | API Key | `null`（无认证） |
 | `account` | 租户级请求的默认账户请求头 | `null` |
 | `user` | 租户级请求的默认用户请求头 | `null` |
-| `timeout` | HTTP 请求超时时间（秒） | `600.0` |
+| `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
-详细内容请参见 [配置指南](../guides/01-configuration.md#ovcliconf)。
+详细内容请参见 [配置指南](../guides/01-configuration.md#ovcli-conf)。
 
 #### 完全不依赖配置文件使用 Python SDK 客户端
 
-`SyncHTTPClient` 和 `AsyncHTTPClient` 支持完全不依赖 `ovcli.conf` 配置文件，只需在初始化时**显式传入所有参数**即可：
+`SyncHTTPClient` 和 `AsyncHTTPClient` 可以在没有 `ovcli.conf` 文件时使用。先在运行代码的 Python 环境中安装独立 SDK：
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
-    url="http://localhost:1933",          # 显式传入
-    api_key="your-key",                    # 显式传入（默认情况下 api_key 已经能标识用户身份）
-    timeout=30.0,                          # 不要用默认值 600.0
-    extra_headers={}                       # 传空 dict 而不是 None，可用于某些场景的网关认证等
+    url="http://localhost:1933",
+    api_key="your-key",
+    timeout=30.0,
+    extra_headers={},
 )
 client.initialize()
 ```
 
-⚠️ **注意**：只要以下任一条件满足，客户端就会尝试加载配置文件：
-- `url` 为 `None`
-- `api_key` 为 `None`
-- `timeout` 等于 `600.0`（默认值）
-- `extra_headers` 为 `None`
+即使显式传入参数，SDK 仍会读取已有的 `ovcli.conf`。显式值覆盖对应配置，其他设置可能来自环境变量或配置文件，因此无效配置仍会导致客户端构造失败。默认超时为 60 秒。文件位置见[客户端配置](../configuration/02-client.md)。
 
 #### HTTP 调用示例
 
@@ -155,12 +161,12 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI 模式
 
-OpenViking CLI （可简写为 ov 命令）连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。CLI 同样从 `ovcli.conf` 读取连接信息（与 HTTP 客户端共享）。
+OpenViking CLI 的命令是 `ov`（通过 `npm install -g @openviking/cli` 安装），连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。CLI 同样从 `ovcli.conf` 读取连接信息（与 HTTP 客户端共享）。
 
 基本用法：
 
 ```bash
-openviking [全局选项] <command> [参数] [命令选项]
+ov [全局选项] <command> [参数] [命令选项]
 ```
 
 全局选项（必须放在命令名之前）：
@@ -173,7 +179,7 @@ openviking [全局选项] <command> [参数] [命令选项]
 示例：
 
 ```bash
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## 生命周期
@@ -181,7 +187,7 @@ openviking -o json ls viking://resources/
 ### Client-Server 模式
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
@@ -194,7 +200,7 @@ client.close()
 CLI 则直接通过命令行调用，需要先配置 ovcli.conf 文件，无需额外初始化客户端：
 
 ```
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## 认证
@@ -248,18 +254,24 @@ Python HTTP SDK（`SyncHTTPClient` 和 `AsyncHTTPClient`）会把该 envelope �
 列表数据渲染为表格，非列表数据 fallback 到格式化 JSON：
 
 ```bash
-openviking ls viking://resources/
+ov ls viking://resources/
 # name          size  mode  isDir  uri
 # .abstract.md  100   420   false  viking://resources/.abstract.md
 ```
 
 ### JSON 模式（`--output json`）
 
-所有命令输出格式化 JSON，与 API 响应的 `result` 结构一致：
+`-o json` 默认使用紧凑输出，并带有 `{ok, result}` 包装：
 
 ```bash
-openviking -o json ls viking://resources/
-# [{ "name": "...", "size": 100, ... }, ...]
+ov -o json ls viking://resources/
+# {"ok":true,"result":[{"name":"...","size":100,...},...]}
+```
+
+使用 `--compact=false` 返回不带包装的格式化 JSON：
+
+```bash
+ov -o json --compact=false ls viking://resources/
 ```
 
 可在 `ovcli.conf` 中设置默认输出格式：
@@ -271,7 +283,7 @@ openviking -o json ls viking://resources/
 }
 ```
 
-### 紧凑模式（`--compact`, `-c`）
+### 紧凑模式（`--compact`, `-c`，默认开启）
 
 - 当 `--output=json` 时：紧凑 JSON 格式 + `{ok, result}` 包装，适用于脚本
 - 当 `--output=table` 时：对表格输出采取精简表示（如去除空列等）
@@ -300,9 +312,10 @@ JSON 输出 - 错误：
 | 退出码 | 说明 | 触发场景 |
 |--------|------|----------|
 | 0 | 成功 | 命令执行成功 |
-| 1 | 一般错误 | 命令执行失败（如 API 调用失败、网络错误、找不到二进制文件等） |
-| 2 | 配置错误 | 无法加载 `ovcli.conf` 配置文件、`--sudo` 需要 `root_api_key` 但未配置、`--sudo` 用于非管理员命令 |
-| 3 | 连接错误 | 无法连接到服务器 |
+| 1 | 运行错误 | 命令执行失败，包括 API 调用错误或连接错误 |
+| 2 | 参数或配置错误 | 命令行参数无效、配置加载失败、缺少必要凭据，或将 `--sudo` 用于不支持的命令 |
+
+当前 Rust CLI 的连接失败返回退出码 `1`，不使用单独的连接错误退出码 `3`。
 
 ## 错误码
 
@@ -327,6 +340,8 @@ JSON 输出 - 错误：
 | `VLM_FAILED` | 500 | VLM 调用失败 |
 | `SESSION_EXPIRED` | 410 | 会话已过期 |
 | `NOT_INITIALIZED` | - | 服务或组件未初始化（需要先调用 initialize()） |
+
+文件／目录类型不符合操作要求、复制或删除目录时缺少 `recursive=true`，以及 HTTP 来源域名明确不存在，均返回 `INVALID_ARGUMENT`（400）。正常路径锁竞争（包括加密写入）返回 `CONFLICT`（409）；锁令牌损坏、锁 I/O 故障和落盘数据解密失败返回 `INTERNAL`（500）。HTTP 来源站不可用或发生临时网络故障时返回 `UNAVAILABLE`（503），抓取超时返回 `DEADLINE_EXCEEDED`（504）。
 
 ---
 
@@ -460,6 +475,9 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| POST | `/api/v1/compile` | 创建由 OV 托管的 Compile 任务 |
+| GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
+| GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/api/v1/tasks/{task_id}` | 获取后台任务 |
 | POST | `/api/v1/tasks/{task_id}/cancel` | 取消后台任务 |
 | GET | `/api/v1/tasks` | 列出后台任务 |
@@ -476,10 +494,18 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/admin/agent-evolution` | 获取调用方 account 的 Agent 进化状态 |
-| PUT | `/api/v1/admin/agent-evolution` | 更新调用方 account 的 Agent 进化状态 |
-| GET | `/api/v1/admin/accounts/{account_id}/settings` | 获取 account 生效配置 |
-| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | 更新白名单内的 account 配置 |
+| GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
+| PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 层显式运行时配置 |
+| PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | 更新 Account 层运行时配置 |
+| GET | `/api/v1/admin/agent-evolution` | 获取 Agent 进化状态（deprecated） |
+| PUT | `/api/v1/admin/agent-evolution` | 更新 Agent 进化状态（deprecated） |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | 获取存量账号配置（deprecated） |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | 更新存量账号配置（deprecated） |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出可编辑记忆模板、默认值及生效值 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个记忆模板 |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个记忆模板 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除记忆模板覆盖，恢复部署默认值 |
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
 | POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |
@@ -505,7 +531,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/privacy-configs/{category}/{target_key}` | 写入并激活新版本 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
 
-### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md) 与 [VikingBot API](24-vikingbot.md)
+### [OpenViking Assets](22-openviking-assets.md)、[WebDAV](20-webdav.md)、[Agent Runtime API](23-agent-runtime.md) 与 [VikingBot API](24-vikingbot.md)
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -518,13 +544,16 @@ JSON 输出 - 错误：
 | DELETE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 删除文件或目录 |
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
+| POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
+| GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
 | GET | `/bot/v1/health` | VikingBot 健康检查 |
 | POST | `/bot/v1/chat` | VikingBot 非流式对话 |
 | POST | `/bot/v1/chat/stream` | VikingBot 流式对话 |
 | POST | `/bot/v1/feedback` | 提交 VikingBot 回答反馈 |
-| POST | `/bot/v1/compile` | 启动 Skill 驱动的 Compile 任务 |
-| GET | `/bot/v1/compile/{task_id}` | 获取 Compile 任务状态 |
-| POST | `/bot/v1/compile/{task_id}/cancel` | 取消 Compile 任务 |
+| POST | `/bot/v1/compile` | 已停用；返回新接口迁移提示 |
+| GET | `/bot/v1/compile/{task_id}` | 已停用；返回 Task 接口迁移提示 |
+| POST | `/bot/v1/compile/{task_id}/cancel` | 已停用；返回 Task 取消接口迁移提示 |
 
 ---
 
@@ -539,4 +568,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、ACL、隐私配置 |
-| 协议与扩展 | OpenViking Assets、WebDAV、VikingBot API |
+| 协议与扩展 | OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |

@@ -15,6 +15,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -45,6 +46,20 @@ class _FakeVikingFS:
 
     async def _ensure_access(self, uri, ctx, action):
         del uri, ctx, action
+
+
+@pytest.mark.asyncio
+async def test_content_write_stat_skips_directory_vector_count(ctx):
+    fake_fs = _FakeVikingFS()
+    fake_fs.stat = AsyncMock(return_value={"isDir": True})
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+
+    assert await coordinator._safe_stat("viking://resources/demo", ctx=ctx) == {"isDir": True}
+    fake_fs.stat.assert_awaited_once_with(
+        "viking://resources/demo",
+        ctx=ctx,
+        skip_count=True,
+    )
 
 
 def _sidecar(level=ContextLevel.ABSTRACT, body="Original body."):
@@ -102,6 +117,7 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
         "name": "demo.md",
         "summary": "",
     }
+    assert vectorize_file.await_args.kwargs["file_md5"] == content_md5(b"updated")
     assert "register_request_wait" not in vectorize_file.await_args.kwargs
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"
@@ -147,11 +163,141 @@ async def test_direct_write_skips_semantic_refresh_for_vectors_only_and_sidecar_
 
 
 @pytest.mark.asyncio
+async def test_direct_write_passes_final_md5_and_old_abstract_to_semantic_refresh(ctx):
+    file_uri = "viking://resources/demo.py"
+
+    class _VikingDB:
+        async def get_l2_diff_records_by_uris(self, uris, *, ctx):
+            assert uris == [file_uri]
+            return {file_uri: {"md5": "old-md5", "abstract": "old abstract"}}
+
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs, vikingdb=_VikingDB())
+    enqueue = AsyncMock(return_value=FreshnessAction.REFRESH_NOW)
+    coordinator._enqueue_semantic_refresh = enqueue
+
+    await coordinator._write_direct_with_refresh(
+        uri=file_uri,
+        root_uri="viking://resources",
+        content="updated",
+        mode="replace",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        written_bytes=7,
+        telemetry_id="",
+    )
+
+    assert enqueue.await_args.kwargs["file_md5"] == content_md5(b"updated")
+    assert enqueue.await_args.kwargs["file_abstract"] == "old abstract"
+
+
+@pytest.mark.asyncio
+async def test_semantic_message_carries_file_md5_and_old_abstract(monkeypatch, ctx):
+    file_uri = "viking://resources/demo.py"
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value="enqueued"))
+    manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
+    monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: manager)
+    monkeypatch.setattr(
+        content_write_module,
+        "plan_abstract_overview_refresh",
+        AsyncMock(return_value=SimpleNamespace(action=FreshnessAction.REFRESH_NOW)),
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+
+    await coordinator._enqueue_semantic_refresh_changes(
+        root_uri="viking://resources",
+        context_type="resource",
+        changes={"modified": [file_uri]},
+        ctx=ctx,
+        file_md5s={file_uri: "new-md5"},
+        file_abstracts={file_uri: "old abstract"},
+    )
+
+    msg = queue.enqueue.await_args.args[0]
+    assert msg.file_md5s == {file_uri: "new-md5"}
+    assert msg.file_abstracts == {file_uri: "old abstract"}
+
+
+@pytest.mark.asyncio
+async def test_direct_append_passes_md5_of_final_content_without_vector_db(ctx):
+    fake_fs = _FakeVikingFS()
+    fake_fs.read_file.return_value = "previous"
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+    enqueue = AsyncMock(return_value=FreshnessAction.REFRESH_NOW)
+    coordinator._enqueue_semantic_refresh = enqueue
+
+    await coordinator._write_direct_with_refresh(
+        uri="viking://resources/demo.py",
+        root_uri="viking://resources",
+        content=" updated",
+        mode="append",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        written_bytes=8,
+        telemetry_id="",
+    )
+
+    assert enqueue.await_args.kwargs["file_md5"] == content_md5(b"previous updated")
+    assert enqueue.await_args.kwargs["file_abstract"] == ""
+
+
+@pytest.mark.asyncio
+async def test_direct_write_continues_when_old_abstract_lookup_fails(ctx):
+    class _FailingVikingDB:
+        async def get_l2_diff_records_by_uris(self, uris, *, ctx):
+            raise RuntimeError("vector lookup unavailable")
+
+    fake_fs = _FakeVikingFS()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs, vikingdb=_FailingVikingDB())
+    enqueue = AsyncMock(return_value=FreshnessAction.REFRESH_NOW)
+    coordinator._enqueue_semantic_refresh = enqueue
+
+    await coordinator._write_direct_with_refresh(
+        uri="viking://resources/demo.py",
+        root_uri="viking://resources",
+        content="updated",
+        mode="replace",
+        context_type="resource",
+        wait=False,
+        timeout=None,
+        ctx=ctx,
+        written_bytes=7,
+        telemetry_id="",
+    )
+
+    assert enqueue.await_args.kwargs["file_abstract"] == ""
+    assert enqueue.await_args.kwargs["file_md5"] == content_md5(b"updated")
+
+
+@pytest.mark.asyncio
+async def test_old_abstract_lookup_uses_viking_fs_vector_store_when_not_injected(ctx):
+    file_uri = "viking://agent/skills/demo/SKILL.md"
+
+    class _VectorStore:
+        async def get_l2_diff_records_by_uris(self, uris, *, ctx):
+            return {file_uri: {"abstract": "skill summary"}}
+
+    fake_fs = _FakeVikingFS()
+    fake_fs._get_vector_store = lambda: _VectorStore()
+    coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
+
+    assert await coordinator._load_file_abstracts([file_uri], ctx=ctx) == {
+        file_uri: "skill summary"
+    }
+
+
+@pytest.mark.asyncio
 async def test_write_builds_ingest_options_before_scheduling_resource_refresh(ctx):
     coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
     coordinator._safe_stat = AsyncMock(return_value={"isDir": False})
     coordinator._resolve_root_uri = AsyncMock(return_value="viking://resources")
-    coordinator._write_direct_with_refresh = AsyncMock(return_value={"uri": "viking://resources/demo.md"})
+    coordinator._write_direct_with_refresh = AsyncMock(
+        return_value={"uri": "viking://resources/demo.md"}
+    )
 
     await coordinator.write(
         uri="viking://resources/demo.md",
@@ -229,9 +375,7 @@ async def test_vectors_only_write_wait_reports_skipped_when_nothing_enqueued(mon
 async def test_automatic_wide_directory_delay_reports_deferred(monkeypatch, ctx):
     fake_fs = _FakeVikingFS()
     coordinator = ContentWriteCoordinator(viking_fs=fake_fs)
-    coordinator._enqueue_semantic_refresh = AsyncMock(
-        return_value=FreshnessAction.MARK_PENDING
-    )
+    coordinator._enqueue_semantic_refresh = AsyncMock(return_value=FreshnessAction.MARK_PENDING)
 
     result = await coordinator._write_direct_with_refresh(
         uri="viking://resources/wide/demo.md",

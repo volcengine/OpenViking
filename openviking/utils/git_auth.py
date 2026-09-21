@@ -10,7 +10,33 @@ from dataclasses import dataclass, field
 from typing import Mapping
 from urllib.parse import urlparse
 
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
+
+GIT_AUTH_FAILED = "GIT_AUTH_FAILED"
+
+
+def raise_git_auth_error(stderr: bytes) -> None:
+    """Preserve explicit Git authentication failures without exposing credentials."""
+    error = stderr.decode(errors="replace").lower()
+    if any(
+        marker in error
+        for marker in (
+            "authentication failed",
+            "authentication failure",
+            "http basic: access denied",
+            "invalid username or password",
+            "invalid username or token",
+            "permission denied (publickey",
+            "permission denied (password",
+            "the requested url returned error: 401",
+            "could not read username",
+            "could not read password",
+        )
+    ):
+        raise OpenVikingError(
+            "Git authentication failed. Check your SSH keys or credentials.",
+            code=GIT_AUTH_FAILED,
+        )
 
 
 @dataclass(frozen=True)
@@ -19,6 +45,11 @@ class GitHttpAuthConfig:
 
     username: str
     token: str = field(repr=False)
+
+
+def is_git_https_url(repo_url: object) -> bool:
+    """Return whether HTTP token authentication is valid for this Git URL."""
+    return isinstance(repo_url, str) and repo_url.strip().lower().startswith("https://")
 
 
 def reject_git_http_userinfo(repo_url: str) -> None:
@@ -34,7 +65,7 @@ def reject_git_http_userinfo(repo_url: str) -> None:
 
 def _validate_git_https_auth_url(repo_url: str) -> str:
     normalized = repo_url.strip() if isinstance(repo_url, str) else ""
-    if not normalized.lower().startswith("https://"):
+    if not is_git_https_url(normalized):
         raise InvalidArgumentError(
             "args.auth_config token authentication requires an HTTPS Git URL."
         )

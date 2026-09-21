@@ -44,6 +44,10 @@ class _FakeVikingFS:
     async def write_file_bytes(self, uri: str, content: bytes) -> None:
         self.files[uri] = content
 
+    async def delete_temp(self, uri: str) -> None:
+        prefix = uri.rstrip("/") + "/"
+        self.files = {key: value for key, value in self.files.items() if not key.startswith(prefix)}
+
 
 def _configure_understanding(
     monkeypatch,
@@ -542,7 +546,13 @@ async def test_direct_upload_failure_includes_file_error(
     video = tmp_path / "video.mp4"
     video.write_bytes(b"01234567")
     fake_fs = _FakeVikingFS()
-    fake_fs.write_file = AsyncMock(side_effect=OSError("storage rejected video.mp4"))
+
+    async def write_file_bytes(uri, content):
+        if uri.endswith("video.mp4"):
+            raise OSError("storage rejected video.mp4")
+        fake_fs.files[uri] = content
+
+    fake_fs.write_file_bytes = AsyncMock(side_effect=write_file_bytes)
 
     with patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs):
         result = await DirectoryParser().parse(str(tmp_path), strict=True)
@@ -747,10 +757,17 @@ async def test_no_split_directory_falls_back_to_native_parser(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("backend", [None, "internal"])
+@pytest.mark.parametrize("feishu_collection", [False, True])
 async def test_no_split_directory_records_missing_native_parser_per_file(
     monkeypatch,
     tmp_path: Path,
+    backend,
+    feishu_collection,
 ):
+    from openviking.parse.feishu_import import FeishuImportPlan
+
+    plan = FeishuImportPlan(tmp_path) if feishu_collection else None
     _configure_understanding(monkeypatch, ["bin"])
     (tmp_path / "README").write_text("plain text", encoding="utf-8")
     (tmp_path / "payload.bin").write_bytes(b"\x00\x01")
@@ -762,7 +779,13 @@ async def test_no_split_directory_records_missing_native_parser_per_file(
         patch.object(BaseParser, "_get_viking_fs", return_value=_FakeVikingFS()),
         patch.object(ParserRouter, "parse", new=understanding_parse),
     ):
-        result = await DirectoryParser().parse(str(tmp_path), split_content=False, strict=True)
+        result = await DirectoryParser().parse(
+            str(tmp_path),
+            split_content=False,
+            strict=not feishu_collection,
+            parser_backend=backend,
+            _feishu_import_plan=plan,
+        )
 
     understanding_parse.assert_not_awaited()
     assert result.meta["file_count"] == 1

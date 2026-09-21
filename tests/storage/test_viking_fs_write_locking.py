@@ -74,6 +74,9 @@ class _AsyncMoveAGFS:
             return {"isDir": True}
         raise FileNotFoundError(path)
 
+    async def ls(self, path):
+        return []
+
     async def pathlock_acquire_batch(
         self,
         requests,
@@ -241,8 +244,8 @@ async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_directory_mv_locks_stable_source_and_destination_parents(monkeypatch):
-    """Directory move keeps both stable parents locked through copy and cleanup."""
+async def test_directory_mv_locks_source_and_destination_subtrees(monkeypatch):
+    """Directory move covers both subtrees without locking unrelated siblings."""
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
@@ -269,14 +272,14 @@ async def test_directory_mv_locks_stable_source_and_destination_parents(monkeypa
     )
 
     assert fake.acquire_calls[0][0] == [
-        {"path": "/local/default/temp", "kind": "tree"},
-        {"path": "/local/default/resources", "kind": "tree"},
+        {"path": "/local/default/temp/source", "kind": "tree"},
+        {"path": "/local/default/resources/target", "kind": "tree"},
     ]
 
 
 @pytest.mark.asyncio
-async def test_directory_mv_reuses_parent_tree_for_failed_copy_cleanup(monkeypatch):
-    """Failed directory move cleans the target under the existing parent Tree lease."""
+async def test_directory_mv_reuses_target_tree_for_vector_failure_cleanup(monkeypatch):
+    """Vector failure cleans the target under the existing destination Tree lease."""
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]

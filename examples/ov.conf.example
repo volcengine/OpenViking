@@ -2,6 +2,7 @@
     "server": {
         "host": "0.0.0.0",
         "port": 1933,
+        "executor_threads": 0,
         "timeout_keep_alive": 5,
         "root_api_key": null,
         "cors_origins": ["*"],
@@ -110,6 +111,13 @@
             "file_vectorization_concurrency": 8
         },
         "session_commit": {"max_concurrent": 8},
+        "external_task": {"max_concurrent": 10},
+    },
+    "compile_api": {
+        "base_url": "",
+        "gateway_token": "",
+        "http_timeout_seconds": 10,
+        "poll_interval_ms": 3000,
     },
     "reindex": {
         "file_vectorization_concurrency": 8
@@ -156,6 +164,7 @@
         "max_retries": 2,
         "provider": "volcengine",
         "thinking": false,
+        "_max_tokens_comment": "Optional output cap. Memory extraction needs ~32768 output tokens to avoid truncating a full memory-file rewrite; that default suits Doubao. If your model's max output is lower (e.g. gpt-4o-mini at 16384), set max_tokens to its limit here to override the extraction default.",
         "media": {
             "enabled": false,
             "file_processing_timeout": 1800,
@@ -176,7 +185,7 @@
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
         "provider": "openai-codex",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.6-terra",
         "api_base": "https://chatgpt.com/backend-api/codex",
         "reasoning_effort": "xhigh",
         "temperature": 0.0,
@@ -224,6 +233,7 @@
         "recall_rewrite_timeout_s": 30.0,
     },
     "grep": {"engine": "auto", "switch_to_remote_threshold": 10000},
+    "glob": {"engine": "fs", "switch_to_remote_threshold": 100},
     "auto_generate_l0": true,
     "auto_generate_l1": true,
     "default_search_mode": "thinking",
@@ -233,6 +243,8 @@
     "memory": {
         "version": "v2",
         "extraction_enabled": true,
+        "extraction_output_format": "python",
+        "maintenance_review_tokens": 1000,
         "session_skill_extraction_enabled": false,
     },
     "ingest": {

@@ -111,6 +111,12 @@ export interface BatchWriteOperation {
 export interface BatchWriteOptions extends WaitOptions {
   extra?: JsonObject;
 }
+/** Compile request options. */
+export interface CompileOptions {
+  instruction?: string;
+  args?: JsonObject;
+  extra?: JsonObject;
+}
 /** Retrieval tag update options. */
 export interface SetTagsOptions {
   mode?: "replace" | "append";
@@ -202,6 +208,8 @@ export interface ListOptions {
   absLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
+  offset?: number;
+  limit?: number;
   sortBy?: "name" | "mtime";
   sortOrder?: "asc" | "desc";
   tags?: string[];
@@ -214,6 +222,8 @@ export interface TreeOptions {
   showAllHidden?: boolean;
   nodeLimit?: number;
   levelLimit?: number;
+  offset?: number;
+  limit?: number;
   tags?: string[];
   includeTags?: boolean;
 }

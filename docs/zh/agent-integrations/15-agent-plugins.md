@@ -12,9 +12,10 @@ agent-plugins/
 ├── mcp.json                             # 一个 stdio MCP server："openviking"
 ├── servers/
 │   ├── mcp-proxy.mjs                    # stdio -> streamable-HTTP 代理，转发到服务端 /mcp
-│   ├── config.mjs, debug-log.mjs        # 凭据 / 配置解析
 │   └── shared/                          # 由 examples/memory-plugin-shared/lib 生成
 ├── skills/openviking-memory/SKILL.md    # 教模型完成「召回 + 沉淀」闭环
+├── skills/ov-experience-memory/SKILL.md # 检索并应用以往任务的 Experience
+├── skills/ov-memory-troubleshoot/SKILL.md # 追溯记忆问题的会话依据
 └── plugin.test.mjs                      # node --test 规范一致性校验
 ```
 
@@ -25,7 +26,7 @@ agent-plugins/
 1. 准备一个可访问的 OpenViking 服务。还没有的话，先按 [快速开始](../getting-started/02-quickstart.md) 部署；本地默认端点是 `http://127.0.0.1:1933`。
 2. 让你的 Agent Plugins 客户端指向 `agent-plugins/` 目录。各客户端的安装命令或插件目录不同，请查阅其文档。加载时客户端会：
    - 按 `mcp.json` 注册名为 `openviking` 的 MCP server，以 stdio 方式运行 `node <plugin>/servers/mcp-proxy.mjs`；
-   - 从 `skills/` 发现 `openviking-memory` 技能。
+   - 从 `skills/` 发现 `openviking-memory`、`ov-experience-memory` 和 `ov-memory-troubleshoot` 技能。
 3. 配置凭据（见下节）后开始会话。模型即可使用 `find` / `search` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`，较新的服务端还提供 `tree` / `write` / `edit`。
 
 ## 为什么用 stdio 代理，而不是 `streamable-http`
@@ -36,13 +37,19 @@ OpenViking 服务端本身在 `/mcp` 上就是 streamable HTTP，但 `mcp.json` 
 
 从高到低 —— 与 `ov` CLI 及其他 OpenViking 插件完全一致：
 
-1. 环境变量：`OPENVIKING_URL`（或 `OPENVIKING_BASE_URL`）、`OPENVIKING_API_KEY`（或 `OPENVIKING_BEARER_TOKEN`）、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID`
-2. `~/.openviking/ovcli.conf`（`url`、`api_key`、`account`、`user`）—— 可用 `OPENVIKING_CLI_CONFIG_FILE` 覆盖路径
-3. `~/.openviking/ov.conf` 的 `server` 段（`url`，或 `host` / `port`，以及 `root_api_key`）—— 可用 `OPENVIKING_CONFIG_FILE` 覆盖路径
-4. 默认值：`http://127.0.0.1:1933`，不鉴权（本地模式）
+1. 环境变量：`OPENVIKING_URL`（或 `OPENVIKING_BASE_URL`）、`OPENVIKING_MCP_URL`、`OPENVIKING_API_KEY`（或 `OPENVIKING_BEARER_TOKEN`）、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、`OPENVIKING_PEER_ID`、`OPENVIKING_AUTH_MODE`
+2. `~/.openviking/ovcli.conf`（`url`、`api_key`、`account` / `account_id`、`user` / `user_id`、`actor_peer_id` / `peer_id`），其后是它的 `plugin.agent_plugins` 与共享 `plugin` 键（`apiKey`、`accountId`、`userId`、`authMode`）—— 可用 `OPENVIKING_CLI_CONFIG_FILE` 覆盖路径
+3. `~/.openviking/ov.conf` 的 `agent_plugins` 段（`apiKey`、`accountId`、`userId`、`peerId`、`authMode`）—— 可用 `OPENVIKING_CONFIG_FILE` 覆盖路径
+4. `~/.openviking/ov.conf` 的 `server` 段（`url`，或 `host` / `port`，以及 `root_api_key`）
+5. 默认值：`http://127.0.0.1:1933`，不鉴权（本地模式）
+
+`OPENVIKING_MCP_URL` 覆盖的是推导出的 `<url>/mcp` 端点，而不是 base URL。
+
+`OPENVIKING_CREDENTIAL_SOURCE`（或 `OPENVIKING_CREDENTIALS_SOURCE`）把整条链钉在某一端：`env` 只认环境变量，`cli`（同义写法还有 `ovcli` / `file` / `config`）只认 ovcli.conf。默认的 `auto` 在 ovcli.conf 带凭据、且上面这些环境变量一个都没设时钉向 ovcli.conf，否则按整条链解析。钉在 ovcli.conf 时，环境变量里的凭据和 `OPENVIKING_MCP_URL` 会被跳过。key 仍依次回落到 `plugin` 键、`agent_plugins` 段，最后是 `server.root_api_key`，所以只写了 `url` 的旧安装仍能用原来的 key；account 和 user 只回落到 `plugin` 键。`env` 模式两个文件都不读。
+
+`~/.openviking/ovcli.conf`:
 
 ```json
-// ~/.openviking/ovcli.conf
 {
   "url": "https://openviking.example.com",
   "api_key": "your-api-key"
@@ -58,6 +65,8 @@ OpenViking 服务端本身在 `/mcp` 上就是 streamable HTTP，但 `mcp.json` 
 Agent Plugins 1.0 只覆盖 skills 和 MCP servers；hooks、commands、agents 被有意排除在本版本之外，因为它们在各客户端之间语义差异太大。因此这个包提供的是**可移植的召回 + 写入能力面**，由模型驱动而非生命周期事件驱动：**自动会话捕获和 prompt 前自动召回不在此范围内**。
 
 作为补偿，内置的 `openviking-memory` 技能直接把这套闭环教给模型 —— 任务开始时用 `find` / `search` + `read` 召回（需要组装上下文时使用 `search` 的 `mode="context"`），过程中和结束后用 `remember` / `write` / `edit` 沉淀，并给出使用召回内容时的优先级与安全规则。
+
+内置的 `ov-experience-memory` 技能让模型在执行类任务前检索 `viking://~/memories/experiences`，并读取适用的 Experience 文件。在这个包里它只做检索：没有会话捕获，这些读取不会关联回所用的 Experience，也不会产生新的轨迹。它检索到的 Experience 来自会捕获会话的 harness。
 
 **如果你的 harness 支持 hooks 机制，推荐使用专属插件。** hook 驱动的召回与捕获不需要模型花费工具调用、也不依赖模型「想起来要记」，比技能驱动的闭环更省 token、也更可靠。本 Agent Plugins 包适用于没有 hooks 的 harness，或你希望用同一个包覆盖多个客户端的场景。
 

@@ -232,6 +232,7 @@ Feishu uses a persistent **WebSocket** connection, so no public IP address is re
 ```
 
 > In long-connection mode, `encryptKey` and `verificationToken` are optional.
+> `domain`: the open-platform domain. Defaults to `https://open.feishu.cn` (Feishu). For **Lark international**, set it to `https://open.larksuite.com`; both the HTTP calls and the WebSocket long connection follow it.
 > `allowFrom`: leave it empty to allow every user, or add `["ou_xxx"]` to restrict access.
 > `botName`: replaces `@<open_id>` mentions with the bot name in group-chat context sent to the model, and labels messages sent by the bot itself. When empty, it falls back to `"Bot"`.
 > `threadRequireMention`: controls whether group messages must mention the bot. The default is `true`, meaning every message in regular groups and topic groups requires an `@` mention. When set to `false`, regular groups do not require a mention, and only the first message in a topic group can omit it; later replies still require an `@` mention outside `DEBUG` mode.

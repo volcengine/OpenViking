@@ -34,7 +34,7 @@ export function createOpenVikingSessionRoutingRuntime(options: {
   logFindRequests: boolean;
   logger: Logger;
 }) {
-  const peerRole = options.peerRole ?? "assistant";
+  const peerRole = options.peerRole ?? "none";
   const sessionAgentResolver = createSessionAgentResolver(options.peerPrefix);
 
   const rememberSessionAgentId = (ctx: SessionAgentLookup) => {
@@ -97,7 +97,7 @@ export function createOpenVikingSessionRoutingRuntime(options: {
       agentId,
       actorPeerId: resolveOpenVikingActorPeerId({
         peerRole,
-        personPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
+        senderPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
         assistantPeerId: agentId,
       }),
     };

@@ -345,16 +345,12 @@ impl MetaStateStore {
 
     /// Read redirect metadata for a directory (public, used by read_dir to merge redirect entries).
     pub async fn get_redirect_meta(&self, dir: &str, ctx: &FsContext) -> Result<RedirectMeta> {
-        self.read_dir_meta_pair(dir, ctx)
-            .await
-            .map(|(redirect, _)| redirect)
+        self.read_redirect_meta(dir, ctx).await
     }
 
     /// Read sync log metadata for a directory (public, used by retry_loop).
     pub async fn get_sync_log_meta(&self, dir: &str, ctx: &FsContext) -> Result<SyncLogMeta> {
-        self.read_dir_meta_pair(dir, ctx)
-            .await
-            .map(|(_, sync_log)| sync_log)
+        self.read_sync_log_meta(dir, ctx).await
     }
 
     /// Get a reference to the context resolver.

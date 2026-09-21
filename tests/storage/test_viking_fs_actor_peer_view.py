@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from dataclasses import replace
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
@@ -14,8 +16,9 @@ _MOD_TIME = "2026-01-01T00:00:00Z"
 class _MemoryAGFS:
     def __init__(self):
         self.files = {
-            "/local/acct/agent/customer-wang-yue/memories/profile.md": b"legacy-wang",
-            "/local/acct/agent/customer-zhang-xiaoxiao/memories/profile.md": b"legacy-zhang",
+            "/local/acct/agent/skills/demo/SKILL.md": b"shared skill",
+            "/local/acct/agent/tools/search/config.json": b"{}",
+            "/local/acct/agent/workflows/daily.md": b"shared workflow",
             "/local/acct/user/support_bot/peers/customer-wang-yue/memories/profile.md": b"wang",
             "/local/acct/user/support_bot/peers/customer-zhang-xiaoxiao/memories/profile.md": (
                 b"zhang"
@@ -54,7 +57,7 @@ class _MemoryAGFS:
         self.writes = []
         self.removed = []
 
-    def ls(self, path, ctx=None):
+    def ls(self, path, ctx=None, *, offset=0, limit=None):
         if path not in self.dirs:
             raise FileNotFoundError(path)
         prefix = path.rstrip("/") + "/"
@@ -65,7 +68,8 @@ class _MemoryAGFS:
             rest = candidate[len(prefix) :]
             if rest and "/" not in rest:
                 names.add(rest)
-        return [self._entry(f"{prefix}{name}") for name in sorted(names)]
+        entries = [self._entry(f"{prefix}{name}") for name in sorted(names)]
+        return entries[offset : offset + limit if limit is not None else None]
 
     def tree_directory(
         self,
@@ -188,22 +192,23 @@ async def test_actor_peer_view_filters_ls_peer_collection(fs, actor_ctx):
 
 
 @pytest.mark.asyncio
-async def test_actor_peer_view_filters_legacy_agent_collection(fs, actor_ctx):
-    entries = await fs.ls("viking://agent", ctx=actor_ctx)
+async def test_agent_directories_are_shared_within_account(fs, actor_ctx):
+    for ctx in (actor_ctx, replace(actor_ctx, actor_peer_id="another-peer")):
+        entries = await fs.ls("viking://agent", ctx=ctx)
+        assert [entry["uri"] for entry in entries] == [
+            "viking://agent/skills",
+            "viking://agent/tools",
+            "viking://agent/workflows",
+        ]
+        assert await fs.read_file("viking://agent/skills/demo/SKILL.md", ctx=ctx) == "shared skill"
+        await fs.write_file("viking://agent/workflows/daily.md", "updated workflow", ctx=ctx)
+        assert (
+            await fs.read_file("viking://agent/workflows/daily.md", ctx=ctx) == "updated workflow"
+        )
 
-    assert [entry["uri"] for entry in entries] == ["viking://agent/customer-wang-yue"]
-    assert (
-        await fs.read_file(
-            "viking://agent/customer-wang-yue/memories/profile.md",
-            ctx=actor_ctx,
-        )
-        == "legacy-wang"
-    )
-    with pytest.raises(PermissionDeniedError):
-        await fs.read_file(
-            "viking://agent/customer-zhang-xiaoxiao/memories/profile.md",
-            ctx=actor_ctx,
-        )
+    other_account = replace(actor_ctx, user=UserIdentifier("other-acct", "support_bot"))
+    with pytest.raises(NotFoundError):
+        await fs.read_file("viking://agent/skills/demo/SKILL.md", ctx=other_account)
 
 
 @pytest.mark.asyncio
@@ -232,6 +237,14 @@ async def test_legacy_session_scope_merges_new_and_unmigrated_sessions(fs, actor
     )
     with pytest.raises(NotFoundError):
         await fs.read_file(f"{session_root}/other-owned/messages.jsonl", ctx=actor_ctx)
+
+    for session_id in ("new-session", "legacy-session", "nested-session"):
+        children = await fs.ls(f"{session_root}/{session_id}", ctx=actor_ctx)
+        assert [entry["uri"] for entry in children] == [
+            f"{session_root}/{session_id}/messages.jsonl"
+        ]
+    with pytest.raises(NotFoundError):
+        await fs.ls(f"{session_root}/other-owned", ctx=actor_ctx)
 
 
 @pytest.mark.asyncio

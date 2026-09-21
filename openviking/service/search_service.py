@@ -25,9 +25,23 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _ensure_non_empty_query(query: str, image_url: Optional[str] = None) -> None:
-    if not query.strip() and not image_url:
-        raise InvalidArgumentError("Search query or image_url must not be empty.")
+def _ensure_non_empty_query(
+    query: str,
+    image_url: Optional[str] = None,
+    filter: Optional[Dict] = None,
+) -> None:
+    """Reject a request that gives the search nothing to work with.
+
+    A filter is an acceptable substitute for a query: the result set is then
+    fully determined by the filter, which is exactly what an exact-match lookup
+    (e.g. by a tag carrying an external id) needs. Without either one the call
+    would return an arbitrary slice of the whole store.
+    """
+    if query.strip() or image_url or filter:
+        return
+    raise InvalidArgumentError(
+        "Search query or image_url must not be empty unless a filter is provided."
+    )
 
 
 class SearchService:
@@ -147,7 +161,7 @@ class SearchService:
             FindResult
         """
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
-        _ensure_non_empty_query(query, resolved_image_url)
+        _ensure_non_empty_query(query, resolved_image_url, filter)
         viking_fs = self._ensure_initialized()
         result = await viking_fs.find(
             query=query,
@@ -160,3 +174,41 @@ class SearchService:
             image_url=resolved_image_url,
         )
         return result
+
+    async def find_skills(
+        self,
+        query: str,
+        ctx: RequestContext,
+        target_uri: str,
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+        level: Optional[List[int]] = None,
+    ) -> Any:
+        """Find distinct packages for /skills/find; general find/search stay item-based."""
+        from openviking.core.retrieval_targets import resolve_retrieval_targets
+        from openviking.retrieve.skill_package_retriever import SkillPackageRetriever
+        from openviking.retrieve.skill_results import SkillResultResolver
+        from openviking_cli.retrieve import ContextType, FindResult, TypedQuery
+
+        _ensure_non_empty_query(query)
+        fs = self._ensure_initialized()
+        targets = resolve_retrieval_targets(target_uri, ctx).target_directories
+        for target in targets:
+            await fs._ensure_retrieval_scope(target, ctx)
+        storage, embedder = fs._get_vector_store(), fs._get_embedder()
+        if not storage:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+        if not embedder:
+            raise RuntimeError("Embedder not configured.")
+        retriever = SkillPackageRetriever(
+            storage=storage, embedder=embedder, retrieval_config=fs.retrieval_config
+        )
+        result = await retriever.retrieve_skills(
+            TypedQuery(query, ContextType.SKILL, "", target_directories=targets),
+            ctx,
+            skill_resolver=SkillResultResolver(fs, ctx),
+            limit=limit,
+            score_threshold=score_threshold,
+            level=level,
+        )
+        return FindResult(memories=[], resources=[], skills=result.matched_contexts)

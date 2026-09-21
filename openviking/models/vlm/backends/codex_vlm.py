@@ -57,12 +57,24 @@ class CodexVLM(OpenAIVLM):
         )
         return openai.OpenAI(**kwargs)
 
+    def _build_completions_adapter(self) -> CodexCompletionsAdapter:
+        auth_retry_client_factory = (
+            self._build_refreshed_responses_client
+            if not str(self.config.get("api_key", "") or "").strip()
+            else None
+        )
+        return CodexCompletionsAdapter(
+            lambda: self._build_responses_client(*self._resolve_runtime_credentials()),
+            self.model or "gpt-5.3-codex",
+            auth_retry_client_factory=auth_retry_client_factory,
+        )
+
+    def _build_refreshed_responses_client(self):
+        return self._build_responses_client(*self._resolve_runtime_credentials(force_refresh=True))
+
     def _get_or_create_sync_responses_client(self):
         if self._sync_client is None:
-            adapter = CodexCompletionsAdapter(
-                lambda: self._build_responses_client(*self._resolve_runtime_credentials()),
-                self.model or "gpt-5.3-codex",
-            )
+            adapter = self._build_completions_adapter()
             self._sync_client = SimpleNamespace(chat=CodexChatShim(adapter))
         return self._sync_client
 
@@ -70,23 +82,24 @@ class CodexVLM(OpenAIVLM):
         # The async path uses a sync Responses client behind asyncio.to_thread so
         # credential refresh and auth-store I/O do not block the event loop.
         if self._async_client is None:
-            sync_adapter = CodexCompletionsAdapter(
-                lambda: self._build_responses_client(*self._resolve_runtime_credentials()),
-                self.model or "gpt-5.3-codex",
-            )
+            sync_adapter = self._build_completions_adapter()
             self._async_client = SimpleNamespace(
                 chat=CodexAsyncChatShim(CodexAsyncCompletionsAdapter(sync_adapter))
             )
         return self._async_client
 
-    def _resolve_runtime_credentials(self) -> tuple[str, str]:
+    def _resolve_runtime_credentials(self, *, force_refresh: bool = False) -> tuple[str, str]:
         explicit_api_key = str(self.config.get("api_key", "") or "").strip()
         explicit_api_base = str(self.config.get("api_base", "") or "").strip().rstrip("/")
         if explicit_api_key:
             self.api_key = explicit_api_key
             self.api_base = explicit_api_base or DEFAULT_CODEX_BASE_URL
             return self.api_key, self.api_base
-        credentials = resolve_codex_runtime_credentials()
+        credentials = (
+            resolve_codex_runtime_credentials(force_refresh=True)
+            if force_refresh
+            else resolve_codex_runtime_credentials()
+        )
         self.api_key = credentials["api_key"]
         self.api_base = explicit_api_base or credentials["base_url"]
         return self.api_key, self.api_base

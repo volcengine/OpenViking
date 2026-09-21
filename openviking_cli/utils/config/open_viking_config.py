@@ -11,9 +11,10 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from openviking_cli.session.user_id import UserIdentifier
 
+from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
 from .config_loader import resolve_config_path
-from .config_utils import format_validation_error, raise_unknown_config_fields
+from .config_utils import format_validation_error
 from .consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -23,6 +24,7 @@ from .consts import (
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .git_config import GitConfig
+from .glob_config import GlobConfig
 from .grep_config import GrepConfig
 from .ingest_config import IngestConfig
 from .log_config import LogConfig
@@ -48,6 +50,7 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
@@ -67,8 +70,6 @@ class ConnectorConfig(BaseModel):
     timeout_seconds: int = 3600
     poll_interval_ms: int = 5000
     allowed_add_types: List[str] = Field(default_factory=lambda: ["tos"])
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _validate(self) -> "ConnectorConfig":
@@ -102,7 +103,6 @@ class ParserApiConfig(BaseModel):
     http_timeout_seconds: float = 10.0
     response_timeout_seconds: int = 1800
     poll_interval_ms: int = 3000
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _normalize_and_validate(self) -> "ParserApiConfig":
@@ -134,6 +134,34 @@ class ParserApiConfig(BaseModel):
         if self.poll_interval_ms <= 0:
             raise ValueError("parser_api.poll_interval_ms must be > 0")
         return self
+
+
+class CompileApiConfig(BaseModel):
+    """Configuration for the external Compile task API."""
+
+    base_url: str = ""
+    gateway_token: str = ""
+    http_timeout_seconds: float = 10.0
+    poll_interval_ms: int = 30000
+
+    @model_validator(mode="after")
+    def _validate(self) -> "CompileApiConfig":
+        if self.base_url and "://" not in self.base_url:
+            raise ValueError("compile_api.base_url must include scheme (e.g., https://...)")
+        if self.http_timeout_seconds <= 0:
+            raise ValueError("compile_api.http_timeout_seconds must be > 0")
+        if self.poll_interval_ms <= 0:
+            raise ValueError("compile_api.poll_interval_ms must be > 0")
+        self.base_url = self.base_url.rstrip("/")
+        return self
+
+
+class RuntimeConfigSettings(BaseModel):
+    """Startup selection of the runtime config source."""
+
+    source: str = "file"
+    module: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OpenVikingConfig(BaseModel):
@@ -181,6 +209,11 @@ class OpenVikingConfig(BaseModel):
     grep: GrepConfig = Field(
         default_factory=GrepConfig,
         description="Grep engine configuration",
+    )
+
+    glob: GlobConfig = Field(
+        default_factory=GlobConfig,
+        description="Glob engine configuration",
     )
 
     # Encryption configuration
@@ -253,6 +286,11 @@ class OpenVikingConfig(BaseModel):
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
+    )
+
+    compile_api: CompileApiConfig = Field(
+        default_factory=CompileApiConfig,
+        description="External Compile task API configuration",
     )
 
     connector: ConnectorConfig = Field(
@@ -372,33 +410,6 @@ class OpenVikingConfig(BaseModel):
         data["git"] = git
         return data
 
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_removed_cache_config(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-
-        storage_value = data.get("storage")
-        if not isinstance(storage_value, dict):
-            return data
-        agfs_value = storage_value.get("agfs")
-        if not isinstance(agfs_value, dict):
-            return data
-        if "cache" in agfs_value:
-            raise ValueError(
-                "storage.agfs.cache has been removed; configure cache.provider/cache.params "
-                "and storage.agfs.cachefs.backend='cache'"
-            )
-        queuefs = agfs_value.get("queuefs")
-        if isinstance(queuefs, dict) and (
-            queuefs.get("backend") == "redis" or "redis" in queuefs
-        ):
-            raise ValueError(
-                "storage.agfs.queuefs backend='redis' and queuefs.redis have been removed; "
-                "use backend='cache' with top-level cache.provider/cache.params"
-            )
-        return data
-
     allow_private_networks: bool = Field(
         default=False,
         description=(
@@ -410,6 +421,11 @@ class OpenVikingConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig, description="Logging configuration")
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
+
+    agent_evolution: AgentEvolutionConfig = RuntimeField(
+        default_factory=AgentEvolutionConfig,
+        description="Dynamic cluster default for Agent Evolution.",
+    )
 
     oauth: OAuthConfig = Field(
         default_factory=OAuthConfig,
@@ -429,7 +445,15 @@ class OpenVikingConfig(BaseModel):
         description="Conversation-log ingest (openviking-server ingest) configuration",
     )
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
+    runtime_config: RuntimeConfigSettings = Field(
+        default_factory=RuntimeConfigSettings,
+        description=(
+            "Boot-level selection of the runtime config source. "
+            "Read once at startup and never mutated by the dynamic config API."
+        ),
+    )
+
+    model_config = {"arbitrary_types_allowed": True}
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "OpenVikingConfig":
@@ -452,11 +476,6 @@ class OpenVikingConfig(BaseModel):
                 "feishu",
                 "webfeed",
             ]
-            raise_unknown_config_fields(
-                data=config_copy,
-                valid_fields=set(cls.model_fields.keys()) | {"server", "bot", "parsers"},
-                context_name="OpenVikingConfig",
-            )
 
             # Remove sections managed by other loaders (e.g. server config)
             config_copy.pop("server", None)
@@ -477,11 +496,6 @@ class OpenVikingConfig(BaseModel):
                         "Config field 'parsers.excel' was removed and is ignored; "
                         "spreadsheet parsing now uses 'parsers.anydoc'."
                     )
-            raise_unknown_config_fields(
-                data=parser_configs,
-                valid_fields=set(parser_types),
-                context_name="parsers",
-            )
             for parser_type in parser_types:
                 if parser_type in config_copy:
                     parser_configs[parser_type] = config_copy.pop(parser_type)
@@ -516,8 +530,9 @@ class OpenVikingConfig(BaseModel):
                     ) from e
 
             # Apply parser configurations
-            for parser_type, parser_data in parser_configs.items():
-                if hasattr(instance, parser_type):
+            for parser_type in parser_types:
+                if parser_type in parser_configs:
+                    parser_data = parser_configs[parser_type]
                     config_class = getattr(instance, parser_type).__class__
                     setattr(instance, parser_type, config_class.from_dict(parser_data))
 
@@ -672,6 +687,12 @@ class OpenVikingConfigSingleton:
             raise RuntimeError(f"Failed to load config file: {e}")
 
     @classmethod
+    def set_instance(cls, config: "OpenVikingConfig") -> None:
+        """Atomically publish an already-built validated configuration."""
+        with cls._lock:
+            cls._instance = config
+
+    @classmethod
     def reset_instance(cls) -> None:
         """Reset the singleton instance (mainly for testing)."""
         with cls._lock:
@@ -685,8 +706,8 @@ def get_openviking_config() -> OpenVikingConfig:
 
 
 def set_openviking_config(config: OpenVikingConfig) -> None:
-    """Set the global OpenVikingConfig instance."""
-    OpenVikingConfigSingleton.initialize(config_dict=config.to_dict())
+    """Atomically publish an already-built OpenVikingConfig."""
+    OpenVikingConfigSingleton.set_instance(config)
 
 
 def is_valid_openviking_config(config: OpenVikingConfig) -> bool:

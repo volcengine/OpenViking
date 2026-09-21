@@ -6,7 +6,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import vector_migration
 from openviking.storage.abstract_overview import parse_abstract_overview
-from openviking.storage.vector_migration import copy_vector_records, delete_vector_records
+from openviking.storage.vector_migration import delete_vector_records
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -132,124 +132,14 @@ directory: viking://resources/source/
 class FakeVectorStore:
     def __init__(self, records):
         self.records = [dict(record) for record in records]
-        self.upserts = []
         self.deleted_ids = []
 
     async def filter(self, **_kwargs):
         return [dict(record) for record in self.records]
 
-    async def upsert(self, data, *, ctx):
-        self.upserts.append(dict(data))
-        return data["id"]
-
     async def delete(self, ids, *, ctx):
         self.deleted_ids.extend(ids)
         return len(ids)
-
-
-@pytest.mark.asyncio
-async def test_copy_vector_records_rewrites_file_and_chunk_uris():
-    store = FakeVectorStore(
-        [
-            {
-                "id": "old-file",
-                "uri": "viking://agent/code-agent/memories/facts/project.md",
-                "account_id": "acct",
-                "owner_user_id": None,
-                "context_type": "memory",
-                "level": 2,
-                "abstract": "project",
-                "vector": [0.1, 0.2],
-            },
-            {
-                "id": "old-chunk",
-                "uri": "viking://agent/code-agent/memories/facts/project.md#chunk_0000",
-                "account_id": "acct",
-                "context_type": "memory",
-                "level": 2,
-                "abstract": "chunk",
-                "vector": [0.3, 0.4],
-            },
-            {
-                "id": "outside",
-                "uri": "viking://agent/code-agent/memories/facts/other.md",
-                "account_id": "acct",
-                "context_type": "memory",
-                "level": 2,
-                "abstract": "other",
-                "vector": [0.5, 0.6],
-            },
-        ]
-    )
-
-    result = await copy_vector_records(
-        store,
-        account_id="acct",
-        source_uri="viking://agent/code-agent/memories/facts/project.md",
-        target_uri="viking://user/alice/peers/code-agent/memories/facts/project.md",
-        recursive=False,
-    )
-
-    assert result.copied == 2
-    assert result.skipped == 0
-    assert {record["uri"] for record in store.upserts} == {
-        "viking://user/alice/peers/code-agent/memories/facts/project.md",
-        "viking://user/alice/peers/code-agent/memories/facts/project.md#chunk_0000",
-    }
-    assert {record["owner_user_id"] for record in store.upserts} == {"alice"}
-    assert {record["context_type"] for record in store.upserts} == {"memory"}
-    assert all(record["active_count"] == 0 for record in store.upserts)
-    assert all(record["id"] not in {"old-file", "old-chunk"} for record in store.upserts)
-
-
-@pytest.mark.asyncio
-async def test_copy_vector_records_rewrites_directory_subtree_and_skips_scalar_only_records():
-    store = FakeVectorStore(
-        [
-            {
-                "id": "old-dir",
-                "uri": "viking://agent/code-agent/skills/review",
-                "account_id": "acct",
-                "context_type": "skill",
-                "level": 0,
-                "abstract": "review skill",
-                "vector": [0.1, 0.2],
-            },
-            {
-                "id": "old-file",
-                "uri": "viking://agent/code-agent/skills/review/SKILL.md",
-                "account_id": "acct",
-                "context_type": "skill",
-                "level": 2,
-                "abstract": "skill body",
-                "vector": [0.3, 0.4],
-            },
-            {
-                "id": "no-vector",
-                "uri": "viking://agent/code-agent/skills/review/README.md",
-                "account_id": "acct",
-                "context_type": "skill",
-                "level": 2,
-                "abstract": "no vector",
-            },
-        ]
-    )
-
-    result = await copy_vector_records(
-        store,
-        account_id="acct",
-        source_uri="viking://agent/code-agent/skills/review",
-        target_uri="viking://user/alice/skills/review",
-        recursive=True,
-    )
-
-    assert result.copied == 2
-    assert result.skipped == 1
-    assert {record["uri"] for record in store.upserts} == {
-        "viking://user/alice/skills/review",
-        "viking://user/alice/skills/review/SKILL.md",
-    }
-    assert {record["context_type"] for record in store.upserts} == {"skill"}
 
 
 @pytest.mark.asyncio
@@ -258,19 +148,19 @@ async def test_delete_vector_records_deletes_records_in_scope_only():
         [
             {
                 "id": "old-dir",
-                "uri": "viking://agent/code-agent/memories",
+                "uri": "viking://session",
                 "account_id": "acct",
                 "vector": [0.1, 0.2],
             },
             {
                 "id": "old-file",
-                "uri": "viking://agent/code-agent/memories/facts/project.md",
+                "uri": "viking://session/s1/messages.jsonl",
                 "account_id": "acct",
                 "vector": [0.3, 0.4],
             },
             {
                 "id": "new-file",
-                "uri": "viking://user/alice/peers/code-agent/memories/facts/project.md",
+                "uri": "viking://user/alice/sessions/s1/messages.jsonl",
                 "account_id": "acct",
                 "vector": [0.5, 0.6],
             },
@@ -280,7 +170,7 @@ async def test_delete_vector_records_deletes_records_in_scope_only():
     result = await delete_vector_records(
         store,
         account_id="acct",
-        uri="viking://agent/code-agent/memories",
+        uri="viking://session",
     )
 
     assert result.deleted == 2

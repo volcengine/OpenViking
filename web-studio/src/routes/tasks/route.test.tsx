@@ -1,235 +1,378 @@
 // @vitest-environment jsdom
 
+import { createInstance } from 'i18next'
+import { I18nextProvider } from 'react-i18next'
+import type { ComponentType } from 'react'
+import type * as TanStackRouter from '@tanstack/react-router'
+import en from '#/i18n/locales/en/workspace'
+import zh from '#/i18n/locales/zh-CN/workspace'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest'
 
-import { TasksRoute } from './route'
+import { toast } from 'sonner'
+import { commitSession } from '#/lib/sessions/api'
+import { Route } from './route'
+import type { TaskRecord } from './-lib/task-record'
 
-const apiMocks = vi.hoisted(() => ({
-  cancelTask: vi.fn(),
-  fetchTasks: vi.fn(),
-}))
+const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn(), post: vi.fn() }))
 
-const toastMocks = vi.hoisted(() => ({
-  dismiss: vi.fn(),
-  error: vi.fn(),
-  info: vi.fn(),
-  loading: vi.fn(() => 'toast-1'),
-  success: vi.fn(),
-  warning: vi.fn(),
-}))
-
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    i18n: { language: 'en', resolvedLanguage: 'en' },
-    t: (key: string) => key,
-  }),
-}))
-
-vi.mock('sonner', () => ({ toast: toastMocks }))
-
-vi.mock('#/hooks/use-app-connection', () => ({
-  useAppConnection: () => ({ identityScopeKey: 'default/default' }),
-}))
-
-vi.mock('#/routes/monitoring/-components/queue-status-card', () => ({
-  QueueStatusCard: () => <div data-testid="mock-queue-status-card" />,
-}))
-
-vi.mock('./-components/task-detail-sheet', () => ({
-  TaskDetailSheet: () => null,
-}))
-
-vi.mock('#/lib/sessions/api', () => ({
-  commitSession: vi.fn(),
-}))
-
-vi.mock('#/gen/ov-client', () => ({
-  postResources: vi.fn(),
+const navigationMocks = vi.hoisted(() => ({ navigate: vi.fn() }))
+vi.mock('@tanstack/react-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof TanStackRouter>()),
+  useNavigate: () => navigationMocks.navigate,
 }))
 
 vi.mock('#/lib/ov-client', () => ({
-  ovClient: { instance: { post: vi.fn() } },
+  getOvResult: async (value: unknown) => value,
+  getTasks: clientMocks.getTasks,
+  ovClient: { instance: { post: clientMocks.post } },
 }))
 
-vi.mock('./-lib/task-list', async (importOriginal) => {
-  const actual = await importOriginal()
-  return {
-    ...actual,
-    cancelTask: apiMocks.cancelTask,
-    fetchTasks: apiMocks.fetchTasks,
-  }
+vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
+vi.mock('#/lib/sessions/api', () => ({ commitSession: vi.fn() }))
+vi.mock('sonner', () => ({
+  toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
+}))
+vi.mock('#/hooks/use-app-connection', () => ({
+  useAppConnection: () => ({ identityScopeKey: 'test/test' }),
+}))
+vi.mock('#/routes/monitoring/-components/queue-status-card', () => ({
+  QueueStatusCard: () => null,
+}))
+vi.mock('#/routes/tasks/-components/task-detail-sheet', () => ({
+  TaskDetailSheet: () => null,
+}))
+
+const TaskPage = Route.options.component as ComponentType & {
+  preload?: () => Promise<void>
+}
+beforeAll(async () => {
+  await TaskPage.preload?.()
 })
 
-function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      mutations: { retry: false },
-      queries: { retry: false },
-    },
+let records: TaskRecord[]
+const queryClients: QueryClient[] = []
+
+function runningTasks(count: number): TaskRecord[] {
+  return Array.from({ length: count }, (_, index) => ({
+    task_id: `task-${index + 1}`,
+    task_type: index < 8 ? 'session_commit' : 'add_resource',
+    resource_id: `resource-${index + 1}`,
+    status: 'running',
+    created_at: 100 + index,
+  }))
+}
+
+async function renderPage(lng = 'en') {
+  const i18n = createInstance()
+  await i18n.init({
+    lng,
+    resources: { en, 'zh-CN': zh },
+    interpolation: { escapeValue: false },
   })
-  const result = render(
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  queryClients.push(queryClient)
+  render(
     <QueryClientProvider client={queryClient}>
-      <TasksRoute />
+      <I18nextProvider i18n={i18n}>
+        <TaskPage />
+      </I18nextProvider>
     </QueryClientProvider>,
   )
-  return { ...result, queryClient }
+  return userEvent.setup()
 }
 
-const runningTask = {
-  created_at: 2,
-  status: 'running',
-  task_id: 'task-running',
-  task_type: 'session_commit',
+function taskRows() {
+  return screen.queryAllByRole('row', {
+    name: /^(View details for task |查看任务 )/,
+  })
 }
 
-const pendingTask = {
-  created_at: 1,
-  status: 'pending',
-  task_id: 'task-pending',
-  task_type: 'add_resource',
-}
-
-const completedTask = {
-  created_at: 0,
-  status: 'completed',
-  task_id: 'task-completed',
-  task_type: 'session_commit',
+function expectRunningRows(count: number) {
+  expect(taskRows()).toHaveLength(count)
+  for (const row of taskRows()) {
+    expect(within(row).getByText('Running')).toBeDefined()
+  }
 }
 
 beforeEach(() => {
-  apiMocks.fetchTasks.mockResolvedValue([
-    runningTask,
-    pendingTask,
-    completedTask,
-  ])
-  apiMocks.cancelTask.mockResolvedValue({
-    task_id: 'task-running',
-    status: 'cancelling',
-  })
+  vi.clearAllMocks()
+  records = runningTasks(12)
+  clientMocks.getTasks.mockReset()
+  clientMocks.post.mockReset()
+  // Model the API contract: filtering precedes ordering and the result limit.
+  clientMocks.getTasks.mockImplementation(({ query }) =>
+    records
+      .filter((task) => !query.status || task.status === query.status)
+      .filter((task) => !query.task_type || task.task_type === query.task_type)
+      .sort((left, right) => Number(right.created_at) - Number(left.created_at))
+      .slice(0, query.limit),
+  )
 })
 
 afterEach(() => {
   cleanup()
-  vi.clearAllMocks()
+  for (const client of queryClients.splice(0)) client.clear()
 })
 
-describe('TasksRoute cancel action', () => {
-  it('shows the cancel action for pending and running cancellable tasks', async () => {
-    renderPage()
-
-    const cancelButtons = await screen.findAllByRole('button', {
-      name: 'actions.cancelTask',
+describe('task status presentation', () => {
+  it('reflects server statuses before and after requesting cancellation', async () => {
+    const user = await renderPage()
+    const row = await screen.findByRole('row', {
+      name: 'View details for task task-12',
     })
-    expect(cancelButtons).toHaveLength(2)
-  })
 
-  it('hides the cancel action for terminal statuses and non-cancellable types', async () => {
-    apiMocks.fetchTasks.mockResolvedValue([
-      completedTask,
-      {
-        created_at: 3,
-        status: 'running',
-        task_id: 'task-skill',
-        task_type: 'add_skill',
-      },
-    ])
+    expectRunningRows(12)
+    expect(screen.getByText('12 / 0')).toBeDefined()
 
-    renderPage()
+    await user.click(within(row).getByRole('button', { name: 'Cancel task' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(clientMocks.post).not.toHaveBeenCalled()
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Keep running' }),
+    )
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(clientMocks.post).not.toHaveBeenCalled()
 
-    await screen.findByText('task-skill')
+    clientMocks.post.mockRejectedValueOnce(new Error('Cancellation rejected'))
+    await user.click(within(row).getByRole('button', { name: 'Cancel task' }))
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', {
+        name: 'Cancel task',
+      }),
+    )
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Cancellation rejected'),
+    )
+    expect(screen.getByRole('alertdialog')).toBeDefined()
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(within(row).getByText('Running')).toBeDefined()
+
+    clientMocks.post.mockImplementationOnce(() => {
+      records[11] = { ...records[11], status: 'cancelling' }
+      return Promise.resolve(records[11])
+    })
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'Cancel task',
+      }),
+    )
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(clientMocks.post).toHaveBeenLastCalledWith(
+      '/api/v1/tasks/task-12/cancel',
+    )
+    expect(await within(row).findByText('Cancelling')).toBeDefined()
     expect(
-      screen.queryByRole('button', { name: 'actions.cancelTask' }),
+      within(row).queryByRole('button', { name: 'Cancel task' }),
+    ).toBeNull()
+    expect(screen.getByText('11 / 0')).toBeDefined()
+
+    records[11] = { ...records[11], status: 'cancelled' }
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await within(row).findByText('Cancelled')).toBeDefined()
+    expect(
+      within(row).queryByRole('button', { name: 'Cancel task' }),
     ).toBeNull()
   })
 
-  it('shows the cancelling intermediate state without an active button', async () => {
-    apiMocks.fetchTasks.mockResolvedValue([
+  it('shows no pending tasks when all tasks are running, including after type filtering', async () => {
+    const user = await renderPage()
+    await screen.findByRole('row', { name: 'View details for task task-12' })
+
+    await user.click(screen.getByRole('combobox', { name: 'Task status' }))
+    await user.click(await screen.findByRole('option', { name: 'Pending' }))
+    await screen.findByText('No matching tasks')
+    expect(taskRows()).toHaveLength(0)
+    expect(screen.getByText('0 / 0')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
+    await screen.findByRole('row', { name: 'View details for task task-12' })
+    await user.click(screen.getByRole('combobox', { name: 'Task type' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Resource processing' }),
+    )
+    await screen.findByText('4 / 0')
+    expectRunningRows(4)
+  })
+
+  it.each([
+    ['en', 'Pending', 'Task status'],
+    ['zh-CN', '等待中', '任务状态'],
+  ])(
+    'renders and filters actual pending tasks in %s',
+    async (lng, pendingLabel, filterLabel) => {
+      records.push(
+        ...[1, 2].map((index) => ({
+          task_id: `pending-${index}`,
+          task_type: 'add_resource',
+          resource_id: `pending-resource-${index}`,
+          status: 'pending',
+          created_at: 200 + index,
+        })),
+      )
+      const user = await renderPage(lng)
+      await screen.findByRole('row', { name: /pending-2/ })
+      expect(screen.getByText('12 / 2')).toBeDefined()
+
+      await user.click(screen.getByRole('combobox', { name: filterLabel }))
+      await user.click(
+        await screen.findByRole('option', { name: pendingLabel }),
+      )
+      await screen.findByText('0 / 2')
+      expect(taskRows()).toHaveLength(2)
+      for (const row of taskRows()) {
+        expect(within(row).getByText(pendingLabel)).toBeDefined()
+      }
+    },
+  )
+
+  it('preserves task statuses when grouping and pagination change the visible rows', async () => {
+    records = runningTasks(26)
+    records[25].resource_id = records[0].resource_id
+    const user = await renderPage()
+    await screen.findByRole('row', { name: 'View details for task task-26' })
+    expectRunningRows(20)
+    expect(screen.getByText('25 / 0')).toBeDefined()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Latest per Resource' }),
+    )
+    expect(screen.getByText('26 / 0')).toBeDefined()
+    expectRunningRows(20)
+
+    await user.click(screen.getByRole('button', { name: 'Go to next page' }))
+    expectRunningRows(6)
+    expect(screen.getByText('26 / 0')).toBeDefined()
+  })
+  it('keeps separate compile runs and opens their dedicated detail page', async () => {
+    records = ['cmp_one', 'cmp_two'].map((task_id) => ({
+      task_id,
+      task_type: 'compile',
+      resource_id: 'same-source',
+      status: 'running',
+      created_at: 200,
+    }))
+    const user = await renderPage()
+    await user.click(
+      await screen.findByRole('row', { name: 'View details for task cmp_one' }),
+    )
+    expect(
+      screen.getByRole('row', { name: 'View details for task cmp_two' }),
+    ).toBeDefined()
+    expect(navigationMocks.navigate).toHaveBeenCalledWith({
+      to: '/compile/tasks/$taskId',
+      params: { taskId: 'cmp_one' },
+    })
+  })
+})
+
+describe('session commit re-trigger feedback', () => {
+  beforeEach(() => {
+    records = [
       {
-        created_at: 2,
-        status: 'cancelling',
-        task_id: 'task-cancelling',
+        task_id: 'failed-commit',
         task_type: 'session_commit',
+        resource_id: 'session-1',
+        status: 'failed',
+        created_at: 100,
       },
-    ])
-
-    renderPage()
-
-    expect(await screen.findByTitle('status.cancelling')).toBeDefined()
-    expect(
-      screen.queryByRole('button', { name: 'actions.cancelTask' }),
-    ).toBeNull()
+    ]
+    vi.mocked(commitSession).mockReset()
   })
 
-  it('asks for confirmation and calls the cancel endpoint', async () => {
-    renderPage()
+  it.each([
+    [
+      'en',
+      'no_messages',
+      'No new task created: this session has no pending messages',
+    ],
+    ['zh-CN', 'no_messages', '未创建新任务：该会话没有待提交消息'],
+    [
+      'en',
+      'all_within_keep_window',
+      'No new task created: this session commit was skipped',
+    ],
+    ['zh-CN', 'all_within_keep_window', '未创建新任务：本次会话提交已跳过'],
+    ['en', undefined, 'No new task created: this session commit was skipped'],
+  ])(
+    'reports skipped commits without success in %s (%s)',
+    async (lng, reason, message) => {
+      vi.mocked(commitSession).mockResolvedValue({
+        status: 'skipped',
+        reason,
+        task_id: null,
+      } as Awaited<ReturnType<typeof commitSession>>)
+      const user = await renderPage(lng)
+      await user.click(
+        await screen.findByTitle(
+          lng === 'en' ? 'Re-trigger Task' : '重新发起任务',
+        ),
+      )
+      await waitFor(() => expect(toast.info).toHaveBeenCalledWith(message))
+      expect(commitSession).toHaveBeenCalledWith('session-1')
+      expect(toast.info).toHaveBeenCalledTimes(1)
+      expect(toast.success).not.toHaveBeenCalled()
+      expect(toast.error).not.toHaveBeenCalled()
+    },
+  )
 
-    const cancelButton = await screen.findAllByRole('button', {
-      name: 'actions.cancelTask',
-    })
-    fireEvent.click(cancelButton[0])
+  it('reports success when a new task is accepted', async () => {
+    vi.mocked(commitSession).mockResolvedValue({
+      status: 'accepted',
+      task_id: 'new-task',
+    } as Awaited<ReturnType<typeof commitSession>>)
+    const user = await renderPage()
+    await user.click(await screen.findByTitle('Re-trigger Task'))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
 
-    expect(await screen.findByText('cancelDialog.title')).toBeDefined()
-    expect(screen.getByText('cancelDialog.description')).toBeDefined()
-    expect(apiMocks.cancelTask).not.toHaveBeenCalled()
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'cancelDialog.confirm' }),
+  it('reports request errors without success', async () => {
+    vi.mocked(commitSession).mockRejectedValue(new Error('Commit failed'))
+    const user = await renderPage()
+    await user.click(await screen.findByTitle('Re-trigger Task'))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Commit failed'),
     )
-
-    await waitFor(() => {
-      expect(apiMocks.cancelTask).toHaveBeenCalledWith('task-running')
-    })
-    await waitFor(() => {
-      expect(toastMocks.success).toHaveBeenCalled()
-    })
-    await waitFor(() => {
-      expect(screen.queryByText('cancelDialog.title')).toBeNull()
-    })
+    expect(toast.info).not.toHaveBeenCalled()
+    expect(toast.success).not.toHaveBeenCalled()
   })
+})
 
-  it('keeps the dialog open and reports failures', async () => {
-    apiMocks.cancelTask.mockRejectedValue(new Error('cancel rejected'))
 
-    renderPage()
-
-    const cancelButton = await screen.findAllByRole('button', {
-      name: 'actions.cancelTask',
-    })
-    fireEvent.click(cancelButton[0])
-
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'cancelDialog.confirm' }),
-    )
-
-    await waitFor(() => {
-      expect(toastMocks.error).toHaveBeenCalledWith('cancel rejected')
-    })
-    expect(await screen.findByText('cancelDialog.title')).toBeDefined()
-  })
-
-  it('dismisses the dialog without cancelling', async () => {
-    renderPage()
-
-    const cancelButton = await screen.findAllByRole('button', {
-      name: 'actions.cancelTask',
-    })
-    fireEvent.click(cancelButton[0])
-
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'cancelDialog.dismiss' }),
-    )
-
-    await waitFor(() => {
-      expect(screen.queryByText('cancelDialog.title')).toBeNull()
-    })
-    expect(apiMocks.cancelTask).not.toHaveBeenCalled()
-  })
+it('groups processing and total time without inventing legacy timing', async () => {
+  records = [
+    { task_id: 'measured', status: 'completed', task_type: 'add_resource', created_at: 100, updated_at: 700, processing_seconds: 61 },
+    { task_id: 'pending', status: 'pending', task_type: 'add_resource', created_at: 100, processing_seconds: 0 },
+    { task_id: 'legacy', status: 'completed', task_type: 'add_resource', created_at: 100, updated_at: 700 },
+  ]
+  await renderPage()
+  const measured = await screen.findByRole('row', { name: 'View details for task measured' })
+  expect(within(measured).getByText('1m 1s')).toBeDefined()
+  expect(within(measured).queryByText(/Waiting Time/)).toBeNull()
+  expect(screen.getByRole('columnheader', { name: 'Duration' })).toBeDefined()
+  expect(within(measured).getByText('1m 1s').closest('td')).toBe(within(measured).getByText('10m').closest('td'))
+  expect(within(measured).getByText('10m')).toBeDefined()
+  expect(within(screen.getByRole('row', { name: 'View details for task pending' })).getByText('Not started')).toBeDefined()
+  const legacy = screen.getByRole('row', { name: 'View details for task legacy' })
+  expect(within(legacy).getByText('Not recorded')).toBeDefined()
 })

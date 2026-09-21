@@ -1,14 +1,21 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
-from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclManager
+from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+from openviking.storage.viking_vector_index_backend import (
+    VikingVectorIndexBackend,
+    _SingleAccountBackend,
+)
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 def _ctx(*, role: Role = Role.USER, actor_peer_id: str | None = None) -> RequestContext:
@@ -26,6 +33,7 @@ def _build(
     context_type: str | None = "resource",
     extra_filter=None,
     level: list[int] | None = None,
+    acl_enabled: bool = False,
 ):
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
@@ -35,13 +43,51 @@ def _build(
         target_directories=targets,
         extra_filter=extra_filter,
         level=level,
+        acl_enabled=acl_enabled,
     )
 
 
-def _tenant_filter(ctx: RequestContext):
+def _tenant_filter(ctx: RequestContext, *, acl_enabled: bool = False):
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
-    return backend._tenant_filter(ctx)
+    return backend._tenant_filter(ctx, acl_enabled=acl_enabled)
+
+
+class _AclConfigReader:
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+
+    async def get_account(self, account_id: str, field: str):
+        del account_id, field
+        return SimpleNamespace(enabled=self.enabled)
+
+
+class _FailingAsyncAdapter:
+    async def call(self, method_name, **kwargs):
+        raise RuntimeError(f"{method_name} failed")
+
+
+class _RecordingAsyncAdapter:
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, method_name, **kwargs):
+        self.calls.append((method_name, kwargs))
+        return []
+
+
+@pytest.mark.asyncio
+async def test_search_by_random_passes_runtime_acl_state_to_tenant_filter():
+    ctx = _ctx()
+    adapter = SimpleNamespace(search_by_random=AsyncMock(return_value=[]))
+    acl_reader = _AclConfigReader(False)
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = AclManager(backend, acl_reader)
+    backend._get_backend_for_context = lambda _ctx: adapter
+
+    assert await backend.search_by_random(ctx=ctx) == []
+    adapter.search_by_random.assert_awaited_once()
+    assert adapter.search_by_random.await_args.kwargs["filter"] == _tenant_filter(ctx)
 
 
 def test_descendant_target_elides_only_visible_root_path_filter():
@@ -85,7 +131,7 @@ def test_all_targets_may_be_under_different_visible_roots():
     targets = [
         "viking://resources/wiki/physics",
         "viking://user/alice/resources/private-notes",
-        "viking://agent/skills/research",
+        "viking://agent/tools/search",
     ]
 
     result = _build(ctx, targets)
@@ -98,7 +144,7 @@ def test_all_targets_may_be_under_different_visible_roots():
                 [
                     PathScope("uri", "viking://resources/wiki/physics", depth=-1),
                     PathScope("uri", "viking://user/alice/resources/private-notes", depth=-1),
-                    PathScope("uri", "viking://agent/skills/research", depth=-1),
+                    PathScope("uri", "viking://agent/tools/search", depth=-1),
                 ]
             ),
         ]
@@ -121,7 +167,8 @@ def test_mixed_visible_and_outside_targets_keep_original_tenant_filter():
 
 
 @pytest.mark.asyncio
-async def test_tenant_search_enforces_visible_roots_and_shared_acl():
+@pytest.mark.parametrize("legacy_mode", [{}, {"acl_mode": None}, {"acl_mode": "none"}])
+async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, legacy_mode):
     ctx = _ctx()
     own_uri = "viking://user/alice/resources/notes"
     cross_user_uri = "viking://user/bob/resources/notes"
@@ -139,8 +186,9 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "context_type": "resource",
         },
         {
+            **legacy_mode,
             "id": "legacy-shared",
-            "uri": "viking://resources/legacy.md",
+            "uri": "viking://agent/workflows/daily.md",
             "account_id": "acct",
             "context_type": "resource",
         },
@@ -149,7 +197,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "uri": "viking://resources/direct.md",
             "account_id": "acct",
             "context_type": "resource",
-            "acl_enabled": True,
+            "acl_mode": "inherit",
             "acl_direct_grants": ["1:user:alice"],
         },
         {
@@ -157,15 +205,32 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
             "uri": "viking://resources/inherited.md",
             "account_id": "acct",
             "context_type": "resource",
-            "acl_enabled": True,
+            "acl_mode": "inherit",
             "acl_inherited_grants": ["3:user:*"],
+        },
+        {
+            "id": "restricted-inherited-shared",
+            "uri": "viking://resources/restricted-inherited.md",
+            "account_id": "acct",
+            "context_type": "resource",
+            "acl_mode": "restricted",
+            "acl_inherited_grants": ["3:user:*"],
+        },
+        {
+            "id": "restricted-direct-shared",
+            "uri": "viking://resources/restricted-direct.md",
+            "account_id": "acct",
+            "context_type": "resource",
+            "acl_mode": "restricted",
+            "acl_direct_grants": ["1:user:alice"],
+            "acl_inherited_grants": ["7:user:bob"],
         },
         {
             "id": "denied-shared",
             "uri": "viking://resources/denied.md",
             "account_id": "acct",
             "context_type": "resource",
-            "acl_enabled": True,
+            "acl_mode": "inherit",
             "acl_direct_grants": ["7:user:bob"],
         },
         {
@@ -176,91 +241,99 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl():
         },
     ]
 
-    def matches(expr, record):
-        if isinstance(expr, And):
-            return all(matches(cond, record) for cond in expr.conds)
-        if isinstance(expr, Or):
-            return any(matches(cond, record) for cond in expr.conds)
-        if isinstance(expr, Eq):
-            return record.get(expr.field) == expr.value
-        if isinstance(expr, In):
-            return any(value in expr.values for value in record.get(expr.field, []))
-        if isinstance(expr, RawDSL):
-            assert expr.payload["op"] == "must_not"
-            return record.get(expr.payload["field"]) not in expr.payload["conds"]
-        if isinstance(expr, PathScope):
-            root = uri_parts(expr.path)
-            path = uri_parts(str(record.get(expr.field, "")))
-            if path[: len(root)] != root:
-                return False
-            return expr.depth == -1 or len(path) - len(root) <= expr.depth
-        raise AssertionError(f"Unexpected filter expression in test: {expr!r}")
-
-    async def fake_search(*, filter, **_kwargs):
-        return [record for record in records if matches(filter, record)]
-
-    backend = object.__new__(VikingVectorIndexBackend)
-    backend.acl_manager = AclManager(backend)
-    backend.acl_manager.set_enabled(ctx.account_id, True)
-    backend.search = fake_search
-
-    visible = await backend.search_in_tenant(
-        ctx=ctx,
-        query_vector=[1.0],
-        context_type="resource",
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path / "vectors")
+        )
     )
-    cross_user_only = await backend.search_in_tenant(
-        ctx=ctx,
-        query_vector=[1.0],
-        context_type="resource",
-        target_directories=[cross_user_uri],
-    )
-    internal = await backend.search_in_tenant(
-        ctx=RequestContext(
-            user=ctx.user,
-            role=ctx.role,
-            bypass_acl=True,
-        ),
-        query_vector=[1.0],
-        context_type="resource",
-    )
+    try:
+        schema = CollectionSchemas.context_collection("context", 4)
+        # Exercise genuinely absent/null fields without a schema default filling them in.
+        next(field for field in schema["Fields"] if field["FieldName"] == "acl_mode").pop(
+            "DefaultValue"
+        )
+        assert await backend.create_collection("context", schema)
+        acl_config = _AclConfigReader(True)
+        backend.acl_manager = AclManager(backend, acl_config)
+        for record in records:
+            record_ctx = RequestContext(
+                user=UserIdentifier(record["account_id"], ctx.user.user_id), role=Role.ADMIN
+            )
+            await backend._upsert_many_raw(
+                [{**record, "level": 2, "vector": [1.0, 0.0, 0.0, 0.0]}], ctx=record_ctx
+            )
 
-    assert [record["id"] for record in visible] == [
-        "own",
-        "legacy-shared",
-        "direct-shared",
-        "inherited-shared",
-    ]
-    assert cross_user_only == []
-    assert [record["id"] for record in internal] == [
-        "own",
-        "cross-user",
-        "legacy-shared",
-        "direct-shared",
-        "inherited-shared",
-        "denied-shared",
-    ]
+        visible = await backend.search_in_tenant(
+            ctx=ctx,
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            context_type="resource",
+        )
+        cross_user_only = await backend.search_in_tenant(
+            ctx=ctx,
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            context_type="resource",
+            target_directories=[cross_user_uri],
+        )
+        internal = await backend.search_in_tenant(
+            ctx=RequestContext(
+                user=ctx.user,
+                role=ctx.role,
+                bypass_acl=True,
+            ),
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            context_type="resource",
+        )
 
-    backend.acl_manager.set_enabled(ctx.account_id, False)
-    shared = await backend.search_in_tenant(
-        ctx=ctx,
-        query_vector=[1.0],
-        context_type="resource",
-    )
-    assert [record["id"] for record in shared] == [
-        "own",
-        "legacy-shared",
-        "direct-shared",
-        "inherited-shared",
-        "denied-shared",
-    ]
+        assert sorted(record["id"] for record in visible) == sorted(
+            [
+                "own",
+                "legacy-shared",
+                "direct-shared",
+                "inherited-shared",
+                "restricted-direct-shared",
+            ]
+        )
+        assert cross_user_only == []
+        assert sorted(record["id"] for record in internal) == sorted(
+            [
+                "own",
+                "cross-user",
+                "legacy-shared",
+                "direct-shared",
+                "inherited-shared",
+                "restricted-inherited-shared",
+                "restricted-direct-shared",
+                "denied-shared",
+            ]
+        )
+
+        acl_config.enabled = False
+        shared = await backend.search_in_tenant(
+            ctx=ctx,
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            context_type="resource",
+        )
+        assert sorted(record["id"] for record in shared) == sorted(
+            [
+                "own",
+                "legacy-shared",
+                "direct-shared",
+                "inherited-shared",
+                "restricted-inherited-shared",
+                "restricted-direct-shared",
+                "denied-shared",
+            ]
+        )
+
+    finally:
+        await backend.close()
 
 
 def test_segment_prefix_and_visible_root_ancestor_do_not_elide_tenant_filter():
     ctx = _ctx()
 
     segment_prefix = _build(ctx, ["viking://resources-other/wiki"])
-    ancestor = _build(ctx, ["viking://agent"])
+    ancestor = _build(ctx, ["viking://user"])
 
     assert segment_prefix == And(
         [
@@ -273,7 +346,7 @@ def test_segment_prefix_and_visible_root_ancestor_do_not_elide_tenant_filter():
         [
             Eq("context_type", "resource"),
             _tenant_filter(ctx),
-            Or([PathScope("uri", "viking://agent", depth=-1)]),
+            Or([PathScope("uri", "viking://user", depth=-1)]),
         ]
     )
 
@@ -285,6 +358,22 @@ def test_no_target_keeps_original_tenant_filter():
         [
             Eq("context_type", "resource"),
             _tenant_filter(ctx),
+        ]
+    )
+
+
+def test_merge_filters_wraps_raw_dict_filter():
+    backend = object.__new__(VikingVectorIndexBackend)
+
+    result = backend._merge_filters(
+        {"op": "must", "field": "uri", "conds": ["viking://resources"]},
+        Eq("account_id", "acct"),
+    )
+
+    assert result == And(
+        [
+            RawDSL({"op": "must", "field": "uri", "conds": ["viking://resources"]}),
+            Eq("account_id", "acct"),
         ]
     )
 
@@ -314,3 +403,36 @@ def test_actor_peer_target_retains_account_and_exact_target_scope():
             Or([PathScope("uri", target, depth=-1)]),
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_search_by_random_propagates_adapter_errors():
+    backend = object.__new__(_SingleAccountBackend)
+    backend._bound_account_id = None
+    backend._async_adapter = _FailingAsyncAdapter()
+
+    with pytest.raises(RuntimeError, match="search_by_random failed"):
+        await backend.search_by_random(filter=Eq("uri", "viking://resources/a.md"))
+
+
+@pytest.mark.asyncio
+async def test_search_by_random_reuses_account_filter_for_raw_dsl():
+    backend = object.__new__(_SingleAccountBackend)
+    backend._bound_account_id = "acct"
+    backend._async_adapter = _RecordingAsyncAdapter()
+    raw_filter = {"op": "must", "field": "uri", "conds": ["viking://resources"]}
+
+    await backend.search_by_random(filter=raw_filter)
+
+    assert backend._async_adapter.calls == [
+        (
+            "search_by_random",
+            {
+                "filter": And([Eq("account_id", "acct"), RawDSL(raw_filter)]),
+                "limit": 10,
+                "offset": 0,
+                "output_fields": None,
+                "advance": None,
+            },
+        )
+    ]

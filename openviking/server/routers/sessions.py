@@ -598,6 +598,11 @@ class CommitRequest(BaseModel):
     behavior.
     """
 
+    reset_context: bool = Field(
+        default=False,
+        strict=True,
+        description="Append an empty archive boundary after archiving all messages; keep session ID.",
+    )
     keep_recent_count: int = Field(
         default=0,
         ge=0,
@@ -643,6 +648,8 @@ class CommitRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_turn_retention_opt_in(self) -> "CommitRequest":
+        if self.reset_context and (self.keep_recent_count != 0 or self.retention_mode is not None):
+            raise ValueError("reset_context requires keep_recent_count=0 and no retention_mode")
         if self.retention_mode is None and any(
             value is not None
             for value in (
@@ -680,6 +687,8 @@ async def commit_session(
     commit_kwargs.update(
         {key: value for key, value in optional_retention.items() if value is not None}
     )
+    if body.reset_context:
+        commit_kwargs["reset_context"] = True
     event_tags = _commit_event_tags(body.extraction_metadata)
     if event_tags is not None:
         commit_kwargs["event_tags"] = event_tags

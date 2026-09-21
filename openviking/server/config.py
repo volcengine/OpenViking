@@ -13,6 +13,7 @@ from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
@@ -72,8 +73,6 @@ class AddTargetsConfig(BaseModel):
     resource_uri: Optional[str] = None
     skill_uri: Optional[str] = None
 
-    model_config = {"extra": "forbid"}
-
     @field_validator("resource_uri")
     @classmethod
     def validate_resource_uri(cls, value: Optional[str]) -> Optional[str]:
@@ -126,20 +125,10 @@ class AddTargetsConfig(BaseModel):
         )
 
 
-class AgentEvolutionConfig(BaseModel):
-    """Default Agent Evolution setting for accounts without an override."""
-
-    enabled: bool = False
-
-    model_config = {"extra": "forbid"}
-
-
 class DeprecatedUserAgentEvolutionConfig(BaseModel):
     """Parse-only compatibility for legacy per-user configuration files."""
 
     enabled: Optional[bool] = None
-
-    model_config = {"extra": "forbid"}
 
 
 class UserConfig(BaseModel):
@@ -152,8 +141,6 @@ class UserConfig(BaseModel):
         exclude=True,
     )
 
-    model_config = {"extra": "forbid"}
-
     @field_validator("memory_policy", mode="before")
     @classmethod
     def validate_memory_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
@@ -164,6 +151,19 @@ class UserConfig(BaseModel):
         return MemoryPolicy.from_dict(value).to_dict()
 
 
+class UserConfigDefaults(UserConfig):
+    """Deployment defaults for users without persisted overrides."""
+
+    auto_commit_policy: Optional[Dict[str, Any]] = None
+
+    @field_validator("auto_commit_policy", mode="before")
+    @classmethod
+    def validate_auto_commit_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
+        from openviking.session.auto_commit_policy import AutoCommitPolicy
+
+        return None if value is None else AutoCommitPolicy.from_dict(value).to_dict()
+
+
 class MetricsAccountDimensionConfig(BaseModel):
     """Account-dimension configuration for metrics label injection."""
 
@@ -172,15 +172,11 @@ class MetricsAccountDimensionConfig(BaseModel):
     max_active_accounts: int = 100
     metric_allowlist: List[str] = Field(default_factory=list)
 
-    model_config = {"extra": "forbid"}
-
 
 class PrometheusExporterConfig(BaseModel):
     """Prometheus exporter configuration."""
 
     enabled: bool = True
-
-    model_config = {"extra": "forbid"}
 
 
 class OTelExporterConfig(BaseModel):
@@ -190,8 +186,6 @@ class OTelExporterConfig(BaseModel):
         """TLS configuration for OTLP exporters."""
 
         insecure: bool = False
-
-        model_config = {"extra": "forbid"}
 
     enabled: bool = False
     protocol: str = "grpc"  # "grpc", "http", or "local" for traces
@@ -204,16 +198,12 @@ class OTelExporterConfig(BaseModel):
     local_rotation_mb: int = Field(default=40, gt=0)
     local_backup_count: int = Field(default=2, ge=0)
 
-    model_config = {"extra": "forbid"}
-
 
 class MetricsExportersConfig(BaseModel):
     """Metrics exporters configuration."""
 
     prometheus: PrometheusExporterConfig = Field(default_factory=PrometheusExporterConfig)
     otel: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
-
-    model_config = {"extra": "forbid"}
 
 
 class MetricsConfig(BaseModel):
@@ -225,8 +215,6 @@ class MetricsConfig(BaseModel):
         default_factory=MetricsAccountDimensionConfig
     )
     exporters: MetricsExportersConfig = Field(default_factory=MetricsExportersConfig)
-
-    model_config = {"extra": "forbid"}
 
 
 class UsageAuditConfig(BaseModel):
@@ -245,8 +233,6 @@ class UsageAuditConfig(BaseModel):
     timezone: str = "local"
     inventory_ttl_seconds: float = Field(10.0, ge=0)
 
-    model_config = {"extra": "forbid"}
-
 
 class UsageReporterSinkConfig(BaseModel):
     """Usage reporter sink configuration."""
@@ -255,8 +241,6 @@ class UsageReporterSinkConfig(BaseModel):
     class_path: Optional[str] = None
     config: Dict[str, object] = Field(default_factory=dict)
 
-    model_config = {"extra": "forbid"}
-
 
 class UsageReporterConfig(BaseModel):
     """Usage event reporter configuration."""
@@ -264,8 +248,6 @@ class UsageReporterConfig(BaseModel):
     enabled: bool = False
     extractors: List[Literal["memory_usage"]] = Field(default_factory=lambda: ["memory_usage"])
     sinks: List[UsageReporterSinkConfig] = Field(default_factory=list)
-
-    model_config = {"extra": "forbid"}
 
 
 class TraceDumpBodyConfig(BaseModel):
@@ -279,8 +261,6 @@ class TraceDumpBodyConfig(BaseModel):
     enabled: bool = False
     max_bytes: int = 4096
 
-    model_config = {"extra": "forbid"}
-
 
 class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
@@ -290,8 +270,6 @@ class ObservabilityConfig(BaseModel):
     traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
-
-    model_config = {"extra": "forbid"}
 
 
 class TempUploadConfig(BaseModel):
@@ -306,8 +284,6 @@ class TempUploadConfig(BaseModel):
     # to reclaim junk directories that would otherwise be skipped forever.
     cleanup_invalid_dirs: bool = False
 
-    model_config = {"extra": "forbid"}
-
 
 class ToolOutputExternalizationConfig(BaseModel):
     """External storage controls for oversized tool outputs."""
@@ -321,13 +297,19 @@ class ToolOutputExternalizationConfig(BaseModel):
     aggregate_selection_strategy: Literal["largest_first"] = "largest_first"
     failure_mode: Literal["reject", "preserve_raw", "preview_only"] = "preserve_raw"
 
-    model_config = {"extra": "forbid"}
-
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    executor_threads: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Maximum number of threads in each server process's default asyncio "
+            "executor. Zero keeps Python's default sizing policy."
+        ),
+    )
     # Seconds an idle HTTP keep-alive connection is kept open before the server
     # closes it. Defaults to 5 to match uvicorn's built-in default and preserve
     # the existing service behavior. Raise it above the idle-connection lifetime
@@ -353,6 +335,9 @@ class ServerConfig(BaseModel):
     api_key_watch_enabled: bool = False
     # Poll interval; each check only stats registry files and reads fully on change.
     api_key_watch_interval_seconds: float = 30.0
+    # Trusted-mode identity registration is batched in memory; 0 disables it.
+    trusted_identity_flush_interval_seconds: float = Field(300.0, ge=0)
+    trusted_identity_pending_max_size: int = Field(10_000, gt=0)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     usage_reporter: UsageReporterConfig = Field(default_factory=UsageReporterConfig)
     # Public-facing base URL emitted in MCP-issued upload instructions. See
@@ -363,13 +348,16 @@ class ServerConfig(BaseModel):
     public_base_url: Optional[str] = None
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
-    user_config_defaults: UserConfig = Field(default_factory=UserConfig)
+    user_config_defaults: UserConfigDefaults = Field(default_factory=UserConfigDefaults)
     agent_evolution: AgentEvolutionConfig = Field(default_factory=AgentEvolutionConfig)
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
 
-    model_config = {"extra": "forbid"}
+    @field_validator("user_config_defaults", mode="before")
+    @classmethod
+    def normalize_user_config_defaults(cls, value: Any) -> Any:
+        return value.model_dump() if isinstance(value, UserConfig) else value
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.

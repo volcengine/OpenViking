@@ -9,7 +9,7 @@ type Logger = {
 type ClientRuntimeConfig = {
   baseUrl: string;
   apiKey: string;
-  peer_role: "none" | "assistant" | "person";
+  peer_role: "none" | "assistant" | "sender";
   peer_prefix: string;
   timeoutMs: number;
   accountId?: string;

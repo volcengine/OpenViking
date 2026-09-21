@@ -258,6 +258,29 @@ async def test_unknown_size_media_stops_at_hard_staging_limit(
     assert client.path_calls == 0
 
 
+async def test_media_summary_stat_skips_directory_vector_count(monkeypatch):
+    fs = _FS()
+    client = _CapturingPathClient()
+    model_config = SimpleNamespace(get_client_instance=lambda: client)
+    monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        media_utils,
+        "get_openviking_config",
+        lambda: _config(model_config),
+    )
+
+    await media_utils.generate_video_summary(
+        "viking://resources/video/clip.mp4",
+        "clip.mp4",
+    )
+
+    fs.stat.assert_awaited_once_with(
+        "viking://resources/video/clip.mp4",
+        ctx=None,
+        skip_count=True,
+    )
+
+
 async def test_success_normalizes_markdown_and_filename_heading(
     monkeypatch,
 ):

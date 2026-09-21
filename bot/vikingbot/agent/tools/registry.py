@@ -8,7 +8,7 @@ from typing import Any
 from loguru import logger
 
 from vikingbot.agent.remote_skills import SkillRuntimeError
-from vikingbot.agent.tools.base import Tool, ToolContext
+from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
@@ -340,6 +340,8 @@ class ToolRegistry:
             channel_metadata=channel_metadata,
             skill_runtime=skill_runtime,
         )
+        if isinstance(outcome.result, MultimodalToolResult):
+            return str(outcome.result)
         return outcome.result
 
     @property

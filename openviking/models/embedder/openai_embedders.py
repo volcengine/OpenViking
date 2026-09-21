@@ -6,17 +6,22 @@ from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 import openai
+from openviking_cli.utils import get_logger
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
+    EmbeddingInput,
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -104,6 +109,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             config: Additional configuration dict
             extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
                           {'HTTP-Referer': 'https://your-site.com', 'X-Title': 'Your App'})
+            input_type: OpenViking embedding input mode ('text' or 'multimodal'). This controls
+                        whether content parts are passed through, and is distinct from
+                        query_param/document_param values sent as extra_body.input_type.
             encoding_format: Wire format for embedding values. ``None`` (default) lets the
                             OpenAI Python SDK pick its default (currently ``base64``). Set to
                             ``"float"`` to send/receive plain JSON arrays — the recommended
@@ -131,11 +139,15 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
+        self._supports_multimodal = input_type == "multimodal"
         self.encoding_format = encoding_format
         self.extra_body = extra_body
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
-        self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
+        self._client_kwargs: Dict[str, Any] = {
+            "api_key": self.api_key or "no-key",
+            "max_retries": 0,
+        }
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
@@ -148,19 +160,31 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             self._client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
-            self.client = openai.AzureOpenAI(
-                http_client=openai.DefaultHttpxClient(limits=self._http_limits()),
-                **self._client_kwargs,
+            sync_kwargs = dict(self._client_kwargs)
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultHttpxClient,
+                limits=self._http_limits(),
             )
+            if http_client is None:
+                http_client = openai.DefaultHttpxClient(limits=self._http_limits())
+            sync_kwargs["http_client"] = http_client
+            self.client = openai.AzureOpenAI(**sync_kwargs)
         else:
             if self.api_base:
                 self._client_kwargs["base_url"] = self.api_base
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
-            self.client = openai.OpenAI(
-                http_client=openai.DefaultHttpxClient(limits=self._http_limits()),
-                **self._client_kwargs,
+            sync_kwargs = dict(self._client_kwargs)
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultHttpxClient,
+                limits=self._http_limits(),
             )
+            if http_client is None:
+                http_client = openai.DefaultHttpxClient(limits=self._http_limits())
+            sync_kwargs["http_client"] = http_client
+            self.client = openai.OpenAI(**sync_kwargs)
         self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension
@@ -291,7 +315,18 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         return extra_body if extra_body else None
 
-    def _build_kwargs(self, text_input: str | List[str], is_query: bool = False) -> Dict[str, Any]:
+    @property
+    def supports_multimodal(self) -> bool:
+        return self._supports_multimodal
+
+    def _prepare_embedding_input(self, text: EmbeddingInput | List[str]) -> EmbeddingInput | List[str]:
+        if isinstance(text, list) and all(isinstance(item, str) for item in text):
+            return text
+        return self.prepare_embedding_input(text)
+
+    def _build_kwargs(
+        self, text_input: EmbeddingInput | List[str], is_query: bool = False
+    ) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"input": text_input, "model": self.model_name}
         if self.dimension and self._should_send_dimensions():
             kwargs["dimensions"] = self.dimension
@@ -312,24 +347,26 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
     def _get_async_client(self):
         def _build_async_client():
-            http_client = openai.DefaultAsyncHttpxClient(limits=self._http_limits())
-            if self._provider == "azure":
-                return openai.AsyncAzureOpenAI(
-                    http_client=http_client,
-                    **self._client_kwargs,
-                )
-            return openai.AsyncOpenAI(
-                http_client=http_client,
-                **self._client_kwargs,
+            kwargs = dict(self._client_kwargs)
+            http_client = create_optional_async_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultAsyncHttpxClient,
+                limits=self._http_limits(),
             )
+            if http_client is None:
+                http_client = openai.DefaultAsyncHttpxClient(limits=self._http_limits())
+            kwargs["http_client"] = http_client
+            if self._provider == "azure":
+                return openai.AsyncAzureOpenAI(**kwargs)
+            return openai.AsyncOpenAI(**kwargs)
 
         return self._async_client_cache.get(_build_async_client)
 
-    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Perform dense embedding on text
+    def embed(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
+        """Perform dense embedding on text, text batches, or multimodal content
 
         Args:
-            text: Input text
+            text: Input text, OpenAI text batch, or multimodal content parts
             is_query: Flag to indicate if this is a query embedding
 
         Returns:
@@ -338,9 +375,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
+        embedding_input = self._prepare_embedding_input(text)
 
         def _call() -> EmbedResult:
-            response = self.client.embeddings.create(**self._build_kwargs(text, is_query=is_query))
+            response = self.client.embeddings.create(
+                **self._build_kwargs(embedding_input, is_query=is_query)
+            )
             self._update_telemetry_token_usage(response)
             vector = response.data[0].embedding
 
@@ -360,11 +400,14 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
-    async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
+    async def embed_async(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
+        embedding_input = self._prepare_embedding_input(text)
 
         async def _call() -> EmbedResult:
-            response = await client.embeddings.create(**self._build_kwargs(text, is_query=is_query))
+            response = await client.embeddings.create(
+                **self._build_kwargs(embedding_input, is_query=is_query)
+            )
             self._update_telemetry_token_usage(response)
             return EmbedResult(dense_vector=self._truncate_vector(response.data[0].embedding))
 

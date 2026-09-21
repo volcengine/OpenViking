@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Any, List, Literal, Optional
 from urllib.parse import urlparse
@@ -86,8 +87,6 @@ class S3Config(BaseModel):
         "during uploads. Disabled by default for backward compatibility.",
     )
 
-    model_config = {"extra": "forbid"}
-
     def validate_config(self):
         """Validate S3 configuration completeness"""
         missing = []
@@ -140,8 +139,6 @@ class QueueFSConfig(BaseModel):
         default="default",
         description="Queue key namespace when backend is 'cache'.",
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -196,8 +193,6 @@ class AGFSCacheFSConfig(BaseModel):
         description="Path prefixes that bypass cache",
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="after")
     def validate_config(self):
         if not self.namespace.strip():
@@ -240,8 +235,6 @@ class RedisCacheConfig(BaseModel):
     tls_insecure_skip_verify: bool = Field(
         default=False, description="Skip Redis TLS certificate verification"
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -317,7 +310,11 @@ class AGFSPathLockConfig(BaseModel):
 
     provider: str = Field(
         default="filesystem",
-        description="PathLock provider: 'filesystem' | 'memory'",
+        description="PathLock provider: 'filesystem' | 'memory' | 'cache'",
+    )
+    namespace: Optional[str] = Field(
+        default=None,
+        description="OpenViking instance name used by cache-backed PathLock.",
     )
     lock_timeout_secs: float = Field(
         default=0.0,
@@ -328,15 +325,25 @@ class AGFSPathLockConfig(BaseModel):
         description="Seconds before an unrefreshed lock token becomes stale.",
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="after")
     def validate_config(self):
         """Validate provider and timeout/expiry ranges."""
-        if self.provider not in {"filesystem", "memory"}:
-            raise ValueError("pathlock provider must be one of: 'filesystem', 'memory'")
-        if self.lock_expire_secs < 1.0:
-            raise ValueError("pathlock lock_expire_secs must be >= 1.0")
+        if self.provider not in {"filesystem", "memory", "cache"}:
+            raise ValueError("pathlock provider must be one of: 'filesystem', 'memory', 'cache'")
+        if self.provider == "cache" and not (self.namespace or "").strip():
+            raise ValueError("pathlock namespace is required for provider 'cache'")
+        if self.namespace is not None and (
+            not self.namespace
+            or any(
+                not (char.isascii() and (char.isalnum() or char in "._-"))
+                for char in self.namespace
+            )
+        ):
+            raise ValueError(
+                "pathlock namespace must contain only ASCII letters, digits, '.', '_' or '-'"
+            )
+        if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:
+            raise ValueError("pathlock lock_expire_secs must be finite and >= 1.0")
         return self
 
 
@@ -441,8 +448,6 @@ class AGFSConfig(BaseModel):
     redirects: Optional[List[dict[str, Any]]] = Field(
         default=None, description="Primary redirect policies."
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):

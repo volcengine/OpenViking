@@ -1,5 +1,6 @@
 """Shell execution tool."""
 
+import shlex
 from typing import TYPE_CHECKING, Any
 
 from vikingbot.agent.tools.base import Tool
@@ -30,7 +31,10 @@ class ExecTool(Tool):
                 "command": {"type": "string", "description": "The shell command to execute"},
                 "working_dir": {
                     "type": "string",
-                    "description": "Optional working directory for the command",
+                    "description": (
+                        "Optional working directory for the command, relative to the sandbox "
+                        "root or an absolute path inside the sandbox"
+                    ),
                 },
             },
             "required": ["command"],
@@ -47,7 +51,9 @@ class ExecTool(Tool):
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
 
-            if command.strip() == "pwd":
+            if working_dir:
+                command = f"cd {shlex.quote(working_dir)} && {command}"
+            elif command.strip() == "pwd":
                 return sandbox.sandbox_cwd
 
             return await sandbox.execute(command, timeout=self.timeout)

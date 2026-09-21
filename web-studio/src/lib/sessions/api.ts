@@ -204,6 +204,57 @@ export async function fetchSessionMessages(
   ])
 }
 
+// Share four slots across title backfills from both conversation entry points.
+let activeTitleRequests = 0
+const titleWaiters: Array<() => void> = []
+
+export async function fetchSessionFirstTitle(
+  sessionId: string,
+): Promise<string> {
+  if (activeTitleRequests >= 4) {
+    await new Promise<void>((resolve) => titleWaiters.push(resolve))
+  } else {
+    activeTitleRequests += 1
+  }
+  try {
+    const session = await fetchSession(sessionId)
+    const count = Math.max(0, Math.floor(session.commit_count || 0))
+    for (let index = 1; index <= count; index += 1) {
+      try {
+        const archive = await fetchSessionArchive(
+          sessionId,
+          `archive_${String(index).padStart(3, '0')}`,
+        )
+        const title = firstUserTitle(archive.messages)
+        if (title) return title
+      } catch (error) {
+        if (!isMissingArchive(error)) throw error
+      }
+    }
+    return firstUserTitle((await fetchSessionContext(sessionId)).messages)
+  } finally {
+    const next = titleWaiters.shift()
+    if (next) next()
+    else activeTitleRequests -= 1
+  }
+}
+
+function firstUserTitle(value: unknown): string {
+  const first = getMessages(value).find(
+    (message) =>
+      message.role === 'user' &&
+      message.parts.some((part) => part.type === 'text' && part.text.trim()),
+  )
+  return (
+    first?.parts
+      .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60) || ''
+  )
+}
+
 export async function fetchSessionMemoryDiffs(
   session: SessionMeta,
 ): Promise<SessionMemoryDiff[]> {
@@ -466,6 +517,14 @@ export function serializeParts(
   return parts.flatMap((part) => {
     if (part.type === 'text') {
       return [{ type: 'text', text: part.text }]
+    }
+    if (part.type === 'image_url') {
+      return [
+        {
+          type: 'image_url',
+          image_url: { ...part.image_url },
+        },
+      ]
     }
     if (part.type === 'context') {
       return [

@@ -602,6 +602,16 @@ bool parse_schema_fields(PyObject* fields_obj,
       return false;
     }
 
+    PyObject* legacy_type_obj = PyDict_GetItemString(item, "legacy_data_type");
+    if (legacy_type_obj != nullptr) {
+      vdb::FieldType legacy_type;
+      if (!py_to_field_type(legacy_type_obj, &legacy_type)) {
+        Py_DECREF(item);
+        return false;
+      }
+      field.legacy_data_type = legacy_type;
+    }
+
     const long field_id = PyLong_AsLong(id_obj);
     if (PyErr_Occurred() != nullptr) {
       Py_DECREF(item);
@@ -1053,10 +1063,13 @@ PyObject* py_bytes_row_deserialize(PyObject*, PyObject* args) {
     return nullptr;
   }
 
-  std::string payload;
-  if (!py_to_string(payload_obj, &payload, true)) {
+  char* payload_data = nullptr;
+  Py_ssize_t payload_size = 0;
+  if (PyBytes_AsStringAndSize(payload_obj, &payload_data, &payload_size) < 0) {
     return nullptr;
   }
+  // The call arguments keep these immutable bytes alive while the GIL is released.
+  const std::string_view payload(payload_data, static_cast<size_t>(payload_size));
 
   PyObject* result = PyDict_New();
   if (result == nullptr) {
@@ -1106,10 +1119,12 @@ PyObject* py_bytes_row_deserialize_field(PyObject*, PyObject* args) {
     return nullptr;
   }
 
-  std::string payload;
-  if (!py_to_string(payload_obj, &payload, true)) {
+  char* payload_data = nullptr;
+  Py_ssize_t payload_size = 0;
+  if (PyBytes_AsStringAndSize(payload_obj, &payload_data, &payload_size) < 0) {
     return nullptr;
   }
+  const std::string_view payload(payload_data, static_cast<size_t>(payload_size));
 
   const auto* meta = handle->schema->get_field_meta(field_name);
   if (meta == nullptr) {
@@ -1373,6 +1388,70 @@ PyObject* py_index_engine_delete_data(PyObject*, PyObject* args) {
     return PyLong_FromLong(result);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
+    return nullptr;
+  }
+}
+
+PyObject* py_index_engine_rebuild_scalar_index(PyObject*, PyObject* args) {
+  PyObject* capsule = nullptr;
+  const char* scalar_index_json = nullptr;
+  PyObject* items = nullptr;
+  if (!PyArg_ParseTuple(args, "OsO", &capsule, &scalar_index_json, &items)) {
+    return nullptr;
+  }
+
+  auto* engine = capsule_to_ptr<vdb::IndexEngine>(capsule, kIndexCapsuleName);
+  if (engine == nullptr) {
+    return nullptr;
+  }
+
+  std::unique_ptr<PyObject, decltype(&Py_DecRef)> iterator(PyObject_GetIter(items),
+                                                        Py_DecRef);
+  if (!iterator) {
+    return nullptr;
+  }
+
+  try {
+    // Bound the native input independently of the Store's encoded page size.
+    // A single oversized row is allowed so every nonempty batch makes progress.
+    auto read_batch = [&](std::vector<vdb::AddDataRequest>& batch) {
+      constexpr size_t kMaxRows = 1024;
+      constexpr size_t kMaxBytes = 1024 * 1024;
+      const auto gil = PyGILState_Ensure();
+      try {
+        batch.clear();
+        size_t bytes = 0;
+        while (batch.size() < kMaxRows && bytes < kMaxBytes) {
+          std::unique_ptr<PyObject, decltype(&Py_DecRef)> item(
+              PyIter_Next(iterator.get()), Py_DecRef);
+          if (!item) {
+            if (PyErr_Occurred()) {
+              throw std::runtime_error("Failed to read scalar index rows");
+            }
+            break;
+          }
+          vdb::AddDataRequest request;
+          if (!parse_add_request(item.get(), &request)) {
+            throw std::runtime_error("Invalid scalar index row");
+          }
+          bytes += request.fields_str.size();
+          batch.push_back(std::move(request));
+        }
+      } catch (...) {
+        PyGILState_Release(gil);
+        throw;
+      }
+      PyGILState_Release(gil);
+      return !batch.empty();
+    };
+    const int result = call_without_gil([&]() {
+      return engine->rebuild_scalar_index(scalar_index_json, read_batch);
+    });
+    return PyLong_FromLong(result);
+  } catch (const std::exception& exc) {
+    if (!PyErr_Occurred()) {
+      raise_runtime_error(exc.what());
+    }
     return nullptr;
   }
 }
@@ -1942,6 +2021,9 @@ PyMethodDef kModuleMethods[] = {
      "Add data to the index engine."},
     {"_index_engine_delete_data", py_index_engine_delete_data, METH_VARARGS,
      "Delete data from the index engine."},
+    {"_index_engine_rebuild_scalar_index",
+     py_index_engine_rebuild_scalar_index, METH_VARARGS,
+     "Rebuild scalar fields without rebuilding the vector index."},
     {"_index_engine_search", py_index_engine_search, METH_VARARGS,
      "Search the index engine."},
     {"_index_engine_search_with_filter_token",

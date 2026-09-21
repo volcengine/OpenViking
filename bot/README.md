@@ -64,7 +64,7 @@ ov chat → OpenViking Server → VikingBot Gateway → Agent
 
 Follow the [OpenViking quickstart](../docs/en/getting-started/03-quickstart-server.md) to configure the models and storage required by OpenViking. By default, the Bot inherits the root-level `vlm` configuration as its Agent model. Configure `bot.agents` only if the Bot should use a separate model.
 
-In this combined mode, the Bot always uses the OpenViking Server started by the same command and ignores `bot.ov_server` settings that point to another service. OpenViking Server injects an authenticated request-scoped identity into every Chat request sent to the Bot.
+In this combined mode, the Bot always uses the OpenViking Server started by the same command. `bot.ov_server.server_url` is ignored, while an explicit `bot.ov_server.api_key` and other Bot OpenViking settings are preserved. In `api_key` mode, that key must be a User/Admin key. OpenViking Server injects an authenticated request-scoped identity into every Chat request sent to the Bot.
 
 #### 2. Start both services
 
@@ -411,6 +411,28 @@ For the complete loading order, file responsibilities, and customization boundar
 
 `readonly` mode does not register `openviking_add_resource`. When a channel sets `ov_tools_enable: false`, it does not expose OpenViking tools or inject Profiles, Memories, and Experiences.
 
+### Scheduled Task Configuration
+
+Scheduled tasks are disabled by default. Set `bot.tools.cron.enabled` to `true` in `ov.conf` to enable them:
+
+```json
+{
+  "bot": {
+    "tools": {
+      "cron": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+This switch controls both `cron` tool registration and the scheduler in Gateway and local Chat modes. When set to `false` or omitted, the tool is not registered and the scheduler does not start. Existing jobs remain on disk but do not run automatically.
+
+Restart the Bot after changing this setting. Existing deployments must explicitly set `enabled: true` after upgrading to continue running scheduled jobs automatically. Subagents and `--eval` mode still do not provide scheduled task capabilities.
+
+The `vikingbot cron` commands remain available for manual job management; this switch does not restrict CLI management operations.
+
 ### MCP Tools
 
 Configure third-party MCP Servers under `bot.tools.mcp_servers`:
@@ -528,3 +550,4 @@ The repository includes `deploy/docker/deploy_langfuse.sh` for local deployment.
 - [Channels, Gateway, and Operations](docs/en/concepts/03-channels-and-gateway.md)
 - [VikingBot and OpenViking Integration](docs/en/concepts/04-openviking-integration.md)
 - [Channel Configuration](docs/en/concepts/05-channel.md)
+- [Skills: Local and Remote](docs/en/concepts/06-skills.md)

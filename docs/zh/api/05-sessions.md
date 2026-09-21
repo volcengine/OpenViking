@@ -44,7 +44,7 @@ Session API 按认证用户作用域访问会话，并返回 canonical user sess
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 | memory_policy | object | 否 | None | 会话默认的记忆抽取策略。可选的 `self` 和 `peer` 开关控制写入目标；可选的 `working_memory.enabled=false` 跳过 archive summary；可选的顶层 `memory_types` 将抽取限制为指定的 enabled memory schema。包含 `experiences` 时会自动激活 `cases` 和 `trajectories`；不包含 `experiences` 时，显式传入的 `cases` 和 `trajectories` 会被忽略。所有 `enabled` 值都应使用 JSON 布尔值。旧版 boolean-like 值暂时仍兼容（字符串 `"false"` 会正确解析为 false），但会产生弃用警告。未传或为 `null` 时允许所有 enabled memory schema。非法结构或未知 memory type 会以 `InvalidArgumentError` 拒绝。 |
-| auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。未传 policy 时 auto commit 关闭，除非 `memory.session_auto_commit.default_enabled=true`。之后可通过 `update_session_config()` 部分更新或禁用该策略。 |
+| auto_commit_policy | object | 否 | None | 可选的自动 commit 策略（见下表）。传入的字段会被校验并 clamp 到取值范围，然后合并到默认值之上；最终生效的策略会在响应的 `result.auto_commit_policy` 中返回，并持久化到 session meta。省略时，新 Session 先继承 `server.user_config_defaults.auto_commit_policy`，再沿用现有 `memory.session_auto_commit.default_enabled` 行为。之后可通过 `update_session_config()` 部分更新或禁用该策略。 |
 
 `auto_commit_policy` 字段（均为可选；存在 policy 时，未传字段回退到默认值）：
 
@@ -96,7 +96,7 @@ curl -X POST http://localhost:1933/api/v1/sessions \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 # 使用 HTTP 客户端
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -305,7 +305,7 @@ curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -730,7 +730,7 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/context?token_budget
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -840,7 +840,7 @@ curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/archives/archive_002
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -958,7 +958,7 @@ curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
@@ -1116,7 +1116,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import ContextPart, TextPart
 
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -1392,6 +1392,10 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 要提交的会话 ID |
 | keep_recent_count | int | 否 | 0 | 提交后保留为 live 状态的最近消息数 (保持 live, 不归档)。`0` (默认) 归档全部消息。 |
+| reset_context | bool | 否 | false | HTTP API：归档全部 live messages 后追加只含 `.done`（带 `context_reset`）的边界 archive，目录内没有消息文件。保留 session ID 和原始历史，清空注入上下文，并阻止后续摘要继承 reset 前的 overview。要求 `keep_recent_count=0`，且不设置 `retention_mode`。 |
+
+`reset_context` 供 OpenClaw 插件 reset hook 和 `Session.commit_async()` 使用；没有 live messages 时也会创建边界；若最新 archive 已是 reset 边界则不重复创建。旧 archive 的记忆提取可以继续完成，长期记忆保留。本次未增加 SDK/CLI 的专用参数。
+
 
 有效策略按 Session `.meta.json`、最新 `settings/user_config.json`、内核默认值的
 顺序解析。Phase 2 开始前会将完整有效策略固化到异步任务。

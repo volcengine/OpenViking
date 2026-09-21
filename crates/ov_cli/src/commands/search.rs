@@ -279,6 +279,7 @@ fn render_search_results_for_table_with_context(
             text_width,
             hide_level_and_score,
             split_name_description,
+            context.is_some_and(|context| context.mode == SearchRenderMode::SkillsFind),
             &mut lines,
         );
     }
@@ -409,6 +410,7 @@ fn render_search_result_card(
     text_width: usize,
     hide_level_and_score: bool,
     split_name_and_description: bool,
+    prefer_root_uri: bool,
     lines: &mut Vec<String>,
 ) {
     let object = item.as_object();
@@ -434,7 +436,13 @@ fn render_search_result_card(
         metadata.join(" · ")
     ));
 
-    if let Some(uri) = search_result_uri(object) {
+    let root_uri = object
+        .filter(|_| prefer_root_uri)
+        .and_then(|object| object.get("root_uri"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty());
+    if let Some(uri) = root_uri.or_else(|| search_result_uri(object)) {
         for line in wrap_display_text(uri, text_width, SEARCH_MAX_URI_LINES) {
             lines.push(format!("{SEARCH_INDENT}{}", theme::sky_value(line).bold()));
         }

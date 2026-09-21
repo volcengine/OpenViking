@@ -124,8 +124,7 @@ class TestUriToTreePath:
     def test_session_uri(self, vfs):
         ctx = _make_ctx()
         assert (
-            vfs._uri_to_tree_path("viking://user/user1/sessions", ctx=ctx)
-            == "user/user1/sessions"
+            vfs._uri_to_tree_path("viking://user/user1/sessions", ctx=ctx) == "user/user1/sessions"
         )
 
     def test_trailing_slash_kept_as_directory(self, vfs):
@@ -1107,3 +1106,43 @@ async def test_vikingfs_get_gitignore_maps_non_utf8_to_invalid_operation(vfs):
     with pytest.raises(AGFSInvalidOperationError) as excinfo:
         await vfs.get_gitignore(ctx=ctx)
     assert "utf-8" in str(excinfo.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_restore_dry_run_for_user_does_not_take_tree_lock(vfs, monkeypatch):
+    """A dry run only plans; locking would recreate a deleted project_dir."""
+    from openviking.server.identity import Role
+
+    root = _make_ctx(account="acct_dry_user")
+    user = RequestContext(user=UserIdentifier("acct_dry_user", "user1"), role=Role.USER)
+    await vfs.write_file("viking://resources/proj/a.md", b"v1", ctx=root)
+    c1 = await vfs.commit(message="v1", paths=["viking://resources/proj/a.md"], ctx=root)
+    await vfs.write_file("viking://resources/proj/a.md", b"v2", ctx=root)
+    await vfs.commit(message="v2", paths=["viking://resources/proj/a.md"], ctx=root)
+
+    tree_locks = []
+    orig_tree = vfs._async_agfs.pathlock_acquire_tree
+
+    async def spy_tree(path, *args, **kwargs):
+        tree_locks.append(path)
+        return await orig_tree(path, *args, **kwargs)
+
+    monkeypatch.setattr(vfs._async_agfs, "pathlock_acquire_tree", spy_tree)
+
+    result = await vfs.restore(
+        project_dir="viking://resources/proj",
+        source_commit=c1["commit_oid"],
+        dry_run=True,
+        ctx=user,
+    )
+    assert result["result"] == "dry_run"
+    assert any(item["path"] == "a.md" for item in result["diff"]["to_write"])
+    assert tree_locks == []
+
+    applied = await vfs.restore(
+        project_dir="viking://resources/proj",
+        source_commit=c1["commit_oid"],
+        ctx=user,
+    )
+    assert applied["result"] == "applied"
+    assert tree_locks == ["/local/acct_dry_user/resources/proj"]

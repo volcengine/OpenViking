@@ -1,10 +1,10 @@
-import { buildRecallBlock } from "./shared/recall-core.mjs"
+import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs"
 import { isBypassed } from "./shared/session-model.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
   async function injectRelevantMemories(input, output) {
-    if (!config.autoRecall?.enabled) return
+    if (!isRecallEnabled(config)) return
     const query = extractCurrentUserText(output.parts ?? [])
     if (!query) return
     if (query.length < config.minQueryLength) return
@@ -27,6 +27,7 @@ export function createMemoryRecall({ config, sessionManager }) {
       query,
       {
         actorPeerId: effectivePeerId(config),
+        legacyPeerId: config.effectivePeer?.legacyPeerId ?? "",
         // The mapped OV session is what turns on server-side query expansion
         // and the cross-turn dedup ledger.
         sessionId: sessionID ? sessionManager.getMappedSessionId(sessionID) : "",

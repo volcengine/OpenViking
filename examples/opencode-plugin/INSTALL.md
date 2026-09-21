@@ -49,12 +49,15 @@ Use this method for development, debugging, or PR testing. OpenCode's recommende
 Run the following commands from the repository root:
 
 ```bash
+node examples/memory-plugin-shared/sync.mjs
 mkdir -p ~/.config/opencode/plugins/openviking
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
+
+`sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
 
 After installation, the layout should look like this:
 
@@ -81,37 +84,44 @@ If you install through an npm package, you can also use `examples/opencode-plugi
 
 ## Configuration
 
-Create the user-level configuration file:
+Behaviour knobs live in the shared client configuration file:
 
 ```bash
-~/.config/opencode/openviking-config.json
+~/.openviking/ovcli.conf
 ```
 
 Example configuration:
 
 ```json
 {
-  "enabled": true,
-  "mcp": { "enabled": true },
-  "timeoutMs": 30000,
-  "repoContext": { "enabled": true, "cacheTtlMs": 60000 },
-  "autoRecall": {
-    "enabled": true,
-    "limit": 6,
-    "scoreThreshold": 0.35,
-    "maxContentChars": 500,
-    "preferAbstract": true,
-    "tokenBudget": 2000,
-    "minQueryLength": 3
-  },
-  "commitTokenThreshold": 20000,
-  "commitKeepRecentCount": 10,
-  "profileTokenBudget": 10000,
-  "resumeContextBudget": 32000
+  "url": "http://127.0.0.1:1933",
+  "api_key": "your-api-key-here",
+  "plugin": {
+    "recallLimit": 6,
+    "opencode": {
+      "enabled": true,
+      "mcpEnabled": true,
+      "timeoutMs": 30000,
+      "repoContext": true,
+      "repoContextCacheTtlMs": 60000,
+      "autoRecall": true,
+      "scoreThreshold": 0.35,
+      "recallMaxContentChars": 500,
+      "recallPreferAbstract": true,
+      "recallTokenBudget": 2000,
+      "minQueryLength": 3,
+      "commitTokenThreshold": 20000,
+      "commitKeepRecentCount": 10,
+      "profileTokenBudget": 10000,
+      "resumeContextBudget": 32000
+    }
+  }
 }
 ```
 
-`autoRecall.limit` is a legacy quota-scaling input, not a final result cap.
+Keys in `plugin` apply to every harness; keys in `plugin.opencode` apply to this one and override them. Resolution is `OPENVIKING_*` environment variables → the workspace's `.openviking/config.json`, `.openviking/config.local.json` and machine registry entry → `plugin.opencode` → `plugin` → built-in defaults. Every knob, with its type, default, range, environment variable and accepted older spellings, is declared in [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs).
+
+`recallLimit` is a legacy quota-scaling input, not a final result cap.
 Explicit values from 1 through 5 produce an effective total quota of 6 because
 each coding category keeps one retrieval slot.
 
@@ -121,11 +131,11 @@ It is recommended to provide the API key through an environment variable instead
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; leave them empty when using API-key mode with user/admin API keys. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`.
+API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; an `api_key` server reads both out of the key, so the plugin withholds them there. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`.
 
-`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `openviking-config.json`.
+`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `ovcli.conf`.
 
-For advanced setups, use `OPENVIKING_PLUGIN_CONFIG` to point to another configuration file path.
+For advanced setups, use `OPENVIKING_CLI_CONFIG_FILE` to point to an `ovcli.conf` at another path.
 
 ### Hook-only mode
 
@@ -134,7 +144,9 @@ keeping this plugin's lifecycle hooks active:
 
 ```json
 {
-  "mcp": { "enabled": false }
+  "plugin": {
+    "opencode": { "mcpEnabled": false }
+  }
 }
 ```
 
@@ -194,6 +206,7 @@ Usage guidance:
 - Use `openviking_list` to explore directory structure.
 - Before deleting anything, obtain explicit user confirmation first; then call `openviking_forget`.
 - If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to the MCP tools.
+- A `bash` command that contains a `viking://` URI still runs; the plugin appends a notice pointing to the MCP tools to its output, which the agent can ignore when the URI is intentional.
 
 ## Local Files with `openviking_add_resource`
 
@@ -226,7 +239,7 @@ Possible files include:
 - `openviking-memory.log`
 - `openviking-session-state.json`
 
-You can change this directory with `runtime.dataDir` in the configuration.
+You can change this directory with `dataDir` in `plugin.opencode`.
 
 These are local runtime files and should not be committed to the repository.
 
@@ -235,7 +248,8 @@ These are local runtime files and should not be committed to the repository.
 | Issue | What to check |
 |-------|---------------|
 | Plugin does not load | For package installs, confirm `~/.config/opencode/opencode.json` contains `@openviking/opencode-plugin`; for source installs, confirm `~/.config/opencode/plugins/openviking.js` exists |
-| MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars / `OPENVIKING_PLUGIN_CONFIG` to the intended config path |
+| Load fails with a missing `lib/shared/*.mjs` module | The source copy was made without running `sync.mjs` first. Run `node examples/memory-plugin-shared/sync.mjs` from the repository root and copy `lib/` again |
+| MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars / `OPENVIKING_CLI_CONFIG_FILE` to the intended config path |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
-| Recall is empty | Confirm OpenViking has indexed memories/resources and `autoRecall.enabled` is `true` |
+| Recall is empty | Confirm OpenViking has indexed memories/resources and `autoRecall` is `true` |
 | Local `openviking_add_resource` fails | Pass a file path, not a directory; local directories are not uploaded automatically yet |

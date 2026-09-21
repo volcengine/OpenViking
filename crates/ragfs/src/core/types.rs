@@ -8,6 +8,26 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+/// Supported directory listing sort fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListSortBy {
+    /// Sort entries by name.
+    Name,
+    /// Sort entries by modification time.
+    Mtime,
+}
+
+/// Supported directory listing sort directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    /// Sort values in ascending order.
+    Asc,
+    /// Sort values in descending order.
+    Desc,
+}
+
 /// Grep match result
 ///
 /// Represents a single match found during a grep operation.

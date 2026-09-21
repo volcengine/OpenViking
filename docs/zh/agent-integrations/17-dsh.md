@@ -63,7 +63,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 模型看到的工具面就是 OpenViking 的 MCP 工具集，经由与其他记忆集成相同的 stdio 代理接入，以 `mcp__openviking__` 前缀发布。由于该代理每个 profile 只起一个进程，`mcp__openviking__remember` 写入的是服务端一个短生命周期的会话而不是当前会话（对话本身仍由自动捕获记录），工具调用带的也是启动时解析的 actor peer。若一个进程要服务多个工作区且需要精确归属工具调用，请显式设置 `OPENVIKING_PEER_ID`。插件同时附带共享的 `openviking-memory` 技能，让模型知道何时该检索、读取和写入。
 
-误把 `viking://` URI 当本地路径的文件或 shell 调用会被拦截，并提示改用对应的 OpenViking 工具。
+文件工具误把 `viking://` URI 当本地路径时，调用会被拦截，并提示改用对应的 OpenViking 工具；shell 命令带 `viking://` URI 时照常执行，模型会收到一条改用 OpenViking 工具的提示，URI 是有意传入的数据时可以忽略。
 
 <details>
 <summary><b>配置</b></summary>
@@ -76,7 +76,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | — | API Key（以 `Authorization: Bearer` 发送） |
 | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` | — | 可信模式下的 account 与 user |
 | `OPENVIKING_PEER_ID` | — | 显式指定 actor peer |
-| `OPENVIKING_WORKSPACE_PEER` | `true` | 按每个会话的工作区推导 peer |
+| `OPENVIKING_WORKSPACE_PEER` | `true` | 按每个会话的工作区推导 peer；设为 `0` 则不发送 peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` | 设为 `actor` 可将召回限制在当前工作区 |
 | `OV_DEBUG_LOG` | — | 把调试日志写到该路径 |
 
@@ -99,7 +99,11 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
             commitTokenThreshold: 20000
 ```
 
-patch 中写的凭证优先于环境变量；行为开关则优先读环境变量。完整参数列表见[插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin)。
+同一个 `config` 块里的 `syncTurns: false` 让该集成变成只读：画像注入和记忆召回照常，但什么都不再写回——不捕获对话、不 commit，也不重放此前会话排入队列的写入，那些写入会一直留在队列里，直到某个仍在写入的会话把它们排空。
+
+同一个 `config` 块里的 `peerSource` 决定工作区 peer 的派生方式。默认的 `"git"` 取仓库归一化后的 `origin` URL（`git@github.com:volcengine/OpenViking.git` 得到 `github.com-volcengine-openviking`），其次是仓库根路径，因此同一个仓库的每个 clone、worktree 和子目录共用同一个 peer；不在仓库中则完全不发送 peer，在那里记下的内容进入用户级空间 `viking://user/<you>/memories`。`"cwd"` 恢复此前的行为——把工作目录路径中的非字母数字字符全部替换成 `-`；`"none"` 则完全不发送 peer。要让仓库之外的目录拥有独立记忆，请为它设置 `OPENVIKING_PEER_ID`（见[让一个目录拥有独立记忆](../configuration/02-client.md#让一个目录拥有独立记忆)）。
+
+patch 中写的凭证优先于环境变量。行为旋钮按优先级从高到低解析：`OPENVIKING_*` 环境变量、工作区的 `.openviking/config.json` 与 `config.local.json`、`ovcli.conf` 的 `plugin.dsh`、`ovcli.conf` 的 `plugin`，最后才是这个 patch 块。完整参数列表见[插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/dsh-memory-plugin)。
 
 </details>
 

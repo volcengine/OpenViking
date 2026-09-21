@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { guardVikingUri } from "./uri-guard.mjs";
+import { guardVikingUri, noticeVikingUri } from "./uri-guard.mjs";
 
-test("uri guard blocks every DSH filesystem and shell tool that accepts paths", async () => {
+test("uri guard blocks every DSH filesystem tool that accepts paths", async () => {
   const cases = [
     ["read", { file_path: "viking://user/default/memories/profile.md" }],
     ["write", { file_path: "viking://user/default/memories/profile.md" }],
     ["edit", { file_path: "viking://user/default/memories/profile.md" }],
     ["glob", { path: "viking://user/default/memories" }],
     ["grep", { path: "viking://user/default/memories", pattern: "profile" }],
-    ["bash", { command: "cat viking://user/default/memories/profile.md" }],
     ["str_replace_editor", {
       command: "view",
       path: "viking://user/default/memories/profile.md",
@@ -98,8 +97,6 @@ test("uri guard still denies a viking URI used as a location", async () => {
     // A path key the list does not know about is still swept, so the fallback
     // keeps its reason to exist.
     ["glob", { targets: { primary: "viking://user/default/memories" } }],
-    // bash carries its path inside `command`, which is not content.
-    ["bash", { command: "cat viking://user/default/memories/p.md" }],
   ];
 
   for (const [name, args] of cases) {
@@ -107,3 +104,86 @@ test("uri guard still denies a viking URI used as a location", async () => {
     assert.equal(decision.kind, "deny", name);
   }
 });
+
+test("uri guard lets grep search for viking URI text in a local tree", async () => {
+  const exec = { name: "grep", arguments: { pattern: "viking://user/default", path: "/tmp" } };
+  const next = async () => ({ kind: "allow", marker: true });
+  assert.deepEqual(await guardVikingUri(exec, next), { kind: "allow", marker: true });
+  const accepted = { kind: "accept" };
+  assert.equal(await noticeVikingUri(exec, okResult(), async () => accepted), accepted);
+});
+
+test("shell commands carrying a viking URI run and get a notice", async () => {
+  const exec = {
+    name: "bash",
+    arguments: { command: "ov read viking://user/default/memories/profile.md" },
+  };
+  let delegated = false;
+  await guardVikingUri(exec, async () => {
+    delegated = true;
+    return { kind: "allow" };
+  });
+  assert.equal(delegated, true);
+
+  const decision = await noticeVikingUri(exec, okResult(), async () => ({ kind: "accept" }));
+  assert.equal(decision.kind, "accept");
+  assert.equal(decision.additionalContexts.length, 1);
+  const [context] = decision.additionalContexts;
+  assert.equal(context.role, "user");
+  assert.equal(context.source.kind, "plugin");
+  assert.equal(context.source.plugin, "openviking-memory");
+  assert.equal(context.source.form, "notice");
+  assert.match(context.source.summary, /viking:\/\/user\/default\/memories\/profile\.md/);
+  assert.match(context.content[0].text, /ignore this notice/);
+  assert.match(context.content[0].text, /mcp__openviking__read/);
+});
+
+test("the notice summary stays within dsh's context summary bound", async () => {
+  const uri = `viking://resources/${"deep/".repeat(60)}file.md`;
+  const decision = await noticeVikingUri(
+    { name: "bash", arguments: { command: `cat ${uri}` } },
+    okResult(),
+    async () => ({ kind: "accept" }),
+  );
+  const { summary } = decision.additionalContexts[0].source;
+  assert.ok(summary.length > 0);
+  assert.ok(summary.length <= 120, `summary is ${summary.length} chars`);
+});
+
+test("the notice keeps a downstream decision and its contexts", async () => {
+  const exec = { name: "bash", arguments: { command: "cat viking://user/default/memories/p.md" } };
+  const earlier = { id: "earlier-context" };
+  const feedback = [{ type: "text", text: "blocked downstream" }];
+  const decision = await noticeVikingUri(exec, okResult(), async () => ({
+    kind: "block",
+    feedback,
+    additionalContexts: [earlier],
+  }));
+  assert.equal(decision.kind, "block");
+  assert.equal(decision.feedback, feedback);
+  assert.equal(decision.additionalContexts.length, 2);
+  assert.equal(decision.additionalContexts[0], earlier);
+  assert.equal(decision.additionalContexts[1].source.form, "notice");
+});
+
+test("the notice leaves file tools, plain shell commands, and denied reads alone", async () => {
+  const cases = [
+    [{ name: "read", arguments: { file_path: "viking://user/default/memories/p.md" } }, {
+      isError: true,
+      error: { message: "viking:// URIs are OpenViking virtual paths" },
+      content: [{ type: "text", text: "Error: viking:// URIs are OpenViking virtual paths" }],
+    }],
+    [{ name: "write", arguments: { file_path: "/tmp/a.md", content: "viking://user/default/" } }, okResult()],
+    [{ name: "bash", arguments: { command: "ls /tmp" } }, okResult()],
+    [{ name: "mcp__openviking__read", arguments: { uris: "viking://user/default/" } }, okResult()],
+  ];
+
+  for (const [exec, result] of cases) {
+    const downstream = { kind: "accept" };
+    assert.equal(await noticeVikingUri(exec, result, async () => downstream), downstream, exec.name);
+  }
+});
+
+function okResult() {
+  return { isError: false, value: "", content: [{ type: "text", text: "" }] };
+}

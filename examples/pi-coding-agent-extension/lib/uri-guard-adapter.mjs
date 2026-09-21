@@ -1,4 +1,4 @@
-import { buildGuardMessage, findVikingUri, normalizeToolName } from "../shared/uri-guard.mjs";
+import { evaluateUriGuard, evaluateUriNotice } from "../shared/uri-guard.mjs";
 
 const VIKING_URI_TOOL_HINTS = {
   read: {
@@ -23,20 +23,25 @@ const VIKING_URI_TOOL_HINTS = {
   },
 };
 
-export function guardVikingUriToolCall(event) {
-  const toolName = normalizeToolName(event?.toolName ?? event?.tool_name ?? event?.name);
-  const hint = VIKING_URI_TOOL_HINTS[toolName];
-  if (!hint) return null;
-
-  const input = event?.input ?? event?.args ?? event?.params ?? {};
-  const uri = findVikingUri(input);
-  if (!uri) return null;
-
+function readPiToolEvent(event) {
   return {
-    block: true,
-    reason: buildGuardMessage(uri, {
-      tool: hint.tool,
-      example: hint.example(uri, input),
-    }),
+    toolName: event?.toolName ?? event?.tool_name ?? event?.name,
+    input: event?.input ?? event?.args ?? event?.params ?? {},
   };
+}
+
+export function guardVikingUriToolCall(event) {
+  const { toolName, input } = readPiToolEvent(event);
+  const decision = evaluateUriGuard(toolName, input, { hints: VIKING_URI_TOOL_HINTS });
+  return decision ? { block: true, reason: decision.reason } : null;
+}
+
+// A tool_result handler's content replaces the result's content, so the
+// original blocks are carried over and the notice is appended after them.
+export function noticeVikingUriToolResult(event) {
+  const { toolName, input } = readPiToolEvent(event);
+  const notice = evaluateUriNotice(toolName, input, { hints: VIKING_URI_TOOL_HINTS });
+  if (!notice) return null;
+  const content = Array.isArray(event?.content) ? event.content : [];
+  return { content: [...content, { type: "text", text: notice.reason }] };
 }

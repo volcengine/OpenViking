@@ -9,18 +9,31 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import And, Contains, Eq, In, Or, PathScope
+from openviking.storage.expr import And, Contains, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb import engine as vectordb_engine
+from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
+from openviking.storage.vectordb_adapters.vikingdb_private_adapter import (
+    VikingDBPrivateCollectionAdapter,
+)
 from openviking.storage.viking_vector_index_backend import (
     VectorTransferRollbackError,
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
-from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+
+
+class _EnabledAclConfig:
+    async def get_account(self, account_id: str, field: str):
+        del account_id, field
+        return SimpleNamespace(enabled=True)
 
 
 def _ctx() -> RequestContext:
@@ -55,12 +68,24 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
         self.partial_delete_count = 0
         self.drop_delete_requests = False
         self.backend_mode = "local"
+        self.vector_dim = 2
         self.scroll_filters = []
         self.acl_manager = None
 
     @property
     def mode(self) -> str:
         return self.backend_mode
+
+    def _get_backend_for_context(self, ctx):
+        del ctx
+        return SimpleNamespace(strict_query=self._query)
+
+    async def _query(self, *, filter, limit=10, offset=0, output_fields=None):
+        del output_fields
+        self.scroll_filters.append(filter)
+        return [
+            dict(record) for record in self.records.values() if _matches_filter(filter, record)
+        ][offset : offset + limit]
 
     async def scroll(
         self,
@@ -137,7 +162,7 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
 
 
 class _TransferAclManager:
-    def is_enabled(self, account_id: str) -> bool:
+    async def is_enabled(self, account_id: str) -> bool:
         return account_id == "acct"
 
     async def materialize_context_records(self, records, ctx):
@@ -145,7 +170,7 @@ class _TransferAclManager:
         return [
             {
                 **record,
-                "acl_enabled": True,
+                "acl_mode": "inherit",
                 "acl_direct_grants": [],
                 "acl_inherited_grants": ["1:group:target-readers"],
             }
@@ -155,7 +180,7 @@ class _TransferAclManager:
     async def materialize_moved_record(self, record, new_uri, ctx):
         del new_uri, ctx
         return {
-            "acl_enabled": True,
+            "acl_mode": record.get("acl_mode", "inherit"),
             "acl_direct_grants": list(record.get("acl_direct_grants") or []),
             "acl_inherited_grants": ["1:group:target-readers"],
         }
@@ -165,6 +190,73 @@ class _AclMemoryTransferBackend(_MemoryTransferBackend):
     def __init__(self, records: list[dict[str, Any]]) -> None:
         super().__init__(records)
         self.acl_manager = _TransferAclManager()
+
+    async def upsert_many(
+        self, data_list: list[dict[str, Any]], *, ctx: RequestContext
+    ) -> list[str]:
+        return await VikingVectorIndexBackend.upsert_many(self, data_list, ctx=ctx)
+
+
+def _matches_filter(expr, record: dict[str, Any]) -> bool:
+    if expr is None:
+        return True
+    if isinstance(expr, And):
+        return all(_matches_filter(cond, record) for cond in expr.conds)
+    if isinstance(expr, Or):
+        return any(_matches_filter(cond, record) for cond in expr.conds)
+    if isinstance(expr, Eq):
+        return record.get(expr.field) == expr.value
+    if isinstance(expr, In):
+        value = record.get(expr.field)
+        if isinstance(value, list):
+            return any(item in expr.values for item in value)
+        return value in expr.values
+    if isinstance(expr, Contains):
+        return expr.substring in str(record.get(expr.field, ""))
+    if isinstance(expr, PathScope):
+        root = uri_parts(expr.path)
+        path = uri_parts(str(record.get(expr.field, "")))
+        if path[: len(root)] != root:
+            return False
+        return expr.depth == -1 or len(path) - len(root) <= expr.depth
+    if isinstance(expr, RawDSL) and expr.payload["op"] == "prefix":
+        return str(record.get(expr.payload["field"], "")).startswith(expr.payload["prefix"])
+    raise AssertionError(f"Unexpected filter expression in test: {expr!r}")
+
+
+class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
+    """Memory vector boundary with the production ACL manager."""
+
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        super().__init__(records)
+        self.acl_manager = AclManager(self, _EnabledAclConfig())
+        self.scroll_output_fields = []
+
+    async def scroll(
+        self,
+        filter=None,
+        limit: int = 100,
+        cursor: str | None = None,
+        output_fields=None,
+        *,
+        ctx: RequestContext,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        del ctx
+        self.scroll_output_fields.append(list(output_fields or []))
+        self.scroll_filters.append(filter)
+        offset = int(cursor or 0)
+        ordered = [
+            dict(self.records[key])
+            for key in sorted(self.records)
+            if _matches_filter(filter, self.records[key])
+        ]
+        page = ordered[offset : offset + limit]
+        next_cursor = str(offset + limit) if offset + limit < len(ordered) else None
+        return page, next_cursor
+
+    async def _strict_transfer_count(self, ctx, filter):
+        del ctx
+        return sum(_matches_filter(filter, record) for record in self.records.values())
 
     async def upsert_many(
         self, data_list: list[dict[str, Any]], *, ctx: RequestContext
@@ -222,6 +314,12 @@ async def test_copy_uri_mapping_scans_real_local_path_records(tmp_path):
         assert result.scanned == 1
         copied = await backend.get_context_by_uri(target, ctx=_ctx())
         assert [record["uri"] for record in copied] == [target]
+
+        first_page, cursor = await backend.scroll(limit=1, ctx=_ctx())
+        assert cursor is not None
+        last_page, cursor = await backend.scroll(limit=2, cursor=cursor, ctx=_ctx())
+        assert cursor is None
+        assert [record["uri"] for record in first_page + last_page] == [source, target]
     finally:
         await backend.close()
 
@@ -285,7 +383,7 @@ async def test_get_l2_abstracts_by_uris_uses_strict_batched_lookup():
 
 
 @pytest.mark.asyncio
-async def test_strict_scroll_propagates_real_adapter_query_failure():
+async def test_scroll_propagates_real_adapter_query_failure():
     backend = _SingleAccountBackend.__new__(_SingleAccountBackend)
     backend._bound_account_id = "acct"
     backend._async_adapter = SimpleNamespace(
@@ -293,7 +391,7 @@ async def test_strict_scroll_propagates_real_adapter_query_failure():
     )
 
     with pytest.raises(RuntimeError, match="injected query failure"):
-        await backend.strict_scroll(limit=100, output_fields=["id", "uri"])
+        await backend.scroll(limit=100, output_fields=["id", "uri"])
 
 
 @pytest.mark.asyncio
@@ -337,12 +435,12 @@ async def test_transfer_scan_fails_closed_on_repeated_record_page():
 
 
 @pytest.mark.asyncio
-async def test_copy_uri_mapping_preserves_dense_sparse_and_chunk_payloads():
+async def test_copy_uri_mapping_preserves_dense_and_sparse_payloads():
     source = "viking://resources/src.md"
     backend = _MemoryTransferBackend(
         [
             _record("source-file", source, sparse_vector={}),
-            _record("source-chunk", f"{source}#chunk_0001", vector=[]),
+            _record("source-l0", source, level=0, vector=[]),
             _record("outside", "viking://resources/other.md"),
         ]
     )
@@ -355,7 +453,6 @@ async def test_copy_uri_mapping_preserves_dense_sparse_and_chunk_payloads():
     assert result.written == 2
     assert {record["uri"] for record in copied} == {
         "viking://resources/dst.md",
-        "viking://resources/dst.md#chunk_0001",
     }
     assert {tuple(record["vector"]) for record in copied} == {(), (0.1, 0.2)}
     assert {tuple(record["sparse_vector"].items()) for record in copied} == {
@@ -365,10 +462,11 @@ async def test_copy_uri_mapping_preserves_dense_sparse_and_chunk_payloads():
 
 
 @pytest.mark.asyncio
-async def test_volcengine_transfer_scope_avoids_unsupported_contains_filter():
+@pytest.mark.parametrize("mode", ["local", "volcengine", "vikingdb", "bytedviking", "custom"])
+async def test_remote_transfer_scope_avoids_unsupported_contains_filter(mode):
     source = "viking://resources/src.md"
     backend = _MemoryTransferBackend([_record("source", source)])
-    backend.backend_mode = "volcengine"
+    backend.backend_mode = mode
 
     await backend.copy_uri_mapping(_ctx(), source, "viking://resources/dst.md", recursive=False)
 
@@ -376,31 +474,1030 @@ async def test_volcengine_transfer_scope_avoids_unsupported_contains_filter():
     for filter_expr in backend.scroll_filters:
         assert isinstance(filter_expr, And)
         scopes = next(cond for cond in filter_expr.conds if isinstance(cond, Or)).conds
-        assert not any(isinstance(scope, Contains) for scope in scopes)
-        assert any(
-            isinstance(scope, PathScope) and scope.path == "viking://resources" for scope in scopes
+        assert all(isinstance(scope, Eq) and scope.field == "uri" for scope in scopes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_entries", [False, True], ids=["source", "target"])
+@pytest.mark.parametrize("recursive", [False, True], ids=["file", "directory"])
+@pytest.mark.parametrize("mode", ["vikingdb", "bytedviking", "custom"])
+async def test_transfer_scan_emits_supported_aggregate_request(
+    monkeypatch, selected_entries, recursive, mode
+):
+    root = "viking://resources/docs"
+    entry = f"{root}/file.md"
+    uri = root if recursive else entry
+    records = [
+        _record("file", entry),
+        _record("chunk", entry + "#chunk_0001"),
+        _record("sibling", "viking://resources/other.md"),
+    ]
+    backend = _RealAclMemoryTransferBackend(records)
+    backend.backend_mode = mode
+    adapter = VikingDBPrivateCollectionAdapter(
+        host="unused.invalid",
+        headers=None,
+        project_name="test",
+        collection_name="context",
+        index_name="default",
+    )
+    collection = VikingDBCollection(
+        host="unused.invalid",
+        meta_data={"ProjectName": "test", "CollectionName": "context"},
+    )
+    adapter._collection = Collection(collection)
+    requests = []
+
+    def validate_dsl(node):
+        # The deployed recall service accepts path-index must queries, not
+        # contains/prefix. Validate the actual adapter output at the I/O boundary.
+        assert node["op"] in {"and", "or", "must"}, node
+        if node["op"] in {"and", "or"}:
+            for child in node["conds"]:
+                validate_dsl(child)
+        elif node["field"] == "uri":
+            assert all(value.startswith("/") for value in node["conds"])
+            assert node["para"] in {"-d=0", "-d=-1"}
+
+    async def count(ctx, filter):
+        def data_post(path, data):
+            assert path == "/api/vikingdb/data/agg"
+            assert data["project"] == "test"
+            assert data["collection_name"] == "context"
+            assert data["index_name"] == "default"
+            assert data["op"] == "count"
+            validate_dsl(data["filter"])
+            requests.append(data)
+            return {"agg": {"_total": sum(_matches_filter(filter, record) for record in records)}}
+
+        monkeypatch.setattr(collection, "_data_post", data_post)
+        return adapter.count(filter)
+
+    monkeypatch.setattr(backend, "_strict_transfer_count", count)
+    found, _ = await backend._scan_uri_transfer_scope(
+        _ctx(),
+        uri,
+        recursive=recursive,
+        include_full_records=True,
+        entry_uris=[entry] if selected_entries else None,
+    )
+    assert requests
+    assert {record["id"] for record in found} == (
+        {"file", "chunk"} if recursive and not selected_entries else {"file"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_transfer_reads_use_private_adapter_query_and_fetch(monkeypatch):
+    source = "viking://resources/source.md"
+    backend = _MemoryTransferBackend([])
+    adapter = VikingDBPrivateCollectionAdapter(
+        host="unused.invalid",
+        headers=None,
+        project_name="test",
+        collection_name="context",
+        index_name="default",
+    )
+    collection = VikingDBCollection(
+        host="unused.invalid", meta_data={"ProjectName": "test", "CollectionName": "context"}
+    )
+    adapter._collection = Collection(collection)
+    account_backend = _SingleAccountBackend(VectorDBBackendConfig(), "acct", shared_adapter=adapter)
+    monkeypatch.setattr(backend, "_get_backend_for_context", lambda ctx: account_backend)
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_get",
+        VikingVectorIndexBackend._strict_transfer_get.__get__(backend),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.vectordb_adapters.base.get_openviking_config",
+        lambda: SimpleNamespace(embedding=SimpleNamespace(dimension=2)),
+    )
+    paths = []
+
+    def data_post(path, data):
+        paths.append(path)
+        if path == "/api/vikingdb/data/search/vector":
+            assert data["limit"] == 100 and data["offset"] == 0
+            assert len(data["dense_vector"]) == 2
+            assert "field" not in data and "order" not in data
+            assert data["filter"] == {
+                "op": "and",
+                "conds": [
+                    {"op": "must", "field": "account_id", "conds": ["acct"]},
+                    {
+                        "op": "and",
+                        "conds": [
+                            {"op": "must", "field": "account_id", "conds": ["acct"]},
+                            {
+                                "op": "must",
+                                "field": "uri",
+                                "conds": ["/resources/source.md"],
+                                "para": "-d=0",
+                            },
+                        ],
+                    },
+                ],
+            }
+            return {
+                "data": [
+                    {"id": "file", "fields": {"uri": "/resources/source.md"}},
+                    {"id": "gone", "fields": {"uri": "/resources/source.md"}},
+                ]
+            }
+        if path == "/api/vikingdb/data/fetch_in_collection":
+            assert data["ids"] == ["file", "gone"]
+            return {
+                "fetch": [
+                    {
+                        "id": "file",
+                        "fields": {
+                            "uri": "/resources/source.md",
+                            "account_id": "acct",
+                            "vector": [0.1, 0.2],
+                        },
+                    }
+                ],
+                "ids_not_exist": ["gone"],
+            }
+        raise AssertionError(f"Legacy reads must not use aggregate or scalar search: {path}")
+
+    monkeypatch.setattr(collection, "_data_post", data_post)
+    records, _ = await backend._read_uri_transfer_entries(
+        _ctx(), [source], include_full_records=True
+    )
+    assert [(r["id"], r["uri"], r["vector"]) for r in records] == [("file", source, [0.1, 0.2])]
+    assert paths == ["/api/vikingdb/data/search/vector", "/api/vikingdb/data/fetch_in_collection"]
+
+
+@pytest.mark.asyncio
+async def test_l2_diff_scan_reads_every_page_under_target_directory():
+    root = "viking://resources/docs"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("a", f"{root}/a.py", md5="ma", abstract="A"),
+            _record("b", f"{root}/sub/b.py", md5="mb", abstract="B"),
+            _record("ghost", f"{root}/ghost.py", md5="mg", abstract="G"),
+            _record("directory", root, level=1),
+            _record("outside", "viking://resources/other.py"),
+            _record("other-account", f"{root}/private.py", account_id="other"),
+        ]
+    )
+
+    records = await backend.get_l2_diff_records_under_uri(root, ctx=_ctx(), batch_size=2)
+
+    assert records == {
+        f"{root}/a.py": {"md5": "ma", "abstract": "A"},
+        f"{root}/ghost.py": {"md5": "mg", "abstract": "G"},
+        f"{root}/sub/b.py": {"md5": "mb", "abstract": "B"},
+    }
+    assert len(backend.scroll_filters) == 2
+
+
+@pytest.mark.asyncio
+async def test_incremental_inventory_reads_all_semantic_levels_under_target():
+    root = "viking://resources/docs"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("root-l0", root, level=0, abstract="root abstract"),
+            _record("root-l1", root, level=1, abstract="root overview"),
+            _record("file-l2", f"{root}/a.py", level=2, md5="ma"),
+            _record("outside", "viking://resources/other.py", level=2),
+            _record(
+                "other-account",
+                f"{root}/private.py",
+                level=2,
+                account_id="other",
+            ),
+        ]
+    )
+
+    records = await backend.get_incremental_inventory_under_uri(root, ctx=_ctx(), batch_size=2)
+
+    assert records == {
+        "root-l0": {"id": "root-l0", "uri": root, "level": 0, "md5": ""},
+        "root-l1": {"id": "root-l1", "uri": root, "level": 1, "md5": ""},
+        "file-l2": {
+            "id": "file-l2",
+            "uri": f"{root}/a.py",
+            "level": 2,
+            "md5": "ma",
+        },
+    }
+    assert len(backend.scroll_filters) == 2
+
+
+@pytest.mark.asyncio
+async def test_incremental_inventory_projects_request_scalar_fields():
+    root = "viking://resources/docs"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record(
+                "file-l2",
+                f"{root}/a.py",
+                level=2,
+                md5="ma",
+                search_tags=["env=test"],
+            )
+        ]
+    )
+
+    records = await backend.get_incremental_inventory_under_uri(
+        root,
+        ctx=_ctx(),
+        output_fields=["id", "uri", "level", "md5", "search_tags"],
+    )
+
+    assert records["file-l2"]["search_tags"] == ["env=test"]
+    assert all("search_tags" in fields for fields in backend.scroll_output_fields)
+    assert all("vector" not in fields for fields in backend.scroll_output_fields)
+    assert all("sparse_vector" not in fields for fields in backend.scroll_output_fields)
+
+
+@pytest.mark.asyncio
+async def test_incremental_hydration_uses_dsl_then_fetches_only_missing_ids():
+    root = "viking://resources/docs"
+    first = _record("root-l0", root, level=0, abstract="root abstract")
+    second = _record("file-l2", f"{root}/a.py", level=2, md5="ma")
+    backend = _MemoryTransferBackend([first, second])
+    backend._strict_transfer_page = AsyncMock(return_value=([dict(first)], None))
+    backend._strict_transfer_get = AsyncMock(return_value=[dict(second)])
+
+    records = await backend.hydrate_incremental_records(
+        {
+            "root-l0": {"uri": root, "level": 0},
+            "file-l2": {"uri": f"{root}/a.py", "level": 2},
+        },
+        ctx=_ctx(),
+    )
+
+    assert set(records) == {"root-l0", "file-l2"}
+    assert records["root-l0"]["abstract"] == "root abstract"
+    assert records["file-l2"]["md5"] == "ma"
+    backend._strict_transfer_get.assert_awaited_once_with(_ctx(), ["file-l2"])
+    query = backend._strict_transfer_page.await_args
+    assert query.args[1] == In("id", ["root-l0", "file-l2"])
+    assert "vector" not in query.kwargs["output_fields"]
+    assert "sparse_vector" not in query.kwargs["output_fields"]
+
+
+@pytest.mark.asyncio
+async def test_incremental_hydration_propagates_dsl_failure_without_fallback():
+    backend = _MemoryTransferBackend([])
+    backend._strict_transfer_page = AsyncMock(side_effect=RuntimeError("query failed"))
+    backend._strict_transfer_get = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="query failed"):
+        await backend.hydrate_incremental_records(
+            {"file-l2": {"uri": "viking://resources/docs/a.py", "level": 2}},
+            ctx=_ctx(),
+        )
+
+    backend._strict_transfer_get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_incremental_hydration_rejects_mismatched_record_identity():
+    root = "viking://resources/docs"
+    backend = _MemoryTransferBackend([])
+    backend._strict_transfer_page = AsyncMock(
+        return_value=(
+            [_record("file-l2", f"{root}/wrong.py", level=2)],
+            None,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        await backend.hydrate_incremental_records(
+            {"file-l2": {"uri": f"{root}/a.py", "level": 2}},
+            ctx=_ctx(),
         )
 
 
 @pytest.mark.asyncio
-async def test_copy_uri_mapping_rejects_preexisting_target_before_writing():
+async def test_incremental_hydration_returns_only_records_still_present():
+    backend = _MemoryTransferBackend([])
+    backend._strict_transfer_page = AsyncMock(return_value=([], None))
+    backend._strict_transfer_get = AsyncMock(return_value=[])
+
+    records = await backend.hydrate_incremental_records(
+        {"gone": {"uri": "viking://resources/docs/a.py", "level": 2}},
+        ctx=_ctx(),
+    )
+
+    assert records == {}
+
+
+@pytest.mark.asyncio
+async def test_incremental_hydration_projects_dynamic_non_vector_schema_fields():
+    root = "viking://resources/docs"
+    record = _record(
+        "file-l2",
+        f"{root}/a.py",
+        level=2,
+        business_priority=7,
+    )
+    backend = _MemoryTransferBackend([record])
+    backend.get_collection_meta = AsyncMock(
+        return_value={
+            "Fields": [
+                {"FieldName": "id"},
+                {"FieldName": "uri"},
+                {"FieldName": "level"},
+                {"FieldName": "abstract"},
+                {"FieldName": "business_priority"},
+                {"FieldName": "vector"},
+                {"FieldName": "sparse_vector"},
+                {"FieldName": "content"},
+            ]
+        }
+    )
+    backend._strict_transfer_page = AsyncMock(return_value=([record], None))
+
+    hydrated = await backend.hydrate_incremental_records(
+        {"file-l2": {"uri": f"{root}/a.py", "level": 2}},
+        ctx=_ctx(),
+    )
+
+    assert hydrated["file-l2"]["business_priority"] == 7
+    fields = backend._strict_transfer_page.await_args.kwargs["output_fields"]
+    assert "business_priority" in fields
+    assert "vector" not in fields
+    assert "sparse_vector" not in fields
+    assert "content" not in fields
+
+
+@pytest.mark.asyncio
+async def test_incremental_hydration_honors_explicit_summary_projection():
+    root = "viking://resources/docs"
+    record = _record(
+        "file-l2",
+        f"{root}/a.py",
+        level=2,
+        abstract="summary",
+        business_priority=7,
+    )
+    backend = _MemoryTransferBackend([record])
+    backend.get_collection_meta = AsyncMock(
+        return_value={
+            "Fields": [
+                {"FieldName": "id"},
+                {"FieldName": "uri"},
+                {"FieldName": "level"},
+                {"FieldName": "abstract"},
+                {"FieldName": "business_priority"},
+            ]
+        }
+    )
+    backend._strict_transfer_page = AsyncMock(return_value=([record], None))
+
+    hydrated = await backend.hydrate_incremental_records(
+        {"file-l2": {"uri": f"{root}/a.py", "level": 2}},
+        ctx=_ctx(),
+        output_fields={"abstract"},
+    )
+
+    assert hydrated["file-l2"] == {
+        "id": "file-l2",
+        "uri": f"{root}/a.py",
+        "level": 2,
+        "abstract": "summary",
+    }
+    fields = backend._strict_transfer_page.await_args.kwargs["output_fields"]
+    assert fields == ["id", "uri", "level", "abstract"]
+    backend.get_collection_meta.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_l2_diff_scan_reads_real_local_backend(tmp_path):
+    if not getattr(vectordb_engine, "PersistStore", None):
+        pytest.skip("local persistent vectordb engine is not available in this environment")
+
+    root = "viking://resources/docs"
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path)
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        records = [
+            _record(
+                "a",
+                f"{root}/a.py",
+                md5="ma",
+                abstract="A",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                created_at="2026-08-20T00:00:00Z",
+                updated_at="2026-08-20T00:00:00Z",
+            ),
+            _record(
+                "ghost",
+                f"{root}/ghost.py",
+                md5="mg",
+                abstract="G",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                created_at="2026-08-20T00:00:01Z",
+                updated_at="2026-08-20T00:00:01Z",
+            ),
+            _record(
+                "outside",
+                "viking://resources/other.py",
+                vector=[0.1, 0.2, 0.3, 0.4],
+                created_at="2026-08-20T00:00:02Z",
+                updated_at="2026-08-20T00:00:02Z",
+            ),
+        ]
+        await backend.upsert_many(records, ctx=_ctx())
+
+        result = await backend.get_l2_diff_records_under_uri(root, ctx=_ctx(), batch_size=1)
+
+        assert result == {
+            f"{root}/a.py": {"md5": "ma", "abstract": "A"},
+            f"{root}/ghost.py": {"md5": "mg", "abstract": "G"},
+        }
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_incremental_inventory_and_hydration_read_real_local_backend(tmp_path):
+    if not getattr(vectordb_engine, "PersistStore", None):
+        pytest.skip("local persistent vectordb engine is not available in this environment")
+
+    root = "viking://resources/docs"
+    backend = VikingVectorIndexBackend(
+        config=VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path)
+        )
+    )
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        await backend.upsert_many(
+            [
+                _record(
+                    "root-l0",
+                    root,
+                    level=0,
+                    abstract="root abstract",
+                    vector=[0.1, 0.2, 0.3, 0.4],
+                    created_at="2026-08-20T00:00:00Z",
+                    updated_at="2026-08-20T00:00:00Z",
+                ),
+                _record(
+                    "root-l1",
+                    root,
+                    level=1,
+                    abstract="root overview",
+                    vector=[0.1, 0.2, 0.3, 0.4],
+                    created_at="2026-08-20T00:00:01Z",
+                    updated_at="2026-08-20T00:00:01Z",
+                ),
+                _record(
+                    "a-l2",
+                    f"{root}/a.py",
+                    md5="ma",
+                    abstract="A",
+                    vector=[0.1, 0.2, 0.3, 0.4],
+                    created_at="2026-08-20T00:00:02Z",
+                    updated_at="2026-08-20T00:00:02Z",
+                ),
+            ],
+            ctx=_ctx(),
+        )
+
+        inventory = await backend.get_incremental_inventory_under_uri(
+            root, ctx=_ctx(), batch_size=1
+        )
+        hydrated = await backend.hydrate_incremental_records(inventory, ctx=_ctx())
+
+        assert set(inventory) == {"root-l0", "root-l1", "a-l2"}
+        assert inventory["a-l2"]["md5"] == "ma"
+        assert hydrated["root-l0"]["abstract"] == "root abstract"
+        assert hydrated["a-l2"]["abstract"] == "A"
+        assert "vector" not in hydrated["a-l2"]
+        assert "sparse_vector" not in hydrated["a-l2"]
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_l2_diff_scan_fails_closed_on_repeated_cursor(monkeypatch):
+    backend = _MemoryTransferBackend([])
+    monkeypatch.setattr(backend, "_strict_transfer_count", AsyncMock(return_value=3))
+    page = [{"uri": "viking://resources/docs/a.py", "md5": "m"}]
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(side_effect=[(page, "same"), (page, "same")]),
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate L2 URI|cursor repeated"):
+        await backend.get_l2_diff_records_under_uri(
+            "viking://resources/docs", ctx=_ctx(), batch_size=1
+        )
+
+
+@pytest.mark.asyncio
+async def test_l2_diff_scan_does_not_ignore_trailing_page_after_count(monkeypatch):
+    backend = _MemoryTransferBackend([])
+    monkeypatch.setattr(backend, "_strict_transfer_count", AsyncMock(return_value=1))
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(
+            side_effect=[
+                ([{"uri": "viking://resources/docs/a.py"}], "1"),
+                ([{"uri": "viking://resources/docs/new.py"}], None),
+            ]
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="count was 1"):
+        await backend.get_l2_diff_records_under_uri(
+            "viking://resources/docs", ctx=_ctx(), batch_size=1
+        )
+
+
+@pytest.mark.asyncio
+async def test_incremental_inventory_retries_a_transiently_short_cursor(monkeypatch):
+    backend = _MemoryTransferBackend([])
+    root = "viking://resources/docs"
+    monkeypatch.setattr(backend, "_strict_transfer_count", AsyncMock(return_value=2))
+    first = {"id": "root-l0", "uri": root, "level": 0, "md5": ""}
+    second = {"id": "root-l1", "uri": root, "level": 1, "md5": ""}
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(
+            side_effect=[
+                ([first], None),
+                ([first, second], None),
+            ]
+        ),
+    )
+
+    records = await backend.get_incremental_inventory_under_uri(root, ctx=_ctx(), batch_size=2)
+
+    assert set(records) == {"root-l0", "root-l1"}
+    assert backend._strict_transfer_count.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_incremental_inventory_retries_a_transient_count_undershoot(monkeypatch):
+    backend = _MemoryTransferBackend([])
+    root = "viking://resources/docs"
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_count",
+        AsyncMock(side_effect=[1, 2]),
+    )
+    first = {"id": "root-l0", "uri": root, "level": 0, "md5": ""}
+    second = {"id": "root-l1", "uri": root, "level": 1, "md5": ""}
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(
+            side_effect=[
+                ([first, second], None),
+                ([first, second], None),
+            ]
+        ),
+    )
+
+    records = await backend.get_incremental_inventory_under_uri(root, ctx=_ctx(), batch_size=2)
+
+    assert set(records) == {"root-l0", "root-l1"}
+    assert backend._strict_transfer_count.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_record",
+    [
+        {"md5": "missing-uri"},
+        {"uri": "viking://resources/other.py", "md5": "outside"},
+    ],
+)
+async def test_l2_diff_scan_fails_closed_on_invalid_scoped_record(monkeypatch, bad_record):
+    backend = _MemoryTransferBackend([])
+    monkeypatch.setattr(backend, "_strict_transfer_count", AsyncMock(return_value=1))
+    monkeypatch.setattr(
+        backend,
+        "_strict_transfer_page",
+        AsyncMock(return_value=([bad_record], None)),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid L2 URI"):
+        await backend.get_l2_diff_records_under_uri("viking://resources/docs", ctx=_ctx())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_uri_mapping_overwrites_exact_target_and_leaves_independent_chunks(
+    transfer_method,
+):
+    source = "viking://resources/src.md"
+    target = "viking://resources/dst.md"
     backend = _MemoryTransferBackend(
         [
-            _record("source", "viking://resources/src.md"),
-            _record("target", "viking://resources/dst.md#chunk_0001"),
+            _record("source-file", source, content="new-file"),
+            _record("source-chunk", f"{source}#chunk_0001", content="new-chunk"),
+            _record("old-target-file", target, content="old-file"),
+            _record("old-target-chunk", f"{target}#chunk_0001", content="old-chunk"),
+            _record("obsolete-target-chunk", f"{target}#chunk_0002", content="obsolete"),
         ]
     )
 
-    with pytest.raises(ConflictError, match="target vector scope already exists"):
-        await backend.copy_uri_mapping(
-            _ctx(),
-            "viking://resources/src.md",
-            "viking://resources/dst.md",
-            recursive=False,
-        )
+    result = await getattr(backend, transfer_method)(_ctx(), source, target, recursive=False)
+
+    targets = sorted(_records_under(backend, target), key=lambda record: record["uri"])
+    assert result.scanned == result.written == 1
+    assert [(record["uri"], record["content"]) for record in targets] == [
+        (target, "new-file"),
+        (f"{target}#chunk_0001", "old-chunk"),
+        (f"{target}#chunk_0002", "obsolete"),
+    ]
+    assert backend.records["source-chunk"]["content"] == "new-chunk"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_uri_mapping_preserves_target_records_for_unaffected_entries(transfer_method):
+    source = "viking://resources/src"
+    target = "viking://resources/dst"
+    unique_target = f"{target}/unique.md"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source),
+            _record("source-a", f"{source}/a.md", content="new-a"),
+            _record("old-target-root", target),
+            _record("old-target-a", f"{target}/a.md", content="old-a"),
+            _record("unique-target", unique_target, content="keep-me"),
+        ]
+    )
+
+    await getattr(backend, transfer_method)(_ctx(), source, target, recursive=True)
+
+    target_records = _records_under(backend, target)
+    assert (
+        next(record for record in target_records if record["uri"] == unique_target)["content"]
+        == "keep-me"
+    )
+    assert (
+        next(record for record in target_records if record["uri"] == f"{target}/a.md")["content"]
+        == "new-a"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+@pytest.mark.parametrize("backend_mode", ["local", "volcengine", "vikingdb"])
+async def test_merge_target_scan_excludes_unrelated_subtrees(
+    transfer_method, backend_mode, monkeypatch
+):
+    source, target = "viking://resources/source", "viking://resources/target"
+    affected = f"{target}/a.md"
+    source_records = [_record("source-root", source), _record("source-file", f"{source}/a.md")]
+    old_records = [_record("old-root", target), _record("old-file", affected)]
+    unique_records = [_record(f"old-chunk-{i}", f"{affected}#chunk_{i}") for i in range(205)] + [
+        _record(f"unique-{i}", f"{target}/unrelated/file-{i}.md") for i in range(1000)
+    ]
+    backend = _RealAclMemoryTransferBackend(source_records + old_records + unique_records)
+    backend.acl_manager = None
+    backend.backend_mode = backend_mode
+    original_query = backend._query
+    read_ids: list[str] = []
+
+    async def counted_query(*args, **kwargs):
+        page = await original_query(*args, **kwargs)
+        read_ids.extend(str(record["id"]) for record in page)
+        return page
+
+    monkeypatch.setattr(backend, "_query", counted_query)
+    result = await getattr(backend, transfer_method)(
+        _ctx(), source, target, recursive=True, source_uris=[source, f"{source}/a.md"]
+    )
+
+    assert not set(read_ids).intersection(record["id"] for record in unique_records)
+    assert {record["id"] for record in old_records}.issubset(read_ids)
+    assert result.written == 2
+    assert not set(backend.records).intersection(record["id"] for record in old_records)
+    assert all(backend.records[record["id"]] == record for record in unique_records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_direct_recursive_transfer_keeps_complete_target_scan(transfer_method):
+    source, target = "viking://resources/source", "viking://resources/target"
+    old_ids = [f"old-{i}" for i in range(101)]
+    backend = _RealAclMemoryTransferBackend(
+        [_record("source", source)] + [_record(record_id, target) for record_id in old_ids]
+    )
+    backend.acl_manager = None
+
+    await getattr(backend, transfer_method)(_ctx(), source, target, recursive=True)
+
+    assert not set(old_ids).intersection(backend.records)
+    assert len(_records_under(backend, target)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_target_replacement_cleans_exact_entries_across_batches(transfer_method):
+    source, target = "viking://resources/source", "viking://resources/target"
+    source_records = [_record(f"source-{i}", f"{source}/file-{i}.md") for i in range(101)]
+    old_records = [_record(f"old-{i}", f"{target}/file-{i}.md") for i in range(101)]
+    backend = _RealAclMemoryTransferBackend(source_records + old_records)
+    backend.acl_manager = None
+
+    result = await getattr(backend, transfer_method)(_ctx(), source, target, recursive=True)
+
+    assert result.written == 101
+    assert len(_records_under(backend, target)) == 101
+    assert not set(backend.records).intersection(record["id"] for record in old_records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_uri_mapping_empty_source_file_preserves_old_target_vectors(transfer_method):
+    source = "viking://resources/src.md"
+    target = "viking://resources/dst.md"
+    backend = _MemoryTransferBackend(
+        [
+            _record("old-target-file", target),
+            _record("old-target-chunk", f"{target}#chunk_0001"),
+            _record("outside", "viking://resources/outside.md"),
+        ]
+    )
+
+    original_records = dict(backend.records)
+
+    result = await getattr(backend, transfer_method)(_ctx(), source, target, recursive=False)
+
+    assert result.scanned == 0
+    assert result.written == 0
+    assert result.deleted == 0
+    assert backend.records == original_records
+    assert backend.delete_calls == backend.upsert_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_uri_mapping_write_failure_keeps_source_without_restoring_old_target(
+    transfer_method,
+):
+    source = "viking://resources/src.md"
+    target = "viking://resources/dst.md"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-file", source),
+            _record("source-l0", source, level=0),
+            _record("old-target-file", target, content="do-not-restore"),
+            _record("old-target-l0", target, level=0, content="do-not-restore"),
+        ]
+    )
+    backend.fail_upsert_at = 2
+
+    with pytest.raises(RuntimeError, match="injected vector write failure"):
+        await getattr(backend, transfer_method)(_ctx(), source, target, recursive=False)
+
+    assert len(_records_under(backend, source, recursive=False)) == 2
+    assert _records_under(backend, target, recursive=False) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_uri_mapping_source_uris_limits_source_and_target_replacement_scope(
+    transfer_method,
+):
+    source = "viking://resources/src"
+    target = "viking://resources/dst"
+    source_b = f"{source}/b.md"
+    target_b = f"{target}/b.md"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source, content="new-root"),
+            _record("source-a", f"{source}/a.md", content="new-a"),
+            _record("source-b", source_b, content="source-b-stays"),
+            _record("old-target-root", target, content="old-root"),
+            _record("old-target-a", f"{target}/a.md", content="old-a"),
+            _record("old-target-b", target_b, content="target-b-stays"),
+        ]
+    )
+
+    result = await getattr(backend, transfer_method)(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[source, f"{source}/a.md"],
+    )
+
+    assert result.scanned == 2
+    assert (
+        next(record for record in backend.records.values() if record["uri"] == target_b)["content"]
+        == "target-b-stays"
+    )
+    assert (
+        next(record for record in backend.records.values() if record["uri"] == source_b)["content"]
+        == "source-b-stays"
+    )
+
+
+@pytest.mark.asyncio
+async def test_copy_over_private_target_preserves_target_acl():
+    source = "viking://resources/src.md"
+    target = "viking://resources/dst.md"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("source-file", source),
+            _record("source-chunk", f"{source}#chunk_0001"),
+            _record(
+                "target-file",
+                target,
+                acl_mode="inherit",
+                acl_direct_grants=["7:user:bob"],
+                acl_inherited_grants=[],
+            ),
+        ]
+    )
+
+    await backend.copy_uri_mapping(_ctx(), source, target, recursive=False)
+
+    targets = _records_under(backend, target, recursive=False)
+    assert {record["uri"] for record in targets} == {target}
+    assert "source-chunk" in backend.records
+    assert all(record["acl_direct_grants"] == ["7:user:bob"] for record in targets)
+    assert all(record["acl_inherited_grants"] == [] for record in targets)
+
+
+@pytest.mark.asyncio
+async def test_copy_target_without_direct_acl_keeps_parent_inheritance():
+    source = "viking://resources/src.md"
+    parent = "viking://resources/team"
+    target = f"{parent}/dst.md"
+    inherited = ["3:group:editors"]
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("source-file", source),
+            _record(
+                "parent",
+                parent,
+                acl_mode="inherit",
+                acl_direct_grants=inherited,
+                acl_inherited_grants=[],
+            ),
+            _record(
+                "target-file",
+                target,
+                acl_mode="inherit",
+                acl_direct_grants=[],
+                acl_inherited_grants=inherited,
+            ),
+        ]
+    )
+
+    await backend.copy_uri_mapping(_ctx(), source, target, recursive=False)
+
+    copied = _records_under(backend, target, recursive=False)
+    assert len(copied) == 1
+    assert copied[0]["acl_direct_grants"] == []
+    assert copied[0]["acl_inherited_grants"] == inherited
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+@pytest.mark.parametrize("recursive,level", [(False, 2), (True, 0)])
+@pytest.mark.parametrize("private", [False, True])
+async def test_unindexed_source_preserves_target_records_and_acl(
+    transfer_method, recursive, level, private
+):
+    source = "viking://resources/source"
+    target = "viking://resources/target"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record(
+                "target-record",
+                target,
+                level=level,
+                abstract="old abstract",
+                acl_mode="inherit" if private else "none",
+                acl_direct_grants=["7:user:bob"] if private else [],
+                acl_inherited_grants=[],
+            ),
+            _record("target-chunk", f"{target}#chunk_0001"),
+        ]
+    )
+    original_records = dict(backend.records)
+
+    result = await getattr(backend, transfer_method)(
+        _ctx(), source, target, recursive=recursive, source_uris=[source]
+    )
+
+    assert result.scanned == result.written == result.deleted == 0
+    assert backend.records == original_records
+    assert backend.delete_calls == backend.upsert_calls == 0
+    assert backend.acl_manager is not None
+    effective = await backend.acl_manager.resolve(target, _ctx())
+    assert effective.context_fields() == {
+        "acl_mode": "inherit" if private else "none",
+        "acl_direct_grants": ["7:user:bob"] if private else [],
+        "acl_inherited_grants": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_copy_private_entry_skips_shared_resource_acl_resolution():
+    source = "viking://user/alice/resources/src.md"
+    target = "viking://user/alice/resources/dst.md"
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("source-file", source, content="new"),
+            _record("target-file", target, content="old"),
+        ]
+    )
+
+    await backend.copy_uri_mapping(_ctx(), source, target, recursive=False)
+
+    copied = _records_under(backend, target, recursive=False)
+    assert len(copied) == 1
+    assert copied[0]["content"] == "new"
+
+
+@pytest.mark.asyncio
+async def test_copy_directory_preserves_root_acl_and_inherits_it_to_new_entries():
+    source = "viking://resources/source"
+    target = "viking://resources/target"
+    source_child = f"{source}/child"
+    source_file = f"{source_child}/file.md"
+    target_child = f"{target}/child"
+    target_file = f"{target_child}/file.md"
+    unique_target = f"{target}/unique.md"
+    root_acl = ["7:user:bob"]
+    backend = _RealAclMemoryTransferBackend(
+        [
+            _record("source-root", source, level=0),
+            _record("source-child", source_child, level=0),
+            _record("source-file", source_file),
+            _record(
+                "target-root",
+                target,
+                level=0,
+                acl_mode="inherit",
+                acl_direct_grants=root_acl,
+                acl_inherited_grants=[],
+            ),
+            _record(
+                "unique-target",
+                unique_target,
+                acl_mode="inherit",
+                acl_direct_grants=["3:user:carol"],
+                acl_inherited_grants=root_acl,
+            ),
+        ]
+    )
+
+    await backend.copy_uri_mapping(
+        _ctx(),
+        source,
+        target,
+        recursive=True,
+        source_uris=[source, source_child, source_file],
+    )
+
+    by_uri = {record["uri"]: record for record in _records_under(backend, target)}
+    assert by_uri[target]["acl_direct_grants"] == root_acl
+    assert by_uri[target]["acl_inherited_grants"] == []
+    for uri in (target_child, target_file):
+        assert by_uri[uri]["acl_direct_grants"] == []
+        assert by_uri[uri]["acl_inherited_grants"] == root_acl
+    assert by_uri[unique_target]["acl_direct_grants"] == ["3:user:carol"]
+    assert by_uri[unique_target]["acl_inherited_grants"] == root_acl
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+@pytest.mark.parametrize(
+    ("source", "target"),
+    [
+        ("viking://resources/same", "viking://resources/same"),
+        ("viking://resources/parent", "viking://resources/parent/child"),
+        ("viking://resources/parent/child", "viking://resources/parent"),
+    ],
+)
+async def test_uri_mapping_rejects_equal_or_containing_scopes(transfer_method, source, target):
+    backend = _MemoryTransferBackend([_record("source", source)])
+
+    with pytest.raises(InvalidArgumentError):
+        await getattr(backend, transfer_method)(_ctx(), source, target, recursive=True)
 
     assert backend.upsert_calls == 0
-    assert len(_records_under(backend, "viking://resources/src.md")) == 1
+    assert list(backend.records) == ["source"]
 
 
 @pytest.mark.asyncio
@@ -442,6 +1539,33 @@ async def test_copy_uri_mapping_reports_actual_residual_after_cleanup_failure():
     assert exc_info.value.phase == "copy_target_cleanup"
     assert exc_info.value.residual_count == 1
     assert len(_records_under(backend, "viking://resources/dst")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transfer_method", ["copy_uri_mapping", "update_uri_mapping"])
+async def test_uri_mapping_cleanup_residual_excludes_unaffected_target_records(
+    transfer_method,
+):
+    source = "viking://resources/src"
+    target = "viking://resources/dst"
+    unique_target = f"{target}/unique.md"
+    backend = _MemoryTransferBackend(
+        [
+            _record("source-root", source),
+            _record("source-a", f"{source}/a.md"),
+            _record("source-b", f"{source}/b.md"),
+            _record("unique-target", unique_target),
+        ]
+    )
+    backend.fail_upsert_at = 3
+    backend.fail_delete_at = 1
+    backend.partial_delete_count = 1
+
+    with pytest.raises(VectorTransferRollbackError) as exc_info:
+        await getattr(backend, transfer_method)(_ctx(), source, target, recursive=True)
+
+    assert exc_info.value.residual_count == 1
+    assert any(record["uri"] == unique_target for record in backend.records.values())
 
 
 @pytest.mark.asyncio
@@ -498,7 +1622,7 @@ async def test_update_uri_mapping_preserves_source_direct_acl_on_target():
             _record(
                 "source",
                 source,
-                acl_enabled=True,
+                acl_mode="restricted",
                 acl_direct_grants=["7:user:alice"],
                 acl_inherited_grants=["1:group:source-readers"],
             )
@@ -509,6 +1633,7 @@ async def test_update_uri_mapping_preserves_source_direct_acl_on_target():
 
     moved = _records_under(backend, target, recursive=False)
     assert len(moved) == 1
+    assert moved[0]["acl_mode"] == "restricted"
     assert moved[0]["acl_direct_grants"] == ["7:user:alice"]
     assert moved[0]["acl_inherited_grants"] == ["1:group:target-readers"]
 
@@ -542,14 +1667,14 @@ async def test_update_uri_mapping_rollback_restores_source_direct_acl():
             _record(
                 "source-root",
                 source,
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=["7:user:alice"],
                 acl_inherited_grants=["1:group:source-readers"],
             ),
             _record(
                 "source-child",
                 f"{source}/child.md",
-                acl_enabled=True,
+                acl_mode="inherit",
                 acl_direct_grants=["3:user:bob"],
                 acl_inherited_grants=["7:user:alice"],
             ),
@@ -583,3 +1708,39 @@ async def test_update_uri_mapping_returns_empty_result_when_source_has_no_vector
     assert result.scanned == 0
     assert result.written == 0
     assert result.deleted == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["copy_uri_mapping", "update_uri_mapping"])
+@pytest.mark.parametrize("mode", ["local", "volcengine", "vikingdb"])
+@pytest.mark.parametrize("incoming_chunk", [False, True])
+async def test_target_chunk_candidate_respects_filesystem_entry(operation, mode, incoming_chunk):
+    source, target = "viking://resources/source.md", "viking://resources/target.md"
+    sibling = target + "#chunk-1"
+    records = [_record("source", source), _record("private", sibling)]
+    if incoming_chunk:
+        records.append(_record("source-chunk", source + "#chunk-1"))
+    backend = _MemoryTransferBackend(records)
+    backend.backend_mode = mode
+    exists = AsyncMock(return_value=True)
+    await getattr(backend, operation)(_ctx(), source, target, target_entry_exists=exists)
+    assert any(record["uri"] == target for record in backend.records.values())
+    assert backend.records["private"] == records[1]
+    if incoming_chunk:
+        assert backend.records["source-chunk"] == records[2]
+
+
+@pytest.mark.asyncio
+async def test_transfer_does_not_inspect_unrelated_chunk_shaped_entry():
+    source, target = "viking://resources/source.md", "viking://resources/target.md"
+    backend = _MemoryTransferBackend(
+        [_record("source", source), _record("old", target + "#chunk-1")]
+    )
+    result = await backend.copy_uri_mapping(
+        _ctx(),
+        source,
+        target,
+        target_entry_exists=AsyncMock(side_effect=RuntimeError("unrelated stat failed")),
+    )
+    assert result.written == 1
+    assert backend.records["old"]["uri"] == target + "#chunk-1"

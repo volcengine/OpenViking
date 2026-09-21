@@ -1,7 +1,7 @@
 //! PathLockProvider trait and built-in implementations.
 //!
-//! The provider is a pure storage abstraction — it does not implement lock semantics
-//! (conflict detection, waiting, etc.). Those belong to `PathLockManager`.
+//! The provider owns token storage. Backends with transactional storage may also
+//! implement the optional atomic capabilities used by `PathLockManager`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,13 +14,86 @@ use crate::core::FileSystem;
 use crate::crypto;
 
 use super::codec::LockTokenCodec;
-use super::types::{LockToken, PathLockError, PathLockResult};
+use super::types::{LockToken, PathLockError, PathLockRequest, PathLockResult};
+
+/// Representation used for handles stored in a PathLock lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathLockHandleMode {
+    /// Handles are resolver-generated lock-file paths.
+    LockPath,
+    /// Handles are normalized logical paths.
+    LogicalPath,
+}
+
+/// Token mutation made during one lock acquisition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AcquisitionChange {
+    /// A new token was created.
+    Created {
+        /// Token written by the provider.
+        replacement: LockToken,
+    },
+    /// The same owner already held an equal or stronger token.
+    Reentrant,
+    /// A same-owner Exact token became Tree.
+    Upgraded {
+        /// Token restored if local lease publication fails.
+        previous: LockToken,
+        /// Tree token written by the provider.
+        replacement: LockToken,
+    },
+}
+
+/// One mutation made by an atomic provider acquisition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtomicAcquisition {
+    /// Provider handle stored in the PathLock lease.
+    pub handle: String,
+    /// Token mutation used by rollback.
+    pub change: AcquisitionChange,
+}
 
 /// Storage abstraction for lock tokens. Only `PathLockManager` should call these methods.
 #[async_trait]
 pub trait PathLockProvider: Send + Sync {
     /// Human-readable provider name for config/logging/metrics.
     fn name(&self) -> &'static str;
+
+    /// Return how this provider represents lease handles.
+    fn handle_mode(&self) -> PathLockHandleMode {
+        PathLockHandleMode::LockPath
+    }
+
+    /// Attempt one atomic batch acquisition when supported.
+    async fn try_acquire_batch_atomic(
+        &self,
+        _requests: &[PathLockRequest],
+        _owner_id: &str,
+        _now_ns: u128,
+        _stale_before_ns: u128,
+    ) -> PathLockResult<Option<Vec<AtomicAcquisition>>> {
+        Ok(None)
+    }
+
+    /// Roll back one completed atomic acquisition when supported.
+    async fn rollback_acquisitions_atomic(
+        &self,
+        _acquisitions: &[AtomicAcquisition],
+        _owner_id: &str,
+    ) -> PathLockResult<Option<()>> {
+        Ok(None)
+    }
+
+    /// Return whether one path is covered by a live token when supported.
+    async fn is_path_locked_atomic(
+        &self,
+        _path: &str,
+        _now_ns: u128,
+        _stale_before_ns: u128,
+        _ignore_stale: bool,
+    ) -> PathLockResult<Option<bool>> {
+        Ok(None)
+    }
 
     /// Read the token at `lock_path`, returning `None` if no token exists.
     async fn read_token(&self, lock_path: &str) -> PathLockResult<Option<LockToken>>;
@@ -192,7 +265,16 @@ impl FilesystemPathLockProvider {
 
     /// Read raw token bytes from `lock_path`, returning `None` if no token exists.
     async fn read_token_raw(&self, lock_path: &str) -> PathLockResult<Option<Vec<u8>>> {
-        match self.fs.read(lock_path, 0, 0).await {
+        let mut result = self.fs.read(lock_path, 0, 0).await;
+        if result
+            .as_ref()
+            .is_ok_and(|data| LockTokenCodec::decode(String::from_utf8_lossy(data).trim()).is_err())
+        {
+            // A concurrent in-place CAS write can expose a transient partial token.
+            tokio::task::yield_now().await;
+            result = self.fs.read(lock_path, 0, 0).await;
+        }
+        match result {
             Ok(data) => Ok(Some(data)),
             Err(e) => {
                 if matches!(

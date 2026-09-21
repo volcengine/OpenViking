@@ -141,11 +141,29 @@ If another context engine already owns the slot, setup will not replace it by de
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --force-slot --json
 ```
 
-If you want assistant messages to carry a prefixed `peer_id` and data-plane recall/search requests to use the matching actor peer view, pass a prefix explicitly:
+Choose `--peer-role` from what the OpenViking user represents:
+
+| Value | Storage example | Use when |
+| --- | --- | --- |
+| `none` (default) | `viking://user/alice/memories/...` | All conversations for this OpenViking user share user-level memory. No peer-specific memory subtree is used. |
+| `assistant` | `viking://user/alice/peers/main/memories/...` | The OpenViking user is a human and assistant-attributed peer memory should be separated by OpenClaw assistant. |
+| `sender` | `viking://user/support-agent/peers/customer-42/memories/...` | The OpenViking user is an agent and sender-attributed peer memory should be separated by human sender. |
+
+`person` is still accepted as a legacy alias for `sender`. New configuration should use `sender`.
+
+For example, give each assistant its own peer memory and optionally namespace the assistant id:
 
 ```bash
 openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role assistant --peer-prefix <PREFIX> --json
 ```
+
+Or scope peer memory by the sender talking to an agent:
+
+```bash
+openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --peer-role sender --json
+```
+
+OpenViking initializes the managed `peers/` container for every user. `none` means the plugin does not create or route into a concrete `peers/<peer_id>/memories` subtree. Actor-peer recall includes shared user memory plus the current peer memory, and changing the setting does not move existing memories.
 
 #### Configure The File Directly When The CLI Is Unavailable
 
@@ -244,7 +262,7 @@ Core fields:
 | `mode` | `remote` | Legacy compatibility field. Only remote mode is supported. |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking HTTP endpoint |
 | `apiKey` | empty | OpenViking API key |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
+| `peer_role` | `none` | Memory scope: `none` (shared `viking://user/<user_id>/memories`), `assistant` (`.../peers/<assistant_id>/memories`), or `sender` (`.../peers/<sender_id>/memories`). Legacy `person` is accepted as `sender`. Session messages use body `peer_id`; data-plane recall/search uses `X-OpenViking-Actor-Peer`. |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant`. |
 | `accountId` | empty | Required when using a root API key |
 | `userId` | empty | Required when using a root API key |
@@ -311,7 +329,7 @@ Useful backup/source flags:
 | `--current-version` | Print the version tracked by the helper |
 | `--base-url URL` | OpenViking server URL (enables non-interactive mode) |
 | `--api-key KEY` | OpenViking API key |
-| `--peer-role ROLE` | Peer role: `none`, `assistant`, or `person` |
+| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender` |
 | `--peer-prefix PREFIX` | Prefix for assistant `peer_id` / actor peer values |
 | `--update` | Update an existing helper-managed install |
 
@@ -356,7 +374,7 @@ The plugin connects to an existing remote OpenViking server.
 | --- | --- | --- |
 | `baseUrl` | `http://127.0.0.1:1933` | Remote OpenViking HTTP endpoint |
 | `apiKey` | empty | Optional OpenViking API key |
-| `peer_role` | `assistant` | Peer identity mode: `none`, `assistant`, or `person`; session messages use body `peer_id`, while data-plane recall/search uses `X-OpenViking-Actor-Peer` |
+| `peer_role` | `none` | Memory scope: `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender`. Session messages use body `peer_id`, while data-plane recall/search uses `X-OpenViking-Actor-Peer` |
 | `peer_prefix` | empty | Optional prefix for assistant `peer_id` / actor peer values when `peer_role=assistant` |
 
 Common settings:

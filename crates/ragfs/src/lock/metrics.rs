@@ -20,10 +20,10 @@ pub struct LockMetrics {
     pub stale_cleanup_failures: usize,
     /// Cumulative count of descendant scan operations.
     pub descendant_scan_count: usize,
-    /// Total milliseconds spent in descendant scans.
-    pub descendant_scan_duration_ms: u64,
-    /// Total milliseconds spent waiting for locks.
-    pub wait_duration_ms: u64,
+    /// Total nanoseconds spent in descendant scans.
+    pub descendant_scan_duration_ns: u64,
+    /// Total nanoseconds spent waiting for successfully acquired locks.
+    pub wait_duration_ns: u64,
     /// Count of conflicts by type (exact/exact, tree/exact, etc.).
     pub conflict_count: usize,
     /// Recent conflicts for observability (ring buffer).

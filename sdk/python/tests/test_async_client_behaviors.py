@@ -265,9 +265,7 @@ async def test_async_http_client_sends_event_memory_tag_configuration():
     client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
     config = {"events": {"tags": ["team=search", "channel=web"]}}
 
-    await client.create_session(
-        "tagged-session", options={"memory_extraction_config": config}
-    )
+    await client.create_session("tagged-session", options={"memory_extraction_config": config})
     await client.update_session_config(
         "tagged-session",
         {
@@ -458,15 +456,13 @@ def test_sync_http_client_reindex_forwards_to_async_client():
 def test_sync_http_client_forwards_tags_to_filesystem_methods():
     client = SyncHTTPClient(url="http://localhost:1933")
 
-    with (
-        patch.object(client._async_client, "ls", return_value=[]) as mock_ls,
-        patch.object(client._async_client, "tree", return_value=[]) as mock_tree,
-        patch.object(client._async_client, "grep", return_value={}) as mock_grep,
-        patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]),
-    ):
-        client.ls("viking://resources", tags=["env=prod"])
-        client.tree("viking://resources", tags=["env=prod"])
-        client.grep("viking://resources", "Sample", tags=["env=prod"])
+    with patch.object(client._async_client, "ls", return_value=[]) as mock_ls:
+        with patch.object(client._async_client, "tree", return_value=[]) as mock_tree:
+            with patch.object(client._async_client, "grep", return_value={}) as mock_grep:
+                with patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]):
+                    client.ls("viking://resources", tags=["env=prod"])
+                    client.tree("viking://resources", tags=["env=prod"])
+                    client.grep("viking://resources", "Sample", tags=["env=prod"])
 
     assert mock_ls.call_args.kwargs["tags"] == ["env=prod"]
     assert mock_tree.call_args.kwargs["tags"] == ["env=prod"]
@@ -604,11 +600,38 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         "get_skill",
         "update_skill",
         "delete_skill",
+        "compile",
         "get_task",
         "list_tasks",
         "admin_list_accounts",
     ]:
         assert method_name in explicit_methods, method_name
+
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._request = AsyncMock(return_value=object())
+    client._async_client._handle_response = lambda _response: {"task_id": "cmp_1"}
+    result = client.compile(
+        ["viking://resources/source"],
+        "viking://resources/output",
+        "viking://agent/skills/wiki",
+        options={
+            "instruction": "Keep supporting evidence.",
+            "args": {"model_name": "endpoint-1"},
+        },
+    )
+
+    assert result == {"task_id": "cmp_1"}
+    client._async_client._request.assert_awaited_once_with(
+        "POST",
+        "/api/v1/compile",
+        json={
+            "from": ["viking://resources/source"],
+            "to": "viking://resources/output",
+            "skill": "viking://agent/skills/wiki",
+            "instruction": "Keep supporting evidence.",
+            "args": {"model_name": "endpoint-1"},
+        },
+    )
 
 
 def test_sync_http_client_session_must_exist_checks_existence():
@@ -1322,10 +1345,12 @@ async def test_ls_and_tree_pass_query_params():
         abs_limit=32,
         show_all_hidden=True,
         node_limit=44,
+        offset=5,
+        limit=7,
         sort_by="mtime",
         sort_order="desc",
     )
-    await client.tree("viking://resources/", level_limit=2)
+    await client.tree("viking://resources/", level_limit=2, offset=4, limit=6)
     await client.tree("viking://resources/", level_limit=0)
     await client.tree("viking://resources/")
 
@@ -1340,13 +1365,16 @@ async def test_ls_and_tree_pass_query_params():
             "abs_limit": 32,
             "show_all_hidden": True,
             "node_limit": 44,
+            "offset": 5,
+            "limit": 7,
             "sort_by": "mtime",
             "sort_order": "desc",
         },
     }
+    assert fake_http.get.await_args_list[1].kwargs["params"]["offset"] == 4
+    assert fake_http.get.await_args_list[1].kwargs["params"]["limit"] == 6
     assert [
-        tree_call.kwargs["params"]["level_limit"]
-        for tree_call in fake_http.get.await_args_list[1:]
+        tree_call.kwargs["params"]["level_limit"] for tree_call in fake_http.get.await_args_list[1:]
     ] == [2, 0, 3]
 
 

@@ -1,6 +1,54 @@
-import test from "node:test";
+import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { RecallManager } from "../recall.ts";
+import { OVClient } from "../client.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+
+let testHome;
+const savedHome = process.env.OPENVIKING_STATE_DIR;
+before(async () => {
+  testHome = await mkdtemp(join(tmpdir(), "ov-pi-recall-tests-"));
+  process.env.OPENVIKING_STATE_DIR = testHome;
+});
+after(async () => {
+  if (savedHome === undefined) delete process.env.OPENVIKING_STATE_DIR;
+  else process.env.OPENVIKING_STATE_DIR = savedHome;
+  await rm(testHome, { recursive: true, force: true });
+});
+
+test("actor recall preserves peers and the server request budget", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "ov-pi-peer-recall-"));
+  const previousHome = process.env.OPENVIKING_STATE_DIR;
+  process.env.OPENVIKING_STATE_DIR = home;
+  const delays = [];
+  const realSetTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (fn, ms, ...args) => {
+    delays.push(ms);
+    return realSetTimeout(fn, ms, ...args);
+  });
+  try {
+    await withMockOpenViking((req, res) => {
+      const peer = req.headers["x-openviking-actor-peer"];
+      writeJson(res, { status: "ok", result: { rendered: `- memory for ${peer}` } });
+    }, async (baseUrl, requests) => {
+      const cfg = config({ endpoint: baseUrl, peerId: "new-git-peer", legacyPeerId: "old-cwd-peer", recallPeerScope: "actor", timeoutMs: 123456 });
+      const recall = new RecallManager(new OVClient(cfg), cfg, () => "pi-session");
+      recall.queueSearch("project conventions");
+      const block = await recall.searchPending();
+      assert.deepEqual(requests.map((r) => r.headers["x-openviking-actor-peer"]), ["new-git-peer", "old-cwd-peer"]);
+      assert.match(block, /memory for new-git-peer/);
+      assert.match(block, /memory for old-cwd-peer/);
+      assert.equal(delays.filter((ms) => ms === 123456).length, 2, "both HTTP requests must retain the helper budget");
+    });
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENVIKING_STATE_DIR;
+    else process.env.OPENVIKING_STATE_DIR = previousHome;
+    await rm(home, { recursive: true, force: true });
+  }
+});
 
 function config(overrides = {}) {
   return {

@@ -27,6 +27,16 @@ beforeEach(() => {
 })
 
 describe('fetchDirectorySidecarContent', () => {
+  it.each(['abstract', 'overview'] as const)(
+    'does not read a %s sidecar for the virtual root',
+    async (level) => {
+      await expect(
+        fetchDirectorySidecarContent('viking://', level),
+      ).resolves.toBe('')
+      expect(getContentReadMock).not.toHaveBeenCalled()
+    },
+  )
+
   it('reads raw L0/L1 sidecars instead of the body-only semantic accessors', async () => {
     getContentReadMock.mockResolvedValue({
       data: {

@@ -27,8 +27,9 @@ from openviking.observability.context import (
     reset_root_observability_context,
 )
 from openviking.observability.http_observability_middleware import (
-    create_http_observability_middleware,
+    HTTPObservabilityMiddleware,
 )
+from openviking.server.request_id import RequestIdMiddleware
 from openviking.telemetry.span_models import RootSpanAttributes
 
 
@@ -38,13 +39,11 @@ def _bind_root_context_for_account(account_id: str | None):
     return bind_root_observability_context(root)
 
 
-def _build_test_app(middleware_factory, *, route_path: str, handler):
+def _build_test_app(middleware_class, *, route_path: str, handler):
     app = FastAPI()
 
-    @app.middleware("http")
-    async def middleware_entry(request, call_next):
-        request.state.request_id = "test-request"
-        return await middleware_factory(request, call_next)
+    app.add_middleware(middleware_class)
+    app.add_middleware(RequestIdMiddleware)
 
     app.get(route_path)(handler)
     return app
@@ -114,7 +113,7 @@ def test_http_collector_uses_unknown_account_when_unbound():
 def test_http_metrics_middleware_propagates_state_account_to_collector(monkeypatch):
     """HTTP middleware must attach the authenticated account id to emitted http events."""
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_observability_middleware()
+    middleware = HTTPObservabilityMiddleware
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))

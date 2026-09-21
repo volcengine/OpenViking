@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
+import asyncio
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -16,16 +18,13 @@ from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.responses import response_from_result
-from openviking.server.skill_source_metadata import persist_skill_source_metadata
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.service.skill_sources import describe_skill_sources, resolve_skill_source
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
-
-_CONNECTOR_TASK_ORIGIN_HEADER = "X-OpenViking-Task-Origin"
-_CONNECTOR_TASK_ORIGIN = "connector_import"
 
 
 class AddResourceRequest(BaseModel):
@@ -56,6 +55,7 @@ class AddResourceRequest(BaseModel):
             Default is False (async processing).
         timeout: Timeout in seconds when wait=True. None means no timeout.
         strict: Whether to use strict mode for processing. Default is True.
+        internal_task: Whether to hide this task from the default task list.
         ignore_dirs: Comma-separated list of directory names to ignore during parsing.
         include: Glob pattern for files to include during parsing.
         exclude: Glob pattern for files to exclude during parsing.
@@ -68,20 +68,14 @@ class AddResourceRequest(BaseModel):
             pass {"feishu_access_token": "..."}. For Feishu user-token watches,
             also pass "feishu_refresh_token". The optional "feishu_app_id" and
             "feishu_app_secret" pair overrides the server app for that watch.
-        watch_interval: Watch interval in minutes for automatic resource monitoring.
-            - watch_interval > 0: Creates or updates a watch task. The resource will be
-              automatically re-processed at the specified interval.
-            - watch_interval = 0: No watch task is created. If a watch task exists for
-              this resource, it will be cancelled (deactivated).
-            - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
-            Default is 0 (no monitoring).
-
-            Note: Re-adding the same source to the same target updates its active watch task.
-            A different source targeting an active watch raises ConflictError; cancel that
-            watch first with watch_interval <= 0. For Connector imports this check is
-            eventually consistent: the Watch is created only after the background import
-            succeeds, so overlapping imports may both write before Watch finalization
-            reports the conflict.
+        watch_interval: Interval in minutes (default: 0). Positive values create a new
+            Watch using explicit ``to`` or the imported ``root_uri``. Nonpositive values
+            create no Watch: native imports with explicit ``to`` pause a single accessible
+            Watch (409 if ambiguous); Connector imports leave Watches untouched.
+            See the endpoint's Watch ownership rules.
+        is_active: Initial Watch state for Connector, native Feishu, and native Git imports. When false,
+            requires watch_interval > 0 and an explicit to or parent target and creates the Watch
+            paused; it stays paused until updated, regardless of the import result.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -97,6 +91,7 @@ class AddResourceRequest(BaseModel):
     wait: bool = False
     timeout: Optional[float] = None
     strict: bool = False
+    internal_task: bool = False
     source_name: Optional[str] = None
     ignore_dirs: Optional[str] = None
     include: Optional[str] = None
@@ -106,6 +101,7 @@ class AddResourceRequest(BaseModel):
     args: Dict[str, Any] = Field(default_factory=dict)
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    is_active: bool = True
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
@@ -130,13 +126,22 @@ class AddResourceRequest(BaseModel):
             raise ValueError("'add_type' requires an exact 'to' target")
         return self
 
+    @model_validator(mode="after")
+    def check_paused_watch(self):
+        has_target = bool((self.to or "").strip() or (self.parent or "").strip())
+        if self.is_active is False and (self.watch_interval <= 0 or not has_target):
+            raise ValueError(
+                "is_active=false requires watch_interval > 0 and either 'to' or 'parent'"
+            )
+        return self
+
 
 class AddSkillRequest(BaseModel):
     """Request model for add_skill.
 
     Attributes:
-        data: Inline skill content or structured skill data. HTTP requests do not treat
-            string values as host filesystem paths.
+        data: Git skill URL, inline skill content, or structured skill data.
+            HTTP requests do not treat strings as host filesystem paths.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         wait: Whether to wait for skill processing to complete.
         timeout: Timeout in seconds when wait=True.
@@ -146,6 +151,8 @@ class AddSkillRequest(BaseModel):
 
     data: Any = None
     temp_file_id: Optional[str] = None
+    skills: list[str] = Field(default_factory=list)
+    list_only: bool = False
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
@@ -222,7 +229,16 @@ async def add_resource(
     request: AddResourceRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Add resource to OpenViking."""
+    """Add resource to OpenViking.
+
+    Native Watches require an unoccupied resolved target and keep it while paused.
+    Connector Watches may share targets only with other Connector Watches; repeating
+    a source and target creates another independent task. Re-importing never updates
+    or resumes a Watch: use PATCH /api/v1/watches/{task_id}, or delete it first.
+    URI lookups return 409 for multiple accessible Watches; address them by task_id.
+    Connector Watches are visible before the initial import and held by the scheduler
+    until that import records its result.
+    """
     service = get_service()
     to_uri = resolve_path_variables(request.to).strip() if request.to else ""
     if to_uri:
@@ -240,6 +256,7 @@ async def add_resource(
     allow_local_path_resolution = False
     original_filename = None
     resolved = None
+    shared_source_ref = None
     if request.temp_file_id:
         if request.watch_interval > 0:
             raise InvalidArgumentError(
@@ -249,12 +266,20 @@ async def add_resource(
                 "sitemap / RSS source instead, or re-add the resource when the "
                 "source changes."
             )
-        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
-            request.temp_file_id, _ctx
-        )
-        path = resolved.local_path
-        original_filename = resolved.original_filename
-        allow_local_path_resolution = True
+        store = TempUploadStore.build(http_request.app.state.config)
+        # A shared upload already lives in durable storage: the API only validates
+        # a reference and the SOURCE worker downloads it once, avoiding a second
+        # API-side download + task re-stage. Local uploads keep the copy path.
+        shared_source_ref = await store.resolve_shared_reference(request.temp_file_id, _ctx)
+        if shared_source_ref is not None:
+            path = shared_source_ref.original_filename or request.temp_file_id
+            original_filename = shared_source_ref.original_filename or None
+            allow_local_path_resolution = True
+        else:
+            resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+            path = resolved.local_path
+            original_filename = resolved.original_filename
+            allow_local_path_resolution = True
     elif path is not None:
         path = require_remote_resource_source(path, declared_connector_add_type=request.add_type)
     if path is None:
@@ -301,11 +326,10 @@ async def add_resource(
                 tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=True,
-                internal_task=(
-                    http_request.headers.get(_CONNECTOR_TASK_ORIGIN_HEADER, "").strip().lower()
-                    == _CONNECTOR_TASK_ORIGIN
-                ),
+                internal_task=request.internal_task,
+                is_active=request.is_active,
                 args=request.args,
+                shared_source=shared_source_ref,
                 **kwargs,
             )
         except Exception:
@@ -364,22 +388,46 @@ async def add_skill(
             source_metadata["original_filename"] = resolved.original_filename
 
     source_path_hint = resolved.original_filename if resolved else None
+
     async def _add() -> dict[str, Any]:
         try:
-            result = await service.resources.add_skill(
-                data=data,
-                ctx=_ctx,
-                wait=request.wait,
-                timeout=request.timeout,
+            async with resolve_skill_source(
+                data,
+                names=request.skills,
                 allow_local_path_resolution=allow_local_path_resolution,
-                source_path_hint=source_path_hint,
-                target_uri=target_uri,
-            )
-            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
-        except Exception:
-            raise
-        else:
-            return result
+                source_metadata=source_metadata,
+            ) as targets:
+                if request.list_only:
+                    return await asyncio.to_thread(describe_skill_sources, targets)
+                installed = []
+                for skill_data, skill_source in targets:
+
+                    async def _install(skill_data=skill_data, skill_source=skill_source):
+                        result = await service.resources.add_skill(
+                            data=skill_data,
+                            ctx=_ctx,
+                            wait=request.wait,
+                            timeout=request.timeout,
+                            allow_local_path_resolution=isinstance(skill_data, Path),
+                            source_path_hint=source_path_hint,
+                            target_uri=target_uri,
+                            source_metadata=skill_source,
+                        )
+                        return result
+
+                    # Each skill owns its own queue wait tracker and task ID.
+                    if len(targets) == 1:
+                        installed.append(await _install())
+                    else:
+                        execution = await run_operation(
+                            operation="resources.add_skill",
+                            telemetry=request.telemetry,
+                            fn=_install,
+                        )
+                        installed.append(execution.result)
+                if len(installed) == 1:
+                    return installed[0]
+                return {"installed": installed, "total": len(installed)}
         finally:
             if resolved:
                 await resolved.cleanup()

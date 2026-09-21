@@ -7,8 +7,12 @@ import {
   buildContextSearchBody,
   buildRecallEndpointBody,
   buildRecallBlock,
+  buildRecallBlockDetailed,
   contextRequestTimeoutMs,
+  estimateTokens,
   isContextFaceLegacy,
+  postRecall,
+  readPeerScopeDowngrade,
 } from "./lib/recall-core.mjs";
 
 async function tempPath(name) {
@@ -133,6 +137,15 @@ test("the deadline follows the stages the request actually asks for", async () =
   // A digest costs the rewrite fuse on top of everything above it.
   const withRewrite = contextRequestTimeoutMs(cfg, { session_id: "s", rewrite: true });
   assert.ok(withRewrite > withSession, "a digest must outlast a plain expanded request");
+});
+
+test("explicit recall context timeout applies without rewrite or expansion", () => {
+  const timeout = contextRequestTimeoutMs(
+    { recallContextTimeoutMs: 25000, timeoutMs: 15000 },
+    { session_id: "s1", query_expansion: "off" },
+  );
+
+  assert.equal(timeout, 25000);
 });
 
 test("buildRecallBlock prefers a cited server digest", async () => {
@@ -280,4 +293,179 @@ test("buildRecallBlock falls back to find when neither context endpoint works", 
   assert.ok(calls.includes("/api/v1/search/find"));
   assert.match(block, /^<openviking-context>/);
   assert.match(block, /\[memory 90%\]/);
+});
+
+function recordingFetch(responses) {
+  const sent = [];
+  const queue = [...responses];
+  return {
+    sent,
+    fetchJSON: async (_path, init) => {
+      sent.push(JSON.parse(init.body));
+      return queue.shift() ?? { ok: true, status: 200, result: {} };
+    },
+  };
+}
+
+test("postRecall drops peer_scope only when the server rejects the field itself", async () => {
+  const memoPath = await tempPath("peer-scope.json");
+  const { sent, fetchJSON } = recordingFetch([
+    { ok: false, status: 422, error: "unexpected keyword argument 'peer_scope'" },
+    { ok: true, status: 200, result: {} },
+  ]);
+
+  const res = await postRecall(fetchJSON, { query: "q", peer_scope: "actor" }, { peerScopeMemoPath: memoPath });
+
+  assert.equal(res.ok, true);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].peer_scope, "actor");
+  assert.equal(sent[1].peer_scope, undefined);
+
+  const memo = await readPeerScopeDowngrade(memoPath);
+  assert.equal(memo.scope, "actor");
+  assert.equal(memo.status, 422);
+});
+
+test("postRecall keeps peer_scope when a 400 is about something else", async () => {
+  const memoPath = await tempPath("peer-scope.json");
+  const { sent, fetchJSON } = recordingFetch([
+    { ok: false, status: 400, error: "query must not be empty" },
+  ]);
+
+  const res = await postRecall(fetchJSON, { query: "", peer_scope: "actor" }, { peerScopeMemoPath: memoPath });
+
+  assert.equal(res.ok, false);
+  assert.equal(sent.length, 1, "an unrelated 400 must not be retried at a wider scope");
+  assert.equal(await readPeerScopeDowngrade(memoPath), null);
+});
+
+test("a remembered downgrade skips the rejected request on later turns", async () => {
+  const memoPath = await tempPath("peer-scope.json");
+  const first = recordingFetch([
+    { ok: false, status: 400, error: "extra fields not permitted" },
+    { ok: true, status: 200, result: {} },
+  ]);
+  await postRecall(first.fetchJSON, { query: "q", peer_scope: "actor" }, { peerScopeMemoPath: memoPath });
+
+  const second = recordingFetch([{ ok: true, status: 200, result: {} }]);
+  await postRecall(second.fetchJSON, { query: "q", peer_scope: "actor" }, { peerScopeMemoPath: memoPath });
+
+  assert.equal(second.sent.length, 1);
+  assert.equal(second.sent[0].peer_scope, undefined);
+});
+
+test("a request without peer_scope is never retried", async () => {
+  const memoPath = await tempPath("peer-scope.json");
+  const { sent, fetchJSON } = recordingFetch([{ ok: false, status: 422, error: "extra fields not permitted" }]);
+
+  await postRecall(fetchJSON, { query: "q" }, { peerScopeMemoPath: memoPath });
+
+  assert.equal(sent.length, 1);
+});
+
+test("under actor scope, recall also asks the peer this workspace used before", async () => {
+  const asked = [];
+  const fetchJSON = async (path, init, options) => {
+    asked.push(options?.actorPeerId || "");
+    return {
+      ok: true,
+      result: {
+        rendered: `<memory uri="viking://${options?.actorPeerId}/a.md">from ${options?.actorPeerId}</memory>`,
+        entries: [{ uri: `viking://${options?.actorPeerId}/a.md` }],
+        stats: {},
+      },
+    };
+  };
+
+  const block = await buildRecallBlock(fetchJSON, { recallPeerScope: "actor" }, "hello", {
+    actorPeerId: "github.com-o-r",
+    legacyPeerId: "-Users-x-src-r",
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+
+  assert.deepEqual(asked, ["github.com-o-r", "-Users-x-src-r"]);
+  assert.match(block, /from github\.com-o-r/);
+  assert.match(block, /from -Users-x-src-r/);
+});
+
+test("under the default scope the server's own sweep covers it, so nothing extra is sent", async () => {
+  const asked = [];
+  const fetchJSON = async (_path, _init, options) => {
+    asked.push(options?.actorPeerId || "");
+    return { ok: true, result: { rendered: '<memory uri="viking://a">body</memory>', entries: [{ uri: "viking://a" }] } };
+  };
+
+  await buildRecallBlock(fetchJSON, { recallPeerScope: "all" }, "hello", {
+    actorPeerId: "github.com-o-r",
+    legacyPeerId: "-Users-x-src-r",
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+
+  assert.deepEqual(asked, ["github.com-o-r"]);
+});
+
+test("a legacy id equal to the effective one is not asked twice", async () => {
+  const asked = [];
+  const fetchJSON = async (_path, _init, options) => {
+    asked.push(options?.actorPeerId || "");
+    return { ok: true, result: { rendered: '<memory uri="viking://a">body</memory>', entries: [{ uri: "viking://a" }] } };
+  };
+
+  await buildRecallBlock(fetchJSON, { recallPeerScope: "actor" }, "hello", {
+    actorPeerId: "same",
+    legacyPeerId: "same",
+    legacyCachePath: await tempPath("context-face.json"),
+  });
+
+  assert.deepEqual(asked, ["same"]);
+});
+
+function fallbackFetch(memories) {
+  return async (path) => {
+    if (path === "/api/v1/search/search") return { ok: false, status: 503 };
+    if (path === "/api/v1/search/recall") return { ok: false, status: 404 };
+    if (path === "/api/v1/search/find") return { ok: true, result: { memories, skills: [] } };
+    return { ok: false, status: 404 };
+  };
+}
+
+test("a server-assembled block reports itself as one budgeted unit", async () => {
+  const detailed = await buildRecallBlockDetailed(async () => ({
+    ok: true,
+    result: { rendered: "- viking://a/b.md — body", entries: [{ uri: "viking://a/b.md" }], stats: {} },
+  }), {}, "hello", { legacyCachePath: await tempPath("context-face.json") });
+
+  assert.equal(detailed.stage, "server_assembled");
+  assert.equal(detailed.contentCount, 1);
+  assert.equal(detailed.hintCount, 0);
+  assert.equal(detailed.budgetUsed, estimateTokens(detailed.block));
+});
+
+test("the ranked fallback reports what fitted the budget and what degraded", async () => {
+  const detailed = await buildRecallBlockDetailed(fallbackFetch([
+    { uri: "viking://user/default/memories/entities/a.md", score: 0.9, abstract: "x".repeat(500), level: 1 },
+    { uri: "viking://user/default/memories/entities/b.md", score: 0.9, abstract: "y".repeat(500), level: 1 },
+  ]), {
+    recallTokenBudget: 200,
+    recallMaxContentChars: 500,
+    recallPreferAbstract: true,
+  }, "what happened", { legacyCachePath: await tempPath("context-face.json") });
+
+  assert.equal(detailed.stage, "ranked");
+  assert.equal(detailed.contentCount, 1);
+  assert.equal(detailed.hintCount, 1);
+  assert.equal(detailed.budgetUsed, estimateTokens(`- [memory 90%] ${"x".repeat(500)}`));
+});
+
+test("an empty recall says whether the server had nothing or the threshold took it", async () => {
+  const legacyCachePath = await tempPath("context-face.json");
+  const nothing = await buildRecallBlockDetailed(fallbackFetch([]), {}, "hello", { legacyCachePath });
+  const belowThreshold = await buildRecallBlockDetailed(fallbackFetch([
+    { uri: "viking://user/default/memories/entities/a.md", score: 0.1, abstract: "barely related", level: 1 },
+  ]), {}, "hello", { legacyCachePath: await tempPath("context-face.json") });
+
+  assert.equal(nothing.stage, "no_results");
+  assert.equal(nothing.block, "");
+  assert.equal(belowThreshold.stage, "filtered_out");
+  assert.equal(await buildRecallBlock(fallbackFetch([]), {}, "hello", { legacyCachePath }), null);
 });

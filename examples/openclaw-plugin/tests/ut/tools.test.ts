@@ -473,7 +473,7 @@ describe("Tool: memory_store (behavioral)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "person" });
+    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "sender" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const factory = factoryTools.get("memory_store");
@@ -2098,7 +2098,7 @@ describe("Plugin registration", () => {
       return okResponse({});
     });
 
-    const { commands, api } = setupPlugin();
+    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
 
@@ -2115,7 +2115,7 @@ describe("Plugin registration", () => {
     expect(headers.get("X-OpenViking-Actor-Peer")).toBe("worker");
   });
 
-  it("search command propagates configured tenant headers", async () => {
+  it("search command omits actor peer identity with the default memory scope", async () => {
     const openVikingTransport = vi.fn(async (url: string) => {
       if (url.endsWith("/api/v1/search/find")) {
         return okResponse({ memories: [], resources: [], skills: [], total: 0 });
@@ -2124,6 +2124,31 @@ describe("Plugin registration", () => {
     });
 
     const { commands, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+
+    await commands.get("ov-search")!.handler({
+      args: "test query --uri viking://resources",
+      commandBody: "/ov-search",
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:session-1",
+    });
+
+    const [, init] = openVikingTransport.mock.calls.find((call) => String(call[0]).endsWith("/api/v1/search/find")) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Actor-Peer")).toBeNull();
+  });
+
+  it("search command propagates configured tenant headers", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+
+    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     api.pluginConfig = {
       ...api.pluginConfig,

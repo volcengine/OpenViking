@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for LiteLLM VLM provider detection and model prefix resolution."""
 
+import asyncio
 import os
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from litellm import ModelResponse
 
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
@@ -73,3 +76,43 @@ class TestLiteLLMVLMProviderDetection:
     )
     def test_existing_provider_detection_still_matches(self, model, provider):
         assert detect_provider_by_model(model) == provider
+
+
+@pytest.mark.parametrize(
+    "model", ["ollama_chat/qwen2.5:7b", "ollama/qwen2.5:7b", "openai/qwen2.5:7b"]
+)
+@pytest.mark.parametrize("api_key", [None, "test-key"])
+@pytest.mark.parametrize("api_base", [None, "http://localhost:11434"])
+@pytest.mark.parametrize("extra_body", [{}, {"num_ctx": 32768, "think": True}])
+def test_explicit_local_routes_reach_completion_unchanged(
+    monkeypatch, model, api_key, api_base, extra_body
+):
+    monkeypatch.setenv("OLLAMA_API_KEY", "")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "")
+    provider = LiteLLMVLMProvider(
+        {
+            "provider": "litellm",
+            "model": model,
+            "api_key": api_key,
+            "api_base": api_base,
+            "extra_request_body": extra_body,
+        }
+    )
+    tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}]
+    response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
+    sync_call = Mock(return_value=response)
+    async_call = AsyncMock(return_value=response)
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.completion", sync_call)
+    monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", async_call)
+
+    provider.get_completion(prompt="test", tools=tools)
+    asyncio.run(provider.get_completion_async(prompt="test", tools=tools))
+
+    for call in (sync_call, async_call):
+        kwargs = call.call_args.kwargs
+        assert kwargs["model"] == model
+        assert kwargs["tools"] == tools
+        assert kwargs.get("api_key") == api_key
+        assert kwargs.get("api_base") == api_base
+        if model.startswith(("ollama/", "ollama_chat/")):
+            assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False} | extra_body

@@ -1,5 +1,7 @@
+import { boundContextSummary } from "@deepseek-ai/dsh-llm";
+import { pluginMessage } from "./capture.mjs";
 import { MCP_SERVER_NAME } from "./config.mjs";
-import { buildGuardMessage, findVikingUri } from "./shared/uri-guard.mjs";
+import { evaluateUriGuard, evaluateUriNotice } from "./shared/uri-guard.mjs";
 
 /** Model-facing name of a bridged OpenViking MCP tool. */
 const mcp = rawName => `mcp__${MCP_SERVER_NAME}__${rawName}`;
@@ -37,16 +39,24 @@ const GUARDED_TOOLS = {
 };
 
 export async function guardVikingUri(exec, next) {
-  const hint = GUARDED_TOOLS[exec.name];
-  if (!hint) return next();
-  const uri = findVikingUri(exec.arguments);
-  if (!uri) return next();
+  const decision = evaluateUriGuard(exec.name, exec.arguments, { hints: GUARDED_TOOLS });
+  if (!decision) return next();
+  return { kind: "deny", reason: decision.reason };
+}
+
+// Delegates first so a later listener's block or content replacement survives;
+// the notice only rides along as one more context.
+export async function noticeVikingUri(exec, _result, next) {
+  const notice = evaluateUriNotice(exec.name, exec.arguments, { hints: GUARDED_TOOLS });
+  if (!notice) return next();
+  const decision = await next();
+  const context = pluginMessage(notice.reason, {
+    form: "notice",
+    summary: boundContextSummary(`OpenViking URI guard: shell command contains ${notice.uri}`),
+  });
   return {
-    kind: "deny",
-    reason: buildGuardMessage(uri, {
-      tool: hint.tool,
-      example: hint.example(uri, exec.arguments),
-    }),
+    ...decision,
+    additionalContexts: [...(decision.additionalContexts ?? []), context],
   };
 }
 

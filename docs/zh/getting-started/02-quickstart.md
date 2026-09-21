@@ -1,264 +1,104 @@
 # 快速开始
 
-5 分钟上手 OpenViking。
+OpenViking 以服务端运行。用独立的 `ov` CLI 连接服务，导入一份小文档，再检索其中的内容。使用托管服务或他人部署的服务时，只需安装 CLI。
 
-## 前置要求
+## 1. 选择服务
 
-在开始使用 OpenViking 之前，请确保您的环境满足以下要求：
+**已有服务地址？** 准备好 URL 和 API Key，直接跳到第 2 步。服务采用 API Key 认证时，数据访问使用 user/admin key，root key 用于管理操作。详见[认证](../guides/04-authentication.md)。
 
-- **Python 版本**：3.10 或更高版本
-- **操作系统**：Linux、macOS、Windows
-- **网络连接**：需要稳定的网络连接（用于下载依赖包和访问模型服务）
+还没有服务时，选择以下一种方式：
 
-## 安装与启动
+### 火山引擎托管服务
 
-OpenViking 支持通过 Python Package 安装作为本地库使用，也支持通过 Docker 快速启动独立服务。
+打开 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)，从**用户管理 → API Key** 获取密钥。服务地址为：
 
-### 方式一：通过 Python 包安装（作为本地命令和库）
-
-选择你常用的 Python 包管理工具安装 OpenViking：
-
-::: code-group
-
-```bash [uv（推荐）]
-uv tool install openviking --upgrade
+```text
+https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
 
-```bash [pip]
-pip install openviking --upgrade --force-reinstall
-```
+无需安装服务端，也无需在本机配置模型。[产品介绍](https://www.volcengine.com/product/openviking-service)和[服务文档](https://docs.volcengine.com/docs/84313/2374478)说明托管服务的使用方式与额度。继续第 2 步。
 
-```bash [pipx]
-# 安装
-pipx install openviking
+### 自建服务
 
-# 更新
-pipx upgrade openviking
-```
-
-:::
-
-安装完成后，可以使用客户端命令 `ov`（`openviking` 是其别名）和服务端命令 `openviking-server`。
-
-### 方式二：通过 Docker 启动 (作为独立服务)
-
-如果你希望将 OpenViking 作为独立的服务运行，推荐使用 Docker。
-
-1. **准备配置目录**
-   在宿主机上创建 OpenViking 目录，并准备好 `ov.conf` 配置文件（配置项参考下方“配置环境”章节）。所有持久化状态 —— 配置和工作区数据 —— 都放在这一个目录下：
-   ```bash
-   mkdir -p ~/.openviking
-   touch ~/.openviking/ov.conf
-   ```
-
-2. **使用 Docker Compose 启动**
-   创建 `docker-compose.yml` 文件：
-   ```yaml
-   services:
-     openviking:
-       image: ghcr.io/volcengine/openviking:latest
-       container_name: openviking
-       ports:
-         - "1933:1933"
-       volumes:
-         - ~/.openviking:/app/.openviking
-       restart: unless-stopped
-   ```
-   然后在同目录下执行启动命令：
-   ```bash
-   docker-compose up -d
-   ```
-
-   默认情况下，容器会启动 OpenViking API 服务（`1933`，同时在 `/studio` 提供 Web Studio 前端）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
-
-   如果运行平台不支持 bind mount，可以通过 `OPENVIKING_CONF_CONTENT` 环境变量传入完整的配置 JSON，或在容器启动后 `docker exec` 进去执行 `openviking-server init`。详见 [部署指南](../guides/03-deployment.md#无法使用-docker--v-时)。
-
-> **💡 Mac 本地网络访问提示 (Connection reset 报错)：**
->
-> 默认情况下，OpenViking 为了安全仅监听 `127.0.0.1`。如果你在 Mac 上使用 Docker，宿主机可能无法直接通过 `localhost:1933` 访问。
-> 
-> **推荐解决方案：使用 socat 端口转发（无需修改配置）：**
-> 在你的 `docker-compose.yml` 中覆盖默认启动命令，利用 `socat` 在容器内部进行端口转发：
-> ```yaml
-> services:
->   openviking:
->     image: ghcr.io/volcengine/openviking:latest
->     ports:
->       - "1933:1934" # 将宿主机 1933 映射到容器 1934
->     volumes:
->       - ~/.openviking:/app/.openviking
->     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
-> ```
-> 这样即可完美解决 Mac 宿主机的访问问题。
-
-## 模型准备
-
-OpenViking 需要以下模型能力：
-- **VLM 模型**：用于图像和内容理解
-- **Embedding 模型**：用于向量化和语义检索
-
-OpenViking 支持多种模型服务：
-- **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](../guides/02-volcengine-purchase-guide.md)
-- **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
-- **OpenAI Codex**：支持通过 ChatGPT/Codex OAuth 使用 Codex 作为 VLM
-- **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
-
-## 配置环境
-
-### 配置文件模版
-
-推荐首次配置使用：
+在运行服务端的机器上[安装 uv](https://docs.astral.sh/uv/getting-started/installation/)，再安装 OpenViking：
 
 ```bash
+uv tool install openviking --upgrade
 openviking-server init
 openviking-server doctor
-```
-
-如果你更希望手动创建，再编写 `~/.openviking/ov.conf`：
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "<api-endpoint>",
-      "api_key"  : "<your-api-key>",
-      "provider" : "<provider-type>",
-      "dimension": 1024,
-      "model"    : "<model-name>"
-    }
-  },
-  "vlm": {
-    "api_base" : "<api-endpoint>",
-    "api_key"  : "<your-api-key>",
-    "provider" : "<provider-type>",
-    "model"    : "<model-name>"
-  }
-}
-```
-
-`provider`、`model`、`api_base` 和 `api_key` 取决于你选择的 VLM 服务；部分 provider 可能会使用本地 OAuth 状态，而不是手动填写 API key。
-
-各模型服务的完整配置示例请参见 [配置指南 - 配置示例](../guides/01-configuration.md#配置示例)。
-
-首次配置建议优先使用 `openviking-server init`，它会帮助你选择 provider，并生成对应场景可直接使用的配置模板。
-
-### 设置环境变量
-
-配置文件放在默认路径 `~/.openviking/ov.conf` 时，无需额外设置，OpenViking 会自动加载。
-
-如果配置文件放在其他位置，需要通过环境变量指定：
-
-```bash
-export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
-```
-
-## 启动本地服务
-
-首次在本地运行时，完成初始化并启动服务：
-
-```bash
-openviking-server init
 openviking-server
 ```
 
-保持服务运行，然后打开另一个终端执行下面的 Python SDK 示例。
-如果使用自定义配置路径，通过 `openviking-server --config /path/to/ov.conf` 启动。
+配置向导用于设置服务端模型并写入 `~/.openviking/ov.conf`。准备好 Embedding 模型和 VLM 的访问凭据——推荐使用火山引擎（豆包）模型，购买和开通见[火山引擎购买指南](../guides/02-volcengine-purchase-guide.md)——再用 `doctor` 检查配置。保持服务运行，另开终端完成后续步骤。
 
-默认本地模式不需要 API Key；连接启用鉴权的 Server 时，先设置
-`OPENVIKING_API_KEY`。
-
-## 运行第一个示例
-
-### 创建 Python 脚本
-
-创建 `example.py`：
-
-```python
-from openviking_sdk import SyncHTTPClient
-
-# 连接本地 OpenViking Server
-client = SyncHTTPClient(url="http://localhost:1933")
-
-try:
-    # 检查连接
-    client.initialize()
-
-    # Add resource (supports URL, file, or directory)
-    # Local directory scans respect .gitignore by default.
-    # Wait until semantic processing completes before inspecting the resource.
-    print("Wait for semantic processing...")
-    add_result = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-        wait=True,
-    )
-    root_uri = add_result['root_uri']
-
-    # Explore the resource tree structure
-    ls_result = client.ls(uri=root_uri)
-    print(f"Directory structure:\n{ls_result}\n")
-
-    # Use glob to find markdown files
-    glob_result = client.glob(pattern="**/*.md", uri=root_uri)
-    if glob_result['matches']:
-        content = client.read(uri=glob_result["matches"][0])
-        print(f"Content preview: {content[:200]}...\n")
-
-    # Get abstract and overview of the resource
-    abstract = client.abstract(uri=root_uri)
-    overview = client.overview(uri=root_uri)
-    print(f"Abstract:\n{abstract}\n\nOverview:\n{overview}\n")
-
-    # Perform semantic search
-    results = client.find(
-        query="what is openviking",
-        target_uri=root_uri,
-    )
-    print("Search results:")
-    for result in results.get("resources", []):
-        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
-
-    # Close the client
-    client.close()
-
-except Exception as e:
-    print(f"Error: {e}")
-```
-
-### 运行脚本
+服务是否在运行，用一条 curl 即可确认，不依赖任何客户端：
 
 ```bash
-python example.py
+curl http://127.0.0.1:1933/health
+# {"status":"ok","healthy":true,...}
 ```
 
-### 预期输出
+本地地址为 `http://127.0.0.1:1933`，默认本地配置不需要 API Key；Web Studio 位于 `/studio`。Docker、持久化存储和远程访问配置见[部署](../guides/03-deployment.md)、[模型配置](../guides/01-configuration.md)和[认证](../guides/04-authentication.md)。
 
-```
-Wait for semantic processing...
+## 2. 安装并连接 CLI
 
-Directory structure:
-...
+在客户端机器上安装好 Node.js 和 npm 后，运行：
 
-Content preview: ...
-
-Abstract:
-...
-
-Overview:
-...
-
-Search results:
-  viking://resources/... (score: 0.8523)
-  ...
+```bash
+npm install -g @openviking/cli
+ov language zh-CN
+ov config
 ```
 
-恭喜！你已成功运行 OpenViking。
+在交互配置中，火山托管服务选择 **OpenViking Service**，自建服务选择 **自定义（Custom）**。填写 API Key，自建服务还需填写 URL。默认本地服务的密钥留空。保存并激活配置。
 
-## 服务端模式
+CLI 将当前连接保存到 `~/.openviking/ovcli.conf`，它与服务端的 `ov.conf` 是两个文件。脚本化配置和多服务切换见 [CLI 配置](05-cli-setup.md)。
 
-想要将 OpenViking 作为共享服务运行？请参见 [快速开始：服务端模式](03-quickstart-server.md)。
+检查连接：
 
-## 下一步
+```bash
+ov health
+```
 
-- [配置详解](../guides/01-configuration.md) - 详细配置选项
-- [API 概览](../api/01-overview.md) - API 参考
-- [资源管理](../api/02-resources.md) - 资源管理 API
+这一步确认服务能响应；下面的导入还会验证模型处理和数据访问。
+
+## 3. 导入文档
+
+在当前目录创建 `quickstart.md`，内容如下：
+
+```markdown
+# Atlas 项目
+
+Atlas 项目每周五备份文档。
+Maya 负责备份流程，每份备份保留 30 天。
+```
+
+将它导入新的资源目录：
+
+```bash
+ov add-resource ./quickstart.md --to viking://resources/quickstart-demo --wait --timeout 120
+```
+
+CLI 会自动上传本地文件。`--wait` 等待处理完成，命令成功后再继续。若省略该参数，保存返回的 `task_id`，用 `ov task status <task_id>` 查询到 `completed` 后再使用结果。详见[后台任务](../api/17-tasks.md)。
+
+本例使用尚未使用的目标 URI。重复运行示例时，换一个新目标，并同步替换下方命令中的 URI。
+
+## 4. 浏览与检索
+
+```bash
+ov tree viking://resources/quickstart-demo
+ov overview viking://resources/quickstart-demo
+ov find "谁负责备份流程？" --uri viking://resources/quickstart-demo
+```
+
+`tree` 列出导入后的结构，`overview` 读取生成的概览，`find` 返回相关上下文的 URI 和分数。读取某条命中时，把返回的 URI 传给 `ov read`：
+
+```bash
+ov read "<returned-file-uri>"
+```
+
+将 `<returned-file-uri>` 替换为结果中的文件 URI，不保留尖括号。更多资源类型和检索参数见[资源管理](../api/02-resources.md)与[检索](../api/06-retrieval.md)。
+
+## 使用 SDK
+
+OpenViking 也提供 Python、TypeScript/JavaScript 和 Go SDK，均连接同一个服务端。客户端示例见 [API 概览](../api/01-overview.md)。

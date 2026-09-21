@@ -42,7 +42,6 @@ async def test_add_resource_processor_cancelled_context_preserves_group_ids(monk
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         viking_fs,
     )
@@ -358,7 +357,6 @@ async def test_legacy_accessor_output_does_not_enable_lark_protocol(tmp_path: Pa
         feishu_access_token="u-test",
     )
 
-    api._create_file.assert_awaited_once_with(local_path=markdown_path)
     api._create_response_for_file.assert_awaited_once_with(file_id="file-1")
     api._create_response_for_url.assert_not_awaited()
 
@@ -483,17 +481,19 @@ def test_add_resource_message_round_trips_processing_mode():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("source", "preflight_name"),
+    ("source", "preflight_name", "internal_task"),
     [
-        ("https://example.larkoffice.com/docx/doxcnToken", None),
-        ("https://example.larkoffice.com/sheets/shtcnToken", "Sheet Title"),
-        ("https://example.larkoffice.com/base/appToken?table=tblSales", "tblSales"),
+        ("https://example.larkoffice.com/docx/doxcnToken", None, False),
+        ("https://example.larkoffice.com/sheets/shtcnToken", "Sheet Title", False),
+        ("https://example.larkoffice.com/base/appToken?table=tblSales", "tblSales", False),
+        ("https://example.larkoffice.com/docx/doxcnToken", None, True),
     ],
 )
 async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     monkeypatch,
     source,
     preflight_name,
+    internal_task,
 ):
     root_uri = "viking://resources/lark/doxcnToken"
     submit_understanding = AsyncMock(return_value="response-1")
@@ -564,16 +564,18 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         wait=False,
         allow_local_path_resolution=False,
         args={"feishu_access_token": "u-secret", "custom_option": "forwarded"},
+        internal_task=internal_task,
     )
 
-    expected_initial = {"status": "success", "task_id": "task-1"}
+    expected_initial = {"status": "success", "task_id": "task-1", "source_path": source}
     if preflight_name:
         expected_initial["root_uri"] = root_uri
     assert initial_result == expected_initial
     assert task_tracker.create.await_args.kwargs["resource_id"] == (
         None if preflight_name is None else root_uri
     )
-    assert task_tracker.create.await_args.kwargs["meta"] == {"source_path": source}
+    expected_meta = {"internal": True} if internal_task else {"source_path": source}
+    assert task_tracker.create.await_args.kwargs["meta"] == expected_meta
     submit_understanding.assert_awaited_once_with(
         source,
         feishu_access_token="u-secret",
@@ -1014,13 +1016,13 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         viking_fs,
     )
     msg = AddResourceMsg(
         task_id="task-1",
         path="https://example.larkoffice.com/docx/doxcnToken",
+        source_path="https://storage.example/document.md?X-Signature=secret",
         root_uri="viking://resources/lark/doxcnToken",
         account_id="account-1",
         user_id="user-1",
@@ -1055,7 +1057,7 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         account_id="account-1",
         user_id="user-1",
         task_id="task-1",
-        meta={"source_path": "", "internal": True},
+        meta={"internal": True},
     )
     assert task_tracker.complete.await_count == 2
     first_complete = task_tracker.complete.await_args_list[0]
@@ -1069,28 +1071,30 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         "resource_id": final_uri,
     }
     final_complete = task_tracker.complete.await_args_list[-1]
-    assert final_complete.args == (
-        "task-1",
-        {
-            "status": "success",
-            "root_uri": final_uri,
-            "context_count": 9,
-            "queue_status": {
-                "Semantic": {
-                    "processed": 0,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
-                "Embedding": {
-                    "processed": 9,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
+    final_result = dict(final_complete.args[1])
+    telemetry = final_result.pop("telemetry")
+    assert telemetry["id"] == telemetry_id
+    assert telemetry["summary"]["operation"] == "add_resource_job"
+    assert final_complete.args[0] == "task-1"
+    assert final_result == {
+        "status": "success",
+        "root_uri": final_uri,
+        "context_count": 9,
+        "queue_status": {
+            "Semantic": {
+                "processed": 0,
+                "requeue_count": 0,
+                "error_count": 0,
+                "errors": [],
+            },
+            "Embedding": {
+                "processed": 9,
+                "requeue_count": 0,
+                "error_count": 0,
+                "errors": [],
             },
         },
-    )
+    }
     assert final_complete.kwargs == {
         "account_id": "account-1",
         "user_id": "user-1",
@@ -1152,7 +1156,6 @@ async def test_add_resource_processor_collects_stats_without_registered_telemetr
             execute_add_resource_job=AsyncMock(side_effect=execute_add_resource_job),
             _link_resource_reason_memory=AsyncMock(),
         ),
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )
@@ -1216,7 +1219,6 @@ async def test_add_resource_processor_replay_skips_lock_adopt_when_result_exists
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=async_agfs),
     )
@@ -1269,7 +1271,6 @@ async def test_add_resource_processor_reports_zero_vectors(monkeypatch):
     )
     processor = AddResourceProcessor(
         service,
-        asyncio.get_running_loop(),
         QueueManager.ADD_RESOURCE,
         SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
     )

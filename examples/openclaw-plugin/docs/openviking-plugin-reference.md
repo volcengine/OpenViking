@@ -75,7 +75,7 @@ $OPENCLAW_STATE_DIR/openclaw.json
 
 | 参数 | 类型 | 默认值 | 环境变量 | 说明 |
 | --- | --- | --- | --- | --- |
-| `peer_role` | `"none"` \| `"assistant"` \| `"person"` | `assistant` | — | Peer 身份模式。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
+| `peer_role` | `"none"` \| `"assistant"` \| `"sender"` \| `"person"` (legacy) | `none` | — | 记忆归属。`none`：共享 `viking://user/<user_id>/memories`（默认）；`assistant`：assistant 归因记忆位于 `.../peers/<assistant_id>/memories`；`sender`：sender 归因记忆位于 `.../peers/<sender_id>/memories`。旧值 `person` 作为 `sender` 的别名兼容。Session message 使用 body `peer_id`；数据面 recall/search 使用 `X-OpenViking-Actor-Peer`。 |
 | `peer_prefix` | string | 空 | — | `peer_role=assistant` 时 assistant `peer_id` / actor peer 值的可选前缀。交互式 setup 仅允许字母、数字、`_`、`-`。 |
 
 ### 3.3 自动捕获与提交
@@ -231,6 +231,7 @@ openclaw openviking setup [options]
 | `--zh` | 使用中文提示。 |
 | `--base-url <url>` | OpenViking Server URL。传入后进入非交互模式。 |
 | `--api-key <key>` | API Key。 |
+| `--peer-role <role>` | 记忆归属：`none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容。 |
 | `--peer-prefix <prefix>` | Peer 路由前缀。 |
 | `--account-id <id>` | Root API Key 场景下的 Account ID。 |
 | `--user-id <id>` | Root API Key 场景下的 User ID。 |

@@ -13,6 +13,7 @@ import type {
   BatchWriteOptions,
   ClientConfig,
   CommitSessionOptions,
+  CompileOptions,
   CreateSessionOptions,
   ExperienceOutcomeOptions,
   ExperienceTrajectoryOptions,
@@ -485,6 +486,8 @@ export class OpenVikingClient {
         abs_limit: options.absLimit ?? 256,
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
+        offset: options.offset,
+        limit: options.limit,
         sort_by: options.sortBy,
         sort_order: options.sortOrder,
         tags: options.tags,
@@ -502,6 +505,8 @@ export class OpenVikingClient {
         show_all_hidden: options.showAllHidden ?? false,
         node_limit: options.nodeLimit ?? 1000,
         level_limit: options.levelLimit ?? 3,
+        offset: options.offset,
+        limit: options.limit,
         tags: options.tags,
         include_tags: options.includeTags || undefined,
       },
@@ -933,6 +938,28 @@ export class OpenVikingClient {
     );
     return result.uri;
   }
+  /** Start an asynchronous Compile task. */
+  compile(
+    fromUris: string[],
+    to: string,
+    skill: string,
+    options: CompileOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      from: fromUris,
+      to,
+      skill,
+      instruction: options.instruction,
+      args:
+        options.args && Object.keys(options.args).length
+          ? options.args
+          : undefined,
+    });
+    return this.request("POST", "/api/v1/compile", {
+      body: mergeExtra(body, options.extra, ["instruction", "args"]),
+    });
+  }
+
   /** Get a background task. */
   async getTask(taskId: string): Promise<JsonObject | null> {
     try {

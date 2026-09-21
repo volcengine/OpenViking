@@ -3,16 +3,23 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
-from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
+from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
+    render_abstract_overview,
+)
 from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs._base import (
+    _ensure_filter_present,
     _ensure_non_empty_search_query,
+    build_matched_context_from_record,
+    is_filter_only_query,
     logger,
 )
 from openviking.telemetry import get_current_telemetry
@@ -39,15 +46,16 @@ class _SemanticMixin:
         file_path = f"{path}/.abstract.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory abstract for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            return f"# {uri} [Directory abstract is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri} [Directory abstract is not ready]"
 
     async def _read_abstract_for_known_dir(
         self,
@@ -170,16 +178,16 @@ class _SemanticMixin:
         file_path = f"{path}/.overview.md"
         try:
             content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
+            return body_for_preview(self._decode_bytes(content_bytes))
+        except AbstractOverviewFormatError as exc:
+            logger.warning("Malformed directory overview for %s: %s", uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-            # Fallback to default if .overview.md doesn't exist
-            return f"# {uri}\n\n[Directory overview is not ready]"
-
-        return body_for_preview(self._decode_bytes(content_bytes))
+        return f"# {uri}\n\n[Directory overview is not ready]"
 
     async def find(
         self,
@@ -204,7 +212,20 @@ class _SemanticMixin:
         Returns:
             FindResult
         """
-        _ensure_non_empty_search_query(query, image_url)
+        # Validate before touching any state: callers rely on a bad request
+        # being rejected even when the instance has not been initialized yet.
+        #
+        # An empty query is allowed only when a metadata filter narrows the
+        # search: the result is then fully determined by that filter, so there
+        # is nothing to embed or rank. Callers that look records up by an exact
+        # tag (e.g. a legacy id carried on the record) would otherwise be forced
+        # to invent a meaningless query string whose similarity score is noise.
+        filter_only = is_filter_only_query(query, image_url)
+        if filter_only:
+            _ensure_filter_present(filter)
+        else:
+            _ensure_non_empty_search_query(query, image_url)
+
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import (
             HierarchicalRetriever,
@@ -218,6 +239,15 @@ class _SemanticMixin:
 
         real_ctx = self._ctx_or_default(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+
+        if filter_only:
+            return await self._find_by_filter(
+                filter=filter,
+                ctx=real_ctx,
+                target_directories=retrieval_targets.target_directories,
+                limit=limit,
+                level=level,
+            )
 
         for target_dir in retrieval_targets.target_directories:
             await self._ensure_retrieval_scope(target_dir, ctx)
@@ -278,6 +308,66 @@ class _SemanticMixin:
             resources=resources,
             skills=skills,
         )
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
+
+    async def _find_by_filter(
+        self,
+        filter: Optional[Dict],
+        ctx: Any,
+        target_directories: Any,
+        limit: int,
+        level: Optional[List[int]] = None,
+    ) -> Any:
+        """Resolve a query-less find purely from the metadata filter.
+
+        Scoping is delegated to filter_in_tenant, which builds the same scope
+        filter the vector path uses — tenant isolation and target-directory
+        limits therefore stay identical between the two. Hand-building the
+        filter here would be one refactor away from silently losing them.
+
+        Records come back in whatever order the store yields; there is no
+        similarity ranking, so ``score`` stays 0 rather than a fabricated value
+        callers might try to sort on.
+        """
+        from openviking.storage.vikingdb_manager import VikingDBManagerProxy
+        from openviking_cli.retrieve import ContextType, FindResult
+
+        telemetry = get_current_telemetry()
+        store = self._get_vector_store()
+        if not store:
+            raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
+
+        for target_dir in target_directories:
+            await self._ensure_retrieval_scope(target_dir, ctx)
+
+        proxy = VikingDBManagerProxy(store, ctx)
+        records = await proxy.filter_in_tenant(
+            target_directories=list(target_directories or []),
+            extra_filter=filter,
+            level=level,
+            limit=limit,
+        )
+
+        memories, resources, skills = [], [], []
+        # Deduplicate by URI, mirroring what the vector path does: tags live on
+        # per-level records, so a directory carrying one matches on both its L0
+        # and L1 record and would otherwise be returned twice — inflating the
+        # total and eating two of the caller's limit slots for one result.
+        seen_uris: set = set()
+        for record in records:
+            matched = build_matched_context_from_record(record)
+            if matched is None or matched.uri in seen_uris:
+                continue
+            seen_uris.add(matched.uri)
+            if matched.context_type == ContextType.MEMORY:
+                memories.append(matched)
+            elif matched.context_type == ContextType.RESOURCE:
+                resources.append(matched)
+            elif matched.context_type == ContextType.SKILL:
+                skills.append(matched)
+
+        find_result = FindResult(memories=memories, resources=resources, skills=skills)
         telemetry.set("vector.returned", find_result.total)
         return find_result
 
@@ -437,6 +527,8 @@ class _SemanticMixin:
         content_filename: str = "content.md",
         is_leaf: bool = False,
         ctx: Optional[RequestContext] = None,
+        *,
+        lease_ref: Any = None,
     ) -> None:
         """Write context to AGFS (L0/L1/L2)."""
 
@@ -444,16 +536,18 @@ class _SemanticMixin:
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
-            await self._ensure_parent_dirs(path, ctx=ctx)
+            await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
             try:
-                await self._async_agfs.mkdir(path)
+                # _pathlock_fs_ctx is supplied by VikingFS's _AccessMixin.
+                fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)  # type: ignore[attr-defined]
+                await self._async_agfs.mkdir(path, fs_ctx=fs_ctx)
             except Exception as e:
                 if "exist" not in str(e).lower():
                     raise
 
             if content:
                 content_uri = f"{uri}/{content_filename}"
-                await self.write_file(content_uri, content, ctx=ctx)
+                await self.write_file(content_uri, content, ctx=ctx, lease_ref=lease_ref)
 
             if abstract:
                 abstract_uri = f"{uri}/.abstract.md"
@@ -471,6 +565,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    lease_ref=lease_ref,
                 )
 
             if overview:
@@ -489,6 +584,7 @@ class _SemanticMixin:
                         },
                     ),
                     ctx=ctx,
+                    lease_ref=lease_ref,
                 )
 
         except Exception as e:

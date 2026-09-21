@@ -116,6 +116,7 @@ class ICollection(ABC):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -136,7 +137,7 @@ class ICollection(ABC):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError
@@ -475,6 +476,7 @@ class Collection:
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ):
         """Retrieve random documents from the index.
 
@@ -494,7 +496,14 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.search_by_random(index_name, limit, offset, filters, output_fields)
+        return self.__collection.search_by_random(
+            index_name=index_name,
+            limit=limit,
+            offset=offset,
+            filters=filters,
+            output_fields=output_fields,
+            advance=advance,
+        )
 
     def search_by_scalar(
         self,
@@ -535,7 +544,7 @@ class Collection:
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         """
@@ -543,7 +552,7 @@ class Collection:
 
         Args:
             index_name (str): Name of the index to update.
-            scalar_index (Optional[Dict[str, Any]]): Updated configuration for scalar indexes.
+            scalar_index (Optional[List[str]]): Complete list of scalar-indexed fields.
                 Defaults to None.
             description (Optional[str]): New description for the index. Defaults to None.
         """

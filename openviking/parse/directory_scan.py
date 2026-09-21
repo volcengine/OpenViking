@@ -16,7 +16,7 @@ from typing import Callable, List, Optional, Set, Union
 
 from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.parsers.constants import IGNORE_DIRS
-from openviking.parse.parsers.upload_utils import is_text_file
+from openviking.parse.parsers.upload_utils import is_empty_file, is_text_file
 from openviking.parse.registry import ParserRegistry, get_registry
 from openviking_cli.exceptions import InvalidArgumentError, UnsupportedDirectoryFilesError
 from openviking_cli.utils.logger import get_logger
@@ -56,14 +56,14 @@ def _should_skip_file(file_path: Path) -> tuple[bool, str]:
     """
     Return (True, reason) if the file should be skipped (not counted as supported/unsupported).
 
-    Skip: dot files, symlinks, empty files (per RFC phase-one).
+    Skip: dot files, symlinks, empty or whitespace-only files.
     """
     if file_path.name.startswith("."):
         return True, "dot file"
     if file_path.is_symlink():
         return True, "symlink"
     try:
-        if file_path.stat().st_size == 0:
+        if is_empty_file(file_path):
             return True, "empty file"
     except OSError:
         return True, "os error"

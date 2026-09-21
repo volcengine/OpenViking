@@ -8,18 +8,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.server.account_settings import (
-    AccountAclSettings,
-    AccountSettingsPatch,
-    update_account_settings,
-)
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -128,14 +123,16 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         user=UserIdentifier(admin.account_id, "outsider"),
         role=Role.USER,
     )
+    late_reader = RequestContext(
+        user=UserIdentifier(admin.account_id, "late_reader"),
+        role=Role.USER,
+    )
     parent_uri = "viking://resources/append_plain"
     auto_protected_dir = "viking://resources/auto_protected"
     uri = "viking://resources/append_plain/journal.md"
 
-    await update_account_settings(
-        service.viking_fs,
-        creator.account_id,
-        AccountSettingsPatch(acl=AccountAclSettings(enabled=True)),
+    await service.runtime_config_manager.patch_account(
+        creator.account_id, {"acl": {"enabled": True}}
     )
     await service.fs.mkdir(auto_protected_dir, ctx=creator)
     await service.resources.wait_processed()
@@ -158,7 +155,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         },
         ctx=admin,
     )
-    await service.fs.set_acl(
+    assert (await service.fs.get_acl(parent_uri, ctx=admin))["acl_mode"] == "none"
+    parent_acl = await service.fs.set_acl(
         parent_uri,
         [
             {"principal": "group:readers", "level": "read"},
@@ -166,6 +164,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         ],
         ctx=admin,
     )
+    assert parent_acl["acl_mode"] == "inherit"
 
     await service.fs.write(uri, content="line1\n", ctx=creator, mode="create", wait=True)
     inherited_entries = [
@@ -192,6 +191,70 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert child_acl["direct_entries"] == []
     assert child_acl["inherited_entries"] == [*inherited_entries, creator_entry]
 
+    restricted_acl = await service.fs.set_acl(
+        import_root,
+        None,
+        ctx=creator,
+        acl_mode=AclMode.RESTRICTED,
+    )
+    assert restricted_acl["acl_mode"] == "restricted"
+    assert restricted_acl["inherited_entries"] == inherited_entries
+    assert restricted_acl["effective_entries"] == [creator_entry]
+    child_acl = await service.fs.get_acl(children[0], ctx=creator)
+    assert child_acl["inherited_entries"] == [creator_entry]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=reader, simple=True)
+
+    refreshed_inherited_entries = [
+        *inherited_entries,
+        {"principal": "user:late_reader", "level": "read"},
+    ]
+    await service.fs.set_acl(
+        parent_uri,
+        [
+            {"principal": "group:readers", "level": "read"},
+            {"principal": "group:writers", "level": "write"},
+            {"principal": "user:late_reader", "level": "read"},
+        ],
+        ctx=admin,
+    )
+    restricted_acl = await service.fs.get_acl(import_root, ctx=creator)
+    assert restricted_acl["inherited_entries"] == refreshed_inherited_entries
+    assert restricted_acl["effective_entries"] == [creator_entry]
+    child_acl = await service.fs.get_acl(children[0], ctx=creator)
+    assert child_acl["inherited_entries"] == [creator_entry]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=late_reader, simple=True)
+
+    inherited_acl = await service.fs.set_acl(
+        import_root,
+        None,
+        ctx=creator,
+        acl_mode=AclMode.INHERIT,
+    )
+    assert inherited_acl["acl_mode"] == "inherit"
+    assert inherited_acl["inherited_entries"] == refreshed_inherited_entries
+    assert await service.fs.ls(import_root, ctx=late_reader, simple=True) == children
+
+    await service.fs.set_acl(import_root, [], acl_mode=AclMode.RESTRICTED, ctx=creator)
+    child_acl = await service.fs.get_acl(children[0], ctx=admin)
+    assert child_acl["acl_mode"] == "inherit"
+    assert child_acl["effective_entries"] == []
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.ls(import_root, ctx=late_reader, simple=True)
+    with pytest.raises(PermissionDeniedError):
+        await service.viking_fs.read_file(children[0], ctx=late_reader)
+
+    removed_acl = await service.fs.delete_acl(import_root, ctx=admin)
+    assert removed_acl["acl_mode"] == "inherit"
+    assert removed_acl["direct_entries"] == []
+    assert removed_acl["inherited_entries"] == refreshed_inherited_entries
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.get_acl(import_root, ctx=creator)
+    assert (await service.fs.get_acl(import_root, ctx=admin))["effective_entries"] == (
+        refreshed_inherited_entries
+    )
+
     await service.fs.write(uri, content="line2\n", ctx=creator, mode="append", wait=True)
 
     stored = await service.viking_fs.read_file(uri, ctx=reader)
@@ -201,10 +264,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     with pytest.raises(PermissionDeniedError):
         await service.viking_fs.read_file(uri, ctx=outsider)
 
-    await update_account_settings(
-        service.viking_fs,
-        creator.account_id,
-        AccountSettingsPatch(acl=AccountAclSettings(enabled=False)),
+    await service.runtime_config_manager.patch_account(
+        creator.account_id, {"acl": {"enabled": False}}
     )
     assert await service.viking_fs.read_file(uri, ctx=outsider) == stored
 
@@ -342,7 +403,9 @@ async def test_memory_write_linkifies_resource_uri_marker_with_readable_anchor(s
     refs = mf.extra_fields["resource_refs"]
     assert refs[0]["resource_uri"] == resource_uri
     assert refs[0]["source"] == "content.write"
-    assert refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    assert (
+        refs[0]["match_text"] == "2026-06-12，用户保存了粉丝创作的越前龙马动漫插画资源，资源URI为"
+    )
     assert mf.links == []
 
 
@@ -462,8 +525,9 @@ class _FakeVikingFS:
         self.tree_entries = []
         self._async_agfs = _FakePathLock()
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         if uri == self._file_uri or uri in self.content:
             return {"isDir": False}
         if uri == self._root_uri:
@@ -564,28 +628,6 @@ async def test_resource_write_semantic_refresh_uses_coalesce_key(monkeypatch):
         "resource|default|default|default|viking://resources/demo"
     )
     assert queue.messages[0].lock_handoff is None
-
-
-@pytest.mark.asyncio
-async def test_resource_write_wait_forces_directory_refresh(monkeypatch):
-    file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    coordinator = ContentWriteCoordinator(
-        viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
-    )
-    enqueue = AsyncMock(return_value=FreshnessAction.REFRESH_NOW)
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", enqueue)
-    monkeypatch.setattr(coordinator, "_wait_for_request", AsyncMock(return_value=None))
-
-    await coordinator.write(
-        uri=file_uri,
-        content="updated",
-        ctx=ctx,
-        wait=True,
-    )
-
-    assert enqueue.await_args.kwargs["force_refresh"] is True
 
 
 @pytest.mark.asyncio
@@ -719,35 +761,35 @@ async def test_write_direct_reuses_outer_lease_for_viking_fs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resource_write_updates_target_and_queues_refresh_before_return(monkeypatch):
+@pytest.mark.parametrize("wait", [False, True])
+async def test_resource_write_skips_busy_parent_and_keeps_file_work(monkeypatch, wait):
     file_uri = "viking://resources/demo/doc.md"
-    root_uri = "viking://resources/demo"
+    root_uri = file_uri.rsplit("/", 1)[0]
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
-    captured_enqueue = {}
-
-    async def _fake_enqueue_semantic_refresh(**kwargs):
-        captured_enqueue.update(kwargs)
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-
-    result = await coordinator.write(
-        uri=file_uri,
-        content="updated",
-        ctx=ctx,
-        mode="replace",
-        wait=False,
+    queue = _FakeSemanticQueue()
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_queue_manager", lambda: _FakeQueueManager(queue)
     )
+    plan = AsyncMock(side_effect=LockAcquisitionError("parent sidecars are busy"))
+    monkeypatch.setattr("openviking.storage.content_write.plan_abstract_overview_refresh", plan)
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace()),
+    )
+    monkeypatch.setattr(coordinator, "_wait_for_request", AsyncMock(return_value=None))
 
+    result = await coordinator.write(uri=file_uri, content="updated", ctx=ctx, wait=wait)
+
+    assert plan.await_args.kwargs["force_refresh"] is wait
     assert viking_fs.content[file_uri] == "updated"
     assert result["content_updated"] is True
-    assert result["semantic_status"] == "queued"
-    assert result["vector_status"] == "queued"
-    assert captured_enqueue["root_uri"] == root_uri
-    assert captured_enqueue["changed_uri"] == file_uri
-    assert captured_enqueue["change_type"] == "modified"
-    assert viking_fs.delete_temp_calls == []
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == ("complete" if wait else "queued")
+    assert len(queue.messages) == 1
+    assert queue.messages[0].changes == {"modified": [file_uri]}
+    assert queue.messages[0].aggregate_directory is False
     assert viking_fs._async_agfs.release_calls == ["lock-1"]
 
 
@@ -827,7 +869,7 @@ async def test_memory_write_wait_skips_semantic_queue_and_releases_write_lock(mo
 
     async def _fake_refresh_schema_overview(**kwargs):
         del kwargs
-        return None
+        return True
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
     monkeypatch.setattr(coordinator, "_wait_for_request", _fail_wait_for_request)
@@ -873,8 +915,9 @@ class _FakeVikingFSForCreate:
         self.existing_dirs = set({root_uri} if existing_dirs is None else existing_dirs)
         self._async_agfs = _FakePathLock()
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         if uri == self._file_uri:
             if self._file_exists:
                 return {"isDir": False}
@@ -1216,8 +1259,9 @@ class _AnyDirVikingFS:
     def __init__(self, file_uri: str):
         self._file_uri = file_uri
 
-    async def stat(self, uri: str, ctx=None):
+    async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
+        assert skip_count is True
         return {"isDir": uri != self._file_uri}
 
 
@@ -1244,7 +1288,7 @@ async def test_resource_write_anchors_nested_file_to_direct_parent(
 ):
     """A resource content write anchors the semantic refresh at the written file's
     direct parent directory (anchor_to_parent=True), so the changed file is a direct
-    child of the DAG run root: its own L2 vector and the parent's L0/L1 are generated
+    child of the semantic-tree root: its own L2 vector and the parent's L0/L1 are generated
     from a single-directory run instead of a recursive walk of the whole project subtree.
     set_tags keeps the project-root collapse (the default), which the derived
     ``.abstract.md`` sidecar mapping relies on."""

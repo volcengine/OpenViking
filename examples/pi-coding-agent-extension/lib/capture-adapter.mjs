@@ -10,7 +10,7 @@ function normalizeRole(role) {
   const value = String(role || "").toLowerCase();
   if (value === "user") return "user";
   if (value === "assistant") return "assistant";
-  if (value === "tool" || value === "tool_result") return "user";
+  if (value === "tool" || value === "tool_result" || value === "toolresult") return "user";
   if (value === "tool_call" || value === "toolcall") return "assistant";
   return "";
 }

@@ -237,6 +237,12 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 			if got := r.URL.Query().Get("node_limit"); got != "200" {
 				t.Fatalf("node_limit = %q", got)
 			}
+			if got := r.URL.Query().Get("offset"); got != "4" {
+				t.Fatalf("offset = %q", got)
+			}
+			if got := r.URL.Query().Get("limit"); got != "5" {
+				t.Fatalf("limit = %q", got)
+			}
 			if got := r.URL.Query().Get("sort_by"); got != "mtime" {
 				t.Fatalf("sort_by = %q", got)
 			}
@@ -251,11 +257,25 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 				if got := r.URL.Query().Get("level_limit"); got != "0" {
 					t.Fatalf("level_limit = %q, want 0", got)
 				}
+				if got := r.URL.Query().Get("offset"); got != "6" {
+					t.Fatalf("offset = %q", got)
+				}
+				if got := r.URL.Query().Get("limit"); got != "7" {
+					t.Fatalf("limit = %q", got)
+				}
 				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod"}) {
 					t.Fatalf("tags = %#v", got)
 				}
-			} else if got := r.URL.Query().Get("level_limit"); got != "3" {
-				t.Fatalf("level_limit = %q, want 3", got)
+			} else {
+				if got := r.URL.Query().Get("level_limit"); got != "3" {
+					t.Fatalf("level_limit = %q, want 3", got)
+				}
+				if _, ok := r.URL.Query()["offset"]; ok {
+					t.Fatal("default tree request should omit offset")
+				}
+				if _, ok := r.URL.Query()["limit"]; ok {
+					t.Fatal("default tree request should omit limit")
+				}
 			}
 			treeCalls++
 		default:
@@ -267,13 +287,21 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 
 	if _, err := client.List(context.Background(), "viking://session", &ListOptions{
 		NodeLimit: 200,
+		Offset:    4,
+		Limit:     5,
 		SortBy:    "mtime",
 		SortOrder: "desc",
 		Tags:      []string{"env=prod", "team=search"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0), Tags: []string{"env=prod"}}); err != nil {
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{
+		NodeLimit:  200,
+		LevelLimit: Int(0),
+		Offset:     6,
+		Limit:      7,
+		Tags:       []string{"env=prod"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {
@@ -1638,26 +1666,58 @@ func TestSessionExistsHandlesNotFound(t *testing.T) {
 	}
 }
 
-func TestListTasksRequest(t *testing.T) {
+func TestCompileAndListTasksRequests(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %s", r.Method)
-		}
-		if r.URL.Path != "/api/v1/tasks" {
+		switch r.URL.Path {
+		case "/api/v1/compile":
+			if r.Method != http.MethodPost {
+				t.Fatalf("method = %s", r.Method)
+			}
+			body := readJSONBody(t, r)
+			if !reflect.DeepEqual(body["from"], []any{"viking://resources/source"}) ||
+				body["to"] != "viking://resources/output" ||
+				body["skill"] != "viking://agent/skills/wiki" ||
+				body["instruction"] != "Keep supporting evidence." ||
+				!reflect.DeepEqual(body["args"], map[string]any{"model_name": "endpoint-1"}) {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
+		case "/api/v1/tasks":
+			if r.Method != http.MethodGet {
+				t.Fatalf("method = %s", r.Method)
+			}
+			query := r.URL.Query()
+			if query.Get("task_type") != "session_commit" ||
+				query.Get("status") != "running" ||
+				query.Get("resource_id") != "session-1" ||
+				query.Get("limit") != "20" {
+				t.Fatalf("query = %s", r.URL.RawQuery)
+			}
+			writeOK(t, w, []map[string]any{
+				{"task_id": "task-1", "status": "running"},
+			})
+		default:
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		query := r.URL.Query()
-		if query.Get("task_type") != "session_commit" ||
-			query.Get("status") != "running" ||
-			query.Get("resource_id") != "session-1" ||
-			query.Get("limit") != "20" {
-			t.Fatalf("query = %s", r.URL.RawQuery)
-		}
-		writeOK(t, w, []map[string]any{
-			{"task_id": "task-1", "status": "running"},
-		})
 	}))
 	defer closeServer()
+
+	compiled, err := client.Compile(
+		context.Background(),
+		[]string{"viking://resources/source"},
+		"viking://resources/output",
+		"viking://agent/skills/wiki",
+		&CompileOptions{
+			Instruction: "Keep supporting evidence.",
+			Args:        map[string]any{"model_name": "endpoint-1"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled["task_id"] != "cmp_1" {
+		t.Fatalf("compiled = %#v", compiled)
+	}
 
 	tasks, err := client.ListTasks(context.Background(), &ListTasksOptions{
 		TaskType:   "session_commit",

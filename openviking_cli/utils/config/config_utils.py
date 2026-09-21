@@ -16,31 +16,6 @@ def suggest_closest_field(field_name: str, valid_fields: set[str]) -> Optional[s
     return None
 
 
-def raise_unknown_config_fields(
-    *,
-    data: dict[str, Any],
-    valid_fields: set[str],
-    context_name: str,
-) -> None:
-    """Raise a user-friendly error for unexpected config fields."""
-    unknown_fields = [key for key in data if key not in valid_fields]
-    if not unknown_fields:
-        return
-
-    errors = []
-    for field_name in unknown_fields:
-        suggestion = suggest_closest_field(field_name, valid_fields)
-        if suggestion:
-            errors.append(
-                f"Unknown config field '{field_name}' in {context_name} "
-                f"(did you mean '{suggestion}'?)"
-            )
-        else:
-            errors.append(f"Unknown config field '{field_name}' in {context_name}")
-
-    raise ValueError("\n".join(errors))
-
-
 def _unwrap_model_type(annotation: Any) -> Optional[type[BaseModel]]:
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return annotation

@@ -192,6 +192,10 @@ class LLMProvider(ABC):
         )
         yield LLMStreamEvent(type="response", response=response)
 
+    def supports_tool_result_media(self, model: str | None = None) -> bool:
+        """Whether this provider can preserve media inside a tool result."""
+        return False
+
     @abstractmethod
     def get_default_model(self) -> str:
         """Get the default model for this provider."""

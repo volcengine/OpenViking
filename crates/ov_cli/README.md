@@ -137,7 +137,7 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `get` - Download a file to a local path.
 
 ```bash
-# The destination parent must exist and the destination itself must not exist.
+# The destination parent must exist. Existing files are overwritten; directories are merged.
 ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
 ov cp -r viking://resources/docs viking://resources/docs-backup
 ```

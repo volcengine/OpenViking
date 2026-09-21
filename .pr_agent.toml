@@ -57,7 +57,7 @@ glob = [
     # Worktree scratch spaces
     '.worktrees/**',
     # Build support (C++ profiles, not core logic)
-    'build_support/**',
+    'scripts/build_support/**',
 ]
 
 # ---------------------------------------------------------------------------

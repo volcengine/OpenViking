@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/schemas/workspace-config-v1.json",
+  "title": "OpenViking workspace configuration (v1)",
+  "description": "Schema for <workspace-root>/.openviking/config.json and config.local.json, and for the `settings` object of a ~/.openviking/workspaces/<slot>.json registry entry. Connection and credential settings belong in ovcli.conf and the environment; a workspace file that names one has it stripped with a warning.",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Ignored by the client; present so editors can validate and complete this file."
+    },
+    "version": {
+      "const": 1,
+      "description": "Schema major version. A file declaring anything else is skipped with a warning rather than guessed at."
+    },
+    "min_client_version": {
+      "type": "string",
+      "description": "Advisory only — a mismatch warns and never blocks, so a committed file cannot deny service to an older plugin."
+    },
+    "notes": {
+      "type": "string",
+      "description": "Free text for whoever reads the file. Not interpreted."
+    },
+    "peer": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "source": {
+          "description": "How to derive the peer id. A preset, a template, or a list of templates tried in order — a template naming an empty variable falls through to the next. The `git` default resolves only inside a repository; anywhere else it resolves to nothing and no peer is sent, so name such a directory with `id` or derive one with `cwd`. Variables: {git_remote} (normalized origin, e.g. github.com-org-repo), {git_root} (the enclosing repository root, empty outside one) and {cwd} (paths, legacy sanitation), {dir} (the workspace root's directory name, empty when the directory is not a workspace) and {harness} (the name of the agent running, never empty; no preset uses it, so agents share one repository's memory unless a template asks otherwise).",
+          "default": "git",
+          "oneOf": [
+            {
+              "type": "string",
+              "examples": ["git", "cwd", "none", "{git_remote}", "team-{dir}", "{git_remote}-{harness}"]
+            },
+            {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1,
+              "examples": [["{git_remote}", "{git_root}"]]
+            }
+          ]
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_.@-]+$",
+          "description": "An explicit peer id, which wins over `source`. Two directories carrying the same id share one memory, which makes this the way to name a directory that is not a git repository. Must match the server's identifier rule."
+        }
+      }
+    },
+    "recall": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "peer_scope": {
+          "enum": ["all", "actor"],
+          "description": "`all` also sweeps the other peers under this user, demoted in ranking; `actor` searches only this workspace's own peer."
+        },
+        "dedup_turns": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "max_items": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "score_threshold": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "commit_token_threshold": { "type": "integer", "minimum": 1000, "maximum": 1000000 }
+      }
+    },
+    "bypass": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "session_patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Matched against both the session id and the working directory. `*` does not cross `/`; use `**` for that. Lists union across layers — a leading \"!reset\" clears what lower layers contributed.",
+          "examples": [["*-scratch", "**/tmp/**"], ["!reset"]]
+        }
+      }
+    },
+    "labels": {
+      "type": "object",
+      "description": "Free-form metadata for humans and for the plugins' doctor output. Its keys are the user's own vocabulary and are never interpreted as settings.",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

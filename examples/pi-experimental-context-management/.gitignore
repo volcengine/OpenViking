@@ -1,0 +1,5 @@
+# The repository root ignores every `lib/` directory (it is a Python build
+# artifact there). This extension ships hand-written ESM modules in lib/, so
+# re-include that directory here rather than adding another exception to the
+# root .gitignore.
+!lib/

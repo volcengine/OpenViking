@@ -25,6 +25,7 @@ _SENSITIVE_KEYS = frozenset(
     {
         "access_token",
         "api_key",
+        "app_secret",
         "authorization",
         "client_secret",
         "cookie",
@@ -41,7 +42,7 @@ _SENSITIVE_KEYS = frozenset(
     }
 )
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(access[_-]?token|api[_-]?key|authorization|client[_-]?secret|cookie|"
+    r"(?i)\b(access[_-]?token|api[_-]?key|app[_-]?secret|authorization|client[_-]?secret|cookie|"
     r"credential|password|refresh[_-]?token|root[_-]?api[_-]?key|secret|"
     r"secret[_-]?access[_-]?key|secret[_-]?key|set[_-]?cookie|token|user[_-]?key)"
     r"(\s*[:=]\s*)(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\r\n,}\]]+)"
@@ -172,7 +173,15 @@ def _redact_sensitive_text(value: str) -> str:
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.strip().lower().replace("-", "_")
     return normalized in _SENSITIVE_KEYS or normalized.endswith(
-        ("_api_key", "_access_token", "_refresh_token", "_client_secret", "_password")
+        (
+            "_api_key",
+            "_access_token",
+            "_refresh_token",
+            "_client_secret",
+            "_password",
+            "_secret",
+            "_token",
+        )
     )
 
 
