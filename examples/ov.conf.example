@@ -235,10 +235,10 @@
         "threshold": 0.1,
     },
     "rerank_jev_vercel_example": {
-        "_comment": "For Jev through Vercel AI Gateway:",
+        "_comment": "For Jev through Vercel AI Gateway (TypeSafe-compatible endpoint):",
         "provider": "jev",
         "api_key": "{your-vercel-ai-gateway-api-key}",
-        "api_base": "https://ai-gateway.vercel.sh/v4/ai",
+        "api_base": "https://ai-gateway.vercel.sh/typesafe",
         "model": "typesafe-ai/jev",
         "threshold": 0.1,
     },

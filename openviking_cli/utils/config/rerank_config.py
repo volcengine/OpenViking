@@ -68,13 +68,7 @@ class RerankConfig(BaseModel):
         """Auto-detect provider from config fields when not explicitly set."""
         if self.provider:
             return self.provider.lower()
-        if self.api_base and (
-            "typesafe.ai" in self.api_base
-            or (
-                "ai-gateway.vercel.sh" in self.api_base
-                and (self.model or "").startswith("typesafe-ai/")
-            )
-        ):
+        if self.api_base and "typesafe" in self.api_base:
             return "jev"
         if self.api_key and self.api_base:
             return "openai"
