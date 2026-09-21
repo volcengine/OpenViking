@@ -363,6 +363,7 @@ class UnifiedResourceProcessor:
             # Source credentials are consumed by the accessor. Never forward
             # them into parser kwargs, parse results, or later queue payloads.
             parse_kwargs.pop("auth_config", None)
+            parse_kwargs.pop("github_token", None)
             parse_kwargs.pop("tos_signature", None)
             parse_kwargs.pop("tos_access", None)
             parse_kwargs["instruction"] = instruction

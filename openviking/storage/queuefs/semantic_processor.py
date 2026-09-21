@@ -33,6 +33,7 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
+from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import detach_task_context
@@ -629,10 +630,12 @@ class SemanticProcessor(DequeueHandlerBase):
                 return ProcessResult.failed(str(e))
             elif error_class == ERROR_CLASS_PERMANENT:
                 logger.critical(
-                    f"Permanent API error processing semantic message, dropping: {e}",
+                    f"Permanent error processing semantic message, dropping: {e}",
                     exc_info=True,
                 )
-                self._circuit_breaker.record_failure(e)
+                # A malformed filesystem target does not indicate an API outage.
+                if not any(isinstance(exc, AGFSNotADirectoryError) for exc in (e, e.__cause__)):
+                    self._circuit_breaker.record_failure(e)
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                     get_request_wait_tracker().mark_semantic_failed(

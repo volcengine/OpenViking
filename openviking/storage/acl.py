@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Protocol, Sequence
 
 from openviking.core.identifiers import validate_identifier_part, validate_user_id
 from openviking.core.namespace import uri_parts
@@ -14,6 +14,10 @@ from openviking_cli.exceptions import InvalidArgumentError
 
 if TYPE_CHECKING:
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+
+
+class AccountConfigReader(Protocol):
+    async def get_account(self, account_id: str, field: str) -> Any: ...
 
 
 class AclLevel(str, Enum):
@@ -251,18 +255,21 @@ class AclManager:
     def __init__(
         self,
         context_store: "VikingVectorIndexBackend",
+        runtime_config: AccountConfigReader | None = None,
     ) -> None:
         self._context_store = context_store
-        self._enabled_accounts: set[str] = set()
+        self._runtime_config = runtime_config
 
-    def set_enabled(self, account_id: str, enabled: bool) -> None:
-        if enabled:
-            self._enabled_accounts.add(account_id)
-        else:
-            self._enabled_accounts.discard(account_id)
+    def set_runtime_config_manager(self, runtime_config: AccountConfigReader) -> None:
+        """Bind the authoritative account configuration reader."""
+        self._runtime_config = runtime_config
 
-    def is_enabled(self, account_id: str) -> bool:
-        return account_id in self._enabled_accounts
+    async def is_enabled(self, account_id: str) -> bool:
+        """Resolve the account ACL switch, loading its config on cache miss."""
+        if self._runtime_config is None:
+            raise RuntimeError("Runtime config manager is not initialized")
+        setting = await self._runtime_config.get_account(account_id, "acl")
+        return False if setting is None else bool(setting.enabled)
 
     @staticmethod
     def _effective_from_record(record: Mapping[str, Any]) -> EffectiveAcl:
@@ -391,7 +398,7 @@ class AclManager:
     async def materialize_context_records(
         self, records: Sequence[dict[str, Any]], ctx: RequestContext
     ) -> list[dict[str, Any]]:
-        if not self.is_enabled(ctx.account_id):
+        if not await self.is_enabled(ctx.account_id):
             return [
                 {key: value for key, value in record.items() if key != ACL_CREATOR_GRANT_FIELD}
                 for record in records

@@ -49,6 +49,7 @@ class _SnapshotMixin:
     ) -> List[str]:
         """Return each requested snapshot scope and all current descendants."""
         result: List[str] = []
+        acl_enabled = await self._acl_enabled(ctx)
         for uri in uris:
             path = self._uri_to_path(uri, ctx=ctx)
             try:
@@ -67,7 +68,12 @@ class _SnapshotMixin:
                     result.extend(
                         self._path_to_uri(entry["path"], ctx=ctx)
                         for entry in entries
-                        if self._is_tree_entry_visible(entry, path, ctx)
+                        if self._is_tree_entry_visible(
+                            entry,
+                            path,
+                            ctx,
+                            acl_enabled=acl_enabled,
+                        )
                     )
             result.append(uri)
         return list(dict.fromkeys(result))

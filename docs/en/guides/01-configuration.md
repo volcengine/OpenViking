@@ -47,6 +47,48 @@ Create `~/.openviking/ov.conf` in your home configuration directory:
 
 For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
 
+## Configuration Scope and Update Lifecycle
+
+OpenViking configuration has two layers:
+
+- **Startup configuration** is read from `ov.conf`. It defines the process baseline and the runtime configuration source. Changing it requires a service restart; the runtime configuration API never rewrites `ov.conf`.
+- **Runtime overrides** are sparse values stored by the configured runtime configuration source. They can be read and updated through the Admin API at Cluster or Account scope.
+
+Only fields explicitly declared as runtime fields are exposed by the runtime configuration API. The current update surface is:
+
+| Scope | Configuration | Lifecycle | Effective behavior |
+| --- | --- | --- | --- |
+| Cluster | `agent_evolution` | Dynamic | ROOT can update it through the Admin API; it is used as the cluster default. |
+| Account | `vlm`, `memory`, `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update it. The first four sections declare Cluster fallback; currently Agent Evolution is consumed through the runtime manager. |
+| Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
+| Account | `embedding`, `vectordb` | Create-only | Can be supplied when creating an Account, but cannot be changed by a later configuration PATCH. They must be configured together when explicitly set. |
+
+Cluster `embedding`, Cluster `vlm`, `query_planner`, Cluster `memory`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `vlm`, `memory`, `feishu`, `embedding`, and `vectordb` values can currently be validated and persisted, but their complete business consumer integrations are still being rolled out; do not interpret persistence alone as proof that every component has switched.
+
+For runtime changes, use the following endpoints:
+
+```http
+GET   /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET   /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+```
+
+The request body wraps a sparse patch in `settings`:
+
+```json
+{
+  "settings": {
+    "agent_evolution": {
+      "enabled": true
+    }
+  }
+}
+```
+
+PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes the override at that layer. Objects merge recursively and arrays replace as a whole. The response contains explicit values at the addressed layer, not inherited or effective values. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime_configuration) for permissions, validation, fallback, and compatibility details. The implementation design is documented in [Runtime Configuration Design](../../design/runtime-configuration-design.md).
+
 ## Configuration Examples
 
 <details>
@@ -1318,8 +1360,8 @@ Notes:
 
 - `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
 - Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). Set it when creating a session with `POST /api/v1/sessions`, or partially update it through `PATCH /api/v1/sessions/{session_id}/config`. Omitting `auto_commit_policy` from a PATCH preserves it; sending `null` disables automatic commits. Use `GET /api/v1/sessions/{session_id}` to inspect the effective policy.
-- When `default_enabled=false`, sessions created without `auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
-- When `default_enabled=true`, sessions created without `auto_commit_policy` get the default policy below.
+- When `default_enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`. Providing either policy enables auto commit and fills missing fields from the defaults below.
+- When `default_enabled=true`, sessions without an explicit or deployment-default policy get the built-in policy below.
 - When `idle_enabled=false`:
   - `SessionAutoCommitScheduler` is not started
 - When `idle_enabled=true`:
@@ -1688,13 +1730,14 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://~/...` resolves per request user. | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://~/skills` and `viking://agent/skills` are accepted. | `null` |
 | `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
-| `agent_evolution.enabled` | bool | Instance-wide Agent Evolution switch. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. When disabled, production of these memory types stops for every account and user. Existing memories remain readable and searchable. | `false` |
+| `user_config_defaults.auto_commit_policy` | object | Deployment default auto-commit policy for newly created sessions without an explicit policy. | `null` |
+| `agent_evolution.enabled` | bool | Startup cluster default for Agent Evolution. Account and Cluster Admin settings may override it at runtime. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. Existing memories remain readable and searchable when disabled. | `false` |
 
 Omitting `auth_mode` (or setting it to `null`) selects `api_key` when a non-empty `root_api_key` is configured, and `dev` otherwise. `dev` is allowed only on localhost and accepts requests without authentication. An empty-string `root_api_key` is invalid.
 
 Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including on localhost; without it, startup fails instead of falling back to development mode. Use the root key with the Admin API to create accounts and user/admin keys; use those tenant-bound keys for data access. `trusted` mode accepts account/user identity headers from a trusted gateway and does not require user-key provisioning first. Its root key is optional only on localhost and required for non-localhost binds. For role resolution, OIDC/LDAP setup, and gateway requirements, see [Authentication](04-authentication.md).
 
-`user_config_defaults` provides deployment defaults for add targets and memory extraction. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Memory policy precedence is Session policy > User `settings/user_config.json` policy > `server.user_config_defaults.memory_policy` > kernel default. `agent_evolution.enabled` is shared by the entire OpenViking instance and has no per-user override. Running HTTP server workers read the current Agent Evolution value from the resolved `ov.conf` when a session commits, so a valid file update applies without restarting the server.
+`user_config_defaults` provides deployment defaults for add targets and memory extraction. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Memory policy precedence is Session policy > User `settings/user_config.json` policy > `server.user_config_defaults.memory_policy` > kernel default. `server.agent_evolution.enabled` supplies the startup default. Runtime resolution is Account override > Cluster runtime override > that startup value. Use the Admin settings APIs for changes without restarting; editing `ov.conf` directly takes effect after restart.
 
 ### Usage Reporter
 

@@ -51,6 +51,9 @@ class PackService:
             user=ctx.user,
             role=Role.ROOT,
             from_oauth=ctx.from_oauth,
+            # ROOT opens user namespaces but does not inherit ADMIN's resource
+            # ACL authority. Account maintenance must include restricted resources.
+            bypass_acl=True,
         )
 
     async def export_ovpack(

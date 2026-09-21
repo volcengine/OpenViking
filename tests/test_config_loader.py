@@ -208,7 +208,7 @@ def test_directory_safety_limits_load_from_parser_config():
         {
             "parsers": {
                 "directory": {
-                    "max_files": 20,
+                    "max_files": None,
                     "max_depth": 5,
                     "max_concurrent": 2,
                 }
@@ -216,7 +216,7 @@ def test_directory_safety_limits_load_from_parser_config():
         }
     )
 
-    assert config.directory.max_files == 20
+    assert config.directory.max_files is None
     assert config.directory.max_depth == 5
     assert config.directory.max_concurrent == 2
 

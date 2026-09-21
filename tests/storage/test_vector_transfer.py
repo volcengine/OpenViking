@@ -30,6 +30,12 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
+class _EnabledAclConfig:
+    async def get_account(self, account_id: str, field: str):
+        del account_id, field
+        return SimpleNamespace(enabled=True)
+
+
 def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 
@@ -156,7 +162,7 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
 
 
 class _TransferAclManager:
-    def is_enabled(self, account_id: str) -> bool:
+    async def is_enabled(self, account_id: str) -> bool:
         return account_id == "acct"
 
     async def materialize_context_records(self, records, ctx):
@@ -223,8 +229,7 @@ class _RealAclMemoryTransferBackend(_MemoryTransferBackend):
 
     def __init__(self, records: list[dict[str, Any]]) -> None:
         super().__init__(records)
-        self.acl_manager = AclManager(self)
-        self.acl_manager.set_enabled("acct", True)
+        self.acl_manager = AclManager(self, _EnabledAclConfig())
 
     async def scroll(
         self,

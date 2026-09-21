@@ -113,11 +113,10 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 }
 ```
 
-`enabled` 优先读取
-`/local/{account_id}/_system/setting.json` 中的 account 级覆盖值；未配置时使用
-`server.agent_evolution.enabled`。Session commit 会实时读取生效值，无需重启。
+`enabled` 依次解析 Account 运行时覆盖、Cluster 运行时覆盖，以及
+`server.agent_evolution.enabled` 提供的启动值。
 
-现有更新接口名保持不变：
+现有接口作为 deprecated 兼容适配器保留：
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -128,9 +127,8 @@ Content-Type: application/json
 
 ### account_settings
 
-ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
-显式列入白名单的字段；当前允许修改 `agent_evolution.enabled` 和
-`acl.enabled`。
+该接口已 deprecated。ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。
+接口保留原有 ACL 与 Agent Evolution 请求和响应语义：
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
@@ -142,6 +140,9 @@ Content-Type: application/json
   "acl": {"enabled": true}
 }
 ```
+
+字段缺失或为 `null` 都表示不修改；传入对象则整体设置对应存量配置段，
+空 ACL 对象表示 `enabled=false`。新接入方应使用下述 configuration 接口。
 
 `acl.enabled` 默认为 `false`。关闭时，共享资源按原有规则完全共享，不执行 ACL
 鉴权。开启后，账号内新增共享资源会写入 ACL，并对带 ACL 的共享资源执行鉴权；
@@ -351,6 +352,44 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 {% endif %}
 {% endfor %}
 ```
+
+### runtime_configuration
+
+ROOT 可管理 Cluster 配置和任意 Account 配置；ADMIN 只能管理所属账号的 Account 层。
+
+```http
+GET /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+Content-Type: application/json
+
+{"settings": {"agent_evolution": {"enabled": true}}}
+```
+
+`settings` 始终表示目标层的显式设置值。PATCH 为三态语义：字段缺失表示不修改，
+`null` 表示删除当前层配置，具体值表示更新。
+
+当前 Cluster 运行时配置面仅包含 agent_evolution。Account 配置面包含
+vlm、memory、feishu、agent_evolution、github、acl 这些动态字段，以及
+embedding、vectordb 这两个仅创建时可设置的字段。Cluster 的 embedding、vlm、
+query_planner、memory、存储、解析器和检索配置没有声明为运行时字段，因此仍然
+只能在启动配置中修改。
+
+dynamic=True 的字段可以在创建 Account 时设置，也可以通过后续 PATCH 修改；
+dynamic=False 的字段只能在创建 Account 时设置，后续 PATCH 触及时会被拒绝。
+显式配置 embedding 和 vectordb 时必须成对提供，并且维度必须一致。Account
+字段可以声明整个配置段的 Cluster fallback。Account 一旦显式设置某个配置段，
+其中省略的属性不会逐项从 Cluster 配置合并，而是使用该模型的默认值。
+
+PATCH 会先做结构校验，再构造合并后的配置：未知路径、运行时配置面之外的字段会被拒绝，
+普通 PATCH 触及仅创建字段时也会被拒绝。对象递归合并，数组整体替换；嵌套 null
+只删除对应叶子。删除整个对象覆盖需要在父路径传 null，传空对象仍表示显式空对象。
+
+两个 GET 接口只返回目标层持久化的显式值，不展开 fallback。配置持久化后会发布新配置并等待
+匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的覆盖，因此接口成功只表示
+配置层更新成功，不保证所有派生客户端都已完成切换。当前业务接入状态见[运行时配置设计](../../design/runtime-configuration-design.md)。
 
 ### user_settings
 

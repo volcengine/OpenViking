@@ -47,6 +47,11 @@ class GitHttpAuthConfig:
     token: str = field(repr=False)
 
 
+def is_git_https_url(repo_url: object) -> bool:
+    """Return whether HTTP token authentication is valid for this Git URL."""
+    return isinstance(repo_url, str) and repo_url.strip().lower().startswith("https://")
+
+
 def reject_git_http_userinfo(repo_url: str) -> None:
     """Require HTTP(S) Git credentials to travel through ``auth_config``."""
     parsed = urlparse(repo_url)
@@ -60,7 +65,7 @@ def reject_git_http_userinfo(repo_url: str) -> None:
 
 def _validate_git_https_auth_url(repo_url: str) -> str:
     normalized = repo_url.strip() if isinstance(repo_url, str) else ""
-    if not normalized.lower().startswith("https://"):
+    if not is_git_https_url(normalized):
         raise InvalidArgumentError(
             "args.auth_config token authentication requires an HTTPS Git URL."
         )

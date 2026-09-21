@@ -1094,7 +1094,7 @@ const workspace = {
     usageDisabled:
       'Usage/Audit is not initialized, so live usage stats are unavailable.',
     usageAccessRequired:
-      'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
+      'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
   },
 } as const
 

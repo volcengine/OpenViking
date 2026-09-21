@@ -494,10 +494,14 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/admin/agent-evolution` | 获取调用方 account 的 Agent 进化状态 |
-| PUT | `/api/v1/admin/agent-evolution` | 更新调用方 account 的 Agent 进化状态 |
-| GET | `/api/v1/admin/accounts/{account_id}/settings` | 获取 account 生效配置 |
-| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | 更新白名单内的 account 配置 |
+| GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
+| PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 层显式运行时配置 |
+| PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | 更新 Account 层运行时配置 |
+| GET | `/api/v1/admin/agent-evolution` | 获取 Agent 进化状态（deprecated） |
+| PUT | `/api/v1/admin/agent-evolution` | 更新 Agent 进化状态（deprecated） |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | 获取存量账号配置（deprecated） |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | 更新存量账号配置（deprecated） |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出可编辑记忆模板、默认值及生效值 |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个记忆模板 |
 | PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个记忆模板 |

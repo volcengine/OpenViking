@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from . import embedding_config
+from .agent_evolution_config import AgentEvolutionConfig
 from .agfs_config import AGFSConfig
 from .cache_config import CacheConfig
 from .config_loader import (
@@ -91,6 +92,7 @@ from .vlm_config import VLMConfig
 
 __all__ = [
     "AGFSConfig",
+    "AgentEvolutionConfig",
     "CacheConfig",
     "SYSTEM_CONFIG_DIR",
     "DEFAULT_OV_CONF",

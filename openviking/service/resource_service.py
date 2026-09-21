@@ -65,10 +65,11 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import (
     build_queue_status_payload,
 )
-from openviking.utils import is_git_repo_url, parse_code_hosting_url
+from openviking.utils import is_git_repo_url, is_github_url, parse_code_hosting_url
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
     build_git_http_auth_env,
+    is_git_https_url,
     parse_git_http_auth_config,
     raise_git_auth_error,
     reject_git_http_userinfo,
@@ -948,10 +949,25 @@ class ResourceService:
             credential_args = credential_arg_names("git", processor_kwargs)
             if credential_args:
                 raise InvalidArgumentError("Native Git credentials must use args.auth_config.")
-            git_auth = parse_git_http_auth_config(processor_kwargs.get("auth_config"), path)
-            if git_auth is not None:
-                task_auth = create_git_http_auth_state(git_auth, path)
-            source_info = await self._preflight_git_source(path, auth_config=git_auth)
+            request_git_auth = parse_git_http_auth_config(processor_kwargs.get("auth_config"), path)
+            if request_git_auth is not None:
+                task_auth = create_git_http_auth_state(request_git_auth, path)
+            preflight_git_auth = request_git_auth
+            if (
+                preflight_git_auth is None
+                and is_git_https_url(path)
+                and is_github_url(path)
+            ):
+                github_token = await self._resource_processor.github_token_for(path, ctx)
+                if github_token:
+                    preflight_git_auth = GitHttpAuthConfig(
+                        username="oauth2",
+                        token=github_token,
+                    )
+            source_info = await self._preflight_git_source(
+                path,
+                auth_config=preflight_git_auth,
+            )
             source_name = source_name or source_info.source_name
             source_info.source_name = source_name
         elif feishu_source:
