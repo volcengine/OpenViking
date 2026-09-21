@@ -42,7 +42,7 @@
 
 OpenViking 是面向 AI 智能体的开源上下文数据库——用一个文件系统装下 Agent 所知道的一切：知识、记忆和技能。
 
-大多数 Agent 记忆是个黑盒：文本进去，向量出来，没人看得到里面到底存了什么。OpenViking 换一种做法，把上下文组织成 `viking://` 虚拟文件系统。Agent 像操作文件一样用 `ls`、`tree`、`read`、`write`、`grep` 浏览和修改；你也可以随时打开目录，查看和编辑 Agent 记住的内容。目录摘要按需加载：先看地图，再进森林。
+大多数 Agent 记忆是个黑盒：文本进去，向量出来，没人看得到里面到底存了什么。OpenViking 换一种做法，把上下文组织成 `viking://` 虚拟文件系统。Agent 像操作文件一样用 `ls`、`tree`、`read`、`write`、`grep` 浏览和修改；你也可以随时打开目录，查看和编辑 Agent 记住的内容。每个目录都带有自动生成的摘要，Agent 先扫摘要，再决定读哪些内容。
 
 <a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
   <picture>
