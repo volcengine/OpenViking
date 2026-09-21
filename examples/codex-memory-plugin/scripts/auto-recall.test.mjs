@@ -1049,3 +1049,59 @@ test("auto-recall authenticates with Bearer alone and gates the identity headers
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+for (const scenario of [
+  {mode: "server", rewrite: true, digest: "Cloud digest", calls: 0},
+  {mode: "server", rewrite: true, digest: "", calls: 0},
+  {mode: "auto", rewrite: undefined, digest: "", calls: 1},
+  {mode: "client", rewrite: undefined, digest: "", calls: 1},
+  {mode: "off", rewrite: undefined, digest: "", calls: 0},
+  {mode: "auto", model: "off", rewrite: "auto", digest: "Cloud digest", calls: 0},
+  {mode: "auto", missingCli: true, rewrite: "auto", digest: "Cloud digest", calls: 0},
+  {mode: "auto", rewrite: undefined, digest: "Cloud digest", calls: 0},
+  {mode: "server", rewrite: true, digest: "", noRelevant: true, calls: 0},
+]) {
+  test(`context rewrite routing ${JSON.stringify(scenario)}`, async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-rewrite-mode-"));
+    try {
+      await withFakeCodex("- Local digest [viking://user/test/memories/example.md]", async ({env, callLog}) => {
+        let body;
+        const rendered = "Raw context. ".repeat(200);
+        const output = await withMockOpenViking(async (req,res) => {
+          if (req.url === "/health") return writeJson(res,{status:"ok", result:{ok:true}});
+          if (req.url === "/api/v1/search/search") {
+            body = await readRequestBody(req);
+            return writeJson(res,{status:"ok",result:{
+              rendered, digest:scenario.digest,
+              entries:[{uri:"viking://user/test/memories/example.md",text:rendered,score:0.9}],
+              stats:{rewrite:scenario.noRelevant ? "no_relevant" : "ok"},
+            }});
+          }
+          writeStatusJson(res,404,{status:"error"});
+        },baseUrl => runAutoRecall({prompt:"recall the project conventions",session_id:"rewrite-test"},{
+          ...env,
+          ...(scenario.missingCli ? {PATH: stateDir} : {}),
+          OPENVIKING_URL:baseUrl, OPENVIKING_CREDENTIAL_SOURCE:"env",
+          OPENVIKING_CONFIG_FILE:join(stateDir,"missing.conf"),
+          OPENVIKING_CLI_CONFIG_FILE:join(stateDir,"missing-cli.conf"),
+          OPENVIKING_CODEX_STATE_DIR:stateDir,OPENVIKING_STATE_DIR:stateDir,
+          OPENVIKING_HOME:stateDir,
+          OPENVIKING_RECALL_COMPRESS:scenario.mode,
+          OPENVIKING_RECALL_COMPRESS_MODEL:scenario.model || "test-model",
+          OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS:"0",
+          OPENVIKING_RECALL_TIMEOUT_MS:"15000",OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS:"5000",
+        }));
+        assert.equal(body.rewrite,scenario.rewrite);
+        const calls = (await readFile(callLog,"utf8").catch(()=>"")).trim().split("\n").filter(Boolean).length;
+        assert.equal(calls,scenario.calls);
+        const result = JSON.parse(output.stdout);
+        if (scenario.noRelevant) assert.deepEqual(result,{});
+        else {
+          const context = result.hookSpecificOutput.additionalContext;
+          assert.match(context,scenario.digest ? /Cloud digest/ : scenario.calls ? /Local digest/ : /Raw context/);
+          if (scenario.digest) assert.doesNotMatch(context,/Raw context/);
+        }
+      });
+    } finally { await rm(stateDir,{recursive:true,force:true}); }
+  });
+}

@@ -17,7 +17,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
-import { trySpawnCodex } from "./codex-launch.mjs";
+import { isCodexAvailable, trySpawnCodex } from "./codex-launch.mjs";
 import { createLogger } from "./debug-log.mjs";
 import {
   buildCodexExecArgs,
@@ -44,6 +44,7 @@ let effectivePeer = { peerId: "" };
 
 let emitted = false;
 let activeCompressor = null;
+let localCompressorAvailable = false;
 let recallDeadline = null;
 const DEFAULT_FINAL_RECALL_CHARS = 6500;
 const RECALL_DIGEST_CACHE_PATH = join(getStateDir(), "recall-digest.json");
@@ -293,8 +294,11 @@ async function readMemoryContent(uri) {
   return null;
 }
 
-function assembledToRecallResult(rendered, entries) {
-  const items = entries
+function assembledToRecallResult(...assemblies) {
+  // A server's no_relevant decision must not resurrect its raw entries.
+  const usable = assemblies.filter((result) => result.stats?.rewrite !== "no_relevant");
+  const rendered = usable.map((result) => result.digest || result.rendered || "").filter(Boolean).join("\n");
+  const items = usable.flatMap((result) => result.entries || [])
     .map(normalizeContextEntry)
     .map((entry) => ({ ...entry, score: clampScore(entry.score) }))
     .filter((entry) => entry.uri && entry.text);
@@ -306,23 +310,16 @@ function assembledToRecallResult(rendered, entries) {
         "More detail: use the OpenViking MCP recall/read/search tools with cited viking:// URIs if needed.",
       ].join("\n")
     : "";
-  return { context, items };
+  return { context, items, serverDigest: usable.some((result) => Boolean(result.digest)) };
 }
 
 async function recallViaServerAssembly(query, ovSessionId = "") {
-  const maxInputChars = cfg.recallCompress
+  const maxInputChars = localCompressorAvailable
     ? cfg.recallCompressMaxInputChars
     : DEFAULT_FINAL_RECALL_CHARS;
-  const assembleCfg = {
-    ...cfg,
-    // Local compression happens below, so ask the server for the assembled
-    // block only. The server budget stays independent from the compressor's
-    // input-character ceiling.
-    recallRewrite: "off",
-  };
-
-  const assembled = await fetchAssembledContext(fetchJSON, assembleCfg, query, {
+  const assembled = await fetchAssembledContext(fetchJSON, cfg, query, {
     actorPeerId: effectivePeer.peerId,
+    localCompressorAvailable,
     sessionId: ovSessionId,
     log,
   });
@@ -331,20 +328,18 @@ async function recallViaServerAssembly(query, ovSessionId = "") {
     // under "actor" does the pre-git peer need asking separately.
     const legacyPeerId = effectivePeer.legacyPeerId;
     if (cfg.recallPeerScope === "actor" && legacyPeerId && legacyPeerId !== effectivePeer.peerId) {
-      const legacy = await fetchAssembledContext(fetchJSON, assembleCfg, query, {
+      const legacy = await fetchAssembledContext(fetchJSON, cfg, query, {
         actorPeerId: legacyPeerId,
+        localCompressorAvailable,
         sessionId: ovSessionId,
         log,
       });
       if (legacy) {
         log("recall_legacy_peer_hit", { legacyPeerId });
-        return assembledToRecallResult(
-          [assembled.rendered, legacy.rendered].filter(Boolean).join("\n"),
-          [...(assembled.entries || []), ...(legacy.entries || [])],
-        );
+        return assembledToRecallResult(assembled, legacy);
       }
     }
-    return assembledToRecallResult(assembled.rendered, assembled.entries);
+    return assembledToRecallResult(assembled);
   }
 
   const body = buildRecallEndpointBody(cfg);
@@ -355,10 +350,7 @@ async function recallViaServerAssembly(query, ovSessionId = "") {
     log("recall_endpoint_fallback", { status: result.status || 0 });
     return null;
   }
-  return assembledToRecallResult(
-    String(result.result?.rendered || "").trim(),
-    Array.isArray(result.result?.entries) ? result.result.entries : [],
-  );
+  return assembledToRecallResult(result.result || {});
 }
 
 function truncateText(text, maxChars) {
@@ -498,7 +490,7 @@ async function runCodexCompressor(prompt, profile) {
 }
 
 async function compressMemoryContext(userPrompt, rendered, items, shortContext = rendered) {
-  if (!cfg.recallCompress) return null;
+  if (!localCompressorAvailable) return null;
   const input = String(rendered || "").trim() || fallbackDigest(items);
   if (!input) return "";
 
@@ -589,16 +581,23 @@ runHookStage({
     return;
   }
 
+  // Resolve availability before the request so the shared core can route auto
+  // to server rewrite. Never probe or launch a local compressor in server mode.
+  if (cfg.recallRewrite === "client" || cfg.recallRewrite === "auto") {
+    localCompressorAvailable = isCodexAvailable()
+      && Boolean((await getRecallCompressorProfile()).enabled);
+  }
+
   const endpointRecall = await recallViaServerAssembly(userPrompt, recallSessionId || "");
   if (endpointRecall !== null) {
     if (!endpointRecall.context && endpointRecall.items.length === 0) {
       log("skip", { stage: "recall_endpoint", reason: "no results" });
       return;
     }
-    const compressedContext = endpointRecall.items.length > 0
+    const compressedContext = !endpointRecall.serverDigest && endpointRecall.items.length > 0
       ? await compressMemoryContext(userPrompt, endpointRecall.context, endpointRecall.items)
       : null;
-    const endpointFallback = cfg.recallCompress && endpointRecall.items.length > 0
+    const endpointFallback = !endpointRecall.serverDigest && localCompressorAvailable && endpointRecall.items.length > 0
       ? fallbackDigest(endpointRecall.items)
       : endpointRecall.context;
     const memoryContext = compressedContext === null

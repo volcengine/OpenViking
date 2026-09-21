@@ -303,8 +303,8 @@ Config knobs:
 | Env var | Default | Meaning |
 |---|---|---|
 | `OPENVIKING_RECALL_LIMIT` | `10` | Legacy quota-scaling input; explicit values are converted to six coding quotas, not enforced as a final result cap. |
-| `OPENVIKING_RECALL_COMPRESS` | `1` | Set `0` / `off` to disable `codex exec` compression. |
-| `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable compression. |
+| `OPENVIKING_RECALL_COMPRESS` | `auto` | `server`: cloud rewrite, never launches `codex exec`; `client`: local only; `auto`: local when available, otherwise cloud; `off` / `0`: uncompressed. `1` aliases `auto`. |
+| `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable the local compressor (`auto` then uses cloud compression). |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |
 | `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | Base URL for the nested compressor's provider. Use this when `--ignore-user-config` prevents the compressor from reading the main Codex provider configuration. |
 | `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` | `1500` | Skip the nested compressor below this recalled-context size. Set `0` to compress every non-empty result. |
@@ -487,3 +487,16 @@ The Codex marketplace catalog that exposes this plugin for `codex plugin marketp
 ## License
 
 Apache-2.0 — same as [OpenViking](https://github.com/volcengine/OpenViking).
+
+
+### Cloud recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to request `POST /api/v1/search/search`
+with `mode: "context", rewrite: true`. This also disables local startup compressor
+probes. A returned server digest is injected without a second local compression
+pass; a server `no_relevant` result injects nothing. If rewrite is unavailable,
+the hook preserves the existing raw-context / legacy retrieval fallback.
+
+`auto` uses `rewrite: "auto"` when the Codex executable or its compressor profile
+is unavailable (including a cached runtime failure). A first local failure still
+uses the deterministic fallback for that turn; later turns use the server.

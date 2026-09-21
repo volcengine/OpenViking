@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { HARNESS_KEYS, KNOBS } from "./lib/config-schema.mjs";
+import { buildContextSearchBody } from "./lib/recall-core.mjs";
 import { buildPluginConfig } from "./lib/plugin-config.mjs";
 import { loadAgentHookConfig } from "./lib/agent-hook-runtime.mjs";
 import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
@@ -23,13 +24,13 @@ const LOADERS = {
     harness: "claude-code",
     load: (cwd) => loadClaudeCode(cwd),
     options: { manifestUrl: new URL("../claude-code-memory-plugin/.claude-plugin/plugin.json", import.meta.url), logFile: "cc-hooks.log", rootKeyFallback: true },
-    owns: ["configPath", "credentialPath"],
+    owns: ["configPath", "credentialPath", "recallRewrite"],
   },
   codex: {
     harness: "codex",
     load: (cwd) => loadCodex(cwd),
     options: { manifestUrl: new URL("../codex-memory-plugin/.codex-plugin/plugin.json", import.meta.url), logFile: "codex-hooks.log" },
-    owns: ["recallCompress"],
+    owns: ["recallCompress", "recallRewrite"],
   },
   opencode: {
     harness: "opencode",
@@ -349,3 +350,18 @@ test("ovcli.conf's plugin section outranks ov.conf, under ovcli.conf's own key",
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const [name, loader] of Object.entries(LOADERS)) {
+  test(`${name} explicit cloud compression reaches the shared HTTP contract`, () => {
+    withFixture({}, ({otherDir}) => {
+      process.env.OPENVIKING_RECALL_COMPRESS = "server";
+      const cfg = loader.load(otherDir);
+      assert.equal(cfg.recallRewrite, "server");
+      assert.equal(buildContextSearchBody(cfg).rewrite, true);
+      process.env.OPENVIKING_RECALL_COMPRESS = "auto";
+      assert.equal(buildContextSearchBody(loader.load(otherDir), { localCompressorAvailable: false }).rewrite, "auto");
+      process.env.OPENVIKING_RECALL_COMPRESS = "off";
+      assert.equal(buildContextSearchBody(loader.load(otherDir)).rewrite, undefined);
+    });
+  });
+}

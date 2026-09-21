@@ -85,3 +85,21 @@ Every file declares `version: 1`; one declaring another version is skipped with 
 Workspace files are trusted without a prompt: a hook is non-interactive, and an approval gate would degrade into one command per workspace. What is refused instead is structural — connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in these files. What a committed file switches off is announced in `ov-memory-doctor` rather than blocked.
 
 `.gitignore` must not ignore all of `.openviking/`, or `config.json` can never be committed. Narrow the rule to `.openviking/media/` and `.openviking/downloads/`; doctor warns while it is still blanket.
+
+## Cloud recall compression
+
+`OPENVIKING_RECALL_COMPRESS=server` enables cloud compression across Claude Code,
+Codex, OpenCode, DSH, Pi, the Cursor/Trae/Trae CN/ZCode hooks, OpenClaw, and Hermes.
+The context-search request sends `rewrite: true`; the server digest is preferred
+over raw rendered context, and `stats.rewrite: "no_relevant"` suppresses injection.
+
+Claude Code and Codex also support `client` for local-only compression. Their
+`auto` mode uses local compression when available and otherwise sends
+`rewrite: "auto"`. Harnesses without local compressors send `rewrite: "auto"`
+directly. Their existing default remains `off`; cloud compression is opt-in.
+`off` omits rewrite. The legacy boolean aliases `1` and `0` mean `auto` and `off`.
+
+These settings apply to automatic recall. Explicit MCP search calls retain the
+arguments supplied by the caller. Cloud compression requires a server that
+supports the context-search rewrite API; older-server fallback behavior remains
+specific to each integration.

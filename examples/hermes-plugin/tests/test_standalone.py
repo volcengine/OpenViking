@@ -136,3 +136,36 @@ def test_cancelled_external_setup_keeps_existing_config(external_provider, monke
     provider.post_setup(str(home), {"memory": {"provider": "openviking"}})
     assert config_path.read_bytes() == before
     assert env_path.read_text(encoding="utf-8") == "UNRELATED_SETTING=keep\n"
+
+
+@pytest.mark.parametrize("mode,rewrite", [("server", True), ("auto", "auto")])
+@pytest.mark.parametrize("response,expected", [
+    ({"rendered": "raw", "digest": "compressed", "entries": []}, "compressed"),
+    ({"rendered": "raw", "entries": []}, "raw"),
+    ({"rendered": "raw", "stats": {"rewrite": "no_relevant"}}, ""),
+])
+def test_cloud_recall(external_provider, monkeypatch, mode, rewrite, response, expected):
+    from unittest.mock import Mock
+    _, provider, _, _ = external_provider("cloud-recall")
+    monkeypatch.setenv("OPENVIKING_RECALL_COMPRESS", mode)
+    client = Mock()
+    client.post.return_value = {"result": response}
+    assert provider._search_prefetch_context("remember deployment preferences", session_id="session", client=client) == expected
+    client.post.assert_called_once()
+    path, body = client.post.call_args.args
+    assert path == "/api/v1/search/search"
+    assert body["mode"] == "context"
+    assert body["rewrite"] == rewrite
+    assert body["session_id"] == "session"
+    assert 50 < client.post.call_args.kwargs["timeout"] <= 55
+
+
+def test_cloud_recall_legacy_fallback(external_provider, monkeypatch):
+    from unittest.mock import Mock
+    _, provider, _, _ = external_provider("cloud-fallback")
+    monkeypatch.setenv("OPENVIKING_RECALL_COMPRESS", "server")
+    client = Mock()
+    client.post.side_effect = [RuntimeError("unsupported mode"), {"result": {"memories": []}}]
+    assert provider._search_prefetch_context("deployment preferences", client=client) == ""
+    assert client.post.call_count == 2
+    assert "rewrite" not in client.post.call_args.args[1]

@@ -40,18 +40,9 @@
  *   OPENVIKING_ACCOUNT, OPENVIKING_USER, OPENVIKING_PEER_ID
  */
 
-import { buildPluginConfig } from "./shared/plugin-config.mjs";
+import { buildPluginConfig, normalizeRewriteMode } from "./shared/plugin-config.mjs";
 
 const MANIFEST_URL = new URL("../.codex-plugin/plugin.json", import.meta.url);
-
-function configBool(value, fallback) {
-  if (typeof value === "boolean") return value;
-  const lower = String(value ?? "").trim().toLowerCase();
-  if (lower === "0" || lower === "false" || lower === "no" || lower === "off") return false;
-  if (lower === "1" || lower === "true" || lower === "yes" || lower === "on"
-      || lower === "auto" || lower === "client") return true;
-  return fallback;
-}
 
 /**
  * `cwd` selects the workspace layer (`.openviking/config.json` and the registry
@@ -69,11 +60,14 @@ export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
     logFile: "codex-hooks.log",
   });
 
+  const recallRewrite = normalizeRewriteMode(
+    env.OPENVIKING_RECALL_COMPRESS ?? env.OPENVIKING_RECALL_REWRITE ?? config.recallCompress,
+    "auto",
+  );
   return {
     ...config,
-    // Codex reads the compression knob as on/off; "auto" and "client" are the
-    // Claude Code spellings of on, and mean the same thing here.
-    recallCompress: configBool(config.recallCompress, true),
+    recallCompress: recallRewrite,
+    recallRewrite,
     // Not `configured.has`: what makes a compressor configured here is having
     // been told which model to run, not having named the switch.
     recallCompressConfigured: Boolean(config.recallCompressModel || config.recallCompressThinking),

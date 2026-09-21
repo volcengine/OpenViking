@@ -929,3 +929,18 @@ describe("context-engine assemble()", () => {
     expect(emptyContentMsg).toBeUndefined();
   });
 });
+
+
+describe("cloud recall digest injection", () => {
+  it.each([false, true])("honors server no_relevant=%s", async (noRelevant) => {
+    const { engine, client } = makeEngine({}, { cfgOverrides: { autoRecall: true, recallCompress: "server" } });
+    client.searchContext.mockResolvedValueOnce({
+      entries: [], rendered: "RAW SHOULD NOT APPEAR", digest: "Prefer Rust for backend tasks.",
+      stats: { rewrite: noRelevant ? "no_relevant" : "rewritten" },
+    });
+    const result = await engine.assemble({ sessionId: "cloud-digest", messages: [{ role: "user", content: "what backend language should we use?" }] });
+    expect(client.searchContext).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ recallCompress: "server" }));
+    expect(JSON.stringify(result.messages)).not.toContain("RAW SHOULD NOT APPEAR");
+    expect(JSON.stringify(result.messages).includes("Prefer Rust")).toBe(!noRelevant);
+  });
+});

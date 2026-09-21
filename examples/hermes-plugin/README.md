@@ -230,3 +230,17 @@ are also allowed because OpenViking supports them. The tool rejects directories,
 resources, skills, sessions, generated summary files, and URIs with query
 strings or fragments. Use OpenViking's MCP, CLI, or admin APIs for broader
 resource and directory cleanup.
+
+
+### Cloud recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to enable cloud recall compression, or
+`auto` to let the server decide whether to rewrite. Both use search
+`mode=context`; `server` sends `rewrite=true`, and `auto` sends `rewrite="auto"`.
+The server digest takes precedence over raw rendered context, and `no_relevant`
+suppresses injection. The default remains `off`; no local compressor is launched.
+
+The Hermes config equivalent is `memory.openviking.recall_compress: server`.
+When enabled, the default request and total recall deadlines become 55 seconds;
+explicit recall timeout settings still take precedence. Older servers fall back
+to the existing search path within that deadline.

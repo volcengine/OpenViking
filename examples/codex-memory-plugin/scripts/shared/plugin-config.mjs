@@ -227,6 +227,13 @@ export function buildPluginConfig(harness, {
   const config = {
     ...settings,
     harness: name,
+    // Harnesses without a local compressor keep rewrite opt-in. The Claude
+    // and Codex loaders retain their existing auto default.
+    recallRewrite: normalizeRewriteMode(
+      env.OPENVIKING_RECALL_COMPRESS ?? env.OPENVIKING_RECALL_REWRITE
+        ?? (configured.has("recallCompress") ? settings.recallCompress : "off"),
+      "off",
+    ),
     clientVersion,
     userAgent: buildUserAgent(name, clientVersion),
 

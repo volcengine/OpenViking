@@ -369,6 +369,7 @@ export async function buildAutoRecallContext(params: {
         contextResult = await client.searchContext(queryText, {
           sessionId: params.ovSessionId,
           limit: recallLimit,
+          recallCompress: cfg.recallCompress,
           scoreThreshold,
           contextType: contextTypes.length === 1 ? contextTypes[0] : contextTypes,
           queryExpansion: "auto",
@@ -475,14 +476,16 @@ export async function buildAutoRecallContext(params: {
         params.traceRecorder?.record(entry);
       };
 
-      const rendered = contextResult?.rendered?.trim() ?? "";
-      if (requestError || entries.length === 0 || !rendered) {
+      const noRelevant = contextResult?.stats?.rewrite === "no_relevant";
+      const digest = contextResult?.digest?.trim() ?? "";
+      const rendered = noRelevant ? "" : digest || contextResult?.rendered?.trim() || "";
+      if (requestError || !rendered) {
         await recordTrace([], 0, 0);
         return { memoryCount: 0, estimatedTokens: 0 };
       }
 
       const usedTokens = contextResult?.stats?.used_tokens;
-      const estimatedTokens = typeof usedTokens === "number" && Number.isFinite(usedTokens)
+      const estimatedTokens = !digest && typeof usedTokens === "number" && Number.isFinite(usedTokens)
         ? Math.max(0, Math.ceil(usedTokens))
         : estimateTokenCount(rendered);
       const block = buildRecallContextBlock([rendered]);
