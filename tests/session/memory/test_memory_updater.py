@@ -1309,7 +1309,7 @@ class TestApplyEditWithSearchReplacePatch:
             description="test",
             fields=[content_field],
         )
-        registry = MemoryTypeRegistry()
+        registry = MemoryTypeRegistry(load_schemas=False)
         registry.register(schema)
         return MemoryUpdater(registry=registry)
 
@@ -1350,7 +1350,9 @@ class TestApplyEditWithSearchReplacePatch:
 Line 2
 Line 3
 Line 4"""
-        original_mf = MemoryFile(content=original_content, extra_fields={"name": "test"})
+        original_mf = MemoryFile(
+            content=original_content, extra_fields={"name": "test", "summary": "Old summary"}
+        )
         original_full_content = MemoryFileUtils.write(original_mf)
 
         # Mock VikingFS
@@ -1393,6 +1395,7 @@ Line 4"""
         assert "Line 2 modified" in result.content
         assert "Line 3 modified" in result.content
         assert "Line 4" in result.content
+        assert "summary" not in result.extra_fields
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_str_patch_dict(self):

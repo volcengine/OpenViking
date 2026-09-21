@@ -49,8 +49,7 @@ logger = get_logger(__name__)
 # which is length-prefixed with a uint16 (STRING_MAX_UINT16_LENGTH = 65535). An
 # oversized abstract raises "string field 'abstract' exceeds 65535 bytes" and
 # fails embedding enqueue, so the resource is silently never vectorized (and thus
-# not retrievable). Cap it with headroom, mirroring
-# memory_updater._truncate_memory_abstract introduced for the memory path (#2774).
+# not retrievable). Cap resource and directory scalars with headroom.
 _ABSTRACT_MAX_BYTES = 50_000
 
 

@@ -34,6 +34,7 @@ from openviking.storage.abstract_overview import body_for_preview, embedding_tex
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
@@ -1056,6 +1057,10 @@ class ReindexExecutor:
                 if not recursive:
                     semantic_kwargs["recursive"] = False
                 await self._run_semantic_processor(**semantic_kwargs)
+            else:
+                await SemanticProcessor()._generate_memory_summary(
+                    uri, ctx=self._content_owner_ctx(uri, ctx), lock=run.lock
+                )
             vector_kwargs = {"uri": uri, "counters": counters, "ctx": ctx}
             if not recursive:
                 vector_kwargs["recursive"] = False
@@ -1099,7 +1104,13 @@ class ReindexExecutor:
             use_hierarchical_aggregation=context_type == "memory",
             propagate_to_parent=recursive,
         )
-        await processor.on_dequeue({"data": msg.to_json()}, lock=lock)
+        result = await processor.on_dequeue({"data": msg.to_json()}, lock=lock)
+        if result.outcome is not ProcessOutcome.SUCCESS:
+            raise OpenVikingError(
+                result.error or f"Semantic processing did not complete: {result.outcome.value}",
+                code="PROCESSING_ERROR",
+                details={"uri": uri},
+            )
 
     async def _reindex_resource_vectors(
         self,
@@ -1657,48 +1668,19 @@ class ReindexExecutor:
                 )
                 return file_counters
             body = body_source.text if body_source.exists else ""
-            memory_content = MemoryFileUtils.read(body).content if body else ""
-            existing = await self._fetch_existing_record(
-                uri=file_uri,
-                level=2,
-                ctx=self._content_owner_ctx(file_uri, ctx),
-            )
-            abstract = self._best_non_empty(
-                self._record_abstract(existing),
-                await self._best_file_summary(file_uri, ctx=ctx),
-            )
-            if not body and existing is None:
+            if not body:
                 file_counters.unsupported_records += 1
                 file_counters.warnings.append(f"No memory source found for {file_uri}")
                 return file_counters
 
+            memory_file = MemoryFileUtils.read(body, uri=file_uri)
             parent_uri = VikingURI(file_uri.split("#", 1)[0]).parent.uri
-            if body:
-                detail_abstract = self._prefer_non_empty(abstract, memory_content, body)
-                try:
-                    await self._upsert_context(
-                        uri=file_uri,
-                        parent_uri=parent_uri,
-                        abstract=detail_abstract,
-                        vector_text=body,
-                        is_leaf=True,
-                        context_type=ContextType.MEMORY.value,
-                        level=ContextLevel.DETAIL,
-                        ctx=ctx,
-                        ingest_options=ingest_options,
-                    )
-                    file_counters.rebuilt_records += 1
-                except Exception as exc:
-                    file_counters.failed_records += 1
-                    file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
-                return file_counters
-
             try:
                 await self._upsert_context(
                     uri=file_uri,
                     parent_uri=parent_uri,
-                    abstract=abstract,
-                    vector_text=abstract,
+                    abstract=memory_file.get_abstract(),
+                    vector_text=body,
                     is_leaf=True,
                     context_type=ContextType.MEMORY.value,
                     level=ContextLevel.DETAIL,
@@ -1706,9 +1688,6 @@ class ReindexExecutor:
                     ingest_options=ingest_options,
                 )
                 file_counters.rebuilt_records += 1
-                file_counters.warnings.append(
-                    f"Reindexed {file_uri} from abstract fallback because original memory body is unavailable"
-                )
             except Exception as exc:
                 file_counters.failed_records += 1
                 file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
@@ -2006,12 +1985,6 @@ class ReindexExecutor:
                 break
 
         return [(f"{uri}#chunk_{idx:04d}", chunk) for idx, chunk in enumerate(chunks) if chunk]
-
-    def _best_non_empty(self, *values: str) -> str:
-        for value in values:
-            if value:
-                return value
-        return ""
 
     def _prefer_non_empty(self, *values: str) -> str:
         for value in values:

@@ -629,6 +629,12 @@ session 子树会被跳过。
 
 对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
 
+Memory 文件的索引 `abstract` 只使用文件中 `MEMORY_FIELDS.summary` 保存的真实摘要，按 UTF-8 限制为 8,000 字节；正文仍按原有规则用于 embedding，不作为摘要兜底，也不复用可能包含旧正文的向量记录 `abstract`。
+
+- `vectors_only` 复用已保存的摘要；缺失时 `abstract` 为空，仍重建正文向量，不调用模型补摘要。空摘要记录保留向量检索分数，不参与基于摘要的 rerank。
+- 对单个 memory 文件或递归 memory 目录执行 `semantic_and_vectors` 时，先复用已有摘要，缺失则生成并写回 `MEMORY_FIELDS.summary`，成功后才重建向量。摘要生成或写回失败会中止本次后续向量重建。目录 `recursive=false` 仍只更新目录语义和 L0/L1 向量。
+- 正常 memory 写入使用同一摘要来源。正文被修改且未同时提供新摘要时，旧摘要会失效；后续语义重建可补齐。缺少原文件时，不再仅凭旧索引中的 `abstract` 重建 memory 向量。
+
 对于 `semantic_and_vectors`，语义刷新和向量重建由 reindex executor 串行编排。语义刷新阶段不会再额外向后台 embedding queue 投递自己的向量化任务；向量由 reindex 阶段统一重建，因此 `wait=true` 表示等待 reindex 操作本身完成。
 
 对 `resource` 或 `memory` 目录设置 `recursive=false` 时，只重新生成目标目录的 `.abstract.md`、`.overview.md`，并重建该目录的 L0/L1 向量；下级目录不会重新生成语义产物，下级目录和文件也不会重新向量化。目标目录仍会读取本轮确定性采样命中的既有下级摘要；若采样命中直接文件，仍会为当前目录聚合准备这些文件的摘要。对 `skill` 目标设置 `recursive=false` 时，会根据 `SKILL.md` 重新生成 skill 目录的 L0/L1 语义产物及向量，但不会重建 `SKILL.md` 的 L2 向量。该参数不改变 `vectors_only`、`prune_orphans` 或 namespace 目标的既有行为。

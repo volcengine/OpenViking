@@ -213,12 +213,14 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
     processor = SemanticProcessor(max_concurrent_llm=4)
     summaries = []
 
-    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None, lock=None):
         del llm_sem, ctx
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+    async def generate_overview(
+        dir_uri, file_summaries, children_abstracts, llm_sem=None, total_files=None
+    ):
         del dir_uri, children_abstracts, llm_sem
         summaries.extend(file_summaries)
         return "overview"
@@ -234,7 +236,7 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         lambda: _FakeMemoryDirFS(),
     )
     _patch_semantic_config(monkeypatch)
-    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_memory_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
         processor,
@@ -262,12 +264,14 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
     captured_file_vectorize = []
     captured_directory_vectorize = []
 
-    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None, lock=None):
         del llm_sem, ctx
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}", "content": "raw content"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
+    async def generate_overview(
+        dir_uri, file_summaries, children_abstracts, llm_sem=None, total_files=None
+    ):
         del dir_uri, children_abstracts, llm_sem
         assert len(captured_file_vectorize) == 1
         assert all("content" not in summary for summary in file_summaries)
@@ -290,7 +294,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         lambda: _FakeMemoryDirFS(),
     )
     _patch_semantic_config(monkeypatch)
-    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_memory_summary", generate_file_summary)
     monkeypatch.setattr(processor, "_generate_overview", generate_overview)
     monkeypatch.setattr(
         processor,
@@ -338,7 +342,7 @@ async def test_memory_directory_skips_vectorization_when_visible_semantics_are_u
     _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(
         processor,
-        "_generate_single_file_summary",
+        "_generate_memory_summary",
         AsyncMock(return_value={"name": "file.md", "summary": "summary"}),
     )
     monkeypatch.setattr(processor, "_generate_overview", AsyncMock(return_value="overview"))

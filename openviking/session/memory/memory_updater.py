@@ -53,7 +53,8 @@ from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
-_MEMORY_ABSTRACT_MAX_BYTES = 50_000
+# Preserve the existing embedding content budget independently of the stored summary.
+_MEMORY_EMBEDDING_CONTENT_MAX_BYTES = 50_000
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 _RESOURCE_ADDITION_FIELD_RE = re.compile(
@@ -1203,6 +1204,11 @@ class MemoryUpdater:
                 ),
                 extract_context=extract_context,
             )
+            if old_content and "summary" not in resolved_op.memory_fields:
+                rendered = MemoryFileUtils.read(new_full_content, uri=uri)
+                if rendered.content != old_content.content and "summary" in rendered.extra_fields:
+                    rendered.extra_fields.pop("summary")
+                    new_full_content = MemoryFileUtils.write(rendered, render_links=False)
             await viking_fs.write_file(
                 uri,
                 new_full_content,
@@ -1445,16 +1451,19 @@ class MemoryUpdater:
                 mf = MemoryFileUtils.read(content, uri=uri)
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
 
-                abstract = LinkRenderer.strip_all_links(mf.content or "")
-                abstract = self._truncate_memory_abstract(abstract)
-                embedding_text = abstract
+                embedding_content = (
+                    LinkRenderer.strip_all_links(mf.content or "")
+                    .encode("utf-8")[:_MEMORY_EMBEDDING_CONTENT_MAX_BYTES]
+                    .decode("utf-8", errors="ignore")
+                )
+                embedding_text = embedding_content
 
                 memory_type = uri_memory_type_map.get(uri)
                 if memory_type and self._registry:
                     schema = self._registry.get(memory_type)
                     if schema and schema.embedding_template:
                         template_vars = dict(mf.extra_fields)
-                        template_vars["content"] = abstract
+                        template_vars["content"] = embedding_content
                         missing_vars = TemplateUtils.find_missing_variables(
                             schema.embedding_template,
                             template_vars,
@@ -1488,7 +1497,7 @@ class MemoryUpdater:
                     uri=uri,
                     parent_uri=parent_uri,
                     is_leaf=True,
-                    abstract=abstract,
+                    abstract=mf.get_abstract(),
                     context_type="memory",
                     level=ContextLevel.DETAIL,
                     user=ctx.user,
@@ -1537,14 +1546,6 @@ class MemoryUpdater:
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
         return attempted_count
-
-    @staticmethod
-    def _truncate_memory_abstract(abstract: str) -> str:
-        """Cap memory vector-store abstract fields below backend byte limits."""
-        encoded = (abstract or "").encode("utf-8")
-        if len(encoded) <= _MEMORY_ABSTRACT_MAX_BYTES:
-            return abstract or ""
-        return encoded[:_MEMORY_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
 
     async def generate_overview(
         self,

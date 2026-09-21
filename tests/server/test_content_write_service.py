@@ -79,6 +79,7 @@ async def test_memory_replace_preserves_metadata(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/preferences/theme.md"
     metadata = {
+        "summary": "Old preference summary",
         "tags": ["ui", "preference"],
         "created_at": "2026-04-01T10:00:00",
         "updated_at": "2026-04-01T10:05:00",
@@ -100,6 +101,7 @@ async def test_memory_replace_preserves_metadata(service):
     stored_result = MemoryFileUtils.read(stored)
 
     assert stored_result.content == "Updated preference"
+    expected_mf.extra_fields.pop("summary")
     assert stored_result.extra_fields == expected_mf.extra_fields
 
 
@@ -284,6 +286,7 @@ async def test_memory_append_preserves_metadata(service):
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_uri = f"viking://user/{ctx.user.user_space_name()}/memories/preferences/theme.md"
     metadata = {
+        "summary": "Old preference summary",
         "tags": ["ui", "preference"],
         "created_at": "2026-04-01T10:00:00",
         "updated_at": "2026-04-01T10:05:00",
@@ -305,6 +308,7 @@ async def test_memory_append_preserves_metadata(service):
     stored_result = MemoryFileUtils.read(stored)
 
     assert stored_result.content == "Original preference\nUpdated preference"
+    expected_mf.extra_fields.pop("summary")
     assert stored_result.extra_fields == expected_mf.extra_fields
 
 

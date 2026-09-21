@@ -68,7 +68,7 @@ async def test_memory_directory_write_error_contract(monkeypatch, error, expecte
     )
     monkeypatch.setattr(
         processor,
-        "_generate_single_file_summary",
+        "_generate_memory_summary",
         lambda *args, **kwargs: _completed({"name": "entry.md", "summary": "summary"}),
     )
     monkeypatch.setattr(

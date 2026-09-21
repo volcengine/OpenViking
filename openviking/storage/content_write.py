@@ -1144,14 +1144,13 @@ class ContentWriteCoordinator:
             return
 
         if context_type_for_uri(uri) == "memory":
-            if mode == "replace":
+            if mode in {"replace", "append"}:
                 existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
                 mf = MemoryFileUtils.read(existing_raw, uri=uri)
-                mf.content = content
-            elif mode == "append":
-                existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-                mf = MemoryFileUtils.read(existing_raw, uri=uri)
-                mf.content = mf.content + content
+                previous_content = mf.content
+                mf.content = content if mode == "replace" else mf.content + content
+                if mf.content != previous_content:
+                    mf.extra_fields.pop("summary", None)
             else:
                 mf = MemoryFileUtils.read(content, uri=uri)
             sync_memory_resource_refs(mf, source=RESOURCE_REF_SOURCE_CONTENT_WRITE)

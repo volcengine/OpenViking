@@ -813,7 +813,7 @@ class SemanticDagExecutor:
         need_vectorize = True
         try:
             summary_dict = None
-            if self._incremental_update:
+            if self._incremental_update and self._context_type != "memory":
                 content_changed = await self._check_file_content_changed(file_path)
                 self._file_change_status[file_path] = content_changed
                 node = self._nodes.get(parent_uri)
@@ -841,10 +841,18 @@ class SemanticDagExecutor:
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
-                summary_dict = await self._processor._generate_single_file_summary(
-                    file_path, llm_sem=self._llm_sem, ctx=self._ctx
-                )
+                if self._context_type == "memory" and self._recursive:
+                    summary_dict = await self._processor._generate_memory_summary(
+                        file_path, llm_sem=self._llm_sem, ctx=self._ctx, lock=self._lock
+                    )
+                else:
+                    # Non-recursive aggregation only refreshes directory sidecars.
+                    summary_dict = await self._processor._generate_single_file_summary(
+                        file_path, llm_sem=self._llm_sem, ctx=self._ctx
+                    )
         except Exception as e:
+            if self._context_type == "memory":
+                raise
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}

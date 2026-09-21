@@ -296,6 +296,16 @@ class MemoryFile(BaseModel):
     memory_type: Optional[str] = None
     extra_fields: Dict[str, Any] = {}
 
+    def get_abstract(self) -> str:
+        """Return only the persisted summary, bounded for retrieval and reranking."""
+        from openviking.session.memory.utils.link_renderer import LinkRenderer
+
+        summary = self.extra_fields.get("summary") or ""
+        if not isinstance(summary, str):
+            raise ValueError("Memory summary must be a string")
+        summary = LinkRenderer.strip_all_links(summary).strip()
+        return summary.encode("utf-8")[:8_000].decode("utf-8", errors="ignore")
+
     def plain_content(self) -> str:
         from openviking.session.memory.utils.link_renderer import LinkRenderer
 

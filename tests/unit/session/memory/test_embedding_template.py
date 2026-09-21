@@ -495,7 +495,10 @@ class TestEmbeddingTextConstruction:
         assert vector_text == "Trip summary"
 
     @pytest.mark.asyncio
-    async def test_memory_abstract_truncated_to_50000_bytes_before_vector_write(self):
+    @pytest.mark.parametrize(
+        "summary", ["事件的真实摘要", "", "摘" * 3_000], ids=["summary", "missing", "oversized"]
+    )
+    async def test_memory_abstract_uses_summary_without_truncating_embedding(self, summary):
         registry = MemoryTypeRegistry(load_schemas=False)
         registry._types["events"] = registry._parse_memory_type(
             {
@@ -518,7 +521,7 @@ class TestEmbeddingTextConstruction:
                     uri="viking://user/alice/memories/events/trip.md",
                     memory_type="events",
                     content=long_content,
-                    extra_fields={"event_name": "trip"},
+                    extra_fields={"event_name": "trip", "summary": summary},
                 )
             )
         )
@@ -540,5 +543,9 @@ class TestEmbeddingTextConstruction:
             )
 
         memory_context = mock_from_context.call_args[0][0]
-        assert len(memory_context.abstract.encode("utf-8")) <= 50_000
-        assert memory_context.abstract.encode("utf-8").decode("utf-8") == memory_context.abstract
+        assert memory_context.abstract == summary.encode("utf-8")[:8_000].decode(
+            "utf-8", errors="ignore"
+        )
+        assert memory_context.get_vectorization_text() == long_content.encode("utf-8")[
+            :50_000
+        ].decode("utf-8", errors="ignore")

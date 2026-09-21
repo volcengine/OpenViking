@@ -243,7 +243,7 @@ async def test_memory_write_error_returns_failed():
         ),
         patch.object(
             processor,
-            "_generate_single_file_summary",
+            "_generate_memory_summary",
             new=AsyncMock(return_value={"name": "file1.md", "summary": "test summary"}),
         ),
         patch.object(

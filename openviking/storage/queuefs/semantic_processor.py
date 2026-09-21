@@ -6,7 +6,7 @@ import asyncio
 import re
 import threading
 from contextlib import nullcontext
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, unquote, urlsplit
 
 from openviking.core.namespace import classify_uri
@@ -760,77 +760,29 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.info(f"No memory files found in {dir_uri}")
             return
 
-        existing_summaries: Dict[str, str] = {}
-        if msg.changes:
-            try:
-                old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                if old_overview:
-                    existing_summaries = self._parse_overview_md(body_for_preview(old_overview))
-                    logger.info(
-                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
-                    )
-            except Exception as e:
-                logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
-
-        changed_files: Set[str] = set()
-        if msg.changes:
-            changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
-            deleted_files = set(msg.changes.get("deleted", []))
-            logger.info(
-                f"Processing memory directory {dir_uri} with changes: "
-                f"added={len(msg.changes.get('added', []))}, "
-                f"modified={len(msg.changes.get('modified', []))}, "
-                f"deleted={len(deleted_files)}"
-            )
-
-        pending_indices: List[Tuple[int, str]] = []
+        paths_to_vectorize = (
+            set(msg.changes.get("added", []) + msg.changes.get("modified", []))
+            if msg.changes
+            else set(file_paths)
+        )
+        pending_indices = list(enumerate(file_paths))
         file_summaries: List[Optional[Dict[str, str]]] = [None] * len(file_paths)
-        paths_to_vectorize = changed_files if msg.changes else set(file_paths)
-
-        for idx, file_path in enumerate(file_paths):
-            file_name = file_path.split("/")[-1]
-            if file_path not in changed_files and file_name in existing_summaries:
-                file_summaries[idx] = {
-                    "name": file_name,
-                    "summary": existing_summaries[file_name],
-                }
-                logger.debug(f"Reused existing summary for {file_name}")
-            else:
-                pending_indices.append((idx, file_path))
-
-        if file_paths and not pending_indices:
-            try:
-                from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                CacheEventDataSource.record_hit("L1")
-            except Exception:
-                pass
-        elif file_paths and pending_indices:
-            try:
-                from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                if len(file_paths) > len(pending_indices):
-                    CacheEventDataSource.record_hit("L1")
-                CacheEventDataSource.record_miss("L1")
-            except Exception:
-                pass
 
         if pending_indices:
             logger.info(
-                f"Generating summaries for {len(pending_indices)} changed files "
-                f"(reused {len(file_paths) - len(pending_indices)} cached)"
+                f"Preparing summaries for {len(pending_indices)} memory files "
+                "from their persisted memory summaries"
             )
 
             async def _gen(idx: int, file_path: str) -> None:
                 file_name = file_path.split("/")[-1]
                 try:
-                    summary_dict = await self._generate_single_file_summary(
-                        file_path, llm_sem=llm_sem, ctx=ctx
+                    summary_dict = await self._generate_memory_summary(
+                        file_path, llm_sem=llm_sem, ctx=ctx, lock=lock
                     )
                     logger.debug(f"Generated summary for {file_name}")
                 except Exception as e:
-                    logger.warning(f"Failed to generate summary for {file_path}: {e}")
-                    summary_dict = {"name": file_name, "summary": ""}
+                    raise RuntimeError(f"Failed to prepare memory summary for {file_path}") from e
 
                 if file_path in paths_to_vectorize and not msg.skip_vectorization:
                     await self._vectorize_single_file(
@@ -854,7 +806,13 @@ class SemanticProcessor(DequeueHandlerBase):
                     f"{(len(pending_indices) + batch_size - 1) // batch_size} "
                     f"({len(batch)} files)"
                 )
-                await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
+                # Settle every summary write before a failure releases the directory lock.
+                results = await asyncio.gather(
+                    *[_gen(i, fp) for i, fp in batch], return_exceptions=True
+                )
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
 
         completed_summaries = [s for s in file_summaries if s is not None]
         sample_limit = getattr(
@@ -1070,19 +1028,65 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to rewrite image URIs for {target_uri}: {e}")
 
+    async def _generate_memory_summary(
+        self,
+        file_path: str,
+        llm_sem: Optional[asyncio.Semaphore] = None,
+        ctx: Optional[RequestContext] = None,
+        lock: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, str]:
+        """Reuse a memory's summary or generate and persist it before indexing."""
+        from openviking.session.memory.utils.memory_file_utils import (
+            MemoryFileUtils,
+            bump_memory_version,
+        )
+
+        viking_fs = get_viking_fs()
+        ctx = ctx or self._default_ctx
+        raw = await viking_fs.read_file(file_path, ctx=ctx)
+        memory_file = MemoryFileUtils.read(raw, uri=file_path)
+        summary = memory_file.get_abstract()
+        file_name = file_path.rsplit("/", 1)[-1]
+        if not summary:
+            generated = await self._generate_text_summary(
+                file_path,
+                file_name,
+                llm_sem or asyncio.Semaphore(self.max_concurrent_llm),
+                ctx=ctx,
+                content=memory_file.content,
+            )
+            memory_file.extra_fields["summary"] = generated["summary"]
+            summary = memory_file.get_abstract()
+            if not summary:
+                raise RuntimeError(f"No summary generated for memory: {file_path}")
+            memory_file.extra_fields["summary"] = summary
+            bump_memory_version(memory_file)
+            await run_to_completion(
+                lambda: viking_fs.write_file(
+                    file_path,
+                    MemoryFileUtils.write(memory_file, render_links=False),
+                    ctx=ctx,
+                    lease_ref=lock,
+                )
+            )
+        return {"name": file_name, "summary": summary}
+
     async def _generate_text_summary(
         self,
         file_path: str,
         file_name: str,
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
+        *,
+        content: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
         active_ctx = ctx or self._default_ctx
 
-        content = await viking_fs.read_file(file_path, ctx=active_ctx)
+        if content is None:
+            content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
             from openviking.utils.embedding_utils import _decode_text_bytes
 
