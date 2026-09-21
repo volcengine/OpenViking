@@ -7,6 +7,10 @@ TypeSafe has no native rerank endpoint; each document is evaluated by an
 independent Noul question against the query. The returned yes probability is
 used as the relevance score.
 
+Speaks only the TypeSafe System One protocol. Vercel AI Gateway exposes a
+TypeSafe-compatible endpoint (https://ai-gateway.vercel.sh/typesafe), so routing
+through Vercel is just a different api_base and model id.
+
 Same interface as the other rerank clients:
 rerank_batch(query, documents) -> List[float]
 """
@@ -14,7 +18,6 @@ rerank_batch(query, documents) -> List[float]
 import json
 import time
 from typing import Dict, List, Optional
-from urllib.parse import urlparse
 
 import httpx
 
@@ -39,11 +42,11 @@ class JevRerankClient(RerankBase):
         self.api_key = api_key
         self.model_name = model_name
         self.api_base = api_base.rstrip("/")
-        hostname = (urlparse(self.api_base).hostname or "").lower()
-        self._vercel_gateway = hostname == "ai-gateway.vercel.sh" or self.model_name.startswith(
-            "typesafe-ai/"
+        self.api_url = (
+            self.api_base
+            if self.api_base.endswith("/v1/systemone")
+            else f"{self.api_base}/v1/systemone"
         )
-        self.api_url = self._resolve_api_url()
         self.timeout = timeout
         self.log_payloads = log_payloads
         self.provider = "jev"
@@ -55,23 +58,11 @@ class JevRerankClient(RerankBase):
             timeout=timeout,
         )
 
-    def _resolve_api_url(self) -> str:
-        if self._vercel_gateway:
-            if self.api_base.endswith("/evaluation-model"):
-                return self.api_base
-            if self.api_base.endswith("/v4/ai"):
-                return f"{self.api_base}/evaluation-model"
-            return f"{self.api_base}/v4/ai/evaluation-model"
-        if self.api_base.endswith("/v1/systemone"):
-            return self.api_base
-        return f"{self.api_base}/v1/systemone"
-
     def _build_questions(self, documents: List[str]) -> Dict[str, dict]:
         """Build one independent relevance question per document."""
-        question_type = "boolean" if self._vercel_gateway else "noul"
         return {
             f"relevance_{index}": {
-                "type": question_type,
+                "type": "noul",
                 "instructions": {
                     "candidate_index": index,
                     "question": (
@@ -98,11 +89,10 @@ class JevRerankClient(RerankBase):
 
         questions = self._build_questions(documents)
         body = {
+            "model": self.model_name,
             "state": {"query": query, "candidate_documents": documents},
             "questions": questions,
         }
-        if not self._vercel_gateway:
-            body["model"] = self.model_name
 
         try:
             if self.log_payloads:
@@ -112,15 +102,7 @@ class JevRerankClient(RerankBase):
                     json.dumps(body, ensure_ascii=False),
                 )
             started = time.monotonic()
-            headers = None
-            if self._vercel_gateway:
-                headers = {
-                    "ai-gateway-protocol-version": "0.0.1",
-                    "ai-gateway-auth-method": "api-key",
-                    "ai-evaluation-model-specification-version": "4",
-                    "ai-model-id": self.model_name,
-                }
-            resp = self._client.post(self.api_url, json=body, headers=headers)
+            resp = self._client.post(self.api_url, json=body)
             duration_seconds = time.monotonic() - started
             resp.raise_for_status()
             data = resp.json()
@@ -140,19 +122,18 @@ class JevRerankClient(RerankBase):
             scores = []
             for index in range(len(documents)):
                 answer = answers.get(f"relevance_{index}")
-                expected_type = "boolean" if self._vercel_gateway else "noul"
-                if not isinstance(answer, dict) or answer.get("type") != expected_type:
+                if not isinstance(answer, dict) or answer.get("type") != "noul":
                     logger.warning("[JevRerank] Missing or malformed answer for item %s", index)
                     return None
-                score = answer.get("probability" if self._vercel_gateway else "noul")
+                score = answer.get("noul")
                 if not isinstance(score, (int, float)) or not 0 <= score <= 1:
                     logger.warning("[JevRerank] Invalid relevance score for item %s", index)
                     return None
                 scores.append(float(score))
 
             usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-            input_tokens = usage.get("inputTokens", usage.get("input_tokens", 0))
-            output_tokens = usage.get("outputTokens", usage.get("output_tokens", 0))
+            input_tokens = usage.get("input_tokens", 0)
+            output_tokens = usage.get("output_tokens", 0)
             self.update_token_usage(
                 model_name=data.get("model") or self.model_name,
                 provider=self.provider,

@@ -31,16 +31,6 @@ def _systemone_payload(scores: list[float]) -> dict:
     }
 
 
-def _gateway_payload(scores: list[float]) -> dict:
-    return {
-        "answers": {
-            f"relevance_{index}": {"type": "boolean", "probability": score}
-            for index, score in enumerate(scores)
-        },
-        "usage": {"inputTokens": 100, "outputTokens": 20},
-    }
-
-
 class TestJevRerankClient:
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")
     def test_rerank_batch_basic(self, mock_client_class):
@@ -61,42 +51,27 @@ class TestJevRerankClient:
         assert len(body["questions"]) == 3
         assert body["questions"]["relevance_0"]["type"] == "noul"
         assert body["questions"]["relevance_2"]["instructions"]["candidate_index"] == 2
-        mock_client.post.assert_called_once_with(
-            "https://api.typesafe.ai/v1/systemone", json=body, headers=None
-        )
+        mock_client.post.assert_called_once_with("https://api.typesafe.ai/v1/systemone", json=body)
 
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")
-    def test_vercel_gateway_protocol(self, mock_client_class):
+    def test_vercel_gateway_uses_typesafe_compatible_endpoint(self, mock_client_class):
+        """Vercel is just another api_base; the wire protocol stays TypeSafe System One."""
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
-        mock_client.post.return_value = _mock_response(_gateway_payload([0.91, 0.08]))
+        mock_client.post.return_value = _mock_response(_systemone_payload([0.91, 0.08]))
 
         client = JevRerankClient(
             api_key="vercel-key",
-            api_base="https://ai-gateway.vercel.sh/v4/ai",
+            api_base="https://ai-gateway.vercel.sh/typesafe",
             model_name="typesafe-ai/jev",
         )
         assert client.rerank_batch("query", ["first", "second"]) == [0.91, 0.08]
 
         call = mock_client.post.call_args
-        assert call.args == ("https://ai-gateway.vercel.sh/v4/ai/evaluation-model",)
-        assert "model" not in call.kwargs["json"]
-        assert call.kwargs["json"]["questions"]["relevance_0"]["type"] == "boolean"
-        assert call.kwargs["headers"] == {
-            "ai-gateway-protocol-version": "0.0.1",
-            "ai-gateway-auth-method": "api-key",
-            "ai-evaluation-model-specification-version": "4",
-            "ai-model-id": "typesafe-ai/jev",
-        }
-
-    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
-    def test_vercel_gateway_accepts_host_only_base_url(self, mock_client_class):
-        client = JevRerankClient(
-            api_key="vercel-key",
-            api_base="https://ai-gateway.vercel.sh",
-            model_name="typesafe-ai/jev",
-        )
-        assert client.api_url == "https://ai-gateway.vercel.sh/v4/ai/evaluation-model"
+        assert call.args == ("https://ai-gateway.vercel.sh/typesafe/v1/systemone",)
+        assert call.kwargs["json"]["model"] == "typesafe-ai/jev"
+        assert call.kwargs["json"]["questions"]["relevance_0"]["type"] == "noul"
+        assert "headers" not in call.kwargs
 
     @patch("openviking.models.rerank.jev_rerank.logger.warning")
     @patch("openviking.models.rerank.jev_rerank.httpx.Client")
@@ -191,13 +166,13 @@ class TestJevRerankConfig:
         config = RerankConfig(api_key="key", api_base="https://api.typesafe.ai")
         assert config._effective_provider() == "jev"
 
-    def test_jev_auto_detected_from_vercel_model(self):
-        config = RerankConfig(
-            api_key="key",
-            api_base="https://ai-gateway.vercel.sh/v4/ai",
-            model="typesafe-ai/jev",
-        )
+    def test_jev_auto_detected_from_vercel_typesafe_base(self):
+        config = RerankConfig(api_key="key", api_base="https://ai-gateway.vercel.sh/typesafe")
         assert config._effective_provider() == "jev"
+
+    def test_plain_vercel_base_is_not_jev(self):
+        config = RerankConfig(api_key="key", api_base="https://ai-gateway.vercel.sh/v1")
+        assert config._effective_provider() == "openai"
 
     def test_jev_requires_api_key(self):
         with pytest.raises(ValueError, match="Jev"):
@@ -234,7 +209,8 @@ class TestJevDispatch:
         config = RerankConfig(
             provider="jev",
             api_key="key",
-            api_base="https://ai-gateway.vercel.sh/v4/ai",
+            api_base="https://ai-gateway.vercel.sh/typesafe",
         )
         client = RerankClient.from_config(config)
         assert client.model_name == "typesafe-ai/jev"
+        assert client.api_url == "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
