@@ -476,6 +476,10 @@ class AgentsConfig(BaseModel):
         default=True,
         description="Enable the spawn tool so the main agent can start background subagents.",
     )
+    disable_current_time: bool = Field(
+        default=False,
+        description="Omit the current time from VikingBot prompts.",
+    )
     session_context_enabled: bool = True
     session_context_token_budget: int = 3000
     commit_token_threshold: int = 200000

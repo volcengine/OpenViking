@@ -269,9 +269,10 @@ The following local and remote Skills extend your capabilities.
             Complete system prompt.
         """
         parts = []
-        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-        tz = _time.strftime("%Z") or "UTC"
-        parts.append(f"## Current Time: {now} ({tz})")
+        if not self._config or not self._config.agents.disable_current_time:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+            tz = _time.strftime("%Z") or "UTC"
+            parts.append(f"## Current Time: {now} ({tz})")
 
         # Add session context
         session_context = "## Current Session"
