@@ -986,6 +986,7 @@ OpenAI-compatible APIs, LiteLLM, and Jev.
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
     "timeout": 120,
+    "log_payloads": false,
     "threshold": 0.1
   }
 }
@@ -1009,6 +1010,7 @@ parallel in one request, and scores do not compete or have to sum to 1.
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
+| `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 

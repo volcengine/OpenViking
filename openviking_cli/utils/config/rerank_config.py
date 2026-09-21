@@ -56,6 +56,14 @@ class RerankConfig(BaseModel):
         ),
     )
 
+    log_payloads: bool = Field(
+        default=False,
+        description=(
+            "Log complete rerank request and response payloads. Disabled by default "
+            "because payloads may contain sensitive query and document content."
+        ),
+    )
+
     def _effective_provider(self) -> Optional[str]:
         """Auto-detect provider from config fields when not explicitly set."""
         if self.provider:

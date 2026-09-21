@@ -146,6 +146,7 @@ Changing the model or `dimension` can make existing vector collections incompati
 | `model` | string / `null` | `null` | OpenAI-compatible, LiteLLM, or Jev rerank model |
 | `threshold` | number | `0.1` | Minimum score considered relevant |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
+| `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 

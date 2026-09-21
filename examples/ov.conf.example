@@ -231,6 +231,7 @@
         "provider": "jev",
         "api_key": "{your-typesafe-api-key}",
         "model": "jev-latest",
+        "log_payloads": false,
         "threshold": 0.1,
     },
     "retrieval": {

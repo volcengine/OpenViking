@@ -32,12 +32,14 @@ class JevRerankClient(RerankBase):
         model_name: str = "jev-latest",
         api_base: str = "https://api.typesafe.ai",
         timeout: float = 30.0,
+        log_payloads: bool = False,
     ):
         super().__init__()
         self.api_key = api_key
         self.model_name = model_name
         self.api_base = api_base.rstrip("/")
         self.timeout = timeout
+        self.log_payloads = log_payloads
         self.provider = "jev"
         self._client = httpx.Client(
             base_url=self.api_base,
@@ -85,22 +87,24 @@ class JevRerankClient(RerankBase):
         }
 
         try:
-            logger.info(
-                "[JevRerank] Request items=%s payload=%s",
-                len(documents),
-                json.dumps(body, ensure_ascii=False),
-            )
+            if self.log_payloads:
+                logger.warning(
+                    "[JevRerank] Request items=%s payload=%s",
+                    len(documents),
+                    json.dumps(body, ensure_ascii=False),
+                )
             started = time.monotonic()
             resp = self._client.post("/v1/systemone", json=body)
             duration_seconds = time.monotonic() - started
             resp.raise_for_status()
             data = resp.json()
-            logger.info(
-                "[JevRerank] Response status=%s duration_ms=%.1f payload=%s",
-                resp.status_code,
-                duration_seconds * 1000,
-                json.dumps(data, ensure_ascii=False),
-            )
+            if self.log_payloads:
+                logger.warning(
+                    "[JevRerank] Response status=%s duration_ms=%.1f payload=%s",
+                    resp.status_code,
+                    duration_seconds * 1000,
+                    json.dumps(data, ensure_ascii=False),
+                )
 
             answers = data.get("answers")
             if not isinstance(answers, dict):
@@ -153,4 +157,5 @@ class JevRerankClient(RerankBase):
             model_name=config.model or "jev-latest",
             api_base=config.api_base or "https://api.typesafe.ai",
             timeout=config.timeout,
+            log_payloads=config.log_payloads,
         )

@@ -954,6 +954,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
     "timeout": 120,
+    "log_payloads": false,
     "threshold": 0.1
   }
 }
@@ -976,6 +977,7 @@ Jev 适配器将 query 和候选文档作为结构化 System One `state`，并�
 | `model` | str | 模型名称（用于 OpenAI 兼容、LiteLLM 或 `jev` 提供方） |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
+| `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
 | `threshold` | float | 分数阈值，范围为 `0.0` 到 `1.0`。低于此值的结果会被过滤。默认：`0.1` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
 
