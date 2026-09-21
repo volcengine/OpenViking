@@ -715,13 +715,15 @@ async def test_incremental_inventory_projects_request_scalar_fields():
 
 
 @pytest.mark.asyncio
-async def test_incremental_hydration_uses_dsl_then_fetches_only_missing_ids():
+async def test_incremental_hydration_fetches_records_by_primary_key():
     root = "viking://resources/docs"
     first = _record("root-l0", root, level=0, abstract="root abstract")
     second = _record("file-l2", f"{root}/a.py", level=2, md5="ma")
     backend = _MemoryTransferBackend([first, second])
-    backend._strict_transfer_page = AsyncMock(return_value=([dict(first)], None))
-    backend._strict_transfer_get = AsyncMock(return_value=[dict(second)])
+    backend._strict_transfer_page = AsyncMock(
+        side_effect=AssertionError("hydration must not filter on the primary key")
+    )
+    backend._strict_transfer_get = AsyncMock(return_value=[dict(first), dict(second)])
 
     records = await backend.hydrate_incremental_records(
         {
@@ -734,37 +736,34 @@ async def test_incremental_hydration_uses_dsl_then_fetches_only_missing_ids():
     assert set(records) == {"root-l0", "file-l2"}
     assert records["root-l0"]["abstract"] == "root abstract"
     assert records["file-l2"]["md5"] == "ma"
-    backend._strict_transfer_get.assert_awaited_once_with(_ctx(), ["file-l2"])
-    query = backend._strict_transfer_page.await_args
-    assert query.args[1] == In("id", ["root-l0", "file-l2"])
-    assert "vector" not in query.kwargs["output_fields"]
-    assert "sparse_vector" not in query.kwargs["output_fields"]
+    # Point-get is used, never an In("id", ...) scalar filter.
+    backend._strict_transfer_page.assert_not_awaited()
+    backend._strict_transfer_get.assert_awaited_once_with(_ctx(), ["root-l0", "file-l2"])
+    # Vector payloads returned by the fetch are dropped by client-side projection.
+    for hydrated in records.values():
+        assert "vector" not in hydrated
+        assert "sparse_vector" not in hydrated
+        assert "content" not in hydrated
 
 
 @pytest.mark.asyncio
-async def test_incremental_hydration_propagates_dsl_failure_without_fallback():
+async def test_incremental_hydration_propagates_fetch_failure():
     backend = _MemoryTransferBackend([])
-    backend._strict_transfer_page = AsyncMock(side_effect=RuntimeError("query failed"))
-    backend._strict_transfer_get = AsyncMock()
+    backend._strict_transfer_get = AsyncMock(side_effect=RuntimeError("fetch failed"))
 
-    with pytest.raises(RuntimeError, match="query failed"):
+    with pytest.raises(RuntimeError, match="fetch failed"):
         await backend.hydrate_incremental_records(
             {"file-l2": {"uri": "viking://resources/docs/a.py", "level": 2}},
             ctx=_ctx(),
         )
-
-    backend._strict_transfer_get.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_incremental_hydration_rejects_mismatched_record_identity():
     root = "viking://resources/docs"
     backend = _MemoryTransferBackend([])
-    backend._strict_transfer_page = AsyncMock(
-        return_value=(
-            [_record("file-l2", f"{root}/wrong.py", level=2)],
-            None,
-        )
+    backend._strict_transfer_get = AsyncMock(
+        return_value=[_record("file-l2", f"{root}/wrong.py", level=2)]
     )
 
     with pytest.raises(RuntimeError, match="identity mismatch"):
@@ -777,7 +776,6 @@ async def test_incremental_hydration_rejects_mismatched_record_identity():
 @pytest.mark.asyncio
 async def test_incremental_hydration_returns_only_records_still_present():
     backend = _MemoryTransferBackend([])
-    backend._strict_transfer_page = AsyncMock(return_value=([], None))
     backend._strict_transfer_get = AsyncMock(return_value=[])
 
     records = await backend.hydrate_incremental_records(
@@ -812,19 +810,17 @@ async def test_incremental_hydration_projects_dynamic_non_vector_schema_fields()
             ]
         }
     )
-    backend._strict_transfer_page = AsyncMock(return_value=([record], None))
 
     hydrated = await backend.hydrate_incremental_records(
         {"file-l2": {"uri": f"{root}/a.py", "level": 2}},
         ctx=_ctx(),
     )
 
+    # Dynamic non-vector schema fields survive; vector payloads are dropped.
     assert hydrated["file-l2"]["business_priority"] == 7
-    fields = backend._strict_transfer_page.await_args.kwargs["output_fields"]
-    assert "business_priority" in fields
-    assert "vector" not in fields
-    assert "sparse_vector" not in fields
-    assert "content" not in fields
+    assert "vector" not in hydrated["file-l2"]
+    assert "sparse_vector" not in hydrated["file-l2"]
+    assert "content" not in hydrated["file-l2"]
 
 
 @pytest.mark.asyncio
@@ -839,17 +835,8 @@ async def test_incremental_hydration_honors_explicit_summary_projection():
     )
     backend = _MemoryTransferBackend([record])
     backend.get_collection_meta = AsyncMock(
-        return_value={
-            "Fields": [
-                {"FieldName": "id"},
-                {"FieldName": "uri"},
-                {"FieldName": "level"},
-                {"FieldName": "abstract"},
-                {"FieldName": "business_priority"},
-            ]
-        }
+        side_effect=AssertionError("explicit projection must not read collection meta")
     )
-    backend._strict_transfer_page = AsyncMock(return_value=([record], None))
 
     hydrated = await backend.hydrate_incremental_records(
         {"file-l2": {"uri": f"{root}/a.py", "level": 2}},
@@ -857,15 +844,14 @@ async def test_incremental_hydration_honors_explicit_summary_projection():
         output_fields={"abstract"},
     )
 
+    # Explicit projection keeps only id/uri/level plus the requested field, even
+    # though the point-get returns every stored column.
     assert hydrated["file-l2"] == {
         "id": "file-l2",
         "uri": f"{root}/a.py",
         "level": 2,
         "abstract": "summary",
     }
-    fields = backend._strict_transfer_page.await_args.kwargs["output_fields"]
-    assert fields == ["id", "uri", "level", "abstract"]
-    backend.get_collection_meta.assert_not_awaited()
 
 
 @pytest.mark.asyncio

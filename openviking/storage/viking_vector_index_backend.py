@@ -2003,7 +2003,13 @@ class VikingVectorIndexBackend:
         batch_size: int = 100,
         output_fields: Optional[Container[str]] = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """Load requested non-vector fields, using strict DSL before ID fallback."""
+        """Load requested non-vector fields by primary-key point-get.
+
+        ``expected`` maps each known record id to its ``{uri, level}`` identity.
+        Records are fetched by primary key (never filtered on ``id``), and the
+        selected non-vector fields are projected on the client side, so the
+        returned rows never carry ``vector``/``sparse_vector``/``content``.
+        """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         requested_ids = list(expected)
@@ -2060,29 +2066,15 @@ class VikingVectorIndexBackend:
 
         for start in range(0, len(requested_ids), batch_size):
             chunk = requested_ids[start : start + batch_size]
-            cursor: Optional[str] = None
-            seen_cursors: set[str] = set()
-            while True:
-                page, next_cursor = await self._strict_transfer_page(
-                    ctx,
-                    In("id", chunk),
-                    limit=batch_size,
-                    cursor=cursor,
-                    output_fields=selected_fields,
-                )
-                for record in page:
-                    _accept(record)
-                if next_cursor is None:
-                    break
-                if next_cursor in seen_cursors:
-                    raise RuntimeError(f"Incremental hydration cursor repeated: {next_cursor}")
-                seen_cursors.add(next_cursor)
-                cursor = next_cursor
-
-            missing = [record_id for record_id in chunk if record_id not in hydrated]
-            if missing:
-                for record in await self._strict_transfer_get(ctx, missing):
-                    _accept(record)
+            # ``id`` is the collection primary key. VikingDB only accepts ``must``
+            # filters on ScalarIndex fields, and a primary key is intentionally not
+            # indexed as a scalar (it is addressed by point-get). Filtering on it
+            # (In("id", ...)) is rejected by strict backends, so fetch the records
+            # by primary key directly: no scalar index, no ordering, no offset
+            # pagination. Records that no longer exist are simply absent, and the
+            # planner promotes those dependencies separately.
+            for record in await self._strict_transfer_get(ctx, chunk):
+                _accept(record)
         return hydrated
 
     async def delete_account_data(self, account_id: str, *, ctx: RequestContext) -> int:
