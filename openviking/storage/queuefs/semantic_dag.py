@@ -5,6 +5,7 @@
 import asyncio
 import re
 import threading
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Set
 from weakref import WeakKeyDictionary
@@ -12,6 +13,7 @@ from weakref import WeakKeyDictionary
 from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
+from openviking.service.task_processing_time import pause_task_processing, processing_owner
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -207,6 +209,7 @@ class SemanticDagExecutor:
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
         self._task_context = get_task_context()
+        self._processing_index = None
         self._telemetry = get_current_telemetry()
         self._stale = False
         self._changed_paths = {
@@ -254,31 +257,36 @@ class SemanticDagExecutor:
         self._root_done = asyncio.Event()
         self._scheduler = get_semantic_node_scheduler(self._node_concurrency)
 
-        try:
-            self._register_active()
-            self._schedule_dir(root_uri, parent_uri=None)
-            await self._root_done.wait()
-            if self._failure:
-                raise self._failure
-        except BaseException:
-            self._closed = True
-            if self._context_type == "skill":
-                for task in self._skill_node_tasks:
-                    task.cancel()
-                await run_to_completion(
-                    lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
-                )
-            await self._active_work_idle.wait()
-            raise
-        finally:
-            self._closed = True
+        owner = processing_owner.get()
+        if owner is not None and self._task_context is not None:
+            if owner[1] == self._task_context.task_id:
+                self._processing_index = owner[0]
+        with pause_task_processing():
             try:
+                self._register_active()
+                self._schedule_dir(root_uri, parent_uri=None)
+                await self._root_done.wait()
+                if self._failure:
+                    raise self._failure
+            except BaseException:
+                self._closed = True
                 if self._context_type == "skill":
-                    await run_to_completion(self._active_work_idle.wait)
-                else:
-                    await self._active_work_idle.wait()
+                    for task in self._skill_node_tasks:
+                        task.cancel()
+                    await run_to_completion(
+                        lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
+                    )
+                await self._active_work_idle.wait()
+                raise
             finally:
-                self._unregister_active()
+                self._closed = True
+                try:
+                    if self._context_type == "skill":
+                        await run_to_completion(self._active_work_idle.wait)
+                    else:
+                        await self._active_work_idle.wait()
+                finally:
+                    self._unregister_active()
 
     def _schedule_work(self, work: DagWork) -> None:
         if self._closed:
@@ -384,8 +392,19 @@ class SemanticDagExecutor:
             if self._task_context is not None
             else detach_task_context()
         )
-        with bind_telemetry(self._telemetry), task_context:
-            await self._run_work_bound(work)
+        timing = (
+            self._processing_index.measure_processing(self._task_context.task_id)
+            if self._processing_index is not None and self._task_context is not None
+            else nullcontext()
+        )
+        # Shared workers inherit their creator's ContextVars. Never let an
+        # unrelated node pause the creator's clock when it has no timing owner.
+        token = processing_owner.set(None)
+        try:
+            with bind_telemetry(self._telemetry), task_context, timing:
+                await self._run_work_bound(work)
+        finally:
+            processing_owner.reset(token)
 
     async def _await_write(self, operation):
         if self._context_type == "skill":

@@ -274,6 +274,7 @@
     "properties": {
       "mode": {
         "type": "string",
+        "enum": ["local", "remote"],
         "description": "Legacy field kept for backward compatibility. Only 'remote' is supported."
       },
       "baseUrl": {
@@ -350,7 +351,8 @@
         "type": "boolean"
       },
       "captureMode": {
-        "type": "string"
+        "type": "string",
+        "enum": ["semantic", "keyword"]
       },
       "captureMaxLength": {
         "type": "number"

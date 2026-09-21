@@ -378,19 +378,27 @@ const workspace = {
   },
   tasksPage: {
     labels: {
+      timing: '耗时',
+      totalDuration: '总耗时',
+      processingNotStarted: '未开始',
+      processingDurationHelp: '仅累计工序实际处理区间，含模型与 I/O 调用；排除排队和等待下游，并行重叠只计一次。旧任务或重启后记录不完整时显示未记录。',
+      processingDuration: '处理耗时',
+      waitingDuration: '等待耗时',
+      timingUnavailable: '未记录',
+
       missingResource: '任务缺少关联资源 ID，无法重新入队',
       requeueFailed: '重新入队失败',
       requeueSubmitted: '重新入队请求已发送，后端正在处理新任务！',
       successRate: '任务成功率',
-      avgDuration: '平均处理耗时',
-      avgProcessingTime: '全流程平均处理时长',
+      avgDuration: '平均总耗时',
+      avgProcessingTime: '仅统计已结束任务，含排队时间',
       totalTasks: '任务总数',
       activePending: '并发与排队',
       runningPending: '进行中 / 等待中任务',
       taskQueueStatus: '任务队列状态',
       processQueueStatus: '工序队列状态',
       queuePipeline: '工序队列流转',
-      duration: '耗时',
+      duration: '总耗时（含排队）',
       taskSummary: '共 {{total}} 条任务（{{failed}} 异常）',
       taskCount: '{{count}} 条',
       completedTasks: '已完成 {{count}} 条',
@@ -1044,7 +1052,7 @@ const workspace = {
     },
     usageDisabled: '用量和审计功能尚未初始化，暂无实时统计。',
     usageAccessRequired:
-      '当前连接没有管理员或 Root 权限，无法显示用量和审计数据。请在“连接设置”中配置具备控制台用量和审计权限的 API 密钥。',
+      '当前连接身份尚未确认。请在“连接设置”中检查服务地址、身份和认证配置。',
   },
 } as const
 

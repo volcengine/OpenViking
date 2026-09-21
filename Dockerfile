@@ -104,7 +104,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     libstdc++6 \
-    ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
 # Resolve relative storage paths inside the persistent mount.

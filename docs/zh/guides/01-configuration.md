@@ -48,6 +48,48 @@ openviking-server doctor
 
 如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。
 
+## 配置范围与生效方式
+
+OpenViking 的配置分为两个层级：
+
+- **启动配置**从 `ov.conf` 读取，用于定义进程基线和运行时配置源。修改后需要重启服务；运行时配置接口不会改写 `ov.conf`。
+- **运行时覆盖配置**由配置源持久化保存，可以通过 Admin API 在 Cluster 或 Account 层修改。
+
+只有显式声明为运行时字段的配置，才会暴露在运行时配置 API 中。当前可修改范围如下：
+
+| 范围 | 配置 | 生命周期 | 生效说明 |
+| --- | --- | --- | --- |
+| Cluster | `agent_evolution` | 动态配置 | ROOT 可通过 Admin API 修改，作为集群默认值使用。 |
+| Account | `vlm`、`memory`、`feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；这些配置段声明了 Cluster fallback。目前只有 Agent Evolution 已通过运行时管理器接入业务读取。 |
+| Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；没有 Cluster fallback。 |
+| Account | `embedding`、`vectordb` | 仅创建时配置 | 创建 Account 时可以设置，后续不能通过配置 PATCH 修改；显式设置时必须成对配置。 |
+
+Cluster 的 `embedding`、Cluster 的 `vlm`、`query_planner`、Cluster 的 `memory`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `vlm`、`memory`、`feishu`、`embedding` 和 `vectordb` 当前可以完成校验和持久化，但业务消费方尚未全部接入；配置成功保存不代表所有组件都已经切换。
+
+修改运行时配置使用以下接口：
+
+```http
+GET   /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET   /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+```
+
+请求体使用 `settings` 包装稀疏补丁：
+
+```json
+{
+  "settings": {
+    "agent_evolution": {
+      "enabled": true
+    }
+  }
+}
+```
+
+PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置或替换，`null` 表示删除当前层的覆盖。对象递归合并，数组整体替换。响应返回目标层的显式值，不返回继承值或最终生效值。权限、校验、fallback 和兼容接口详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)；实现设计见 [运行时配置设计](../../design/runtime-configuration-design.md)。
+
 ## 配置示例
 
 <details>
@@ -610,11 +652,12 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
-| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body` 和 `reasoning_effort` |
+| `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body`、`reasoning_effort` 和 `keepalive_expiry` |
 | `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
 | `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
 | `backup` | object | 可选的备用 VLM 配置（结构与 `vlm` 相同），当主 VLM 遇到限流、`5xx`、超时或连接失败等可重试错误时自动切换。仅支持 1 层备用 &mdash; 备用 VLM 本身不能再嵌套 `backup` |
 | `timeout` | float | 单次 VLM API 请求的 HTTP 超时时间（秒），传递给底层 OpenAI/LiteLLM 客户端。慢端点（如 DashScope、本地推理）可调大。必须 `> 0`（默认：`600.0`） |
+| `keepalive_expiry` | float | OpenAI 兼容 VLM 客户端的空闲连接保留秒数。设为 `0` 可禁用空闲连接复用；不设置时使用 OpenAI SDK 默认值。必须 `>= 0` |
 | `extra_headers` | object | 兼容 HTTP provider 的自定义请求头。`kimi` 默认已注入所需订阅请求头，也支持在这里覆盖或扩展 |
 | `extra_request_body` | object | 传给 OpenAI 兼容 completion 请求的额外 JSON body 字段，可用于 Ollama `{"think": false}` 等 provider 专有参数 |
 | `reasoning_effort` | str | `openai`、`azure`、`kimi`、`glm` 和 `openai-codex` 的推理强度，显式配置时发送；可用值由模型决定。不设置时，GPT-5/o 系列名称保留 `low`，其他模型不发送。Chat Completions 请求中，`extra_request_body.reasoning_effort` 优先 |
@@ -1293,8 +1336,8 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 - `memory.session_auto_commit` 是服务端全局配置，不是单个 session 的业务 policy。
 - session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。可以在创建 session 时通过 `POST /api/v1/sessions` 设置，也可以通过 `PATCH /api/v1/sessions/{session_id}/config` 部分更新。PATCH 时省略 `auto_commit_policy` 会保留现有策略，传 `null` 会禁用自动 commit；通过 `GET /api/v1/sessions/{session_id}` 查看生效策略。
-- `default_enabled=false` 时，未传 `auto_commit_policy` 创建的 session 保持 auto commit 关闭，返回 `auto_commit_policy: null`。显式传 `{}` 或任意 policy 字段会为该 session 开启 auto commit，并用下方默认值补齐缺失字段。
-- `default_enabled=true` 时，未传 `auto_commit_policy` 创建的 session 会带上下方默认 policy。
+- `default_enabled=false` 时，既无显式 policy、也无 `server.user_config_defaults.auto_commit_policy` 的新 Session 保持 auto commit 关闭，并返回 `auto_commit_policy: null`。任一 policy 存在时都会启用自动 Commit，并用下方默认值补齐缺失字段。
+- `default_enabled=true` 时，既无显式 policy、也无部署级默认 policy 的新 Session 会带上下方内置 policy。
 - `idle_enabled=false` 时：
   - 不会启动 `SessionAutoCommitScheduler`
 - `idle_enabled=true` 时：
@@ -1660,13 +1703,14 @@ ov add-resource ./docs --exclude "*.tmp"
 | `user_config_defaults.add_targets.resource_uri` | str | `add_resource` 未传 `to` 和 `parent` 时使用的部署级默认资源添加目录。`viking://~/...` 会按请求用户解析。 | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | `add_skill` 未传 `target_uri` 时使用的部署级默认技能添加根目录。仅允许 `viking://~/skills` 和 `viking://agent/skills`。 | `null` |
 | `user_config_defaults.memory_policy` | object | Session 和 User 都未显式配置策略时使用的部署级默认记忆抽取策略。 | `null` |
-| `agent_evolution.enabled` | bool | 实例级 Agent 进化开关。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭时，所有账号和用户均停止生产这三类记忆。已有记忆仍可读取和检索。 | `false` |
+| `user_config_defaults.auto_commit_policy` | object | 新建 Session 未显式指定策略时使用的部署级自动 Commit 默认策略。 | `null` |
+| `agent_evolution.enabled` | bool | Agent 进化的集群启动默认值，运行时可由 Account 或 Cluster Admin settings 覆盖。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭后已有记忆仍可读取和检索。 | `false` |
 
 省略 `auth_mode`（或设为 `null`）时，配置了非空 `root_api_key` 则选择 `api_key`，否则选择 `dev`。`dev` 仅允许监听 localhost，不进行身份认证。`root_api_key` 不能配置为空字符串。
 
 显式设置 `auth_mode: "api_key"` 时，包括 localhost 在内都必须提供非空 `root_api_key`；缺少该 key 会导致启动失败，不会回退到开发模式。使用 root key 调用 Admin API 创建 account 和 user/admin key，数据访问使用这些绑定租户身份的 key。`trusted` 模式接受可信网关注入的 account/user 身份头，无需预先创建 user key；其 root key 仅在 localhost 可省略，监听非 localhost 地址时必填。角色解析、OIDC/LDAP 配置与网关要求参见 [身份认证](04-authentication.md)。
 
-`user_config_defaults` 提供添加目标和记忆抽取的部署级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。记忆策略优先级为 Session 策略 > User `settings/user_config.json` 策略 > `server.user_config_defaults.memory_policy` > 内核默认策略。`agent_evolution.enabled` 是当前 OpenViking 实例的统一开关，不支持用户级覆盖。HTTP Server 的 worker 会在 session commit 时从解析后的 `ov.conf` 读取当前 Agent 进化配置，因此合法的文件更新无需重启服务即可生效。
+`user_config_defaults` 提供添加目标和记忆抽取的部署级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。记忆策略优先级为 Session 策略 > User `settings/user_config.json` 策略 > `server.user_config_defaults.memory_policy` > 内核默认策略。`server.agent_evolution.enabled` 提供启动默认值，运行时优先级为 Account 覆盖 > Cluster 运行时覆盖 > 启动值。无需重启的修改应使用 Admin settings 接口；直接编辑 `ov.conf` 需要重启后生效。
 
 ### Usage Reporter
 

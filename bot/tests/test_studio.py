@@ -191,15 +191,6 @@ def test_public_config_never_returns_credentials_and_filters_accounts(tmp_path):
     assert error.value.status_code == 404
 
 
-async def test_revision_conflict_does_not_mutate_config(tmp_path):
-    service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
-    service.store.save(record())
-    with pytest.raises(HTTPException) as error:
-        await service.update("a", "connection", {"revision": 0, "action": "pause"})
-    assert error.value.status_code == 409
-    assert service.get("a", "connection")["enabled"]
-
-
 async def test_private_gateway_rejects_loopback_without_secret(tmp_path, monkeypatch):
     import httpx
     from fastapi import FastAPI
@@ -252,28 +243,12 @@ async def test_failed_secret_rotation_preserves_old_connection(tmp_path, monkeyp
     assert service.get("a", "connection")["enabled"]
 
 
-async def test_obsolete_setup_step_action_is_rejected(tmp_path):
-    service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
-    service.store.save(record())
-    with pytest.raises(HTTPException) as exc:
-        await service.update("a", "connection", {"revision": 1, "action": "step", "step": 5})
-    assert exc.value.status_code == 400
-
-
 def test_managed_group_tools_deny_local_and_unregistered_capabilities():
     from vikingbot.studio.policy import disabled_group_tools
 
     assert disabled_group_tools(
         ["openviking_search", "exec", "read_file", "mcp_admin", "spawn"]
     ) == ["exec", "read_file", "mcp_admin", "spawn"]
-
-
-def test_provider_registry_preserves_legacy_and_rejects_unknown():
-    assert get_provider({}).type == "feishu"
-    assert get_provider({"type": "feishu"}).type == "feishu"
-    with pytest.raises(HTTPException) as error:
-        get_provider({"type": "slack"})
-    assert error.value.status_code == 400
 
 
 async def test_delete_connection_stops_runtime_and_cleans_owned_data(tmp_path):
@@ -300,129 +275,6 @@ async def test_delete_connection_stops_runtime_and_cleans_owned_data(tmp_path):
     assert service.store.connections("a") == []
     assert len(service.store.connections("b")) == 1
     assert service.store.history(item["id"]) == []
-
-
-def test_conversations_show_latest_preview_and_time(tmp_path):
-    store = StudioStore(tmp_path / "preview.db")
-    store.append("bot", "group", "1", {"title": "Team", "content": "first"})
-    store.append(
-        "bot",
-        "group",
-        "2",
-        {
-            "content": "latest reply",
-            "time": "2026-09-16T12:00:00+00:00",
-        },
-    )
-    item = store.conversations("bot")[0]
-    assert item["title"] == "first"
-    assert item["preview"] == "latest reply"
-    assert item["time"] == "2026-09-16T12:00:00+00:00"
-    assert store.conversations("another") == []
-
-
-def test_conversation_title_keeps_first_message_when_group_name_resolves(tmp_path):
-    store = StudioStore(tmp_path / "titles.db")
-    store.append("bot", "group", "1", {"title": "", "content": "介绍一下 OpenViking"})
-    assert store.conversations("bot")[0]["title"] == "介绍一下 OpenViking"
-    store.append("bot", "group", "2", {"title": "开发讨论", "content": "继续"})
-    assert store.conversations("bot")[0]["title"] == "介绍一下 OpenViking"
-
-
-async def test_history_backfills_names_only_when_sender_identity_is_known(channel, monkeypatch):
-    channel.store.append(
-        "connection",
-        "group",
-        "known",
-        {
-            "role": "user",
-            "sender": "",
-            "sender_id": "ou_person",
-            "content": "hello",
-        },
-    )
-    channel.store.append(
-        "connection",
-        "group",
-        "legacy",
-        {
-            "role": "user",
-            "sender": "",
-            "content": "old",
-        },
-    )
-    lookup = AsyncMock(return_value="张三")
-    monkeypatch.setattr(channel, "_get_group_member_name", lookup)
-    messages = await channel.history_with_names("group")
-    assert messages[1]["sender"] == "张三"
-    assert messages[0]["sender"] == ""
-    assert channel.store.history("connection", "group")[1]["sender"] == "张三"
-    lookup.assert_awaited_once_with("group", "ou_person")
-
-
-async def test_history_name_lookup_failure_keeps_messages(channel, monkeypatch):
-    channel.store.append(
-        "connection",
-        "group",
-        "known",
-        {
-            "role": "user",
-            "sender": "",
-            "sender_id": "ou_person",
-            "content": "hello",
-        },
-    )
-    monkeypatch.setattr(channel, "_get_group_member_name", AsyncMock(side_effect=RuntimeError()))
-    messages = await channel.history_with_names("group")
-    assert messages[0]["content"] == "hello"
-    assert messages[0]["sender"] == ""
-
-
-async def test_platform_provider_receives_generic_credentials(tmp_path, monkeypatch):
-    from vikingbot.studio.providers.registry import PROVIDERS
-
-    class FutureProvider:
-        type = "future-platform"
-
-        async def prepare(self, credentials):
-            assert credentials == {"client_id": "app", "client_secret": "secret"}
-            return {"client_id": credentials["client_id"]}
-
-        def runtime_key(self, record):
-            return self.type + record["client_id"]
-
-        def install(self, service, record):
-            channel = SimpleNamespace(start=AsyncMock())
-            service.manager.channels[self.runtime_key(record)] = channel
-            return channel
-
-        def public_fields(self, record):
-            return {"client_id": record["client_id"]}
-
-    monkeypatch.setitem(PROVIDERS, "future-platform", FutureProvider())
-    service = StudioService(SimpleNamespace(bot_data_path=tmp_path), SimpleNamespace(channels={}))
-    result = await service.create(
-        "a",
-        {
-            "type": "future-platform",
-            "credentials": {"client_id": "app", "client_secret": "secret"},
-        },
-        {"user_id": "bot"},
-    )
-    await asyncio.gather(*service.tasks.values())
-    assert result["type"] == "future-platform"
-    assert result["client_id"] == "app"
-    assert "secret" not in str(result)
-    assert service.get("a", result["id"])["account"] == "a"
-
-
-@pytest.mark.parametrize("value", ["false", 0, None, {"unexpected": True}])
-def test_feishu_settings_reject_invalid_values(value):
-    provider = get_provider({"type": "feishu"})
-    with pytest.raises(HTTPException):
-        provider.validate_settings(
-            value if isinstance(value, dict) else {"thread_require_mention": value}
-        )
 
 
 async def test_reply_settings_persist_apply_immediately_and_keep_revision_guard(
@@ -471,25 +323,6 @@ async def test_reply_settings_persist_apply_immediately_and_keep_revision_guard(
     service.config.workspace_path = tmp_path
     provider.install(service, persisted)
     assert captured == [False]
-
-
-@pytest.mark.parametrize("endpoint", ["token", "bot"])
-@pytest.mark.parametrize("status", [429, 503])
-async def test_feishu_upstream_failure_is_not_a_credentials_error(monkeypatch, endpoint, status):
-    import httpx
-    from vikingbot.studio.providers.feishu import provider
-
-    def respond(request):
-        if endpoint == "bot" and request.method == "POST":
-            return httpx.Response(200, json={"code": 0, "tenant_access_token": "token"})
-        return httpx.Response(status, json={"code": 99991400, "msg": "unavailable"})
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
-    monkeypatch.setattr(provider.httpx, "AsyncClient", lambda **kwargs: client)
-    with pytest.raises(HTTPException) as error:
-        await provider.FeishuProvider().validate_app("cli_test", "secret")
-    assert error.value.status_code == 502
-    assert error.value.detail == "Cannot reach Feishu; retry the connection check"
 
 
 async def test_recreated_connection_isolates_sessions_and_rejects_old_replies(

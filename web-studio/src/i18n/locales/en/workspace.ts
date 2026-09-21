@@ -389,19 +389,27 @@ const workspace = {
   },
   tasksPage: {
     labels: {
+      timing: 'Duration',
+      totalDuration: 'Total Time',
+      processingNotStarted: 'Not started',
+      processingDurationHelp: 'Worker processing time, including model and I/O calls. Excludes queue and downstream waits; overlapping workers count once. Incomplete or legacy records are unavailable.',
+      processingDuration: 'Processing Time',
+      waitingDuration: 'Waiting Time',
+      timingUnavailable: 'Not recorded',
+
       missingResource: 'Missing resource ID for task',
       requeueFailed: 'Re-queue failed',
       requeueSubmitted: 'Re-queue request submitted successfully!',
       successRate: 'Success Rate',
-      avgDuration: 'Avg Duration',
-      avgProcessingTime: 'Avg Processing Time',
+      avgDuration: 'Avg Total Duration',
+      avgProcessingTime: 'Finished tasks only, including queue time',
       totalTasks: 'Total Tasks',
       activePending: 'Active/Pending',
       runningPending: 'Running / Pending Workloads',
       taskQueueStatus: 'Task Queue Status',
       processQueueStatus: 'Process Queue Status',
       queuePipeline: 'Queue Pipeline',
-      duration: 'Duration',
+      duration: 'Total Duration (incl. queue)',
       taskSummary: 'Total {{total}} ({{failed}} failed)',
       taskCount: 'Tasks: {{count}}',
       completedTasks: 'Completed: {{count}}',
@@ -1089,7 +1097,7 @@ const workspace = {
     usageDisabled:
       'Usage/Audit is not initialized, so live usage stats are unavailable.',
     usageAccessRequired:
-      'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
+      'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
   },
 } as const
 

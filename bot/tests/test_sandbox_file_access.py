@@ -3,9 +3,8 @@
 """Regression tests for bounded local and remote sandbox file access."""
 
 import json
-import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 from vikingbot.sandbox.backends.aiosandbox import AioSandboxBackend
@@ -48,23 +47,9 @@ async def test_local_workspace_listing_and_reads_are_bounded(tmp_path: Path):
 
 class _AioFileClient:
     def __init__(self, *, truncated=False):
-        self.list_calls = []
         self.glob_calls = []
         self.download_calls = []
         self.truncated = truncated
-        self.entries = {
-            "/home/gem": [
-                SimpleNamespace(name="artifact.bin", is_directory=False, size=6),
-                SimpleNamespace(name="nested", is_directory=True, size=0),
-            ],
-            "/home/gem/nested": [
-                SimpleNamespace(name="page.md", is_directory=False, size=4),
-            ],
-        }
-
-    async def list_path(self, **kwargs):
-        self.list_calls.append(kwargs)
-        return SimpleNamespace(data=SimpleNamespace(files=self.entries[kwargs["path"]]))
 
     async def glob_files(self, **kwargs):
         self.glob_calls.append(kwargs)
@@ -189,27 +174,11 @@ class _OpenSandboxCommands:
         )
 
 
-class _RunCommandOpts(SimpleNamespace):
-    pass
-
-
 def _opensandbox_vke_backend(
     tmp_path: Path,
     file_client: _OpenSandboxFiles,
     commands: _OpenSandboxCommands,
 ) -> OpenSandboxBackend:
-    if "opensandbox.models.execd" not in sys.modules:
-        opensandbox_module = sys.modules.setdefault("opensandbox", ModuleType("opensandbox"))
-        models_module = sys.modules.setdefault(
-            "opensandbox.models",
-            ModuleType("opensandbox.models"),
-        )
-        execd_module = ModuleType("opensandbox.models.execd")
-        execd_module.RunCommandOpts = _RunCommandOpts
-        opensandbox_module.models = models_module
-        models_module.execd = execd_module
-        sys.modules["opensandbox.models.execd"] = execd_module
-
     backend = object.__new__(OpenSandboxBackend)
     backend._workspace = tmp_path
     backend._is_vke = True

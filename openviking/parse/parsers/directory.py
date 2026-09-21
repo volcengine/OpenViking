@@ -216,7 +216,10 @@ class DirectoryParser(BaseParser):
                     processable_files.append(
                         ClassifiedFile(entry_path, relative, CLASS_PROCESSABLE)
                     )
-                if len(processable_files) > directory_config.max_files:
+                if (
+                    directory_config.max_files is not None
+                    and len(processable_files) > directory_config.max_files
+                ):
                     raise InvalidArgumentError("Feishu directory file limit exceeded")
                 processable_files.sort(key=lambda item: item.rel_path)
             warnings.extend(scan_result.warnings)

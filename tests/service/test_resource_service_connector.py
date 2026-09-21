@@ -41,6 +41,11 @@ class _FakeEncryptor:
         return ciphertext[4:][::-1]
 
 
+class _FakeResourceProcessor:
+    async def github_token_for(self, *_args, **_kwargs):
+        return None
+
+
 @pytest.fixture
 def connector_config(monkeypatch):
     import openviking_cli.utils.config.open_viking_config as config_module
@@ -94,7 +99,7 @@ def service():
     return ResourceService(
         vikingdb=object(),
         viking_fs=SimpleNamespace(exists=AsyncMock(return_value=True)),
-        resource_processor=object(),
+        resource_processor=_FakeResourceProcessor(),
         skill_processor=object(),
     )
 

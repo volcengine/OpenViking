@@ -333,6 +333,9 @@ class VLMBase(ABC):
         """Reset token usage"""
         self._token_tracker.reset()
 
+    def close(self) -> None:
+        """Release provider resources, if any."""
+
     def _extract_content_from_response(self, response) -> str:
         if isinstance(response, str):
             return response
@@ -762,6 +765,11 @@ class FailoverVLM(VLMBase):
         self.primary.reset_token_usage()
         self.backup.reset_token_usage()
 
+    def close(self) -> None:
+        """Close both provider instances."""
+        self.primary.close()
+        self.backup.close()
+
 
 class MultiCredentialVLM(VLMBase):
     """VLM wrapper that provides failover across multiple ordered credentials.
@@ -1128,3 +1136,8 @@ class MultiCredentialVLM(VLMBase):
         """Reset token usage for all credential instances."""
         for instance in self._vlm_instances:
             instance.reset_token_usage()
+
+    def close(self) -> None:
+        """Close all credential provider instances."""
+        for instance in self._vlm_instances:
+            instance.close()

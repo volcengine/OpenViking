@@ -160,16 +160,8 @@ async def _initialize_runtime_state(
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
+    await service.apply_agent_evolution_config()
     await _initialize_auth_plugin(app, service, config)
-    manager = app.state.api_key_manager
-    if manager is not None:
-        await service.load_acl_settings(
-            [
-                item["account_id"]
-                for item in manager.get_accounts()
-                if item["account_id"] != service.user.account_id
-            ]
-        )
     from openviking.service.deletion import setup_deletion
 
     app.state.deletion_service = await setup_deletion(
@@ -261,7 +253,7 @@ def create_app(
     Args:
         config: Server configuration. If None, loads from default location.
         service: Pre-initialized OpenVikingService (optional).
-        config_path: Resolved ov.conf path used for live configuration reload.
+        config_path: Resolved ov.conf path used for startup configuration.
 
     Returns:
         FastAPI application instance
@@ -299,7 +291,9 @@ def create_app(
         if callable(usage_reporter_setter):
             usage_reporter_setter(_get_usage_reporter())
 
-        agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
+        agent_evolution_setter = getattr(service_obj, "set_agent_evolution_config", None)
+        if not callable(agent_evolution_setter):
+            agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
         if callable(agent_evolution_setter):
             agent_evolution_setter(config.agent_evolution)
 
@@ -311,15 +305,9 @@ def create_app(
         if callable(user_memory_policy_setter):
             user_memory_policy_setter(config.user_config_defaults.memory_policy)
 
-        agent_evolution_path_setter = getattr(
-            sessions,
-            "set_agent_evolution_config_path",
-            None,
-        )
-        if callable(agent_evolution_path_setter):
-            agent_evolution_path_setter(
-                str(resolved_config_path) if resolved_config_path is not None else None
-            )
+        auto_commit_setter = getattr(sessions, "set_default_user_auto_commit_policy", None)
+        if callable(auto_commit_setter):
+            auto_commit_setter(config.user_config_defaults.auto_commit_policy)
 
     if service is not None:
         _configure_session_runtime(service)

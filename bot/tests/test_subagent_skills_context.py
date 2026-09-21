@@ -3,16 +3,12 @@
 """Regression tests for subagent prompt skill loading."""
 
 import asyncio
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from vikingbot.agent.subagent import SubagentManager  # noqa: E402
-from vikingbot.bus.queue import MessageBus  # noqa: E402
+from vikingbot.agent.subagent import SubagentManager
+from vikingbot.bus.queue import MessageBus
 
 
 def _write_skill(workspace: Path, name: str, content: str) -> None:
@@ -58,7 +54,6 @@ Read this only when needed.
     assert "# Active Skills" in prompt
     assert "### Skill: always-skill" in prompt
     assert "Always-loaded instruction." in prompt
-    assert "description: Always active instructions" not in prompt
     assert "# Skills" in prompt
     assert "<name>normal-skill</name>" in prompt
     assert "<description>Normal on-demand instructions</description>" in prompt

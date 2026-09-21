@@ -43,8 +43,15 @@ def test_cuvs_filter_cache_rejects_negative_size():
         CuVSConfig(micro_batching_enabled=True, algorithm="cagra")
     with pytest.raises(ValidationError, match="max_concurrent_gpu_searches=1"):
         CuVSConfig(micro_batching_enabled=True, max_concurrent_gpu_searches=2)
-    with pytest.raises(ValidationError, match="dynamic_batching"):
-        CuVSConfig(dynamic_batching=True)
+
+
+@pytest.mark.parametrize("dynamic_batching", [True, False])
+def test_cuvs_ignores_unknown_dynamic_batching(dynamic_batching):
+    config = CuVSConfig(dynamic_batching=dynamic_batching)
+
+    assert config == CuVSConfig()
+    assert "dynamic_batching" not in config.model_dump()
+    assert config.micro_batching_enabled is False
 
 
 def test_cuvs_auto_mode_is_opt_in_and_validates_memory_guardrails():

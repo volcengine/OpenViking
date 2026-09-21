@@ -417,11 +417,11 @@ class ExtractLoop:
                 # not the console/log stream.
                 tracer.info(failure_message)
             else:
-                # ERROR: retries exhausted; this extraction will yield no operations.
+                # ERROR: no attempt remains to repair the invalid response.
                 tracer.error(failure_message)
 
-            # If no retry remains, treat unparseable response as "no memory
-            # operations" rather than failing hard.
+            # Preserve a valid first pass when only its resolution repair failed.
+            # Otherwise propagate failure so the archive is not marked completed.
             if not retry_remaining:
                 if pending_resolution_repair is not None:
                     final_operations, raw_links = pending_resolution_repair
@@ -432,16 +432,11 @@ class ExtractLoop:
                         console=True,
                     )
                     break
-                final_operations = ResolvedOperations(
-                    upsert_operations=[],
-                    delete_file_contents=[],
-                    errors=[
-                        "Final response could not be parsed as operations "
-                        f"after {max_iterations} iterations "
-                        f"(failure_kind={failure_kind})"
-                    ],
+                raise RuntimeError(
+                    "Final response could not be parsed as operations "
+                    f"after {max_iterations} iterations "
+                    f"(failure_kind={failure_kind})"
                 )
-                break
 
             self._disable_tools_for_iteration = (
                 not self._output_protocol.keep_tools_enabled_after_parse_error(

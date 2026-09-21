@@ -586,8 +586,8 @@ class DirectoryConfig(ParserConfig):
             adding directory resources. When True (default), files maintain their
             relative path hierarchy. When False, all files are flattened to a
             single level under the resource root.
-        max_files: Maximum number of selected files admitted by one Understanding
-            directory import.
+        max_files: Optional maximum number of selected files admitted by one
+            Understanding or Feishu directory import. None means unlimited.
         max_depth: Maximum nested directory depth below an Understanding directory
             import root.
         max_concurrent: Maximum concurrent Understanding jobs shared by all
@@ -595,7 +595,7 @@ class DirectoryConfig(ParserConfig):
     """
 
     preserve_structure: bool = True
-    max_files: int = 1000
+    max_files: Optional[int] = 1000
     max_depth: int = 10
     max_concurrent: int = 4
 
@@ -609,6 +609,8 @@ class DirectoryConfig(ParserConfig):
             "max_concurrent",
         ):
             value = getattr(self, name)
+            if name == "max_files" and value is None:
+                continue
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
 

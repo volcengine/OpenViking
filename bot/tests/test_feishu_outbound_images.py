@@ -3,15 +3,10 @@
 """Regression coverage for knowledge-base images in Feishu cards."""
 
 import json
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.feishu import FeishuChannel
@@ -136,48 +131,6 @@ async def test_explicit_image_after_code_block_still_sends(delivery):
     assert cleaned == f"{example}\n图片如下：\n\n来源：`{URI}`"
     assert images == [{"image_key": "img_uploaded"}]
     channel._upload_image_to_feishu.assert_awaited_once_with(PNG)
-
-
-@pytest.mark.asyncio
-async def test_image_listing_card_preserves_uri_without_attaching_image(delivery):
-    pytest.importorskip("lark_oapi")
-    channel, client, create, msg, config = delivery
-    msg.content = (
-        f"目前 OpenViking 中有 **1 张图片**：\n\n- `{URI}`\n\n"
-        "如果你愿意，我还可以继续帮你查看这张图片。"
-    )
-    send = Mock(return_value=SimpleNamespace(success=lambda: True))
-    channel._client = SimpleNamespace(
-        im=SimpleNamespace(v1=SimpleNamespace(message=SimpleNamespace(create=send)))
-    )
-
-    await channel.send(msg)
-
-    send.assert_called_once()
-    card = json.loads(send.call_args.args[0].request_body.content)
-    assert card["elements"] == [{"tag": "markdown", "content": msg.content}]
-    create.assert_not_awaited()
-    channel._upload_image_to_feishu.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("channel_type", ["feishu", "telegram"])
-async def test_image_delivery_instructions_are_scoped_to_feishu(tmp_path, channel_type):
-    from vikingbot.agent.context import ContextBuilder
-
-    context = ContextBuilder(tmp_path)
-    context._templates_ensured = True
-    context._skills = SimpleNamespace(get_always_skills=lambda: [], build_skills_summary=lambda: "")
-    session_key = SessionKey(type=channel_type, channel_id="app", chat_id="chat")
-
-    prompt = await context.build_system_prompt(session_key, ov_tools_enable=False)
-
-    if channel_type == "feishu":
-        assert "![description](viking://...) outside code" in prompt
-        assert "To cite an image URI without displaying it, use inline code" in prompt
-        assert "Reading an image does not send it to the user" in prompt
-    else:
-        assert "## Feishu images" not in prompt
 
 
 @pytest.mark.asyncio

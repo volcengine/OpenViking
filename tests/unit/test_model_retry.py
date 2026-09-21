@@ -4,6 +4,12 @@
 
 import pytest
 
+from openviking.pyagfs.exceptions import (
+    AGFSClientError,
+    AGFSConnectionError,
+    AGFSNotADirectoryError,
+    AGFSTimeoutError,
+)
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
@@ -12,11 +18,50 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
+    ERROR_CLASS_UNKNOWN,
     classify_api_error,
     extract_metric_error_code,
     retry_async,
     retry_sync,
 )
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        NotADirectoryError,
+        AGFSNotADirectoryError,
+    ],
+)
+@pytest.mark.parametrize("message", ["/resources/notes.txt", "timeout at /arbitrary/input.md"])
+def test_classify_permanent_filesystem_errors(error_type, message, wrapped):
+    error = error_type(message)
+    if wrapped:
+        wrapper = RuntimeError("storage operation failed")
+        wrapper.__cause__ = error
+        error = wrapper
+    assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (AGFSTimeoutError("request timeout"), ERROR_CLASS_TRANSIENT),
+        (AGFSConnectionError("connection refused"), ERROR_CLASS_TRANSIENT),
+        (AGFSClientError("unexpected storage failure"), ERROR_CLASS_UNKNOWN),
+    ],
+)
+def test_classify_other_agfs_errors(error, expected, wrapped):
+    if wrapped:
+        wrapper = RuntimeError("storage operation failed")
+        wrapper.__cause__ = error
+        error = wrapper
+    assert classify_api_error(error) == expected
 
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
@@ -33,10 +78,13 @@ class _ProviderError(RuntimeError):
 
 
 def test_extract_metric_error_code_prefers_structured_provider_code():
-    assert extract_metric_error_code(_ProviderError(status_code=429, code="RateLimitExceeded")) == "429"
-    assert extract_metric_error_code(_ProviderError(body={"error": {"code": "InvalidParameter"}})) == (
-        "InvalidParameter"
+    assert (
+        extract_metric_error_code(_ProviderError(status_code=429, code="RateLimitExceeded"))
+        == "429"
     )
+    assert extract_metric_error_code(
+        _ProviderError(body={"error": {"code": "InvalidParameter"}})
+    ) == ("InvalidParameter")
 
 
 def test_extract_metric_error_code_uses_safe_fallbacks_only():
