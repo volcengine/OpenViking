@@ -307,16 +307,20 @@ describe('session commit re-trigger feedback', () => {
 })
 
 
-it('shows measured processing and waiting time without inventing legacy timing', async () => {
+it('groups processing and total time without inventing legacy timing', async () => {
   records = [
     { task_id: 'measured', status: 'completed', task_type: 'add_resource', created_at: 100, updated_at: 700, processing_seconds: 61 },
+    { task_id: 'pending', status: 'pending', task_type: 'add_resource', created_at: 100, processing_seconds: 0 },
     { task_id: 'legacy', status: 'completed', task_type: 'add_resource', created_at: 100, updated_at: 700 },
   ]
   await renderPage()
   const measured = await screen.findByRole('row', { name: 'View details for task measured' })
   expect(within(measured).getByText('1m 1s')).toBeDefined()
-  expect(within(measured).getByText('Waiting Time: 8m 59s')).toBeDefined()
+  expect(within(measured).queryByText(/Waiting Time/)).toBeNull()
+  expect(screen.getByRole('columnheader', { name: 'Duration' })).toBeDefined()
+  expect(within(measured).getByText('1m 1s').closest('td')).toBe(within(measured).getByText('10m').closest('td'))
   expect(within(measured).getByText('10m')).toBeDefined()
+  expect(within(screen.getByRole('row', { name: 'View details for task pending' })).getByText('Not started')).toBeDefined()
   const legacy = screen.getByRole('row', { name: 'View details for task legacy' })
   expect(within(legacy).getByText('Not recorded')).toBeDefined()
 })

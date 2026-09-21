@@ -54,7 +54,6 @@ import type { TaskRecord } from '#/routes/tasks/-lib/task-record'
 import {
   formatTaskDuration,
   formatTaskProcessingDuration,
-  formatTaskWaitingDuration,
   getAverageTaskDurationSeconds,
   getTaskDate,
 } from '#/routes/tasks/-lib/task-time'
@@ -839,8 +838,7 @@ function TasksRoute() {
                   <TableHead>{t('table.resource')}</TableHead>
                   <TableHead>{t('labels.queuePipeline')}</TableHead>
                   <TableHead>{t('table.status')}</TableHead>
-                  <TableHead title={t('labels.processingDurationHelp')}>{t('labels.processingDuration')}</TableHead>
-                  <TableHead>{t('labels.duration')}</TableHead>
+                  <TableHead title={t('labels.processingDurationHelp')}>{t('labels.timing')}</TableHead>
                   <TableHead className="text-right">
                     {t('table.createdAt')}
                   </TableHead>
@@ -908,13 +906,14 @@ function TasksRoute() {
                       <TableCell>{renderQueuePipeline(task)}</TableCell>
                       <TableCell>{renderStatus(task)}</TableCell>
                       <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                        <div>{formatTaskProcessingDuration(task) ?? t('labels.timingUnavailable')}</div>
-                        <div className="text-muted-foreground">
-                          {t('labels.waitingDuration')}: {formatTaskWaitingDuration(task) ?? '-'}
+                        <div>
+                          {t('labels.processingDuration')}: <span>{task.status === 'pending' && (task.processing_seconds == null || task.processing_seconds === 0)
+                            ? t('labels.processingNotStarted')
+                            : formatTaskProcessingDuration(task) ?? t('labels.timingUnavailable')}</span>
                         </div>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
-                        {formatTaskDuration(task)}
+                        <div className="text-muted-foreground">
+                          {t('labels.totalDuration')}: <span>{formatTaskDuration(task)}</span>
+                        </div>
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-right text-muted-foreground">
                         {formatTime(task)}
