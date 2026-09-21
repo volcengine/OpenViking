@@ -100,7 +100,6 @@ class _FakeProcessor:
         overview,
         ctx=None,
         ingest_options=None,
-        creator_acl_grant=None,
     ):
         self.vectorized_dirs.append(uri)
 
@@ -113,7 +112,6 @@ class _FakeProcessor:
         ctx=None,
         use_summary=False,
         ingest_options=None,
-        creator_acl_grant=None,
         file_md5=None,
     ):
         if self.verify_streaming:

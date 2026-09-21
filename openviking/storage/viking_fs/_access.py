@@ -195,11 +195,7 @@ class _AccessMixin:
 
         effective = await acl_manager.resolve_many(pending, real_ctx) if pending else {}
         for uri in pending:
-            acl = effective[uri]
-            if not acl.enabled:
-                result[uri] = self._is_accessible(uri, real_ctx)
-            else:
-                result[uri] = acl_allows(acl, real_ctx, action)
+            result[uri] = acl_allows(effective[uri], real_ctx, action)
         return result
 
     async def _ensure_access(

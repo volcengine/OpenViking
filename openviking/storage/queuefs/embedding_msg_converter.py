@@ -9,7 +9,6 @@ to EmbeddingMsg objects for asynchronous vector processing.
 
 from openviking.core.context import Context, ContextLevel
 from openviking.core.namespace import owner_fields_for_uri
-from openviking.storage.acl import ACL_CREATOR_GRANT_FIELD, CreatorAclGrant
 from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.telemetry import get_current_telemetry
@@ -24,7 +23,6 @@ class EmbeddingMsgConverter:
     @staticmethod
     def from_context(
         context: Context,
-        creator_acl_grant: CreatorAclGrant | None = None,
         action: IndexAction = IndexAction.MERGE,
     ) -> EmbeddingMsg | None:
         """
@@ -89,8 +87,6 @@ class EmbeddingMsgConverter:
         else:
             message = vectorization_text
 
-        if creator_acl_grant is not None:
-            context_data[ACL_CREATOR_GRANT_FIELD] = creator_acl_grant
         embedding_msg = EmbeddingMsg.for_embed(
             message=message,
             context_data=context_data,

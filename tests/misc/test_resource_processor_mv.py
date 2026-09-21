@@ -446,7 +446,6 @@ async def test_resource_processor_first_add_summarizes_from_committed_uri(monkey
     assert fake_fs.persist_calls == []
     assert fake_fs.delete_temp_calls == [("viking://temp/tmpdir", None)]
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root"]
-    assert summarize_calls[0]["target_preexisting"] is False
 
 
 @pytest.mark.asyncio
@@ -675,7 +674,6 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     assert result["status"] == "success"
     assert result["root_uri"] == "viking://resources/root"
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root"]
-    assert summarize_calls[0]["target_preexisting"] is True
     assert fake_fs.persist_calls == []
 
 
@@ -736,5 +734,4 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
     ]
     assert fake_pathlock.acquired_tree_paths == ["/mock/resources/root_2"]
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root_2"]
-    assert summarize_calls[0]["target_preexisting"] is False
     assert fake_fs.persist_calls == []

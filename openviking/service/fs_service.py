@@ -27,7 +27,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
-from openviking.storage.acl import AclAction, AclMode, CreatorAclGrant
+from openviking.storage.acl import AclAction, AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -325,7 +325,6 @@ class FSService:
         """Create directory."""
         viking_fs = self._ensure_initialized()
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
-        directory_preexisting = await viking_fs.exists(directory_uri, ctx=ctx)
         await viking_fs.mkdir(uri, ctx=ctx)
 
         abstract = self._normalize_directory_description(description)
@@ -361,7 +360,6 @@ class FSService:
             overview="",
             context_type=context_type_for_uri(directory_uri),
             ctx=ctx,
-            creator_acl_grant=(CreatorAclGrant.DIRECT if not directory_preexisting else None),
             include_overview=False,
         )
 

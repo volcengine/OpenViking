@@ -26,7 +26,7 @@ from openviking.resource.processing_mode import (
     normalize_processing_mode,
 )
 from openviking.server.identity import RequestContext
-from openviking.storage.acl import AclAction, CreatorAclGrant
+from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
@@ -1114,7 +1114,6 @@ class ResourceProcessor:
                             lock=resource_lock,
                             temp_uris=[temp_uri],
                             is_code_repo=bool(prepared.get("is_code_repo")),
-                            target_preexisting=target_preexisting,
                             ingest_options=ingest_options,
                             semantic_source=semantic_source,
                             generation_trigger="resource_ingest",
@@ -1205,9 +1204,6 @@ class ResourceProcessor:
                             root_uri,
                             ctx=ctx,
                             ingest_options=ingest_options,
-                            creator_acl_grant=(
-                                CreatorAclGrant.DIRECT if not target_preexisting else None
-                            ),
                             file_md5=(prepared.get("file_md5s") or {}).get(root_uri),
                         )
                     elif vectors_only:
@@ -1239,7 +1235,6 @@ class ResourceProcessor:
                     root_uri,
                     ctx=ctx,
                     ingest_options=ingest_options,
-                    creator_acl_grant=(CreatorAclGrant.DIRECT if not target_preexisting else None),
                     file_md5=(prepared.get("file_md5s") or {}).get(root_uri),
                 )
             except BaseException:
@@ -1483,7 +1478,6 @@ class ResourceProcessor:
         *,
         ctx: RequestContext,
         ingest_options: IngestOptions | None = None,
-        creator_acl_grant: CreatorAclGrant | None = None,
         file_md5: str | None = None,
         scalar_override: Optional[Dict[str, Any]] = None,
         field_patch: FieldPatch | None = None,
@@ -1500,7 +1494,6 @@ class ResourceProcessor:
             context_type=context_type_for_uri(file_uri),
             ctx=ctx,
             ingest_options=IngestOptions.from_value(ingest_options),
-            creator_acl_grant=creator_acl_grant,
             file_md5=file_md5,
             scalar_override=scalar_override,
             field_patch=field_patch,

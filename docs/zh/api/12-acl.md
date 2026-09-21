@@ -16,11 +16,10 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权和 restricte
 
 所有接口都要求调用者对目标节点拥有 `manage`。共享资源由 account `ADMIN` 隐式管理。
 
-`viking://resources` 是固定共享 scope，不能设置直接 ACL。账号配置
-`acl.enabled` 默认为 `false`。关闭时，共享资源完全使用原有公开规则，不执行 ACL
-鉴权；开启后，新建共享文件、目录和 `add-resource` 根节点会给创建者直接
-`manage`，同时继承父目录 ACL。已有且未设置 ACL 的内容仍按公开规则访问；
-`add-resource` 的内部节点只继承，不重复写直接权限。
+账号配置 `acl.enabled` 默认为 `false`。关闭时，共享资源使用原有 namespace 规则，
+不执行 ACL 鉴权。开启后，`viking://resources` 的 ACL 固定为 `user:* = manage`，
+不可修改。新建文件、目录和导入节点的直接授权为空，只继承父目录有效权限；
+创建者不获得额外授权。未设置 ACL 的共享内容按默认继承计算。
 
 ## 数据结构
 
@@ -45,12 +44,13 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权和 restricte
 ```json
 {
   "uri": "viking://resources/project-a",
-  "acl_mode": "inherit",
+  "acl_mode": "restricted",
   "direct_entries": [
+    {"principal": "group:engineering", "level": "write"},
     {"principal": "user:bob", "level": "read"}
   ],
   "inherited_entries": [
-    {"principal": "group:engineering", "level": "write"}
+    {"principal": "user:*", "level": "manage"}
   ],
   "effective_entries": [
     {"principal": "group:engineering", "level": "write"},
@@ -64,7 +64,7 @@ ACL API 管理 `viking://resources/...` 共享资源的直接授权和 restricte
 | `direct_entries` | 只包含当前节点直接设置的条目 |
 | `inherited_entries` | 父节点当前的有效权限；restricted 期间也会继续更新 |
 | `effective_entries` | inherit 时合并 direct 与 inherited；restricted 时仅使用 direct |
-| `acl_mode` | `none`：不受 ACL 控制；`inherit`：直接与继承权限均生效；`restricted`：仅直接权限生效 |
+| `acl_mode` | `none`：未写入 ACL 字段，开启时按默认继承计算；`inherit`：直接与继承权限均生效；`restricted`：仅直接权限生效 |
 
 account `ADMIN` 的隐式 `manage` 权限不出现在这些列表中。
 
@@ -114,7 +114,7 @@ PUT /api/v1/acl
 
 `entries` 和 `acl_mode` 至少传一个。`entries` 完整替换直接权限；`acl_mode` 支持 `restricted`（只使用直接权限）和 `inherit`（恢复继承）。未传的字段保持不变。restricted 期间继承权限仍随父节点更新，恢复继承后立即使用最新值。重复 principal 保留最高权限级别。
 
-不能直接设置 `none` 来绕过父目录的 ACL。恢复继承或删除 ACL 后，如果当前节点没有任何直接权限，父目录也不受 ACL 控制，系统会自动返回 `none`。
+不能直接设置 `none` 来绕过父目录的 ACL。恢复继承或删除 ACL 后，重新继承父目录的有效权限；父链持续连到根目录时，全员拥有 `manage`。
 
 ```bash
 curl -X PUT http://localhost:1933/api/v1/acl \
@@ -241,7 +241,7 @@ ov acl revoke viking://resources/project-a --principal user:bob
 DELETE /api/v1/acl?uri={uri}
 ```
 
-该接口清空当前节点的直接 ACL 并退出 restricted；不会删除已保存的 inherited，也不删除后代节点的直接 ACL。清空后立即使用最新继承权限；父目录也不受 ACL 控制时，`acl_mode` 恢复为 `none`。
+该接口清空当前节点的直接 ACL 并退出 restricted；不会删除已保存的 inherited，也不删除后代节点的直接 ACL。清空后立即使用最新继承权限；父链持续连到根目录时，全员恢复 `manage`。
 
 ```bash
 curl -X DELETE \

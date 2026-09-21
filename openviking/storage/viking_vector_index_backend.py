@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
 
 from openviking.core.namespace import (
-    canonical_user_root,
     resolve_uri,
     uri_parts,
     visible_roots,
@@ -2708,31 +2707,33 @@ class VikingVectorIndexBackend:
             )
 
         controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
-        uncontrolled_filter = And(
-            [
-                RawDSL(
-                    {
-                        "op": "must_not",
-                        "field": ACL_MODE_FIELD,
-                        # Exclude controlled modes so absent/null fields stay visible.
-                        "conds": controlled_modes,
-                    }
-                ),
-                Or([PathScope("uri", root, depth=-1) for root in visible_roots(ctx)]),
-            ]
+        # Shared records written while ACL was disabled retain the root's
+        # default user:* manage access. Controlled descendants must match their
+        # own grants, including inherit nodes below a restricted boundary.
+        default_shared_filter = RawDSL(
+            {"op": "must_not", "field": ACL_MODE_FIELD, "conds": controlled_modes}
         )
         read_grants = acl_grant_tokens(acl_principals(ctx), AclAction.READ)
         shared_acl_filter = And(
             [
                 PathScope("uri", "viking://resources", depth=-1),
-                In(ACL_MODE_FIELD, controlled_modes),
                 Or(
                     [
-                        In("acl_direct_grants", read_grants),
+                        default_shared_filter,
                         And(
                             [
-                                Eq(ACL_MODE_FIELD, AclMode.INHERIT.value),
-                                In("acl_inherited_grants", read_grants),
+                                In(ACL_MODE_FIELD, controlled_modes),
+                                Or(
+                                    [
+                                        In("acl_direct_grants", read_grants),
+                                        And(
+                                            [
+                                                Eq(ACL_MODE_FIELD, AclMode.INHERIT.value),
+                                                In("acl_inherited_grants", read_grants),
+                                            ]
+                                        ),
+                                    ]
+                                ),
                             ]
                         ),
                     ]
@@ -2740,9 +2741,12 @@ class VikingVectorIndexBackend:
             ]
         )
         access_filters: List[FilterExpr] = [
-            uncontrolled_filter,
+            *(
+                PathScope("uri", root, depth=-1)
+                for root in visible_roots(ctx)
+                if not is_acl_uri(root)
+            ),
             shared_acl_filter,
-            PathScope("uri", f"{canonical_user_root(ctx)}/resources", depth=-1),
         ]
         if ctx.role == Role.ADMIN:
             access_filters.append(PathScope("uri", "viking://resources", depth=-1))

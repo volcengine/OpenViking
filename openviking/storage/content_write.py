@@ -37,7 +37,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     prepare_abstract_overview_write,
 )
-from openviking.storage.acl import AclAction, CreatorAclGrant
+from openviking.storage.acl import AclAction
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -880,7 +880,6 @@ class ContentWriteCoordinator:
                     uri=uri,
                     context_type=context_type,
                     ctx=ctx,
-                    creator_acl_grant=(CreatorAclGrant.DIRECT if mode == "create" else None),
                     ingest_options=ingest_options,
                     file_md5=content_md5(final_content),
                 )
@@ -993,7 +992,6 @@ class ContentWriteCoordinator:
         uri: str,
         context_type: str,
         ctx: RequestContext,
-        creator_acl_grant: CreatorAclGrant | None = None,
         ingest_options: IngestOptions | None = None,
         file_md5: str | None = None,
     ) -> bool:
@@ -1007,7 +1005,6 @@ class ContentWriteCoordinator:
             parent_uri=parent.uri,
             context_type=context_type,
             ctx=ctx,
-            creator_acl_grant=creator_acl_grant,
             ingest_options=ingest_options,
             file_md5=file_md5,
         )

@@ -193,6 +193,13 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
             "context_type": "resource",
         },
         {
+            **legacy_mode,
+            "id": "default-shared",
+            "uri": "viking://resources/default.md",
+            "account_id": "acct",
+            "context_type": "resource",
+        },
+        {
             "id": "direct-shared",
             "uri": "viking://resources/direct.md",
             "account_id": "acct",
@@ -206,7 +213,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "inherit",
-            "acl_inherited_grants": ["3:user:*"],
+            "acl_inherited_grants": ["7:user:*"],
         },
         {
             "id": "restricted-inherited-shared",
@@ -214,7 +221,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "restricted",
-            "acl_inherited_grants": ["3:user:*"],
+            "acl_inherited_grants": ["7:user:*"],
         },
         {
             "id": "restricted-direct-shared",
@@ -227,11 +234,12 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
         },
         {
             "id": "denied-shared",
-            "uri": "viking://resources/denied.md",
+            "uri": "viking://resources/finance/denied.md",
             "account_id": "acct",
             "context_type": "resource",
             "acl_mode": "inherit",
-            "acl_direct_grants": ["7:user:bob"],
+            "acl_direct_grants": [],
+            "acl_inherited_grants": ["3:group:finance"],
         },
         {
             "id": "foreign-account",
@@ -283,11 +291,19 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
             query_vector=[1.0, 0.0, 0.0, 0.0],
             context_type="resource",
         )
+        finance = await backend.search_in_tenant(
+            ctx=RequestContext(user=ctx.user, role=ctx.role, group_ids=("finance",)),
+            query_vector=[1.0, 0.0, 0.0, 0.0],
+            context_type="resource",
+            target_directories=["viking://resources/finance"],
+        )
+        assert [record["id"] for record in finance] == ["denied-shared"]
 
         assert sorted(record["id"] for record in visible) == sorted(
             [
                 "own",
                 "legacy-shared",
+                "default-shared",
                 "direct-shared",
                 "inherited-shared",
                 "restricted-direct-shared",
@@ -299,6 +315,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
                 "own",
                 "cross-user",
                 "legacy-shared",
+                "default-shared",
                 "direct-shared",
                 "inherited-shared",
                 "restricted-inherited-shared",
@@ -317,6 +334,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(tmp_path, leg
             [
                 "own",
                 "legacy-shared",
+                "default-shared",
                 "direct-shared",
                 "inherited-shared",
                 "restricted-inherited-shared",

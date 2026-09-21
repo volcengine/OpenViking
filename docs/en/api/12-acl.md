@@ -16,13 +16,12 @@ Read [Resource Access Control (ACL)](../concepts/15-acl.md) for the permission a
 
 Every endpoint requires `manage` on the target node. Account `ADMIN`s implicitly manage shared resources.
 
-`viking://resources` is a fixed shared scope and cannot carry a direct ACL. The
-account setting `acl.enabled` defaults to `false`. While disabled, shared
-resources use the original public behavior and ACL authorization is skipped.
-When enabled, newly created shared files, directories, and `add-resource` roots
-grant the creator direct `manage` and inherit the parent ACL. Existing content
-without an ACL remains public. Descendants within an `add-resource` import only
-inherit the root grant.
+The account setting `acl.enabled` defaults to `false`. While disabled, shared
+resources use the existing namespace rules without ACL enforcement. When
+enabled, `viking://resources` has a fixed, immutable `user:* = manage` ACL. New
+files, directories and import nodes have empty direct ACLs and inherit their
+parent’s effective permissions. Creators receive no additional grants. Shared
+content without ACL fields uses default inheritance.
 
 ## Data Structures
 
@@ -47,12 +46,13 @@ The caller supplies the account-unique, stable `group_id` through the [Admin API
 ```json
 {
   "uri": "viking://resources/project-a",
-  "acl_mode": "inherit",
+  "acl_mode": "restricted",
   "direct_entries": [
+    {"principal": "group:engineering", "level": "write"},
     {"principal": "user:bob", "level": "read"}
   ],
   "inherited_entries": [
-    {"principal": "group:engineering", "level": "write"}
+    {"principal": "user:*", "level": "manage"}
   ],
   "effective_entries": [
     {"principal": "group:engineering", "level": "write"},
@@ -66,7 +66,7 @@ The caller supplies the account-unique, stable `group_id` through the [Admin API
 | `direct_entries` | Entries set directly on this node |
 | `inherited_entries` | The parent's current effective permissions, refreshed even while restricted |
 | `effective_entries` | Direct plus inherited grants in inherit mode; direct grants only in restricted mode |
-| `acl_mode` | `none`: not ACL-controlled; `inherit`: direct and inherited grants apply; `restricted`: only direct grants apply |
+| `acl_mode` | `none`: ACL fields not materialized; default inheritance applies when enabled; `inherit`: direct and inherited grants apply; `restricted`: only direct grants apply |
 
 The account `ADMIN` implicit `manage` permission is not included in these lists.
 
@@ -116,7 +116,7 @@ Request body:
 
 Provide `entries`, `acl_mode`, or both. `entries` replaces the full direct ACL. `acl_mode` accepts `restricted` (direct grants only) or `inherit` (resume inheritance). Omitted fields remain unchanged. Inherited grants continue to refresh while restricted and apply immediately when inheritance resumes. Duplicate principals keep their highest level.
 
-Setting `none` directly is not allowed, as it would bypass the parent's ACL. After resuming inheritance or deleting the ACL, the system returns `none` if the node has no direct grants and its parent is not ACL-controlled.
+Setting `none` directly is not allowed. Resuming inheritance or deleting the ACL restores the parent’s effective permissions; an uninterrupted path to the root grants all account members `manage`.
 
 ```bash
 curl -X PUT http://localhost:1933/api/v1/acl \
@@ -243,7 +243,7 @@ ov acl revoke viking://resources/project-a --principal user:bob
 DELETE /api/v1/acl?uri={uri}
 ```
 
-This clears the node's direct ACL and exits restricted mode without deleting stored inherited entries or descendant direct ACLs. The latest inherited permissions apply immediately; if the parent is not ACL-controlled either, `acl_mode` returns to `none`.
+This clears the node's direct ACL and exits restricted mode without deleting stored inherited entries or descendant direct ACLs. The latest inherited permissions apply immediately; an uninterrupted path to the root restores `manage` for all account members.
 
 ```bash
 curl -X DELETE \
