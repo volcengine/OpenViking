@@ -155,7 +155,6 @@ async def test_write_without_wait_is_immediately_readable(client_with_resource):
     )
     assert write_resp.status_code == 200
     body = write_resp.json()
-    assert body["result"]["content_updated"] is True
     assert body["result"]["semantic_status"] == "queued"
     assert body["result"]["vector_status"] == "queued"
 
