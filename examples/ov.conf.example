@@ -226,6 +226,13 @@
         "model": "qwen3-rerank",
         "threshold": 0.1,
     },
+    "rerank_jev_example": {
+        "_comment": "For Jev via the TypeSafe System One API:",
+        "provider": "jev",
+        "api_key": "{your-typesafe-api-key}",
+        "model": "jev-latest",
+        "threshold": 0.1,
+    },
     "retrieval": {
         "hotness_alpha": 0.0,
         "score_propagation_alpha": 1.0,

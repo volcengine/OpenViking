@@ -142,14 +142,14 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
-| `provider` | `vikingdb`, `cohere`, `openai`, `litellm` / `null` | `null` | Rerank service; inferred from credentials when omitted |
-| `model` | string / `null` | `null` | OpenAI-compatible or LiteLLM rerank model |
+| `provider` | `vikingdb`, `cohere`, `openai`, `litellm`, `jev` / `null` | `null` | Rerank service; inferred from credentials when omitted |
+| `model` | string / `null` | `null` | OpenAI-compatible, LiteLLM, or Jev rerank model |
 | `threshold` | number | `0.1` | Minimum score considered relevant |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
-Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+`jev` uses the TypeSafe System One API (`jev-latest` by default; set `api_base` to override the `https://api.typesafe.ai` endpoint). It sends the query and candidate documents as structured `state`, asks one independent Noul relevance question per candidate, and uses each yes probability as its rerank score. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
 
