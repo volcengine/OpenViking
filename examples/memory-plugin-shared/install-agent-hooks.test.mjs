@@ -363,7 +363,8 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
       [join(home, ".openviking", "agent-integrations", "cursor", "scripts", "ov-memory-doctor.mjs"), "cursor", "--offline", "--no-color"],
       { env: { ...process.env, HOME: home }, encoding: "utf8" },
     );
-    assert.match(doctor.stdout, /version 0\.3\.2, client cursor/);
+    const version = JSON.parse(readFileSync(join(checkout, "examples", "agent-hook-plugin", "plugin.json"), "utf8")).version;
+    assert.ok(doctor.stdout.includes(`version ${version}, client cursor`));
     // A hooks.json entry that names a script the install did not put on disk
     // fails only when the host first runs it, so the rendered commands are
     // checked against the tree they were rendered for.
