@@ -41,7 +41,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
 vi.mock('#/lib/ov-client', () => ({
   getOvResult: async (value: unknown) => value,
   getTasks: clientMocks.getTasks,
-  ovClient: { instance: { post: clientMocks.post } },
+  ovClient: { client: { post: clientMocks.post } },
 }))
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
@@ -176,9 +176,9 @@ describe('task status presentation', () => {
       }),
     )
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
-    expect(clientMocks.post).toHaveBeenLastCalledWith(
-      '/api/v1/tasks/task-12/cancel',
-    )
+    expect(clientMocks.post).toHaveBeenLastCalledWith({
+      url: '/api/v1/tasks/task-12/cancel',
+    })
     expect(await within(row).findByText('Cancelling')).toBeDefined()
     expect(
       within(row).queryByRole('button', { name: 'Cancel task' }),

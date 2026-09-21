@@ -52,9 +52,9 @@ export function isTaskCancelling(task: TaskRecord): boolean {
 
 export async function cancelTask(taskId: string): Promise<TaskRecord> {
   return getOvResult<TaskRecord>(
-    ovClient.instance.post(
-      `/api/v1/tasks/${encodeURIComponent(taskId)}/cancel`,
-    ),
+    ovClient.client.post({
+      url: `/api/v1/tasks/${encodeURIComponent(taskId)}/cancel`,
+    }),
   )
 }
 
