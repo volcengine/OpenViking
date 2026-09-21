@@ -49,10 +49,12 @@ There is intentionally no `skills/openviking/SKILL.md`. The tool surface comes f
 
 ## Requirements
 
-- OpenCode
+- OpenCode 1.18.29+ or OpenCode 2
 - OpenViking HTTP server
 - Node.js 18+
 - An OpenViking API key if your server requires authentication
+
+The same package serves both plugin APIs. OpenCode 1 calls `server()` (or the named `OpenVikingPlugin` export). OpenCode 2 calls `setup()`. The v2 entrypoint does not import `@opencode/plugin`, so a source install on OpenCode 1 still loads. OpenCode 2 normalizes the installer's `"plugin"` key to `"plugins"`; a native v2 config may use `"plugins"` directly.
 
 Start OpenViking first:
 

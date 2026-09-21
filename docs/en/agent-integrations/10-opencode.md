@@ -60,6 +60,8 @@ opencode
 
 If `~/.config/opencode/opencode.json` already exists, do not overwrite it; only merge `"@openviking/opencode-plugin"` into the existing `plugin` array. OpenCode downloads the npm package at startup, and the plugin registers its MCP server automatically.
 
+OpenCode 2 uses the same package. It calls `setup()`; OpenCode 1.18.29+ calls `server()`. OpenCode 2 normalizes `"plugin"` to `"plugins"`, so this installer entry still works. A native v2 config may use `"plugins"` instead. There is no OpenCode skill to install.
+
 ### Source install
 
 If package installation is not available in your environment:
@@ -158,7 +160,7 @@ Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are
 
 | Issue | What to check |
 |-------|---------------|
-| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
+| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin` (`plugin` on v1, `plugins` on v2), or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
 | Load fails with a missing `lib/shared/*.mjs` module | The source copy was made without running `sync.mjs` first. Run `node examples/memory-plugin-shared/sync.mjs` from the repository root and copy `lib/` again |
 | MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars; `OPENVIKING_CLI_CONFIG_FILE` points the plugin at a different ovcli.conf |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |

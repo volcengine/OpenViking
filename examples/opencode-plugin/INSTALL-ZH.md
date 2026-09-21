@@ -11,7 +11,7 @@
 
 需要先准备：
 
-- OpenCode
+- OpenCode 1.18.29+ 或 OpenCode 2
 - OpenViking HTTP Server
 - Node.js 18+
 - 如果服务端启用了认证，需要可用的 OpenViking API Key

@@ -60,6 +60,8 @@ opencode
 
 已有 `~/.config/opencode/opencode.json` 时，不要覆盖原文件；只把 `"@openviking/opencode-plugin"` 合并到已有的 `plugin` 数组。OpenCode 启动时会自动下载这个 npm 包，插件会自动注册它的 MCP server。
 
+OpenCode 2 使用同一个包：v2 调用 `setup()`，OpenCode 1.18.29+ 调用 `server()`。OpenCode 2 会把 `"plugin"` 规范化为 `"plugins"`，因此安装器写入的条目仍然有效。原生 v2 配置也可以直接写 `"plugins"`。不需要安装 OpenCode skill。
+
 ### 源码安装
 
 如果当前环境不能通过 package 安装：
@@ -158,7 +160,7 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 
 | 问题 | 排查方向 |
 |------|----------|
-| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `@openviking/opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
+| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `@openviking/opencode-plugin`（v1 用 `plugin`，v2 用 `plugins`）；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
 | 加载时报找不到 `lib/shared/*.mjs` | 源码复制前没有运行 `sync.mjs`。在仓库根目录运行 `node examples/memory-plugin-shared/sync.mjs` 后重新复制 `lib/` |
 | MCP tools 连到了错误的 server | 检查 `~/.openviking/ovcli.conf`，或用 `OPENVIKING_*` 环境变量；`OPENVIKING_CLI_CONFIG_FILE` 可让插件改读另一份 ovcli.conf |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
