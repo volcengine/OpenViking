@@ -161,3 +161,54 @@ async def test_nested_wait_and_cancellation_restore_processing_owner(monkeypatch
     task.cancel()
     await task
     assert index.processing_seconds("task") == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_enqueue", [False, True])
+async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(monkeypatch, custom_enqueue):
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+    now = [0.0]
+    monkeypatch.setattr(
+        "openviking.service.task_processing_time.time",
+        SimpleNamespace(monotonic=lambda: now[0]),
+    )
+    index = TaskWorkIndex()
+    index.init_processing("task")
+    message = SimpleNamespace(uri="viking://resources/retry-test")
+    enqueued = []
+
+    async def sleep(delay):
+        assert delay == 30
+        now[0] += delay
+        assert index.processing_seconds("task") == 3
+
+    async def enqueue(msg):
+        assert msg is message
+        now[0] += 2
+        enqueued.append(msg)
+
+    queue = SimpleNamespace(enqueue=enqueue)
+
+    async def custom(queue_arg, msg):
+        assert queue_arg is queue
+        await enqueue(msg)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: queue),
+    )
+    processor = SimpleNamespace(_circuit_breaker=SimpleNamespace(retry_after=30))
+    worker = asyncio.current_task()
+    index.register_active("task", worker)
+    try:
+        now[0] = 3
+        await SemanticProcessor._reenqueue_semantic_msg(
+            processor, message, enqueue=custom if custom_enqueue else None
+        )
+    finally:
+        index.unregister_active("task", worker)
+
+    assert enqueued == [message]
+    assert index.processing_seconds("task") == 5
