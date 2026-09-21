@@ -960,6 +960,24 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 }
 ```
 
+通过 Vercel AI Gateway 使用 Jev 时，复用现有 `api_base` 字段并使用 Vercel
+模型 ID；此时 `api_key` 必须是 Vercel AI Gateway API key：
+
+```json
+{
+  "rerank": {
+    "provider": "jev",
+    "api_key": "your-vercel-ai-gateway-api-key",
+    "api_base": "https://ai-gateway.vercel.sh/v4/ai",
+    "model": "typesafe-ai/jev",
+    "threshold": 0.1
+  }
+}
+```
+
+适配器根据 `api_base` 选择协议：TypeSafe 直连使用 `/v1/systemone` 和 Noul
+问题；Vercel 使用 `/evaluation-model`、Boolean 问题及 AI Gateway 所需请求头。
+
 Jev 适配器将 query 和候选文档作为结构化 System One `state`，并为每个候选
 提出一个独立的 Noul 相关性问题。每个问题返回的 yes 概率就是该文档的 rerank
 分数。所有问题在一次请求中并行计算，各文档分数互不竞争，也不要求总和为 1。
@@ -973,7 +991,7 @@ Jev 适配器将 query 和候选文档作为结构化 System One `state`，并�
 | `sk` | str | VikingDB Secret Key（仅 `vikingdb` 提供方使用） |
 | `model_name` | str | 模型名称（仅 `vikingdb` 提供方使用，默认：`doubao-seed-rerank`） |
 | `api_key` | str | API Key（用于 `openai`、`cohere` 或 `jev` 提供方） |
-| `api_base` | str | 接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai`） |
+| `api_base` | str | 接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai`，Vercel 使用 `https://ai-gateway.vercel.sh/v4/ai`） |
 | `model` | str | 模型名称（用于 OpenAI 兼容、LiteLLM 或 `jev` 提供方） |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |

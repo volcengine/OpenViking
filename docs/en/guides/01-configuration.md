@@ -992,6 +992,25 @@ OpenAI-compatible APIs, LiteLLM, and Jev.
 }
 ```
 
+To use Jev through Vercel AI Gateway, set the existing `api_base` field and use
+Vercel's model ID. The `api_key` must be a Vercel AI Gateway API key:
+
+```json
+{
+  "rerank": {
+    "provider": "jev",
+    "api_key": "your-vercel-ai-gateway-api-key",
+    "api_base": "https://ai-gateway.vercel.sh/v4/ai",
+    "model": "typesafe-ai/jev",
+    "threshold": 0.1
+  }
+}
+```
+
+The adapter selects the provider protocol from `api_base`: TypeSafe direct uses
+`/v1/systemone` with Noul questions, while Vercel uses `/evaluation-model` with
+Boolean questions and the required AI Gateway headers.
+
 The Jev adapter sends the query and candidate documents as structured System One
 `state`, then asks one independent Noul relevance question per candidate. Each returned
 yes probability becomes that document's rerank score. All questions are evaluated in
@@ -1006,7 +1025,7 @@ parallel in one request, and scores do not compete or have to sum to 1.
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
 | `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
-| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`) |
+| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/v4/ai`) |
 | `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
 | `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
 | `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |

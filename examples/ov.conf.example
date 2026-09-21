@@ -227,11 +227,19 @@
         "threshold": 0.1,
     },
     "rerank_jev_example": {
-        "_comment": "For Jev via the TypeSafe System One API:",
+        "_comment": "For direct Jev access through the TypeSafe System One API:",
         "provider": "jev",
         "api_key": "{your-typesafe-api-key}",
         "model": "jev-latest",
         "log_payloads": false,
+        "threshold": 0.1,
+    },
+    "rerank_jev_vercel_example": {
+        "_comment": "For Jev through Vercel AI Gateway:",
+        "provider": "jev",
+        "api_key": "{your-vercel-ai-gateway-api-key}",
+        "api_base": "https://ai-gateway.vercel.sh/v4/ai",
+        "model": "typesafe-ai/jev",
         "threshold": 0.1,
     },
     "retrieval": {

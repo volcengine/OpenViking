@@ -150,7 +150,7 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
-`jev` uses the TypeSafe System One API (`jev-latest` by default; set `api_base` to override the `https://api.typesafe.ai` endpoint). It sends the query and candidate documents as structured `state`, asks one independent Noul relevance question per candidate, and uses each yes probability as its rerank score. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+`jev` supports direct TypeSafe access (`https://api.typesafe.ai`, model `jev-latest`) and Vercel AI Gateway (`https://ai-gateway.vercel.sh/v4/ai`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields. It sends the query and candidate documents as structured `state`, asks one independent relevance question per candidate, and uses each yes probability as its rerank score. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
 
