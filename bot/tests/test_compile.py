@@ -1734,6 +1734,8 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
     monkeypatch, tmp_path: Path, target_uri: str
 ):
     class TaskConfig:
+        uses_managed_opensandbox = False
+
         def __init__(self):
             self.bot_data_path = tmp_path
             self.workspace_path = tmp_path / "host-workspace"
@@ -3169,6 +3171,8 @@ async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tm
     sandbox = _FakeWorkspaceSandbox(remote_files)
 
     class TaskConfig:
+        uses_managed_opensandbox = False
+
         def __init__(self):
             self.bot_data_path = tmp_path
             self.workspace_path = tmp_path / "host-workspace"
