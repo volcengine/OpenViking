@@ -1,0 +1,56 @@
+bot/tests/test_compile_evidence_spans.py
+  h_b34c679d17e2ac 1,9-10,14,21,25-36,38,40-41,43,46-47,50-60,64-69,71-84,88,90-96,99,101,104-109,112-118,121-122,126-129,134-190
+bot/tests/test_compile_routing_batches.py
+  h_b34c679d17e2ac 1,4,10-15,18-45,47-51,53-62,64-76,78-91,93-112,114-121,123-124,126-172,174-204,206-226
+bot/vikingbot/compile/file_ops.py
+  h_b34c679d17e2ac 3,115-119
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 41,43-47,88-89
+bot/vikingbot/compile/ops/common.py
+  h_b34c679d17e2ac 48,50-52,67-74,136-147,209
+bot/vikingbot/compile/ops/finalize.py
+  h_b34c679d17e2ac 27-31,41,58,173
+bot/vikingbot/compile/ops/reduce.py
+  h_b34c679d17e2ac 4,39-41,57
+bot/vikingbot/compile/ops/shuffle.py
+  h_b34c679d17e2ac 15,175,249,274-288,290,295-303,309-313,320,322-343,345-347,350-406,408-416,418-422,424-425
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 1,16,36,45,64,83-86,124-130,154,157-158,195,204,229-230,275,344,346
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 27,275-276,279,295,316-317,455-459
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 13,22,58,111,119,220,255,260,307,310-311,316-317,321-328,333-334,395-397,415,453-454,470-479
+bot/vikingbot/compile/resume.py
+  h_b34c679d17e2ac 7,13,34,36,41,43-44,46,48-50,52,72-74,81-89,93,103-104,115-118,121-124,139-149,159-161,183,185-190,192-197,200-353
+bot/vikingbot/compile/service.py
+  h_b34c679d17e2ac 60,203-206,458,464-468,529,950,973-975,1031
+bot/vikingbot/compile/skill_resources.py
+  h_b34c679d17e2ac 196-199,202-206,214-223,230-241,243-245,251-281
+bot/vikingbot/config/schema.py
+  h_b34c679d17e2ac 436-474,906
+crates/ov_cli/src/main.rs
+  h_b34c679d17e2ac 1154
+docs/design/compile-pipeline.md
+  h_b34c679d17e2ac 4-5,27,33,58,83-84,86
+docs/en/api/23-agent-runtime.md
+  h_b34c679d17e2ac 17
+docs/en/guides/01-configuration.md
+  h_b34c679d17e2ac 780-805
+docs/zh/api/23-agent-runtime.md
+  h_b34c679d17e2ac 17
+docs/zh/guides/01-configuration.md
+  h_b34c679d17e2ac 748-773
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fb32963181026fcc0135c48044a4fe605489ff41",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
