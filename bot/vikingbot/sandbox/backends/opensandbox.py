@@ -12,6 +12,7 @@ from loguru import logger
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
+from vikingbot.sandbox.managed_server import WORKSPACE_GID_LABEL, WORKSPACE_UID_LABEL
 
 
 @register_backend("opensandbox")
@@ -59,6 +60,13 @@ class OpenSandboxBackend(SandboxBackend):
             if self._osb_config.managed:
                 if self._host_workspace is None:
                     raise ValueError("Managed OpenSandbox requires a dedicated host workspace")
+                owner = self._host_workspace.stat()
+                volume_options["metadata"] = {
+                    WORKSPACE_UID_LABEL: str(owner.st_uid),
+                    WORKSPACE_GID_LABEL: str(owner.st_gid),
+                }
+                # Numeric users may not have a passwd entry or access to image /root.
+                volume_options["env"] = {"HOME": "/workspace"}
                 volume_options["volumes"] = [
                     Volume(
                         name="workspace",
@@ -215,12 +223,13 @@ class OpenSandboxBackend(SandboxBackend):
     async def write_file(self, path: str, content: str) -> None:
         if not self._sandbox:
             raise SandboxNotStartedError()
-        await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=0o644)
+        # Execd interprets mode as octal digits (644), not Python's 0o644 (=420).
+        await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=644)
 
     async def write_file_bytes(self, path: str, content: bytes) -> None:
         if not self._sandbox:
             raise SandboxNotStartedError()
-        await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=0o644)
+        await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=644)
 
     async def remove_tree(self, path: str) -> None:
         if not self._sandbox:

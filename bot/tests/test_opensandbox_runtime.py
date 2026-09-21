@@ -137,6 +137,41 @@ def test_managed_server_restricts_workload_and_sidecar_published_ports(monkeypat
         client.close()
 
 
+def test_managed_server_sets_workspace_owner_only_for_workloads():
+    from vikingbot.sandbox.managed_server import (
+        WORKSPACE_GID_LABEL,
+        WORKSPACE_UID_LABEL,
+        use_workspace_owner,
+    )
+
+    class Client:
+        def create_container(self, **kwargs):
+            return kwargs
+
+    use_workspace_owner(Client)
+    client = Client()
+    workload = client.create_container(
+        labels={
+            "opensandbox.io/id": "test",
+            WORKSPACE_UID_LABEL: "1000",
+            WORKSPACE_GID_LABEL: "1001",
+        },
+        user="root",
+    )
+    assert workload["user"] == "1000:1001"
+    assert "user" not in client.create_container(labels={"opensandbox.io/egress": "test"})
+    assert "user" not in client.create_container(name="sandbox-execd-cache")
+    for value in ("", "root", "1000:wheel", "-1:1000"):
+        with pytest.raises(ValueError, match="UID:GID"):
+            client.create_container(
+                labels={
+                    "opensandbox.io/id": "test",
+                    WORKSPACE_UID_LABEL: value,
+                    WORKSPACE_GID_LABEL: "1000",
+                }
+            )
+
+
 @pytest.mark.asyncio
 async def test_binary_files_use_remote_api_and_sdk_errors_are_reported(tmp_path):
     from opensandbox.models.execd import Execution, ExecutionError
@@ -157,7 +192,7 @@ async def test_binary_files_use_remote_api_and_sdk_errors_are_reported(tmp_path)
     )
     await backend.write_file_bytes("nested/image.png", b"\x00\xff")
     backend._sandbox.files.write_file.assert_awaited_once_with(
-        "/workspace/nested/image.png", b"\x00\xff", mode=0o644
+        "/workspace/nested/image.png", b"\x00\xff", mode=644
     )
     assert not (tmp_path / "work" / "nested" / "image.png").exists()
     output = await backend.execute("false")
@@ -250,13 +285,20 @@ async def test_backend_creation_mounts_only_managed_workspace(tmp_path, monkeypa
     await backend.start()
     kwargs = create.call_args.kwargs
     if managed:
+        from vikingbot.sandbox.managed_server import WORKSPACE_GID_LABEL, WORKSPACE_UID_LABEL
+
         assert len(kwargs["volumes"]) == 1
         volume = kwargs["volumes"][0]
         assert volume.host.path == str(workspace.resolve())
         assert volume.mount_path == "/workspace"
         assert volume.read_only is False
+        owner = workspace.stat()
+        assert kwargs["metadata"][WORKSPACE_UID_LABEL] == str(owner.st_uid)
+        assert kwargs["metadata"][WORKSPACE_GID_LABEL] == str(owner.st_gid)
+        assert kwargs["env"]["HOME"] == "/workspace"
     else:
         assert "volumes" not in kwargs
+        assert "metadata" not in kwargs
     assert kwargs["resource"] == {"cpu": "500m", "memory": "1Gi"}
     assert kwargs["network_policy"].default_action == "deny"
     assert [rule.action for rule in kwargs["network_policy"].egress] == ["deny", "allow"]

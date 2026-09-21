@@ -532,6 +532,11 @@ Settings under `bot.sandbox.backends.opensandbox`:
 Managed sandboxes use bridge networking, dropped capabilities and no-new-privileges. Each container
 bind-mounts only its dedicated host workspace at `/workspace`, with read/write access:
 
+The workload container, including execd, runs as the workspace owner's numeric UID/GID with
+`HOME=/workspace`. This supports ordinary Linux users' `0755` directories and `0644` files without
+relaxing permissions or restoring `CAP_DAC_OVERRIDE`. Egress and image-cache containers keep their
+own execution identities.
+
 ```text
 {storage.workspace}/bot/runtime/opensandbox/
 ├── gateway-*/                  # Server configuration and logs; never mounted
@@ -556,6 +561,14 @@ expiration cleanup cannot run while the managed Server is stopped, so verify rec
 External mode uses file APIs without local bind mounts, skips local Docker checks and never starts or stops the external service. Its operator
 must configure the runtime, egress component and security policy. Automatic management applies to
 Gateway / `--with-bot`; standalone `vikingbot chat` requires a prestarted OpenSandbox service.
+
+Run the optional Docker permission regression with the images above available. It uses native
+Linux volume storage to exercise UID 1000 ownership, `0755` directories, `0644` files, command/file
+API writes and container recreation without Docker Desktop host file-sharing permission translation:
+
+```bash
+VIKINGBOT_TEST_DOCKER=1 PYTHONPATH=bot python -m pytest -q -o addopts='' bot/tests/test_opensandbox_docker_permissions.py
+```
 
 ## HTTP API
 

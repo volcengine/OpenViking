@@ -540,6 +540,10 @@ OpenSandbox Server 0.1.6 默认绑定所有网卡的适配，不会修改外部 
 托管 Docker 使用 bridge 网络、裁剪 capabilities、禁止新增特权。仅将专用工作目录
 读写挂载到容器 `/workspace`，不会挂载 Bot 配置、服务密钥、Docker socket 或其他会话目录：
 
+执行容器和其中的 execd 服务使用专用工作目录所有者的数值 UID/GID，`HOME` 指向
+`/workspace`。因此在 Linux 上也能读写普通用户拥有的 `0755` 目录和 `0644` 文件，
+无需扩大目录权限或恢复 `CAP_DAC_OVERRIDE`；网络组件和镜像缓存容器不使用这个用户覆盖。
+
 ```text
 {storage.workspace}/bot/runtime/opensandbox/
 ├── gateway-*/                  # 服务配置和日志，不挂载
@@ -562,6 +566,14 @@ Mac 上可在 Finder 直接查看这些工作文件，宿主机和容器的修�
 `managed=false` 使用文件 API，不挂载 Bot 本机目录、不检查本机 Docker、不启停外部服务；外部服务需自行配置 Docker、egress
 组件和权限策略。当前自动托管范围是 Gateway / `--with-bot`，独立 `vikingbot chat` 使用
 OpenSandbox 时需要提前启动服务并配置地址。
+
+可显式运行 Docker 权限回归测试（需要 Docker 和上述镜像）。该测试使用 Linux 原生卷，
+覆盖 UID 1000 的 `0755` 目录、`0644` 文件、命令与文件 API 写入及容器重建，避免
+Docker Desktop 的宿主机文件共享权限转换掩盖 Linux 权限问题：
+
+```bash
+VIKINGBOT_TEST_DOCKER=1 PYTHONPATH=bot python -m pytest -q -o addopts='' bot/tests/test_opensandbox_docker_permissions.py
+```
 
 ## HTTP API
 
