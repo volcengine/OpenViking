@@ -59,7 +59,7 @@ jobs:
           else
             python -m pip install "setuptools-scm>=8.0"
             version="$(
-              python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+              python -c "from scripts.build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
             )"
           fi
           if [ -z "${version}" ] || [ "${version}" = "0.0.0" ]; then

@@ -83,7 +83,7 @@ OpenVikingでは、焦点が絞られ、十分に理解された変更を重視�
 | Storage | RAGFS、PathLock、QueueFS、暗号化 | `openviking/storage`、`openviking/pyagfs`、`openviking/crypto`、`crates/ragfs*` | `@baojun-zhang` |
 | Integration | Agent PluginとMCP | `agent-plugins`、メモリPluginの例、Server MCP | `@t0saki`、`@ZaynJarvis` |
 | Integration | VikingBotとAgentコンパイル | `bot`、`ov compile` | `@yeshion23333`、`@fujiajie666` |
-| Client | SDK、CLI、LangChain | `sdk`、`crates/ov_cli`、`integrations/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
+| Client | SDK、CLI、LangChain | `sdk`、`crates/ov_cli`、`examples/langchain` | `@zhoujh01`、`@t0saki`、`@ehz0ah` |
 | Product | Web Studio | `web-studio` | `@yufeng201`、`@ZaynJarvis` |
 | Project | ドキュメント、CI、Pluginリリース | `docs`、`.github/workflows` | `@yufeng201`、`@ZaynJarvis` |
 

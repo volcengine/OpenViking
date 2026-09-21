@@ -53,7 +53,7 @@ WORKDIR /app
 # Copy source required for setup.py artifact builds and native extension build.
 COPY Cargo.toml Cargo.lock ./
 COPY pyproject.toml uv.lock setup.py README.md ./
-COPY build_support/ build_support/
+COPY scripts/build_support/ scripts/build_support/
 COPY bot/ bot/
 COPY crates/ crates/
 COPY openviking/ openviking/
@@ -113,8 +113,8 @@ COPY --from=py-builder /app/.venv /app/.venv
 # Fail the image build if VikingBot and the separately released SDK drift apart.
 RUN /app/.venv/bin/python -I -c "import inspect; from importlib.metadata import version; from openviking_sdk.client import AsyncHTTPClient; signature = inspect.signature(AsyncHTTPClient.get_skill); raise SystemExit(0 if 'include_integrity' in signature.parameters else f\"incompatible openviking-sdk {version('openviking-sdk')}: AsyncHTTPClient.get_skill{signature} lacks include_integrity\")"
 RUN /app/.venv/bin/python -I -c "from importlib.util import find_spec; from pathlib import Path; spec = find_spec('openviking.web_studio'); locations = list(spec.submodule_search_locations or ()) if spec else []; root = Path('/app/.venv').resolve(); p = (Path(locations[0]).resolve() / 'dist/index.html').resolve() if len(locations) == 1 else None; valid = p is not None and p.is_file() and p.is_relative_to(root); raise SystemExit(0 if valid else f'missing or misplaced Studio bundle: spec_found={spec is not None}, locations={locations!r}, resource={p}')"
-COPY docker/openviking-entrypoint.sh /usr/local/bin/openviking-entrypoint
-COPY docker/pending_health_server.py /usr/local/bin/openviking-pending-health
+COPY deploy/docker/openviking-entrypoint.sh /usr/local/bin/openviking-entrypoint
+COPY deploy/docker/pending_health_server.py /usr/local/bin/openviking-pending-health
 RUN mkdir -p /app/.openviking \
  && sed -i 's/\r$//' /usr/local/bin/openviking-entrypoint /usr/local/bin/openviking-pending-health \
  && chmod +x /usr/local/bin/openviking-entrypoint /usr/local/bin/openviking-pending-health

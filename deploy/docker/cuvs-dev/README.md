@@ -10,7 +10,7 @@ Build it from the repository root:
 
 ```bash
 docker build \
-  -f docker/cuvs-dev/Dockerfile \
+  -f deploy/docker/cuvs-dev/Dockerfile \
   -t openviking-cuvs:dev \
   .
 ```
@@ -22,7 +22,7 @@ driver/runtime policy requires it:
 docker build \
   --build-arg CUVS_PACKAGE=cuvs-cu12==26.6.0 \
   --build-arg 'CUPY_PACKAGE=cupy-cuda12x[ctk]==14.1.1' \
-  -f docker/cuvs-dev/Dockerfile \
+  -f deploy/docker/cuvs-dev/Dockerfile \
   -t openviking-cuvs:dev-cu12 \
   .
 ```
@@ -64,7 +64,7 @@ For an Enroot/Pyxis environment, export the already-built Docker image once to
 a shared SquashFS file:
 
 ```bash
-docker/cuvs-dev/export-sqsh.sh \
+deploy/docker/cuvs-dev/export-sqsh.sh \
   openviking-cuvs:dev \
   /shared/images/openviking-cuvs-dev.sqsh
 ```
