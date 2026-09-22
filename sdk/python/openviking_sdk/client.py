@@ -1833,6 +1833,7 @@ class AsyncHTTPClient:
         name: Optional[str] = None,
         limit: Optional[int] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
         params: Dict[str, Any] = {}
         if name is not None:
@@ -1840,6 +1841,8 @@ class AsyncHTTPClient:
         if limit is not None:
             params["limit"] = limit
             params["page"] = page
+        if query is not None:
+            params["query"] = query
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
         return self._handle_response(response)
 
@@ -1874,6 +1877,7 @@ class AsyncHTTPClient:
         name: Optional[str] = None,
         role: Optional[str] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
         params: Dict[str, Any] = {}
         if limit is not None:
@@ -1883,6 +1887,8 @@ class AsyncHTTPClient:
             params["name"] = name
         if role is not None:
             params["role"] = role
+        if query is not None:
+            params["query"] = query
         response = await self._request(
             "GET", f"/api/v1/admin/accounts/{account_id}/users", params=params
         )
@@ -2854,8 +2860,11 @@ class SyncHTTPClient:
         name: Optional[str] = None,
         limit: Optional[int] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
-        return run_async(self._async_client.admin_list_accounts(name=name, limit=limit, page=page))
+        return run_async(
+            self._async_client.admin_list_accounts(name=name, limit=limit, page=page, query=query)
+        )
 
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))
@@ -2885,10 +2894,11 @@ class SyncHTTPClient:
         name: Optional[str] = None,
         role: Optional[str] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
         return run_async(
             self._async_client.admin_list_users(
-                account_id, limit=limit, name=name, role=role, page=page
+                account_id, limit=limit, name=name, role=role, page=page, query=query
             )
         )
 

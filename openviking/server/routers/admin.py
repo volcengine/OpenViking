@@ -491,13 +491,14 @@ async def list_accounts(
     name: str | None = None,
     limit: int | None = Query(None, ge=1, description="Page size; omit to return all"),
     page: int = Query(1, ge=1, description="1-based page number (requires limit)"),
+    query: str | None = Query(None, description="Case-insensitive account id substring"),
     ctx: RequestContext = Depends(get_request_context),
 ):
     """List accounts in creation order. `name` supports wildcard (* and ?) matching."""
     manager = _get_api_key_manager(request)
     if not _registry_watcher_running(request):
         await manager.refresh_accounts_from_store()
-    accounts = manager.get_accounts(name_filter=name, limit=limit, page=page)
+    accounts = manager.get_accounts(name_filter=name, limit=limit, page=page, query_filter=query)
     return Response(status="ok", result=accounts)
 
 
