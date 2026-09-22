@@ -21,13 +21,6 @@ import {
   DialogFooter,
 } from '#/components/ui/dialog'
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from '#/components/ui/sheet'
-import {
   AlertDialog,
   AlertDialogContent,
   AlertDialogHeader,
@@ -365,25 +358,30 @@ function GroupMembers({
   })
   const pages = Math.max(1, Math.ceil((users.data?.total ?? 0) / 20))
   return (
-    <Sheet
+    <Dialog
       open
       onOpenChange={(open) => {
         if (!open && !change.isPending) onClose()
       }}
     >
-      <SheetContent
-        className="w-full overflow-y-auto sm:max-w-xl"
+      <DialogContent
+        className="gap-5 sm:max-w-3xl"
         showCloseButton={!change.isPending}
       >
-        <SheetHeader>
-          <SheetTitle className="break-all">
+        <DialogHeader className="pr-8">
+          <DialogTitle className="break-all text-lg">
             {t('groups.members', { group: groupId })}
-          </SheetTitle>
-          <SheetDescription>{t('groups.memberHint')}</SheetDescription>
-        </SheetHeader>
-        <div className="flex flex-col gap-6 px-4 pb-6">
-          <section className="flex flex-col gap-3">
-            <h2 className="font-medium">{t('groups.currentMembers')}</h2>
+          </DialogTitle>
+          <DialogDescription>{t('groups.memberHint')}</DialogDescription>
+        </DialogHeader>
+        <div className="grid min-w-0 gap-5 sm:grid-cols-2">
+          <section className="flex min-w-0 flex-col gap-3">
+            <h2 className="flex items-center gap-2 font-medium">
+              {t('groups.currentMembers')}
+              {members.isSuccess && (
+                <Badge variant="secondary">{members.data.members.length}</Badge>
+              )}
+            </h2>
             {members.isPending ? (
               <p role="status">{t('loading')}</p>
             ) : members.isError ? (
@@ -392,16 +390,16 @@ function GroupMembers({
                 retry={() => void members.refetch()}
               />
             ) : (
-              <ul className="flex flex-col gap-2">
+              <ul className="max-h-80 overflow-y-auto overscroll-contain rounded-lg border divide-y">
                 {members.data.members.length === 0 && (
-                  <li className="text-sm text-muted-foreground">
+                  <li className="px-3 py-6 text-center text-sm text-muted-foreground">
                     {t('groups.noMembers')}
                   </li>
                 )}
                 {members.data.members.map((user) => (
                   <li
                     key={user}
-                    className="flex items-center justify-between gap-3"
+                    className="flex items-center justify-between gap-3 px-3 py-2"
                   >
                     <span className="truncate font-mono text-sm" title={user}>
                       {user}
@@ -421,7 +419,7 @@ function GroupMembers({
               </ul>
             )}
           </section>
-          <section className="flex flex-col gap-3">
+          <section className="flex min-w-0 flex-col gap-3">
             <h2 className="font-medium">{t('groups.candidates')}</h2>
             <Input
               aria-label={t('groups.searchUsers')}
@@ -438,16 +436,16 @@ function GroupMembers({
               />
             ) : (
               <>
-                <ul className="flex flex-col gap-2">
+                <ul className="max-h-80 overflow-y-auto overscroll-contain rounded-lg border divide-y">
                   {users.data.users.length === 0 && (
-                    <li className="text-sm text-muted-foreground">
+                    <li className="px-3 py-6 text-center text-sm text-muted-foreground">
                       {t('groups.noUsers')}
                     </li>
                   )}
                   {users.data.users.map((user) => (
                     <li
                       key={user.userId}
-                      className="flex items-center justify-between gap-3"
+                      className="flex items-center justify-between gap-3 px-3 py-2"
                     >
                       <span
                         className="truncate font-mono text-sm"
@@ -474,7 +472,7 @@ function GroupMembers({
                     </li>
                   ))}
                 </ul>
-                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                   <Button
                     variant="outline"
                     size="sm"
@@ -497,7 +495,7 @@ function GroupMembers({
             )}
           </section>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   )
 }
