@@ -587,6 +587,11 @@ class UnderstandingAPI(BaseParser):
         return auth or None
 
     async def _resolve_lark_file(self, kwargs: Dict[str, Any]) -> Dict[str, str]:
+        from openviking.connector.auth import current_feishu_token
+
+        token_provider = current_feishu_token.get()
+        if token_provider is not None:
+            return {"user_access_token": await asyncio.to_thread(token_provider.get_token)}
         auth = self._normalize_lark_file(kwargs)
         if auth:
             return auth
