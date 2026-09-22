@@ -28,7 +28,22 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
                     },
                 },
                 "vector": {"searches": 1, "scored": 2, "passed": 2, "returned": 1, "scanned": 9},
-                "memory": {"extracted": 4},
+                "memory": {
+                    "extracted": 4,
+                    "extract": {
+                        "actions": {
+                            "created": 2,
+                            "merged": 1,
+                            "deleted": 1,
+                            "skipped": 3,
+                            "failed": 1,
+                        },
+                        "actions_by_type": {
+                            "preferences": {"created": 2, "skipped": 3},
+                            "events": {"merged": 1, "deleted": 1, "failed": 1},
+                        },
+                    },
+                },
                 "semantic_nodes": {"OK": 12},
                 "resource": {
                     "process": {
@@ -56,7 +71,34 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
             in text
         )
         assert 'openviking_vector_searches_total{operation="resource.process"} 1' in text
-        assert 'openviking_memory_extracted_total{operation="resource.process"} 4' in text
+        assert (
+            'openviking_memory_extracted_total{memory_type="preferences",operation="resource.process"} 2'
+            in text
+        )
+        assert (
+            'openviking_memory_extracted_total{memory_type="events",operation="resource.process"} 2'
+            in text
+        )
+        assert (
+            'openviking_memory_operations_total{action="created",memory_type="preferences",operation="resource.process",result="success"} 2'
+            in text
+        )
+        assert (
+            'openviking_memory_operations_total{action="updated",memory_type="events",operation="resource.process",result="success"} 1'
+            in text
+        )
+        assert (
+            'openviking_memory_operations_total{action="deleted",memory_type="events",operation="resource.process",result="success"} 1'
+            in text
+        )
+        assert (
+            'openviking_memory_operations_total{action="skipped",memory_type="preferences",operation="resource.process",result="skipped"} 3'
+            in text
+        )
+        assert (
+            'openviking_memory_operations_total{action="failed",memory_type="events",operation="resource.process",result="failed"} 1'
+            in text
+        )
         assert (
             'openviking_semantic_nodes_total{status="OK"} 12' in text
             or 'openviking_semantic_nodes_total{status="OK"} 12.0' in text

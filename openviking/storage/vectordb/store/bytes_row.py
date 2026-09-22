@@ -13,6 +13,7 @@ UINT32_SIZE = 4  # Used for string/binary length and offset
 UINT16_SIZE = 2  # Used for list length and string/binary length inside lists
 BOOL_SIZE = 1
 STRING_MAX_UINT16_LENGTH = 0xFFFF
+_VERSIONED_ROW_HEADER = b"\x00\x01"
 
 
 @dataclass
@@ -24,6 +25,7 @@ class FieldMeta:
     offset: int  # Start offset (calculated from the beginning of row data)
     id: int
     default_value: Any = None
+    legacy_data_type: "_PyFieldType | None" = None
 
 
 class _PyFieldType(Enum):
@@ -56,6 +58,7 @@ class _PySchema:
         self.field_metas: Dict[str, FieldMeta] = {}
         self.field_orders: List[FieldMeta] = [None] * len(fields)  # type: ignore
         current_offset = 1
+        self.has_legacy_fields = False
 
         # Type to size and default value mapping
         TYPE_INFO = {
@@ -74,6 +77,11 @@ class _PySchema:
         for field in fields:
             name = field["name"]
             data_type = field["data_type"]
+            legacy_type = field.get("legacy_data_type", data_type)
+            if legacy_type != data_type:
+                if legacy_type != _PyFieldType.string or data_type != _PyFieldType.text:
+                    raise ValueError("Only STRING to TEXT migration is supported")
+                self.has_legacy_fields = True
             field_id = field["id"]
 
             if data_type not in TYPE_INFO:
@@ -92,6 +100,7 @@ class _PySchema:
                 offset=current_offset,
                 id=field_id,
                 default_value=default_value,
+                legacy_data_type=legacy_type,
             )
             self.field_orders[field_id] = self.field_metas[name]
             # Update start offset for the next field
@@ -225,46 +234,62 @@ class _PyBytesRow:
 
         # Use '<' for little-endian
         fmt = "<" + "".join(fix_fmt_list) + "".join(var_fmt_list)
-        buffer = bytearray(1 + struct.calcsize(fmt))
-        buffer[0] = len(self.field_order)  # <= 255
-        struct.pack_into(fmt, buffer, 1, *(fix_val_list + var_val_list))
+        header_size = len(_VERSIONED_ROW_HEADER) if self.schema.has_legacy_fields else 0
+        buffer = bytearray(header_size + 1 + struct.calcsize(fmt))
+        if header_size:
+            buffer[:header_size] = _VERSIONED_ROW_HEADER
+        buffer[header_size] = len(self.field_order)  # <= 255
+        struct.pack_into(fmt, buffer, header_size + 1, *(fix_val_list + var_val_list))
         return bytes(buffer)
 
     def serialize_batch(self, rows_data) -> List[bytes]:
         return [self.serialize(row_data) for row_data in rows_data]
 
     def deserialize_field(self, serialized_data, field_name):
+        row_offset = 0
+        legacy = self.schema.has_legacy_fields
+        if legacy and serialized_data and serialized_data[0] == 0:
+            if not serialized_data.startswith(_VERSIONED_ROW_HEADER) or len(serialized_data) <= len(
+                _VERSIONED_ROW_HEADER
+            ):
+                raise ValueError("Invalid or unsupported bytes_row record version")
+            row_offset = len(_VERSIONED_ROW_HEADER)
+            legacy = False
+
         field_meta = self.schema.get_field_meta(field_name)
-        if field_meta.id >= serialized_data[0]:
+        if field_meta.id >= serialized_data[row_offset]:
             return field_meta.default_value
 
+        field_offset = row_offset + field_meta.offset
+        data_type = field_meta.legacy_data_type if legacy else field_meta.data_type
+
         # Use '<' for little-endian in all unpack operations
-        if field_meta.data_type == _PyFieldType.int64:
-            return struct.unpack_from("<q", serialized_data, field_meta.offset)[0]
-        elif field_meta.data_type == _PyFieldType.uint64:
-            return struct.unpack_from("<Q", serialized_data, field_meta.offset)[0]
-        elif field_meta.data_type == _PyFieldType.float32:
-            return struct.unpack_from("<f", serialized_data, field_meta.offset)[0]
-        elif field_meta.data_type == _PyFieldType.boolean:
+        if data_type == _PyFieldType.int64:
+            return struct.unpack_from("<q", serialized_data, field_offset)[0]
+        elif data_type == _PyFieldType.uint64:
+            return struct.unpack_from("<Q", serialized_data, field_offset)[0]
+        elif data_type == _PyFieldType.float32:
+            return struct.unpack_from("<f", serialized_data, field_offset)[0]
+        elif data_type == _PyFieldType.boolean:
             # B is 1 byte, endianness doesn't matter, but consistent style
-            return bool(serialized_data[field_meta.offset])
-        elif field_meta.data_type == _PyFieldType.string:
-            str_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+            return bool(serialized_data[field_offset])
+        elif data_type == _PyFieldType.string:
+            str_offset = struct.unpack_from("<I", serialized_data, field_offset)[0] + row_offset
             str_len = struct.unpack_from("<H", serialized_data, str_offset)[0]
             str_offset += UINT16_SIZE
             return serialized_data[str_offset : str_offset + str_len].decode("utf-8")
-        elif field_meta.data_type == _PyFieldType.binary:
-            binary_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+        elif data_type == _PyFieldType.binary:
+            binary_offset = struct.unpack_from("<I", serialized_data, field_offset)[0] + row_offset
             binary_len = struct.unpack_from("<I", serialized_data, binary_offset)[0]
             binary_offset += UINT32_SIZE
             return serialized_data[binary_offset : binary_offset + binary_len]
-        elif field_meta.data_type == _PyFieldType.text:
-            text_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+        elif data_type == _PyFieldType.text:
+            text_offset = struct.unpack_from("<I", serialized_data, field_offset)[0] + row_offset
             text_len = struct.unpack_from("<I", serialized_data, text_offset)[0]
             text_offset += UINT32_SIZE
             return serialized_data[text_offset : text_offset + text_len].decode("utf-8")
-        elif field_meta.data_type == _PyFieldType.list_string:
-            list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+        elif data_type == _PyFieldType.list_string:
+            list_offset = struct.unpack_from("<I", serialized_data, field_offset)[0] + row_offset
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]
             list_offset += UINT16_SIZE
             str_list = [None] * list_len
@@ -274,14 +299,14 @@ class _PyBytesRow:
                 str_list[i] = serialized_data[list_offset : list_offset + str_len].decode("utf-8")
                 list_offset += str_len
             return str_list
-        elif field_meta.data_type == _PyFieldType.list_int64:
-            list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+        elif data_type == _PyFieldType.list_int64:
+            list_offset = struct.unpack_from("<I", serialized_data, field_offset)[0] + row_offset
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]
             list_offset += UINT16_SIZE
             return list(struct.unpack_from(f"<{list_len}q", serialized_data, list_offset))
 
-        elif field_meta.data_type == _PyFieldType.list_float32:
-            list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
+        elif data_type == _PyFieldType.list_float32:
+            list_offset = struct.unpack_from("<I", serialized_data, field_offset)[0] + row_offset
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]
             list_offset += UINT16_SIZE
             return list(struct.unpack_from(f"<{list_len}f", serialized_data, list_offset))

@@ -12,6 +12,7 @@ from openviking.service.core import OpenVikingService
 from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
@@ -28,10 +29,12 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
         ),
         vlm=SimpleNamespace(max_concurrent=32),
         parser_api=SimpleNamespace(),
+        compile_api=SimpleNamespace(base_url=""),
         queue_workers=SimpleNamespace(
             external_parse=SimpleNamespace(max_concurrent=9),
             add_resource=SimpleNamespace(max_concurrent=7),
             session_commit=SimpleNamespace(max_concurrent=5),
+            external_task=SimpleNamespace(max_concurrent=6),
         ),
         git=object(),
     )
@@ -57,6 +60,7 @@ def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None
     assert storage_calls[0][1]["max_concurrent_external_parse"] == 9
     assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
     assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
+    assert storage_calls[0][1]["max_concurrent_external_task"] == 6
 
 
 def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
@@ -107,3 +111,47 @@ async def test_check_consistency_preserves_directory_behavior() -> None:
     )
     viking_fs.tree.assert_awaited_once()
     check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> None:
+    events: list[str] = []
+
+    class ResourceService:
+        async def close_background_tasks(self) -> None:
+            events.append("resource_tasks")
+
+    class QueueManager:
+        def stop(self) -> None:
+            events.append("queue_manager")
+
+    class RagfsClient:
+        def close(self) -> None:
+            events.append("ragfs_binding")
+
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._resource_service = ResourceService()
+    service._config = SimpleNamespace(vlm=VLMConfig())
+    service._runtime_config_manager = None
+    service._watch_scheduler = None
+    service._session_auto_commit_scheduler = None
+    service._queue_manager = QueueManager()
+    service._vikingdb_manager = None
+    service._agfs_client = RagfsClient()
+    service._viking_fs = object()
+    service._resource_processor = object()
+    service._skill_processor = object()
+    service._session_compressor = object()
+    service._directory_initializer = object()
+    service._privacy_config_service = object()
+    service._initialized = True
+    monkeypatch.setattr(
+        OpenVikingService,
+        "_release_data_dir_lock",
+        lambda self: events.append("data_dir_lock"),
+    )
+
+    await service.close()
+
+    assert events.index("queue_manager") < events.index("ragfs_binding")
+    assert events[-1] == "data_dir_lock"

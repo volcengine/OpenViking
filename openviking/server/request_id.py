@@ -10,25 +10,20 @@ import re
 import time
 import uuid
 
-from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from openviking_cli.utils.logger import bind_log_request_id
 
 REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID_HEADER_BYTES = b"x-request-id"
-_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:/-]{1,128}")
 _IGNORED_COMPLETION_ROUTES = frozenset({"/health", "/ready", "/metrics"})
 
 _completion_logger = logging.getLogger("openviking.observability.http")
 
 
 def _resolve_request_id(scope: Scope) -> tuple[str, bool]:
-    values = [
-        value
-        for name, value in scope["headers"]
-        if name.lower() == _REQUEST_ID_HEADER_BYTES
-    ]
+    values = [value for name, value in scope["headers"] if name.lower() == _REQUEST_ID_HEADER_BYTES]
     invalid = bool(values)
     if len(values) == 1:
         try:
@@ -80,22 +75,15 @@ class RequestIdMiddleware:
         with bind_log_request_id(request_id):
             try:
                 if invalid:
-                    response = JSONResponse(
-                        status_code=400,
-                        content={
-                            "status": "error",
-                            "error": {
-                                "code": "INVALID_ARGUMENT",
-                                "message": (
-                                    "X-Request-ID must be supplied once and contain 1-128 "
-                                    "characters from [A-Za-z0-9._:-]"
-                                ),
-                            },
-                        },
+                    # Regenerated ids from _resolve_request_id are used as-is;
+                    # reject-by-HTTP-400 broke legitimate gateways (e.g. OpenAI
+                    # Secure MCP Tunnel) that forward trace ids like
+                    # "<uuid>/<suffix>". Never log the raw invalid value.
+                    _completion_logger.warning(
+                        "HTTP request arrived with missing or invalid "
+                        "X-Request-ID header; generated replacement"
                     )
-                    await response(scope, receive, send_with_request_id)
-                else:
-                    await self.app(scope, receive, send_with_request_id)
+                await self.app(scope, receive, send_with_request_id)
             finally:
                 if scope["path"] not in _IGNORED_COMPLETION_ROUTES:
                     duration_ms = (time.perf_counter() - started_at) * 1000

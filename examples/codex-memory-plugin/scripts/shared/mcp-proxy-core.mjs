@@ -9,6 +9,8 @@
 import { statSync } from "node:fs";
 import { createInterface } from "node:readline";
 
+import { buildOvHeaders } from "./ov-http.mjs";
+
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const DELETE_TIMEOUT_MS = 2000;
 const MAX_CONCURRENT_REQUESTS = 16;
@@ -240,21 +242,27 @@ export function createOpenVikingMcpProxy({
   }
 
   function headersForRequest(includeSession = true) {
-    const headers = {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-      // Always the proxy's current version (default, then server-negotiated) —
-      // never the client's un-negotiated ask, which strict upstreams reject
-      // with HTTP 400 before initialize negotiation can run.
-      "MCP-Protocol-Version": protocolVersion,
-    };
-    if (includeSession && sessionId) headers["Mcp-Session-Id"] = sessionId;
-    if (proxyConfig.apiKey) headers.Authorization = `Bearer ${proxyConfig.apiKey}`;
-    if (proxyConfig.account) headers["X-OpenViking-Account"] = proxyConfig.account;
-    if (proxyConfig.user) headers["X-OpenViking-User"] = proxyConfig.user;
-    if (proxyConfig.peerId) headers["X-OpenViking-Actor-Peer"] = proxyConfig.peerId;
-    if (proxyConfig.userAgent) headers["User-Agent"] = proxyConfig.userAgent;
-    return headers;
+    const built = buildOvHeaders(proxyConfig, {
+      actorPeerId: proxyConfig.peerId,
+      extraHeaders: {
+        "Accept": "application/json, text/event-stream",
+        // Always the proxy's current version (default, then server-negotiated) —
+        // never the client's un-negotiated ask, which strict upstreams reject
+        // with HTTP 400 before initialize negotiation can run.
+        "MCP-Protocol-Version": protocolVersion,
+        ...(includeSession && sessionId ? { "Mcp-Session-Id": sessionId } : {}),
+      },
+    });
+    // Operator-supplied extras (OPENVIKING_EXTRA_HEADERS) merged with the
+    // proxy's own headers winning — the env-only escape hatch fills gaps for
+    // strict private-gateway upstreams (tenant/vault names, region hints)
+    // without letting a stray env var override authentication or session
+    // negotiation.
+    const opExtras = proxyConfig.extraHeaders;
+    if (opExtras && typeof opExtras === "object") {
+      return { ...opExtras, ...built };
+    }
+    return built;
   }
 
   function writeMessage(obj) {
@@ -292,10 +300,22 @@ export function createOpenVikingMcpProxy({
       );
     }
     const msg = err instanceof Error ? err.message : String(err);
+    if (err && err.name === "AbortError") {
+      // Client-side timeout, not an outage: the server may be healthy and
+      // still computing (rerank-inclusive find/search can legitimately take
+      // longer than the default budget). Keep -32001 for genuine
+      // connection failures so the two are not misdiagnosed as each other.
+      return errorResponse(
+        id,
+        -32004,
+        `OpenViking MCP request timed out after ${proxyConfig.timeoutMs}ms (${proxyConfig.mcpUrl}). The server may still be processing (rerank can be slow) — check /health or raise OPENVIKING_TIMEOUT_MS.`,
+        { timeoutMs: proxyConfig.timeoutMs, mcpUrl: proxyConfig.mcpUrl, cause: msg },
+      );
+    }
     return errorResponse(
       id,
       -32001,
-      `OpenViking MCP request failed. Check the configured URL (${proxyConfig.mcpUrl}) and that 'ov serve' is running.`,
+      `OpenViking MCP request failed. Check the configured URL (${proxyConfig.mcpUrl}) and that the OpenViking server (\`openviking-server\`) is reachable.`,
       { cause: msg },
     );
   }

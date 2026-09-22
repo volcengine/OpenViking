@@ -30,7 +30,8 @@ export type OpenVikingSecretRef =
 export type MemoryOpenVikingConfig = {
   mode?: "remote";
   baseUrl?: string;
-  peer_role?: "none" | "assistant" | "person";
+  /** `person` is a legacy alias for `sender`. */
+  peer_role?: "none" | "assistant" | "sender" | "person";
   peer_prefix?: string;
   apiKey?: string | OpenVikingSecretRef;
   /** Optional HTTP headers merged into every OpenViking request. */
@@ -45,13 +46,15 @@ export type MemoryOpenVikingConfig = {
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
   autoRecall?: boolean;
-  /** Outer time budget for the whole auto-recall flow, including search, ranking, and reads. */
+  /** Outer time budget for the whole server-assembled auto-recall flow. */
   autoRecallTimeoutMs?: number;
+  /** Cloud recall compression; no local compressor is shipped. Default off. */
+  recallCompress?: "off" | "server" | "auto";
   /** Include resources in auto-recall and default memory_recall search. Default false. */
   recallResources?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
-  /** Maximum total characters injected by auto-recall. */
+  /** Legacy character budget, converted to the server context token budget. */
   recallMaxInjectedChars?: number;
   /** @deprecated Auto-recall no longer truncates individual memories. */
   recallMaxContentChars?: number;
@@ -67,11 +70,13 @@ export type MemoryOpenVikingConfig = {
    * compatibility). Set to 0 to commit every turn.
    */
   commitTokenThresholdRatio?: number;
+  /** Auto-commit retention: legacy message count (default) or the server's turn-budget policy. */
+  commitRetentionMode?: "message_count" | "turn_budget";
   /**
    * WM v2: number of most-recent messages to keep live after an afterTurn
    * commit so the next turn still has immediate context. Forwarded to the
-   * server as `keep_recent_count`. Default 10. The compact path ignores this
-   * value and always passes 0.
+   * server as `keep_recent_count`. Default 10. Ignored in turn_budget mode.
+   * The compact path ignores this value and always passes 0.
    */
   commitKeepRecentCount?: number;
   bypassSessionPatterns?: string[];
@@ -127,10 +132,12 @@ export type MemoryOpenVikingConfig = {
 
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
-  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey">
+  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey" | "peer_role">
 > & {
   /** parse() resolves SecretRef values, so the runtime shape is always a plain string. */
   apiKey: string;
+  /** Runtime uses the canonical name; legacy `person` input normalizes to `sender`. */
+  peer_role: "none" | "assistant" | "sender";
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
   recallTargetTypes: Array<"resource" | "user" | "agent">;
 };
@@ -140,7 +147,9 @@ const DEFAULT_TARGET_URI = "viking://~/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
-const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 5000;
+// Session-aware context search may spend up to 5 seconds on query expansion
+// before returning its server-side fallback, so leave headroom for retrieval.
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
@@ -150,7 +159,7 @@ const DEFAULT_COMMIT_TOKEN_THRESHOLD_RATIO = 0.5;
 const DEFAULT_COMMIT_KEEP_RECENT_COUNT = 10;
 const DEFAULT_BYPASS_SESSION_PATTERNS: string[] = [];
 const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
-const DEFAULT_PEER_ROLE = "assistant" as const;
+const DEFAULT_PEER_ROLE = "none" as const;
 const DEFAULT_PEER_PREFIX = "";
 const DEFAULT_TRACE_RECALL_DIR = "~/.openclaw/openviking/recall-traces";
 const DEFAULT_TRACE_RECALL_RETENTION_DAYS = 14;
@@ -290,16 +299,23 @@ function resolveSecret(
   }
 }
 
-function resolvePeerRole(configured: unknown) {
+function resolvePeerRole(configured: unknown): "none" | "assistant" | "sender" {
   if (typeof configured === "string") {
     const role = configured.trim().toLowerCase();
-    if (role === "none" || role === "assistant" || role === "person") {
+    if (role === "none" || role === "assistant" || role === "sender") {
       return role;
     }
-    throw new Error(`openviking peer_role must be "none", "assistant", or "person"`);
+    if (role === "person") {
+      return "sender";
+    }
+    throw new Error(
+      `openviking peer_role must be "none", "assistant", or "sender" (legacy alias: "person")`,
+    );
   }
   if (configured !== undefined) {
-    throw new Error(`openviking peer_role must be "none", "assistant", or "person"`);
+    throw new Error(
+      `openviking peer_role must be "none", "assistant", or "sender" (legacy alias: "person")`,
+    );
   }
   return DEFAULT_PEER_ROLE;
 }
@@ -517,6 +533,7 @@ export const memoryOpenVikingConfigSchema = {
         "captureMaxLength",
         "autoRecall",
         "autoRecallTimeoutMs",
+        "recallCompress",
         "recallResources",
         "recallLimit",
         "recallScoreThreshold",
@@ -526,6 +543,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallTokenBudget",
         "commitTokenThreshold",
         "commitTokenThresholdRatio",
+        "commitRetentionMode",
         "commitKeepRecentCount",
         "bypassSessionPatterns",
         "ingestReplyAssist",
@@ -576,6 +594,14 @@ export const memoryOpenVikingConfigSchema = {
         ? (cfg.apiKey as string | OpenVikingSecretRef)
         : getEnv("OPENVIKING_API_KEY") || undefined;
     const captureMode = cfg.captureMode;
+    const commitRetentionMode = cfg.commitRetentionMode;
+    if (
+      commitRetentionMode !== undefined &&
+      commitRetentionMode !== "message_count" &&
+      commitRetentionMode !== "turn_budget"
+    ) {
+      throw new Error('openviking commitRetentionMode must be "message_count" or "turn_budget"');
+    }
     if (
       typeof captureMode !== "undefined" &&
       captureMode !== "semantic" &&
@@ -605,6 +631,12 @@ export const memoryOpenVikingConfigSchema = {
         ),
       ),
     );
+    const rawCompress = String(getEnv("OPENVIKING_RECALL_COMPRESS") ?? cfg.recallCompress ?? "off").trim().toLowerCase();
+    const recallCompress = ["1", "true", "yes"].includes(rawCompress) ? "auto"
+      : ["0", "false", "no"].includes(rawCompress) ? "off" : rawCompress;
+    if (recallCompress !== "off" && recallCompress !== "server" && recallCompress !== "auto") {
+      throw new Error("openviking recallCompress must be server, auto or off (no local compressor)");
+    }
     const recallResources = cfg.recallResources === true || envFlag("OPENVIKING_RECALL_RESOURCES");
     const recallTargetTypes = normalizeRecallTargetTypes(
       cfg.recallTargetTypes,
@@ -654,6 +686,7 @@ export const memoryOpenVikingConfigSchema = {
         0,
         Math.min(1, toNumber(cfg.commitTokenThresholdRatio, DEFAULT_COMMIT_TOKEN_THRESHOLD_RATIO)),
       ),
+      commitRetentionMode: commitRetentionMode ?? "message_count",
       commitKeepRecentCount: Math.max(
         0,
         Math.min(
@@ -727,6 +760,7 @@ export const memoryOpenVikingConfigSchema = {
       traceRecallIncludeContentByDefault: cfg.traceRecallIncludeContentByDefault === true,
       traceRecallIncludeRawUserPreview: cfg.traceRecallIncludeRawUserPreview === true,
       recallTargetTypes,
+      recallCompress,
       enableAddResourceTool: cfg.enableAddResourceTool === true,
       enabledTools,
       disabledTools,
@@ -774,14 +808,17 @@ export const memoryOpenVikingConfigSchema = {
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
     },
     peer_role: {
-      label: "Peer Role",
+      label: "Memory Scope (peer_role)",
       placeholder: DEFAULT_PEER_ROLE,
-      help: 'Controls which session messages get peer_id: "none", "assistant", or "person".',
+      help:
+        'Where peer-scoped memories are stored. "none" (default): viking://user/<user_id>/memories. ' +
+        '"assistant": viking://user/<user_id>/peers/<assistant_id>/memories. ' +
+        '"sender": viking://user/<user_id>/peers/<sender_id>/memories. Legacy "person" is accepted as "sender".',
     },
     peer_prefix: {
       label: "Peer Prefix",
       placeholder: "optional-prefix",
-      help: "Optional prefix applied to assistant peer_id values derived from OpenClaw runtime agent IDs.",
+      help: 'Only used when Memory Scope is "assistant". Prefix added to the peer id derived from the OpenClaw agent id.',
     },
     apiKey: {
       label: "OpenViking API Key",
@@ -843,7 +880,7 @@ export const memoryOpenVikingConfigSchema = {
       label: "Auto-Recall Timeout (ms)",
       placeholder: String(DEFAULT_AUTO_RECALL_TIMEOUT_MS),
       advanced: true,
-      help: "Outer time budget for the whole auto-recall flow, including search, ranking, and memory reads.",
+      help: "Outer time budget for the server-assembled context search, including session-aware query expansion.",
     },
     recallResources: {
       label: "Recall Resources",
@@ -870,7 +907,7 @@ export const memoryOpenVikingConfigSchema = {
       label: "Recall Max Injected Chars",
       placeholder: String(DEFAULT_RECALL_MAX_INJECTED_CHARS),
       advanced: true,
-      help: "Maximum total characters for auto-recall memory injection. Complete memories that do not fit are skipped, not truncated.",
+      help: "Legacy auto-recall character budget. It is converted to the server context token budget at four characters per token.",
     },
     recallMaxContentChars: {
       label: "Deprecated Recall Max Content Chars",
@@ -881,7 +918,7 @@ export const memoryOpenVikingConfigSchema = {
     recallPreferAbstract: {
       label: "Recall Prefer Abstract",
       advanced: true,
-      help: "Use memory abstract instead of fetching full content when abstract is available. Reduces token usage.",
+      help: "Pin server-assembled auto-recall entries to abstract detail. When disabled, the server chooses each category's default detail tier.",
     },
     recallTokenBudget: {
       label: "Deprecated Recall Token Budget",
@@ -892,7 +929,7 @@ export const memoryOpenVikingConfigSchema = {
     bypassSessionPatterns: {
       label: "Bypass Session Patterns",
       placeholder: "agent:*:cron:**",
-      help: "Completely bypass OpenViking for matching session keys. Use * within one segment and ** across segments.",
+      help: "Completely bypass OpenViking for matching session keys (no capture, recall, or commit; compaction falls back to OpenClaw's native compactor). Use * within one segment and ** across segments.",
       advanced: true,
     },
     commitTokenThresholdRatio: {
@@ -901,13 +938,18 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
       help: "Auto-commit triggers once estimated pending tokens reach this fraction (0-1) of the model context window (e.g. 0.5 = 50%). Set to 0 to commit every turn.",
     },
+    commitRetentionMode: {
+      label: "Commit Retention Mode",
+      advanced: true,
+      help: "Auto-commit only: message_count (default) keeps recent messages; turn_budget uses the server's turn-aware defaults. Manual commit and compact still archive everything.",
+    },
     commitKeepRecentCount: {
       label: "Commit Keep Recent Count",
       placeholder: String(DEFAULT_COMMIT_KEEP_RECENT_COUNT),
       advanced: true,
       help:
         "Number of most-recent messages to keep live after an afterTurn commit. " +
-        "Forwarded as keep_recent_count to the server. Compact path always uses 0.",
+        "Forwarded as keep_recent_count to the server in message_count mode; ignored in turn_budget mode. Compact path always uses 0.",
     },
     emitStandardDiagnostics: {
       label: "Standard diagnostics (diag JSON lines)",

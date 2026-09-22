@@ -105,9 +105,10 @@ def test_get_ctx_raises_when_unset():
         ("viking://~/resources", "viking://user/test_user/resources"),
     ],
 )
-def test_resolve_mcp_workspace_uri_only_expands_documented_aliases(uri, expected):
-    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
-    assert _resolve_mcp_workspace_uri(uri, user_ctx) == expected
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+def test_resolve_mcp_workspace_uri_only_expands_documented_aliases(uri, expected, role):
+    ctx = RequestContext(DEFAULT_CTX.user, role)
+    assert _resolve_mcp_workspace_uri(uri, ctx) == expected
 
 
 @pytest.mark.parametrize(
@@ -132,8 +133,8 @@ def test_resolve_mcp_workspace_uri_supports_dotted_current_user_id():
     assert _resolve_mcp_workspace_uri("viking://user/notes/todo.md", ctx) == (
         "viking://user/notes/todo.md"
     )
-    # DEFAULT_CTX is ROOT: root-role requests skip current-user resolution
-    # entirely, so a reserved first segment stays a literal user id.
+    # DEFAULT_CTX is ROOT: only the '~' alias uses its effective user identity,
+    # so a reserved first segment stays a literal user id.
     assert _resolve_mcp_workspace_uri("viking://user/resources", DEFAULT_CTX) == (
         "viking://user/resources"
     )
@@ -621,6 +622,38 @@ async def test_read_delegates_to_visible_read(monkeypatch):
     read_visible.assert_awaited_once_with(
         "viking://user/test_user/project/private.md",
         ctx=DEFAULT_CTX,
+        offset=0,
+        limit=-1,
+    )
+
+
+async def test_read_passes_offset_limit_to_visible_read(monkeypatch):
+    read_visible = AsyncMock(return_value="line 3\nline 4\n")
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
+    )
+    uri = "viking://resources/notes.md"
+
+    result = await mcp_endpoint.mcp.call_tool(
+        "read",
+        {
+            "uris": uri,
+            "offset": 2,
+            "limit": 2,
+        },
+    )
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], TextContent)
+    assert result[0].text == "line 3\nline 4\n"
+    read_visible.assert_awaited_once_with(
+        uri,
+        ctx=DEFAULT_CTX,
+        offset=2,
+        limit=2,
     )
 
 
@@ -745,7 +778,11 @@ async def test_read_video_returns_unsupported_hint(monkeypatch):
 
     assert "no standard VideoContent" in result
     assert 'ov get "viking://resources/demo.mp4" "./demo.mp4"' in result
-    stat.assert_awaited_once_with("viking://resources/demo.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/demo.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -768,7 +805,11 @@ async def test_read_video_nonexistent_uri_preserves_not_found(monkeypatch):
 
     assert "not found" in result.lower()
     assert "VideoContent" not in result
-    stat.assert_awaited_once_with("viking://resources/missing.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/missing.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -791,7 +832,11 @@ async def test_read_video_directory_uri_preserves_directory_hint(monkeypatch):
 
     assert "URI points to a directory" in result
     assert "VideoContent" not in result
-    stat.assert_awaited_once_with("viking://resources/archive.mp4", ctx=DEFAULT_CTX)
+    stat.assert_awaited_once_with(
+        "viking://resources/archive.mp4",
+        ctx=DEFAULT_CTX,
+        skip_count=True,
+    )
     read_visible.assert_not_awaited()
 
 
@@ -879,7 +924,7 @@ async def test_read_svg_remains_text(monkeypatch):
     uri = "viking://resources/diagram.svg"
 
     assert await read(uri) == "<svg></svg>"
-    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
+    read_visible.assert_awaited_once_with(uri, ctx=DEFAULT_CTX, offset=0, limit=-1)
     read_file_bytes.assert_not_awaited()
 
 
@@ -1005,6 +1050,23 @@ async def test_add_resource_local_path_returns_upload_instruction(service):
     # Default fixture sets neither env nor config.public_base_url → URL is auto-inferred
     # and the troubleshooting hint must appear.
     assert "OPENVIKING_PUBLIC_BASE_URL" in result
+    upload_token_store.clear()
+
+
+async def test_add_resource_local_path_mentions_gateway_headers(service):
+    """The prose must warn agents that private-gateway headers apply to the upload too.
+
+    Prevents the "no API key needed" line from being read as "no headers needed" when
+    the deployment sits behind a gateway that enforces tenant/vault headers.
+    """
+    from openviking.server.upload_token_store import upload_token_store
+
+    upload_token_store.clear()
+    result = await add_resource(path="/tmp/sample_local_file_xyz.pdf")
+    lower = result.lower()
+    assert "gateway" in lower or "reverse proxy" in lower
+    assert "openviking_name" in lower or "extra request headers" in lower
+    assert "replay" in lower or "same headers" in lower
     upload_token_store.clear()
 
 
@@ -1550,9 +1612,10 @@ async def test_edit_memory_file_preserves_metadata(service):
     assert visible.strip() == "likes: coffee"
 
 
-async def test_write_home_alias_uri(service):
-    """`viking://~/...` writes into the caller's canonical user root."""
-    user_ctx = RequestContext(DEFAULT_CTX.user, Role.USER)
+@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
+async def test_write_home_alias_uri(service, role):
+    """Every MCP request role writes `viking://~/...` under its effective user."""
+    user_ctx = RequestContext(DEFAULT_CTX.user, role)
     canonical = f"viking://user/{DEFAULT_CTX.user.user_id}/memories/preferences/home_alias.md"
     token = _mcp_ctx.set(user_ctx)
     try:
@@ -1569,12 +1632,6 @@ async def test_write_home_alias_uri(service):
     assert "viking://~" not in read_back
     visible = await service.fs.read_visible(canonical, ctx=DEFAULT_CTX)
     assert visible.strip() == "x"
-
-
-async def test_home_alias_rejected_for_root_role(service):
-    """Root-role MCP calls skip current-user resolution, so the alias fails closed."""
-    with pytest.raises(InvalidURIError, match="Home alias URI is not canonical"):
-        await list_tool(uri="viking://~/memories")
 
 
 async def test_write_home_alias_memory_uri(service):
@@ -1741,7 +1798,7 @@ def test_mcp_route_unmatched_paths_keep_falling_back(app):
     assert "route" not in child_scope
 
 
-async def test_mcp_middleware_stamps_root_span_identity():
+async def test_mcp_middleware_stamps_and_uses_root_identity_for_home_alias():
     """Identity resolved from the auth headers must be stamped onto the outer
     request's root span attributes, so MCP traffic is audited under the real
     account/user instead of ``__unknown__``."""
@@ -1753,7 +1810,12 @@ async def test_mcp_middleware_stamps_root_span_identity():
         request_id="req-test",
     )
 
+    seen = {}
+
     async def downstream(scope, receive, send):
+        ctx = _get_ctx()
+        seen["ctx"] = ctx
+        seen["uri"] = _resolve_mcp_workspace_uri("viking://~/memories", ctx)
         response = httpx.Response(200, json={"ok": True})
         await send(
             {
@@ -1787,6 +1849,9 @@ async def test_mcp_middleware_stamps_root_span_identity():
     assert response.status_code == 200
     assert root_attrs.account_id == "acct-1"
     assert root_attrs.user_id == "user-1"
+    assert seen["ctx"].role == Role.ROOT
+    assert seen["ctx"].account_id == "acct-1"
+    assert seen["uri"] == "viking://user/user-1/memories"
 
 
 # ---- tree tool ----

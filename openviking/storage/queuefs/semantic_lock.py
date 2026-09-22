@@ -18,7 +18,7 @@ _TREE_LOCK_SUFFIX = f"/{MULTIWRITE_PATH_LOCK_FILE}"
 
 
 def _tree_paths_from_handoff(lock_paths: Iterable[str]) -> list[str]:
-    """Extract tree lock directory paths from lock file paths."""
+    """Extract tree lock directory paths from legacy lock file handles."""
     tree_paths: list[str] = []
     for lock_path in lock_paths:
         if not lock_path.endswith(_TREE_LOCK_SUFFIX):
@@ -44,7 +44,7 @@ class SemanticLockScope:
         caller_lock: Optional[Dict[str, Any]] = None,
         fallback_path_factory: Optional[Callable[[], str]] = None,
     ) -> "SemanticLockScope":
-        """Resolve a live lock, lazily deriving a path for stale legacy handoffs."""
+        """Resolve a live lock, reacquiring its original coverage when stale."""
         if lock_handoff and caller_lock is not None:
             raise ValueError("semantic lock must come from either message or caller, not both")
         if caller_lock is not None:
@@ -54,22 +54,29 @@ class SemanticLockScope:
             viking_fs = get_viking_fs()
             try:
                 return cls(await viking_fs._async_agfs.pathlock_adopt(lock_handoff), _owned=True)
-            except LockAcquisitionError:
-                tree_paths = _tree_paths_from_handoff(lock_handoff["lock_paths"])
-                if not tree_paths and fallback_path_factory:
-                    tree_paths = [fallback_path_factory()]
-                if not tree_paths:
+            except LockAcquisitionError as error:
+                # ponytail: Replace this message check with a recoverable handoff
+                # exception when the native binding exposes typed handoff failures.
+                error_message = str(error)
+                if "is no longer owned by" not in error_message and (
+                    "logical-path provider handoff requires covered_paths" not in error_message
+                ):
                     raise
+                covered_paths = lock_handoff.get("covered_paths") or []
+                if not covered_paths:
+                    tree_paths = _tree_paths_from_handoff(lock_handoff["lock_paths"])
+                    if not tree_paths and fallback_path_factory:
+                        tree_paths = [fallback_path_factory()]
+                    if not tree_paths:
+                        raise
+                    covered_paths = [{"path": path, "kind": "tree"} for path in tree_paths]
 
-                if len(tree_paths) == 1:
-                    lease = await viking_fs._async_agfs.pathlock_acquire_tree(tree_paths[0])
-                else:
-                    lease = await viking_fs._async_agfs.pathlock_acquire_tree_batch(tree_paths)
+                lease = await viking_fs._async_agfs.pathlock_acquire_batch(covered_paths)
 
                 logger.info(
                     "Recovered semantic lock handoff %s by reacquiring %s",
                     lock_handoff.get("owner_id"),
-                    tree_paths,
+                    covered_paths,
                 )
                 return cls(lease, _owned=True)
         return cls(None)

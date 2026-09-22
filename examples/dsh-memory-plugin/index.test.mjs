@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { apply } from "./index.mjs";
 
-test("pre-step recalls from the final downstream message batch", async () => {
+test("session filtering skips subagents without changing main-session recall", async () => {
   const handlers = new Map();
+  let memoryRuntime;
   const ctx = {
     logger: { debug() {} },
-    provide() {},
+    provide(name, value) {
+      if (name === "openvikingMemory") memoryRuntime = value;
+    },
     effect(execute) {
       execute();
       return async () => {};
@@ -20,6 +23,7 @@ test("pre-step recalls from the final downstream message batch", async () => {
   apply(ctx, {
     endpoint: "http://127.0.0.1:1933",
     workspacePeer: false,
+    skipSubagentSessions: true,
   });
 
   const agent = {
@@ -31,8 +35,8 @@ test("pre-step recalls from the final downstream message batch", async () => {
       },
     },
   };
-  const runtime = handlers.get("agent/session-start");
-  assert.equal(typeof runtime, "function");
+  const sessionStart = handlers.get("agent/session-start");
+  assert.equal(typeof sessionStart, "function");
 
   const preStep = handlers.get("agent/pre-step");
   const initial = [message("initial input")];
@@ -57,6 +61,38 @@ test("pre-step recalls from the final downstream message batch", async () => {
       messages: initial,
       signal: new AbortController().signal,
     }, async () => ({ kind: "enter", messages: downstream }));
+
+    const child = {
+      status: "idle",
+      session: {
+        id: "dsh-derived-child",
+        header: { cwd: "/workspace", origin: "subagent" },
+      },
+      inject() {
+        assert.fail("subagent profile must not be injected");
+      },
+      ctx: {
+        effect() {
+          assert.fail("subagent teardown commit must not be registered");
+        },
+      },
+    };
+    assert.equal(await sessionStart({ agent: child }), false);
+    const childMessages = [message("derived worker input")];
+    const childDecision = await preStep({
+      agent: child,
+      messages: childMessages,
+      signal: new AbortController().signal,
+    }, async () => ({ kind: "enter", messages: childMessages }));
+    handlers.get("session/event")(child.session, {
+      type: "user/message",
+      data: message("derived exploration chatter"),
+    });
+    handlers.get("session/event")(child.session, { type: "turn/end", data: {} });
+    await handlers.get("session/flush")(child.session);
+
+    assert.deepEqual(childDecision.messages, childMessages);
+    assert.equal(memoryRuntime.states.has(child.session.id), false);
   } finally {
     globalThis.fetch = originalFetch;
   }

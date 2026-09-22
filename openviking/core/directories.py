@@ -7,8 +7,9 @@ OpenViking uses a virtual filesystem where all directories are data records.
 This module defines the preset directory structure that is created on initialization.
 """
 
+import asyncio
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from openviking.core.context import Context, Vectorize
 from openviking.core.namespace import (
@@ -18,7 +19,9 @@ from openviking.core.namespace import (
     user_space_fragment,
 )
 from openviking.server.identity import RequestContext
+from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.vector_ids import vector_record_id
 
 if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
@@ -37,7 +40,16 @@ class DirectoryDefinition:
     children: List["DirectoryDefinition"] = field(default_factory=list)
 
 
-# Preset directory tree - each scope has a root DirectoryDefinition
+@dataclass(frozen=True)
+class _DirectoryTarget:
+    uri: str
+    parent_uri: Optional[str]
+    definition: DirectoryDefinition
+    scope: str
+    ctx: RequestContext
+
+
+# Preset directory trees, keyed by their namespace path.
 PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
     "user": DirectoryDefinition(
         path="",
@@ -140,6 +152,39 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         overview="Globally shared resource storage, organized by project/topic. "
         "No preset subdirectory structure, users create project directories as needed.",
     ),
+    "agent": DirectoryDefinition(
+        path="",
+        abstract="Shared agent capabilities and configuration available across the account.",
+        overview="Account-wide capability definitions, organized into skills, communication "
+        "endpoints, tools, and payments. Each category has its own directory.",
+        children=[
+            DirectoryDefinition(
+                path="skills",
+                abstract="Shared skill registry. Stores callable skill definitions available across the account.",
+                overview="Use this directory for skills shared by users in the same account. "
+                "Each skill is stored in its own directory using the SKILL.md format. "
+                "User-private skills remain under viking://user/{user_id}/skills.",
+            ),
+            DirectoryDefinition(
+                path="endpoints",
+                abstract="Shared communication endpoint configuration for agent capabilities.",
+                overview="Stores definitions of external communication endpoints, organized "
+                "by protocol or service, such as A2A and ANP.",
+            ),
+            DirectoryDefinition(
+                path="tools",
+                abstract="Shared tool configuration for agent capabilities.",
+                overview="Stores tool integration definitions, organized by protocol or "
+                "provider, such as MCP server configurations.",
+            ),
+            DirectoryDefinition(
+                path="payments",
+                abstract="Shared payment capability configuration for agents.",
+                overview="Stores payment capability definitions, organized by protocol "
+                "or provider, such as AP2 configurations.",
+            ),
+        ],
+    ),
 }
 
 
@@ -161,29 +206,25 @@ class DirectoryInitializer:
 
         return get_viking_fs()
 
+    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
+        """Initialize account and first-user preset directories as one batch."""
+        account_roots, account_children = self._account_directory_targets(ctx)
+        user_root, user_children = self._user_directory_targets(ctx)
+        created = await self._initialize_directory_trees(
+            (*account_roots, user_root), (*account_children, *user_children)
+        )
+        user_count = sum(target.scope == "user" for target in created)
+        return len(created) - user_count, user_count
+
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
-        """Initialize account-shared scope roots.
+        """Initialize account-shared roots and their preset first-level directories.
 
         ``viking://user`` is the container of user spaces, not a space itself.
         Its concrete metadata belongs to ``viking://user/{user_id}`` and is
         created by ``initialize_user_directories``.
         """
-        count = 0
-        scope_roots = {
-            "resources": PRESET_DIRECTORIES["resources"],
-        }
-        for scope, defn in scope_roots.items():
-            root_uri = f"viking://{scope}"
-            created = await self._ensure_directory(
-                uri=root_uri,
-                parent_uri=None,
-                defn=defn,
-                scope=scope,
-                ctx=ctx,
-            )
-            if created:
-                count += 1
-        return count
+        roots, children = self._account_directory_targets(ctx)
+        return len(await self._initialize_directory_trees(roots, children))
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
         """Initialize the current user's root and first-level entry directories.
@@ -194,161 +235,195 @@ class DirectoryInitializer:
         """
         if "user" not in PRESET_DIRECTORIES:
             return 0
-        user_space_root = canonical_user_root(ctx)
+        user_root, user_children = self._user_directory_targets(ctx)
+        return len(await self._initialize_directory_trees((user_root,), user_children))
+
+    async def _initialize_directory_trees(
+        self, roots: Sequence[_DirectoryTarget], children: Sequence[_DirectoryTarget]
+    ) -> list[_DirectoryTarget]:
+        """Initialize roots before children and index successful writes as one batch."""
+        results = await asyncio.gather(
+            *(self._ensure_agfs_directory(target) for target in roots),
+            return_exceptions=True,
+        )
+        created, error = self._partition_directory_results(results)
+        if error is None:
+            results = await asyncio.gather(
+                *(self._ensure_agfs_directory(target) for target in children),
+                return_exceptions=True,
+            )
+            created_children, error = self._partition_directory_results(results)
+            created.extend(created_children)
+        await self._ensure_directory_l0_l1_vectors(created)
+        if error is not None:
+            raise error
+        return created
+
+    @staticmethod
+    def _account_directory_targets(
+        ctx: RequestContext,
+    ) -> tuple[list[_DirectoryTarget], list[_DirectoryTarget]]:
+        roots = []
+        children = []
+        for scope in ("resources", "agent"):
+            uri = f"viking://{scope}"
+            tree = PRESET_DIRECTORIES[scope]
+            roots.append(
+                _DirectoryTarget(
+                    uri=uri,
+                    parent_uri=None,
+                    definition=tree,
+                    scope=scope,
+                    ctx=ctx,
+                )
+            )
+            children.extend(
+                _DirectoryTarget(
+                    uri=f"{uri}/{child.path}",
+                    parent_uri=uri,
+                    definition=child,
+                    scope=scope,
+                    ctx=ctx,
+                )
+                for child in tree.children
+            )
+        return roots, children
+
+    @staticmethod
+    def _user_directory_targets(
+        ctx: RequestContext,
+    ) -> tuple[_DirectoryTarget, list[_DirectoryTarget]]:
         # Preset initialization is a server-controlled write to the current
-        # user's own root and first-level directories.  Actor-peer view must
+        # user's own root and first-level directories. Actor-peer view must
         # still protect peer subtrees during normal filesystem mutations, but
         # it must not prevent a fresh user from creating the container that
         # owns those subtrees in the first place.
         initialization_ctx = replace(ctx, actor_peer_id=None)
         user_tree = PRESET_DIRECTORIES["user"]
-        parent_uri = "viking://user"
-        count = 0
-        if await self._ensure_directory(
-            uri=user_space_root,
-            parent_uri=parent_uri,
-            defn=user_tree,
+        user_root_uri = canonical_user_root(initialization_ctx)
+        root = _DirectoryTarget(
+            uri=user_root_uri,
+            parent_uri="viking://user",
+            definition=user_tree,
             scope="user",
             ctx=initialization_ctx,
-        ):
-            count += 1
-
-        for child in user_tree.children:
-            child_uri = f"{user_space_root}/{child.path}"
-            if await self._ensure_directory(
-                uri=child_uri,
-                parent_uri=user_space_root,
-                defn=child,
+        )
+        children = [
+            _DirectoryTarget(
+                uri=f"{user_root_uri}/{child.path}",
+                parent_uri=user_root_uri,
+                definition=child,
                 scope="user",
                 ctx=initialization_ctx,
-            ):
-                count += 1
+            )
+            for child in user_tree.children
+        ]
+        return root, children
 
-        return count
+    @staticmethod
+    def _partition_directory_results(
+        results: Sequence[_DirectoryTarget | None | BaseException],
+    ) -> tuple[list[_DirectoryTarget], Optional[BaseException]]:
+        """Keep successful concurrent writes while preserving the first failure."""
+        created_targets = []
+        first_error = None
+        for result in results:
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException):
+                if first_error is None:
+                    first_error = result
+            elif result is not None:
+                created_targets.append(result)
+        return created_targets, first_error
 
-    async def _ensure_directory(
-        self,
-        uri: str,
-        parent_uri: Optional[str],
-        defn: DirectoryDefinition,
-        scope: str,
-        ctx: RequestContext,
-    ) -> bool:
-        """Ensure directory exists, return whether newly created."""
+    async def _ensure_agfs_directory(self, target: _DirectoryTarget) -> _DirectoryTarget | None:
+        """Fill missing L0/L1 files, preserving stored text for vector initialization."""
         from openviking_cli.utils.logger import get_logger
 
         logger = get_logger(__name__)
-        created = False
-        agfs_created = False
-        # 1. Ensure files exist in AGFS
-        if not await self._check_agfs_files_exist(uri, ctx=ctx):
-            logger.debug(f"[VikingFS] Creating directory: {uri} for scope {scope}")
-            await self._create_agfs_structure(uri, defn.abstract, defn.overview, ctx=ctx)
-            created = True
-            agfs_created = True
-        else:
-            logger.debug(f"[VikingFS] Directory {uri} already exists")
-
-        # 2. Seed directory L0/L1 vectors only during fresh initialization.
-        owner_space = self._owner_space_for_scope(scope=scope, ctx=ctx)
-        if agfs_created and not is_session_uri(uri):
-            await self._ensure_directory_l0_l1_vectors(
-                uri=uri,
-                parent_uri=parent_uri,
-                defn=defn,
-                owner_space=owner_space,
-                ctx=ctx,
+        viking_fs = self._get_viking_fs()
+        contents = {}
+        missing = {}
+        try:
+            for name, default in (
+                ("abstract", target.definition.abstract),
+                ("overview", target.definition.overview),
+            ):
+                try:
+                    raw = await viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
+                except (FileNotFoundError, NotFoundError):
+                    contents[name] = default
+                    missing[name] = contents[name]
+                else:
+                    contents[name] = body_for_preview(raw)
+        except AbstractOverviewFormatError as exc:
+            logger.warning(
+                "[VikingFS] Directory %s (account=%s) has invalid L0/L1 metadata; "
+                "preserving existing contents: %s",
+                target.uri,
+                target.ctx.account_id,
+                exc,
             )
-        return created
+            return None
+        if not missing:
+            logger.debug(f"[VikingFS] Directory {target.uri} already exists")
+            return None
+        logger.debug(f"[VikingFS] Creating directory: {target.uri} for scope {target.scope}")
+        await viking_fs.write_context(
+            uri=target.uri,
+            **missing,
+            is_leaf=False,
+            ctx=target.ctx,
+        )
+        return replace(target, definition=replace(target.definition, **contents))
 
-    async def _ensure_directory_l0_l1_vectors(
-        self,
-        uri: str,
-        parent_uri: Optional[str],
-        defn: DirectoryDefinition,
-        owner_space: str,
-        ctx: RequestContext,
-    ) -> None:
-        """Ensure L0/L1 vector records exist for a preset directory."""
-        for level, vector_text in (
-            (0, defn.abstract),
-            (1, defn.overview),
-        ):
-            existing = await self.vikingdb.get_context_by_uri(
-                uri=uri,
-                level=level,
-                limit=1,
-                ctx=ctx,
+    async def _ensure_directory_l0_l1_vectors(self, targets: list[_DirectoryTarget]) -> None:
+        """Seed missing L0/L1 records after one batch existence read."""
+        vector_targets = [
+            (target, level, vector_text)
+            for target in targets
+            if not is_session_uri(target.uri)
+            for level, vector_text in (
+                (0, target.definition.abstract),
+                (1, target.definition.overview),
             )
-            if existing:
+        ]
+        if not vector_targets:
+            return
+
+        record_ids = [
+            vector_record_id(target.ctx.account_id, target.uri, level)
+            for target, level, _vector_text in vector_targets
+        ]
+        existing = await self.vikingdb.get(record_ids, ctx=vector_targets[0][0].ctx)
+        existing_ids = {record.get("id") for record in existing if record.get("id")}
+
+        messages = []
+        for record_id, (target, level, vector_text) in zip(record_ids, vector_targets, strict=True):
+            if record_id in existing_ids:
                 continue
             context = Context(
-                uri=uri,
-                parent_uri=parent_uri,
+                uri=target.uri,
+                parent_uri=target.parent_uri,
                 is_leaf=False,
-                context_type=context_type_for_uri(uri),
-                abstract=defn.abstract,
+                context_type=context_type_for_uri(target.uri),
+                abstract=target.definition.abstract,
                 level=level,
-                user=ctx.user,
-                account_id=ctx.account_id,
-                owner_space=owner_space,
+                user=target.ctx.user,
+                account_id=target.ctx.account_id,
+                owner_space=self._owner_space_for_scope(scope=target.scope, ctx=target.ctx),
             )
             context.set_vectorize(Vectorize(text=vector_text))
             emb_msg = EmbeddingMsgConverter.from_context(context)
             if emb_msg:
-                await self.vikingdb.enqueue_embedding_msg(emb_msg)
+                messages.append(emb_msg)
+        await asyncio.gather(
+            *(self.vikingdb.enqueue_embedding_msg(message) for message in messages)
+        )
 
     @staticmethod
     def _owner_space_for_scope(scope: str, ctx: RequestContext) -> str:
         if scope in {"user", "session"}:
             return user_space_fragment(ctx)
         return ""
-
-    async def _check_agfs_files_exist(self, uri: str, ctx: RequestContext) -> bool:
-        """Check if L0/L1 files exist in AGFS."""
-        try:
-            viking_fs = self._get_viking_fs()
-            await viking_fs.abstract(uri, ctx=ctx)
-            return True
-        except (FileNotFoundError, NotFoundError):
-            return False
-
-    async def _initialize_children(
-        self,
-        scope: str,
-        children: List[DirectoryDefinition],
-        parent_uri: str,
-        ctx: RequestContext,
-    ) -> int:
-        """Recursively initialize subdirectories."""
-        count = 0
-
-        for defn in children:
-            uri = f"{parent_uri}/{defn.path}"
-
-            created = await self._ensure_directory(
-                uri=uri,
-                parent_uri=parent_uri,
-                defn=defn,
-                scope=scope,
-                ctx=ctx,
-            )
-            if created:
-                count += 1
-
-            if defn.children:
-                count += await self._initialize_children(scope, defn.children, uri, ctx=ctx)
-
-        return count
-
-    async def _create_agfs_structure(
-        self, uri: str, abstract: str, overview: str, ctx: RequestContext
-    ) -> None:
-        """Create L0/L1 file structure for directory in AGFS."""
-        await self._get_viking_fs().write_context(
-            uri=uri,
-            abstract=abstract,
-            overview=overview,
-            is_leaf=False,  # Preset directories can continue traversing downward
-            ctx=ctx,
-        )

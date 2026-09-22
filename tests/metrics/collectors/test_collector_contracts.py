@@ -347,12 +347,13 @@ def test_prometheus_exporter_inherits_base_metric_exporter():
 
 def test_concrete_datasources_and_collectors_follow_doc_inheritance():
     from openviking.metrics.collectors.base import (
+        DomainStatsMetricCollector,
         ProbeMetricCollector,
         Refreshable,
         StateMetricCollector,
     )
-    from openviking.metrics.collectors.lock import LockCollector
     from openviking.metrics.collectors.queue import QueueCollector
+    from openviking.metrics.collectors.ragfs import RagfsMetricCollector
     from openviking.metrics.collectors.service_probe import ServiceProbeCollector
     from openviking.metrics.collectors.vikingdb import VikingDBCollector
     from openviking.metrics.datasources.base import (
@@ -361,25 +362,25 @@ def test_concrete_datasources_and_collectors_follow_doc_inheritance():
         StateMetricDataSource,
     )
     from openviking.metrics.datasources.observer_state import (
-        LockStateDataSource,
         ObserverStateDataSource,
         VikingDBStateDataSource,
     )
     from openviking.metrics.datasources.probes import ServiceProbeDataSource
     from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
+    from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
 
     assert issubclass(QueuePipelineStateDataSource, StateMetricDataSource)
     assert issubclass(ObserverStateDataSource, DomainStatsMetricDataSource)
-    assert issubclass(LockStateDataSource, StateMetricDataSource)
+    assert issubclass(RagfsMetricDataSource, DomainStatsMetricDataSource)
     assert issubclass(VikingDBStateDataSource, StateMetricDataSource)
     assert issubclass(ServiceProbeDataSource, ProbeMetricDataSource)
 
     assert issubclass(QueueCollector, StateMetricCollector)
-    assert issubclass(LockCollector, StateMetricCollector)
+    assert issubclass(RagfsMetricCollector, DomainStatsMetricCollector)
     assert issubclass(VikingDBCollector, StateMetricCollector)
     assert issubclass(ServiceProbeCollector, ProbeMetricCollector)
     assert issubclass(QueueCollector, Refreshable)
-    assert issubclass(LockCollector, Refreshable)
+    assert issubclass(RagfsMetricCollector, Refreshable)
     assert issubclass(VikingDBCollector, Refreshable)
     assert issubclass(ServiceProbeCollector, Refreshable)
 

@@ -22,8 +22,8 @@ class _FakeSDK:
             raise NotFoundError(sid, "session")
         return {"session_id": sid, "pending_tokens": 0, "message_count": 0}
 
-    async def create_session(self, session_id=None, memory_policy=None):
-        self.created.append(session_id)
+    async def create_session(self, session_id=None, options=None):
+        self.created.append((session_id, options))
         self.existing.add(session_id)
         return {"session_id": session_id}
 
@@ -40,9 +40,12 @@ async def test_ensure_session_get_or_create():
     sdk = _FakeSDK()
     client = ConversationReplayClient(sdk)
     await client.ensure_session("s1")  # not present -> create
-    assert sdk.created == ["s1"]
+    assert sdk.created == [("s1", None)]
     await client.ensure_session("s1")  # now present -> no second create
-    assert sdk.created == ["s1"]
+    assert sdk.created == [("s1", None)]
+    # a memory policy travels inside CreateSessionOptions, not as a keyword
+    await client.ensure_session("s2", {"working_memory": {"enabled": False}})
+    assert sdk.created[-1] == ("s2", {"memory_policy": {"working_memory": {"enabled": False}}})
 
 
 async def test_append_chunks_at_100():
@@ -192,3 +195,46 @@ async def test_commit_if_needed_commits_when_needs_commit_and_pending(tmp_path):
     assert await replayer.commit_if_needed("claude_code", _ref()) is True
     assert replayer.client.committed == ["import__claude_code__s1"]
     assert store.get("claude_code", "s1").needs_commit is False
+
+
+async def test_commit_if_needed_ignores_server_pending_without_local_appends(tmp_path):
+    """Regression: server-side pending tokens alone must not trigger a commit.
+
+    The watch sweep calls ``commit_if_needed`` for every session on every tick, and the
+    server keeps reporting pending tokens until the queued commit is processed. Treating
+    that as "needs commit" re-enqueues the same session on every tick and the queue can
+    never catch up.
+    """
+    store = CursorStore(tmp_path)
+    ref = _ref("s1")
+    # Known session with live pending tokens server-side, but nothing appended locally.
+    store.ensure_row(
+        "claude_code", "s1", "import__claude_code__s1", Cursor(BYTE_OFFSET, {"offset": 10})
+    )
+    fake = _FakeReplay(pending=9000)
+    replayer = SessionReplayer(fake, store)
+
+    for _ in range(3):  # three consecutive sweeps
+        assert await replayer.commit_if_needed("claude_code", ref) is False
+    assert fake.committed == []
+
+
+async def test_commit_if_needed_still_recovers_after_crash(tmp_path):
+    """``needs_commit`` persists, so appended-but-uncommitted work is still flushed."""
+    store = CursorStore(tmp_path)
+    ref = _ref("s1")
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    fake = _FakeReplay(pending=500)
+    # Simulates a restart: a fresh replayer with no in-memory state still commits.
+    replayer = SessionReplayer(fake, store)
+    assert await replayer.commit_if_needed("claude_code", ref) is True
+    assert fake.committed == ["import__claude_code__s1"]

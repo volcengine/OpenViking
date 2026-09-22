@@ -9,70 +9,38 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as HomeRouteRouteImport } from './routes/home/route'
-import { Route as MonitoringRouteRouteImport } from './routes/monitoring/route'
-import { Route as PlaygroundRouteRouteImport } from './routes/playground/route'
-import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/route'
-import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
-import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
-import { Route as SettingsRouteRouteImport } from './routes/settings/route'
-import { Route as SkillsRouteRouteImport } from './routes/skills/route'
-import { Route as TasksRouteRouteImport } from './routes/tasks/route'
-import { Route as UsersRouteRouteImport } from './routes/users/route'
 import { Route as WatchesRouteRouteImport } from './routes/watches/route'
-import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
-import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
+import { Route as VikingbotRouteRouteImport } from './routes/vikingbot/route'
+import { Route as UsersRouteRouteImport } from './routes/users/route'
+import { Route as TasksRouteRouteImport } from './routes/tasks/route'
+import { Route as SkillsRouteRouteImport } from './routes/skills/route'
+import { Route as SettingsRouteRouteImport } from './routes/settings/route'
+import { Route as SessionsRouteRouteImport } from './routes/sessions/route'
+import { Route as RetrievalRouteRouteImport } from './routes/retrieval/route'
+import { Route as RequestLogsRouteRouteImport } from './routes/request-logs/route'
+import { Route as PlaygroundRouteRouteImport } from './routes/playground/route'
+import { Route as MonitoringRouteRouteImport } from './routes/monitoring/route'
+import { Route as HomeRouteRouteImport } from './routes/home/route'
+import { Route as AgentExperienceRouteRouteImport } from './routes/agent-experience/route'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as VikingbotIndexRouteImport } from './routes/vikingbot/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions/index'
+import { Route as CompileIndexRouteImport } from './routes/compile/index'
+import { Route as AgentExperienceIndexRouteImport } from './routes/agent-experience/index'
+import { Route as OauthVerifyRouteImport } from './routes/oauth/verify'
+import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
+import { Route as CompileNewRouteImport } from './routes/compile/new'
+import { Route as AgentExperienceExperienceUriRouteImport } from './routes/agent-experience/$experienceUri'
+import { Route as CompileTasksTaskIdRouteImport } from './routes/compile/tasks/$taskId'
 
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const WatchesRouteRoute = WatchesRouteRouteImport.update({
+  id: '/watches',
+  path: '/watches',
   getParentRoute: () => rootRouteImport,
 } as any)
-const HomeRouteRoute = HomeRouteRouteImport.update({
-  id: '/home',
-  path: '/home',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MonitoringRouteRoute = MonitoringRouteRouteImport.update({
-  id: '/monitoring',
-  path: '/monitoring',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PlaygroundRouteRoute = PlaygroundRouteRouteImport.update({
-  id: '/playground',
-  path: '/playground',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RequestLogsRouteRoute = RequestLogsRouteRouteImport.update({
-  id: '/request-logs',
-  path: '/request-logs',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RetrievalRouteRoute = RetrievalRouteRouteImport.update({
-  id: '/retrieval',
-  path: '/retrieval',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SessionsRouteRoute = SessionsRouteRouteImport.update({
-  id: '/sessions',
-  path: '/sessions',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRouteRoute = SettingsRouteRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SkillsRouteRoute = SkillsRouteRouteImport.update({
-  id: '/skills',
-  path: '/skills',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const TasksRouteRoute = TasksRouteRouteImport.update({
-  id: '/tasks',
-  path: '/tasks',
+const VikingbotRouteRoute = VikingbotRouteRouteImport.update({
+  id: '/vikingbot',
+  path: '/vikingbot',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UsersRouteRoute = UsersRouteRouteImport.update({
@@ -80,9 +48,84 @@ const UsersRouteRoute = UsersRouteRouteImport.update({
   path: '/users',
   getParentRoute: () => rootRouteImport,
 } as any)
-const WatchesRouteRoute = WatchesRouteRouteImport.update({
-  id: '/watches',
-  path: '/watches',
+const TasksRouteRoute = TasksRouteRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SkillsRouteRoute = SkillsRouteRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRouteRoute = SettingsRouteRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SessionsRouteRoute = SessionsRouteRouteImport.update({
+  id: '/sessions',
+  path: '/sessions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RetrievalRouteRoute = RetrievalRouteRouteImport.update({
+  id: '/retrieval',
+  path: '/retrieval',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RequestLogsRouteRoute = RequestLogsRouteRouteImport.update({
+  id: '/request-logs',
+  path: '/request-logs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlaygroundRouteRoute = PlaygroundRouteRouteImport.update({
+  id: '/playground',
+  path: '/playground',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonitoringRouteRoute = MonitoringRouteRouteImport.update({
+  id: '/monitoring',
+  path: '/monitoring',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HomeRouteRoute = HomeRouteRouteImport.update({
+  id: '/home',
+  path: '/home',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentExperienceRouteRoute = AgentExperienceRouteRouteImport.update({
+  id: '/agent-experience',
+  path: '/agent-experience',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VikingbotIndexRoute = VikingbotIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => VikingbotRouteRoute,
+} as any)
+const SessionsIndexRoute = SessionsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => SessionsRouteRoute,
+} as any)
+const CompileIndexRoute = CompileIndexRouteImport.update({
+  id: '/compile/',
+  path: '/compile/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentExperienceIndexRoute = AgentExperienceIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AgentExperienceRouteRoute,
+} as any)
+const OauthVerifyRoute = OauthVerifyRouteImport.update({
+  id: '/oauth/verify',
+  path: '/oauth/verify',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OauthConsentRoute = OauthConsentRouteImport.update({
@@ -90,19 +133,26 @@ const OauthConsentRoute = OauthConsentRouteImport.update({
   path: '/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
-const OauthVerifyRoute = OauthVerifyRouteImport.update({
-  id: '/oauth/verify',
-  path: '/oauth/verify',
+const CompileNewRoute = CompileNewRouteImport.update({
+  id: '/compile/new',
+  path: '/compile/new',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SessionsIndexRoute = SessionsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => SessionsRouteRoute,
+const AgentExperienceExperienceUriRoute =
+  AgentExperienceExperienceUriRouteImport.update({
+    id: '/$experienceUri',
+    path: '/$experienceUri',
+    getParentRoute: () => AgentExperienceRouteRoute,
+  } as any)
+const CompileTasksTaskIdRoute = CompileTasksTaskIdRouteImport.update({
+  id: '/compile/tasks/$taskId',
+  path: '/compile/tasks/$taskId',
+  getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
   '/home': typeof HomeRouteRoute
   '/monitoring': typeof MonitoringRouteRoute
   '/playground': typeof PlaygroundRouteRoute
@@ -113,10 +163,17 @@ export interface FileRoutesByFullPath {
   '/skills': typeof SkillsRouteRoute
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
+  '/vikingbot': typeof VikingbotRouteRouteWithChildren
   '/watches': typeof WatchesRouteRoute
+  '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
+  '/compile/new': typeof CompileNewRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
+  '/agent-experience/': typeof AgentExperienceIndexRoute
+  '/compile/': typeof CompileIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/vikingbot/': typeof VikingbotIndexRoute
+  '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -130,13 +187,20 @@ export interface FileRoutesByTo {
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
   '/watches': typeof WatchesRouteRoute
+  '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
+  '/compile/new': typeof CompileNewRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
+  '/agent-experience': typeof AgentExperienceIndexRoute
+  '/compile': typeof CompileIndexRoute
   '/sessions': typeof SessionsIndexRoute
+  '/vikingbot': typeof VikingbotIndexRoute
+  '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/agent-experience': typeof AgentExperienceRouteRouteWithChildren
   '/home': typeof HomeRouteRoute
   '/monitoring': typeof MonitoringRouteRoute
   '/playground': typeof PlaygroundRouteRoute
@@ -147,15 +211,23 @@ export interface FileRoutesById {
   '/skills': typeof SkillsRouteRoute
   '/tasks': typeof TasksRouteRoute
   '/users': typeof UsersRouteRoute
+  '/vikingbot': typeof VikingbotRouteRouteWithChildren
   '/watches': typeof WatchesRouteRoute
+  '/agent-experience/$experienceUri': typeof AgentExperienceExperienceUriRoute
+  '/compile/new': typeof CompileNewRoute
   '/oauth/consent': typeof OauthConsentRoute
   '/oauth/verify': typeof OauthVerifyRoute
+  '/agent-experience/': typeof AgentExperienceIndexRoute
+  '/compile/': typeof CompileIndexRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/vikingbot/': typeof VikingbotIndexRoute
+  '/compile/tasks/$taskId': typeof CompileTasksTaskIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agent-experience'
     | '/home'
     | '/monitoring'
     | '/playground'
@@ -166,10 +238,17 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/users'
+    | '/vikingbot'
     | '/watches'
+    | '/agent-experience/$experienceUri'
+    | '/compile/new'
     | '/oauth/consent'
     | '/oauth/verify'
+    | '/agent-experience/'
+    | '/compile/'
     | '/sessions/'
+    | '/vikingbot/'
+    | '/compile/tasks/$taskId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -183,12 +262,19 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/users'
     | '/watches'
+    | '/agent-experience/$experienceUri'
+    | '/compile/new'
     | '/oauth/consent'
     | '/oauth/verify'
+    | '/agent-experience'
+    | '/compile'
     | '/sessions'
+    | '/vikingbot'
+    | '/compile/tasks/$taskId'
   id:
     | '__root__'
     | '/'
+    | '/agent-experience'
     | '/home'
     | '/monitoring'
     | '/playground'
@@ -199,14 +285,22 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/users'
+    | '/vikingbot'
     | '/watches'
+    | '/agent-experience/$experienceUri'
+    | '/compile/new'
     | '/oauth/consent'
     | '/oauth/verify'
+    | '/agent-experience/'
+    | '/compile/'
     | '/sessions/'
+    | '/vikingbot/'
+    | '/compile/tasks/$taskId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentExperienceRouteRoute: typeof AgentExperienceRouteRouteWithChildren
   HomeRouteRoute: typeof HomeRouteRoute
   MonitoringRouteRoute: typeof MonitoringRouteRoute
   PlaygroundRouteRoute: typeof PlaygroundRouteRoute
@@ -217,81 +311,29 @@ export interface RootRouteChildren {
   SkillsRouteRoute: typeof SkillsRouteRoute
   TasksRouteRoute: typeof TasksRouteRoute
   UsersRouteRoute: typeof UsersRouteRoute
+  VikingbotRouteRoute: typeof VikingbotRouteRouteWithChildren
   WatchesRouteRoute: typeof WatchesRouteRoute
+  CompileNewRoute: typeof CompileNewRoute
   OauthConsentRoute: typeof OauthConsentRoute
   OauthVerifyRoute: typeof OauthVerifyRoute
+  CompileIndexRoute: typeof CompileIndexRoute
+  CompileTasksTaskIdRoute: typeof CompileTasksTaskIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/watches': {
+      id: '/watches'
+      path: '/watches'
+      fullPath: '/watches'
+      preLoaderRoute: typeof WatchesRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/home': {
-      id: '/home'
-      path: '/home'
-      fullPath: '/home'
-      preLoaderRoute: typeof HomeRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/monitoring': {
-      id: '/monitoring'
-      path: '/monitoring'
-      fullPath: '/monitoring'
-      preLoaderRoute: typeof MonitoringRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/playground': {
-      id: '/playground'
-      path: '/playground'
-      fullPath: '/playground'
-      preLoaderRoute: typeof PlaygroundRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/request-logs': {
-      id: '/request-logs'
-      path: '/request-logs'
-      fullPath: '/request-logs'
-      preLoaderRoute: typeof RequestLogsRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/retrieval': {
-      id: '/retrieval'
-      path: '/retrieval'
-      fullPath: '/retrieval'
-      preLoaderRoute: typeof RetrievalRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sessions': {
-      id: '/sessions'
-      path: '/sessions'
-      fullPath: '/sessions'
-      preLoaderRoute: typeof SessionsRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/skills': {
-      id: '/skills'
-      path: '/skills'
-      fullPath: '/skills'
-      preLoaderRoute: typeof SkillsRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/tasks': {
-      id: '/tasks'
-      path: '/tasks'
-      fullPath: '/tasks'
-      preLoaderRoute: typeof TasksRouteRouteImport
+    '/vikingbot': {
+      id: '/vikingbot'
+      path: '/vikingbot'
+      fullPath: '/vikingbot'
+      preLoaderRoute: typeof VikingbotRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/users': {
@@ -301,11 +343,116 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UsersRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/watches': {
-      id: '/watches'
-      path: '/watches'
-      fullPath: '/watches'
-      preLoaderRoute: typeof WatchesRouteRouteImport
+    '/tasks': {
+      id: '/tasks'
+      path: '/tasks'
+      fullPath: '/tasks'
+      preLoaderRoute: typeof TasksRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/skills': {
+      id: '/skills'
+      path: '/skills'
+      fullPath: '/skills'
+      preLoaderRoute: typeof SkillsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sessions': {
+      id: '/sessions'
+      path: '/sessions'
+      fullPath: '/sessions'
+      preLoaderRoute: typeof SessionsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/retrieval': {
+      id: '/retrieval'
+      path: '/retrieval'
+      fullPath: '/retrieval'
+      preLoaderRoute: typeof RetrievalRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/request-logs': {
+      id: '/request-logs'
+      path: '/request-logs'
+      fullPath: '/request-logs'
+      preLoaderRoute: typeof RequestLogsRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/playground': {
+      id: '/playground'
+      path: '/playground'
+      fullPath: '/playground'
+      preLoaderRoute: typeof PlaygroundRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitoring': {
+      id: '/monitoring'
+      path: '/monitoring'
+      fullPath: '/monitoring'
+      preLoaderRoute: typeof MonitoringRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/home': {
+      id: '/home'
+      path: '/home'
+      fullPath: '/home'
+      preLoaderRoute: typeof HomeRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agent-experience': {
+      id: '/agent-experience'
+      path: '/agent-experience'
+      fullPath: '/agent-experience'
+      preLoaderRoute: typeof AgentExperienceRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vikingbot/': {
+      id: '/vikingbot/'
+      path: '/'
+      fullPath: '/vikingbot/'
+      preLoaderRoute: typeof VikingbotIndexRouteImport
+      parentRoute: typeof VikingbotRouteRoute
+    }
+    '/sessions/': {
+      id: '/sessions/'
+      path: '/'
+      fullPath: '/sessions/'
+      preLoaderRoute: typeof SessionsIndexRouteImport
+      parentRoute: typeof SessionsRouteRoute
+    }
+    '/compile/': {
+      id: '/compile/'
+      path: '/compile'
+      fullPath: '/compile/'
+      preLoaderRoute: typeof CompileIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agent-experience/': {
+      id: '/agent-experience/'
+      path: '/'
+      fullPath: '/agent-experience/'
+      preLoaderRoute: typeof AgentExperienceIndexRouteImport
+      parentRoute: typeof AgentExperienceRouteRoute
+    }
+    '/oauth/verify': {
+      id: '/oauth/verify'
+      path: '/oauth/verify'
+      fullPath: '/oauth/verify'
+      preLoaderRoute: typeof OauthVerifyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/oauth/consent': {
@@ -315,22 +462,42 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/oauth/verify': {
-      id: '/oauth/verify'
-      path: '/oauth/verify'
-      fullPath: '/oauth/verify'
-      preLoaderRoute: typeof OauthVerifyRouteImport
+    '/compile/new': {
+      id: '/compile/new'
+      path: '/compile/new'
+      fullPath: '/compile/new'
+      preLoaderRoute: typeof CompileNewRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sessions/': {
-      id: '/sessions/'
-      path: '/'
-      fullPath: '/sessions/'
-      preLoaderRoute: typeof SessionsIndexRouteImport
-      parentRoute: typeof SessionsRouteRoute
+    '/agent-experience/$experienceUri': {
+      id: '/agent-experience/$experienceUri'
+      path: '/$experienceUri'
+      fullPath: '/agent-experience/$experienceUri'
+      preLoaderRoute: typeof AgentExperienceExperienceUriRouteImport
+      parentRoute: typeof AgentExperienceRouteRoute
+    }
+    '/compile/tasks/$taskId': {
+      id: '/compile/tasks/$taskId'
+      path: '/compile/tasks/$taskId'
+      fullPath: '/compile/tasks/$taskId'
+      preLoaderRoute: typeof CompileTasksTaskIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
   }
 }
+
+interface AgentExperienceRouteRouteChildren {
+  AgentExperienceExperienceUriRoute: typeof AgentExperienceExperienceUriRoute
+  AgentExperienceIndexRoute: typeof AgentExperienceIndexRoute
+}
+
+const AgentExperienceRouteRouteChildren: AgentExperienceRouteRouteChildren = {
+  AgentExperienceExperienceUriRoute: AgentExperienceExperienceUriRoute,
+  AgentExperienceIndexRoute: AgentExperienceIndexRoute,
+}
+
+const AgentExperienceRouteRouteWithChildren =
+  AgentExperienceRouteRoute._addFileChildren(AgentExperienceRouteRouteChildren)
 
 interface SessionsRouteRouteChildren {
   SessionsIndexRoute: typeof SessionsIndexRoute
@@ -344,8 +511,21 @@ const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
   SessionsRouteRouteChildren,
 )
 
+interface VikingbotRouteRouteChildren {
+  VikingbotIndexRoute: typeof VikingbotIndexRoute
+}
+
+const VikingbotRouteRouteChildren: VikingbotRouteRouteChildren = {
+  VikingbotIndexRoute: VikingbotIndexRoute,
+}
+
+const VikingbotRouteRouteWithChildren = VikingbotRouteRoute._addFileChildren(
+  VikingbotRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentExperienceRouteRoute: AgentExperienceRouteRouteWithChildren,
   HomeRouteRoute: HomeRouteRoute,
   MonitoringRouteRoute: MonitoringRouteRoute,
   PlaygroundRouteRoute: PlaygroundRouteRoute,
@@ -356,9 +536,13 @@ const rootRouteChildren: RootRouteChildren = {
   SkillsRouteRoute: SkillsRouteRoute,
   TasksRouteRoute: TasksRouteRoute,
   UsersRouteRoute: UsersRouteRoute,
+  VikingbotRouteRoute: VikingbotRouteRouteWithChildren,
   WatchesRouteRoute: WatchesRouteRoute,
+  CompileNewRoute: CompileNewRoute,
   OauthConsentRoute: OauthConsentRoute,
   OauthVerifyRoute: OauthVerifyRoute,
+  CompileIndexRoute: CompileIndexRoute,
+  CompileTasksTaskIdRoute: CompileTasksTaskIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

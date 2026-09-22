@@ -42,9 +42,8 @@ def test_context_type_for_uri_uses_path_segments():
         context_type_for_uri("viking://user/support_bot/peers/web-visitor-alice/resources/faq.md")
         == "resource"
     )
-    assert context_type_for_uri("viking://agent/code-agent/memories/profile.md") == "memory"
-    assert context_type_for_uri("viking://agent/code-agent/resources/faq.md") == "resource"
-    assert context_type_for_uri("viking://agent/code-agent/skills/demo") == "skill"
+    assert context_type_for_uri("viking://agent/tools/memories/guide.md") == "resource"
+    assert context_type_for_uri("viking://agent/workflows/skills/demo.md") == "resource"
     assert context_type_for_uri("viking://agent/skills") == "skill"
     assert context_type_for_uri("viking://agent/skills/demo") == "skill"
     assert context_type_for_uri("viking://resources/memories-report.md") == "resource"
@@ -94,10 +93,19 @@ def test_exact_memory_and_skill_root_detection():
     assert not classify_uri("viking://user/alice/skills/demo/assets").is_skill_root
 
 
-def test_owner_space_for_uri_uses_user_only():
+def test_shared_agent_skill_target_has_no_user_owner_or_peer_filter():
     assert owner_space_for_uri("viking://user/alice/memories") == "alice"
     assert owner_space_for_uri("viking://user/alice/skills/demo") == "alice"
     assert owner_space_for_uri("viking://resources/readme.md") == ""
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="support_bot"),
+        role=Role.ADMIN,
+        actor_peer_id="workspace-test-peer",
+    )
+    for uri in ("viking://agent/skills", "viking://agent/skills/demo"):
+        assert validate_content_target_uri(uri, ctx, kind="skill") == uri
+        assert owner_space_for_uri(uri) == ""
 
 
 def test_session_uri_helpers_use_user_namespace():
@@ -128,8 +136,7 @@ def test_session_uri_helpers_use_user_namespace():
     assert is_session_uri("viking://session/s1")
     roots = visible_roots(ctx)
     assert "viking://session" not in roots
-    assert "viking://agent" not in roots
-    assert "viking://agent/skills" in roots
+    assert "viking://agent" in roots
 
 
 def test_request_boundary_rejects_reserved_user_root_shorthand():
@@ -178,7 +185,7 @@ def test_request_boundary_rejects_reserved_user_root_shorthand():
         resolve_request_uri("viking://user/resources", admin_ctx)
     with pytest.raises(NamespaceShapeError, match=re.escape("viking://~/skills")):
         resolve_request_uri("viking://user/skills", admin_ctx)
-    # ROOT requests never enter current-user resolution, so the literal parse stands.
+    # ROOT requests resolve only the unambiguous '~' alias, so this literal parse stands.
     root_ctx = RequestContext(
         user=UserIdentifier(account_id="acct", user_id="root-actor"),
         role=Role.ROOT,
@@ -260,7 +267,7 @@ def test_unreserved_user_root_segment_keeps_canonical_meaning():
 
 
 def test_home_alias_expands_to_current_user_root_at_request_boundary():
-    for role in (Role.USER, Role.ADMIN):
+    for role in (Role.USER, Role.ADMIN, Role.ROOT):
         ctx = RequestContext(
             user=UserIdentifier(account_id="acct", user_id="alice"),
             role=role,
@@ -296,19 +303,7 @@ def test_home_alias_expands_to_current_user_root_at_request_boundary():
     )
 
 
-def test_home_alias_fails_closed_without_current_user_resolution():
-    root_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct", user_id="root-actor"),
-        role=Role.ROOT,
-    )
-
-    # Root-role requests skip current-user resolution, so the alias never becomes
-    # a literal '~' namespace -- it is rejected instead of guessing a user.
-    with pytest.raises(NamespaceShapeError, match="Home alias URI is not canonical"):
-        resolve_request_uri("viking://~/resources/docs", root_ctx)
-    with pytest.raises(InvalidURIError, match="Home alias URI is not canonical"):
-        validate_request_viking_uri("viking://~/resources/docs", root_ctx)
-
+def test_home_alias_fails_closed_without_request_context():
     # Every internal consumer of the canonical parser is protected the same way.
     with pytest.raises(NamespaceShapeError, match="Home alias URI is not canonical"):
         resolve_uri("viking://~")

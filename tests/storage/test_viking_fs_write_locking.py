@@ -70,7 +70,12 @@ class _AsyncMoveAGFS:
         """Return the configured source kind and a missing destination."""
         if path.endswith("/source.md") or path.endswith("/source"):
             return {"isDir": self.source_is_dir}
+        if path.endswith("/resources"):
+            return {"isDir": True}
         raise FileNotFoundError(path)
+
+    async def ls(self, path):
+        return []
 
     async def pathlock_acquire_batch(
         self,
@@ -169,7 +174,7 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
         fake.events.append(("ensure_parent", path, lease_ref))
 
     monkeypatch.setattr(fs, "_ensure_parent_dirs", ensure_parent_dirs)
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda _uri, _ctx=None: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
@@ -206,8 +211,7 @@ async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
     }
     copied_with = []
 
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(fs, "_ensure_delete_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
@@ -240,14 +244,13 @@ async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_directory_mv_uses_source_tree_and_destination_exact(monkeypatch):
-    """Directory move must not hold a destination Tree lock for the whole copy."""
+async def test_directory_mv_locks_source_and_destination_subtrees(monkeypatch):
+    """Directory move covers both subtrees without locking unrelated siblings."""
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
 
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(fs, "_ensure_delete_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
@@ -270,19 +273,18 @@ async def test_directory_mv_uses_source_tree_and_destination_exact(monkeypatch):
 
     assert fake.acquire_calls[0][0] == [
         {"path": "/local/default/temp/source", "kind": "tree"},
-        {"path": "/local/default/resources/target", "kind": "exact"},
+        {"path": "/local/default/resources/target", "kind": "tree"},
     ]
 
 
 @pytest.mark.asyncio
-async def test_directory_mv_uses_temporary_tree_only_for_failed_copy_cleanup(monkeypatch):
-    """Failed directory move must acquire and release a cleanup-only target Tree."""
+async def test_directory_mv_reuses_target_tree_for_vector_failure_cleanup(monkeypatch):
+    """Vector failure cleans the target under the existing destination Tree lease."""
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
 
-    monkeypatch.setattr(fs, "_ensure_mutable_access", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(fs, "_ensure_delete_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
         fs,
         "_uri_to_path",
@@ -308,25 +310,9 @@ async def test_directory_mv_uses_temporary_tree_only_for_failed_copy_cleanup(mon
             ctx=_default_ctx(),
         )
 
-    assert fake.tree_calls == [
-        (
-            "/local/default/resources/target",
-            {
-                "lease_ref": "operation-ref",
-                "owner_id": "operation-owner",
-                "ownership_ref": "operation-ownership",
-                "owned": True,
-            },
-        )
-    ]
-    assert fake.rm_calls[0][2]["lease_ref"] == "cleanup-ref"
+    assert fake.tree_calls == []
+    assert fake.rm_calls[0][2]["lease_ref"] == "operation-ref"
     assert fake.release_calls == [
-        {
-            "lease_ref": "cleanup-ref",
-            "owner_id": "operation-owner",
-            "ownership_ref": "cleanup-ownership",
-            "owned": True,
-        },
         {
             "lease_ref": "operation-ref",
             "owner_id": "operation-owner",

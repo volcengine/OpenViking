@@ -1,10 +1,18 @@
 import { getHealth } from '#/lib/ov-client'
+import { createClient } from '#/gen/ov-client/client'
 
 export type ServerAuthMode = 'api_key' | 'trusted' | 'dev' | 'oidc' | 'ldap'
 export type ServerMode = ServerAuthMode | 'checking' | 'offline'
 
-const SERVER_AUTH_MODES = new Set<ServerAuthMode>(['api_key', 'trusted', 'dev', 'oidc', 'ldap'])
+const SERVER_AUTH_MODES = new Set<ServerAuthMode>([
+  'api_key',
+  'trusted',
+  'dev',
+  'oidc',
+  'ldap',
+])
 const HEALTH_REQUEST_REUSE_MS = 1_000
+const healthClient = createClient()
 
 let recentHealthRequest:
   | {
@@ -45,6 +53,7 @@ export async function fetchServerHealth(
   }
 
   const promise = getHealth({
+    client: healthClient,
     baseURL: normalizedBaseUrl,
     headers: {
       Accept: 'application/json',

@@ -240,7 +240,7 @@ async def test_memory_usage_extractor_parses_mcp_text_search_and_list_results():
             parts=[
                 ToolPart(
                     tool_id="call-find",
-                    tool_name="mcp__openviking__find",
+                    tool_name="mcp__plugin_openviking-memory_openviking__find",
                     tool_status="completed",
                     tool_output=(
                         "Found 2 item(s):\n\n"
@@ -352,6 +352,10 @@ async def test_memory_usage_extractor_canonicalizes_home_alias_list_uri():
             "mcp__openviking__read",
             {"uris": "viking://user/test/memories/experiences/read.md"},
         ),
+        (
+            "mcp__plugin_openviking-memory_openviking__read",
+            {"uris": "viking://user/test/memories/experiences/read.md"},
+        ),
     ],
 )
 async def test_memory_usage_extractor_recognizes_generic_read_tools(tool_name, tool_input):
@@ -387,6 +391,8 @@ async def test_memory_usage_extractor_recognizes_generic_read_tools(tool_name, t
         "openviking_multi_read",
         "ov_multi_read",
         "mcp__openviking__multi_read",
+        "mcp__plugin_openviking-memory_openviking__multi_read",
+        "mcp__PLUGIN_openviking-memory_OpenViking__MULTI_READ",
     ],
 )
 async def test_memory_usage_extractor_multi_read_counts_only_successful_experiences(tool_name):
@@ -440,6 +446,12 @@ async def test_memory_usage_extractor_does_not_fuzzy_match_other_mcp_tools():
                 ToolPart(
                     tool_id="call-read",
                     tool_name="mcp__other__read",
+                    tool_status="completed",
+                    tool_input={"uri": experience_uri},
+                ),
+                ToolPart(
+                    tool_id="call-plugin-read",
+                    tool_name="mcp__plugin_other-memory_other__read",
                     tool_status="completed",
                     tool_input={"uri": experience_uri},
                 ),

@@ -6,7 +6,7 @@ Watch API 管理资源的周期检查、暂停、恢复和手动触发。
 
 ### Watch Management（监控任务管理）
 
-列出、查看、更新和触发通过 [`add_resource`](02-resources.md#add_resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
+列出、查看、更新和触发通过 [`add_resource`](02-resources.md#add-resource) 配合 `watch_interval > 0` 创建的监控任务。控制面在 REST（`/api/v1/watches`）、`ov task watch` CLI 子命令组以及面向 Agent 的最小闭包 MCP 接口（`list_watches` / `cancel_watch`）三处镜像。
 
 #### 1. API 实现介绍
 
@@ -140,6 +140,7 @@ ov task watch rm viking://resources/guide.md
       {
         "task_id": "7f02e980-8df9-4f27-a570-4d8428cbed8a",
         "path": "https://example.com/guide.md",
+        "source_type": "url",
         "to_uri": "viking://resources/guide.md",
         "parent_uri": "viking://resources",
         "reason": "keep documentation current",
@@ -150,6 +151,9 @@ ov task watch rm viking://resources/guide.md
         "processor_kwargs": {},
         "created_at": "2026-07-24T10:00:00",
         "last_execution_time": null,
+        "last_task_id": null,
+        "last_status": null,
+        "last_error": null,
         "next_execution_time": "2026-07-24T10:30:00",
         "is_active": true,
         "account_id": "default",
@@ -161,6 +165,15 @@ ov task watch rm viking://resources/guide.md
   }
 }
 ```
+
+`source_type` 是可选的来源元数据。显式 Connector `add_type` 优先（例如 `tos` 或
+`feishu_project`）；原生导入返回 `feishu`、`git`、`url` 或 `local`。历史任务或
+无法分类的任务返回 `null`。
+
+首次执行前，`last_task_id`、`last_status` 和 `last_error` 均为 `null`。执行后，
+`last_task_id` 指向对应的普通导入任务（预检查失败时可能为 `null`），`last_status`
+为 `completed`、`failed` 或 `cancelled`；失败时 `last_error` 返回经过凭证脱敏且最多
+500 字符的错误信息。可用 `ov task status <last_task_id>` 查看对应导入任务详情。
 
 查看单个任务以及成功更新时，`result` 直接是同一结构的任务对象。删除和触发分别返回：
 
@@ -186,7 +199,8 @@ ov task watch rm viking://resources/guide.md
 }
 ```
 
-`scheduled=true` 只表示后台执行已调度，不表示重新摄取已经完成；应再次查看任务的 `last_execution_time`。
+`scheduled=true` 只表示后台执行已调度，不表示重新摄取已经完成；应再次查看任务，直到
+`last_execution_time` 更新，并检查 `last_status` 和 `last_error`。
 
 **MCP**（Agent 控制面——仅最小闭包）
 
@@ -195,7 +209,7 @@ list_watches()                                            # 每个任务一行�
 cancel_watch(to_uri="viking://resources/guide.md")        # 按 URI 幂等删除
 ```
 
-暂停 / 恢复 / 触发 / 更新故意不通过 MCP 暴露——这些 power-user 操作放在 CLI/REST 一侧，以保持 Agent 系统提示词的紧凑。Agent 侧若需创建监控任务或调整周期，仍走 [`add_resource`](02-resources.md#add_resource) 配合 `watch_interval`；可显式传 `to`，也可让系统绑定本次导入返回的 `root_uri`。
+暂停 / 恢复 / 触发 / 更新故意不通过 MCP 暴露——这些 power-user 操作放在 CLI/REST 一侧，以保持 Agent 系统提示词的紧凑。Agent 侧若需创建监控任务或调整周期，仍走 [`add_resource`](02-resources.md#add-resource) 配合 `watch_interval`；可显式传 `to`，也可让系统绑定本次导入返回的 `root_uri`。
 
 ---
 

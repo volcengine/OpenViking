@@ -40,8 +40,10 @@ async def test_ingest_temp_upload_forwards_no_split(monkeypatch: pytest.MonkeyPa
         store,
         "upload-id",
         ctx,
+        parent="viking://user/test_user/resources/team",
         parse_mode="no_split",
     )
 
     assert add_resource.await_args.kwargs["args"] == {"parse_mode": "no_split"}
     assert "parse_mode" not in add_resource.await_args.kwargs
+    assert add_resource.await_args.kwargs["parent"] == "viking://user/test_user/resources/team"

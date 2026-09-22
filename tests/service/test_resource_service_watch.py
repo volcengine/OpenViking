@@ -2,20 +2,26 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Integration tests for ResourceService watch functionality."""
 
+import asyncio
 from types import SimpleNamespace
 from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 import pytest_asyncio
 
+from openviking.parse.mode import ParseMode
+from openviking.resource.feishu_watch_auth import FeishuAppCredentials
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
 from openviking.service.task_tracker import TaskStatus
+from openviking.service.task_work_index import TASK_WORK_ID_FIELD
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -103,6 +109,22 @@ def disable_task_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture
+def runtime_config_manager():
+    from openviking_cli.utils.config.parser_config import FeishuConfig
+
+    async def resolve_account(account_id, resolver):
+        assert account_id
+        return resolver(
+            SimpleNamespace(
+                account=SimpleNamespace(feishu=None),
+                cluster=SimpleNamespace(feishu=FeishuConfig()),
+            )
+        )
+
+    return SimpleNamespace(resolve_account=resolve_account)
+
+
 @pytest.fixture(autouse=True)
 def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     task_tracker = NoopTaskTracker()
@@ -112,6 +134,10 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
     monkeypatch.setattr("openviking.connector.routing.is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.connector.delegate.ConnectorDelegate.supported_args",
+        Mock(return_value=set()),
+    )
 
 
 @pytest_asyncio.fixture
@@ -122,16 +148,21 @@ async def watch_manager() -> AsyncGenerator[WatchManager, None]:
 
 
 @pytest_asyncio.fixture
-async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[ResourceService, None]:
+async def resource_service(
+    watch_manager: WatchManager, runtime_config_manager
+) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
     scheduler = MagicMock()
     scheduler.watch_manager = watch_manager
+    scheduler.hold_execution = AsyncMock(return_value=True)
+    scheduler.release_execution = AsyncMock()
     service = ResourceService(
         vikingdb=MockVikingDB(),
         viking_fs=MockVikingFS(),
         resource_processor=MockResourceProcessor(),
         skill_processor=MockSkillProcessor(),
         watch_scheduler=scheduler,
+        runtime_config_manager=runtime_config_manager,
     )
     service._enqueue_add_resource_job = AsyncMock(return_value=SimpleNamespace(task_id="test-task"))
     yield service
@@ -171,6 +202,7 @@ class TestWatchTaskCreation:
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.path == "/test/path"
+        assert task.source_type == "local"
         assert task.to_uri == to_uri
         assert task.reason == "Test monitoring"
         assert task.instruction == "Monitor for changes"
@@ -457,14 +489,22 @@ class TestAddResourceArgs:
         monkeypatch.setattr(
             resource_service_module,
             "load_feishu_app_credentials",
-            lambda: object(),
+            lambda config=None, app_id=None, app_secret=None: FeishuAppCredentials(
+                app_id=app_id or "configured-app",
+                app_secret=app_secret or "configured-secret",
+                domain="https://open.feishu.cn",
+                request_timeout=30,
+            ),
         )
         disable_task_tracker(monkeypatch)
         to_uri = "viking://resources/feishu_user_watch"
-        resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
+        resource_service._plan_source_job_target = AsyncMock(
+            return_value=(to_uri, None, False, False)
+        )
 
-        async def preflight(_self, _source, *, feishu_access_token=None):
+        async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
             assert feishu_access_token == "u-test"
+            assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
             return SimpleNamespace(source_name=None, source_format="file")
 
         monkeypatch.setattr(
@@ -480,6 +520,8 @@ class TestAddResourceArgs:
             args={
                 "feishu_access_token": " u-test ",
                 "feishu_refresh_token": " r-test ",
+                "feishu_app_id": " cli-test ",
+                "feishu_app_secret": " secret-test ",
             },
         )
 
@@ -492,7 +534,10 @@ class TestAddResourceArgs:
             "access_token": "u-test",
             "refresh_token": "r-test",
             "expires_at": None,
+            "app_id": "cli-test",
+            "app_secret": "secret-test",
         }
+        assert "secret-test" not in str(message.to_dict())
         await resource_service.execute_add_resource_job(
             message,
             ctx=request_context,
@@ -504,24 +549,338 @@ class TestAddResourceArgs:
         processor = resource_service._resource_processor
         assert processor.calls[-1]["feishu_access_token"] == "u-test"
         assert "feishu_refresh_token" not in processor.calls[-1]
+        assert "feishu_app_id" not in processor.calls[-1]
+        assert "feishu_app_secret" not in processor.calls[-1]
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
+        assert task.source_type == "feishu"
         assert task.processor_kwargs == {}
         assert task.auth_state == {
             "provider": "feishu",
             "access_token": "u-test",
             "refresh_token": "r-test",
             "expires_at": None,
+            "app_id": "cli-test",
+            "app_secret": "secret-test",
         }
         assert "auth_state" not in task.to_dict()
 
     @pytest.mark.asyncio
+    async def test_feishu_account_default_watch_does_not_store_app_secret(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        monkeypatch.setattr(
+            resource_service_module,
+            "load_feishu_app_credentials",
+            lambda config=None, app_id=None, app_secret=None: FeishuAppCredentials(
+                app_id="account-app",
+                app_secret="account-secret",
+                domain="https://open.feishu.cn",
+                request_timeout=30,
+            ),
+        )
+
+        normalized = await resource_service._normalize_add_resource_args(
+            {
+                "feishu_access_token": "u-test",
+                "feishu_refresh_token": "r-test",
+            },
+            ctx=request_context,
+            watch_interval=30,
+        )
+
+        assert normalized.watch_auth_state == {
+            "provider": "feishu",
+            "access_token": "u-test",
+            "refresh_token": "r-test",
+            "expires_at": None,
+            "app_id": "account-app",
+        }
+
+    def test_feishu_watch_refresh_restores_access_token_without_refresh_token(
+        self,
+        resource_service: ResourceService,
+    ):
+        msg = SimpleNamespace(
+            path="https://example.feishu.cn/docx/doc_token",
+            watch_interval=30.0,
+            skip_watch_management=True,
+            understanding_response_id=None,
+            understanding_file_id=None,
+        )
+
+        auth_kwargs, watch_auth_state = resource_service._restore_source_task_auth(
+            msg,
+            {
+                "provider": "feishu",
+                "access_token": "u-refreshed",
+                "domain": "https://open.feishu.cn",
+            },
+        )
+
+        assert auth_kwargs == {"feishu_access_token": "u-refreshed"}
+        assert watch_auth_state is None
+
+    @pytest.mark.asyncio
+    async def test_feishu_watch_refresh_preflight_uses_cluster_domain(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        from openviking_cli.utils.config.parser_config import FeishuConfig
+
+        async def resolve_account(account_id, resolver):
+            assert account_id == request_context.account_id
+            return resolver(
+                SimpleNamespace(
+                    account=SimpleNamespace(feishu=None),
+                    cluster=SimpleNamespace(
+                        feishu=FeishuConfig(domain="https://open.feishu.cn")
+                    ),
+                )
+            )
+
+        seen = {}
+
+        async def preflight(
+            _self,
+            _source,
+            *,
+            feishu_access_token=None,
+            feishu_config=None,
+            **_kwargs,
+        ):
+            seen["access_token"] = feishu_access_token
+            seen["config_domain"] = feishu_config.domain
+            return SimpleNamespace(source_name=None, source_format="file")
+
+        resource_service._runtime_config_manager = SimpleNamespace(
+            resolve_account=resolve_account
+        )
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            preflight,
+        )
+
+        plan = await resource_service._prepare_standard_source_plan(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            mode=ParseMode.DEFAULT,
+            allow_local_path_resolution=False,
+            processor_kwargs={
+                "feishu_access_token": "u-refreshed",
+            },
+            watch_auth_state={
+                "provider": "feishu",
+                "access_token": "u-refreshed",
+                "domain": "https://open.larksuite.com",
+            },
+        )
+
+        assert seen == {
+            "access_token": "u-refreshed",
+            "config_domain": "https://open.feishu.cn",
+        }
+        assert "domain" not in plan.task_auth
+
+    @pytest.mark.asyncio
+    async def test_feishu_watch_binds_account_app_identity_without_secret(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        from openviking_cli.utils.config.parser_config import FeishuConfig
+
+        async def resolve_account(account_id, resolver):
+            assert account_id == request_context.account_id
+            return resolver(
+                SimpleNamespace(
+                    account=SimpleNamespace(
+                        feishu=SimpleNamespace(
+                            app_id="account-app",
+                            app_secret="account-secret",
+                            max_rows_per_sheet=None,
+                            max_records_per_table=None,
+                            download_images=None,
+                            request_timeout=None,
+                        )
+                    ),
+                    cluster=SimpleNamespace(feishu=FeishuConfig()),
+                )
+            )
+
+        resource_service._runtime_config_manager = SimpleNamespace(
+            resolve_account=resolve_account
+        )
+        disable_task_tracker(monkeypatch)
+        to_uri = "viking://resources/feishu-account-watch"
+        resource_service._plan_source_job_target = AsyncMock(
+            return_value=(to_uri, None, False, False)
+        )
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            AsyncMock(return_value=SimpleNamespace(source_name=None, source_format="file")),
+        )
+
+        await resource_service.add_resource(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30,
+            args={
+                "feishu_access_token": "user-token",
+                "feishu_refresh_token": "refresh-token",
+            },
+        )
+
+        auth_state = resource_service._enqueue_add_resource_job.await_args.kwargs["task_auth"]
+        assert auth_state["app_id"] == "account-app"
+        assert "app_secret" not in auth_state
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("target", "is_active"),
+        [
+            ({"to": "viking://resources/feishu"}, False),
+            ({"parent": "viking://resources"}, False),
+            ({"to": "viking://resources/feishu"}, True),
+        ],
+    )
+    async def test_native_feishu_watch_is_created_during_queue_processing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+        target,
+        is_active,
+    ):
+        to_uri = "viking://resources/feishu"
+        resource_service._plan_source_job_target = AsyncMock(
+            return_value=(to_uri, None, False, False)
+        )
+
+        async def preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
+            return SimpleNamespace(source_name="Feishu", source_format="file")
+
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            preflight,
+        )
+
+        result = await resource_service.add_resource(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            watch_interval=30,
+            is_active=is_active,
+            **target,
+        )
+
+        assert await get_task_by_uri(resource_service, to_uri, request_context) is None
+        assert result["task_id"] == "test-task"
+
+        message = resource_service._enqueue_add_resource_job.await_args.args[0]
+        assert message.is_active is is_active
+        assert message.watch_task_id is None
+        assert message.skip_watch_management is False
+        assert AddResourceMsg.from_dict(message.to_dict()).is_active is is_active
+
+        await resource_service.execute_add_resource_job(
+            message,
+            ctx=request_context,
+            resource_lock=None,
+            stage_callback=AsyncMock(),
+        )
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert message.watch_task_id == task.task_id
+        assert task.is_active is (is_active is not False)
+        assert (task.next_execution_time is not None) is (is_active is not False)
+        assert len(resource_service._resource_processor.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_native_feishu_preflight_failure_does_not_create_watch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        to_uri = "viking://resources/failed_feishu"
+
+        async def fail_preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
+            raise RuntimeError("preflight unavailable")
+
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            fail_preflight,
+        )
+
+        with pytest.raises(RuntimeError, match="preflight unavailable"):
+            await resource_service.add_resource(
+                path="https://example.feishu.cn/docx/doc_token",
+                ctx=request_context,
+                to=to_uri,
+                watch_interval=30,
+                is_active=False,
+            )
+
+        assert await get_task_by_uri(resource_service, to_uri, request_context) is None
+
+    @pytest.mark.asyncio
+    async def test_paused_watch_with_parent_rejects_non_feishu_source(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="only supported"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                parent="viking://resources",
+                watch_interval=30,
+                is_active=False,
+            )
+
+    @pytest.mark.asyncio
+    async def test_feishu_user_token_watch_rejects_partial_app_credentials(
+        self,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        with pytest.raises(InvalidArgumentError, match="must be non-empty strings"):
+            await resource_service.add_resource(
+                path="https://example.feishu.cn/docx/doc_token",
+                ctx=request_context,
+                watch_interval=30,
+                args={
+                    "feishu_access_token": "u-test",
+                    "feishu_refresh_token": "r-test",
+                    "feishu_app_id": "cli-test",
+                },
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("target", "is_active"),
+        [
+            ({"to": "viking://resources/git_private_watch"}, True),
+            ({"to": "viking://resources/git_private_watch"}, False),
+            ({"parent": "viking://resources"}, False),
+        ],
+    )
     async def test_git_token_watch_stores_private_auth_state(
         self,
         monkeypatch: pytest.MonkeyPatch,
         resource_service: ResourceService,
         request_context: RequestContext,
+        target,
+        is_active,
     ):
         monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: True)
         disable_task_tracker(monkeypatch)
@@ -534,12 +893,15 @@ class TestAddResourceArgs:
                 source_format="repository",
             )
         )
-        resource_service._plan_source_job_target = AsyncMock(return_value=(to_uri, None, False))
+        resource_service._plan_source_job_target = AsyncMock(
+            return_value=(to_uri, None, False, False)
+        )
 
         await resource_service.add_resource(
             path=repo_url,
             ctx=request_context,
-            to=to_uri,
+            **target,
+            is_active=is_active,
             watch_interval=30,
             args={
                 "branch": "main",
@@ -552,6 +914,7 @@ class TestAddResourceArgs:
 
         enqueue_call = resource_service._enqueue_add_resource_job.await_args
         message = enqueue_call.args[0]
+        assert AddResourceMsg.from_dict(message.to_dict()).is_active is is_active
         task_auth = enqueue_call.kwargs["task_auth"]
         assert "git-secret" not in str(message.to_dict())
         assert task_auth == {
@@ -576,6 +939,11 @@ class TestAddResourceArgs:
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
+        assert len(processor.calls) == 1
+        assert task.is_active is is_active
+        assert (task.next_execution_time is not None) is is_active
+        assert message.watch_task_id == task.task_id
+        assert task.source_type == "git"
         assert task.processor_kwargs == {
             "branch": "main",
             "source_name": "private",
@@ -589,6 +957,125 @@ class TestAddResourceArgs:
         public_task = task.to_dict()
         assert "auth_state" not in public_task
         assert "git-secret" not in str(public_task)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "error", "expected_status", "expected_error"),
+    [
+        (
+            {"status": "success", "root_uri": "viking://resources/paused_feishu"},
+            None,
+            "completed",
+            None,
+        ),
+        (None, RuntimeError("native import failed"), "failed", "native import failed"),
+        (
+            {"status": "error", "errors": ["parse failed", "write failed"]},
+            None,
+            "failed",
+            "parse failed; write failed",
+        ),
+        (None, asyncio.CancelledError(), "cancelled", None),
+    ],
+)
+async def test_add_resource_processor_records_paused_watch_result(
+    monkeypatch: pytest.MonkeyPatch,
+    result,
+    error,
+    expected_status: str,
+    expected_error: str | None,
+):
+    task_tracker = SimpleNamespace(
+        create=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.PENDING)),
+        start=AsyncMock(),
+        update_stage=AsyncMock(),
+        complete=AsyncMock(),
+        fail=AsyncMock(),
+        get_task_auth=AsyncMock(return_value={}),
+        wait_for_descendants=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.add_resource_processor.get_task_tracker",
+        Mock(return_value=task_tracker),
+    )
+
+    async def execute_add_resource_job(message, **_kwargs):
+        message.watch_task_id = "watch-1"
+        if error:
+            raise error
+        return result
+
+    execute = AsyncMock(side_effect=execute_add_resource_job)
+    service = SimpleNamespace(
+        execute_add_resource_job=execute,
+        _link_resource_reason_memory=AsyncMock(),
+        record_watch_execution=AsyncMock(),
+    )
+    processor = AddResourceProcessor(
+        service,
+        QueueManager.ADD_RESOURCE,
+        SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock())),
+    )
+    message = AddResourceMsg(
+        task_id="add-resource-1",
+        path="https://example.feishu.cn/docx/doc_token",
+        root_uri="viking://resources/paused_feishu",
+        account_id="account-1",
+        user_id="user-1",
+        role="user",
+    )
+
+    data = message.to_dict()
+    data[TASK_WORK_ID_FIELD] = "work-1"
+    if isinstance(error, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await processor._process(message, data)
+    else:
+        await processor._process(message, data)
+
+    service.record_watch_execution.assert_awaited_once_with(
+        "watch-1",
+        status=expected_status,
+        execution_task_id="add-resource-1",
+        error=expected_error,
+    )
+    if expected_status == "completed":
+        assert task_tracker.complete.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_record_watch_execution_redacts_error_in_log(caplog):
+    watch_manager = SimpleNamespace(record_execution=AsyncMock())
+    scheduler = SimpleNamespace(
+        watch_manager=watch_manager,
+        release_execution=AsyncMock(),
+    )
+    service = ResourceService(watch_scheduler=scheduler)
+    error = "connector failed: api_key=secret-watch-key, Authorization: Bearer secret-token"
+
+    resource_service_module.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("INFO", logger=resource_service_module.logger.name):
+            await service.record_watch_execution(
+                "watch-1",
+                status="failed",
+                execution_task_id="connector-1",
+                error=error,
+            )
+    finally:
+        resource_service_module.logger.removeHandler(caplog.handler)
+
+    assert "secret-watch-key" not in caplog.text
+    assert "secret-token" not in caplog.text
+    assert "[REDACTED]" in caplog.text
+    watch_manager.record_execution.assert_awaited_once_with(
+        "watch-1",
+        status="failed",
+        execution_task_id="connector-1",
+        error=error,
+    )
+    scheduler.release_execution.assert_awaited_once_with("watch-1")
 
 
 class TestWatchTaskConflict:
@@ -620,10 +1107,38 @@ class TestWatchTaskConflict:
         assert to_uri in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_same_source_updates_active_task(
+    async def test_same_source_to_different_targets_creates_separate_tasks(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
-        """Re-applying one source updates its active watch instead of conflicting."""
+        """Only the target decides: one source may be watched into several targets."""
+        source = "/test/shared-source"
+        first_to = "viking://resources/shared_source_a"
+        second_to = "viking://resources/shared_source_b"
+
+        await resource_service.add_resource(
+            path=source, ctx=request_context, to=first_to, watch_interval=30.0
+        )
+        await resource_service.add_resource(
+            path=source, ctx=request_context, to=second_to, watch_interval=45.0
+        )
+
+        first = await get_task_by_uri(resource_service, first_to, request_context)
+        second = await get_task_by_uri(resource_service, second_to, request_context)
+        assert first is not None and second is not None
+        assert first.task_id != second.task_id
+        assert first.path == second.path == source
+        assert (first.watch_interval, second.watch_interval) == (30.0, 45.0)
+        assert first.is_active and second.is_active
+
+    @pytest.mark.asyncio
+    async def test_same_source_conflicts_with_active_task(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        """An active watch on the target rejects re-adding even the same source.
+
+        The kernel cannot tell whether two imports are the same source (Connector
+        types carry their identity in args), so only the target decides.
+        """
         to_uri = "viking://resources/idempotent_watch"
         source = "/test/same-path"
 
@@ -638,23 +1153,23 @@ class TestWatchTaskConflict:
         original = await get_task_by_uri(resource_service, to_uri, request_context)
         assert original is not None
 
-        await resource_service.add_resource(
-            path=source,
-            ctx=request_context,
-            to=to_uri,
-            reason="Updated reason",
-            watch_interval=45.0,
-            args={"branch": "release"},
-        )
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await resource_service.add_resource(
+                path=source,
+                ctx=request_context,
+                to=to_uri,
+                reason="Updated reason",
+                watch_interval=45.0,
+                args={"branch": "release"},
+            )
 
-        updated = await get_task_by_uri(resource_service, to_uri, request_context)
-        assert updated is not None
-        assert updated.task_id == original.task_id
-        assert updated.path == source
-        assert updated.reason == "Updated reason"
-        assert updated.watch_interval == 45.0
-        assert updated.processor_kwargs == {"branch": "release"}
-        assert updated.is_active is True
+        unchanged = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert unchanged is not None
+        assert unchanged.task_id == original.task_id
+        assert unchanged.reason == "Original reason"
+        assert unchanged.watch_interval == 30.0
+        assert unchanged.processor_kwargs == {"branch": "main"}
+        assert unchanged.is_active is True
 
     @pytest.mark.asyncio
     async def test_conflict_does_not_create_async_task(
@@ -712,11 +1227,13 @@ class TestWatchTaskConflict:
                 watch_interval=45.0,
             )
 
-        assert "already used by another task" in str(exc_info.value)
+        assert "already being monitored" in str(exc_info.value)
         assert to_uri in str(exc_info.value)
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
+
+        assert task.task_id not in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_same_user_context_sees_existing_task(
@@ -769,7 +1286,8 @@ class TestWatchTaskConflict:
         assert task is not None
         task_id = task.task_id
 
-        await resource_service._watch_scheduler.watch_manager.update_task(
+        watch_manager = resource_service._watch_scheduler.watch_manager
+        await watch_manager.update_task(
             task_id=task_id,
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
@@ -777,18 +1295,31 @@ class TestWatchTaskConflict:
             is_active=False,
         )
 
-        await resource_service.add_resource(
-            path="/test/path2",
-            ctx=request_context,
-            to=to_uri,
+        # A paused watch still owns its target: re-adding conflicts, and the watch
+        # is reactivated through the watch itself.
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await resource_service.add_resource(
+                path="/test/path2",
+                ctx=request_context,
+                to=to_uri,
+                reason="Updated reason",
+                watch_interval=45.0,
+            )
+
+        await watch_manager.update_task(
+            task_id=task_id,
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=str(request_context.role),
             reason="Updated reason",
             watch_interval=45.0,
+            is_active=True,
         )
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.task_id == task_id
-        assert task.path == "/test/path2"
+        assert task.path == "/test/path1"
         assert task.reason == "Updated reason"
         assert task.watch_interval == 45.0
         assert task.is_active is True
@@ -796,6 +1327,36 @@ class TestWatchTaskConflict:
 
 class TestWatchTaskCancellation:
     """Tests for watch task cancellation."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("watch_interval", [0, -5])
+    async def test_native_cancellation_reports_shared_target_conflict(
+        self, resource_service: ResourceService, request_context: RequestContext, watch_interval
+    ):
+        manager = resource_service._watch_scheduler.watch_manager
+        to_uri = "viking://resources/shared"
+        tasks = [
+            await manager.create_task(
+                path=f"tos://bucket/{index}/",
+                to_uri=to_uri,
+                account_id=request_context.account_id,
+                user_id=request_context.user.user_id,
+                auth_state={"provider": "connector_encrypted", "ciphertext": "unused"},
+            )
+            for index in range(2)
+        ]
+
+        with pytest.raises(ConflictError, match="address one by task_id") as exc_info:
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                to=to_uri,
+                watch_interval=watch_interval,
+            )
+
+        assert all(task.is_active for task in tasks)
+        assert all(task.task_id in str(exc_info.value) for task in tasks)
+        resource_service._enqueue_add_resource_job.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cancel_watch_task_with_zero_interval(
@@ -918,7 +1479,8 @@ class TestWatchTaskUpdate:
         assert task is not None
         original_task_id = task.task_id
 
-        await resource_service._watch_scheduler.watch_manager.update_task(
+        watch_manager = resource_service._watch_scheduler.watch_manager
+        await watch_manager.update_task(
             task_id=task.task_id,
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
@@ -926,19 +1488,32 @@ class TestWatchTaskUpdate:
             is_active=False,
         )
 
-        await resource_service.add_resource(
-            path="/test/path2",
-            ctx=request_context,
-            to=to_uri,
+        # Parameters change through the watch, never by re-adding to its target.
+        with pytest.raises(ConflictError, match="already being monitored"):
+            await resource_service.add_resource(
+                path="/test/path2",
+                ctx=request_context,
+                to=to_uri,
+                reason="Updated reason",
+                instruction="Updated instruction",
+                watch_interval=60.0,
+            )
+
+        await watch_manager.update_task(
+            task_id=original_task_id,
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=str(request_context.role),
             reason="Updated reason",
             instruction="Updated instruction",
             watch_interval=60.0,
+            is_active=True,
         )
 
         task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.task_id == original_task_id
-        assert task.path == "/test/path2"
+        assert task.path == "/test/path1"
         assert task.reason == "Updated reason"
         assert task.instruction == "Updated instruction"
         assert task.watch_interval == 60.0

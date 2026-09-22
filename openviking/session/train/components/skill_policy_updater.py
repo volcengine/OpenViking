@@ -89,7 +89,9 @@ class SkillPolicyUpdater:
             skill_processor=processor,
             viking_fs=viking_fs,
         )
-        result = await updater.apply_operations(operations, ctx)
+        result = await updater.apply_operations(
+            operations, ctx, transaction_handle=transaction_handle
+        )
 
         errors = [f"{uri}: {exc}" for uri, exc in result.errors]
 
@@ -165,6 +167,10 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
             policy_set, uri=None, name=item.target_name
         )
         metadata = dict(existing.metadata) if existing is not None else {}
+        merged_fields = item.metadata.get("merge_memory_fields", {})
+        for key in ("description", "allowed_tools", "tags"):
+            if key in merged_fields:
+                metadata[key] = merged_fields[key]
         metadata.update(item.metadata.get("patch_metadata", {}))
         metadata.setdefault("memory_type", item.memory_type or "skills")
         version = (existing.version + 1) if existing is not None else 1

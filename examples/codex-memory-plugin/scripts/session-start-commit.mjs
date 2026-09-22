@@ -14,24 +14,31 @@
  * abstract-annotated indexes of preferences/ and entities/, capped by
  * OPENVIKING_PROFILE_TOKEN_BUDGET with the shared CJK-aware estimator.
  *
- * Behavior (see DESIGN.md §3 — "SessionStart source=startup, heuristic"):
- *   On `startup` or `clear`, run the active-window heuristic over state files
- *   excluding the new session_id:
- *     - 0 recently-active     → no-op
- *     - 1 recently-active     → commit it (the just-ended session)
- *     - ≥2 recently-active    → skip; rely on idle TTL
- *   "Recently-active" means lastUpdatedAt within ACTIVE_WINDOW_MS (default 2 min).
+ * Behavior (see DESIGN.md — "Fallback sweep"):
+ *   Committing a finished thread is SessionEnd's job. On `startup` or `clear`
+ *   this hook only sweeps what SessionEnd could not reach: a state file with a
+ *   live OV session is committed when it carries an `.ended` marker (the
+ *   SessionEnd worker was killed or the server was down) or when it has been
+ *   idle for more than IDLE_TTL_MS (default 30 min) — signals, crashes, Codex
+ *   older than 0.145, and app-server threads whose SessionEnd is deferred.
  *
- *   At the tail (regardless of which branch above ran), run an idle-TTL sweep:
- *   any state file (including the new session_id, but in practice it's just
- *   been created and is fresh) older than IDLE_TTL_MS (default 30 min) gets
- *   committed and cleared. This catches SIGTERM/Ctrl+C/`/exit` exits and
- *   crashes that left state files orphaned.
+ *   Each candidate is committed under its session lock with no waiting: a lock
+ *   we cannot take means a SessionEnd or Stop worker already owns the session.
+ *   Under the lock the sweep first appends whatever the state's recorded
+ *   transcript still holds past the cursor, so a session whose workers never
+ *   ran is not archived without its tail turns; an incomplete append keeps the
+ *   session live for the next sweep instead of committing.
+ *
+ *   The same pass retires cursor-only states (no live OV session): a cursor
+ *   that was never used is dropped after IDLE_TTL_MS, and a real cursor is
+ *   kept for resume until COMMITTED_TTL_MS (default 30 days). Without this the
+ *   state directory grows one file per codex session forever and listStates()
+ *   reads all of them on every SessionStart.
  *
  * Commit failure handling:
- *   On any /commit failure (OV unreachable, non-2xx, timeout) we DO NOT call
- *   clearState — we keep the state file with ovSessionId still set so the
- *   next sweep retries. A transient OV outage shouldn't lose memory.
+ *   On any /commit failure (OV unreachable, non-2xx, timeout) we keep the state
+ *   file with ovSessionId still set so the next sweep retries. A transient OV
+ *   outage shouldn't lose memory.
  *
  * Output may contain hookSpecificOutput.additionalContext for profile/archive
  * injection and systemMessage for commit status at the same time.
@@ -39,23 +46,41 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
+import { catchUpTurns, commitOvSession, makeFetchJSON } from "./ov-session.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
-import { clearState, deriveOvSessionId, listStates, loadState, saveState } from "./session-state.mjs";
+import {
+  clearEnded,
+  clearState,
+  deriveOvSessionId,
+  listStates,
+  loadState,
+  readEndedAt,
+  saveState,
+  withSessionLock,
+} from "./session-state.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { replayPending } from "./shared/pending-queue.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
-const cfg = loadConfig();
+let cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
 let activePeerId = cfg.peerId || "";
-
-const ACTIVE_WINDOW_MS = (() => {
-  const v = Number(process.env.OPENVIKING_CODEX_ACTIVE_WINDOW_MS);
-  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 120_000;
-})();
 
 const IDLE_TTL_MS = (() => {
   const v = Number(process.env.OPENVIKING_CODEX_IDLE_TTL_MS);
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : 1_800_000;
+})();
+
+const HOOK_STARTED_AT = Date.now();
+
+// The sweep catches up unsent turns before committing, so it needs the same
+// HTTP helper the capture hooks use.
+const { fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
+
+const COMMITTED_TTL_MS = (() => {
+  const v = Number(process.env.OPENVIKING_CODEX_COMMITTED_TTL_MS);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 2_592_000_000;
 })();
 
 function output(obj) {
@@ -79,50 +104,21 @@ function emitSessionStartOutput({ contexts = [], systemMessage = "" } = {}) {
   output(response);
 }
 
-function responseTraceId(body) {
-  return body?.result?.trace_id || body?.error?.trace_id || body?.trace_id || undefined;
-}
-
-async function requestJSON(path, init = {}, options = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
+/**
+ * Drain writes that an earlier hook queued while the server was unreachable.
+ * SessionStart is the only codex hook that runs after a known-healthy check,
+ * so it is where the queue gets its chance; a bypassed directory still replays,
+ * because the entries were recorded by sessions that were not bypassed.
+ */
+async function replayPendingWrites() {
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) {
-      headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-      headers["X-API-Key"] = cfg.apiKey;
+    const result = await replayPending(fetchJSONRes, log);
+    if (result.replayed > 0 || result.failed > 0 || result.deferred > 0) {
+      log("pending-replay", result);
     }
-    if (cfg.sendIdentityHeaders && cfg.account) headers["X-OpenViking-Account"] = cfg.account;
-    if (cfg.sendIdentityHeaders && cfg.user) headers["X-OpenViking-User"] = cfg.user;
-    const actorPeerId = options.actorPeerId ?? activePeerId;
-    if (actorPeerId) headers["X-OpenViking-Actor-Peer"] = actorPeerId;
-    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
-    const res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-    const body = await res.json().catch(() => null);
-    if (!body) return { ok: false, status: res.status };
-    const traceId = responseTraceId(body);
-    if (!res.ok || body.status === "error") {
-      return { ok: false, status: res.status, error: body.error || body, traceId };
-    }
-    return { ok: true, status: res.status, result: body.result ?? body, traceId };
-  } catch (error) {
-    return { ok: false, status: 0, error: { message: error?.message || String(error) } };
-  } finally {
-    clearTimeout(timer);
+  } catch (err) {
+    logError("pending-replay", err);
   }
-}
-
-async function fetchJSON(path, init = {}, options = {}) {
-  const response = await requestJSON(path, init, options);
-  return response.ok ? response.result : null;
-}
-
-async function commitOvSession(ovSessionId) {
-  if (!ovSessionId) return null;
-  return requestJSON(
-    `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
 }
 
 function truncateText(text, maxChars) {
@@ -173,7 +169,7 @@ async function buildSessionProfileContext() {
   }
   try {
     const profile = await buildProfileBlock(
-      requestJSON,
+      fetchJSONRes,
       cfg.profileTokenBudget,
       activePeerId,
     );
@@ -232,79 +228,95 @@ async function buildResumeArchiveContext(newSessionId) {
 }
 
 /**
- * Commit and clear a single state file. On commit failure, preserve state
- * (don't call clearState) so the next sweep retries.
+ * Commit a live OV session and release it, keeping the transcript cursor so a
+ * later resume appends instead of replaying (DESIGN.md "Commit-then-resume").
+ * On commit failure, keep the live session id so the next sweep retries.
  *
- * Returns { committed: bool, ovSessionId: string|null }.
+ * Returns { committed: bool, ovSessionId: string|null, traceId: string }.
  */
-async function commitAndClear(state, reason) {
-  if (state.ovSessionId) {
-    const ovSessionId = state.ovSessionId;
-    const commit = await commitOvSession(state.ovSessionId);
-    if (!commit?.ok) {
-      log("commit", {
-        reason,
-        codexSessionId: state.codexSessionId,
-        ovSessionId: state.ovSessionId,
-        ok: false,
-        status: commit?.status,
-        trace_id: commit?.traceId,
-        error: commit?.error?.message || commit?.error?.code,
-      });
-      return { committed: false, ovSessionId: null, traceId: commit?.traceId || "" };
-    }
-    const traceId = commit.traceId || commit.result?.trace_id || "";
+async function commitAndRelease(state, reason, endToken) {
+  const ovSessionId = state.ovSessionId;
+  const commit = await commitOvSession(fetchJSONRes, ovSessionId);
+  if (!commit?.ok) {
     log("commit", {
       reason,
       codexSessionId: state.codexSessionId,
       ovSessionId,
-      archived: commit.result?.archived ?? false,
-      taskId: commit.result?.task_id,
-      status: commit.result?.status,
-      trace_id: traceId || undefined,
+      ok: false,
+      status: commit?.status,
+      trace_id: commit?.traceId,
+      error: commit?.error?.message || commit?.error?.code,
     });
-    await clearState(state.codexSessionId);
-    return { committed: true, ovSessionId, traceId };
+    return { committed: false, ovSessionId: null, traceId: commit?.traceId || "" };
   }
-  // No OV session attached — nothing to commit on the server, but the local
-  // state file is still stale and should be removed.
-  log("clear_no_ov", { reason, codexSessionId: state.codexSessionId });
+  const traceId = commit.traceId || commit.result?.trace_id || "";
+  log("commit", {
+    reason,
+    codexSessionId: state.codexSessionId,
+    ovSessionId,
+    archived: commit.result?.archived ?? false,
+    taskId: commit.result?.task_id,
+    status: commit.result?.status,
+    trace_id: traceId || undefined,
+  });
+  state.ovSessionId = null;
+  await saveState(state, { touch: false });
+  // Only retire the marker this pass verified; a newer one belongs to an exit
+  // that happened while we were committing.
+  await clearEnded(
+    state.codexSessionId,
+    typeof endToken === "number" ? { before: endToken + 1 } : {},
+  );
+  return { committed: true, ovSessionId, traceId };
+}
+
+/**
+ * Retire a state file with no live OV session. A cursor that never captured
+ * anything carries no resume value, so it goes on the idle schedule; a real
+ * cursor is kept until COMMITTED_TTL_MS in case the codex session is resumed.
+ */
+async function maybeRetireCursorState(state, ageMs) {
+  const hasCursor = Number(state.capturedTurnCount) > 0;
+  const ttl = hasCursor ? COMMITTED_TTL_MS : IDLE_TTL_MS;
+  if (ageMs <= ttl) return false;
+  log("state_retire", {
+    codexSessionId: state.codexSessionId,
+    capturedTurnCount: state.capturedTurnCount,
+    ageMs,
+    ttlMs: ttl,
+  });
   await clearState(state.codexSessionId);
-  return { committed: true, ovSessionId: null, traceId: "" };
+  return true;
 }
 
 function describeCommittedSessions(commits) {
+  const traceIds = commits.map((item) => item.traceId).filter(Boolean);
   if (commits.length === 1) {
     return `OpenViking session ${commits[0].ovSessionId} is committed` +
-      (commits[0].traceId ? ` (trace_id=${commits[0].traceId})` : "");
+      (traceIds.length ? ` (trace_id=${traceIds[0]})` : "");
   }
-  const ovSessionIds = commits.map((item) => item.ovSessionId);
-  if (ovSessionIds.length > 1) {
-    const traceIds = commits.map((item) => item.traceId).filter(Boolean);
-    return `OpenViking sessions ${ovSessionIds.join(", ")} are committed` +
-      (traceIds.length ? ` (trace_ids=${traceIds.join(",")})` : "");
-  }
-  return "OpenViking session state is cleared";
+  return `OpenViking sessions ${commits.map((item) => item.ovSessionId).join(", ")} are committed` +
+    (traceIds.length ? ` (trace_ids=${traceIds.join(",")})` : "");
 }
 
-async function main() {
-  let input;
-  try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    input = JSON.parse(Buffer.concat(chunks).toString());
-  } catch {
-    log("skip", { stage: "stdin_parse", reason: "invalid input" });
-    noop();
-    return;
-  }
-
+// A bypassed directory suppresses this session's own memory work — no peer
+// registration, no injection. The sweep and the pending replay still run: they
+// finish sessions recorded elsewhere, and this hook is the only place codex
+// runs either, so skipping them would strand that data for as long as the user
+// keeps working in a bypassed repository.
+runHookStage({
+  loadConfig,
+  gates: { bypass: () => false },
+  envelope: (response) => emitSessionStartOutput(response || {}),
+  onSkip: (reason) => log("skip", { stage: "init", reason }),
+}, async (stage) => {
+  const { input, cwd, bypassed } = stage;
+  cfg = stage.cfg;
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
-  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
-  if (newSessionId !== "unknown") {
+  if (!bypassed && newSessionId !== "unknown") {
     const state = await loadState(newSessionId);
     await saveState({
       ...state,
@@ -314,9 +326,9 @@ async function main() {
   log("start", {
     source,
     newSessionId,
-    activeWindowMs: ACTIVE_WINDOW_MS,
     idleTtlMs: IDLE_TTL_MS,
     peerSource: effectivePeer.source,
+    bypassed,
   });
 
   try {
@@ -326,18 +338,24 @@ async function main() {
   }
 
   if (source === "resume") {
+    // Earliest liveness signal after `codex resume`: the thread is running
+    // again, so a marker left by its previous exit must not trigger the sweep.
+    await clearEnded(newSessionId, { before: HOOK_STARTED_AT });
     const health = await fetchJSON("/health");
     if (!health) {
       logError("health_check", "server unreachable; skipping profile + archive injection");
-      noop();
+      return;
+    }
+    await replayPendingWrites();
+    if (bypassed) {
+      log("skip", { stage: "inject", reason: "bypass_session_pattern" });
       return;
     }
     const [profileContext, archiveContext] = await Promise.all([
       buildSessionProfileContext(),
       buildResumeArchiveContext(newSessionId),
     ]);
-    emitSessionStartOutput({ contexts: [profileContext, archiveContext] });
-    return;
+    return { contexts: [profileContext, archiveContext] };
   }
 
   // Other non-startup sources are hard no-ops. We don't sweep there, because
@@ -345,108 +363,137 @@ async function main() {
   // session boundary.
   if (source !== "startup" && source !== "clear") {
     log("skip", { stage: "source_check", reason: `source=${source} (only startup|clear act)` });
-    noop();
     return;
   }
 
   const health = await fetchJSON("/health");
   if (!health) {
     logError("health_check", "server unreachable; skipping profile injection + commit + sweep");
-    noop();
     return;
   }
 
-  const profileContext = await buildSessionProfileContext();
+  await replayPendingWrites();
+
+  const profileContext = bypassed ? null : await buildSessionProfileContext();
   const now = Date.now();
-  const states = await listStates();
+  const commits = [];
+  let retired = 0;
+  let lockSkipped = 0;
 
-  // -------------------------------------------------------------------------
-  // Active-window heuristic (DESIGN.md §3)
-  // -------------------------------------------------------------------------
-  const otherStates = states.filter(
-    (s) => s?.codexSessionId && s.codexSessionId !== newSessionId,
-  );
-
-  const recentlyActive = otherStates.filter(
-    (s) => typeof s.lastUpdatedAt === "number"
-      && (now - s.lastUpdatedAt) <= ACTIVE_WINDOW_MS,
-  );
-
-  let heuristicCommitted = 0;
-  const heuristicCommits = [];
-  const skippedSessionIds = new Set();
-
-  if (recentlyActive.length === 0) {
-    log("heuristic", { branch: "0_active", action: "noop", otherStates: otherStates.length });
-  } else if (recentlyActive.length === 1) {
-    const target = recentlyActive[0];
-    log("heuristic", {
-      branch: "1_active",
-      action: "commit",
-      codexSessionId: target.codexSessionId,
-      ovSessionId: target.ovSessionId,
-    });
-    const r = await commitAndClear(target, "heuristic_1_active");
-    if (r.committed) {
-      heuristicCommitted += 1;
-      if (r.ovSessionId) heuristicCommits.push(r);
-    }
-  } else {
-    log("heuristic", {
-      branch: ">=2_active",
-      action: "skip; rely on idle TTL",
-      activeCount: recentlyActive.length,
-      activeIds: recentlyActive.map((s) => s.codexSessionId),
-    });
-    for (const s of recentlyActive) skippedSessionIds.add(s.codexSessionId);
-  }
-
-  // -------------------------------------------------------------------------
-  // Idle TTL sweep (tail) — applies to ALL state files including ones we just
-  // skipped above (≥2 active path). We re-list because the heuristic branch
-  // may have removed entries.
-  // -------------------------------------------------------------------------
-  const postHeuristic = await listStates();
-  let idleCommitted = 0;
-  const idleCommits = [];
-
-  for (const s of postHeuristic) {
+  for (const s of await listStates()) {
     if (!s?.codexSessionId) continue;
+    if (s.codexSessionId === newSessionId) continue;
     if (typeof s.lastUpdatedAt !== "number") continue;
-    if ((now - s.lastUpdatedAt) <= IDLE_TTL_MS) continue;
-    log("idle_sweep", {
-      codexSessionId: s.codexSessionId,
-      ovSessionId: s.ovSessionId,
-      ageMs: now - s.lastUpdatedAt,
-    });
-    const r = await commitAndClear(s, "idle_ttl");
-    if (r.committed) {
-      idleCommitted += 1;
-      if (r.ovSessionId) idleCommits.push(r);
+    const ageMs = now - s.lastUpdatedAt;
+
+    // A marker must always enter the lock, even with no live id: PreCompact
+    // releases the id while leaving a cursor behind, so the tail turns of a
+    // session whose SessionEnd worker died are only reachable through a
+    // catch-up under the lock.
+    if (!s.ovSessionId && !s.endedAt) {
+      if (await maybeRetireCursorState(s, ageMs)) retired += 1;
+      continue;
     }
+    if (!s.endedAt && ageMs <= IDLE_TTL_MS) continue;
+
+    const reason = s.endedAt ? "ended_retry" : "idle_ttl";
+    log("sweep", { codexSessionId: s.codexSessionId, ovSessionId: s.ovSessionId, ageMs, reason });
+    // Try-lock only: a held lock means a SessionEnd or Stop worker is already
+    // committing this session (user quit and relaunched within seconds).
+    const outcome = await withSessionLock(s.codexSessionId, async ({ heartbeat }) => {
+      const fresh = await loadState(s.codexSessionId);
+
+      // Re-read the marker under the lock: it may have been cleared by a
+      // resume or replaced by a newer exit since listStates() sampled it.
+      const endToken = await readEndedAt(s.codexSessionId);
+      if (reason === "ended_retry" && (endToken === undefined || endToken > s.endedAt)) {
+        if (ageMs <= IDLE_TTL_MS) {
+          log("sweep_skip", {
+            codexSessionId: s.codexSessionId,
+            reason: endToken === undefined ? "marker cleared under the lock" : "newer end marker",
+          });
+          return null;
+        }
+      }
+
+      // Turns the session's own workers never sent would be lost by an
+      // archive-now commit, so catch them up first and keep the session live
+      // for the next sweep if any of them failed to land.
+      const { newTurns, added, skipped, unreadable } = await catchUpTurns({
+        state: fresh,
+        transcriptPath: fresh.transcriptPath,
+        fetchJSONRes,
+        activePeerId: fresh.workspacePeerId || activePeerId,
+        cfg,
+        log,
+        logError,
+        heartbeat,
+      });
+      if (added > 0) log("appended_catchup", { ovSessionId: fresh.ovSessionId, added });
+
+      // An unreadable transcript is not an empty one: the tail turns may still
+      // be there. Keep the live id and the marker for the next sweep.
+      if (unreadable) {
+        logError("transcript_unreadable", {
+          codexSessionId: s.codexSessionId,
+          ovSessionId: fresh.ovSessionId,
+          transcriptPath: fresh.transcriptPath,
+        });
+        await saveState(fresh, { touch: false });
+        return null;
+      }
+
+      if (newTurns.length > 0 && !skipped && added < newTurns.length) {
+        logError("append_incomplete", {
+          codexSessionId: s.codexSessionId,
+          ovSessionId: fresh.ovSessionId,
+          attempted: newTurns.length,
+          added,
+        });
+        await saveState(fresh, { touch: false });
+        return null;
+      }
+
+      // The catch-up derives a live id whenever it sends something; still
+      // having none means there is genuinely nothing to commit, so the marker
+      // can go.
+      if (!fresh.ovSessionId) {
+        if (added > 0) await saveState(fresh, { touch: false });
+        await clearEnded(
+          s.codexSessionId,
+          typeof endToken === "number" ? { before: endToken + 1 } : {},
+        );
+        log("skip", {
+          stage: "commit",
+          codexSessionId: s.codexSessionId,
+          reason: "no live OV session for this codex session",
+        });
+        return null;
+      }
+
+      return commitAndRelease(fresh, reason, endToken);
+    }, { waitMs: 0 });
+
+    if (outcome.skipped) {
+      lockSkipped += 1;
+      log("sweep_skip", { codexSessionId: s.codexSessionId, reason: "locked by another writer" });
+      continue;
+    }
+    if (outcome.value?.committed) commits.push(outcome.value);
   }
 
-  const totalCommitted = heuristicCommitted + idleCommitted;
-  const commits = [...heuristicCommits, ...idleCommits];
   const ovSessionIds = commits.map((item) => item.ovSessionId);
 
   log("done", {
     source,
-    heuristicCommitted,
-    idleCommitted,
-    totalCommitted,
+    committed: commits.length,
+    retired,
+    lockSkipped,
     ovSessionIds,
-    skipped: [...skippedSessionIds],
   });
 
-  if (totalCommitted > 0) {
-    emitSessionStartOutput({
-      contexts: [profileContext],
-      systemMessage: describeCommittedSessions(commits),
-    });
-  } else {
-    emitSessionStartOutput({ contexts: [profileContext] });
-  }
-}
-
-main().catch((err) => { logError("uncaught", err); noop(); });
+  return {
+    contexts: [profileContext],
+    systemMessage: commits.length > 0 ? describeCommittedSessions(commits) : "",
+  };
+}).catch((err) => { logError("uncaught", err); noop(); });

@@ -39,8 +39,8 @@ viking://{scope}/{path}
 - 接受但不宣传：`~` 不属于公开作用域列表，`Invalid scope ... Must be one of:` 错误信息中不会出现它。
 - 响应始终回显展开后的 canonical URI，不会返回 `viking://~`；持久化数据（向量记录、watch key）
   同样保持 canonical 形式。
-- 需要认证用户身份。展开发生在 user / admin 调用方的请求入口；root 角色与未认证上下文，
-  以及要求 URI 已是 canonical 形式的场景（内部存储路径、后台任务），会直接拒绝该别名，
+- 需要认证请求身份。所有请求角色（包括 root）都使用该身份的有效 `user_id` 展开；要求 URI
+  已是 canonical 形式的场景（内部存储路径、没有请求上下文的后台任务）仍会直接拒绝该别名，
   而不会猜测用户。
 - 取代已移除的无 uid 短写：`memories`、`resources`、`skills`、`peers`、`privacy`、`sessions`
   的 `viking://user/<segment>/...` 写法会在 USER / ADMIN 请求入口被拒绝，错误信息中会给出
@@ -49,6 +49,10 @@ viking://{scope}/{path}
 ## 初始目录
 
 摒弃传统的扁平化数据库思维，将所有上下文组织为一套文件系统。Agent 不再仅是通过向量搜索来找数据，而是可以通过确定性的路径和标准文件系统指令来定位和浏览数据。每个上下文或目录分配唯一的 URI 标识字符串，格式为 viking://{scope}/{path}，让系统能精准定位并访问存储在不同位置的资源。
+
+## 文件 ID
+
+除 URI 之外，每个文件会被自动分配一个稳定的 `id`，作为其在 VikingDB 中向量记录的主键。对于 level 2（常规文件）记录，该 id 按 `md5(f"{account_id}:{uri}")` 确定性计算，由 `stat()` 等元数据接口返回。调用方可凭此 id 直接交叉引用向量索引条目，无需额外查询。id 以 account 为作用域，当文件被移动到其他 URI 时 id 会随之改变（URI 迁移过程中向量记录会重新计算主键）。目录不返回单一 `id`，因为一个目录在多个语义层（L0 abstract、L1 overview、L2）下可能对应多条记录，每条各有自己的 id。
 
 ```
 viking://
@@ -106,6 +110,8 @@ viking://~/resources/docs/                    # 自己的私有资源目录
 viking://user/{user_id}/memories/             # 显式用户路径（可写自己的 id；访问他人需 admin/root）
 ```
 
+`viking://resources/...` 是当前 account 的共享区，可通过 [资源访问控制（ACL）](./15-acl.md) 细化目录或文件权限。`viking://user/{user}/resources/...` 是个人私有区；分享资源需要将其移动到共享区。
+
 ### 用户技能和 peer 内容
 
 ```
@@ -140,9 +146,9 @@ viking://agent/tools/mcp/                           # MCP 工具配置（规划�
 viking://agent/payments/ap2/                        # 支付配置（规划中）
 ```
 
-`viking://agent/...` 为全局共享作用域，account 下所有用户均可访问，
-不通过 agent_id 隔离。旧版（0.3.x）遗留的 `viking://agent/...` 数据仍可通过
-只读兼容入口访问，但新数据应按照新的目录语义写入。
+`viking://agent/...` 是 account 内公共能力与配置目录，可包含 skills、endpoints、tools、payments 等子目录。
+目录名不表示 Agent 身份，`actor_peer_id` 不过滤该目录；共享范围限于当前账号。
+Peer 数据使用 `viking://user/<user_id>/peers/<peer_id>/...`。
 
 ### 会话数据
 
@@ -267,8 +273,8 @@ viking://
     └── history/
 ```
 
-`viking://agent/...` 作用域为全局共享的 agent 能力根，account 下所有用户均可访问，
-不通过 agent_id 隔离。旧版（0.3.x）遗留的 `viking://agent/...` 数据仍可通过只读兼容入口访问。
+`viking://agent/...` 是 account 内公共目录，不包含 Agent ID 身份层。
+`actor_peer_id` 只过滤当前用户的 `peers` 集合，公共目录仍按账号隔离。
 
 ## URI 操作
 

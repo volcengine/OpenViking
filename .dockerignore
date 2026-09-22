@@ -5,8 +5,12 @@
 __pycache__
 *.py[cod]
 .pytest_cache
+.ruff_cache
 .coverage
 htmlcov
+target/
+src/build/
+docs/.vitepress/dist/
 web-studio/node_modules
 web-studio/dist
 openviking/web_studio/dist

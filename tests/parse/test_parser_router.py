@@ -7,7 +7,7 @@ from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.parsers.media.utils import MPEG_TS_PACKET_SIZE, MPEG_TS_PROBE_BYTES
 from openviking.parse.registry import ParserRegistry
-from openviking.parse.understanding_api import PREPARED_RESPONSE_ID_ARG
+from openviking.parse.understanding_api import PREPARED_FILE_ID_ARG, PREPARED_RESPONSE_ID_ARG
 from openviking.utils.media_processor import UnifiedResourceProcessor
 
 
@@ -331,3 +331,29 @@ async def test_prepared_understanding_response_bypasses_remote_redownload():
     assert parser_router.parse.await_args.args == ("https://example.com/expiring-download",)
     assert parser_router.parse.await_args.kwargs["parser_backend"] == "understanding"
     assert parser_router.parse.await_args.kwargs[PREPARED_RESPONSE_ID_ARG] == "response-1"
+
+
+@pytest.mark.asyncio
+async def test_prepared_understanding_file_bypasses_local_reopen():
+    result = object()
+    parser_router = SimpleNamespace(parse=AsyncMock(return_value=result))
+    accessor = SimpleNamespace(
+        access=AsyncMock(side_effect=AssertionError("prepared file must not reopen source"))
+    )
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    processor._parser_router = parser_router
+    processor._accessor_registry = accessor
+
+    actual = await processor.process(
+        "/tmp/upload_already_cleaned.pdf",
+        source_name="uploaded.pdf",
+        resolved_extension=".pdf",
+        **{PREPARED_FILE_ID_ARG: "file-1"},
+    )
+
+    assert actual is result
+    accessor.access.assert_not_awaited()
+    parser_router.parse.assert_awaited_once()
+    assert parser_router.parse.await_args.args == ("/tmp/upload_already_cleaned.pdf",)
+    assert parser_router.parse.await_args.kwargs["parser_backend"] == "understanding"
+    assert parser_router.parse.await_args.kwargs[PREPARED_FILE_ID_ARG] == "file-1"

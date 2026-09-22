@@ -61,7 +61,7 @@ ov chat → OpenViking Server → VikingBot Gateway → Agent
 
 先按照 [OpenViking 快速开始](../docs/zh/getting-started/03-quickstart-server.md)配置好 OpenViking 所需的模型和存储。Bot 默认继承根级 `vlm` 作为 Agent 模型；如需使用独立模型，再配置 `bot.agents`。
 
-一体启动时，Bot 固定使用当前启动的 OpenViking Server，忽略 `bot.ov_server` 中指向其他服务的配置。OpenViking Server 会为每个 Chat 请求向 Bot 注入已经认证的 request-scoped 身份。
+一体启动时，Bot 固定使用当前启动的 OpenViking Server；`bot.ov_server.server_url` 会被忽略，但显式配置的 `bot.ov_server.api_key` 和其他 Bot 侧 OpenViking 设置会保留。`api_key` 模式下，该 key 必须是 User/Admin key。OpenViking Server 会为每个 Chat 请求向 Bot 注入已经认证的 request-scoped 身份。
 
 #### 2. 一体启动
 
@@ -312,6 +312,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.agents.max_tool_iterations` | `50` | 单轮最大工具迭代数 |
 | `bot.agents.memory_window` | `50` | 本地历史窗口和会话提交消息阈值 |
 | `bot.agents.subagent_enabled` | `true` | 是否提供 `spawn` 工具 |
+| `bot.agents.subagent_max_concurrency` | `4` | 同时运行的后台子 Agent 数量上限 |
 | `bot.gateway.host` | `127.0.0.1` | Gateway 监听地址 |
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |
@@ -406,6 +407,28 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 | 其他 | `message`、`generate_image`、`cron`、`spawn` |
 
 `readonly` 模式不会注册 `openviking_add_resource`。渠道设置 `ov_tools_enable: false` 时，该渠道不显示 OpenViking 工具，也不注入 Profile、Memory 和 Experience。
+
+### 定时任务配置
+
+定时任务默认关闭。在 `ov.conf` 中设置 `bot.tools.cron.enabled` 为 `true`，即可开启：
+
+```json
+{
+  "bot": {
+    "tools": {
+      "cron": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+此开关同时控制 `cron` 工具注册和定时调度服务，适用于 Gateway 和本地 Chat。设为 `false` 或省略此配置时，不注册 `cron` 工具，也不启动调度服务；已有任务保留在磁盘上，但不会自动执行。
+
+修改后需要重启 Bot。已有部署升级后，如需继续自动执行定时任务，必须显式设置 `enabled: true`。子 Agent 和 `--eval` 模式仍不提供定时任务能力。
+
+`vikingbot cron` 命令仍可手动管理任务，此开关不限制 CLI 管理操作。
 
 ### MCP 工具
 
@@ -524,3 +547,4 @@ Gateway 的 Bot API 前缀为 `/bot/v1`：
 - [渠道、Gateway 与运行管理](docs/zh/concepts/03-channels-and-gateway.md)
 - [VikingBot 与 OpenViking 集成](docs/zh/concepts/04-openviking-integration.md)
 - [渠道配置](docs/zh/concepts/05-channel.md)
+- [Skills：本地与远程技能](docs/zh/concepts/06-skills.md)

@@ -5,14 +5,10 @@
 //! [`CachedFileSystem`].
 
 mod envelope;
-mod memory;
 mod metrics;
 mod policy;
-mod provider;
 mod wrapper;
 
-pub use memory::{MemoryCacheProvider, MemoryMockProvider};
 pub use metrics::{CacheMetrics, CacheMetricsSnapshot};
 pub use policy::{CacheDecision, CachePolicy, CacheTraversalMode, CacheTreeMode};
-pub use provider::{CacheError, CacheProvider, CacheResult, ProviderCapabilities};
 pub use wrapper::{CacheNamespace, CachedFileSystem};

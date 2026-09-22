@@ -4,10 +4,13 @@ from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 TEXT_SOURCE_CONTENT_ONLY = "content_only"
 TEXT_SOURCE_SUMMARY_FIRST = "summary_first"
-TEXT_SOURCE_SUMMARY_ONLY = "summary_only"
-SUMMARY_TEXT_SOURCES = frozenset({TEXT_SOURCE_SUMMARY_FIRST, TEXT_SOURCE_SUMMARY_ONLY})
+SUMMARY_TEXT_SOURCES = frozenset({TEXT_SOURCE_SUMMARY_FIRST})
 TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
 
 
@@ -32,8 +35,6 @@ class EmbeddingCredential(BaseModel):
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
-
-    model_config = {"extra": "forbid"}
 
 
 class EmbeddingModelConfig(BaseModel):
@@ -147,8 +148,6 @@ class EmbeddingModelConfig(BaseModel):
     failback_request_count: int = Field(
         default=50, description="Number of backup requests after which to attempt failback"
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
     @classmethod
@@ -639,7 +638,9 @@ class EmbeddingConfig(BaseModel):
     )
 
     max_concurrent: int = Field(
-        default=10, description="Maximum number of concurrent embedding requests"
+        default=10,
+        ge=1,
+        description="Maximum number of concurrent embedding requests",
     )
     max_retries: int = Field(
         default=3,
@@ -647,7 +648,7 @@ class EmbeddingConfig(BaseModel):
     )
     text_source: str = Field(
         default=TEXT_SOURCE_CONTENT_ONLY,
-        description="Text source for file vectorization: summary_first|summary_only|content_only",
+        description="Text source for file vectorization: summary_first|content_only",
     )
     max_input_tokens: int = Field(
         default=4096,
@@ -667,8 +668,6 @@ class EmbeddingConfig(BaseModel):
             "actually changed; only enable when you understand the implication."
         ),
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
     @classmethod
@@ -693,10 +692,14 @@ class EmbeddingConfig(BaseModel):
             raise ValueError(
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
             )
-        if self.text_source not in TEXT_SOURCES:
-            raise ValueError(
-                "embedding.text_source must be one of: summary_first, summary_only, content_only"
+        if self.text_source == "summary_only":
+            logger.warning(
+                "embedding.text_source=summary_only is deprecated; use summary_first instead. "
+                "Files without a summary still fall back to content for vectorization."
             )
+            self.text_source = TEXT_SOURCE_SUMMARY_FIRST
+        if self.text_source not in TEXT_SOURCES:
+            raise ValueError("embedding.text_source must be one of: summary_first, content_only")
         return self
 
     def _create_embedder(
@@ -765,6 +768,11 @@ class EmbeddingConfig(BaseModel):
                     **(
                         {"encoding_format": cfg.encoding_format}
                         if cfg.encoding_format is not None
+                        else {}
+                    ),
+                    **(
+                        {"input_type": "multimodal"}
+                        if "input" in cfg.model_fields_set and cfg.input == "multimodal"
                         else {}
                     ),
                     **({"extra_body": cfg.extra_body} if cfg.extra_body else {}),
@@ -994,6 +1002,10 @@ class EmbeddingConfig(BaseModel):
             )
 
         embedder_class, param_builder = factory_registry[key]
+        if embedder_class is None and key == ("gemini", "dense"):
+            raise ValueError(
+                "google-genai is not installed. Install it with: pip install openviking[gemini]"
+            )
         params = param_builder(config)
         return embedder_class(**params)
 
@@ -1046,12 +1058,12 @@ class EmbeddingConfig(BaseModel):
         credential_ids = []
 
         for cred in config.credentials:
-            # Create a temporary config merged from the model config and credential
+            # Preserve whether `input` was explicitly set; the default multimodal
+            # value must not opt OpenAI-compatible failover configs into image input.
             merged_config = EmbeddingModelConfig(
                 model=cred.model or config.model,
                 dimension=config.dimension,
                 batch_size=config.batch_size,
-                input=config.input,
                 query_param=config.query_param,
                 document_param=config.document_param,
                 provider=cred.provider or config.provider,
@@ -1073,6 +1085,7 @@ class EmbeddingConfig(BaseModel):
                 enable_fusion=config.enable_fusion,
                 res_level=config.res_level,
                 max_video_frames=config.max_video_frames,
+                **({"input": config.input} if "input" in config.model_fields_set else {}),
             )
             provider = self._require_provider(merged_config.provider)
             embedders.append(self._create_embedder(provider, embedder_type, merged_config))

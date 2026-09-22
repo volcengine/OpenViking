@@ -4,6 +4,12 @@
 
 import pytest
 
+from openviking.pyagfs.exceptions import (
+    AGFSClientError,
+    AGFSConnectionError,
+    AGFSNotADirectoryError,
+    AGFSTimeoutError,
+)
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     ERROR_CLASS_AUTH,
@@ -12,14 +18,82 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_PERMANENT,
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
+    ERROR_CLASS_UNKNOWN,
     classify_api_error,
+    extract_metric_error_code,
     retry_async,
     retry_sync,
 )
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        FileNotFoundError,
+        PermissionError,
+        IsADirectoryError,
+        NotADirectoryError,
+        AGFSNotADirectoryError,
+    ],
+)
+@pytest.mark.parametrize("message", ["/resources/notes.txt", "timeout at /arbitrary/input.md"])
+def test_classify_permanent_filesystem_errors(error_type, message, wrapped):
+    error = error_type(message)
+    if wrapped:
+        wrapper = RuntimeError("storage operation failed")
+        wrapper.__cause__ = error
+        error = wrapper
+    assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (AGFSTimeoutError("request timeout"), ERROR_CLASS_TRANSIENT),
+        (AGFSConnectionError("connection refused"), ERROR_CLASS_TRANSIENT),
+        (AGFSClientError("unexpected storage failure"), ERROR_CLASS_UNKNOWN),
+    ],
+)
+def test_classify_other_agfs_errors(error, expected, wrapped):
+    if wrapped:
+        wrapper = RuntimeError("storage operation failed")
+        wrapper.__cause__ = error
+        error = wrapper
+    assert classify_api_error(error) == expected
+
+
 def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
+
+
+class _ProviderError(RuntimeError):
+    def __init__(self, *, status_code=None, error_code=None, code=None, body=None):
+        super().__init__("provider request failed")
+        self.status_code = status_code
+        self.error_code = error_code
+        self.code = code
+        self.body = body
+
+
+def test_extract_metric_error_code_prefers_structured_provider_code():
+    assert (
+        extract_metric_error_code(_ProviderError(status_code=429, code="RateLimitExceeded"))
+        == "429"
+    )
+    assert extract_metric_error_code(
+        _ProviderError(body={"error": {"code": "InvalidParameter"}})
+    ) == ("InvalidParameter")
+
+
+def test_extract_metric_error_code_uses_safe_fallbacks_only():
+    assert extract_metric_error_code(TimeoutError("request timed out")) == "timeout"
+    assert extract_metric_error_code(ConnectionError("connection reset")) == "connection_error"
+    wrapped_timeout = RuntimeError("request failed")
+    wrapped_timeout.__cause__ = TimeoutError("request timed out")
+    assert extract_metric_error_code(wrapped_timeout) == "timeout"
+    assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
 
 
 def test_classify_all_credentials_failed_prefers_transient_over_auth():
@@ -193,10 +267,37 @@ def test_quota_exceeded_case_insensitive():
             "'input (8525 tokens) is too large to process. increase the physical batch size "
             "(current batch size: 2048)', 'type': 'server_error'}}"
         ),
+        # SiliconFlow generic 400 with structured code 20015, dict-repr form (#4676)
+        (
+            "Error code: 400 - {'code': 20015, 'message': "
+            "'The parameter is invalid. Please check again.', 'data': None}"
+        ),
+        # JSON string form
+        'Error code: 400 - {"code": 20015, "message": "The parameter is invalid."}',
     ],
 )
 def test_classify_input_too_large_errors(message):
     assert classify_api_error(RuntimeError(message)) == ERROR_CLASS_INPUT_TOO_LARGE
+
+
+def test_other_siliconflow_400_codes_stay_permanent():
+    """Only code 20015 is reclassified; other SiliconFlow parameter errors
+    (e.g. a bad model name) must remain permanent request-level failures."""
+    error = RuntimeError(
+        "Error code: 400 - {'code': 20012, 'message': 'Model not exists', 'data': None}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_PERMANENT
+
+
+def test_20015_inside_request_id_is_not_input_too_large():
+    """A rate-limit error whose request ID happens to contain 20015 must not
+    be misclassified as INPUT_TOO_LARGE."""
+    error = RuntimeError(
+        "Error code: 429 - {'error': {'code': 'TooManyRequests', "
+        "'message': 'RPM limit exceeded', "
+        "'request_id': '0217801248873024200158fe53d7c9130f34413480585e683685bc95'}}"
+    )
+    assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
 def test_retry_sync_does_not_retry_input_too_large():

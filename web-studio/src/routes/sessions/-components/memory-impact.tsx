@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import {
+  BarChart3Icon,
   BrainCircuitIcon,
   FilePenLineIcon,
   FilePlus2Icon,
@@ -307,6 +309,7 @@ function OperationRow({
 }) {
   const { t } = useTranslation('sessions')
   const { icon: Icon, text } = KIND_STYLES[operation.kind]
+  const isExperience = operation.memoryType === 'experiences'
 
   return (
     <details className="group border-b last:border-b-0">
@@ -318,6 +321,18 @@ function OperationRow({
         <Badge className="max-w-28" variant="outline">
           <span className="truncate">{operation.memoryType}</span>
         </Badge>
+        {isExperience ? (
+          <Link
+            aria-label={t('impact.viewExperienceImpact')}
+            params={{ experienceUri: operation.uri }}
+            title={t('impact.viewExperienceImpact')}
+            to="/agent-experience/$experienceUri"
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <BarChart3Icon className="size-3.5" />
+          </Link>
+        ) : null}
         <span className="text-[10px] text-muted-foreground transition-transform group-open:rotate-90">
           ›
         </span>

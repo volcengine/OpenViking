@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
-import asyncio
 import argparse
+import asyncio
 import json
 import os
 import shutil
@@ -216,7 +216,19 @@ def main():
         config = load_server_config(args.config)
         OpenVikingConfigSingleton.initialize(config_path=args.config)
     except (FileNotFoundError, ValueError) as e:
-        print(e, file=sys.stderr)
+        if isinstance(e, ValueError):
+            print(
+                f"Failed to load OpenViking server configuration from {resolved_config_path}:\n{e}",
+                file=sys.stderr,
+            )
+            print(
+                "\nValidate the configuration with:\n"
+                "  openviking-server doctor\n\n"
+                "See examples/ov.conf.example for supported fields.",
+                file=sys.stderr,
+            )
+        else:
+            print(e, file=sys.stderr)
         sys.exit(1)
 
     # Configure logging early so that all subsequent steps have proper logging
@@ -264,6 +276,10 @@ def main():
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
+        import secrets
+
+        # Shared only by this server and its managed child, never returned to Studio.
+        os.environ["OPENVIKING_BOT_STUDIO_TOKEN"] = secrets.token_urlsafe(32)
         bot_port = args.bot_port
         config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
         _abort_if_port_in_use(bot_port, "vikingbot gateway")

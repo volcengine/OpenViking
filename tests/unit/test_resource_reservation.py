@@ -14,6 +14,9 @@ class _FakeVikingFS:
     def __init__(self, existing=()):
         self.existing = set(existing)
 
+    async def _ensure_access(self, uri, ctx, *, action):
+        return None
+
     async def exists(self, uri, *, ctx):
         return uri in self.existing
 

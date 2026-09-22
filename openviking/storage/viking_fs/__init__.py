@@ -99,8 +99,9 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.storage.acl import AclManager
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import GrepConfig, RerankConfig, RetrievalConfig
+    from openviking_cli.utils.config import GlobConfig, GrepConfig, RerankConfig, RetrievalConfig
 
 
 # ========== VikingFS Main Class ==========
@@ -130,8 +131,10 @@ class VikingFS(
         query_embedder: Optional[Any] = None,
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
+        acl_manager: Optional["AclManager"] = None,
         retrieval_config: Optional["RetrievalConfig"] = None,
         grep_config: Optional["GrepConfig"] = None,
+        glob_config: Optional["GlobConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
     ):
@@ -140,8 +143,10 @@ class VikingFS(
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
         self.vector_store = vector_store
+        self.acl_manager = acl_manager
         self.retrieval_config = retrieval_config
         self.grep_config = grep_config
+        self.glob_config = glob_config
         self._encryptor = encryptor
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024
@@ -150,7 +155,7 @@ class VikingFS(
             "vikingfs_bound_ctx", default=None
         )
         self._background_tasks: set = set()
-        self._user_deletion_guard: Optional[Callable[[str, str], bool]] = None
+        self._deletion_guard: Optional[Callable[[str, str], bool]] = None
 
 
 VikingFS.__module__ = __name__

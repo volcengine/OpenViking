@@ -17,7 +17,7 @@ use crate::core::internal_names::{EXACT_LOCK_FILE_PREFIX, PATH_LOCK_FILE};
 use crate::core::{FileSystem, FsContextView};
 
 use super::metrics::LockMetrics;
-use super::provider::PathLockProvider;
+use super::provider::{AcquisitionChange, AtomicAcquisition, PathLockHandleMode, PathLockProvider};
 use super::resolver::{LockPathResolver, ResolvedExactPaths};
 use super::types::{
     BorrowedPathLockLease, LockToken, OwnedPathLockLease, PathLockConflict, PathLockError,
@@ -28,8 +28,10 @@ use super::types::{
 /// Configuration for the PathLockManager.
 #[derive(Debug, Clone)]
 pub struct PathLockConfig {
-    /// Built-in provider name: `filesystem` or `memory`.
+    /// Built-in provider name: `filesystem`, `memory`, or `cache`.
     pub provider: String,
+    /// OpenViking instance name used by the cache-backed provider.
+    pub namespace: Option<String>,
     /// Default wait timeout for auto-acquired locks.
     pub lock_timeout_secs: f64,
     /// Seconds after which a lock token is considered stale.
@@ -40,6 +42,7 @@ impl Default for PathLockConfig {
     fn default() -> Self {
         Self {
             provider: "filesystem".to_string(),
+            namespace: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 30.0,
         }
@@ -110,16 +113,6 @@ struct LeaseEntry {
     pending_handoff: bool,
     lock_kinds: HashMap<String, PathLockKind>,
     last_active_at: Instant,
-}
-
-#[derive(Debug)]
-enum AcquisitionChange {
-    Created,
-    Reentrant,
-    Upgraded {
-        previous: LockToken,
-        replacement: LockToken,
-    },
 }
 
 #[derive(Debug)]
@@ -493,7 +486,7 @@ pub struct PathLockManager {
     config: PathLockConfig,
     metrics: Arc<RwLock<LockMetrics>>,
     waiting_lock_count: AtomicUsize,
-    wait_duration_ms: AtomicU64,
+    wait_duration_ns: AtomicU64,
 }
 
 impl PathLockManager {
@@ -595,7 +588,7 @@ impl PathLockManager {
             config,
             metrics,
             waiting_lock_count: AtomicUsize::new(0),
-            wait_duration_ms: AtomicU64::new(0),
+            wait_duration_ns: AtomicU64::new(0),
         }
     }
 
@@ -614,7 +607,7 @@ impl PathLockManager {
         lock_path: &str,
         owner_id: &str,
     ) -> PathLockResult<bool> {
-        match provider.remove_token(lock_path, owner_id).await {
+        match provider.remove_token(lock_path, owner_id, false).await {
             Ok(true) => Ok(true),
             Ok(false) => match provider.read_token(lock_path).await? {
                 None => Ok(true),
@@ -642,12 +635,7 @@ impl PathLockManager {
     fn normalize_requests(requests: &[PathLockRequest]) -> Vec<PathLockRequest> {
         let mut by_path: HashMap<String, PathLockKind> = HashMap::new();
         for request in requests {
-            let trimmed = request.path.trim_end_matches('/');
-            let path = if trimmed.is_empty() {
-                "/".to_string()
-            } else {
-                trimmed.to_string()
-            };
+            let path = Self::normalize_path(&request.path);
             by_path
                 .entry(path)
                 .and_modify(|kind| {
@@ -671,17 +659,33 @@ impl PathLockManager {
         normalized
     }
 
+    /// Normalize one logical path using the existing PathLock trailing-slash rule.
+    fn normalize_path(path: &str) -> String {
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    /// Return the configured lock expiry in nanoseconds.
+    fn lock_expire_ns(&self) -> u128 {
+        (self.config.lock_expire_secs * 1_000_000_000.0) as u128
+    }
+
     /// Check if a token is stale based on config.
     fn is_stale(&self, token: &LockToken, now_ns: u128) -> bool {
-        let expire_ns = (self.config.lock_expire_secs * 1_000_000_000.0) as u128;
-        now_ns.saturating_sub(token.time_ns) > expire_ns
+        now_ns.saturating_sub(token.time_ns) > self.lock_expire_ns()
     }
 
     /// Return whether an acquire-loop error should be retried within the wait budget.
     fn is_retryable_error(error: &PathLockError) -> bool {
         matches!(
             error,
-            PathLockError::Conflict { .. } | PathLockError::Busy { .. }
+            PathLockError::Conflict { .. }
+                | PathLockError::Busy { .. }
+                | PathLockError::EmptyToken { .. }
         )
     }
 
@@ -864,7 +868,7 @@ impl PathLockManager {
             first_attempt = false;
             let acquired_lock_paths = match self.try_acquire_batch_once(&sorted, &owner_id).await {
                 Ok(acquired) => acquired,
-                Err((err, pre_conflict)) => {
+                Err(err) => {
                     drop(owner_registry);
                     if !Self::is_retryable_error(&err) {
                         break Err(err);
@@ -898,37 +902,6 @@ impl PathLockManager {
                         });
                     }
 
-                    if pre_conflict {
-                        if let PathLockError::Conflict { ref lock_path, .. } = &err {
-                            let token = match self.provider.read_token(lock_path).await {
-                                Ok(token) => token,
-                                Err(error) => break Err(error),
-                            };
-                            if let Some(token) = token {
-                                let now_ns = Self::now_ns();
-                                if self.is_stale(&token, now_ns) {
-                                    if start.elapsed() >= timeout {
-                                        break Err(PathLockError::Timeout {
-                                            elapsed_ms: start.elapsed().as_millis() as u64,
-                                        });
-                                    }
-                                    let removed = match self
-                                        .provider
-                                        .remove_token(lock_path, &token.owner_id)
-                                        .await
-                                    {
-                                        Ok(removed) => removed,
-                                        Err(error) => break Err(error),
-                                    };
-                                    if removed {
-                                        info!(lock_path = %lock_path, stale_owner = %token.owner_id, token_kind = ?token.lock_type, age_ms = ((now_ns.saturating_sub(token.time_ns)) / 1_000_000) as u64, "removed stale pathlock token during acquire retry");
-                                        self.metrics.write().await.stale_tokens_removed += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     let remaining = timeout.saturating_sub(start.elapsed());
                     tokio::time::sleep(Self::retry_delay(retry_attempt, remaining)).await;
                     retry_attempt = retry_attempt.saturating_add(1);
@@ -941,7 +914,7 @@ impl PathLockManager {
                 owner_id: owner_id.clone(),
                 lock_paths: acquired_lock_paths
                     .iter()
-                    .map(|(lock_path, _)| lock_path.clone())
+                    .map(|acquisition| acquisition.handle.clone())
                     .collect(),
                 covered_paths: sorted.clone(),
             };
@@ -980,8 +953,12 @@ impl PathLockManager {
 
         match result {
             Ok(owned) => {
-                self.wait_duration_ms
-                    .fetch_add(start.elapsed().as_millis() as u64, AtomicOrdering::Relaxed);
+                let elapsed_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                let _ = self.wait_duration_ns.fetch_update(
+                    AtomicOrdering::Relaxed,
+                    AtomicOrdering::Relaxed,
+                    |total| Some(total.saturating_add(elapsed_ns)),
+                );
                 if waiting.0.is_some() {
                     info!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, covered_paths = ?owned.lease.covered_paths, wait_ms = start.elapsed().as_millis() as u64, "pathlock acquire batch succeeded after waiting");
                 }
@@ -996,7 +973,23 @@ impl PathLockManager {
         &self,
         requests: &[PathLockRequest],
         owner_id: &str,
-    ) -> Result<Vec<(String, AcquisitionChange)>, (PathLockError, bool)> {
+    ) -> PathLockResult<Vec<AtomicAcquisition>> {
+        let now_ns = Self::now_ns();
+        match self
+            .provider
+            .try_acquire_batch_atomic(
+                requests,
+                owner_id,
+                now_ns,
+                now_ns.saturating_sub(self.lock_expire_ns()),
+            )
+            .await
+        {
+            Ok(Some(acquisitions)) => return Ok(acquisitions),
+            Ok(None) => {}
+            Err(error) => return Err(error),
+        }
+
         let mut acquired = Vec::new();
         let mut exact_resolutions: HashMap<String, ResolvedExactPaths> = HashMap::new();
         let acquisition: PathLockResult<()> = async {
@@ -1016,7 +1009,10 @@ impl PathLockManager {
                         let change = self
                             .try_acquire_one(&lock_path, owner_id, PathLockKind::Exact)
                             .await?;
-                        acquired.push((lock_path, change));
+                        acquired.push(AtomicAcquisition {
+                            handle: lock_path,
+                            change,
+                        });
                     }
                     PathLockKind::Tree => {
                         let lock_path = self.resolver.resolve_tree_lock_path(&request.path).await?;
@@ -1034,7 +1030,10 @@ impl PathLockManager {
                         let change = self
                             .try_acquire_one(&lock_path, owner_id, PathLockKind::Tree)
                             .await?;
-                        acquired.push((lock_path, change));
+                        acquired.push(AtomicAcquisition {
+                            handle: lock_path,
+                            change,
+                        });
                     }
                 }
             }
@@ -1043,9 +1042,9 @@ impl PathLockManager {
         .await;
         if let Err(error) = acquisition {
             if let Err(rollback_error) = self.rollback_acquisitions(&acquired, owner_id).await {
-                return Err((Self::rollback_error(error, rollback_error), false));
+                return Err(Self::rollback_error(error, rollback_error));
             }
-            return Err((error, true));
+            return Err(error);
         }
 
         let verification: PathLockResult<()> = async {
@@ -1080,9 +1079,9 @@ impl PathLockManager {
         .await;
         if let Err(error) = verification {
             if let Err(rollback_error) = self.rollback_acquisitions(&acquired, owner_id).await {
-                return Err((Self::rollback_error(error, rollback_error), false));
+                return Err(Self::rollback_error(error, rollback_error));
             }
-            return Err((error, false));
+            return Err(error);
         }
         Ok(acquired)
     }
@@ -1090,14 +1089,22 @@ impl PathLockManager {
     /// Roll back token changes made by one incomplete batch acquisition.
     async fn rollback_acquisitions(
         &self,
-        acquired_lock_paths: &[(String, AcquisitionChange)],
+        acquired_lock_paths: &[AtomicAcquisition],
         owner_id: &str,
     ) -> PathLockResult<()> {
+        if let Some(result) = self
+            .provider
+            .rollback_acquisitions_atomic(acquired_lock_paths, owner_id)
+            .await?
+        {
+            return Ok(result);
+        }
+
         let mut first_error = None;
-        for (lock_path, change) in acquired_lock_paths.iter().rev() {
-            let result = match change {
-                AcquisitionChange::Created => {
-                    Self::remove_owned_token_with(&self.provider, lock_path, owner_id)
+        for acquisition in acquired_lock_paths.iter().rev() {
+            let result = match &acquisition.change {
+                AcquisitionChange::Created { .. } => {
+                    Self::remove_owned_token_with(&self.provider, &acquisition.handle, owner_id)
                         .await
                         .map(|_| ())
                 }
@@ -1107,12 +1114,13 @@ impl PathLockManager {
                     replacement,
                 } => match self
                     .provider
-                    .compare_and_write_token(lock_path, replacement, previous)
+                    .compare_and_write_token(&acquisition.handle, replacement, previous)
                     .await
                 {
                     Ok(true) => Ok(()),
                     Ok(false) => Err(PathLockError::Io(format!(
-                        "failed to roll back token upgrade at '{lock_path}'"
+                        "failed to roll back token upgrade at '{}'",
+                        acquisition.handle
                     ))),
                     Err(error) => Err(error),
                 },
@@ -1167,22 +1175,28 @@ impl PathLockManager {
                 debug!(lock_path = %lock_path, owner_id = %owner_id, kind = ?existing.lock_type, "reused existing pathlock token for same owner");
                 return Ok(AcquisitionChange::Reentrant);
             }
-            if !self.is_stale(&existing, now_ns) {
-                return Err(PathLockError::Conflict {
-                    lock_path: lock_path.to_string(),
-                    owner: existing.owner_id,
-                    kind: existing.lock_type,
-                });
+            // Replace only the stale snapshot we observed. A concurrent heartbeat
+            // or takeover must not be erased by a separate remove/create sequence.
+            if self.is_stale(&existing, now_ns)
+                && self
+                    .provider
+                    .compare_and_write_token(lock_path, &existing, &token)
+                    .await?
+            {
+                info!(lock_path = %lock_path, stale_owner = %existing.owner_id, owner_id = %owner_id, "replaced stale pathlock token during acquire");
+                self.metrics.write().await.stale_tokens_removed += 1;
+                return Ok(AcquisitionChange::Created { replacement: token });
             }
-            // Stale — remove it before attempting to create our own token.
-            self.provider
-                .remove_token(lock_path, &existing.owner_id)
-                .await?;
+            return Err(PathLockError::Conflict {
+                lock_path: lock_path.to_string(),
+                owner: existing.owner_id,
+                kind: existing.lock_type,
+            });
         }
 
         self.provider.try_create_token(lock_path, &token).await?;
         debug!(lock_path = %lock_path, owner_id = %owner_id, kind = ?kind, "created new pathlock token");
-        Ok(AcquisitionChange::Created)
+        Ok(AcquisitionChange::Created { replacement: token })
     }
 
     /// Check concrete lock-file paths for a live token owned by another owner.
@@ -1247,7 +1261,9 @@ impl PathLockManager {
 
         let mut metrics = self.metrics.write().await;
         metrics.descendant_scan_count += 1;
-        metrics.descendant_scan_duration_ms += scan_start.elapsed().as_millis() as u64;
+        metrics.descendant_scan_duration_ns = metrics
+            .descendant_scan_duration_ns
+            .saturating_add(u64::try_from(scan_start.elapsed().as_nanos()).unwrap_or(u64::MAX));
         drop(metrics);
         debug!(path = %path, descendant_count = descendants.len(), scan_ms = scan_start.elapsed().as_millis() as u64, "scanned descendant pathlock tokens");
 
@@ -1745,6 +1761,12 @@ impl PathLockManager {
         }
 
         let legacy_handoff = handoff.covered_paths.is_empty();
+        let handle_mode = self.provider.handle_mode();
+        if handle_mode == PathLockHandleMode::LogicalPath && legacy_handoff {
+            return Err(PathLockError::HandoffFailed(
+                "logical-path provider handoff requires covered_paths".to_string(),
+            ));
+        }
         if !legacy_handoff && handoff.covered_paths.len() != handoff.lock_paths.len() {
             return Err(PathLockError::InvalidRequest(
                 "handoff lock_paths and covered_paths must have equal lengths".to_string(),
@@ -1757,38 +1779,52 @@ impl PathLockManager {
         // We validate live ownership/kind by the lock file path itself and keep covered_paths empty.
         // Upgrade path: once old queue payloads are drained, remove this branch and require covered_paths.
         for (index, lp) in handoff.lock_paths.iter().enumerate() {
-            let expected_kind = if legacy_handoff {
-                let file_name = lp.rsplit('/').next().unwrap_or("");
-                if lp == &format!("/{}", PATH_LOCK_FILE)
-                    || lp.ends_with(&format!("/{}", PATH_LOCK_FILE))
-                {
-                    PathLockKind::Tree
-                } else if file_name.starts_with(EXACT_LOCK_FILE_PREFIX) {
-                    PathLockKind::Exact
-                } else {
-                    return Err(PathLockError::InvalidRequest(format!(
-                        "legacy handoff lock path '{lp}' is not a supported lock file"
-                    )));
-                }
-            } else {
-                let request = &handoff.covered_paths[index];
-                let expected_paths = match request.kind {
-                    PathLockKind::Exact => {
-                        self.resolver
-                            .resolve_exact_conflict_paths(&request.path)
-                            .await?
+            let expected_kind = match handle_mode {
+                PathLockHandleMode::LogicalPath => {
+                    let request = &handoff.covered_paths[index];
+                    let expected_path = Self::normalize_path(&request.path);
+                    if lp != &expected_path {
+                        return Err(PathLockError::InvalidRequest(format!(
+                            "handoff coverage '{}' does not match logical lock path '{lp}'",
+                            request.path
+                        )));
                     }
-                    PathLockKind::Tree => {
-                        vec![self.resolver.resolve_tree_lock_path(&request.path).await?]
-                    }
-                };
-                if !expected_paths.contains(lp) {
-                    return Err(PathLockError::InvalidRequest(format!(
-                        "handoff coverage '{}' does not map to lock path '{lp}'",
-                        request.path
-                    )));
+                    request.kind
                 }
-                request.kind
+                PathLockHandleMode::LockPath if legacy_handoff => {
+                    let file_name = lp.rsplit('/').next().unwrap_or("");
+                    if lp == &format!("/{}", PATH_LOCK_FILE)
+                        || lp.ends_with(&format!("/{}", PATH_LOCK_FILE))
+                    {
+                        PathLockKind::Tree
+                    } else if file_name.starts_with(EXACT_LOCK_FILE_PREFIX) {
+                        PathLockKind::Exact
+                    } else {
+                        return Err(PathLockError::InvalidRequest(format!(
+                            "legacy handoff lock path '{lp}' is not a supported lock file"
+                        )));
+                    }
+                }
+                PathLockHandleMode::LockPath => {
+                    let request = &handoff.covered_paths[index];
+                    let expected_paths = match request.kind {
+                        PathLockKind::Exact => {
+                            self.resolver
+                                .resolve_exact_conflict_paths(&request.path)
+                                .await?
+                        }
+                        PathLockKind::Tree => {
+                            vec![self.resolver.resolve_tree_lock_path(&request.path).await?]
+                        }
+                    };
+                    if !expected_paths.contains(lp) {
+                        return Err(PathLockError::InvalidRequest(format!(
+                            "handoff coverage '{}' does not map to lock path '{lp}'",
+                            request.path
+                        )));
+                    }
+                    request.kind
+                }
             };
             expected_kinds.push(expected_kind);
         }
@@ -1880,6 +1916,19 @@ impl PathLockManager {
     /// Check if a path is locked (for observability).
     pub async fn is_locked(&self, path: &str, ignore_stale: bool) -> PathLockResult<bool> {
         let now_ns = Self::now_ns();
+        let normalized_path = Self::normalize_path(path);
+        if let Some(locked) = self
+            .provider
+            .is_path_locked_atomic(
+                &normalized_path,
+                now_ns,
+                now_ns.saturating_sub(self.lock_expire_ns()),
+                ignore_stale,
+            )
+            .await?
+        {
+            return Ok(locked);
+        }
 
         // Check own .path.ovlock.
         let dir_lock = format!("{}/{}", path.trim_end_matches('/'), PATH_LOCK_FILE);
@@ -2041,7 +2090,7 @@ impl PathLockManager {
         let mut metrics = self.metrics.read().await.clone();
         metrics.active_lock_count = self.lease_registry.active_count();
         metrics.waiting_lock_count = self.waiting_lock_count.load(AtomicOrdering::Relaxed);
-        metrics.wait_duration_ms = self.wait_duration_ms.load(AtomicOrdering::Relaxed);
+        metrics.wait_duration_ns = self.wait_duration_ns.load(AtomicOrdering::Relaxed);
         metrics
     }
 }
@@ -2111,8 +2160,17 @@ mod tests {
             self.inner.write(path, data, offset, flags).await
         }
 
-        async fn read_dir(&self, path: &str) -> FsResult<Vec<FileInfo>> {
-            self.inner.read_dir(path).await
+        async fn read_dir(
+            &self,
+            path: &str,
+            offset: Option<usize>,
+            limit: Option<usize>,
+            sort_by: Option<crate::core::ListSortBy>,
+            sort_order: Option<crate::core::SortOrder>,
+        ) -> FsResult<Vec<FileInfo>> {
+            self.inner
+                .read_dir(path, offset, limit, sort_by, sort_order)
+                .await
         }
 
         async fn stat(&self, path: &str) -> FsResult<FileInfo> {
@@ -2139,9 +2197,10 @@ mod tests {
         fail_next_read: AtomicBool,
         fail_next_remove: AtomicBool,
         return_false_next_remove: AtomicBool,
-        busy_next_remove: AtomicBool,
-        busy_remove_count: AtomicUsize,
+        busy_next_takeover: AtomicBool,
+        busy_takeover_count: AtomicUsize,
         reject_compare: bool,
+        refresh_on_takeover: bool,
     }
 
     impl FailNextRemoveProvider {
@@ -2152,22 +2211,24 @@ mod tests {
                 fail_next_read: AtomicBool::new(true),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
-                busy_next_remove: AtomicBool::new(false),
-                busy_remove_count: AtomicUsize::new(0),
+                busy_next_takeover: AtomicBool::new(false),
+                busy_takeover_count: AtomicUsize::new(0),
                 reject_compare: false,
+                refresh_on_takeover: false,
             }
         }
 
-        /// Build a memory provider whose next remove reports a retryable busy error.
-        fn with_busy_remove() -> Self {
+        /// Build a memory provider whose next takeover reports a retryable busy error.
+        fn with_busy_takeover() -> Self {
             Self {
                 inner: crate::lock::provider::MemoryPathLockProvider::new(),
                 fail_next_read: AtomicBool::new(false),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
-                busy_next_remove: AtomicBool::new(true),
-                busy_remove_count: AtomicUsize::new(0),
+                busy_next_takeover: AtomicBool::new(true),
+                busy_takeover_count: AtomicUsize::new(0),
                 reject_compare: false,
+                refresh_on_takeover: false,
             }
         }
 
@@ -2178,9 +2239,10 @@ mod tests {
                 fail_next_read: AtomicBool::new(false),
                 fail_next_remove: AtomicBool::new(false),
                 return_false_next_remove: AtomicBool::new(false),
-                busy_next_remove: AtomicBool::new(false),
-                busy_remove_count: AtomicUsize::new(0),
+                busy_next_takeover: AtomicBool::new(false),
+                busy_takeover_count: AtomicUsize::new(0),
                 reject_compare: true,
+                refresh_on_takeover: false,
             }
         }
     }
@@ -2208,8 +2270,20 @@ mod tests {
             expected: &LockToken,
             replacement: &LockToken,
         ) -> PathLockResult<bool> {
+            if self.busy_next_takeover.swap(false, Ordering::SeqCst) {
+                self.busy_takeover_count.fetch_add(1, Ordering::SeqCst);
+                return Err(PathLockError::Busy {
+                    lock_path: lock_path.to_string(),
+                    operation: "compare_and_write".to_string(),
+                });
+            }
             if self.reject_compare {
                 return Ok(false);
+            }
+            if self.refresh_on_takeover {
+                self.inner
+                    .refresh_token(lock_path, &expected.owner_id, PathLockManager::now_ns())
+                    .await?;
             }
             self.inner
                 .compare_and_write_token(lock_path, expected, replacement)
@@ -2225,21 +2299,24 @@ mod tests {
             self.inner.refresh_token(lock_path, owner_id, time_ns).await
         }
 
-        async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
-            if self.busy_next_remove.swap(false, Ordering::SeqCst) {
-                self.busy_remove_count.fetch_add(1, Ordering::SeqCst);
-                return Err(PathLockError::Busy {
-                    lock_path: lock_path.to_string(),
-                    operation: "remove".to_string(),
-                });
-            }
+        async fn remove_token(
+            &self,
+            lock_path: &str,
+            owner_id: &str,
+            force: bool,
+        ) -> PathLockResult<bool> {
             if self.return_false_next_remove.swap(false, Ordering::SeqCst) {
                 return Ok(false);
             }
             if self.fail_next_remove.swap(false, Ordering::SeqCst) {
                 return Err(PathLockError::Io("injected remove failure".to_string()));
             }
-            self.inner.remove_token(lock_path, owner_id).await
+            if self.refresh_on_takeover {
+                self.inner
+                    .refresh_token(lock_path, owner_id, PathLockManager::now_ns())
+                    .await?;
+            }
+            self.inner.remove_token(lock_path, owner_id, force).await
         }
 
         async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
@@ -2329,8 +2406,13 @@ mod tests {
             self.inner.refresh_token(lock_path, owner_id, time_ns).await
         }
 
-        async fn remove_token(&self, lock_path: &str, owner_id: &str) -> PathLockResult<bool> {
-            self.inner.remove_token(lock_path, owner_id).await
+        async fn remove_token(
+            &self,
+            lock_path: &str,
+            owner_id: &str,
+            force: bool,
+        ) -> PathLockResult<bool> {
+            self.inner.remove_token(lock_path, owner_id, force).await
         }
 
         async fn scan_descendant_locks(&self, root: &str) -> PathLockResult<Vec<String>> {
@@ -2402,6 +2484,7 @@ mod tests {
         fs.mkdir("/data/delete-me", 0o755).await.unwrap();
         let provider = Arc::new(crate::lock::provider::FilesystemPathLockProvider::new(
             fs.clone(),
+            PathLockConfig::default().lock_expire_secs,
         ));
         let mgr = PathLockManager::new(fs.clone(), provider, PathLockConfig::default());
         let lease = mgr
@@ -2811,10 +2894,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn busy_cleanup_is_retried() {
+    async fn busy_stale_takeover_is_retried() {
         let fs = Arc::new(MemFileSystem::new());
         fs.mkdir("/data", 0o755).await.unwrap();
-        let provider = Arc::new(FailNextRemoveProvider::with_busy_remove());
+        let provider = Arc::new(FailNextRemoveProvider::with_busy_takeover());
         provider
             .inner
             .try_create_token(
@@ -2841,13 +2924,59 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(provider.busy_remove_count.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.busy_takeover_count.load(Ordering::SeqCst), 1);
         mgr.release(&lease).await.unwrap();
         let error = PathLockManager::rollback_error(
             PathLockError::Io("commit".into()),
             PathLockError::Io("rollback".into()),
         );
         assert!(!PathLockManager::is_retryable_error(&error));
+    }
+
+    #[tokio::test]
+    async fn stale_takeover_preserves_a_concurrent_refresh() {
+        for (refresh, timeout) in [
+            (false, Duration::ZERO),
+            (true, Duration::ZERO),
+            (true, Duration::from_millis(200)),
+        ] {
+            let fs = Arc::new(MemFileSystem::new());
+            fs.mkdir("/data", 0o755).await.unwrap();
+            let provider = Arc::new(FailNextRemoveProvider {
+                reject_compare: false,
+                refresh_on_takeover: refresh,
+                ..FailNextRemoveProvider::with_compare_miss()
+            });
+            let lock_path = "/data/.path.ovlock";
+            provider
+                .inner
+                .try_create_token(
+                    lock_path,
+                    &LockToken {
+                        owner_id: "original-owner".to_string(),
+                        time_ns: 1,
+                        lock_type: PathLockKind::Tree,
+                    },
+                )
+                .await
+                .unwrap();
+            let mgr = PathLockManager::new(fs, provider.clone(), PathLockConfig::default());
+
+            let result = mgr.acquire_tree("/data", timeout, None).await;
+            let token = provider.inner.read_token(lock_path).await.unwrap().unwrap();
+            assert!(token.time_ns > 1);
+            if refresh {
+                // The heartbeat wins after the stale read but before takeover.
+                // Both the renewed token and its ownership must survive.
+                assert!(matches!(result, Err(PathLockError::Timeout { .. })));
+                assert_eq!(token.owner_id, "original-owner");
+            } else {
+                // A genuinely stale token remains reclaimable without waiting.
+                let lease = result.unwrap();
+                assert_eq!(token.owner_id, lease.lease.owner_id);
+                mgr.release(&lease).await.unwrap();
+            }
+        }
     }
 
     /// Verify a downgrade CAS miss returns without dropping local lease state.

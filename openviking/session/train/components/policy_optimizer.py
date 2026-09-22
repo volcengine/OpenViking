@@ -13,6 +13,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, StoredLink
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
@@ -48,6 +49,7 @@ class PatchMergePolicyOptimizer:
     viking_fs: Any = None
     vlm: Any = None
     memory_type: str = "experiences"
+    memory_registry: MemoryTypeRegistry | None = None
 
     @tracer(
         "train.policy_optimizer.patch_merge.plan",
@@ -128,6 +130,7 @@ class PatchMergePolicyOptimizer:
         extract_context = ExtractContext(list(context.messages or []))
         provider = PatchMergeContextProvider(
             memory_type=self.memory_type,
+            memory_registry=self.memory_registry,
             required_file_uris=_required_file_uris(gradients, policy_set),
             patches=[_gradient_to_merge_patch(gradient) for gradient in gradients],
         )
@@ -525,7 +528,7 @@ def _name_field_for_memory_type(memory_type: str) -> str:
     """Return the extra_fields key for the policy name in a given memory type."""
     if memory_type == "experiences":
         return "experience_name"
-    if memory_type == "skills":
+    if memory_type in {"skills", "session_skills"}:
         return "skill_name"
     if memory_type.endswith("s"):
         return f"{memory_type[:-1]}_name"

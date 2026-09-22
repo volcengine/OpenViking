@@ -2,6 +2,7 @@
     "server": {
         "host": "0.0.0.0",
         "port": 1933,
+        "executor_threads": 0,
         "timeout_keep_alive": 5,
         "root_api_key": null,
         "cors_origins": ["*"],
@@ -47,6 +48,17 @@
             },
         },
     },
+    "cache": {
+        "provider": "redis",
+        "params": {
+            "mode": "standalone",
+            "endpoints": ["redis://127.0.0.1:6379"],
+            "pool_size": 32,
+            "connect_timeout_ms": 1000,
+            "command_timeout_ms": 1000,
+            "default_ttl_seconds": 3600,
+        },
+    },
     "storage": {
         "workspace": "./data",
         "vectordb": {
@@ -65,6 +77,16 @@
         "agfs": {
             "backend": "local",
             "timeout": 10,
+            "cachefs": {
+                "backend": "local",
+                "namespace": "openviking",
+                "max_file_size_bytes": 1048576,
+                "bypass_prefixes": ["/queue", "/tmp"],
+            },
+            "queuefs": {
+                "backend": "sqlite",
+                "cache_key_prefix": "default",
+            },
             "pathlock": {
                 "provider": "filesystem",
                 "lock_expire_secs": 30.0
@@ -89,6 +111,13 @@
             "file_vectorization_concurrency": 8
         },
         "session_commit": {"max_concurrent": 8},
+        "external_task": {"max_concurrent": 10},
+    },
+    "compile_api": {
+        "base_url": "",
+        "gateway_token": "",
+        "http_timeout_seconds": 10,
+        "poll_interval_ms": 3000,
     },
     "reindex": {
         "file_vectorization_concurrency": 8
@@ -135,6 +164,7 @@
         "max_retries": 2,
         "provider": "volcengine",
         "thinking": false,
+        "_max_tokens_comment": "Optional output cap. Memory extraction needs ~32768 output tokens to avoid truncating a full memory-file rewrite; that default suits Doubao. If your model's max output is lower (e.g. gpt-4o-mini at 16384), set max_tokens to its limit here to override the extraction default.",
         "media": {
             "enabled": false,
             "file_processing_timeout": 1800,
@@ -155,7 +185,7 @@
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
         "provider": "openai-codex",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.6-terra",
         "api_base": "https://chatgpt.com/backend-api/codex",
         "reasoning_effort": "xhigh",
         "temperature": 0.0,
@@ -196,6 +226,22 @@
         "model": "qwen3-rerank",
         "threshold": 0.1,
     },
+    "rerank_jev_example": {
+        "_comment": "For direct Jev access through the TypeSafe System One API:",
+        "provider": "jev",
+        "api_key": "{your-typesafe-api-key}",
+        "model": "jev-latest",
+        "log_payloads": false,
+        "threshold": 0.1,
+    },
+    "rerank_jev_vercel_example": {
+        "_comment": "For Jev through Vercel AI Gateway (TypeSafe-compatible endpoint):",
+        "provider": "jev",
+        "api_key": "{your-vercel-ai-gateway-api-key}",
+        "api_base": "https://ai-gateway.vercel.sh/typesafe",
+        "model": "typesafe-ai/jev",
+        "threshold": 0.1,
+    },
     "retrieval": {
         "hotness_alpha": 0.0,
         "score_propagation_alpha": 1.0,
@@ -203,6 +249,7 @@
         "recall_rewrite_timeout_s": 30.0,
     },
     "grep": {"engine": "auto", "switch_to_remote_threshold": 10000},
+    "glob": {"engine": "fs", "switch_to_remote_threshold": 100},
     "auto_generate_l0": true,
     "auto_generate_l1": true,
     "default_search_mode": "thinking",
@@ -212,6 +259,8 @@
     "memory": {
         "version": "v2",
         "extraction_enabled": true,
+        "extraction_output_format": "python",
+        "maintenance_review_tokens": 1000,
         "session_skill_extraction_enabled": false,
     },
     "ingest": {

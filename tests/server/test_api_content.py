@@ -29,6 +29,18 @@ def test_write_content_request_defaults_processing_mode():
     assert request.processing_mode == "semantic_and_vectors"
 
 
+def test_write_content_request_accepts_tags_and_tag_mode():
+    request = WriteContentRequest(
+        uri="viking://resources/demo.md",
+        content="updated",
+        tags=["Env=Prod", "team=search"],
+        tag_mode="append",
+    )
+
+    assert request.tags == ["Env=Prod", "team=search"]
+    assert request.tag_mode == "append"
+
+
 async def test_write_forwards_processing_mode_to_service(monkeypatch):
     seen = {}
 
@@ -51,6 +63,31 @@ async def test_write_forwards_processing_mode_to_service(monkeypatch):
 
     assert response["status"] == "ok"
     assert seen["processing_mode"] == "vectors_only"
+
+
+async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_write(**kwargs):
+        seen.update(kwargs)
+        return {"uri": kwargs["uri"]}
+
+    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
+    monkeypatch.setattr(content_router, "get_service", lambda: service)
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    await content_router.write(
+        WriteContentRequest(
+            uri="viking://resources/demo.md",
+            content="updated",
+            tags=["env=prod"],
+            tag_mode="append",
+        ),
+        ctx,
+    )
+
+    assert seen["tags"] == ["env=prod"]
+    assert seen["tag_mode"] == "append"
 
 
 async def _first_child_uri(client, uri: str) -> str:
@@ -134,30 +171,41 @@ async def test_read_internal_scope_uri_returns_invalid_uri(client, uri: str):
     assert "frozenset" not in body["error"]["message"]
 
 
-async def test_abstract_content(client_with_resource):
+async def test_abstract_content(client_with_resource, service):
     client, uri = client_with_resource
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(f"{uri}/.abstract.md", "---\n", ctx=ctx)
+
     resp = await client.get("/api/v1/content/abstract", params={"uri": uri})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+    assert body["result"] == f"# {uri} [Directory abstract is not ready]"
 
 
-async def test_overview_content(client_with_resource):
+async def test_overview_content(client_with_resource, service):
     client, uri = client_with_resource
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(f"{uri}/.overview.md", "---\n", ctx=ctx)
+
     resp = await client.get("/api/v1/content/overview", params={"uri": uri})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+    assert body["result"] == f"# {uri}\n\n[Directory overview is not ready]"
 
 
-async def test_abstract_file_uri_returns_failed_precondition(client_with_resource):
-    client, uri = client_with_resource
-    file_uri = await _first_child_uri(client, uri)
-    resp = await client.get("/api/v1/content/abstract", params={"uri": file_uri})
-    assert resp.status_code == 412
+async def test_ls_file_uri_returns_invalid_argument(client, service):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    file_uri = "viking://resources/directory-type-check/file.md"
+    await service.viking_fs.mkdir("viking://resources/directory-type-check", ctx=ctx)
+    await service.viking_fs.write_file(file_uri, "file content", ctx=ctx)
+
+    resp = await client.get("/api/v1/fs/ls", params={"uri": file_uri})
+    assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
-    assert body["error"]["code"] == "FAILED_PRECONDITION"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert "not a directory" in body["error"]["message"]
 
 

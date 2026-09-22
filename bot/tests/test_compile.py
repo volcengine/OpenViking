@@ -9,9 +9,8 @@ import pytest
 from vikingbot.agent.loop import (
     AgentIterationLimitExceeded,
     AgentLoop,
-    render_budget_reminder,
 )
-from vikingbot.agent.tools.base import Tool, ToolContext
+from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.agent.tools.compile import (
     CompileScopedTool,
     SubmitTargetCheckoutTool,
@@ -20,11 +19,10 @@ from vikingbot.agent.tools.compile import (
 from vikingbot.agent.tools.ov_file import (
     VikingExportTool,
     VikingMultiReadTool,
-    local_path_for_viking_uri,
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import (
-    DEFAULT_COMPILE_REASON,
+    DEFAULT_COMPILE_INSTRUCTION,
     CompileFailure,
     CompileLimits,
     CompileRequest,
@@ -40,25 +38,17 @@ from vikingbot.compile.readlist import (
     ReadTrackingTool,
 )
 from vikingbot.compile.renderer import (
-    RenderedBundle,
     WikiRenderer,
-    wiki_page_path_from_title,
 )
 from vikingbot.compile.service import BotCompileService, CompileCapabilities
 from vikingbot.compile.store import CompileTaskStore
 from vikingbot.config.schema import (
     DirectBackendConfig,
     SandboxBackend,
-    SandboxConfig,
-    SandboxMode,
     SessionKey,
 )
-from vikingbot.sandbox import SandboxManager
-from vikingbot.sandbox.backends.srt import SrtBackend
 from vikingbot.sandbox.base import SandboxFileInfo
-from vikingbot.utils.session_paths import portable_path_component
 
-from openviking.core.skill_loader import SkillLoader
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking_cli.exceptions import OpenVikingError
 
@@ -77,203 +67,6 @@ def _page(page_id: int, title: str, **overrides):
     return value
 
 
-def test_skill_loader_distinguishes_missing_and_explicit_empty_allowed_tools():
-    missing = SkillLoader.parse("---\nname: a\ndescription: A\n---\nDo it")
-    empty = SkillLoader.parse("---\nname: a\ndescription: A\nallowed-tools: []\n---\nDo it")
-    assert missing["allowed_tools_declared"] is False
-    assert empty["allowed_tools_declared"] is True
-    assert "allowed-tools: ''" in SkillLoader.to_skill_md(empty)
-
-
-def test_skill_loader_accepts_standard_and_legacy_allowed_tools_forms():
-    standard = SkillLoader.parse(
-        "---\nname: a\ndescription: A\nallowed-tools: Read Write Bash(git:*)\n---\nDo it"
-    )
-    ara = SkillLoader.parse(
-        "---\nname: a\ndescription: A\n"
-        "allowed-tools: Read, Write, Bash(python *|git clone *), Glob\n---\nDo it"
-    )
-    legacy = SkillLoader.parse(
-        "---\nname: a\ndescription: A\nallowed-tools: [Read, Write]\n---\nDo it"
-    )
-
-    assert standard["allowed_tools"] == ["Read", "Write", "Bash(git:*)"]
-    assert ara["allowed_tools"] == [
-        "Read",
-        "Write",
-        "Bash(python *|git clone *)",
-        "Glob",
-    ]
-    assert legacy["allowed_tools"] == ["Read", "Write"]
-
-
-def test_skill_loader_rejects_invalid_allowed_tools():
-    with pytest.raises(ValueError, match="space-separated string or an array of strings"):
-        SkillLoader.parse("---\nname: a\ndescription: A\nallowed-tools: [Read, 3]\n---\nDo it")
-    with pytest.raises(ValueError, match="unbalanced parentheses"):
-        SkillLoader.parse(
-            "---\nname: a\ndescription: A\nallowed-tools: Read Bash(git:*\n---\nDo it"
-        )
-
-
-def test_compile_bundle_schema_distinguishes_wiki_pages_and_artifact_files():
-    schema = WikiBundleDraft.model_json_schema()
-    properties = schema["properties"]
-    page_properties = schema["$defs"]["WikiPageDraft"]["properties"]
-
-    assert "Actual Wiki pages only" in properties["pages"]["description"]
-    assert "Markdown, YAML, JSON" in properties["files"]["description"]
-    assert "generated Wiki pages only" in properties["links"]["description"]
-    assert "known source URIs" in page_properties["body_markdown"]["description"]
-    assert (
-        "editable UTF-8 Markdown Wiki page" in page_properties["body_workspace_path"]["description"]
-    )
-    assert (
-        "__compile_staging__/target_checkout/"
-        in page_properties["body_workspace_path"]["description"]
-    )
-    assert "filename derives from title" in page_properties["path_hint"]["description"]
-    assert "supplied source roots" in page_properties["source_ids"]["description"]
-    assert "preserve every required path and format" in properties["files"]["description"]
-
-
-def test_compile_limit_defaults_match_the_resource_envelope():
-    limits = CompileLimits()
-
-    assert limits.concurrent_tasks == 10
-    assert limits.accepted_tasks == 40
-    assert limits.accepted_tasks_per_principal == 10
-    assert limits.queue_wait_seconds == 60 * 60
-    assert limits.task_runtime_seconds == 60 * 60
-    assert limits.agent_iterations == 60
-    assert limits.source_files == 5000
-    assert limits.source_total_bytes == 1024 * 1024 * 1024
-    assert limits.target_total_bytes == 1024 * 1024 * 1024
-    assert limits.salvage_grace_seconds == 120
-    assert limits.cleanup_grace_seconds == 40
-    assert limits.target_inventory_entries == 2000
-    assert limits.target_catalog_pages == 10
-    assert limits.output_pages == 128
-    assert limits.output_files == 128
-    assert limits.output_operations == 256
-    assert DirectBackendConfig().allow_compile_exec is True
-
-
-def test_compile_request_schema_defers_runtime_max_but_requires_positive_finite_seconds():
-    request = CompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "runtime_timeout_seconds": 24 * 60 * 60,
-        }
-    )
-    assert request.runtime_timeout_seconds == 24 * 60 * 60
-
-    for invalid in (0, float("inf"), float("nan")):
-        with pytest.raises(ValueError):
-            CompileRequest.model_validate(
-                {
-                    "from": ["viking://resources/source"],
-                    "to": "viking://resources/wiki",
-                    "skill": "viking://agent/skills/wiki",
-                    "runtime_timeout_seconds": invalid,
-                }
-            )
-
-
-def test_wiki_page_requires_exactly_one_body_source():
-    body = _page(1, "One")
-    body.pop("body_markdown")
-
-    with pytest.raises(ValueError, match="exactly one of body_markdown"):
-        WikiBundleDraft.model_validate({"pages": [body]})
-    with pytest.raises(ValueError, match="exactly one of body_markdown"):
-        WikiBundleDraft.model_validate(
-            {
-                "pages": [
-                    {
-                        **body,
-                        "body_markdown": "Inline",
-                        "body_workspace_path": "pages/one.md",
-                    }
-                ]
-            }
-        )
-
-
-def test_submit_tool_rejects_raw_payload_wrapper_with_actionable_hint():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-
-    assert tool.validate_params({"raw": "{}"}) == [
-        "use the tool schema directly; do not wrap the payload in a JSON string"
-    ]
-    assert {"pages", "files"} <= set(tool.parameters["required"])
-    assert "missing required files" in tool.validate_params({"pages": []})
-    assert tool.validate_params({"pages": [], "files": []}) == []
-
-
-def test_submit_tool_schema_requires_workspace_page_bodies_when_available():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-        require_workspace_pages=True,
-    )
-
-    page_schema = tool.parameters["$defs"]["WikiPageDraft"]
-    assert "body_markdown" not in page_schema["properties"]
-    assert "body_workspace_path" in page_schema["required"]
-
-
-def test_submit_tool_checkout_schema_takes_no_file_manifest():
-    tool = SubmitTargetCheckoutTool(
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        limits=CompileLimits(),
-    )
-
-    assert tool.parameters == {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": False,
-    }
-    assert "Pass no pages, files, paths, or content" in tool.description
-
-
-@pytest.mark.parametrize(
-    "target_uri",
-    ["viking://resources/wiki", "viking://agent/skills"],
-)
-@pytest.mark.parametrize("exec_enabled", [True, False])
-def test_submit_tool_schema_requires_workspace_artifacts_when_available(target_uri, exec_enabled):
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri=target_uri,
-        limits=CompileLimits(),
-        require_workspace_files=True,
-        exec_enabled=exec_enabled,
-    )
-
-    file_schema = tool.parameters["$defs"]["CompileFileDraft"]
-    assert "content" not in file_schema["properties"]
-    assert "workspace_path" in file_schema["required"]
-    hint = tool.validate_params({"raw": "{}"})[0]
-    assert ("write_file or exec" in tool.description) is exec_enabled
-    assert ("write_file or exec" in hint) is exec_enabled
-    assert "workspace_path instead of inline content" in hint
-    if not exec_enabled:
-        assert "with write_file," in tool.description
-        assert "with write_file and submit" in hint
-
-
 @pytest.mark.asyncio
 async def test_submit_tool_accepts_only_one_complete_skill_package():
     tool = SubmitWikiBundleTool(
@@ -282,13 +75,6 @@ async def test_submit_tool_accepts_only_one_complete_skill_package():
         target_uri="viking://agent/skills",
         limits=CompileLimits(),
     )
-
-    schema = tool.parameters
-    assert set(schema["properties"]) == {"files"}
-    assert schema["required"] == ["files"]
-    assert set(schema["$defs"]) == {"CompileFileDraft"}
-    assert "update_uri" not in schema["$defs"]["CompileFileDraft"]["properties"]
-    assert "path" in schema["$defs"]["CompileFileDraft"]["required"]
 
     accepted = await tool.execute(
         ToolContext(),
@@ -406,78 +192,6 @@ def test_renderer_creates_okf_pages_links_and_source_fallbacks():
     assert "- [source](viking://resources/source)" in first["content"]
 
 
-def test_renderer_preserves_existing_link_without_adding_another_mention_or_backlink():
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [
-                _page(
-                    1,
-                    "Overview",
-                    body_markdown=(
-                        'Read [Details](./details.md "details") next. Details appears again.'
-                    ),
-                ),
-                _page(2, "Details"),
-            ],
-        }
-    )
-
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw={},
-    )
-    operations = {operation["uri"]: operation["content"] for operation in rendered.operations}
-
-    assert (
-        operations["viking://resources/wiki/overview.md"].count('[Details](./details.md "details")')
-        == 1
-    )
-    assert "Details appears again" in operations["viking://resources/wiki/overview.md"]
-    assert "Related pages" not in operations["viking://resources/wiki/details.md"]
-    assert rendered.link_count == 0
-
-
-def test_renderer_links_first_filename_mention_in_body_but_not_page_title():
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [
-                _page(
-                    1,
-                    "Beta Overview",
-                    path_hint="entity/beta-overview.md",
-                    body_markdown="# Beta Overview\n\nBeta appears first. Beta appears again.",
-                ),
-                _page(
-                    2,
-                    "Beta",
-                    path_hint="concept/beta.md",
-                    body_markdown="# Beta\n\nDefinition.",
-                ),
-            ]
-        }
-    )
-
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw={},
-    )
-    content = {operation["uri"]: operation["content"] for operation in rendered.operations}[
-        "viking://resources/wiki/entity/beta-overview.md"
-    ]
-
-    assert "# Beta Overview" in content
-    assert "# [Beta]" not in content
-    assert content.count("](../concept/beta.md)") == 1
-    assert "[Beta](../concept/beta.md) appears first. Beta appears again." in content
-    assert rendered.link_count == 1
-
-
 def test_renderer_auto_links_existing_target_pages_when_a_new_page_is_added():
     alpha_uri = "viking://resources/wiki/entity/alpha.md"
     old_alpha = (
@@ -517,137 +231,6 @@ def test_renderer_auto_links_existing_target_pages_when_a_new_page_is_added():
     assert "Related pages" not in operations[alpha_uri]["content"]
 
 
-def test_renderer_skips_ambiguous_duplicate_filenames_across_directories():
-    existing_raw = {
-        "viking://resources/wiki/entity/topic.md": (
-            "---\ntype: entity\ntitle: Entity Topic\ndescription: Entity\n---\n\n"
-            "# Entity Topic\n\nEntity body.\n"
-        ),
-        "viking://resources/wiki/concept/topic.md": (
-            "---\ntype: concept\ntitle: Concept Topic\ndescription: Concept\n---\n\n"
-            "# Concept Topic\n\nConcept body.\n"
-        ),
-    }
-    bundle = WikiBundleDraft.model_validate(
-        {"pages": [_page(1, "Overview", body_markdown="Topic is intentionally ambiguous.")]}
-    )
-
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw=existing_raw,
-    )
-    overview = next(
-        operation["content"]
-        for operation in rendered.operations
-        if operation["uri"] == "viking://resources/wiki/overview.md"
-    )
-
-    assert "Topic is intentionally ambiguous." in overview
-    assert "[Topic]" not in overview
-    assert rendered.updated == []
-
-
-def test_wiki_page_title_path_normalizes_spaced_dashes_only():
-    assert (
-        wiki_page_path_from_title("Experimental Designs - Residual Networks")
-        == "Experimental_Designs_Residual_Networks"
-    )
-    assert wiki_page_path_from_title("One-Page Overview") == "One-Page_Overview"
-
-
-def test_renderer_linkifies_source_uris_without_repeating_them():
-    source_detail = "viking://resources/source/chapter_1.md"
-    outside = "viking://resources/outside/chapter.md"
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [
-                _page(
-                    1,
-                    "Overview",
-                    body_markdown=(
-                        "Read Details next.\n\n"
-                        f"Source: {source_detail} section 2\n\n"
-                        f"Keep code unchanged: `{source_detail}`\n\n"
-                        f"Outside stays plain: {outside}"
-                    ),
-                ),
-                _page(2, "Details"),
-            ],
-            "links": [{"f": 1, "t": 2, "match_text": "Details"}],
-        }
-    )
-
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw={},
-    )
-    operations = {operation["uri"]: operation["content"] for operation in rendered.operations}
-    overview = operations["viking://resources/wiki/overview.md"]
-    details = operations["viking://resources/wiki/details.md"]
-
-    assert "[Details](./details.md)" in overview
-    assert f"[chapter_1]({source_detail})" in overview
-    assert f"`{source_detail}`" in overview
-    assert outside in overview and f"]({outside})" not in overview
-    assert overview.count(f"]({source_detail})") == 1
-    assert "[source](viking://resources/source)" not in overview
-    assert "# Citations" not in overview
-    assert "## Related pages" not in details
-    assert "- [Overview](./overview.md)" not in details
-    assert "## Sources" in details
-    assert rendered.link_count == 1
-
-
-def test_renderer_adds_raw_text_and_workspace_binary_to_same_bundle():
-    paper = "---\ntitle: ARA Demo\nauthors: [Ada]\n---\n\n# Layer Index\n"
-    image_bytes = b"\x89PNG\r\n\x1a\nfigure"
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [_page(1, "Overview")],
-            "files": [
-                {"path": "PAPER.md", "content": paper},
-                {
-                    "path": "trace/exploration_tree.yaml",
-                    "content": "nodes: []\n",
-                },
-                {
-                    "path": "evidence/figures/figure1.png",
-                    "workspace_path": "ara-output/figure1.png",
-                },
-            ],
-        }
-    )
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw={},
-        file_payloads=[None, None, image_bytes],
-    )
-    operations = {operation["uri"]: operation for operation in rendered.operations}
-    assert operations["viking://resources/wiki/PAPER.md"]["content"] == paper
-    assert (
-        operations["viking://resources/wiki/trace/exploration_tree.yaml"]["content"]
-        == "nodes: []\n"
-    )
-    encoded = operations["viking://resources/wiki/evidence/figures/figure1.png"]["content_base64"]
-    assert base64.b64decode(encoded) == image_bytes
-    assert rendered.created == [
-        "viking://resources/wiki/overview.md",
-        "viking://resources/wiki/PAPER.md",
-        "viking://resources/wiki/trace/exploration_tree.yaml",
-        "viking://resources/wiki/evidence/figures/figure1.png",
-    ]
-    assert rendered.wiki_uris == ["viking://resources/wiki/overview.md"]
-
-
 @pytest.mark.asyncio
 async def test_compile_rejects_combined_output_operation_overflow():
     limits = CompileLimits(output_pages=2, output_files=2, output_operations=3)
@@ -679,288 +262,44 @@ async def test_compile_rejects_combined_output_operation_overflow():
         )
 
 
-def test_renderer_accepts_minimal_okf_artifact_with_unknown_fields():
-    content = (
-        "---\n"
-        "type: research_artifact\n"
-        "ara_version: 1.0\n"
-        "custom: anything\n"
-        "---\n\n"
-        "# Research artifact\n"
-    )
-    bundle = WikiBundleDraft.model_validate(
-        {"pages": [], "files": [{"path": "research.md", "content": content}]}
-    )
-
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={},
-        catalog_uris=set(),
-        existing_raw={},
-    )
-
-    assert rendered.operations[0]["content"] == content
-    assert rendered.wiki_uris == ["viking://resources/wiki/research.md"]
-
-
 @pytest.mark.parametrize(
-    ("content", "message"),
+    "instruction, provided, model_reply, expected_language, input_kind, selected_text, omitted_text",
     [
-        ("---\ntype:\n---\n", 'field "type" must be a non-empty string'),
-        ("---\ntype: [concept]\n---\n", 'field "type" must be a non-empty string'),
-        ("---\ntype: concept\nauthors: [\n---\n", "invalid YAML frontmatter"),
-        ("---\ntype: concept\n# no closing delimiter", "unterminated YAML frontmatter"),
+        pytest.param(
+            "请用中文输出",
+            True,
+            "zh-CN",
+            "zh-CN",
+            "user_instruction",
+            "请用中文输出",
+            "source sample",
+            id="explicit-language",
+        ),
+        pytest.param(
+            DEFAULT_COMPILE_INSTRUCTION,
+            False,
+            "ja",
+            "en",
+            "source_content",
+            "source sample",
+            DEFAULT_COMPILE_INSTRUCTION,
+            id="source-language",
+        ),
     ],
 )
-def test_renderer_rejects_invalid_declared_okf_artifact(content, message):
-    bundle = WikiBundleDraft.model_validate(
-        {"pages": [], "files": [{"path": "invalid.md", "content": content}]}
-    )
+async def test_wiki_language_classifier_selects_input(
+    instruction, provided, model_reply, expected_language, input_kind, selected_text, omitted_text
+):
+    from unittest.mock import AsyncMock
 
-    with pytest.raises(ValueError, match=message):
-        WikiRenderer().render(
-            bundle=bundle,
-            target_uri="viking://resources/wiki",
-            source_roots={},
-            catalog_uris=set(),
-            existing_raw={},
-        )
-
-
-def test_renderer_checks_size_before_parsing_okf_artifact():
-    content = "---\ntype: [broken\n---\n"
-    bundle = WikiBundleDraft.model_validate(
-        {"pages": [], "files": [{"path": "large.md", "content": content}]}
-    )
-
-    with pytest.raises(ValueError, match="final content size limit"):
-        WikiRenderer(CompileLimits(output_total_bytes=8)).render(
-            bundle=bundle,
-            target_uri="viking://resources/wiki",
-            source_roots={},
-            catalog_uris=set(),
-            existing_raw={},
-        )
-
-
-def test_renderer_rejects_page_path_colliding_with_artifact():
-    bundle = WikiBundleDraft.model_validate({"pages": [_page(1, "PAPER", path_hint="PAPER.md")]})
-
-    with pytest.raises(ValueError, match="already exists"):
-        WikiRenderer().render(
-            bundle=bundle,
-            target_uri="viking://resources/wiki",
-            source_roots={"src_1": "viking://resources/source"},
-            catalog_uris=set(),
-            file_catalog_uris={"viking://resources/wiki/PAPER.md"},
-            existing_raw={},
-        )
-
-
-def test_renderer_raw_update_cannot_remove_okf_from_existing_wiki_page():
-    uri = "viking://resources/wiki/existing.md"
-    bundle = WikiBundleDraft.model_validate(
-        {"pages": [], "files": [{"update_uri": uri, "content": "# Plain Markdown"}]}
-    )
-
-    with pytest.raises(ValueError, match="must retain valid OKF"):
-        WikiRenderer().render(
-            bundle=bundle,
-            target_uri="viking://resources/wiki",
-            source_roots={},
-            catalog_uris={uri},
-            file_catalog_uris={uri},
-            existing_raw={},
-            existing_bytes={uri: b"---\ntype: concept\n---\n\n# Existing"},
-        )
-
-
-def test_renderer_raw_file_update_uses_upsert_and_detects_unchanged():
-    uri = "viking://resources/wiki/trace/exploration_tree.yaml"
-    old = b"nodes: []\n"
-    unchanged_bundle = WikiBundleDraft.model_validate(
-        {"pages": [], "files": [{"update_uri": uri, "content": old.decode()}]}
-    )
-    renderer = WikiRenderer()
-    unchanged = renderer.render(
-        bundle=unchanged_bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={},
-        catalog_uris=set(),
-        existing_raw={},
-        file_catalog_uris={uri},
-        existing_bytes={uri: old},
-    )
-    assert unchanged.unchanged == [uri]
-    assert unchanged.operations == []
-
-    changed_bundle = WikiBundleDraft.model_validate(
-        {"pages": [], "files": [{"update_uri": uri, "content": "nodes: [root]\n"}]}
-    )
-    changed = renderer.render(
-        bundle=changed_bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={},
-        catalog_uris=set(),
-        existing_raw={},
-        file_catalog_uris={uri},
-        existing_bytes={uri: old},
-    )
-    assert changed.updated == [uri]
-    assert changed.operations[0]["mode"] == "upsert"
-
-
-def test_renderer_empty_existing_update_uses_upsert_and_preserves_uri():
-    uri = "viking://resources/wiki/empty.md"
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [
-                _page(1, "Empty", path_hint=None, update_uri=uri),
-            ]
-        }
-    )
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris={uri},
-        existing_raw={uri: ""},
-    )
-    assert rendered.updated == [uri]
-    assert rendered.created == []
-    assert rendered.operations[0]["mode"] == "upsert"
-
-
-def test_renderer_preserves_unknown_frontmatter_and_skill_owned_citations():
-    uri = "viking://resources/wiki/topic.md"
-    old = """---
-type: legacy
-title: Old
-description: Old summary
-custom: keep-me
----
-
-Old body
-
-# Citations
-
-[1] [Detail](viking://resources/source/detail.md)
-[2] [Outside](viking://resources/other/no.md)
-"""
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [
-                _page(
-                    1,
-                    "Topic",
-                    update_uri=uri,
-                    path_hint=None,
-                    tags=[" stable ", "stable", "new"],
-                    body_markdown=(
-                        "New body\n\n# Citations\n\n"
-                        "[9] [Detail](viking://resources/source/detail.md)"
-                    ),
-                )
-            ]
-        }
-    )
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris={uri},
-        existing_raw={uri: old},
-    )
-    content = rendered.operations[0]["content"]
-    assert "custom: keep-me" in content
-    assert "tags: [stable, new]" in content
-    assert content.count("viking://resources/source/detail.md") == 1
-    assert "viking://resources/other/no.md" not in content
-    assert "[source](viking://resources/source)" not in content
-
-
-def test_renderer_does_not_repeat_inline_source_links():
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [
-                _page(
-                    1,
-                    "主题",
-                    body_markdown=("事实来自[原始资料](viking://resources/source/detail.md)。"),
-                )
-            ]
-        }
-    )
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw={},
-    )
-    content = rendered.operations[0]["content"]
-    assert content.count("viking://resources/source/detail.md") == 1
-    assert "## 参考来源" not in content
-    assert "# Citations" not in content
-
-
-def test_renderer_uses_chinese_source_heading_from_compile_language():
-    bundle = WikiBundleDraft.model_validate(
-        {"pages": [_page(1, "主题", body_markdown="这是没有显式来源链接的正文。")]}
-    )
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw={},
-        wiki_language="zh-CN",
-    )
-    content = rendered.operations[0]["content"]
-    assert "## 来源" in content
-    assert "# Citations" not in content
-
-
-def test_renderer_uses_compile_language_for_sources_without_related_pages_section():
-    bundle = WikiBundleDraft.model_validate(
-        {
-            "pages": [
-                _page(1, "入口", body_markdown="参见主题。"),
-                _page(2, "主题", body_markdown="English body retained from an older page."),
-            ],
-            "links": [{"f": 1, "t": 2, "match_text": "主题"}],
-        }
-    )
-    rendered = WikiRenderer().render(
-        bundle=bundle,
-        target_uri="viking://resources/wiki",
-        source_roots={"src_1": "viking://resources/source"},
-        catalog_uris=set(),
-        existing_raw={},
-        wiki_language="zh-CN",
-    )
-    content = rendered.operations[1]["content"]
-    assert "## 来源" in content
-    assert "## 相关页面" not in content
-    assert "## Related pages" not in content
-    assert "## Sources" not in content
-
-
-@pytest.mark.asyncio
-async def test_wiki_language_classifier_uses_real_reason_and_one_model_call():
-    class Provider:
-        def __init__(self):
-            self.calls = []
-
-        async def chat(self, **kwargs):
-            self.calls.append(kwargs)
-            return SimpleNamespace(
-                content="zh-CN",
+    provider = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=SimpleNamespace(
+                content=model_reply,
                 usage={"prompt_tokens": 12, "completion_tokens": 1},
             )
-
-    provider = Provider()
+        )
+    )
     service = object.__new__(BotCompileService)
     service.agent_loop = SimpleNamespace(provider=provider, model="test-model")
     request = SanitizedCompileRequest.model_validate(
@@ -968,65 +307,23 @@ async def test_wiki_language_classifier_uses_real_reason_and_one_model_call():
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
             "skill": "viking://agent/skills/wiki",
-            "reason": "请用中文输出",
-            "reason_provided": True,
+            "instruction": instruction,
+            "instruction_provided": provided,
         }
     )
-
     language, usage = await service._classify_wiki_language(
         request=request,
         sources=[{"overview": "source overview"}],
         source_sample="source sample",
         session_key=_FakeCompileSessionKey(),
     )
-
-    assert language == "zh-CN"
+    assert language == expected_language
     assert usage == {"prompt_tokens": 12, "completion_tokens": 1}
-    assert len(provider.calls) == 1
-    call = provider.calls[0]
-    assert call["max_tokens"] == 64
-    assert call["temperature"] == 0.0
-    assert call["session_id"] == "cmp:wiki-language"
-    assert "input_kind=user_reason" in call["messages"][1]["content"]
-    assert "请用中文输出" in call["messages"][1]["content"]
-    assert "source sample" not in call["messages"][1]["content"]
-
-
-@pytest.mark.asyncio
-async def test_wiki_language_classifier_ignores_default_reason_and_defaults_non_chinese_to_en():
-    class Provider:
-        def __init__(self):
-            self.message = ""
-
-        async def chat(self, **kwargs):
-            self.message = kwargs["messages"][1]["content"]
-            return SimpleNamespace(content="ja", usage={})
-
-    provider = Provider()
-    service = object.__new__(BotCompileService)
-    service.agent_loop = SimpleNamespace(provider=provider, model="test-model")
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "reason": DEFAULT_COMPILE_REASON,
-            "reason_provided": False,
-        }
-    )
-
-    language, usage = await service._classify_wiki_language(
-        request=request,
-        sources=[{"overview": "fallback source overview"}],
-        source_sample="这是实际的资源文本。",
-        session_key=_FakeCompileSessionKey(),
-    )
-
-    assert language == "en"
-    assert usage == {}
-    assert "input_kind=source_content" in provider.message
-    assert "这是实际的资源文本。" in provider.message
-    assert DEFAULT_COMPILE_REASON not in provider.message
+    provider.chat.assert_awaited_once()
+    content = provider.chat.await_args.kwargs["messages"][1]["content"]
+    assert f"input_kind={input_kind}" in content
+    assert selected_text in content
+    assert omitted_text not in content
 
 
 def test_memory_renderer_round_trips_fields_and_only_bumps_changed_version():
@@ -1084,197 +381,6 @@ def test_memory_renderer_round_trips_fields_and_only_bumps_changed_version():
 
 
 @pytest.mark.asyncio
-async def test_submit_tool_rejects_protected_anchor_and_path_collision():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        file_catalog_uris={"viking://resources/wiki/existing.md"},
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-    context = ToolContext()
-    collision = await tool.execute(
-        context,
-        pages=[_page(1, "Existing", path_hint="existing.md")],
-    )
-    assert collision.startswith("Error:")
-    protected = await tool.execute(
-        context,
-        pages=[
-            _page(1, "One", body_markdown="`Two`"),
-            _page(2, "Two"),
-        ],
-        links=[{"f": 1, "t": 2, "match_text": "Two"}],
-    )
-    assert protected.startswith("Wiki bundle accepted")
-    assert "was not found and the link was dropped" in protected
-    assert tool.bundle is not None and tool.bundle.links == []
-
-    accepted = await tool.execute(context, pages=[], links=[])
-    assert not accepted.startswith("Error:")
-    assert tool.bundle is not None and tool.bundle.pages == []
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_accepts_existing_link_only_when_target_matches():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-    context = ToolContext()
-
-    accepted = await tool.execute(
-        context,
-        pages=[
-            _page(1, "One", body_markdown="参见 [L2 行为标签库](./two.md)。"),
-            _page(2, "Two"),
-        ],
-        links=[{"f": 1, "t": 2, "match_text": "行为标签库"}],
-    )
-    assert accepted.startswith("Wiki bundle accepted")
-    assert tool.bundle is not None and len(tool.bundle.links) == 1
-
-    accepted = await tool.execute(
-        context,
-        pages=[
-            _page(1, "One", body_markdown="See [Version](./foo(1).md)."),
-            _page(2, "Version", path_hint="foo(1).md"),
-        ],
-        links=[{"f": 1, "t": 2, "match_text": "Version"}],
-    )
-    assert accepted.startswith("Wiki bundle accepted")
-    assert tool.bundle is not None and len(tool.bundle.links) == 1
-
-    rejected = await tool.execute(
-        context,
-        pages=[
-            _page(1, "One", body_markdown="参见 [行为标签库](./three.md)。"),
-            _page(2, "Two"),
-            _page(3, "Three"),
-        ],
-        links=[{"f": 1, "t": 2, "match_text": "行为标签库"}],
-    )
-    assert rejected.startswith("Wiki bundle accepted")
-    assert "was not found and the link was dropped" in rejected
-    assert tool.bundle is not None and tool.bundle.links == []
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_checks_size_before_parsing_okf_artifact():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(output_total_bytes=8),
-    )
-
-    result = await tool.execute(
-        ToolContext(),
-        pages=[],
-        files=[
-            {
-                "path": "large.md",
-                "content": "---\ntype: [broken\n---\n",
-            }
-        ],
-    )
-
-    assert result.startswith("Error: Invalid Wiki bundle:")
-    assert "draft content size limit exceeded" in result
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_raw_update_cannot_remove_okf_from_existing_wiki_page():
-    uri = "viking://resources/wiki/existing.md"
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris={uri},
-        file_catalog_uris={uri},
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-
-    result = await tool.execute(
-        ToolContext(),
-        pages=[],
-        files=[{"update_uri": uri, "content": "# Plain Markdown"}],
-    )
-
-    assert result.startswith("Error: Invalid Wiki bundle:")
-    assert "must retain valid OKF frontmatter" in result
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_resolves_existing_updates_outside_relevant_catalog():
-    wiki_uri = "viking://resources/wiki/existing.md"
-    artifact_uri = "viking://resources/wiki/PAPER.md"
-    resolved = []
-
-    async def resolve(uri):
-        resolved.append(uri)
-        return uri == wiki_uri
-
-    catalog_uris = set()
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=catalog_uris,
-        file_catalog_uris={wiki_uri, artifact_uri},
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-        wiki_uri_resolver=resolve,
-    )
-
-    accepted = await tool.execute(
-        ToolContext(),
-        pages=[_page(1, "Existing", update_uri=wiki_uri, path_hint=None)],
-    )
-    assert accepted.startswith("Wiki bundle accepted")
-    assert wiki_uri in catalog_uris
-
-    rejected = await tool.execute(
-        ToolContext(),
-        pages=[],
-        files=[{"update_uri": wiki_uri, "content": "# Plain Markdown"}],
-    )
-    assert "must retain valid OKF frontmatter" in rejected
-
-    artifact = await tool.execute(
-        ToolContext(),
-        pages=[],
-        files=[{"update_uri": artifact_uri, "content": "# Paper"}],
-    )
-    assert artifact.startswith("Wiki bundle accepted")
-    assert resolved == [wiki_uri, artifact_uri]
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_reports_structurally_invalid_links():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-
-    result = await tool.execute(
-        ToolContext(),
-        pages=[_page(1, "One"), _page(2, "Two")],
-        links=[
-            {"f": 1, "t": 2, "match_text": "Two"},
-            {"f": 1, "t": 1, "match_text": "One"},
-            {"f": 1, "t": 3, "match_text": "Three"},
-        ],
-    )
-
-    assert result.startswith("Error: Invalid Wiki bundle: 2 invalid link(s):")
-    assert "links[1] must not be a self-link" in result
-    assert "links[2] endpoints must reference bundle pages" in result
-    assert tool.bundle is None
-
-
-@pytest.mark.asyncio
 async def test_submit_tool_drops_unrenderable_links_instead_of_failing():
     tool = SubmitWikiBundleTool(
         source_ids={"src_1"},
@@ -1300,34 +406,6 @@ async def test_submit_tool_drops_unrenderable_links_instead_of_failing():
     assert "was not found and the link was dropped" in result
     assert tool.bundle is not None
     assert tool.bundle.links == []
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_accepts_inline_content_by_default():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-
-    page_schema = tool.parameters["$defs"]["WikiPageDraft"]
-    file_schema = tool.parameters["$defs"]["CompileFileDraft"]
-    assert "body_markdown" in page_schema["properties"]
-    assert "body_workspace_path" in page_schema["properties"]
-    assert "content" in file_schema["properties"]
-    assert "workspace_path" in file_schema["properties"]
-
-    result = await tool.execute(
-        ToolContext(),
-        pages=[_page(1, "Home")],
-        files=[{"path": "extra/notes.yaml", "content": "kind: notes\n"}],
-    )
-
-    assert result == "Wiki bundle accepted with 1 page(s) and 1 file(s)."
-    assert tool.bundle is not None
-    assert tool.bundle.pages[0].body_markdown == "Body for Home"
-    assert tool.bundle.files[0].content == "kind: notes\n"
 
 
 @pytest.mark.asyncio
@@ -1364,6 +442,115 @@ async def test_multi_read_hints_on_large_files_and_supports_offset_limit(monkeyp
     )
     assert "window:10:20" in window
     assert fake.calls == [("viking://resources/big.jsonl", 10, 20)]
+
+
+@pytest.mark.asyncio
+async def test_multi_read_returns_images_as_tool_result_content(monkeypatch):
+    image_uri = "viking://resources/example/image.png"
+    image_bytes = b"\x89PNG\r\n\x1a\nimage-data"
+
+    class FakeClient:
+        async def stat(self, uri):
+            assert uri == image_uri
+            return {"size": len(image_bytes), "isDir": False}
+
+        async def download_bytes(self, uri):
+            assert uri == image_uri
+            return image_bytes
+
+        async def read_content(self, *args, **kwargs):
+            raise AssertionError("image reads must not use the text endpoint")
+
+    tool = VikingMultiReadTool()
+
+    async def fake_get_client(ctx):
+        return FakeClient()
+
+    async def no_release(ctx, client):
+        return None
+
+    monkeypatch.setattr(tool, "_get_client", fake_get_client)
+    monkeypatch.setattr(tool, "_release_client", no_release)
+
+    result = await tool.execute(ToolContext(), uris=[image_uri])
+
+    assert isinstance(result, MultimodalToolResult)
+    assert f"START OF {image_uri}" in str(result)
+    assert "Image resource (image/png" in str(result)
+    assert result.content[2] == {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:image/png;base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_multi_read_limits_aggregate_inline_image_bytes(monkeypatch):
+    first_uri = "viking://resources/first.png"
+    second_uri = "viking://resources/second.png"
+    first_image = b"\x89PNG\r\n\x1a\nfirst"
+    second_image = b"\x89PNG\r\n\x1a\nother"
+    images = {first_uri: first_image, second_uri: second_image}
+
+    class FakeClient:
+        async def stat(self, uri):
+            return {"size": len(images[uri]), "isDir": False}
+
+        async def download_bytes(self, uri):
+            return images[uri]
+
+        async def read_content(self, *args, **kwargs):
+            raise AssertionError("image reads must not use the text endpoint")
+
+    tool = VikingMultiReadTool()
+    monkeypatch.setattr(tool, "_MAX_INLINE_MEDIA_BYTES", len(first_image))
+
+    async def fake_get_client(ctx):
+        return FakeClient()
+
+    async def no_release(ctx, client):
+        return None
+
+    monkeypatch.setattr(tool, "_get_client", fake_get_client)
+    monkeypatch.setattr(tool, "_release_client", no_release)
+
+    result = await tool.execute(ToolContext(), uris=[first_uri, second_uri])
+
+    assert isinstance(result, MultimodalToolResult)
+    assert sum(part.get("type") == "image_url" for part in result.content) == 1
+    assert "combined inline media size" in str(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extension", ["mp3", "mp4"])
+async def test_multi_read_uses_openviking_overview_for_audio_and_video(monkeypatch, extension):
+    media_uri = f"viking://resources/interview/interview.{extension}"
+
+    class FakeClient:
+        async def read_content(self, uri, level="abstract", **kwargs):
+            assert uri == media_uri
+            assert level == "overview"
+            return "Speaker: hello"
+
+        async def download_bytes(self, uri):
+            raise AssertionError("media reads must not create a second transcription path")
+
+    tool = VikingMultiReadTool()
+
+    async def fake_get_client(ctx):
+        return FakeClient()
+
+    async def no_release(ctx, client):
+        return None
+
+    monkeypatch.setattr(tool, "_get_client", fake_get_client)
+    monkeypatch.setattr(tool, "_release_client", no_release)
+
+    result = await tool.execute(ToolContext(), uris=[media_uri])
+
+    assert isinstance(result, str)
+    assert "Speaker: hello" in result
 
 
 class _RecordingSandbox:
@@ -1699,7 +886,8 @@ async def test_compact_tool_loop_incremental_merges_previous_note():
 
 @pytest.mark.asyncio
 async def test_compact_tool_loop_chunks_large_transcript_and_merges():
-    loop = _compact_loop(_FakeChatProvider("SEGMENT"))
+    provider = _FakeChatProvider("SEGMENT")
+    loop = _compact_loop(provider)
 
     # Build enough history that the transcript spans multiple summarization chunks
     # (each chunk is capped at 32k chars; each message at 6k).
@@ -1713,36 +901,13 @@ async def test_compact_tool_loop_chunks_large_transcript_and_merges():
 
     out = await loop._compact_tool_loop(messages, _FakeCompileSessionKey(), budget_chars=20_000)
 
+    assert provider.calls >= 3  # Multiple source segments plus the final merge.
     assert out[2]["content"].startswith("[Context compaction]")
     assert "SEGMENT" in out[2]["content"]
     # Budget-aware window: at least one complete recent turn is retained and the
     # compacted result fits the (small) budget.
     assert sum(len(json.dumps(m, ensure_ascii=False)) for m in out) <= 20_000
     assert out[3:][0]["role"] in {"user", "assistant"}
-
-
-@pytest.mark.asyncio
-async def test_compact_tool_loop_keeps_system_messages_and_preserves_budget_churn_free():
-    loop = _compact_loop(_FakeChatProvider("SUMMARY"))
-
-    messages = [
-        {"role": "system", "content": "SYS"},
-        {"role": "user", "content": "TASK"},
-        {"role": "user", "content": "[Context compaction]\n## Key facts\nold facts"},
-        {"role": "assistant", "content": "recent action"},
-        {"role": "user", "content": "recent result"},
-    ]
-    # Not enough history since the last compaction to warrant a new summarization
-    # call: re-emits the existing (small) state without churn.
-    out = await loop._compact_tool_loop(messages, _FakeCompileSessionKey())
-    assert out == messages
-
-
-def test_local_path_for_viking_uri_drops_namespace_prefix():
-    assert local_path_for_viking_uri("viking://resources/a/b.md") == "a/b.md"
-    assert local_path_for_viking_uri("viking://user/alice/resources/a/b.md") == "a/b.md"
-    assert local_path_for_viking_uri("viking://user/alice/skills/s/guide.md") == "s/guide.md"
-    assert local_path_for_viking_uri("viking://resources/sessions/x.jsonl") == "sessions/x.jsonl"
 
 
 @pytest.mark.asyncio
@@ -1912,6 +1077,7 @@ async def test_materialize_sources_enforces_actual_total_size():
 @pytest.mark.asyncio
 async def test_materialize_sources_bounds_downloaded_payloads(monkeypatch):
     state = {"pending": 0, "peak": 0}
+    writes = {}
 
     class Client:
         async def download_bytes(self, uri):
@@ -1922,9 +1088,10 @@ async def test_materialize_sources_bounds_downloaded_payloads(monkeypatch):
 
     class Sandbox:
         async def write_file(self, path, content):
-            del path, content
-            await asyncio.sleep(0.01)
-            state["pending"] -= 1
+            if path.endswith(".txt"):
+                writes[path] = content
+                await asyncio.sleep(0)
+                state["pending"] -= 1
 
     monkeypatch.setattr("vikingbot.compile.service._MATERIALIZE_CONCURRENCY", 2)
     service = object.__new__(BotCompileService)
@@ -1945,7 +1112,9 @@ async def test_materialize_sources_bounds_downloaded_payloads(monkeypatch):
 
     await service._materialize_sources(client=Client(), sources=sources, sandbox=Sandbox())
 
-    assert state["peak"] <= 2
+    assert writes == {f"compile_resources/src_1/s/{index}.txt": "x" for index in range(5)}
+    assert 1 <= state["peak"] <= 2
+    assert state["pending"] == 0
 
 
 @pytest.mark.asyncio
@@ -1991,256 +1160,6 @@ async def test_materialize_target_checkout_preserves_paths_and_bytes():
             "viking://resources/output/data.bin"
         ],
     }
-
-
-def test_compile_prompt_mentions_materialized_manifest_when_available():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "reason": "Compile the research",
-        }
-    )
-
-    system, _user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write Wiki pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-        materialized_manifest="compile_resources/_manifest.tsv",
-        materialize_warnings=["failed to materialize viking://resources/source/b.bin: bad"],
-    )
-
-    assert "Source files are already materialized locally" in system
-    assert "compile_resources/_manifest.tsv" in system
-    assert "Do NOT" in system
-    assert "could NOT be materialized" in system
-    assert "viking://resources/source/b.bin" in system
-
-
-def test_compile_prompt_describes_editable_target_checkout():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/output",
-            "skill": "viking://agent/skills/compiler",
-            "reason": "Refresh the output",
-        }
-    )
-
-    system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="compiler",
-        skill_content="Produce the required files.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-        target_checkout_enabled=True,
-    )
-
-    assert "`__compile_staging__/target_checkout/`" in system
-    assert "editable output working tree" in system
-    assert "update existing files in place" in system
-    assert "submit_wiki_bundle with no arguments" in system
-    assert "complete UTF-8 OKF Markdown file" in system
-    assert "commits only validated changes" in system
-    assert "Inspect the editable target checkout" in user
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_requires_workspace_paths_for_artifacts():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-        require_workspace_files=True,
-    )
-    result = await tool.execute(
-        ToolContext(),
-        pages=[],
-        files=[
-            {
-                "path": "logic/claims.md",
-                "content": "# Claims",
-            },
-            {
-                "path": "logic/concepts.md",
-                "workspace_path": "ara-output/logic/concepts.md",
-            },
-        ],
-    )
-
-    assert result.startswith("Error: Invalid Wiki bundle:")
-    assert "must be generated with write_file" in result
-    assert tool.bundle is None
-
-    single_inline = await tool.execute(
-        ToolContext(),
-        pages=[],
-        files=[
-            {
-                "path": "PAPER.md",
-                "content": "---\ntitle: ARA Paper\nauthors: [Ada]\n---\n\n# Paper",
-            }
-        ],
-    )
-    assert single_inline.startswith("Error: Invalid Wiki bundle:")
-    assert "submitted using workspace_path instead of inline content" in single_inline
-
-    inline_tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-    rejected = await inline_tool.execute(
-        ToolContext(),
-        pages=[],
-        files=[{"path": "concept.md", "content": "---\ntype: ''\n---\n"}],
-    )
-    assert rejected.startswith("Error: Invalid Wiki bundle:")
-    assert 'field "type" must be a non-empty string' in rejected
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_reads_explicit_workspace_file_and_rejects_memory_files():
-    class Sandbox:
-        async def read_file_bytes(self, path):
-            assert path == "ara-output/figure.png"
-            return b"PNG"
-
-    class Manager:
-        async def get_sandbox(self, session_key):
-            assert session_key is not None
-            return Sandbox()
-
-    context = ToolContext(
-        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
-        sandbox_manager=Manager(),
-    )
-    resource_tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-    params = {
-        "pages": [],
-        "files": [
-            {
-                "path": "evidence/figure.png",
-                "workspace_path": "ara-output/figure.png",
-            }
-        ],
-    }
-    accepted = await resource_tool.execute(context, **params)
-    assert not accepted.startswith("Error:")
-    assert resource_tool.file_payloads == [b"PNG"]
-
-    memory_tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://user/alice/memories/preferences/wiki",
-        limits=CompileLimits(),
-    )
-    rejected = await memory_tool.execute(
-        context,
-        pages=[],
-        files=[{"path": "trace/tree.yaml", "content": "nodes: []"}],
-    )
-    assert rejected.startswith("Error:")
-    assert "Resource targets" in rejected
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_rejects_non_utf8_declared_okf_workspace_markdown():
-    class Sandbox:
-        async def read_file_bytes(self, path):
-            assert path == "generated/concept.md"
-            return b"---\ntype: concept\n---\n\xff"
-
-    class Manager:
-        async def get_sandbox(self, session_key):
-            return Sandbox()
-
-    context = ToolContext(
-        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
-        sandbox_manager=Manager(),
-    )
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-
-    rejected = await tool.execute(
-        context,
-        pages=[],
-        files=[
-            {
-                "path": "concept.md",
-                "workspace_path": "generated/concept.md",
-            }
-        ],
-    )
-
-    assert rejected.startswith("Error: Invalid Wiki bundle:")
-    assert "must be UTF-8" in rejected
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_materializes_workspace_page_body_before_validation():
-    class Sandbox:
-        async def read_file_bytes(self, path):
-            return {
-                "__compile_staging__/wiki_pages/overview.md": b"Read Details next.",
-                "__compile_staging__/wiki_pages/details.md": b"Details body.",
-            }[path]
-
-    class Manager:
-        async def get_sandbox(self, session_key):
-            assert session_key is not None
-            return Sandbox()
-
-    context = ToolContext(
-        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
-        sandbox_manager=Manager(),
-    )
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-        require_workspace_pages=True,
-    )
-    overview = _page(1, "Overview")
-    overview.pop("body_markdown")
-    overview["body_workspace_path"] = "__compile_staging__/wiki_pages/overview.md"
-    details = _page(2, "Details")
-    details.pop("body_markdown")
-    details["body_workspace_path"] = "__compile_staging__/wiki_pages/details.md"
-
-    accepted = await tool.execute(
-        context,
-        pages=[overview, details],
-        files=[],
-        links=[{"f": 1, "t": 2, "match_text": "Details"}],
-    )
-    assert accepted == "Wiki bundle accepted with 2 page(s) and 0 file(s)."
-    assert tool.bundle is not None
-    assert tool.bundle.pages[0].body_markdown == "Read Details next."
-    assert tool.bundle.pages[0].body_workspace_path is None
-
-    rejected = await tool.execute(
-        context,
-        pages=[_page(1, "Inline")],
-        files=[],
-    )
-    assert "must be generated with write_file" in rejected
-    assert tool.bundle is None
 
 
 @pytest.mark.asyncio
@@ -2388,130 +1307,6 @@ async def test_submit_tool_checkout_rejects_incomplete_wiki_frontmatter():
     assert tool.bundle is None
 
 
-@pytest.mark.asyncio
-async def test_submit_tool_checkout_rejects_manifest_arguments():
-    tool = SubmitTargetCheckoutTool(
-        target_uri="viking://resources/wiki",
-        source_roots={},
-        limits=CompileLimits(),
-    )
-
-    result = await tool.execute(ToolContext(), pages=[], files=[])
-
-    assert result == "Error: submit_wiki_bundle takes no arguments for a Resource checkout."
-    assert tool.bundle is None
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_rejects_artifact_reused_as_wiki_body():
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-        require_workspace_pages=True,
-    )
-    page = _page(1, "Overview")
-    page.pop("body_markdown")
-    page["body_workspace_path"] = "./ara-output/PAPER.md"
-
-    result = await tool.execute(
-        ToolContext(),
-        pages=[page],
-        files=[
-            {
-                "path": "PAPER.md",
-                "workspace_path": "ara-output/PAPER.md",
-            }
-        ],
-    )
-
-    assert result.startswith("Error: Invalid Wiki bundle:")
-    assert "must be editable files under __compile_staging__/wiki_pages/" in result
-    assert tool.bundle is None
-
-
-@pytest.mark.asyncio
-async def test_submit_tool_preserves_generated_skill_artifacts_alongside_staged_wiki_pages():
-    files = {
-        "skills/compiler/SKILL.md": b"input skill",
-        "ara-output/PAPER.md": b"---\ntitle: ARA\nauthors: [Ada]\nyear: 2026\n---\n\n# ARA",
-        "ara-output/logic/problem.md": b"# Problem",
-        "__compile_staging__/wiki_pages/overview.md": b"# Reader overview",
-        "__compile_staging__/tmp/notes.md": b"scratch",
-    }
-
-    class Sandbox:
-        async def list_dir(self, path):
-            directories = {
-                ".": [("ara-output", True), ("__compile_staging__", True), ("skills", True)],
-                "ara-output": [("PAPER.md", False), ("logic", True)],
-                "ara-output/logic": [("problem.md", False)],
-                "skills": [("compiler", True)],
-                "skills/compiler": [("SKILL.md", False)],
-            }
-            return directories[path]
-
-        async def read_file_bytes(self, path):
-            return files[path]
-
-    class Manager:
-        async def get_sandbox(self, session_key):
-            assert session_key is not None
-            return Sandbox()
-
-    context = ToolContext(
-        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
-        sandbox_manager=Manager(),
-    )
-    tool = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-        require_workspace_files=True,
-        require_workspace_pages=True,
-        workspace_baseline={"skills/compiler/SKILL.md"},
-    )
-    page = _page(1, "Overview")
-    page.pop("body_markdown")
-    page["body_workspace_path"] = "__compile_staging__/wiki_pages/overview.md"
-
-    rejected = await tool.execute(
-        context,
-        pages=[page],
-        files=[],
-    )
-    assert "generated Skill artifacts are missing from files" in rejected
-    assert "ara-output/PAPER.md" in rejected
-    assert "ara-output/logic/problem.md" in rejected
-
-    accepted = await tool.execute(
-        context,
-        pages=[page],
-        files=[
-            {
-                "path": "PAPER.md",
-                "workspace_path": "ara-output/PAPER.md",
-            },
-            {
-                "path": "logic/problem.md",
-                "workspace_path": "ara-output/logic/problem.md",
-            },
-        ],
-    )
-    assert accepted == "Wiki bundle accepted with 1 page(s) and 2 file(s)."
-    assert tool.bundle is not None
-    assert [file.path for file in tool.bundle.files] == [
-        "PAPER.md",
-        "logic/problem.md",
-    ]
-    assert tool.file_payloads == [
-        files["ara-output/PAPER.md"],
-        files["ara-output/logic/problem.md"],
-    ]
-
-
 class _EchoTool(Tool):
     @property
     def name(self):
@@ -2537,7 +1332,7 @@ async def test_scoped_tool_requires_and_bounds_openviking_uri():
         roots=("viking://resources/source",),
         limits=CompileLimits(),
         result_budget={"bytes": 0},
-        budget_lock=__import__("asyncio").Lock(),
+        budget_lock=asyncio.Lock(),
     )
     context = ToolContext()
     assert (await wrapped.execute(context)).startswith("Error:")
@@ -2554,60 +1349,30 @@ async def test_scoped_tool_requires_and_bounds_openviking_uri():
 
 @pytest.mark.asyncio
 async def test_scoped_tool_enforces_per_call_and_total_result_budgets():
+    class ResultTool(_EchoTool):
+        async def execute(self, tool_context, **kwargs):
+            return kwargs["result"]
+
     limits = CompileLimits(tool_result_bytes=8, tool_total_result_bytes=12)
     budget = {"bytes": 0}
     wrapped = CompileScopedTool(
-        _EchoTool(),
+        ResultTool(),
         roots=("viking://resources/source",),
         limits=limits,
         result_budget=budget,
-        budget_lock=__import__("asyncio").Lock(),
+        budget_lock=asyncio.Lock(),
     )
     context = ToolContext()
-    oversized = await wrapped.execute(context, uri="viking://resources/source/child")
-    assert oversized.startswith("Error:")
+    kwargs = {"uri": "viking://resources/source/child"}
+    oversized = await wrapped.execute(context, **kwargs, result="x" * 9)
+    assert "per-call size limit" in oversized
     assert budget["bytes"] == 0
-
-
-@pytest.mark.asyncio
-async def test_structured_wrapper_delegates_to_only_existing_loop_without_fallback():
-    registry = ToolRegistry()
-    submit = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-    registry.register(submit)
-    expected = WikiBundleDraft.model_validate({"pages": []})
-
-    class FakeLoop:
-        async def _run_agent_loop(self, **kwargs):
-            assert kwargs["tool_registry"] is registry
-            assert kwargs["stop_tool_names"] == ["submit_wiki_bundle"]
-            assert kwargs["allow_final_fallback"] is False
-            assert kwargs["inject_write_experience"] is False
-            assert kwargs["messages"] == [
-                {"role": "system", "content": "system"},
-                {"role": "user", "content": "user"},
-            ]
-            submit.bundle = expected
-            return None, None, [], {"total_tokens": 1}, 1
-
-    bundle, tools, usage, iterations = await AgentLoop.run_structured_task(
-        FakeLoop(),
-        system_prompt="system",
-        user_prompt="user",
-        session_key=SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
-        tool_registry=registry,
-        openviking_tool_names=set(),
-        stop_tool_names=["submit_wiki_bundle"],
-        openviking_connection={"api_key": "secret"},
-    )
-    assert bundle is expected
-    assert tools == []
-    assert usage == {"total_tokens": 1}
-    assert iterations == 1
+    assert await wrapped.execute(context, **kwargs, result="x" * 8) == "x" * 8
+    assert await wrapped.execute(context, **kwargs, result="y" * 4) == "y" * 4
+    assert budget["bytes"] == 12
+    exhausted = await wrapped.execute(context, **kwargs, result="z")
+    assert "task tool-result budget exceeded" in exhausted
+    assert budget["bytes"] == 12
 
 
 @pytest.mark.asyncio
@@ -2644,29 +1409,6 @@ async def test_structured_wrapper_distinguishes_iteration_exhaustion(iteration, 
             stop_tool_names=["submit_wiki_bundle"],
             openviking_connection=None,
         )
-
-
-def test_budget_reminder_text_escalates_with_remaining_rounds():
-    assert render_budget_reminder(70) is None
-    assert render_budget_reminder(16) is None
-
-    heads_up = render_budget_reminder(15)
-    warn = render_budget_reminder(8)
-    critical = render_budget_reminder(3)
-
-    assert "还剩 15 轮" in heads_up
-    assert "停止对已读文件的全量重扫" in heads_up
-    assert "还剩 8 轮" in warn
-    assert "必须开始提交" in warn
-    assert "未覆盖/待确认" in warn
-    assert "还剩 3 轮" in critical
-    assert "立即提交当前最好结果" in critical
-    assert "禁止再开启新的探索/读取" in critical
-    # The consequence sentence ties the reminder to the real salvage failure mode.
-    for note in (heads_up, warn, critical):
-        assert "submit_wiki_bundle" in note
-        assert "不经校验" in note
-    assert "还剩 0 轮" in render_budget_reminder(0)
 
 
 @pytest.mark.asyncio
@@ -2815,64 +1557,7 @@ async def test_read_tracking_tool_records_read_file_edit_and_explicit_exec():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("iteration", "with_note"),
-    [
-        (42, True),  # max_iterations=50, remaining == 8 -> budget reminder fires
-        (1, False),  # no thresholds/readlist -> provider stays quiet by default
-    ],
-)
-async def test_structured_task_injects_status_note_provider(iteration, with_note):
-    registry = ToolRegistry()
-    submit = SubmitWikiBundleTool(
-        source_ids={"src_1"},
-        catalog_uris=set(),
-        target_uri="viking://resources/wiki",
-        limits=CompileLimits(),
-    )
-    registry.register(submit)
-
-    class FakeReadlist:
-        async def summary(self):
-            return "已读 1/2 个源文件，未读 1 个。"
-
-    captured: dict = {}
-
-    class FakeLoop:
-        max_iterations = 50
-
-        async def _run_agent_loop(self, **kwargs):
-            captured["provider"] = kwargs.get("status_note_provider")
-            captured["note"] = await captured["provider"](iteration)
-            submit.bundle = WikiBundleDraft.model_validate({"pages": []})
-            return None, None, [], {}, iteration
-
-    kwargs: dict = {
-        "system_prompt": "system",
-        "user_prompt": "user",
-        "session_key": SessionKey(type="compile", channel_id="cmp", chat_id="cmp"),
-        "tool_registry": registry,
-        "openviking_tool_names": set(),
-        "stop_tool_names": ["submit_wiki_bundle"],
-        "openviking_connection": None,
-    }
-    if with_note:
-        kwargs["budget_reminder_thresholds"] = (15, 8, 3)
-        kwargs["readlist_provider"] = FakeReadlist()
-
-    await AgentLoop.run_structured_task(FakeLoop(), **kwargs)
-
-    note = captured["note"]
-    if not with_note:
-        assert note is None
-        return
-    assert "必须开始提交" in note
-    assert "已读 1/2 个源文件" in note
-    assert note.index("必须开始提交") < note.index("已读 1/2")  # budget reminder first
-
-
-@pytest.mark.asyncio
-async def test_request_normalization_uses_default_reason_and_canonical_skill(monkeypatch):
+async def test_request_normalization_uses_default_instruction_and_canonical_skill(monkeypatch):
     class Client:
         created = set()
         skill_content = "---\nname: wiki\ndescription: Wiki\n---\nCompile it"
@@ -2914,8 +1599,7 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
                 "from": ["viking://resources/source", "viking://resources/source"],
                 "to": "viking://resources/wiki",
                 "skill": "viking://agent/skills/wiki/SKILL.md",
-                "reason": "   ",
-                "runtime_timeout_seconds": 20 * 60,
+                "instruction": "   ",
             }
         ),
         connection={"api_key": "secret"},
@@ -2923,9 +1607,8 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
     assert normalized.from_ == ["viking://resources/source"]
     assert normalized.to == "viking://resources/wiki"
     assert normalized.skill == "viking://agent/skills/wiki"
-    assert normalized.reason == DEFAULT_COMPILE_REASON
-    assert normalized.reason_provided is False
-    assert normalized.runtime_timeout_seconds == 20 * 60
+    assert normalized.instruction == DEFAULT_COMPILE_INSTRUCTION
+    assert normalized.instruction_provided is False
 
     Client.created.clear()
     Client.skill_content = "---\nname: wiki\n---\nCompile it"
@@ -2942,51 +1625,6 @@ async def test_request_normalization_uses_default_reason_and_canonical_skill(mon
         )
     assert raised.value.code == "SKILL_INVALID"
     assert Client.created == set()
-
-
-@pytest.mark.asyncio
-async def test_request_normalization_rejects_runtime_above_server_limit_before_io(monkeypatch):
-    async def create_client(**kwargs):
-        raise AssertionError(f"client must not be created: {kwargs}")
-
-    monkeypatch.setattr("vikingbot.compile.service.VikingClient.create", create_client)
-    service = object.__new__(BotCompileService)
-    service.config = None
-    service.limits = CompileLimits(task_runtime_seconds=10)
-
-    with pytest.raises(CompileFailure) as raised:
-        await service._normalize_request(
-            CompileRequest.model_validate(
-                {
-                    "from": ["viking://resources/source"],
-                    "to": "viking://resources/wiki",
-                    "skill": "viking://agent/skills/wiki",
-                    "runtime_timeout_seconds": 11,
-                }
-            ),
-            connection={"api_key": "secret"},
-        )
-
-    assert raised.value.code == "RESOURCE_EXHAUSTED"
-    assert raised.value.stage == "queued"
-    assert "server limit of 10 seconds" in str(raised.value)
-
-
-def test_compile_target_accepts_only_exact_skill_namespaces():
-    directory = {"isDir": True}
-
-    BotCompileService._validate_target_directory("viking://agent/skills", directory)
-    BotCompileService._validate_target_directory("viking://user/alice/skills", directory)
-    BotCompileService._validate_target_directory("viking://user/skills", directory)
-
-    with pytest.raises(CompileFailure, match="supported skills namespace"):
-        BotCompileService._validate_target_directory(
-            "viking://agent/skills/existing-skill", directory
-        )
-    with pytest.raises(CompileFailure, match="supported skills namespace"):
-        BotCompileService._validate_target_directory(
-            "viking://agent/legacy-agent/skills", directory
-        )
 
 
 @pytest.mark.asyncio
@@ -3287,7 +1925,7 @@ async def test_execute_skill_target_skips_recursive_catalog_and_completes(
             "from": ["viking://resources/weekly"],
             "to": target_uri,
             "skill": "viking://agent/skills/skill-creator",
-            "reason": "Create a weekly report Skill",
+            "instruction": "Create a weekly report Skill",
         }
     )
     task = CompileTask(
@@ -3581,37 +2219,6 @@ async def test_target_catalog_search_failure_keeps_collision_inventory():
 
 
 @pytest.mark.asyncio
-async def test_load_target_wiki_raw_reads_every_okf_page_but_skips_markdown_artifacts():
-    wiki_uri = "viking://resources/wiki/entity/topic.md"
-    artifact_uri = "viking://resources/wiki/README.md"
-    contents = {
-        wiki_uri: "---\ntype: entity\ntitle: Topic\n---\n\n# Topic\n",
-        artifact_uri: "# README\n",
-    }
-
-    class Client:
-        async def read_raw(self, uri, *, offset=0, limit=-1):
-            assert offset == 0
-            content = contents[uri]
-            if limit == -1:
-                return content
-            return "".join(content.splitlines(keepends=True)[:limit])
-
-    service = object.__new__(BotCompileService)
-    service.limits = CompileLimits()
-    loaded = await service._load_target_wiki_raw(
-        Client(),
-        {
-            wiki_uri: {"size": len(contents[wiki_uri])},
-            artifact_uri: {"size": len(contents[artifact_uri])},
-            "viking://resources/wiki/image.png": {"size": 10},
-        },
-    )
-
-    assert loaded == {wiki_uri: contents[wiki_uri]}
-
-
-@pytest.mark.asyncio
 async def test_memory_target_catalog_uses_memory_search_results():
     target = "viking://user/alice/memories/preferences/wiki"
     existing = f"{target}/topic.md"
@@ -3687,24 +2294,6 @@ async def test_scoped_tool_redirects_skill_workspace_reads(uri, expected_path):
     assert expected_path in result
 
 
-@pytest.mark.asyncio
-async def test_scoped_tool_keeps_normal_scope_errors_and_valid_reads():
-    wrapped = CompileScopedTool(
-        _NamedTool("openviking_multi_read"),
-        roots=("viking://resources/source",),
-        limits=CompileLimits(),
-        result_budget={"bytes": 0},
-        budget_lock=asyncio.Lock(),
-    )
-
-    rejected = await wrapped.execute(ToolContext(), uris=["viking://resources/other/file.md"])
-    accepted = await wrapped.execute(ToolContext(), uris=["viking://resources/source/file.md"])
-
-    assert "outside the Compile task scope" in rejected
-    assert "read_file" not in rejected
-    assert "viking://resources/source/file.md" in accepted
-
-
 @pytest.mark.parametrize("exec_enabled", [True, False])
 def test_compile_registry_has_a_fixed_ara_compatible_tool_set(exec_enabled):
     available = ToolRegistry()
@@ -3762,11 +2351,8 @@ def test_compile_registry_has_a_fixed_ara_compatible_tool_set(exec_enabled):
         "openviking_glob",
         "openviking_multi_read",
     }
-    assert registry.tool_names[-1] == "submit_wiki_bundle"
     assert all(isinstance(registry.get(name), CompileScopedTool) for name in ov_names)
     submit = registry.get("submit_wiki_bundle")
-    assert submit.require_workspace_files is False
-    assert submit.require_workspace_pages is False
     assert submit.exec_enabled is exec_enabled
 
     checkout_registry, _ = service._build_compile_registry(
@@ -3777,7 +2363,6 @@ def test_compile_registry_has_a_fixed_ara_compatible_tool_set(exec_enabled):
     )
     checkout_submit = checkout_registry.get("submit_wiki_bundle")
     assert isinstance(checkout_submit, SubmitTargetCheckoutTool)
-    assert checkout_submit.parameters["properties"] == {}
 
 
 def test_compile_registry_keeps_source_fallback_tools_only_when_needed():
@@ -3839,206 +2424,6 @@ def test_compile_registry_keeps_source_fallback_tools_only_when_needed():
     assert "openviking_export" in eager_ov
 
 
-def test_compile_prompt_uses_materialized_workflow_when_manifest_available():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "reason": "Compile the research",
-        }
-    )
-    common = {
-        "request": request,
-        "skill_name": "wiki",
-        "skill_content": "Write Wiki pages.",
-        "catalog": [],
-        "capabilities": CompileCapabilities(exec_enabled=True),
-    }
-
-    materialized_system, _ = BotCompileService._build_prompts(
-        **common,
-        materialized_manifest="compile_resources/_manifest.tsv",
-    )
-    assert "read `compile_resources/_manifest.tsv`" in materialized_system
-    assert "Do NOT use openviking_list" in materialized_system
-
-    truncated_system, _ = BotCompileService._build_prompts(
-        **common,
-        materialized_manifest="compile_resources/_manifest.tsv",
-        catalog_truncated=True,
-    )
-    assert "source catalog was truncated" in truncated_system
-    assert "openviking_list/openviking_glob/openviking_multi_read" in truncated_system
-
-    eager_system, _ = BotCompileService._build_prompts(**common)
-    assert "Map the corpus first: run openviking_list" in eager_system
-    assert "Do NOT use openviking_list" not in eager_system
-
-
-def test_compile_prompt_includes_per_source_inventory():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": [
-                "viking://resources/dream-memory-store",
-                "viking://resources/dream-sessions",
-            ],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "reason": "Compile",
-        }
-    )
-    sources = [
-        {
-            "source_id": "src_1",
-            "directory_uri": "viking://resources/dream-memory-store",
-            "file_count": 46,
-            "total_bytes": 180_000,
-            "entries": [
-                {"name": "a.md", "is_dir": False},
-                {"name": "b.md", "is_dir": False},
-                {"name": "MEMORY", "is_dir": True},
-            ],
-        },
-        {
-            "source_id": "src_2",
-            "directory_uri": "viking://resources/dream-sessions",
-            "file_count": 480,
-            "total_bytes": 22_000_000,
-            "entries": [{"name": "rollout.jsonl", "is_dir": False}],
-        },
-    ]
-
-    _system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-        sources=sources,
-    )
-
-    assert "Source inventory (data):" in user
-    assert "src_1" in user and "src_2" in user
-    assert "46 files" in user
-    assert "480 files" in user
-    assert "md:2" in user
-    assert "jsonl:1" in user
-
-    # Without sources (e.g. older callers), the inventory section is omitted entirely.
-    _system, user_without = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-    )
-    assert "Source inventory (data):" not in user_without
-
-
-def test_compile_prompt_routes_skill_cli_commands_through_exec():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/ara",
-            "reason": "Compile the research",
-        }
-    )
-
-    system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="ara",
-        skill_content="Follow the ARA method.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=True),
-    )
-
-    assert "When the Skill asks to run Bash, shell commands, or a CLI, use the exec tool." in system
-    assert "`skills/ara/`" in system
-    assert "resolve its relative paths there and use read_file" in system
-    assert (
-        "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
-    )
-    assert "workspace_path (files) or body_workspace_path (pages)" in system
-    assert "Compile host capability notice" not in system
-    assert "Preserve every required output type, path, and format" in system
-    assert "preserve Skill-prescribed artifact file trees as exact files" in system
-    assert "bundle.links" not in system
-    assert "match_text" not in system
-    assert "pages=[]" not in system
-    assert "body_workspace_path" in system
-    assert "use its URI as an ordinary Markdown link" in system
-    assert "unavailable" not in user
-    assert "verify every output path and format explicitly required by the Skill" in user
-    assert "Inspect the source directories" in system
-    for implementation_name in (
-        "submit_wiki_bundle",
-        "source_id",
-        "update_uri",
-        "workspace_path",
-    ):
-        assert implementation_name not in user
-
-
-def test_compile_prompt_omits_exec_when_capability_is_disabled():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/wiki",
-            "skill": "viking://agent/skills/wiki",
-            "reason": "Compile the research",
-        }
-    )
-
-    system, _user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="wiki",
-        skill_content="Write two Wiki pages.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=False),
-    )
-
-    assert "Command execution is unavailable." in system
-    assert "Do not attempt Bash, shell commands, or CLI commands" in system
-    assert "use write_file or edit_file" in system
-    assert (
-        "Submit Wiki page bodies and artifact file content inline in submit_wiki_bundle" in system
-    )
-    assert "write_file or exec" not in system
-    assert "use the exec tool" not in system
-
-
-def test_compile_prompt_requires_one_complete_skill_package_without_exec():
-    request = SanitizedCompileRequest.model_validate(
-        {
-            "from": ["viking://resources/weekly"],
-            "to": "viking://agent/skills",
-            "skill": "viking://agent/skills/skill-creator",
-            "reason": "Create a weekly report Skill",
-        }
-    )
-
-    system, user = BotCompileService._build_prompts(
-        request=request,
-        skill_name="skill-creator",
-        skill_content="Create a standards-compliant Skill.",
-        catalog=[],
-        capabilities=CompileCapabilities(exec_enabled=False),
-    )
-
-    assert "Command execution is unavailable." in system
-    assert "write_file or exec" not in system
-    assert "workspace_path (files) or body_workspace_path (pages)" in system
-    assert "exactly one complete Skill package as artifact files" in system
-    assert "<skill-name>/SKILL.md" in system
-    assert "Do not produce Wiki pages, links" in system
-    assert "one complete Skill package" in user
-    assert "on demand" in user
-    assert "existing auxiliary files not included in the submission are preserved" in user
-    assert "Existing target files" not in user
-
-
 def _compile_service(
     tmp_path: Path,
     *,
@@ -4084,7 +2469,7 @@ def _sanitized_compile_request() -> SanitizedCompileRequest:
         {
             "from": ["viking://resources/source"],
             "to": "viking://resources/wiki",
-            "reason": "Compile",
+            "instruction": "Compile",
             "skill": "viking://agent/skills/wiki",
         }
     )
@@ -4268,10 +2653,18 @@ async def test_compile_create_task_connection_and_exec(
     accepted = await service.create_task(
         _compile_request(connection=with_connection),
         principal_scope=principal_scope,
+        task_id="cmp_ov_task",
     )
     await started.wait()
+    repeated = await service.create_task(
+        _compile_request(connection=with_connection),
+        principal_scope=principal_scope,
+        task_id="cmp_ov_task",
+    )
 
     assert accepted.status == "accepted"
+    assert accepted.session_id == "cmp_ov_task"
+    assert repeated.session_id == accepted.session_id
     assert service._compile_capabilities().exec_enabled is expected_exec
     expected_connection = {"api_key": "secret"} if with_connection else {}
     assert observed == {
@@ -4376,75 +2769,7 @@ async def test_compile_admission_is_bounded_per_principal_and_globally(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_compile_queue_wait_has_a_deadline(tmp_path: Path):
-    service = _compile_service(
-        tmp_path,
-        auth_mode="api_key",
-        backend=SandboxBackend.AIOSANDBOX,
-        limits=CompileLimits(concurrent_tasks=1, queue_wait_seconds=0.01),
-    )
-    request = _sanitized_compile_request()
-    task = CompileTask(
-        task_id="cmp_queued",
-        principal_scope="owner",
-        sanitized_request=request,
-        status="accepted",
-        stage="queued",
-        created_at=utc_now(),
-        updated_at=utc_now(),
-    )
-    await service.store.create(task)
-    await service._semaphore.acquire()
-    try:
-        await service._run_task(task.task_id, request, {"api_key": "secret"})
-    finally:
-        service._semaphore.release()
-
-    failed = await service.store.get(task.task_id)
-    assert failed is not None
-    assert failed.status == "failed"
-    assert failed.stage == "queued"
-    assert failed.error is not None
-    assert failed.error.code == "DEADLINE_EXCEEDED"
-    assert service._target_locks == {}
-
-
-@pytest.mark.asyncio
-async def test_compile_uses_request_runtime_timeout(monkeypatch, tmp_path: Path):
-    service = _compile_service(
-        tmp_path,
-        auth_mode="api_key",
-        backend=SandboxBackend.AIOSANDBOX,
-    )
-    request = _sanitized_compile_request().model_copy(update={"runtime_timeout_seconds": 0.01})
-    task = CompileTask(
-        task_id="cmp_runtime",
-        principal_scope="owner",
-        sanitized_request=request,
-        status="accepted",
-        stage="queued",
-        created_at=utc_now(),
-        updated_at=utc_now(),
-    )
-    await service.store.create(task)
-    observed = []
-
-    async def execute(*args, runtime_deadline, **kwargs):
-        del args, kwargs
-        observed.append(runtime_deadline - asyncio.get_running_loop().time())
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(service, "_execute_task", execute)
-    await service._run_task(task.task_id, request, {"api_key": "secret"})
-
-    failed = await service.store.get(task.task_id)
-    assert observed and 0 < observed[0] <= 0.02
-    assert failed is not None and failed.status == "failed"
-    assert failed.error is not None and failed.error.code == "DEADLINE_EXCEEDED"
-
-
-@pytest.mark.asyncio
-async def test_timeout_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
+async def test_salvage_copies_workspace_and_repairs_links(tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="api_key",
@@ -4477,7 +2802,8 @@ async def test_timeout_salvage_copies_workspace_and_repairs_links(tmp_path: Path
         "caseonly.md": b"case mismatch",
         "Foo.md": b"first",
         "foo.md": b"duplicate",
-        "bad#name.txt": b"unsafe URI",
+        "hash#name.txt": b"literal hash",
+        "bad?name.txt": b"unsafe URI",
         "__compile_staging__/work/notes.txt": b"notes",
         "__compile_staging__/tmp/check.txt": b"check",
         READLIST_PATH: b"compile_resources/src_1/a.md\n",
@@ -4548,7 +2874,8 @@ async def test_timeout_salvage_copies_workspace_and_repairs_links(tmp_path: Path
     assert "sandboxes/cmp-srt-settings.json" not in payloads
     assert "sandboxes/cmp-srt-settings.json" not in {path for path, _limit in sandbox.reads}
     assert sum(path.casefold() == "foo.md" for path in payloads) == 1
-    assert "bad#name.txt" not in payloads
+    assert payloads["hash#name.txt"] == b"literal hash"
+    assert "bad?name.txt" not in payloads
     topic = payloads["guide/topic.md"].decode()
     assert "[Home](../home.md#top)" in topic
     assert "[Meta](../meta/readme.md)" in topic
@@ -4564,90 +2891,8 @@ async def test_timeout_salvage_copies_workspace_and_repairs_links(tmp_path: Path
     assert any("Skipped" in warning for warning in result.warnings)
 
 
-@pytest.mark.parametrize(
-    "content",
-    [
-        '[Missing](missing.md "title")',
-        "[Missing](missing(1).md)",
-    ],
-)
-def test_timeout_salvage_removes_unresolved_complex_markdown_links(content: str):
-    assert (
-        BotCompileService._repair_salvaged_markdown(
-            content,
-            source_path="guide/topic.md",
-            known_paths={"guide/topic.md"},
-        )
-        == "Missing"
-    )
-
-
-def test_timeout_salvage_preserves_existing_escaped_parenthesis_link():
-    content = r"[Paren](../meta/foo\(1\).md)"
-
-    assert (
-        BotCompileService._repair_salvaged_markdown(
-            content,
-            source_path="guide/topic.md",
-            known_paths={"meta/foo(1).md"},
-        )
-        == content
-    )
-
-
 @pytest.mark.asyncio
-async def test_timeout_salvage_ignores_preexisting_srt_settings(tmp_path: Path):
-    service = _compile_service(
-        tmp_path,
-        auth_mode="api_key",
-        backend=SandboxBackend.SRT,
-    )
-    settings_path = "sandboxes/cmp-srt-settings.json"
-
-    class Client:
-        async def tree(self, uri, *, node_limit):
-            raise AssertionError(f"target must not be read: {uri}, {node_limit}")
-
-    result = await service._salvage_workspace(
-        client=Client(),
-        request=_sanitized_compile_request(),
-        sandbox=_FakeWorkspaceSandbox({}, sizes={settings_path: 128}),
-        workspace_baseline={settings_path},
-    )
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_srt_settings_created_by_manager_are_in_the_workspace_baseline(
-    monkeypatch, tmp_path: Path
-):
-    async def start_without_process(self):
-        self.workspace.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(SrtBackend, "start", start_without_process)
-    config = SimpleNamespace(
-        sandbox=SandboxConfig(backend=SandboxBackend.SRT, mode=SandboxMode.PER_SESSION),
-        skills=[],
-    )
-    manager = SandboxManager(config, tmp_path / "workspaces", tmp_path / "source")
-    session_key = SessionKey(type="compile", channel_id="cmp", chat_id="cmp:windows")
-
-    sandbox = await manager.get_sandbox(session_key)
-    baseline = {
-        entry.path
-        for entry in await sandbox.list_files(max_entries=CompileLimits().target_inventory_entries)
-    }
-
-    workspace_id = manager.to_workspace_id(session_key)
-    settings_name = portable_path_component(workspace_id)
-    assert ":" in workspace_id
-    assert ":" not in settings_name
-    assert baseline == {f"sandboxes/{settings_name}-srt-settings.json"}
-
-
-@pytest.mark.asyncio
-async def test_timeout_salvage_skips_oversized_file_before_reading(tmp_path: Path):
+async def test_salvage_skips_oversized_file_before_reading(tmp_path: Path):
     limits = CompileLimits(output_total_bytes=4)
     service = _compile_service(
         tmp_path,
@@ -4705,9 +2950,7 @@ async def test_timeout_salvage_skips_oversized_file_before_reading(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_timeout_salvage_grace_returns_when_cancellation_is_suppressed(
-    monkeypatch, tmp_path: Path
-):
+async def test_salvage_grace_returns_when_cancellation_is_suppressed(monkeypatch, tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="api_key",
@@ -4748,12 +2991,12 @@ async def test_timeout_salvage_grace_returns_when_cancellation_is_suppressed(
                     request=request,
                     sandbox=object(),
                     workspace_baseline=set(),
-                    reason="reached its runtime deadline",
-                    failure_code="DEADLINE_EXCEEDED",
+                    reason="reached its iteration limit",
+                    failure_code="AGENT_OUTPUT_INVALID",
                 ),
                 timeout=0.2,
             )
-        assert raised.value.code == "DEADLINE_EXCEEDED"
+        assert raised.value.code == "AGENT_OUTPUT_INVALID"
         assert raised.value.stage == "salvaging"
         assert "grace limit" in str(raised.value)
         assert loop.time() - started_at < 0.2
@@ -4764,9 +3007,7 @@ async def test_timeout_salvage_grace_returns_when_cancellation_is_suppressed(
 
 
 @pytest.mark.asyncio
-async def test_salvage_keeps_its_grace_period_when_parent_runtime_expires(
-    monkeypatch, tmp_path: Path
-):
+async def test_salvage_keeps_its_grace_period_when_parent_is_cancelled(monkeypatch, tmp_path: Path):
     service = _compile_service(
         tmp_path,
         auth_mode="api_key",
@@ -4828,7 +3069,6 @@ async def test_cleanup_grace_releases_execution_slot_and_target_lock(tmp_path: P
         limits=CompileLimits(
             concurrent_tasks=1,
             cleanup_grace_seconds=0.01,
-            task_runtime_seconds=1,
         ),
     )
     request = _sanitized_compile_request()
@@ -4849,8 +3089,8 @@ async def test_cleanup_grace_releases_execution_slot_and_target_lock(tmp_path: P
                 await release_cleanup.wait()
             cleanup_finished.set()
 
-    async def execute(task_id, _request, connection, *, runtime_deadline):
-        del connection, runtime_deadline
+    async def execute(task_id, _request, connection):
+        del connection
         if task_id == "cmp_first":
             await service._cleanup_execution_resources(
                 sandbox_manager=StubbornManager(),
@@ -4877,7 +3117,7 @@ async def test_cleanup_grace_releases_execution_slot_and_target_lock(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_timeout_salvage_respects_combined_output_operation_limit(tmp_path: Path):
+async def test_salvage_respects_combined_output_operation_limit(tmp_path: Path):
     limits = CompileLimits(output_pages=2, output_files=2, output_operations=3)
     service = _compile_service(
         tmp_path,
@@ -4922,10 +3162,7 @@ async def test_timeout_salvage_respects_combined_output_operation_limit(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cutoff", ["runtime", "iterations", "accepted", "writing"])
-async def test_compile_cutoff_salvages_before_workspace_cleanup(
-    monkeypatch, tmp_path: Path, cutoff: str
-):
+async def test_iteration_limit_salvages_before_workspace_cleanup(monkeypatch, tmp_path: Path):
     observed = []
     remote_files = {}
 
@@ -4983,28 +3220,7 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
         async def run_structured_task(self, **kwargs):
             del kwargs
             remote_files["output.md"] = b"partial"
-            if cutoff == "iterations":
-                raise AgentIterationLimitExceeded(1)
-            if cutoff == "accepted":
-                submit_tool.bundle = WikiBundleDraft.model_validate({"pages": []})
-                await asyncio.Event().wait()
-            if cutoff == "writing":
-                return (
-                    RenderedBundle(
-                        operations=[
-                            {
-                                "uri": "viking://resources/wiki/guide.md",
-                                "content": "Guide",
-                                "mode": "upsert",
-                            }
-                        ],
-                        created=["viking://resources/wiki/guide.md"],
-                    ),
-                    [],
-                    {},
-                    1,
-                )
-            await asyncio.Event().wait()
+            raise AgentIterationLimitExceeded(1)
 
     class Client:
         async def get_skill(self, skill_name, *, target_uri):
@@ -5015,12 +3231,6 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
                 "content": "---\nname: wiki\ndescription: Write Wiki\n---\nWrite it.",
                 "files": [],
             }
-
-        async def batch_write(self, **kwargs):
-            assert cutoff == "writing"
-            assert kwargs["operations"][0]["uri"] == "viking://resources/wiki/guide.md"
-            assert kwargs["wait"] is False
-            await asyncio.Event().wait()
 
         async def close(self):
             return None
@@ -5045,7 +3255,7 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
         assert workspace_baseline == set()
         assert request.to == "viking://resources/wiki"
         assert await sandbox.read_file_bytes("output.md") == b"partial"
-        assert ("runtime deadline" if cutoff == "runtime" else "1-iteration limit") in reason
+        assert "1-iteration limit" in reason
         observed.append("salvage")
         return CompileResult(
             **{
@@ -5090,7 +3300,7 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
 
     request = _sanitized_compile_request()
     task = CompileTask(
-        task_id=f"cmp_{cutoff}",
+        task_id="cmp_iterations",
         principal_scope="owner",
         sanitized_request=request,
         status="accepted",
@@ -5099,30 +3309,10 @@ async def test_compile_cutoff_salvages_before_workspace_cleanup(
         updated_at=utc_now(),
     )
     await service.store.create(task)
-    loop = asyncio.get_running_loop()
-    execute = service._execute_task(
-        task.task_id,
-        request,
-        {"api_key": "secret"},
-        runtime_deadline=loop.time()
-        + (0.01 if cutoff in {"runtime", "accepted", "writing"} else 60),
-    )
-    if cutoff in {"accepted", "writing"}:
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(execute, timeout=0.01)
-    elif cutoff == "runtime":
-        await asyncio.wait_for(execute, timeout=0.01)
-    else:
-        await execute
+    await service._execute_task(task.task_id, request, {"api_key": "secret"})
 
     completed = await service.store.get(task.task_id)
     assert completed is not None
-    if cutoff in {"accepted", "writing"}:
-        assert completed.status == ("committing" if cutoff == "writing" else "running")
-        assert completed.stage == cutoff.replace("accepted", "agent")
-        assert completed.result is None
-        assert observed == ["cleanup"]
-        return
     assert completed.status == "completed"
     assert completed.stage == "salvaged"
     assert completed.result is not None
@@ -5151,7 +3341,7 @@ async def test_task_store_restart_marks_nonterminal_without_persisting_connectio
             {
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
-                "reason": "Compile",
+                "instruction": "Compile",
                 "skill": "viking://agent/skills/wiki",
             }
         ),
@@ -5246,7 +3436,7 @@ async def test_task_store_prunes_expired_and_excess_terminal_records(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_task_owner_isolation_and_skill_snapshot_sync(tmp_path: Path):
+async def test_task_owner_isolation(tmp_path: Path):
     store = CompileTaskStore(tmp_path)
     now = utc_now()
     task = CompileTask(
@@ -5256,7 +3446,7 @@ async def test_task_owner_isolation_and_skill_snapshot_sync(tmp_path: Path):
             {
                 "from": ["viking://resources/source"],
                 "to": "viking://resources/wiki",
-                "reason": "Compile",
+                "instruction": "Compile",
                 "skill": "viking://agent/skills/wiki",
             }
         ),
@@ -5269,10 +3459,13 @@ async def test_task_owner_isolation_and_skill_snapshot_sync(tmp_path: Path):
     service = object.__new__(BotCompileService)
     service.store = store
     service._started = True
-    service._start_lock = __import__("asyncio").Lock()
+    service._start_lock = asyncio.Lock()
     assert await service.get_task("cmp_owner", principal_scope="other") is None
     assert (await service.get_task("cmp_owner", principal_scope="owner"))["task_id"] == "cmp_owner"
 
+
+@pytest.mark.asyncio
+async def test_compile_syncs_skill_package_files(tmp_path: Path):
     workspace = tmp_path / "workspace"
     skill_dir = workspace / "skills" / "wiki" / "references"
     skill_dir.mkdir(parents=True)

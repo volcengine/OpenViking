@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <string_view>
+#include <optional>
 #include <vector>
 #include <map>
 #include <variant>
@@ -12,6 +14,8 @@
 namespace vectordb {
 
 constexpr uint32_t STRING_MAX_UINT16_LENGTH = 0xFFFF;
+// A zero field count distinguishes versioned rows from legacy records.
+constexpr std::string_view VERSIONED_ROW_HEADER{"\0\1", 2};
 
 enum class FieldType {
   INT64 = 0,
@@ -37,6 +41,7 @@ struct FieldMeta {
   int offset;
   int id;
   Value default_value;
+  FieldType legacy_data_type;
 };
 
 struct FieldDef {
@@ -44,6 +49,7 @@ struct FieldDef {
   FieldType data_type;
   int id;
   Value default_value;
+  std::optional<FieldType> legacy_data_type;
 };
 
 class Schema {
@@ -56,12 +62,16 @@ class Schema {
   int get_total_byte_length() const {
     return total_byte_length_;
   }
+  bool has_legacy_fields() const {
+    return has_legacy_fields_;
+  }
   const FieldMeta* get_field_meta(const std::string& name) const;
 
  private:
   std::vector<FieldMeta> field_orders_;
   std::map<std::string, FieldMeta> field_metas_;
   int total_byte_length_;
+  bool has_legacy_fields_ = false;
 };
 
 class BytesRow {
@@ -272,9 +282,12 @@ class BytesRow {
       }
     }
 
-    std::string buffer;
-    buffer.resize(variable_region_offset);
-    char* ptr = &buffer[0];
+    const size_t header_size =
+        schema_->has_legacy_fields() ? VERSIONED_ROW_HEADER.size() : 0;
+    std::string buffer(variable_region_offset + header_size, '\0');
+    if (header_size != 0)
+      std::memcpy(buffer.data(), VERSIONED_ROW_HEADER.data(), header_size);
+    char* ptr = buffer.data() + header_size;
 
     // Header
     ptr[0] = static_cast<uint8_t>(field_order.size());
@@ -406,10 +419,10 @@ class BytesRow {
 
   // Deserialize to a map
   std::map<std::string, Value> deserialize(
-      const std::string& serialized_data) const;
+      std::string_view serialized_data) const;
 
   // Deserialize a single field
-  Value deserialize_field(const std::string& serialized_data,
+  Value deserialize_field(std::string_view serialized_data,
                           const std::string& field_name) const;
 
   // Get schema

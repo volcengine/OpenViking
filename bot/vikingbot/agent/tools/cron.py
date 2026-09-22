@@ -48,6 +48,12 @@ class CronTool(Tool):
                     "type": "string",
                     "description": "Cron expression like '0 9 * * *' (for scheduled tasks)",
                 },
+                "timezone": {
+                    "type": "string",
+                    "description": (
+                        "IANA timezone for cron expressions, for example Asia/Shanghai"
+                    ),
+                },
                 "at": {
                     "type": "string",
                     "description": "ISO datetime for one-time execution (e.g. '2026-02-12T10:30:00')",
@@ -65,6 +71,7 @@ class CronTool(Tool):
         message: str = "",
         every_seconds: int | None = None,
         cron_expr: str | None = None,
+        timezone: str | None = None,
         at: str | None = None,
         job_id: str | None = None,
         **kwargs: Any,
@@ -75,6 +82,7 @@ class CronTool(Tool):
                 message,
                 every_seconds,
                 cron_expr,
+                timezone,
                 at,
                 tool_context.session_key,
                 self._delivery_metadata(getattr(tool_context, "channel_metadata", None)),
@@ -91,19 +99,22 @@ class CronTool(Tool):
         message: str,
         every_seconds: int | None,
         cron_expr: str | None,
+        timezone: str | None,
         at: str | None,
         session_key: "SessionKey",
         channel_metadata: dict[str, Any] | None = None,
     ) -> str:
         if not message:
             return "Error: message is required for add"
+        if timezone and not cron_expr:
+            return "Error: timezone is only supported with cron_expr"
 
         # Build schedule
         delete_after = False
         if every_seconds:
             schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
         elif cron_expr:
-            schedule = CronSchedule(kind="cron", expr=cron_expr)
+            schedule = CronSchedule(kind="cron", expr=cron_expr, tz=timezone)
         elif at:
             try:
                 dt = parse_iso_datetime(at)

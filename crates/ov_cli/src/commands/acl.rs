@@ -1,0 +1,85 @@
+use crate::client::HttpClient;
+use crate::error::{Error, Result};
+use crate::output::{OutputFormat, output_success};
+use serde_json::{Value, json};
+
+fn show(value: Value, output_format: OutputFormat, compact: bool) -> Result<()> {
+    output_success(value, output_format, compact);
+    Ok(())
+}
+
+pub async fn get(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show(client.acl_get(uri).await?, output_format, compact)
+}
+
+pub async fn set(
+    client: &HttpClient,
+    uri: &str,
+    raw_entries: Vec<String>,
+    acl_mode: Option<String>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    if raw_entries.is_empty() && acl_mode.is_none() {
+        return Err(Error::Client(
+            "Provide at least one --entry or --acl-mode inherit|restricted.".to_string(),
+        ));
+    }
+    let mut entries = Vec::new();
+    for raw in raw_entries {
+        let Some((principal, level)) = raw.split_once('=') else {
+            return Err(Error::Client(format!(
+                "Invalid ACL entry '{raw}'. Expected principal=read|write|manage."
+            )));
+        };
+        entries.push(json!({"principal": principal, "level": level}));
+    }
+    show(
+        client.acl_set(uri, entries, acl_mode).await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn grant(
+    client: &HttpClient,
+    uri: &str,
+    principal: &str,
+    level: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show(
+        client.acl_grant(uri, principal, level).await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn revoke(
+    client: &HttpClient,
+    uri: &str,
+    principal: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show(
+        client.acl_revoke(uri, principal).await?,
+        output_format,
+        compact,
+    )
+}
+
+pub async fn remove(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show(client.acl_delete(uri).await?, output_format, compact)
+}

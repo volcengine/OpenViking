@@ -160,6 +160,20 @@ export async function fetchDirectoryLevelContent(
   }
 }
 
+export async function fetchDirectorySidecarContent(
+  uri: string,
+  level: 'abstract' | 'overview',
+): Promise<string> {
+  const directoryUri = normalizeDirUri(uri)
+  if (directoryUri === 'viking://') return ''
+  const sidecarUri = `${directoryUri}.${level}.md`
+  const result = await fetchFileContent(sidecarUri, {
+    limit: -1,
+    raw: true,
+  })
+  return result.content
+}
+
 export async function fetchFsStat(
   uri: string,
   options: { throwOnError?: boolean } = {},

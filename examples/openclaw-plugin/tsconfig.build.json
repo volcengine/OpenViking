@@ -1,15 +1,20 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "allowJs": true,
     "noEmit": false,
     "outDir": "dist",
     "rootDir": "."
   },
+  "include": [
+    "*.ts",
+    "commands/**/*.ts",
+    "shared/**/*.mjs"
+  ],
   "exclude": [
     "dist",
     "node_modules",
     "tests",
-    "__tests__",
     "vitest.config.ts"
   ]
 }

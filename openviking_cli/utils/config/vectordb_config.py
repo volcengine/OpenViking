@@ -36,8 +36,6 @@ class VolcengineConfig(BaseModel):
         ),
     )
 
-    model_config = {"extra": "forbid"}
-
 
 class VikingDBConfig(BaseModel):
     """Configuration for VikingDB private deployment."""
@@ -46,8 +44,6 @@ class VikingDBConfig(BaseModel):
     headers: Optional[Dict[str, str]] = Field(
         default_factory=dict, description="Custom headers for requests"
     )
-
-    model_config = {"extra": "forbid"}
 
 
 class CuVSConfig(BaseModel):
@@ -175,8 +171,6 @@ class CuVSConfig(BaseModel):
         ),
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="after")
     def validate_micro_batching(self):
         if not self.micro_batching_enabled:
@@ -264,8 +258,6 @@ class VectorDBBackendConfig(BaseModel):
         default_factory=dict,
         description="Custom parameters for custom backend adapters",
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):

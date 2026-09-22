@@ -1,3 +1,7 @@
+import type { GroupedFindResult } from '#/lib/retrieval'
+import { parseOkfSidecarMarkdown } from '#/lib/okf-markdown'
+import { retrievalResultNameFromUri } from '#/lib/viking-uri'
+
 import type { VikingFsEntry } from '../-types/viking-fm'
 import { normalizeDirUri, normalizeFileUri, parentUri } from './normalize'
 
@@ -100,4 +104,57 @@ export function filterResourceSearchEntries(
   }
 
   return entries.filter((entry) => matchesResourceSearch(entry, spec))
+}
+
+// A pattern without `/` matches at any depth (implicit `**/` prefix); one that
+// contains `/` is treated as already anchored — matches gitignore / VS Code
+// files-to-include / fd conventions.
+export function normalizeGlobPattern(pattern: string): string {
+  const trimmed = pattern.trim()
+  return trimmed.includes('/') ? trimmed : `**/${trimmed}`
+}
+
+export function retrievalItemsToEntries(
+  result: GroupedFindResult | undefined,
+): Array<VikingFsEntry> {
+  if (!result) return []
+  const items = [...result.resources, ...result.memories, ...result.skills]
+  return items.map((item) => ({
+    uri: item.uri,
+    name:
+      retrievalResultNameFromUri(item.uri) +
+      (item.line === undefined ? '' : `:${item.line}`),
+    isDir: item.uri.endsWith('/'),
+    abstract: item.abstract,
+    // ponytail: reuse the `size` slot to surface the semantic score.
+    size:
+      item.result_kind === 'grep' || item.result_kind === 'glob'
+        ? ''
+        : item.score.toFixed(2),
+    sizeBytes: null,
+    modTime: '',
+    modTimestamp: null,
+  }))
+}
+
+export function resourceEntryAbstractForDisplay(
+  entry: Pick<VikingFsEntry, 'abstract' | 'isDir' | 'uri'>,
+): string {
+  const content = entry.abstract.trim()
+  if (!content || !entry.isDir) return content
+
+  const looksLikeGeneratedSidecar =
+    /^---\r?\ndirectory:\s*viking:\/\//.test(content) &&
+    /\r?\ngenerated_by:/.test(content)
+  if (!looksLikeGeneratedSidecar) return content
+
+  const document = parseOkfSidecarMarkdown(
+    `${normalizeDirUri(entry.uri)}.abstract.md`,
+    content,
+  )
+  if (document) return document.body.trim()
+
+  // Directory abstracts returned in list/search payloads may be clipped before
+  // the closing `---`. Do not surface that partial YAML as a human summary.
+  return ''
 }

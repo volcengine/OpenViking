@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
+from openviking.parse.output import create_parse_artifact_writer
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import AUDIO_EXTENSIONS
 from openviking.parse.parsers.media.naming import resolve_media_names
@@ -75,15 +76,10 @@ class AudioParser(BaseParser):
             FileNotFoundError: If source file does not exist
             IOError: If audio processing fails
         """
-        from openviking.storage.viking_fs import get_viking_fs
-
         # Convert to Path object
         file_path = Path(source) if isinstance(source, str) else source
         if not file_path.exists():
             raise FileNotFoundError(f"Audio file not found: {source}")
-
-        viking_fs = get_viking_fs()
-        temp_uri = viking_fs.create_temp_uri()
 
         # Phase 1: Generate temporary files
         audio_bytes = file_path.read_bytes()
@@ -98,12 +94,6 @@ class AudioParser(BaseParser):
         # Root directory name: filename stem + _ + extension (without dot)
         ext_no_dot = ext[1:] if ext else ""
         root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
-        root_dir_uri = f"{temp_uri}/{root_dir_name}"
-        await viking_fs.mkdir(root_dir_uri, exist_ok=True)
-
-        # 1.1 Save original audio with original filename (sanitized)
-        await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", audio_bytes)
-
         # 1.2 Validate audio file using magic bytes
         # Define magic bytes for supported audio formats
         audio_magic_bytes = {
@@ -130,6 +120,18 @@ class AudioParser(BaseParser):
             raise ValueError(
                 f"Invalid audio file: {file_path}. File signature does not match expected format {ext_lower}"
             )
+
+        writer = await create_parse_artifact_writer(
+            kwargs.get("parse_output_store"),
+            viking_fs=self._get_viking_fs() if kwargs.get("parse_output_store") is None else None,
+        )
+        try:
+            await writer.mkdir(root_dir_name)
+            await writer.write_bytes(f"{root_dir_name}/{original_filename}", audio_bytes)
+            artifact_ref = await writer.finalize(resource_rel=root_dir_name)
+        except BaseException:
+            await writer.cleanup()
+            raise
 
         # Extract audio metadata (placeholder)
         duration = 0
@@ -161,7 +163,8 @@ class AudioParser(BaseParser):
         return ParseResult(
             root=root_node,
             source_path=str(file_path),
-            temp_dir_path=temp_uri,
+            temp_dir_path=artifact_ref.root,
+            artifact_ref=artifact_ref,
             source_format="audio",
             parser_name="AudioParser",
             meta={"content_type": "audio", "format": format_str.lower()},

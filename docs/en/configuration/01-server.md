@@ -36,7 +36,7 @@ The server reads the file at startup. Restart the server after changing models, 
 }
 ```
 
-Optional sections use their defaults when omitted. Unknown fields are rejected.
+Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility. Known fields still validate types and values. Misspelled field names are also ignored, but the server logs a warning listing every field it did not apply.
 
 ## Top-Level Settings
 
@@ -50,6 +50,7 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `rerank` | object | disabled | Retrieval result reranking |
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
+| `glob` | object | built-in defaults | Path glob engine |
 | `storage` | object | local | Workspace, file system, and vector database |
 | `queue_workers` | object | see below | Runtime concurrency for QueueFS consumer workers |
 | `server` | object | local development | HTTP, authentication, uploads, and observability |
@@ -57,6 +58,7 @@ Optional sections use their defaults when omitted. Unknown fields are rejected.
 | `parsers` | object | parser defaults | PDF, code, image, audio, video, and text parsing |
 | `semantic` | object | built-in defaults | Abstract and overview generation limits |
 | `parser_api` | object | disabled | Third-party file parser API |
+| `compile_api` | object | disabled | External Compile task API |
 | `connector` | object | disabled | External Connector ingestion service |
 | `encryption` | object | disabled | File and secret encryption |
 | `git` | object | local | Version backend: `local` or `s3` |
@@ -140,12 +142,15 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
-| `provider` | `vikingdb`, `cohere`, `openai`, `litellm` / `null` | `null` | Rerank service; inferred from credentials when omitted |
-| `model` | string / `null` | `null` | OpenAI-compatible or LiteLLM rerank model |
+| `provider` | `vikingdb`, `cohere`, `openai`, `litellm`, `jev` / `null` | `null` | Rerank service; inferred from credentials when omitted |
+| `model` | string / `null` | `null` | OpenAI-compatible, LiteLLM, or Jev rerank model |
 | `threshold` | number | `0.1` | Minimum score considered relevant |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
+| `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
+
+`jev` supports direct TypeSafe access (`https://api.typesafe.ai`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. It sends the query and candidate documents as structured `state`, asks one independent relevance question per candidate, and uses each yes probability as its rerank score. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
 
@@ -181,6 +186,9 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
     },
     "vectordb": {
       "backend": "local"
+    },
+    "parse_output": {
+      "mode": "agfs"
     }
   }
 }
@@ -194,9 +202,16 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
+| `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
+| `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
+
+`parse_output.mode=local` avoids writing parser intermediates to shared AGFS.
+The same worker must commit the required bytes to the formal resource tree before
+enqueueing downstream work. Artifacts are temporary and are removed after the
+content commit; provision `local_root` with enough space for concurrent imports.
 
 ## Queue Worker Settings
 
@@ -213,15 +228,33 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+| `file_operation_concurrency` | integer | `16` | Maximum concurrent file-level commit and fallback comparison operations within one AddResource job; must be greater than `0`; requires a server restart after changes |
 | `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
-`max_concurrent` controls independent AddResource jobs, while `file_vectorization_concurrency` controls files within one vectors-only directory job. It does not affect single-file resources or `semantic_and_vectors` processing.
+`max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
 
 ### `queue_workers.session_commit`
 
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `8` | Number of SessionCommit jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+### `queue_workers.external_task`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `10` | Number of external asynchronous tasks consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+## Compile API Settings
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `base_url` | string | `""` | External service base URL, including `http://` or `https://`; a non-empty value enables external Compile |
+| `gateway_token` | string | `""` | Optional service credential used by OV to call the Compile Gateway |
+| `http_timeout_seconds` | number | `10` | Timeout for one HTTP request |
+| `poll_interval_ms` | integer | `30000` | External task polling interval |
+
+When `base_url` is configured, OV sends the current user's OV API key in `X-API-Key`. It sends `X-Gateway-Token` only when `gateway_token` is configured.
 
 ## Reindex Settings
 
@@ -239,6 +272,7 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
+    "executor_threads": 0,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -256,6 +290,7 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | `host` | IP / hostname | `"127.0.0.1"` | Listen address |
 | `port` | integer | `1933` | Listen port |
 | `workers` | integer | `1` | Worker process count |
+| `executor_threads` | non-negative integer | `0` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
 | `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
 | `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |
@@ -308,9 +343,7 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false,
-    "v2_lock_retry_interval_seconds": 0.2,
-    "v2_lock_max_retries": 0
+    "link_enabled": false
   }
 }
 ```
@@ -326,8 +359,6 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
-| `v2_lock_retry_interval_seconds` | number, `>= 0` | `0.2` | Memory-lock retry interval |
-| `v2_lock_max_retries` | integer, `>= 0` | `0` | Retry limit; `0` means unlimited |
 
 ## Parser Settings
 
@@ -352,7 +383,12 @@ Parsers live under `parsers`:
     },
     "html": {},
     "text": {},
-    "directory": {},
+    "directory": {
+      "preserve_structure": true,
+      "max_files": null,
+      "max_depth": 10,
+      "max_concurrent": 4
+    },
     "feishu": {
       "domain": "https://open.feishu.cn",
       "max_rows_per_sheet": 1000,
@@ -363,6 +399,27 @@ Parsers live under `parsers`:
   }
 }
 ```
+
+`parsers.directory.max_files` defaults to `null`, meaning no file-count limit.
+Set it to a positive integer to limit the number of files per directory import.
+
+`parsers.directory.max_concurrent` is shared by all directory imports in the
+server event loop. With the default value `4`, one directory can run four
+Understanding jobs concurrently, while multiple concurrent directories still
+run at most four in total.
+
+`max_files` and `max_depth` apply when Understanding directory routing is enabled.
+Each `DirectoryParser` scan applies these limits independently before submitting its
+own Understanding requests. A nested ZIP starts a new directory scan and does not
+share the outer scan's file-count or depth budget.
+When Understanding is disabled, native OpenViking directory parsing does not apply
+these two limits.
+
+When a local directory is added through the client, the complete directory ZIP is
+subject to the `/resources/temp_upload` size limit. After extraction,
+`DirectoryParser` does not impose a common per-file byte limit. Each selected file
+follows the limits and upload behavior of its assigned built-in parser or
+Understanding API backend.
 
 | Setting | Purpose |
 |---|---|

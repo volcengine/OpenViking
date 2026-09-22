@@ -63,6 +63,10 @@ curl http://127.0.0.1:1933/bot/v1/health
 
 ### 2. Start Web Studio
 
+Use Node.js 22.x for local development, builds, and tests, matching the Studio build workflow.
+
+With the current Vitest/jsdom versions, Node.js 26 can cause `localStorage` errors during tests. If this occurs, switch to Node.js 22.x and run `npm ci && npm test` in `web-studio/`.
+
 ```bash
 cd web-studio
 npm install
@@ -156,7 +160,7 @@ src/styles.css           Global CSS and design tokens
 types/ov-server/         Supplemental typed server-result subsets
 ```
 
-Keep route-specific implementation colocated under the corresponding route directory. Cross-route consumers must import an explicit public feature entry point instead of reaching into a `-*` module. User-visible copy belongs in both `src/i18n/locales/en.ts` and `src/i18n/locales/zh-CN.ts`.
+Keep route-specific implementation colocated under the corresponding route directory. Cross-route consumers must import an explicit public feature entry point instead of reaching into a `-*` module. Follow the [Web Studio internationalization contribution guide](./CONTRIBUTING.md) whenever a feature adds or changes user-visible text.
 
 ## Deployment
 
@@ -342,6 +346,7 @@ Do not set `VITE_OV_BASE_URL` to `https://ov.example.com/web-studio`. `/web-stud
 The official OpenViking image can be used as the API server dependency:
 
 ```bash
+# Prefer ghcr.io. If it is hard to reach, use openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
 docker run -d \
   --name openviking \
   -p 1933:1933 \
@@ -382,5 +387,6 @@ The API key is missing or invalid, the key belongs to a different server, or the
 
 ## Related Docs
 
+- [Web Studio internationalization contribution guide](./CONTRIBUTING.md): translation ownership, dynamic server text, and the review checklist.
 - [OpenViking server deployment](../docs/en/guides/03-deployment.md): server-side deployment details.
 - [VikingBot validation with OpenViking Server](../bot/docs/vikingbot-phase1-validation-with-openviking-server.md): bot proxy validation flow.

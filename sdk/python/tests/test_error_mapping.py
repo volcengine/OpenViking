@@ -5,6 +5,7 @@ from openviking_sdk.errors import (
     ConflictError,
     OpenVikingError,
     ResourceExhaustedError,
+    UnavailableError,
     UnimplementedError,
 )
 
@@ -41,3 +42,27 @@ def test_client_preserves_unknown_error_code():
 
     assert exc_info.value.code == "PROVIDER_SPECIFIC"
     assert exc_info.value.details == {"x": 1}
+
+
+def test_client_preserves_unavailable_service_and_reason():
+    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
+
+    with pytest.raises(UnavailableError) as exc_info:
+        client._raise_exception(
+            {
+                "code": "UNAVAILABLE",
+                "message": "Storage backend unavailable: lock contention",
+                "details": {
+                    "service": "storage backend",
+                    "reason": "failed to read lock token (os error 33)",
+                },
+            }
+        )
+
+    assert str(exc_info.value) == (
+        "Storage backend unavailable: failed to read lock token (os error 33)"
+    )
+    assert exc_info.value.details == {
+        "service": "storage backend",
+        "reason": "failed to read lock token (os error 33)",
+    }

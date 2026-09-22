@@ -20,7 +20,9 @@ from openviking.session.memory.memory_isolation_handler import (
 )
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
+    get_default_registry,
 )
+from openviking.session.memory.merge_policy import MEMORY_MERGE_POLICY
 from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
@@ -64,11 +66,12 @@ class SessionExtractContextProvider(ExtractContextProvider):
         ctx: RequestContext = None,
         viking_fs: VikingFS = None,
         transaction_handle=None,
+        memory_registry: MemoryTypeRegistry | None = None,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
         self._output_language = self._detect_language()
-        self._registry = None  # 延迟加载
+        self._registry = memory_registry  # Lazy defaults if no account snapshot was supplied.
         self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
@@ -191,7 +194,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
             """
 
 ## Resource URI Handling
-- If the conversation contains a resource URI (`viking://resources/...`, `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources/...`) and the user says a durable fact, judgment, preference, or event about it, extract that memory into the appropriate normal memory type such as entities, events, or preferences.
+- If the conversation contains a resource URI (`viking://resources/...`, `viking://user/{user_id}/resources/...`, or `viking://user/{user_id}/peers/{peer_id}/resources/...`) and the user says a durable fact, judgment, preference, or event about it, extract that memory into whichever enabled memory type its schema best fits.
 - Preserve resource references as markdown links in visible memory content when useful. Example: user said "The user saved a Ryoma Echizen photo viking://resources/images/ryoma" -> write "The user saved a [Ryoma Echizen photo](viking://resources/images/ryoma)".
 - For `## Resource Addition` blocks, use `User reason` as the user's intent and `Resource abstract` only as optional context. Do not copy raw fields such as `Resource URI`, `Added at`, `Resource abstract`, or `User reason` into visible memory content.
 - For `## Resource Deletion` blocks, update existing mutable memories that mention or depend on the deleted resource. Do not create a new event solely for this maintenance action.
@@ -207,7 +210,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
             if contains_resource_uri
             else ""
         )
-        goal = f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
+        goal = f"""You are a memory extraction and maintenance agent. Analyze the conversation together with the pre-fetched existing memories, then produce a single atomic plan to create, update, delete, or reorganize memories so that the final memory collection conforms to all enabled memory schemas.
 
 ## Workflow
 1. Analyze the conversation and pre-fetched context
@@ -230,10 +233,15 @@ The system automatically generates URIs based on memory_type and fields. Just pr
 When a memory item describes the current user, omit peer_id.
 When a memory item describes a peer, set peer_id to one of the peer_id values allowed by
 the output schema. Do not invent peer_id values.
-For events with ranges, the system derives self/peer targets from the message range.
-Message role is authoritative: user-role content is the source for profile/preferences/entities/events,
-and assistant-role content is the source for cases/patterns/tools/skills. Do not infer ownership
-from neighboring messages.
+For memory items that carry a message-range field, the system derives self/peer targets from that range.
+Message role is authoritative for newly extracted facts: attribute each fact to the speaker whose
+message states it, and follow each enabled memory type's own schema rules for which role its content
+comes from. Do not infer ownership from neighboring messages.
+Facts already stored in pre-fetched or explicitly read memories remain valid sources for
+maintenance and may be preserved, normalized, merged, split, or moved between enabled memory
+types when required by their schemas.
+
+{MEMORY_MERGE_POLICY}
 """
 
         return goal
@@ -617,8 +625,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return schemas
 
     def _get_registry(self) -> MemoryTypeRegistry:
-        """内部获取 registry（自动在初始化时加载）"""
+        """获取共享的默认记忆 registry。"""
         if self._registry is None:
-            # MemoryTypeRegistry 在 __init__ 时自动加载 schemas
-            self._registry = MemoryTypeRegistry(load_schemas=True)
+            self._registry = get_default_registry()
         return self._registry

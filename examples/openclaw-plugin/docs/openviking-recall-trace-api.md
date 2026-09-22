@@ -87,19 +87,19 @@ Trace 会记录实际召回范围，但召回范围本身由 `recallTargetTypes`
 | `recallTargetTypes` | 默认 `['user', 'agent']` | 允许值：`resource`、`user`、`agent`；空值回退默认集合。实现见 `config.ts:176`、`recall-trace.ts:113`。 |
 | `recallResources` | 默认 `false` | 兼容旧配置；仅在未显式配置 `recallTargetTypes` 时，把 `resource` 追加到默认召回集合。实现见 `config.ts:363`。 |
 
-目标类型会被解析为以下搜索计划：`resolveRecallSearchPlan` 实现见 `recall-trace.ts:141`。
+目标类型会被解析为 context type 搜索计划；自动召回把该计划合并进一次服务端 context search：
 
-| resourceType | target URI | 说明 |
+| resourceType | context type | 说明 |
 | --- | --- | --- |
-| `resource` | `viking://resources` | 全局资源库。 |
-| `user` | `viking://user/memories` | 当前用户长期记忆。 |
-| `agent` | `agent recall target` | 当前 Agent 长期记忆。 |
+| `resource` | `resource` | 资源库。 |
+| `user` | `memory` | 当前用户长期记忆。 |
+| `agent` | `memory` | 当前 actor 的长期记忆；与 `user` 合并为一个 memory context type，由 actor routing 限定范围。 |
 
 ## 3. Trace 记录来源
 
 | source | operationType | 触发方式 | selected 语义 | 关键实现 |
 | --- | --- | --- | --- | --- |
-| `auto_recall` | `semantic_find` | Context Engine 在回复前自动召回 | 被注入 `<relevant-memories>` 的记忆或资源，`injected: true` | `auto-recall.ts:194`、`auto-recall.ts:313` |
+| `auto_recall` | `semantic_find`（兼容值） | Context Engine 在回复前发起服务端 context search | 服务端组装并注入 `<relevant-memories>` 的记忆或资源，`injected: true` | `auto-recall.ts` 的 `buildAutoRecallContext()` |
 | `memory_recall` | `semantic_find` | Agent 调用 `memory_recall` 工具 | 工具返回给模型的记忆，通常 `injected: true` 且 `displayed: true` | `index.ts:1391`、`index.ts:1542` |
 | `ov_search` | `semantic_find` | Agent 调用 `ov_search` 工具或用户执行 `/ov-search` | 搜索结果列表中展示的资源/技能/记忆，`displayed: true` | trace 记录在 `index.ts` 的 `searchOpenViking` 流程中，工具注册见 `index.ts:1371` |
 | `ov_archive_search` | `archive_grep` | Agent 调用 `ov_archive_search` 工具 | 展示的归档匹配行，包含 `line`，`displayed: true` | `index.ts:1992`、`index.ts:2008` |
@@ -126,7 +126,7 @@ Trace 会记录实际召回范围，但召回范围本身由 `recallTargetTypes`
 | `trigger.derivedKeywords` | string[]? | 派生关键词；归档搜索通常保存原 query。 |
 | `trigger.rawUserTextPreview` | string? | 原始用户输入预览；默认不持久化。 |
 | `trigger.queryTruncated` | boolean? | `query` 是否因过长被截断。 |
-| `searches` | array | 本次 trace 中每个目标 URI 的搜索明细。 |
+| `searches` | array | 本次 trace 中每个逻辑 context type 的搜索明细。 |
 | `selected` | array | 最终被注入或展示的结果。 |
 | `stats` | object | 候选数、选中数、注入数、估算 token。 |
 
@@ -139,8 +139,8 @@ Trace 会记录实际召回范围，但召回范围本身由 `recallTargetTypes`
 | `resourceType` | `resource` \| `user` \| `agent` \| `archive` | 当前子搜索类型。 |
 | `targetUriInput` | string? | 输入或计划中的目标 URI。 |
 | `targetUriResolved` | string? | 解析后的目标 URI。 |
-| `limit` | number | 请求 limit。自动召回和显式召回通常使用 `max(recallLimit * 4, 20)`。 |
-| `scoreThreshold` | number? | 分数阈值。搜索阶段常以 `0` 取候选，后处理再过滤。 |
+| `limit` | number | 请求 limit。自动召回直接使用 `recallLimit`；显式 `memory_recall` 可先扩大候选数。 |
+| `scoreThreshold` | number? | 分数阈值。自动召回由服务端应用；显式 `memory_recall` 仍可在本地后处理。 |
 | `durationMs` | number | 子搜索耗时，毫秒。 |
 | `total` | number | OpenViking 返回或插件统计的候选总数。 |
 | `results` | array | 候选结果摘要，最多 `traceRecallMaxResultsPerSearch` 条。 |

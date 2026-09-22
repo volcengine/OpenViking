@@ -553,6 +553,27 @@ class TestImageLinkSplit:
         assert any(u.endswith("/photo.png") for u in fake.files), fake.files
         assert any(u.endswith(".image_mappings.json") for u in fake.files), fake.files
 
+    async def test_angle_bracket_image_destination_with_spaces_is_ingested(self, tmp_path: Path):
+        kb = tmp_path / "kb"
+        image_dir = kb / "resource name" / "images"
+        image_dir.mkdir(parents=True)
+        _write_valid_png(image_dir / "photo.png")
+        src = kb / "page.md"
+        image_ref = "<resource name/images/photo.png>"
+        src.write_text(f"![p]({image_ref})", encoding="utf-8")
+
+        fake = FakeVikingFS()
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake):
+            await MarkdownParser().parse(
+                str(src), enable_link_rewrite=True, link_rewrite_root=str(kb)
+            )
+
+        md = [_decode(c) for u, c in fake.files.items() if u.endswith(".md")]
+        assert md and f"![p]({image_ref})" in md[0], fake.files
+        assert any(u.endswith("/photo.png") for u in fake.files), fake.files
+        mapping = [_decode(c) for u, c in fake.files.items() if u.endswith(".image_mappings.json")]
+        assert mapping and image_ref in mapping[0], fake.files
+
     async def test_image_outside_base_dir_depth_adjusted(self, tmp_path: Path):
         # The md lives in kb/sub; the image lives in kb/img — outside base_dir
         # (= the md's own directory) but inside the import root. #2429 cannot

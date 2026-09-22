@@ -51,20 +51,40 @@ describe('task list requests', () => {
     })
   })
 
-  it('keeps effective status filtering on the client', async () => {
-    clientMocks.getTasks.mockResolvedValue(
-      Array.from({ length: 9 }, (_, index) => ({
-        created_at: index + 1,
-        status: 'running',
-        task_id: `task-${index + 1}`,
+  it('finds matching tasks before the server applies its result limit', async () => {
+    const failedTask = {
+      task_id: 'old-failure',
+      task_type: 'session_commit',
+      status: 'failed',
+      created_at: 1,
+    }
+    const records = [
+      ...Array.from({ length: MAX_TASKS }, (_, index) => ({
+        task_id: `completed-${index}`,
+        task_type: 'session_commit',
+        status: 'completed',
+        created_at: MAX_TASKS + 1 - index,
       })),
+      failedTask,
+    ]
+    clientMocks.getTasks.mockImplementation(({ query }) =>
+      records
+        .filter((task) => !query.status || task.status === query.status)
+        .filter(
+          (task) => !query.task_type || task.task_type === query.task_type,
+        )
+        .slice(0, query.limit),
     )
 
-    await expect(fetchTasks('all', 'pending')).resolves.toEqual([
-      expect.objectContaining({ task_id: 'task-9' }),
+    await expect(fetchTasks('session_commit', 'failed')).resolves.toEqual([
+      failedTask,
     ])
     expect(clientMocks.getTasks).toHaveBeenCalledWith({
-      query: { limit: MAX_TASKS },
+      query: {
+        limit: MAX_TASKS,
+        task_type: 'session_commit',
+        status: 'failed',
+      },
     })
   })
 

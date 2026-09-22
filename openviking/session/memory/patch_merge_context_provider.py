@@ -10,6 +10,8 @@ from typing import Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.merge_policy import MEMORY_MERGE_POLICY
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
@@ -121,9 +123,11 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         patches: list[PatchMergePatch],
         required_file_uris: list[str] | None = None,
         output_language: str | None = None,
+        memory_registry: MemoryTypeRegistry | None = None,
     ):
         super().__init__(messages=[])
         self.memory_type = memory_type
+        self._registry = memory_registry
         self.required_file_uris = list(required_file_uris or [])
         self.patches = list(patches)
         self._output_language = output_language or _resolve_patch_output_language(self.patches)
@@ -138,14 +142,18 @@ Do not call tools. Output JSON only.
 
 All memory content must be written in {output_language}.
 
-Reconcile independent extraction patch proposals: merge duplicate/overlapping
-memories into one canonical file patch, and keep distinct memories separate.
+Reconcile independent extraction patch proposals. Apply this shared policy before
+choosing a canonical file or deleting any proposal:
+
+{MEMORY_MERGE_POLICY}
+
 Normalize URI/path variants for directory/filename fields. Treat path segment
 fields as stable schema identifiers, not free-form labels. Reuse existing
 equivalent directories across singular/plural, synonym, or language/script
 variants. For new segments, use singular snake_case for English and one concise
 canonical term for Chinese; e.g. book not books, 书籍 not 书/图书. If a loser URI
-is an existing file, put it in delete_ids; if it is only a new proposal, omit it.
+is a verified duplicate existing file, put it in delete_ids with the fact-complete
+canonical replacement; if it is only a duplicate new proposal, omit it.
 """
 
     def get_tools(self) -> list[str]:
@@ -153,7 +161,8 @@ is an existing file, put it in delete_ids; if it is only a new proposal, omit it
 
     def get_memory_schemas(self, ctx: RequestContext) -> list[MemoryTypeSchema]:
         del ctx
-        schema = self._get_registry().get(self.memory_type)
+        registry = self._get_registry()
+        schema = registry.get(self.memory_type)
         if schema is None or not schema.enabled:
             raise ValueError(f"Memory schema not found or disabled: {self.memory_type}")
         return [schema]

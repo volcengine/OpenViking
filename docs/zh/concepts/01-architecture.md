@@ -26,7 +26,7 @@ OpenViking 是为 AI Agent 设计的上下文数据库，将所有上下文（Me
 │    │  Retrieve   │          │   Session   │          │    Parse    │      │
 │    │ (上下文检索) │          │  (会话管理)  │          │ (上下文提取) │      │
 │    │             │          │             │          │             │      │
-│    │ search/find │          │ add/used    │          │ 文档解析    │      │
+│    │ search/find │          │ add         │          │ 文档解析    │      │
 │    │ 意图分析    │          │ commit      │          │ L0/L1/L2    │      │
 │    │ Rerank     │          │ commit      │          │ 树构建      │      │
 │    └──────┬──────┘          └──────┬──────┘          └──────┬──────┘      │

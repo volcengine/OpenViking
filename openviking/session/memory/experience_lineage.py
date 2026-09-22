@@ -22,7 +22,10 @@ _READ_TOOL_OPERATIONS = {
     "ov_read": "read",
     "ov_multi_read": "multi_read",
 }
-_MCP_OPENVIKING_READ_RE = re.compile(r"^mcp__openviking__(read|multi_read)$")
+_MCP_OPENVIKING_READ_RE = re.compile(
+    r"^mcp__(?:openviking|plugin_.+_openviking)__(read|multi_read)$",
+    re.IGNORECASE,
+)
 TRAJECTORY_OUTCOMES = ("success", "failure", "partial", "unknown", "unfinished")
 
 
@@ -154,7 +157,7 @@ def _read_operation(tool_name: str) -> str | None:
     if operation is not None:
         return operation
     match = _MCP_OPENVIKING_READ_RE.fullmatch(name)
-    return match.group(1) if match is not None else None
+    return match.group(1).lower() if match is not None else None
 
 
 def _load_value(value: Any) -> Any:

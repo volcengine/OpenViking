@@ -30,6 +30,28 @@ const CODING_QUOTA_WEIGHTS = {
 
 let userSpaceCache = "";
 
+/**
+ * Is recall on for this config?
+ *
+ * The switch has four spellings in the wild: a boolean `autoRecall`, opencode's
+ * `{ enabled }` object, dsh and pi's `syncTurns`, and the global `enabled`
+ * that turns the whole plugin off. Reading it here rather than in each loader
+ * is what keeps it from drifting a fifth time — and any spelling that says off
+ * wins, so a config that disables recall under an older name still disables it.
+ */
+export function isRecallEnabled(cfg = {}) {
+  return isSwitchOn([cfg.enabled, cfg.autoRecall, cfg.recall, cfg.syncRecall]);
+}
+
+/** Any recognised spelling that says off wins; everything else means on. */
+function isSwitchOn(values) {
+  for (const value of values) {
+    if (value === false) return false;
+    if (value && typeof value === "object" && !Array.isArray(value) && value.enabled === false) return false;
+  }
+  return true;
+}
+
 export function estimateTokens(text) {
   return text ? Math.ceil(String(text).length / 4) : 0;
 }
@@ -163,10 +185,9 @@ export function contextRequestTimeoutMs(cfg = {}, body = {}) {
   // `query_expansion` defaults to "auto" server-side, so only an explicit "off"
   // takes the expansion fuse back out of the budget.
   const wantsExpansion = Boolean(body.session_id) && body.query_expansion !== "off";
-  if (!wantsRewrite && !wantsExpansion) return undefined;
-
   const configured = Number(cfg.recallContextTimeoutMs);
   if (Number.isFinite(configured) && configured > 0) return Math.max(1000, Math.floor(configured));
+  if (!wantsRewrite && !wantsExpansion) return undefined;
   const floor = wantsRewrite ? SERVER_REWRITE_REQUEST_TIMEOUT_MS : EXPANSION_REQUEST_TIMEOUT_MS;
   return Math.max(Number(cfg.timeoutMs) || 0, floor);
 }
@@ -287,21 +308,46 @@ async function resolveTargetUri(fetchJSON, targetUri, actorPeerId = "") {
   return `viking://user/${space}/${parts.join("/")}`;
 }
 
-async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = "") {
-  const resolvedUri = await resolveTargetUri(fetchJSON, source.uri, actorPeerId);
-  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
-  const res = await fetchJSON("/api/v1/search/find", {
-    method: "POST",
-    body: JSON.stringify(body),
-  }, { actorPeerId });
-  if (!res.ok) return [];
-  const items = res.result?.[source.bucket] || [];
-  return items.map((item) => ({ ...item, _sourceType: source.type }));
+async function searchOneSource(fetchJSON, cfg, query, source, limit, options) {
+  const actorPeerId = options.actorPeerId || "";
+  const home = await resolveTargetUri(fetchJSON, source.uri, actorPeerId);
+  const targets = [...new Set(cfg.user
+    ? [`viking://user/${cfg.user}/${source.bucket}`, home] : [home])];
+  const sessionId = String(options.sessionId || "").trim();
+  const search = async (target, session) => {
+    const body = { query, target_uri: target, limit, score_threshold: 0 };
+    if (session) body.session_id = session;
+    const init = { method: "POST", body: JSON.stringify(body) };
+    // Session-aware retrieval may decide no context is needed. Only after all
+    // targets are empty do we retry without the session. Old servers still
+    // support find; an unsupported search route can fall back to it.
+    let res = await fetchJSON(sessionId ? "/api/v1/search/search" : "/api/v1/search/find", init, { actorPeerId });
+    if (sessionId && !res.ok && (
+      !res.status || res.status === 404 || res.status === 405 || res.status >= 500
+      || ((res.status === 400 || res.status === 422) && looksLikeUnknownField(res))
+    )) {
+      const { session_id, ...findBody } = body;
+      res = await fetchJSON("/api/v1/search/find", { method: "POST", body: JSON.stringify(findBody) }, { actorPeerId });
+    }
+    const items = res.ok && Array.isArray(res.result?.[source.bucket]) ? res.result[source.bucket] : [];
+    return items.map((item) => ({ ...item, _sourceType: source.type }));
+  };
+  for (const target of targets) {
+    const items = await search(target, sessionId);
+    if (items.length) return items;
+  }
+  if (sessionId) {
+    for (const target of targets) {
+      const items = await search(target, "");
+      if (items.length) return items;
+    }
+  }
+  return [];
 }
 
-async function searchAllSources(fetchJSON, query, perSourceLimit, actorPeerId = "", log = () => {}) {
+async function searchAllSources(fetchJSON, cfg, query, perSourceLimit, options, log = () => {}) {
   const results = await Promise.all(
-    SOURCES.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId)),
+    SOURCES.map((src) => searchOneSource(fetchJSON, cfg, query, src, perSourceLimit, options)),
   );
   const all = results.flat();
   log("recall_search_summary", {
@@ -337,51 +383,30 @@ async function resolveItemContent(fetchJSON, item, cfg, actorPeerId = "") {
   return content;
 }
 
-async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = "", log = () => {}) {
-  if (items.length === 0) return null;
-
-  let budgetRemaining = Math.max(200, Number(cfg.recallTokenBudget || 2000));
-  const lines = [
-    "<openviking-context>",
-    "Relevant context from OpenViking. Use the read MCP tool to expand URIs.",
-  ];
+function formatFallback(items, cfg, log = () => {}) {
+  const budgetTotal = Math.max(200, Number(cfg.recallTokenBudget || 2000));
+  const lines = [];
   let contentCount = 0;
   let hintCount = 0;
-
+  const maxChars = Math.max(50, Number(cfg.recallMaxContentChars || 500));
   for (const item of items) {
     const score = (clampScore(item.score) * 100).toFixed(0);
-    const uriLine = `- [${item._sourceType} ${score}%] ${item.uri}`;
-
-    if (budgetRemaining > 0) {
-      const content = await resolveItemContent(fetchJSON, item, cfg, actorPeerId);
-      const contentLine = `- [${item._sourceType} ${score}%] ${content}`;
-      const lineTokens = estimateTokens(contentLine);
-
-      if (lineTokens > budgetRemaining && contentCount > 0) {
-        lines.push(uriLine);
-        hintCount++;
-      } else {
-        lines.push(contentLine);
-        budgetRemaining -= lineTokens;
-        contentCount++;
-      }
-    } else {
+    const kind = item._sourceType || item.category || "memory";
+    const uriLine = `- [${kind} ${score}%] ${item.uri}`;
+    const text = String(item.text || item.uri);
+    const content = text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
+    const contentLine = `- [${kind} ${score}%] ${content}`;
+    if (estimateTokens(wrapContext([...lines, uriLine, contentLine].join("\n"))) <= budgetTotal) {
+      lines.push(uriLine, contentLine);
+      contentCount += 1;
+    } else if (estimateTokens(wrapContext([...lines, uriLine].join("\n"))) <= budgetTotal) {
       lines.push(uriLine);
-      hintCount++;
+      hintCount += 1;
     }
   }
-
-  lines.push("</openviking-context>");
-
-  const budgetUsed = Math.max(200, Number(cfg.recallTokenBudget || 2000)) - budgetRemaining;
-  log("recall_injection_built", {
-    contentItems: contentCount,
-    hintItems: hintCount,
-    budgetUsed,
-    budgetTotal: Math.max(200, Number(cfg.recallTokenBudget || 2000)),
-  });
-
-  return lines.join("\n");
+  const budgetUsed = lines.length ? estimateTokens(wrapContext(lines.join("\n"))) : 0;
+  log("recall_injection_built", { contentItems: contentCount, hintItems: hintCount, budgetUsed, budgetTotal });
+  return { rendered: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
 const LEGACY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -417,16 +442,45 @@ export async function markContextFaceLegacy(path = stateFile("context-face.json"
   await writeJsonFile(path, { legacyUntil: now + LEGACY_CACHE_TTL_MS });
 }
 
+/**
+ * A `peer_scope` the server rejects is remembered the same way, but unlike the
+ * context face this one is not a silent capability probe: dropping the field
+ * widens recall from the caller's own peer to the whole user root, so doctor
+ * reads this file back and warns.
+ */
+export function peerScopeMemoPath() {
+  return stateFile("peer-scope.json");
+}
+
+export async function readPeerScopeDowngrade(path = peerScopeMemoPath(), now = Date.now()) {
+  const cached = await readJsonFile(path);
+  if (!cached?.legacyUntil || Number(cached.legacyUntil) <= now) return null;
+  return cached;
+}
+
+export async function markPeerScopeDowngrade(scope, status, path = peerScopeMemoPath(), now = Date.now()) {
+  await writeJsonFile(path, {
+    legacyUntil: now + LEGACY_CACHE_TTL_MS,
+    scope: String(scope || ""),
+    status: Number(status) || 0,
+    at: now,
+  });
+}
+
 function looksLikeUnknownField(res) {
   const text = JSON.stringify(res?.error ?? res?.result ?? res?.detail ?? "").toLowerCase();
   return text.includes("extra") || text.includes("mode") || text.includes("unexpected");
 }
 
 function wrapContext(body) {
+  // Retrieved text cannot introduce a second capture delimiter inside ours.
+  const text = String(body)
+    .replace(/<\/?relevant-memor(?:y|ies)\b[^>]*>/gi, "legacy memory wrapper")
+    .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker");
   return [
     "<openviking-context>",
     "Relevant memory from OpenViking. Use the search/read MCP tools to expand URIs.",
-    body,
+    text,
     "</openviking-context>",
   ].join("\n");
 }
@@ -442,7 +496,7 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 
   const block = await recallViaContextFace(fetchJSON, cfg, query, { ...options, actorPeerId }, log);
   if (block !== null) return block;
-  return recallViaEndpoint(fetchJSON, cfg, query, actorPeerId, log);
+  return recallViaEndpoint(fetchJSON, cfg, query, { ...options, actorPeerId }, log);
 }
 
 /**
@@ -506,59 +560,79 @@ export function normalizeContextEntry(entry = {}) {
   };
 }
 
+/** Server relevance decisions and digest precedence are shared by every host. */
+export function selectRecallContent(result = {}) {
+  if (String(result.stats?.rewrite || "").toLowerCase() === "no_relevant") return "";
+  return String(result.digest || "").trim() || String(result.rendered || "").trim();
+}
+
+function wantsLocalCompression(cfg, options) {
+  const mode = String(cfg.recallRewrite || "off").toLowerCase();
+  return (mode === "client" || mode === "auto")
+    && options.localCompressorAvailable !== false
+    && typeof options.runCompressor === "function";
+}
+
+// Context, legacy recall, and raw retrieval share the same result policy.
+// The host callback only runs its model; it never chooses a fallback or digest.
+async function finalizeRecall(result, cfg, query, options, log, shortContext) {
+  const selected = selectRecallContent(result);
+  if (String(result.stats?.rewrite || "").toLowerCase() === "no_relevant") return "";
+  const entries = (result.entries || []).map(normalizeContextEntry).filter((entry) => entry.uri);
+  const rendered = String(result.rendered || "").trim();
+  if (String(result.digest || "").trim() || !wantsLocalCompression(cfg, options)) return selected;
+  const fallback = shortContext ?? (entries.length ? formatFallback(entries, cfg).rendered : rendered);
+  const input = rendered || entries.map((entry) => `${entry.uri}\n${entry.text}`).join("\n");
+  if (!input) return "";
+  try {
+    const compression = await compressRecallContext({
+      query, rendered: input, shortContext: shortContext ?? (rendered || fallback),
+      entries, cfg, runCompressor: options.runCompressor,
+      cachePath: options.digestCachePath || stateFile("recall-digest.json"), now: Date.now(),
+    });
+    log("recall_local_compression", { status: compression.status });
+    if (compression.status === "ok") return compression.context;
+    if (compression.status === "empty") return "";
+  } catch (err) {
+    log("recall_local_compression_failed", { error: String(err?.message || err) });
+  }
+  return fallback;
+}
+
 async function recallViaContextFace(fetchJSON, cfg, query, options, log) {
   const assembled = await fetchAssembledContext(fetchJSON, cfg, query, { ...options, log });
   if (assembled === null) return null;
-
-  const { rendered, entries } = assembled;
-  let digest = assembled.digest;
-  const mode = String(cfg.recallRewrite || "off").toLowerCase();
-  if (String(assembled.stats?.rewrite || "").toLowerCase() === "no_relevant") {
-    log("recall_server_compression", { status: "empty" });
-    return "";
-  }
-  const wantsLocal = mode === "client" || (mode === "auto" && !digest);
-  if (wantsLocal && rendered && typeof options.runCompressor === "function") {
-    try {
-      const compression = await compressRecallContext({
-        query,
-        rendered,
-        entries,
-        cfg,
-        runCompressor: options.runCompressor,
-        cachePath: options.digestCachePath || stateFile("recall-digest.json"),
-        now: Date.now(),
-      });
-      log("recall_local_compression", { status: compression.status });
-      if (compression.status === "ok") digest = compression.context;
-      if (compression.status === "empty") return "";
-    } catch (err) {
-      log("recall_local_compression_failed", { error: String(err?.message || err) });
-    }
-  }
-
-  const injected = digest || rendered;
-  if (!injected) return "";
-  return wrapContext(injected);
+  const text = await finalizeRecall(assembled, cfg, query, options, log);
+  return text ? wrapContext(text) : "";
 }
 
-async function recallViaEndpoint(fetchJSON, cfg, query, actorPeerId = "", log = () => {}) {
+async function recallViaEndpoint(fetchJSON, cfg, query, options, log) {
   const body = buildRecallEndpointBody(cfg);
   body.query = query;
-  const res = await postRecall(fetchJSON, body, { actorPeerId, log });
+  if (wantsLocalCompression(cfg, options)) {
+    body.max_chars = Math.max(1000, Number(cfg.recallCompressMaxInputChars || 18000));
+  }
+  const res = await postRecall(fetchJSON, body, { actorPeerId: options.actorPeerId, log });
   if (!res.ok) {
     log("recall_endpoint_fallback", { status: res.status || 0 });
     return null;
   }
-  const rendered = String(res.result?.rendered || "").trim();
-  if (!rendered) return "";
-  return wrapContext(rendered);
+  const text = await finalizeRecall(res.result || {}, cfg, query, options, log);
+  return text ? wrapContext(text) : "";
 }
 
 export async function postRecall(fetchJSON, body, opts = {}) {
   const actorPeerId = opts.actorPeerId || "";
   const log = opts.log || (() => {});
+  const memoPath = opts.peerScopeMemoPath;
   const request = { ...body };
+
+  // A remembered downgrade is still a downgrade: recall runs wider than the
+  // caller asked for, so the memo doubles as the doctor's evidence.
+  if (request.peer_scope && await readPeerScopeDowngrade(memoPath)) {
+    delete request.peer_scope;
+  }
+
   const res = await fetchJSON("/api/v1/search/recall", {
     method: "POST",
     body: JSON.stringify(request),
@@ -566,9 +640,17 @@ export async function postRecall(fetchJSON, body, opts = {}) {
   if (!request.peer_scope || (res.status !== 400 && res.status !== 422)) {
     return res;
   }
+  // Only an unknown-field rejection means "this server predates peer_scope".
+  // Retrying every other 400/422 without it silently widens the search from
+  // the caller's own peer to the whole user root.
+  if (!looksLikeUnknownField(res)) {
+    log("recall_peer_scope_error", { status: res.status || 0 });
+    return res;
+  }
 
   const downgraded = { ...request };
   delete downgraded.peer_scope;
+  await markPeerScopeDowngrade(String(request.peer_scope), res.status || 0, memoPath);
   log("recall_peer_scope_downgrade", { status: res.status || 0 });
   return fetchJSON("/api/v1/search/recall", {
     method: "POST",
@@ -576,11 +658,56 @@ export async function postRecall(fetchJSON, body, opts = {}) {
   }, { actorPeerId });
 }
 
+/**
+ * Recall, plus whatever is still filed under the peer this workspace used
+ * before the identity rule changed.
+ *
+ * Under the default `peer_scope: "all"` this costs nothing: the server's own
+ * sweep of `{user_root}/peers` already reaches the old peer's memories. Under
+ * `"actor"` that sweep is off by definition, so the old peer is asked for
+ * separately — as itself, which is both cheaper and wider than a bare
+ * cross-peer read (that would need the user id, and reaches memories only).
+ *
+ * `stage` names the path the block came from, which is what a host needs to
+ * tell "the server had nothing" (`no_results`) from "the score threshold
+ * dropped everything" (`filtered_out`) when the block is empty, and a
+ * `server_assembled` block from a `ranked` one when it is not.
+ */
+export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = {}) {
+  const primary = await recallForPeer(fetchJSON, cfg, query, options);
+
+  const legacyPeerId = String(options.legacyPeerId || "").trim();
+  const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
+  if (cfg.recallPeerScope !== "actor" || !legacyPeerId || legacyPeerId === actorPeerId) return primary;
+
+  const log = options.log || (() => {});
+  const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId });
+  if (!legacy.block) return primary;
+  log("recall_legacy_peer_hit", { legacyPeerId });
+  return {
+    block: primary.block ? `${primary.block}\n${legacy.block}` : legacy.block,
+    contentCount: primary.contentCount + legacy.contentCount,
+    hintCount: primary.hintCount + legacy.hintCount,
+    budgetUsed: primary.budgetUsed + legacy.budgetUsed,
+    stage: primary.block ? primary.stage : legacy.stage,
+  };
+}
+
+/** The block alone, or null when nothing was injectable. */
 export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
+  const { block } = await buildRecallBlockDetailed(fetchJSON, cfg, query, options);
+  return block || null;
+}
+
+function emptyRecall(stage) {
+  return { block: "", contentCount: 0, hintCount: 0, budgetUsed: 0, stage };
+}
+
+async function recallForPeer(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
   const log = options.log || (() => {});
   const trimmed = String(query || "").trim();
-  if (!trimmed) return null;
+  if (!trimmed) return emptyRecall("no_results");
 
   // Assembly happens server-side when the deployment offers the context face;
   // older servers fall through to /recall, then to raw find.
@@ -589,12 +716,23 @@ export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
     actorPeerId,
     log,
   });
-  if (serverBlock !== null) return serverBlock || null;
+  if (serverBlock !== null) {
+    if (!serverBlock) return emptyRecall("no_results");
+    // The server rendered one budgeted unit, so nothing here degraded to a
+    // URI-only hint and the block's own estimate is what it cost.
+    return {
+      block: serverBlock,
+      contentCount: 1,
+      hintCount: 0,
+      budgetUsed: estimateTokens(serverBlock),
+      stage: "server_assembled",
+    };
+  }
 
   const recallLimit = Math.max(1, Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT));
   const perSourceLimit = Math.max(recallLimit * 2, 8);
-  const raw = await searchAllSources(fetchJSON, trimmed, perSourceLimit, actorPeerId, log);
-  if (raw.length === 0) return null;
+  const raw = await searchAllSources(fetchJSON, cfg, trimmed, perSourceLimit, { ...options, actorPeerId }, log);
+  if (raw.length === 0) return emptyRecall("no_results");
 
   const profile = buildQueryProfile(trimmed);
   const scoreThreshold = Number.isFinite(Number(cfg.scoreThreshold)) ? Number(cfg.scoreThreshold) : 0.35;
@@ -608,6 +746,26 @@ export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
     items: picked.map((it) => ({ type: it._sourceType, uri: it.uri, score: clampScore(it.score) })),
   });
 
-  if (picked.length === 0) return null;
-  return buildFallbackInjectionBlock(fetchJSON, picked, cfg, actorPeerId, log);
+  if (picked.length === 0) return emptyRecall("filtered_out");
+  const local = wantsLocalCompression(cfg, options);
+  const inputLimit = Math.max(1000, Number(cfg.recallCompressMaxInputChars || 18000));
+  const contentCfg = local ? { ...cfg, recallPreferAbstract: false, recallMaxContentChars: inputLimit } : cfg;
+  const entries = await Promise.all(picked.map(async (item) => ({
+    ...item, text: await resolveItemContent(fetchJSON, item, contentCfg, actorPeerId),
+  })));
+  const fallback = formatFallback(entries, cfg, log);
+  let text = await finalizeRecall({
+    rendered: local ? entries.map((item) => `${item.uri}\n${item.text}`).join("\n").slice(0, inputLimit) : fallback.rendered,
+    entries,
+  }, cfg, trimmed, options, log, fallback.rendered);
+  if (estimateTokens(wrapContext(text)) > Math.max(200, Number(cfg.recallTokenBudget || 2000))) {
+    text = fallback.rendered;
+  }
+  if (!text) return emptyRecall("no_results");
+  const unchanged = text === fallback.rendered;
+  return {
+    block: wrapContext(text), contentCount: unchanged ? fallback.contentCount : 1,
+    hintCount: unchanged ? fallback.hintCount : 0,
+    budgetUsed: estimateTokens(wrapContext(text)), stage: "ranked",
+  };
 }

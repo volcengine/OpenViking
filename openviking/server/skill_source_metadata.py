@@ -14,6 +14,37 @@ def skill_source_metadata_uri(root_uri: str) -> str:
     return f"{root_uri.rstrip('/')}/{SOURCE_METADATA_FILENAME}"
 
 
+def _source_record(
+    result: Dict[str, Any], source: Optional[Dict[str, Any]]
+) -> Optional[tuple[str, str]]:
+    root_uri = result.get("root_uri") or result.get("uri")
+    if not source or not root_uri:
+        return None
+    record = dict(source)
+    skill_name = result.get("name") or record.get("skill_name")
+    if skill_name:
+        record["skill_name"] = skill_name
+    return (
+        skill_source_metadata_uri(root_uri),
+        json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True),
+    )
+
+
+async def write_skill_source_metadata(
+    viking_fs,
+    ctx: RequestContext,
+    result: Dict[str, Any],
+    source: Optional[Dict[str, Any]],
+    *,
+    lease_ref: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Save the source before handing the package lock to background processing."""
+    record = _source_record(result, source)
+    if record is not None:
+        uri, content = record
+        await viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+
+
 async def read_skill_source_metadata(
     service,
     ctx: RequestContext,
@@ -44,34 +75,3 @@ async def read_skill_source_metadata(
     metadata["tracked"] = True
     metadata["metadata_uri"] = uri
     return metadata
-
-
-async def persist_skill_source_metadata(
-    service,
-    ctx: RequestContext,
-    result: Dict[str, Any],
-    source: Optional[Dict[str, Any]],
-) -> None:
-    if not source:
-        return
-
-    root_uri = result.get("root_uri") or result.get("uri")
-    if not root_uri:
-        return
-
-    record = dict(source)
-    skill_name = result.get("name") or record.get("skill_name")
-    if skill_name:
-        record["skill_name"] = skill_name
-
-    uri = skill_source_metadata_uri(root_uri)
-    content = json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True)
-    viking_fs = getattr(service, "viking_fs", None)
-    if viking_fs is not None:
-        await viking_fs.write(uri, content, ctx=ctx)
-        return
-
-    try:
-        await service.fs.write(uri=uri, content=content, ctx=ctx, mode="replace", wait=True)
-    except Exception:
-        await service.fs.write(uri=uri, content=content, ctx=ctx, mode="create", wait=True)

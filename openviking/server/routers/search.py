@@ -95,9 +95,7 @@ def _resolve_search_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
-def _resolve_uri_or_uris(
-    uri: Union[str, List[str]], ctx: RequestContext
-) -> Union[str, List[str]]:
+def _resolve_uri_or_uris(uri: Union[str, List[str]], ctx: RequestContext) -> Union[str, List[str]]:
     """Resolve path variables in a single URI or list of URIs."""
     if isinstance(uri, list):
         return [validate_request_viking_uri(resolve_path_variables(u), ctx) for u in uri]
@@ -174,6 +172,28 @@ CONTEXT_ONLY_FIELDS = (
 )
 
 
+def context_only_fields_error(supplied_fields, as_named_by_caller=None) -> Optional[str]:
+    """The refusal for context-only arguments in list mode, or None if there is nothing to refuse.
+
+    Both faces of search have to answer the same way here, and both used to carry their
+    own copy of the field list and the wording. The MCP tool never builds a
+    ``SearchRequest`` -- it calls ``SearchService.search`` directly -- so it cannot inherit
+    the validator; it can inherit this.
+
+    ``as_named_by_caller`` maps a field in ``CONTEXT_ONLY_FIELDS`` to the spellings the
+    caller actually used, for a face that exposes one of them under more than one name --
+    and a caller can set more than one of those at once. Telling somebody who passed
+    ``detail_by_category`` that ``detail`` is the problem is not an improvement on having
+    no error at all.
+    """
+    used = sorted(set(CONTEXT_ONLY_FIELDS) & set(supplied_fields))
+    if not used:
+        return None
+    names = sorted({name for field in used for name in ((as_named_by_caller or {}).get(field) or {field})})
+    return (f"{', '.join(names)} require mode='context'; "
+            "set mode='context' or drop these fields")
+
+
 class SearchRequest(BaseModel):
     """Request model for search with session.
 
@@ -220,12 +240,9 @@ class SearchRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
         if self.mode == "list":
-            used = sorted(set(CONTEXT_ONLY_FIELDS) & self.model_fields_set)
-            if used:
-                raise ValueError(
-                    f"{', '.join(used)} require mode='context'; "
-                    "set mode='context' or drop these fields"
-                )
+            error = context_only_fields_error(self.model_fields_set)
+            if error:
+                raise ValueError(error)
             return self
 
         if self.read_content:
@@ -310,6 +327,8 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = 256
     level_limit: int = 10
+    tags: Optional[List[str]] = None
+    include_tags: bool = False
 
 
 class GlobRequest(BaseModel):
@@ -318,6 +337,9 @@ class GlobRequest(BaseModel):
     pattern: str
     uri: str = "viking://"
     node_limit: Optional[int] = 256
+    extra_fields: Optional[list[str]] = None
+    tags: Optional[List[str]] = None
+    include_tags: bool = False
 
 
 @router.post("/find")
@@ -533,6 +555,8 @@ async def grep(
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
+            tags=request.tags,
+            include_tags=request.include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")
@@ -559,7 +583,13 @@ async def glob(
     resolved_uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
         result = await service.fs.glob(
-            request.pattern, ctx=_ctx, uri=resolved_uri, node_limit=request.node_limit
+            request.pattern,
+            ctx=_ctx,
+            uri=resolved_uri,
+            node_limit=request.node_limit,
+            extra_fields=request.extra_fields,
+            tags=request.tags,
+            include_tags=request.include_tags,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri or request.pattern, "file")

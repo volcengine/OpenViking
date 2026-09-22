@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${PLUGIN_ROOT}/scripts/session-start-commit.mjs",
+            "command": "node \"${PLUGIN_ROOT}/scripts/session-start-commit.mjs\"",
             "timeout": 70
           }
         ]
@@ -18,8 +18,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${PLUGIN_ROOT}/scripts/auto-recall.mjs",
+            "command": "node \"${PLUGIN_ROOT}/scripts/auto-recall.mjs\"",
             "timeout": 130
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/uri-guard.mjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -30,8 +42,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${PLUGIN_ROOT}/scripts/auto-capture.mjs",
+            "command": "node \"${PLUGIN_ROOT}/scripts/auto-capture.mjs\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/scripts/session-end.mjs\"",
+            "timeout": 3
           }
         ]
       }
@@ -42,7 +66,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${PLUGIN_ROOT}/scripts/pre-compact-capture.mjs",
+            "command": "node \"${PLUGIN_ROOT}/scripts/pre-compact-capture.mjs\"",
             "timeout": 60
           }
         ]

@@ -18,6 +18,9 @@ import { toast } from 'sonner'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
+import { Input } from '#/components/ui/input'
+import { UserPagination } from './-components/user-pagination'
+import { useUserList } from './-lib/use-user-list'
 import {
   Card,
   CardContent,
@@ -58,7 +61,7 @@ import {
 import { useAppConnection } from '#/hooks/use-app-connection'
 import {
   createAdminUser,
-  fetchAdminUsers,
+  fetchAdminUsersPage,
   regenerateAdminUserKey,
   removeAdminUser,
   updateAdminUserRole,
@@ -74,6 +77,7 @@ import type {
 import { copyTextToClipboard } from '#/lib/clipboard'
 import { resolveStudioManagementCapabilities } from '#/lib/studio-permissions'
 
+import { UserMemoryPolicyCell } from './-components/user-memory-policy-cell'
 import { AddUserDialog } from './-components/add-user-dialog'
 import { DeleteAccountButton } from './-components/delete-account-button'
 import { getErrorMessage } from './-lib/error'
@@ -145,17 +149,50 @@ function UserManagementRoute() {
     ],
   )
 
+  const userList = useUserList(
+    JSON.stringify([
+      adminConnection.baseUrl,
+      adminConnection.apiKey,
+      connection.accountId,
+    ]),
+  )
+  const [searchQuery, setSearchQuery] = React.useState('')
+  React.useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(userList.search), 250)
+    return () => clearTimeout(timer)
+  }, [userList.search])
   const usersQuery = useQuery({
-    enabled: canManageUsers && Boolean(connection.accountId),
-    queryFn: () => fetchAdminUsers(adminConnection, connection.accountId),
+    enabled:
+      canManageUsers &&
+      Boolean(connection.accountId) &&
+      searchQuery === userList.search,
+    queryFn: () =>
+      fetchAdminUsersPage(adminConnection, connection.accountId, {
+        page: userList.page,
+        pageSize: userList.pageSize,
+        search: searchQuery,
+      }),
     queryKey: [
       'managed-users',
       adminConnection.baseUrl,
       adminConnection.apiKey,
       connection.accountId,
+      userList.page,
+      userList.pageSize,
+      searchQuery,
     ],
     retry: false,
   })
+  const users = usersQuery.data?.users ?? []
+  const total = usersQuery.data?.total ?? 0
+  const accountTotal = usersQuery.data?.accountTotal ?? 0
+  const managerCount = usersQuery.data?.managerCount ?? 0
+  const visibleKeys = usersQuery.data?.keyCount ?? 0
+  const pageCount = Math.max(1, Math.ceil(total / userList.pageSize))
+  React.useEffect(() => {
+    if (usersQuery.isSuccess && userList.page > pageCount)
+      userList.setPage(pageCount)
+  }, [usersQuery.isSuccess, userList, pageCount])
 
   const createUser = useMutation({
     mutationFn: (input: CreateUserInput) =>
@@ -247,7 +284,7 @@ function UserManagementRoute() {
   }
 
   async function useUserIdentity(user: AdminUser | KeyResult): Promise<void> {
-    if (!user.apiKey) {
+    if (serverMode !== 'trusted' && !user.apiKey) {
       toast.error(t('management.noUsableKey'))
       return
     }
@@ -259,7 +296,7 @@ function UserManagementRoute() {
       await switchIdentity({
         accountId,
         allowLegacyIdentityFallback: true,
-        apiKey: user.apiKey,
+        apiKey: user.apiKey || '',
         userId,
       })
       toast.success(t('toast.dataKeySelected'))
@@ -301,13 +338,6 @@ function UserManagementRoute() {
     )
   }
 
-  const users = usersQuery.data ?? []
-  const managerCount = users.filter(
-    (user) => user.role === 'admin' || user.role === 'root',
-  ).length
-  const visibleKeys = users.filter(
-    (user) => user.apiKey || user.keyPrefix,
-  ).length
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -336,7 +366,17 @@ function UserManagementRoute() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => void usersQuery.refetch()}
+            onClick={() => {
+              void usersQuery.refetch()
+              void queryClient.invalidateQueries({
+                queryKey: [
+                  'user-memory-settings',
+                  adminConnection.baseUrl,
+                  adminConnection.apiKey,
+                  connection.accountId,
+                ],
+              })
+            }}
             disabled={usersQuery.isFetching}
           >
             <RefreshCwIcon
@@ -359,7 +399,7 @@ function UserManagementRoute() {
                 {t('stats.users')}
               </p>
               <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {users.length || '-'}
+                {usersQuery.isSuccess ? accountTotal : '-'}
               </p>
             </div>
             <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
@@ -374,7 +414,7 @@ function UserManagementRoute() {
                 {t('stats.apiKeys')}
               </p>
               <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {visibleKeys || '-'}
+                {usersQuery.isSuccess ? visibleKeys : '-'}
               </p>
             </div>
             <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
@@ -394,9 +434,17 @@ function UserManagementRoute() {
                 : 'management.memberListDescription',
             )}
           </CardDescription>
+          <Input
+            type="search"
+            className="max-w-sm"
+            aria-label={t('userList.search')}
+            placeholder={t('userList.search')}
+            value={userList.search}
+            onChange={(event) => userList.setSearch(event.target.value)}
+          />
         </CardHeader>
         <CardContent className="p-0">
-          {usersQuery.isLoading ? (
+          {usersQuery.isPending || searchQuery !== userList.search ? (
             <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">
               <LoaderCircleIcon className="size-4 animate-spin" />
               {t('loading')}
@@ -408,11 +456,17 @@ function UserManagementRoute() {
                 {getErrorMessage(usersQuery.error)}
               </p>
             </div>
-          ) : users.length === 0 ? (
+          ) : total === 0 ? (
             <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-6 text-center">
-              <p className="font-medium">{t('empty.usersTitle')}</p>
+              <p className="font-medium">
+                {t(accountTotal ? 'userList.noResults' : 'empty.usersTitle')}
+              </p>
               <p className="text-sm text-muted-foreground">
-                {t('empty.usersDescription')}
+                {t(
+                  accountTotal
+                    ? 'userList.noResultsDescription'
+                    : 'empty.usersDescription',
+                )}
               </p>
             </div>
           ) : (
@@ -422,6 +476,7 @@ function UserManagementRoute() {
                   <TableRow className="bg-muted/20 hover:bg-muted/20">
                     <TableHead>{t('table.user')}</TableHead>
                     <TableHead>{t('table.role')}</TableHead>
+                    <TableHead>{t('memoryPolicy.title')}</TableHead>
                     <TableHead>{t('table.apiKey')}</TableHead>
                     <TableHead className="text-right">
                       {t('table.actions')}
@@ -434,6 +489,9 @@ function UserManagementRoute() {
                     const isCurrentIdentity =
                       user.accountId === connection.accountId &&
                       user.userId === connection.userId
+                    const canSwitchIdentity =
+                      !isCurrentIdentity &&
+                      (serverMode === 'trusted' || Boolean(user.apiKey))
                     const isSwitching = switchingIdentityKey === identityKey
                     const isLastManager =
                       (user.role === 'admin' || user.role === 'root') &&
@@ -517,6 +575,12 @@ function UserManagementRoute() {
                           )}
                         </TableCell>
                         <TableCell>
+                          <UserMemoryPolicyCell
+                            connection={adminConnection}
+                            user={user}
+                          />
+                        </TableCell>
+                        <TableCell>
                           <div className="flex min-w-0 items-center gap-1">
                             <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
                               {resolveKeyLabel(user)}
@@ -571,7 +635,7 @@ function UserManagementRoute() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-end gap-1">
-                            {user.apiKey && !isCurrentIdentity ? (
+                            {canSwitchIdentity ? (
                               <Button
                                 type="button"
                                 variant="secondary"
@@ -628,6 +692,11 @@ function UserManagementRoute() {
                   })}
                 </TableBody>
               </Table>
+              <UserPagination
+                {...userList}
+                total={total}
+                pageCount={pageCount}
+              />
             </div>
           )}
         </CardContent>

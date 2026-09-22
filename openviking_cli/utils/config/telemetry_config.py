@@ -13,8 +13,6 @@ class TracerConfig(BaseModel):
     ak: str = Field(default="", description="Access key")
     sk: str = Field(default="", description="Secret key")
 
-    model_config = {"extra": "forbid"}
-
 
 class TelemetryConfig(BaseModel):
     """Telemetry configuration including tracer."""
@@ -22,5 +20,3 @@ class TelemetryConfig(BaseModel):
     tracer: TracerConfig = Field(
         default_factory=lambda: TracerConfig(), description="OpenTelemetry tracer configuration"
     )
-
-    model_config = {"extra": "forbid"}

@@ -3,6 +3,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import semver from "semver";
+import { PLUGIN_VERSION } from "./config.mjs";
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url));
 const FORBIDDEN_IDENTIFIER = ["tra", "ex"].join("");
@@ -17,12 +19,13 @@ test("bundle uses neutral DSH naming, bounded peers, and an isolated service", a
 
   assert.equal(manifest.name, "@openviking/dsh-memory-plugin");
   assert.equal(manifest.dependencies, undefined);
-  // DSH rc releases intentionally float their core packages within 0.1.x.
-  // Accept that host range while keeping CI pinned to the oldest supported
-  // contract so a newer local install cannot silently raise our minimum.
-  const supportedPeerRange = ">=0.1.0-rc.6 <0.2.0";
-  for (const [name, version] of Object.entries(manifest.peerDependencies)) {
-    assert.equal(version, supportedPeerRange, `${name} must use the bounded 0.1.x range`);
+  for (const [name, range] of Object.entries(manifest.peerDependencies)) {
+    for (const version of ["0.1.0-rc.6", "0.1.5-rc.1", "0.1.5-rc.2", "0.1.5"]) {
+      assert.ok(semver.satisfies(version, range), `${name} must accept ${version}`);
+    }
+    for (const version of ["0.0.1-rc.3", "0.1.0-rc.5", "0.1.5-alpha.2", "0.2.0-rc.1", "0.2.0"]) {
+      assert.ok(!semver.satisfies(version, range), `${name} must reject ${version}`);
+    }
     assert.equal(manifest.devDependencies[name], "0.1.0-rc.6", `${name} must test the minimum`);
   }
   assert.ok(manifest.peerDependencies["@deepseek-ai/dsh-mcp-client"]);
@@ -40,6 +43,14 @@ test("bundle uses neutral DSH naming, bounded peers, and an isolated service", a
   assert.match(patch, /name: '@openviking\/dsh-memory-plugin'/);
   assert.doesNotMatch(JSON.stringify(manifest), FORBIDDEN_PATTERN);
   assert.doesNotMatch(patch, FORBIDDEN_PATTERN);
+});
+
+test("the runtime and package lock report the published package version", async () => {
+  const manifest = JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
+  const lock = JSON.parse(await readFile(new URL("./package-lock.json", import.meta.url), "utf8"));
+  assert.equal(PLUGIN_VERSION, manifest.version);
+  assert.equal(lock.version, manifest.version);
+  assert.equal(lock.packages[""].version, manifest.version);
 });
 
 test("plugin source tree contains no product-specific identifier", async () => {

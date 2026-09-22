@@ -134,7 +134,7 @@ class SessionCommitPolicyTrainer:
             stage = "create_session"
             await self.client.create_session(
                 session_id=session_id,
-                memory_policy=_training_commit_memory_policy(),
+                options={"memory_policy": _training_commit_memory_policy()},
             )
             stage = "batch_add_messages"
             await self._batch_add_messages(session_id, messages)

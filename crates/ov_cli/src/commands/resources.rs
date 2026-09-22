@@ -65,29 +65,3 @@ pub async fn add_resource(
     output_success(&result, format, compact);
     Ok(())
 }
-
-pub async fn add_skill(
-    client: &HttpClient,
-    data: &str,
-    wait: bool,
-    timeout: Option<f64>,
-    parent: Option<&str>,
-    show_progress: bool,
-    verbose: bool,
-    format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
-    let result = client
-        .add_skill(data, wait, timeout, show_progress, verbose, None, parent)
-        .await?;
-
-    if !wait && matches!(format, OutputFormat::Table) {
-        eprintln!("Note: Skill is being processed in the background.");
-        eprintln!(
-            "Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks."
-        );
-    }
-
-    output_success(&result, format, compact);
-    Ok(())
-}

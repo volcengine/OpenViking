@@ -96,6 +96,9 @@ class OpenAIRerankClient(RerankBase):
             "model": self.model_name,
             "query": query,
             "documents": documents,
+            # Required by some OpenAI-compatible providers (e.g. Scaleway);
+            # matches CohereRerankClient and is harmless elsewhere.
+            "top_n": len(documents),
         }
 
     def _extract_results(self, response_json: dict) -> Optional[List[dict]]:

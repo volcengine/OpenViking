@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 
+import i18n from '#/i18n'
 import { fetchAdminAccounts } from '#/lib/admin'
 import { isOvClientError, ovClient } from '#/lib/ov-client'
 
@@ -57,6 +58,15 @@ type AppConnectionContextValue = {
 
 const CONNECTION_STORAGE_KEY = 'ov_console_connection'
 const AUTH_PROMPT_SUPPRESSION_MS = 10000
+
+type ConnectionErrorKey =
+  | 'credentialMismatch'
+  | 'identitySwitchUnsupported'
+  | 'rootRequired'
+
+export function createConnectionError(key: ConnectionErrorKey): Error {
+  return new Error(i18n.t(`connection:errors.${key}`))
+}
 
 const ENV_BASE_URL =
   typeof import.meta.env.VITE_OV_BASE_URL === 'string'
@@ -215,25 +225,34 @@ export function resolveInitialApiKey({
 }
 
 export function resolveConnectionRoleProbeState({
+  accountId = '',
   apiKey,
   baseUrl,
   serverMode,
+  userId = '',
 }: {
+  accountId?: string
   apiKey: string
   baseUrl: string
   serverMode: ServerMode
+  userId?: string
 }): {
   isLoading: boolean
   role: ConnectionRole
   shouldProbe: boolean
 } {
-  if (!baseUrl) {
+  if (!baseUrl || serverMode === 'offline') {
     return { isLoading: false, role: 'unknown', shouldProbe: false }
+  }
+  if (serverMode === 'checking') {
+    return { isLoading: true, role: 'unknown', shouldProbe: false }
   }
   if (serverMode === 'dev') {
     return { isLoading: false, role: 'root', shouldProbe: false }
   }
-  if (!apiKey) {
+  const hasTrustedIdentity =
+    serverMode === 'trusted' && Boolean(accountId.trim() && userId.trim())
+  if (!apiKey && !hasTrustedIdentity) {
     return { isLoading: false, role: 'unknown', shouldProbe: false }
   }
   return { isLoading: true, role: 'unknown', shouldProbe: true }
@@ -553,9 +572,11 @@ export function AppConnectionProvider({
     const isCancelled = () => cancelled
     const apiKey = connection.adminApiKey || connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
+      accountId: connection.accountId,
       apiKey,
       baseUrl: connection.baseUrl,
       serverMode,
+      userId: connection.userId,
     })
     const probeKey = createConnectionRoleProbeKey(connection, serverMode)
     const synchronizedProbe = synchronizedRoleProbeRef.current
@@ -700,9 +721,7 @@ export function AppConnectionProvider({
         userId,
       }) => {
         if (serverMode === 'dev' || serverMode === 'checking') {
-          throw new Error(
-            'The current server mode does not support identity switching.',
-          )
+          throw createConnectionError('identitySwitchUnsupported')
         }
 
         const requested = normalizeConnectionDraft({
@@ -718,9 +737,7 @@ export function AppConnectionProvider({
           allowLegacyIdentityFallback,
         )
         if (!resolvedIdentity) {
-          throw new Error(
-            'The selected credential does not match the target account and user.',
-          )
+          throw createConnectionError('credentialMismatch')
         }
 
         if (pathname === '/playground') {
@@ -737,9 +754,7 @@ export function AppConnectionProvider({
       },
       switchManagementAccount: async (accountId) => {
         if (connectionRole !== 'root') {
-          throw new Error(
-            'Only a validated Root credential can switch management accounts.',
-          )
+          throw createConnectionError('rootRequired')
         }
         commitConnection(
           createManagementAccountConnection(connection, accountId),

@@ -39,7 +39,7 @@ from openviking.session.memory.dataclass import (
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_type_registry import create_default_registry
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import ExtractContext, write_stored_links
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
@@ -53,6 +53,10 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.json_parser import JsonUtils
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import generate_uri
+from openviking.session.skill.session_skill_context_provider import (
+    SESSION_SKILL_MEMORY_TYPE,
+    load_skill_extract_registry,
+)
 from openviking.session.train import (
     Case,
     ExperienceGradientContext,
@@ -125,11 +129,28 @@ def _initialize_extraction_telemetry() -> None:
         "memory.extract.merged",
         "memory.extract.deleted",
         "memory.extract.skipped",
+        "memory.extract.failed",
     ):
         telemetry.set(name, 0)
 
 
-def _report_extraction_telemetry(result: Any) -> None:
+def _memory_type_by_uri(operations: ResolvedOperations) -> dict[str, str]:
+    """Map applied memory URIs to their stable extraction schema names."""
+    types_by_uri: dict[str, str] = {}
+    for operation in getattr(operations, "upsert_operations", []) or []:
+        memory_type = str(getattr(operation, "memory_type", "") or "unknown")
+        for uri in getattr(operation, "uris", []) or []:
+            types_by_uri[str(uri)] = memory_type
+    for file_content in getattr(operations, "delete_file_contents", []) or []:
+        uri = str(getattr(file_content, "uri", "") or "")
+        if uri:
+            types_by_uri[uri] = str(
+                getattr(file_content, "memory_type", "") or "unknown"
+            )
+    return types_by_uri
+
+
+def _report_extraction_telemetry(result: Any, operations: ResolvedOperations) -> None:
     telemetry = get_current_telemetry()
     telemetry.set(
         "memory.extract.candidates.total",
@@ -138,7 +159,39 @@ def _report_extraction_telemetry(result: Any) -> None:
     telemetry.set("memory.extract.created", len(result.written_uris))
     telemetry.set("memory.extract.merged", len(result.edited_uris))
     telemetry.set("memory.extract.deleted", len(result.deleted_uris))
-    telemetry.set("memory.extract.skipped", len(result.errors))
+    telemetry.set("memory.extract.skipped", len(result.skipped_operations))
+    telemetry.set("memory.extract.failed", len(result.errors))
+
+    types_by_uri = _memory_type_by_uri(operations)
+    actions_by_type: dict[str, dict[str, int]] = {}
+
+    def memory_type_for_telemetry(uri: Any) -> str:
+        if memory_type := types_by_uri.get(str(uri)):
+            return str(memory_type)
+        try:
+            return str(MemoryUpdater.memory_type_from_uri(str(uri)) or "unknown")
+        except ValueError:
+            return "unknown"
+
+    def add(memory_type: Any, action: str) -> None:
+        normalized_type = str(memory_type or "unknown")
+        type_actions = actions_by_type.setdefault(normalized_type, {})
+        type_actions[action] = type_actions.get(action, 0) + 1
+
+    for uri in result.written_uris:
+        add(memory_type_for_telemetry(uri), "created")
+    for uri in result.edited_uris:
+        add(memory_type_for_telemetry(uri), "merged")
+    for uri in result.deleted_uris:
+        add(memory_type_for_telemetry(uri), "deleted")
+    for operation in result.skipped_operations:
+        add(getattr(operation, "memory_type", None), "skipped")
+    for uri, _error in result.errors:
+        add(memory_type_for_telemetry(uri), "failed")
+
+    for memory_type, actions in actions_by_type.items():
+        for action, value in actions.items():
+            telemetry.set(f"memory.extract.by_type.{memory_type}.{action}", value)
 
 
 async def _commit_experience_snapshot(
@@ -370,7 +423,7 @@ class SessionCompressorV3:
     ):
         if not agent_evolution_enabled:
             effective_types = (
-                set(create_default_registry().list_names(include_disabled=False))
+                set(get_default_registry().list_names(include_disabled=False))
                 if allowed_memory_types is None
                 else set(allowed_memory_types)
             )
@@ -529,7 +582,7 @@ class SessionCompressorV3:
         archive_uri: str,
     ) -> Any:
         viking_fs = get_viking_fs()
-        registry = create_default_registry()
+        registry = get_default_registry()
         schema = registry.get(_CASES_MEMORY_TYPE)
         if schema is None or not schema.enabled:
             raise RuntimeError("cases memory schema is not available")
@@ -625,7 +678,11 @@ class SessionCompressorV3:
             logger.warning("VikingFS unavailable, skipping v3 memory extraction", exc_info=True)
             return _V3ExtractionResult()
 
-        registry = create_default_registry()
+        from openviking.session.memory.account_templates import resolve_account_memory_registry
+
+        registry = await resolve_account_memory_registry(
+            viking_fs, ctx.account_id, get_default_registry()
+        )
         if allow_self_memory:
             await registry.initialize_memory_files(
                 ctx,
@@ -639,6 +696,7 @@ class SessionCompressorV3:
             ctx=ctx,
             viking_fs=viking_fs,
             transaction_handle=None,
+            memory_registry=registry,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -685,6 +743,7 @@ class SessionCompressorV3:
                 messages=list(messages),
                 ctx=ctx,
                 strict_extract_errors=strict_extract_errors,
+                memory_registry=registry,
                 isolation_options={
                     "allowed_memory_types": allowed_memory_types,
                     "allow_self": allow_self_memory,
@@ -703,7 +762,7 @@ class SessionCompressorV3:
 
         result = update_result.apply_result
         patch_operations = update_result.operations
-        _report_extraction_telemetry(result)
+        _report_extraction_telemetry(result, patch_operations)
 
         memory_diff = None
         if archive_uri and viking_fs and result is not None:
@@ -834,7 +893,8 @@ class SessionCompressorV3:
             gradient_estimator=_NoopGradientEstimator(),
             policy_optimizer=PatchMergePolicyOptimizer(
                 viking_fs=viking_fs,
-                memory_type="skills",
+                memory_type=SESSION_SKILL_MEMORY_TYPE,
+                memory_registry=load_skill_extract_registry(),
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
@@ -1968,7 +2028,7 @@ async def _render_case_links_from_template(
     if merged_links != mf.links:
         mf.links = merged_links
 
-    schema = create_default_registry().get(_CASES_MEMORY_TYPE)
+    schema = get_default_registry().get(_CASES_MEMORY_TYPE)
     content_template = schema.content_template if schema is not None else None
     await viking_fs.write_file(
         case_uri,

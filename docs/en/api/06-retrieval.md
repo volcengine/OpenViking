@@ -59,7 +59,7 @@ The `find()` method performs pure vector similarity search for simple query scen
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
@@ -181,8 +181,7 @@ Tags must use strict `k=v` strings. When multiple tags are provided, `find()` re
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
@@ -204,7 +203,7 @@ recent_emails = client.find(
 # Search only memories and resources
 typed_results = client.find(
     query="authentication",
-    options={"context_type": [ContextType.MEMORY, ContextType.RESOURCE]},
+    options={"context_type": ["memory", "resource"]},
 )
 
 # Search by local image, bytes, data URI, HTTP URL, or viking:// URI
@@ -397,7 +396,7 @@ The `search()` method adds session context understanding and intent analysis cap
 | session_id | str | No | None | Session ID for context-aware search (HTTP) |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| node_limit | int | No | None | Maximum number of results |
+| node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
 | since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`. Timezone-less values are interpreted as UTC. CLI `--after` maps to this field |
@@ -459,8 +458,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 **Python SDK**
 
 ```python
-import openviking as ov
-from openviking.retrieve import ContextType
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -482,7 +480,7 @@ results = client.search(
     query="best practices",
     session_id=session.session_id,
     options={
-        "context_type": ContextType.SKILL,
+        "context_type": "skill",
         "since": "2h",
     },
 )
@@ -808,6 +806,12 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
+| tags | string[] | No | Unset | Search only files matching every supplied `k=v` retrieval tag |
+| include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
+
+`tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
+
+Entries in `matches` include `tags` when `tags` filtering is used or `include_tags=true` is requested; files without retrieval tags then return an empty array (`[]`). Plain grep omits `tags` to avoid an unnecessary VectorDB read.
 
 #### 3. Usage Examples
 
@@ -824,14 +828,15 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
     -d '{
         "uri": "viking://resources",
         "pattern": "authentication",
-        "case_insensitive": true
+        "case_insensitive": true,
+        "tags": ["team=search", "env=prod"]
     }'
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -841,6 +846,7 @@ results = client.grep(
     pattern="authentication",
     case_insensitive=True,
     node_limit=1024,
+    tags=["team=search", "env=prod"],
 )
 
 print(f"Found {results['count']} matches")
@@ -852,7 +858,9 @@ for match in results['matches']:
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.grep("viking://resources/docs/", "authentication"));
+console.log(await client.grep("viking://resources/docs/", "authentication", {
+  tags: ["team=search", "env=prod"],
+}));
 ```
 
 **Go SDK**
@@ -862,6 +870,7 @@ nodeLimit := 1024
 result, err := client.Grep(ctx, "viking://resources", "authentication", &openviking.GrepOptions{
     CaseInsensitive: true,
     NodeLimit:       &nodeLimit,
+    Tags:            []string{"team=search", "env=prod"},
 })
 if err != nil {
     return err
@@ -880,7 +889,15 @@ openviking grep "authentication" --uri viking://resources --ignore-case
 
 # Specify depth limit
 openviking grep "TODO" --uri viking://resources --level-limit 3
+
+# Search only files carrying every tag
+openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
+
+# Include tags in human-readable results without filtering
+openviking grep "TODO" --uri viking://resources --fields tags
 ```
+
+For HTTP `POST /api/v1/search/grep`, set `include_tags: true` to include tags without filtering. A request with `tags` always returns tags for the matched files.
 
 **Response Example**
 
@@ -892,7 +909,8 @@ openviking grep "TODO" --uri viking://resources --level-limit 3
             {
                 "uri": "viking://resources/docs/auth.md",
                 "line": 15,
-                "content": "User authentication is handled by..."
+                "content": "User authentication is handled by...",
+                "tags": ["team=search", "env=prod"]
             }
         ],
         "count": 1
@@ -931,6 +949,11 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
 | node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
+| extra_fields | list[str] | No | None | Extra fields to include per match. Recognized names: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`. When omitted, the response contains URI strings only; when provided, `result.matches` becomes a list of entry objects |
+| tags | string[] | No | Unset | Retain only matches that have every supplied `k=v` retrieval tag |
+| include_tags | bool | No | `false` | Return retrieval tags for each match without filtering |
+
+`tags` uses AND semantics and is applied before `node_limit`. A tagged or `include_tags=true` request returns entry objects with a `tags` array; ordinary glob requests retain URI-string results and do not read tags from VectorDB.
 
 #### 3. Usage Examples
 
@@ -946,14 +969,16 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
     -H "X-API-Key: your-key" \
     -d '{
         "pattern": "**/*.md",
-        "uri": "viking://resources"
+        "uri": "viking://resources",
+        "tags": ["team=search", "env=prod"],
+        "include_tags": true
     }'
 ```
 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -964,19 +989,23 @@ print(f"Found {results['count']} markdown files:")
 for uri in results['matches']:
     print(f"  {uri}")
 
-# Find all Python files with a higher explicit cap
+# Find all Python files with extra stat fields
 results = client.glob(
-    pattern="**/*.py",
+    pattern="**/*.md",
     uri="viking://resources",
-    node_limit=1024,
+    tags=["team=search", "env=prod"],
 )
-print(f"Found {results['count']} Python files")
+print(f"Found {results['count']} tagged markdown files")
+for entry in results['matches']:
+    print(f"  {entry['uri']}  {entry['tags']}")
 ```
 
 **TypeScript SDK**
 
 ```typescript
-console.log(await client.glob("**/*.md", "viking://resources/docs/"));
+console.log(await client.glob("**/*.md", "viking://resources/docs/", {
+  tags: ["team=search", "env=prod"],
+}));
 ```
 
 **Go SDK**
@@ -984,6 +1013,7 @@ console.log(await client.glob("**/*.md", "viking://resources/docs/"));
 ```go
 result, err := client.Glob(ctx, "**/*.md", "viking://resources", &openviking.GlobOptions{
     NodeLimit: openviking.Int(1024),
+    Tags:      []string{"team=search", "env=prod"},
 })
 if err != nil {
     return err
@@ -999,9 +1029,21 @@ openviking glob "**/*.md" --uri viking://resources
 
 # Find all Python files
 openviking glob "**/*.py"
+
+# Filter by all tags, or project tags without filtering
+openviking glob "**/*.md" --tags team=search,env=prod
+openviking glob "**/*.md" -f tags
+
+# Table output with extra fields (ps -o style -f)
+openviking glob "**/*.py" -f name,size,mtime,mode
+
+# Script-friendly simple output with selected fields (comma-separated, no header)
+openviking glob "**/*.py" --simple -f name,size
 ```
 
 **Response Example**
+
+Default (URI strings):
 
 ```json
 {
@@ -1017,6 +1059,22 @@ openviking glob "**/*.py"
 }
 ```
 
+With `extra_fields=["name","size","mtime"]`:
+
+```json
+{
+    "status": "ok",
+    "result": {
+        "matches": [
+            {"name": "api.md", "uri": "viking://resources/docs/api.md", "size": 12345, "mtime": 1720000000},
+            {"name": "guide.md", "uri": "viking://resources/docs/guide.md", "size": 8234, "mtime": 1720000001}
+        ],
+        "count": 2
+    },
+    "time": 0.2
+}
+```
+
 ---
 
 ## Working with Results
@@ -1028,7 +1086,7 @@ Retrieval results usually only contain L0 summaries, you can progressively load 
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1072,7 +1130,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 ### Use Specific Queries
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1087,7 +1145,7 @@ results = client.find(query="auth")
 ### Scope Your Searches
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -1102,7 +1160,7 @@ results = client.find(
 ### Use Session Context for Conversations
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 from openviking_sdk import TextPart
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")

@@ -20,7 +20,9 @@ Important behaviors:
 
 from __future__ import annotations
 
+import math
 import threading
+import time
 from bisect import bisect_left
 from typing import Mapping, Sequence
 
@@ -38,6 +40,48 @@ def _canonicalize_label_names(label_names: Sequence[str]) -> tuple[str, ...]:
     that provide the same key set with different input ordering.
     """
     return tuple(sorted(str(name) for name in label_names))
+
+
+def _validate_label_keys(
+    name: str,
+    label_names: tuple[str, ...],
+    normalized: tuple[tuple[str, str], ...],
+) -> None:
+    """Check normalized labels against the named metric's declared keys; return None."""
+    if not label_names and normalized:
+        raise ValueError(f"metric {name} does not accept labels")
+    if label_names and tuple(k for k, _ in normalized) != label_names:
+        raise ValueError(f"metric {name} label keys mismatch: expected {label_names}")
+
+
+def _validate_counter_value(value: float) -> float:
+    """Return value as a finite, nonnegative float or raise ValueError."""
+    value = float(value)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("counter value must be finite and nonnegative")
+    return value
+
+
+def _validate_histogram_values(
+    bounds: tuple[float, ...],
+    bucket_counts: Sequence[int],
+    count: int,
+    value_sum: float,
+) -> tuple[tuple[int, ...], float]:
+    """Validate bounds and totals; return bucket_counts as a tuple and value_sum as a float."""
+    bucket_counts = tuple(bucket_counts)
+    value_sum = float(value_sum)
+    if any(not math.isfinite(bound) or bound < 0 for bound in bounds) or any(
+        left >= right for left, right in zip(bounds, bounds[1:], strict=False)
+    ):
+        raise ValueError("histogram bounds must be finite, nonnegative and increasing")
+    if len(bucket_counts) != len(bounds) + 1 or any(
+        type(value) is not int or value < 0 for value in (*bucket_counts, count)
+    ):
+        raise ValueError("histogram counts must be nonnegative integers matching bounds")
+    if sum(bucket_counts) != count or not math.isfinite(value_sum) or value_sum < 0:
+        raise ValueError("histogram count or sum is invalid")
+    return bucket_counts, value_sum
 
 
 def _labels_contains(
@@ -105,6 +149,44 @@ class MetricRegistry:
             Counter family, which validates label keys.
         """
         self.counter(name, label_names=label_names).inc(labels=labels, amount=float(amount))
+
+    def set_counter(
+        self,
+        name: str,
+        value: float,
+        *,
+        labels: Mapping[str, str] | None = None,
+        label_names: Sequence[str] = (),
+    ) -> None:
+        """Replace the named counter's labelled value, including zero or reset; return None."""
+        value = _validate_counter_value(value)
+        ln = _canonicalize_label_names(label_names)
+        normalized = normalize_labels(labels)
+        _validate_label_keys(name, ln, normalized)
+        self.counter(name, label_names=ln).set(value, labels=dict(normalized))
+
+    def set_histogram(
+        self,
+        name: str,
+        *,
+        bucket_bounds: Sequence[float],
+        bucket_counts: Sequence[int],
+        count: int,
+        value_sum: float,
+        labels: Mapping[str, str] | None = None,
+        label_names: Sequence[str] = (),
+    ) -> None:
+        """Replace a named histogram from disjoint bucket counts and totals; return None."""
+        bounds = tuple(float(bound) for bound in bucket_bounds)
+        bucket_counts, value_sum = _validate_histogram_values(
+            bounds, bucket_counts, count, value_sum
+        )
+        ln = _canonicalize_label_names(label_names)
+        normalized = normalize_labels(labels)
+        _validate_label_keys(name, ln, normalized)
+        self.histogram(name, label_names=ln, buckets=bounds).set(
+            bucket_counts, count, value_sum, labels=dict(normalized)
+        )
 
     def set_gauge(
         self,
@@ -242,17 +324,26 @@ class MetricRegistry:
                 family._validate_buckets(b)
         return _Histogram(family)
 
-    def iter_counters(self):
+    def iter_counters(self, *, include_start_time: bool = False):
         """
         Iterate over all counter families and their current series values.
 
         The returned family payload is a detached snapshot so exporters can iterate without
-        holding the registry lock during rendering.
+        holding the registry lock during rendering. When include_start_time is True,
+        each series also includes its cumulative start time in Unix nanoseconds.
         """
         with self._lock:
             families = dict(self._counters)
         for name, family in families.items():
-            yield name, list(family.copy_values().items())
+            values = family.copy_values()
+            if values is not None:
+                yield (
+                    name,
+                    [
+                        (labels, *value) if include_start_time else (labels, value[0])
+                        for labels, value in values.items()
+                    ],
+                )
 
     def counter_label_names(self, name: str) -> tuple[str, ...]:
         """Return the registered label key tuple for a counter family, if present."""
@@ -270,7 +361,9 @@ class MetricRegistry:
         with self._lock:
             families = dict(self._gauges)
         for name, family in families.items():
-            yield name, list(family.copy_values().items())
+            values = family.copy_values()
+            if values is not None:
+                yield name, list(values.items())
 
     def gauge_label_names(self, name: str) -> tuple[str, ...]:
         """Return the registered label key tuple for a gauge family, if present."""
@@ -309,18 +402,40 @@ class MetricRegistry:
             return
         family.delete_matching(match_labels=match_labels)
 
-    def iter_histograms(self):
+    def counter_delete_matching(self, name: str, *, match_labels: Mapping[str, str]) -> None:
+        """Delete counter series matching the supplied label subset; return None."""
+        with self._lock:
+            family = self._counters.get(name)
+        if family is not None:
+            family.delete_matching(match_labels=match_labels)
+
+    def histogram_delete_matching(self, name: str, *, match_labels: Mapping[str, str]) -> None:
+        """Delete histogram series matching the supplied label subset; return None."""
+        with self._lock:
+            family = self._histograms.get(name)
+        if family is not None:
+            family.delete_matching(match_labels=match_labels)
+
+    def iter_histograms(self, *, include_start_time: bool = False):
         """
         Iterate over all histogram families and their materialized series snapshots.
 
         Each yielded item contains family metadata and a detached list of per-series bucket
-        counts, sample counts, and sums ready for exporter rendering.
+        counts, sample counts, and sums ready for exporter rendering. When include_start_time
+        is True, each series also includes its cumulative start time in Unix nanoseconds.
         """
         with self._lock:
             families = dict(self._histograms)
         for name, family in families.items():
-            label_names, bucket_bounds, series = family.copy_series()
-            yield name, label_names, bucket_bounds, series
+            snapshot = family.copy_series()
+            if snapshot is not None:
+                label_names, bucket_bounds, series = snapshot
+                yield (
+                    name,
+                    label_names,
+                    bucket_bounds,
+                    (series if include_start_time else [values[:-1] for values in series]),
+                )
 
     def iter_dropped_series(self):
         """
@@ -358,7 +473,8 @@ class _CounterFamily:
         self._max_series = max_series
         self._on_drop = on_drop
         self._lock = threading.Lock()
-        self._values: dict[tuple[tuple[str, str], ...], float] = {}
+        self._values: dict[tuple[tuple[str, str], ...], tuple[float, int]] = {}
+        self._had_deletions = False
 
     def inc(self, *, labels: Mapping[str, str] | None, amount: float) -> None:
         """
@@ -374,12 +490,38 @@ class _CounterFamily:
             if key not in self._values and len(self._values) >= self._max_series:
                 self._on_drop(self.name)
                 return
-            self._values[key] = self._values.get(key, 0.0) + float(amount)
+            value, start_time_ns = self._values.get(key, (0.0, 0))
+            self._values[key] = (value + float(amount), start_time_ns or time.time_ns())
 
-    def copy_values(self) -> dict[tuple[tuple[str, str], ...], float]:
-        """Return a detached copy of all series values in this family."""
+    def copy_values(self) -> dict[tuple[tuple[str, str], ...], tuple[float, int]] | None:
+        """Return totals with their start times, or None if deletion emptied this family."""
         with self._lock:
+            if self._had_deletions and not self._values:
+                return None
             return dict(self._values)
+
+    def set(self, *, labels: Mapping[str, str] | None, value: float) -> None:
+        """Replace labels with value, starting a new cumulative period on decrease; return None."""
+        value = _validate_counter_value(value)
+        key = self._normalize_and_validate(labels)
+        with self._lock:
+            if key not in self._values and len(self._values) >= self._max_series:
+                self._on_drop(self.name)
+                return
+            previous = self._values.get(key)
+            start_time_ns = (
+                previous[1] if previous is not None and value >= previous[0] else time.time_ns()
+            )
+            self._values[key] = (value, start_time_ns)
+
+    def delete_matching(self, *, match_labels: Mapping[str, str]) -> None:
+        """Remove counter entries containing the supplied labels; return None."""
+        normalized = normalize_labels(match_labels)
+        with self._lock:
+            for key in list(self._values):
+                if _labels_contains(key, normalized):
+                    del self._values[key]
+                    self._had_deletions = True
 
     def _normalize_and_validate(
         self, labels: Mapping[str, str] | None
@@ -398,10 +540,7 @@ class _CounterFamily:
 
     def _validate_label_names_against(self, normalized: tuple[tuple[str, str], ...]) -> None:
         """Ensure a concrete series write uses exactly the configured label keys."""
-        if not self.label_names and normalized:
-            raise ValueError(f"metric {self.name} does not accept labels")
-        if self.label_names and tuple(k for k, _ in normalized) != self.label_names:
-            raise ValueError(f"metric {self.name} label keys mismatch: expected {self.label_names}")
+        _validate_label_keys(self.name, self.label_names, normalized)
 
 
 class _GaugeFamily:
@@ -422,6 +561,7 @@ class _GaugeFamily:
         self._on_drop = on_drop
         self._lock = threading.Lock()
         self._values: dict[tuple[tuple[str, str], ...], float] = {}
+        self._had_deletions = False
 
     def set(self, *, labels: Mapping[str, str] | None, value: float) -> None:
         """
@@ -451,9 +591,11 @@ class _GaugeFamily:
                 return
             self._values[key] = self._values.get(key, 0.0) + float(delta)
 
-    def copy_values(self) -> dict[tuple[tuple[str, str], ...], float]:
-        """Return a detached copy of all gauge series values."""
+    def copy_values(self) -> dict[tuple[tuple[str, str], ...], float] | None:
+        """Return a gauge value snapshot, or None if deletion emptied this family."""
         with self._lock:
+            if self._had_deletions and not self._values:
+                return None
             return dict(self._values)
 
     def get_value(self, *, labels: Mapping[str, str] | None) -> float | None:
@@ -470,6 +612,7 @@ class _GaugeFamily:
             for k in keys:
                 if _labels_contains(k, normalized):
                     self._values.pop(k, None)
+                    self._had_deletions = True
 
     def _normalize_and_validate(
         self, labels: Mapping[str, str] | None
@@ -514,6 +657,7 @@ class _HistogramFamily:
         self._on_drop = on_drop
         self._lock = threading.Lock()
         self._series: dict[tuple[tuple[str, str], ...], _HistogramSeries] = {}
+        self._had_deletions = False
 
     def observe(self, *, labels: Mapping[str, str] | None, value: float) -> None:
         """
@@ -533,23 +677,56 @@ class _HistogramFamily:
                 self._series[key] = series
             series.observe(float(value))
 
+    def set(
+        self,
+        *,
+        labels: Mapping[str, str] | None,
+        bucket_counts: Sequence[int],
+        count: int,
+        value_sum: float,
+    ) -> None:
+        """Validate bucket_counts, count and value_sum before replacing labels; return None."""
+        bucket_counts, value_sum = _validate_histogram_values(
+            self.bucket_bounds, bucket_counts, count, value_sum
+        )
+        key = self._normalize_and_validate(labels)
+        with self._lock:
+            series = self._series.get(key)
+            if series is None:
+                if len(self._series) >= self._max_series:
+                    self._on_drop(self.name)
+                    return
+                series = _HistogramSeries(bucket_bounds=self.bucket_bounds)
+                self._series[key] = series
+            series.set_values(bucket_counts, count, value_sum)
+
+    def delete_matching(self, *, match_labels: Mapping[str, str]) -> None:
+        """Remove histogram entries containing the supplied labels; return None."""
+        normalized = normalize_labels(match_labels)
+        with self._lock:
+            for key in list(self._series):
+                if _labels_contains(key, normalized):
+                    del self._series[key]
+                    self._had_deletions = True
+
     def copy_series(
         self,
-    ) -> tuple[
-        tuple[str, ...],
-        tuple[float, ...],
-        list[tuple[tuple[tuple[str, str], ...], tuple[int, ...], int, float]],
-    ]:
-        """Return a detached snapshot of the histogram family and all of its series."""
+    ) -> (
+        tuple[
+            tuple[str, ...],
+            tuple[float, ...],
+            list[tuple[tuple[tuple[str, str], ...], tuple[int, ...], int, float, int]],
+        ]
+        | None
+    ):
+        """Return histogram values and start times, or None if deletion emptied this family."""
         with self._lock:
-            series_copy: dict[tuple[tuple[str, str], ...], _HistogramSeries] = dict(self._series)
-            label_names = self.label_names
-            bucket_bounds = self.bucket_bounds
-        series: list[tuple[tuple[tuple[str, str], ...], tuple[int, ...], int, float]] = []
-        for labels, s in series_copy.items():
-            bucket_counts, count, value_sum = s.copy_values()
-            series.append((labels, bucket_counts, count, value_sum))
-        return label_names, bucket_bounds, series
+            if self._had_deletions and not self._series:
+                return None
+            series: list[tuple[tuple[tuple[str, str], ...], tuple[int, ...], int, float, int]] = []
+            for labels, s in self._series.items():
+                series.append((labels, *s.copy_values()))
+            return self.label_names, self.bucket_bounds, series
 
     def _normalize_and_validate(
         self, labels: Mapping[str, str] | None
@@ -568,10 +745,7 @@ class _HistogramFamily:
 
     def _validate_label_names_against(self, normalized: tuple[tuple[str, str], ...]) -> None:
         """Ensure a concrete series write uses exactly the configured label keys."""
-        if not self.label_names and normalized:
-            raise ValueError(f"metric {self.name} does not accept labels")
-        if self.label_names and tuple(k for k, _ in normalized) != self.label_names:
-            raise ValueError(f"metric {self.name} label keys mismatch: expected {self.label_names}")
+        _validate_label_keys(self.name, self.label_names, normalized)
 
     def _validate_buckets(self, bucket_bounds: tuple[float, ...]) -> None:
         """Ensure a histogram family is never reopened with a different bucket layout."""
@@ -589,6 +763,7 @@ class _HistogramSeries:
         self._bucket_counts: list[int] = [0] * (len(bucket_bounds) + 1)
         self._count: int = 0
         self._sum: float = 0.0
+        self._start_time_ns = time.time_ns()
 
     def observe(self, value: float) -> None:
         """
@@ -603,10 +778,26 @@ class _HistogramSeries:
             self._count += 1
             self._sum += value
 
-    def copy_values(self) -> tuple[tuple[int, ...], int, float]:
-        """Return immutable copies of bucket counts, sample count, and sum."""
+    def copy_values(self) -> tuple[tuple[int, ...], int, float, int]:
+        """Return bucket counts, sample count, sum and cumulative start time under one lock."""
         with self._lock:
-            return tuple(self._bucket_counts), self._count, self._sum
+            return tuple(self._bucket_counts), self._count, self._sum, self._start_time_ns
+
+    def set_values(self, bucket_counts: tuple[int, ...], count: int, value_sum: float) -> None:
+        """Replace validated totals, starting a new period if any total decreases; return None."""
+        with self._lock:
+            if (
+                count < self._count
+                or value_sum < self._sum
+                or any(
+                    current < previous
+                    for current, previous in zip(bucket_counts, self._bucket_counts, strict=True)
+                )
+            ):
+                self._start_time_ns = time.time_ns()
+            self._bucket_counts = list(bucket_counts)
+            self._count = count
+            self._sum = value_sum
 
 
 class _Counter:
@@ -619,6 +810,10 @@ class _Counter:
     def inc(self, amount: float = 1.0, *, labels: Mapping[str, str] | None = None) -> None:
         """Increment one series in the bound counter family using the public wrapper API."""
         self._family.inc(labels=labels, amount=amount)
+
+    def set(self, value: float, *, labels: Mapping[str, str] | None = None) -> None:
+        """Replace the labelled series with a validated absolute value; return None."""
+        self._family.set(labels=labels, value=value)
 
 
 class _Gauge:
@@ -636,6 +831,7 @@ class _Gauge:
         """Increase one series in the bound gauge family by a positive delta."""
         self._family.add(labels=labels, delta=amount)
 
+
 class _Histogram:
     """Public lightweight handle used by callers to mutate one histogram family."""
 
@@ -646,3 +842,16 @@ class _Histogram:
     def observe(self, value: float, *, labels: Mapping[str, str] | None = None) -> None:
         """Record one observation for a series in the bound histogram family wrapper."""
         self._family.observe(labels=labels, value=value)
+
+    def set(
+        self,
+        bucket_counts: Sequence[int],
+        count: int,
+        value_sum: float,
+        *,
+        labels: Mapping[str, str] | None = None,
+    ) -> None:
+        """Replace the labelled series using validated disjoint counts and totals; return None."""
+        self._family.set(
+            labels=labels, bucket_counts=bucket_counts, count=count, value_sum=value_sum
+        )

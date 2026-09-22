@@ -4,7 +4,9 @@
 
 import asyncio
 import hashlib
-from unittest.mock import AsyncMock, Mock
+import os
+import signal
+from unittest.mock import AsyncMock, Mock, call
 
 import httpx
 import pytest
@@ -17,6 +19,7 @@ from openviking.server.openviking_assets import (
     resolve_openviking_assets,
 )
 from openviking_cli.exceptions import (
+    DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -345,16 +348,80 @@ async def test_git_preflight_rejects_unsafe_token_urls_before_spawn(monkeypatch,
     exec_mock.assert_not_awaited()
 
 
-async def test_git_preflight_cancellation_kills_and_reaps_authenticated_process(monkeypatch):
-    process = Mock()
-    process.communicate = AsyncMock(side_effect=asyncio.CancelledError)
-    process.kill = Mock()
-    process.wait = AsyncMock()
+async def test_git_preflight_rejects_http_userinfo_before_spawn(monkeypatch):
+    exec_mock = AsyncMock(return_value=_GitProcess(0))
+    monkeypatch.setattr("asyncio.create_subprocess_exec", exec_mock)
 
-    async def fake_exec(*_args, **_kwargs):
+    with pytest.raises(InvalidArgumentError, match="cannot contain userinfo"):
+        await preflight_git_repository(
+            asset_name="private",
+            repo_url="https://user:dummy@github.com/org/private.git",
+        )
+
+    exec_mock.assert_not_awaited()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+async def test_git_preflight_timeout_kills_process_group_and_bounds_reap(monkeypatch):
+    process = Mock(pid=43210)
+    process.communicate = AsyncMock(return_value=(b"", b""))
+    process.kill = Mock()
+    captured = {}
+    wait_timeouts = []
+    killpg = Mock()
+
+    async def fake_exec(*_args, **kwargs):
+        captured.update(kwargs)
         return process
 
+    async def fake_wait_for(awaitable, timeout):
+        wait_timeouts.append(timeout)
+        if len(wait_timeouts) == 1:
+            awaitable.close()
+            raise asyncio.TimeoutError
+        return await awaitable
+
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("asyncio.wait_for", fake_wait_for)
+    monkeypatch.setattr(os, "killpg", killpg)
+
+    with pytest.raises(DeadlineExceededError):
+        await preflight_git_repository(
+            asset_name="private",
+            repo_url="https://github.com/org/private.git",
+            token="secret-token",
+            timeout=7.0,
+        )
+
+    assert (
+        captured.get("start_new_session"),
+        killpg.call_args_list,
+        wait_timeouts,
+    ) == (True, [call(process.pid, signal.SIGKILL)], [7.0, 1.0])
+    process.kill.assert_not_called()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
+async def test_git_preflight_cancellation_kills_process_group_and_bounds_reap(monkeypatch):
+    process = Mock(pid=43210)
+    process.communicate = AsyncMock(side_effect=[asyncio.CancelledError, (b"", b"")])
+    process.kill = Mock()
+    process.wait = AsyncMock()
+    captured = {}
+    wait_timeouts = []
+    killpg = Mock()
+
+    async def fake_exec(*_args, **kwargs):
+        captured.update(kwargs)
+        return process
+
+    async def fake_wait_for(awaitable, timeout):
+        wait_timeouts.append(timeout)
+        return await awaitable
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("asyncio.wait_for", fake_wait_for)
+    monkeypatch.setattr(os, "killpg", killpg)
 
     with pytest.raises(asyncio.CancelledError):
         await preflight_git_repository(
@@ -363,8 +430,12 @@ async def test_git_preflight_cancellation_kills_and_reaps_authenticated_process(
             token="secret-token",
         )
 
-    process.kill.assert_called_once_with()
-    process.wait.assert_awaited_once_with()
+    assert (
+        captured.get("start_new_session"),
+        killpg.call_args_list,
+        wait_timeouts,
+    ) == (True, [call(process.pid, signal.SIGKILL)], [15.0, 1.0])
+    process.kill.assert_not_called()
 
 
 async def test_git_preflight_preserves_ssh_username(monkeypatch):

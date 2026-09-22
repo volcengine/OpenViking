@@ -29,6 +29,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.image_validation import is_valid_image
+from openviking.parse.output import (
+    AgfsParseOutputStore,
+    ParseArtifactRef,
+    ParseArtifactWriter,
+    create_parse_artifact_writer,
+)
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
 from openviking.parse.parsers.constants import (
@@ -289,6 +295,10 @@ class MarkdownParser(BaseParser):
             ParseResult with temp_dir_path (Viking URI)
         """
         start_time = time.time()
+        output_store = kwargs.pop("parse_output_store", None)
+        writer = await create_parse_artifact_writer(
+            output_store, viking_fs=self._get_viking_fs() if output_store is None else None
+        )
 
         try:
             split_content = bool(kwargs.get("split_content", True))
@@ -305,7 +315,7 @@ class MarkdownParser(BaseParser):
             # Phase 1 — parse only: turn the markdown into an ordered VikingFS write
             # plan, touching nothing. The temp URI is allocated here (the one
             # FS-scoped step) and threaded in so layout planning stays side-effect free.
-            temp_uri = self._create_temp_uri()
+            temp_uri = writer.ref.root
             layout_kwargs = dict(kwargs)
             layout_kwargs["flatten_single_output"] = flatten_single_output
             layout = await self._compute_layout(
@@ -335,6 +345,7 @@ class MarkdownParser(BaseParser):
             # rewriting links and ingesting local images.
             await self._apply_layout(
                 layout,
+                writer=writer,
                 rewrite_ctx=rewrite_ctx,
                 base_dir=base_dir,
                 allowed_media_dirs=allowed_media_dirs,
@@ -360,12 +371,15 @@ class MarkdownParser(BaseParser):
                 warnings=layout.warnings,
             )
 
-            result.temp_dir_path = layout.temp_uri
+            root_rel = writer.relative_path(layout.root_dir)
+            result.artifact_ref = await writer.finalize(resource_rel=root_rel)
+            result.temp_dir_path = result.artifact_ref.root
 
             return result
 
         except Exception as e:
             logger.error(f"[MarkdownParser] Parse failed: {e}", exc_info=True)
+            await writer.cleanup()
             raise
 
     async def _compute_layout(
@@ -414,9 +428,7 @@ class MarkdownParser(BaseParser):
         doc_name = self._sanitize_for_path(doc_title)
         # Preserve code source filenames as the temp document directory.
         source_name = kwargs.get("source_name")
-        root_name = (
-            source_name if source_name and supports_code_skeleton(source_name) else doc_name
-        )
+        root_name = source_name if source_name and supports_code_skeleton(source_name) else doc_name
         root_dir = (
             temp_uri
             if kwargs.get("flatten_single_output", False)
@@ -426,8 +438,12 @@ class MarkdownParser(BaseParser):
         # Find all headings
         headings = self._find_headings(content)
 
-        # The temp dir is the first thing materialized on apply.
-        ops: List[_LayoutOp] = [_LayoutOp("mkdir", temp_uri)]
+        # The temp dir is the first thing materialized on apply. A flattened
+        # document uses the temp dir itself as its root, which _build_structure
+        # creates below, so do not enqueue the same mkdir twice.
+        ops: List[_LayoutOp] = []
+        if root_dir != temp_uri:
+            ops.append(_LayoutOp("mkdir", temp_uri))
         await self._build_structure(
             ops,
             content,
@@ -452,6 +468,7 @@ class MarkdownParser(BaseParser):
         self,
         layout: _Layout,
         *,
+        writer: Optional[ParseArtifactWriter] = None,
         rewrite_ctx: Optional[_RewriteContext] = None,
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
@@ -460,7 +477,11 @@ class MarkdownParser(BaseParser):
         create dirs, write each section (rewriting relative links when enabled), then
         ingest the local images those sections reference."""
         started = time.perf_counter()
-        viking_fs = self._get_viking_fs()
+        if writer is None:
+            writer = ParseArtifactWriter(
+                AgfsParseOutputStore(viking_fs=self._get_viking_fs()),
+                ParseArtifactRef(backend="agfs", root=layout.temp_uri),
+            )
         mkdir_ops = [op for op in layout.ops if op.kind == "mkdir"]
         write_ops = [op for op in layout.ops if op.kind == "write"]
         write_chars = sum(len(op.content or "") for op in write_ops)
@@ -471,13 +492,17 @@ class MarkdownParser(BaseParser):
         mkdir_count = 0
         for op in layout.ops:
             if op.kind == "mkdir":
-                await viking_fs.mkdir(op.uri, exist_ok=op.exist_ok)
+                await writer.mkdir(op.uri)
                 mkdir_count += 1
         mkdir_s = time.perf_counter() - mkdir_started
 
         write_started = time.perf_counter()
+        written_sections: list[tuple[str, str]] = []
         for op in write_ops:
-            await self._write_section(op.uri, op.content, rewrite_ctx=rewrite_ctx)
+            written = await self._write_section(
+                op.uri, op.content, writer=writer, rewrite_ctx=rewrite_ctx
+            )
+            written_sections.append((op.uri, written))
         write_s = time.perf_counter() - write_started
 
         # Ingest local image files, placing each image next to the markdown file
@@ -486,7 +511,13 @@ class MarkdownParser(BaseParser):
         images_started = time.perf_counter()
         has_image_refs = self._layout_has_local_image_refs(write_ops)
         if has_image_refs:
-            await self._ingest_local_images(layout.root_dir, base_dir, allowed_media_dirs)
+            await self._ingest_local_images(
+                layout.root_dir,
+                base_dir,
+                allowed_media_dirs,
+                writer=writer,
+                markdown_files=written_sections,
+            )
         images_s = time.perf_counter() - images_started
 
         total_s = time.perf_counter() - started
@@ -782,9 +813,11 @@ class MarkdownParser(BaseParser):
         for row in rows:
             candidate_lines = [*current_lines, row]
             candidate = "\n".join(candidate_lines)
-            if current_lines and (
-                len(candidate) > max_chars or self._estimate_token_count(candidate) > max_size
-            ) and current_data_rows > 0:
+            if (
+                current_lines
+                and (len(candidate) > max_chars or self._estimate_token_count(candidate) > max_size)
+                and current_data_rows > 0
+            ):
                 flush()
                 current_lines = [*header, row] if repeat_header else [row]
                 current_data_rows = 1
@@ -800,6 +833,9 @@ class MarkdownParser(BaseParser):
         root_dir: str,
         base_dir: Optional[Path] = None,
         allowed_media_dirs: Optional[List[Path]] = None,
+        *,
+        writer: Optional[ParseArtifactWriter] = None,
+        markdown_files: Optional[List[Tuple[str, str]]] = None,
     ) -> None:
         """
         Scan every processed markdown file under ``root_dir`` and copy the local
@@ -817,26 +853,20 @@ class MarkdownParser(BaseParser):
             allowed_media_dirs: Additional directories from which derived media
                 may be read (passed through to ``_resolve_image_path``)
         """
-        viking_fs = self._get_viking_fs()
-
-        # Find all processed markdown files under the root directory
-        glob_result = await viking_fs.glob("**/*.md", uri=root_dir)
-        md_uris = glob_result.get("matches", [])
-        if not md_uris:
-            return
+        if writer is None:
+            writer = ParseArtifactWriter(
+                AgfsParseOutputStore(viking_fs=self._get_viking_fs()),
+                ParseArtifactRef(backend="agfs", root=root_dir),
+            )
+        if markdown_files is None:
+            raise ValueError("markdown_files are required for artifact image ingestion")
 
         root_prefix = root_dir.rstrip("/")
 
         # mapping: rel_md_path -> {original_path_str -> unique_filename}
         mappings: Dict[str, Dict[str, str]] = {}
 
-        for md_uri in md_uris:
-            try:
-                content = await viking_fs.read_file(md_uri)
-            except Exception:
-                logger.warning(f"[MarkdownParser] Failed to read markdown file: {md_uri}")
-                continue
-
+        for md_uri, content in markdown_files:
             # Collect all image references in this markdown file: markdown
             # embeds (![...]) and HTML <img src="..."> tags alike.
             from openviking.parse.image_rewrite import HTML_IMG_PATTERN
@@ -899,7 +929,7 @@ class MarkdownParser(BaseParser):
 
                     # Write next to the markdown file
                     viking_path = f"{md_dir}/{unique_filename}"
-                    await viking_fs.write_file_bytes(viking_path, image_bytes)
+                    await writer.write_bytes(viking_path, image_bytes)
 
                     # Record mapping for post-commit rewrite
                     file_mappings[origin_link] = unique_filename
@@ -919,7 +949,7 @@ class MarkdownParser(BaseParser):
 
             from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME
 
-            await viking_fs.write_file(
+            await writer.write_text(
                 f"{root_prefix}/{IMAGE_MAPPINGS_FILENAME}",
                 json.dumps(mappings, ensure_ascii=False),
             )
@@ -945,7 +975,7 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(path_str)
+            path = Path(self._unwrap_link_destination(path_str))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
@@ -1020,7 +1050,15 @@ class MarkdownParser(BaseParser):
         return is_valid_image(image_bytes, source_path)
 
     @staticmethod
-    def _is_remote_uri(path: str) -> bool:
+    def _unwrap_link_destination(path: str) -> str:
+        """Return the path represented by a Markdown ``<destination>``."""
+        path = path.strip()
+        if len(path) >= 2 and path.startswith("<") and path.endswith(">"):
+            return path[1:-1]
+        return path
+
+    @classmethod
+    def _is_remote_uri(cls, path: str) -> bool:
         """
         Check if a path is a remote URI.
 
@@ -1031,7 +1069,7 @@ class MarkdownParser(BaseParser):
             True if path starts with http://, https://, viking://, data:, or ftp://
         """
         remote_prefixes = ("http://", "https://", "viking://", "data:", "ftp://")
-        return path.startswith(remote_prefixes)
+        return cls._unwrap_link_destination(path).startswith(remote_prefixes)
 
     @staticmethod
     def _deduplicate_filename(filename: str, used_names: set[str]) -> str:
@@ -1329,8 +1367,9 @@ class MarkdownParser(BaseParser):
         uri: str,
         content: str,
         *,
+        writer: Optional[ParseArtifactWriter] = None,
         rewrite_ctx: Optional[_RewriteContext] = None,
-    ) -> None:
+    ) -> str:
         """Write a markdown section file, rewriting relative links when enabled."""
         if rewrite_ctx is not None:
             content = await self._rewrite_relative_links(
@@ -1338,7 +1377,13 @@ class MarkdownParser(BaseParser):
                 section_subpath=self._section_subpath(uri, rewrite_ctx.root_dir),
                 rewrite_ctx=rewrite_ctx,
             )
-        await self._get_viking_fs().write_file(uri, content)
+        if writer is None:
+            writer = ParseArtifactWriter(
+                AgfsParseOutputStore(viking_fs=self._get_viking_fs()),
+                ParseArtifactRef(backend="agfs", root=uri.rsplit("/", 1)[0]),
+            )
+        await writer.write_text(uri, content)
+        return content
 
     # ========== New Parsing Logic (v5.0) ==========
 

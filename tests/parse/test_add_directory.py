@@ -24,6 +24,11 @@ from openviking.parse.base import (
     ResourceNode,
     create_parse_result,
 )
+from openviking.parse.output import (
+    ARTIFACT_MANIFEST_NAME,
+    LocalParseOutputStore,
+    read_artifact_manifest,
+)
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
 
@@ -57,7 +62,7 @@ class FakeVikingFS:
             content = content.encode("utf-8")
         self.files[uri] = content
 
-    async def write_file_bytes(self, uri: str, content: bytes) -> None:
+    async def write_file_bytes(self, uri: str, content: bytes, **kw) -> None:
         self.files[uri] = content
 
     # ---- read / list operations ------------------------------------------
@@ -109,7 +114,7 @@ class FakeVikingFS:
 
     # ---- temp URI --------------------------------------------------------
 
-    def create_temp_uri(self) -> str:
+    def create_temp_uri(self, ctx: Any = None) -> str:
         self._temp_counter += 1
         return f"viking://temp/dir_{self._temp_counter}"
 
@@ -217,12 +222,8 @@ class TestDirectoryParserBasic:
         (tmp_path / "notes").mkdir()
         (tmp_path / "08_Attachments").mkdir()
         (tmp_path / "notes" / "article.md").write_text("keep", encoding="utf-8")
-        (tmp_path / "notes" / "private.excalidraw.md").write_text(
-            "exclude", encoding="utf-8"
-        )
-        (tmp_path / "08_Attachments" / "diagram.md").write_text(
-            "ignore", encoding="utf-8"
-        )
+        (tmp_path / "notes" / "private.excalidraw.md").write_text("exclude", encoding="utf-8")
+        (tmp_path / "08_Attachments" / "diagram.md").write_text("ignore", encoding="utf-8")
         (tmp_path / "main.py").write_text("exclude by include", encoding="utf-8")
 
         with (
@@ -236,7 +237,9 @@ class TestDirectoryParserBasic:
                 exclude="*.excalidraw.md",
             )
 
-        uploaded_paths = {uri.split("/repository/", 1)[-1] for uri in fake_fs.files}
+        uploaded_paths = {
+            uri.split("/repository/", 1)[-1] for uri in fake_fs.files if "/repository/" in uri
+        }
         assert result.parser_name == "CodeRepositoryParser"
         assert uploaded_paths == {"notes/article.md"}
 
@@ -330,6 +333,8 @@ class TestDirectWriteFiles:
 
         dir_name = tmp_code.name
         for uri in fake_fs.files:
+            if uri.endswith(ARTIFACT_MANIFEST_NAME):
+                continue
             assert f"/{dir_name}/" in uri
 
     @pytest.mark.asyncio
@@ -343,6 +348,27 @@ class TestDirectWriteFiles:
                 break
         else:
             pytest.fail("hello.py not found in uploaded files")
+
+    @pytest.mark.asyncio
+    async def test_local_store_merges_parsed_and_direct_files(self, tmp_path: Path) -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "guide.md").write_text("# Guide\n\nbody", encoding="utf-8")
+        (source / "main.py").write_text("print('ok')", encoding="utf-8")
+        store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+
+        result = await DirectoryParser().parse(source, parse_output_store=store)
+
+        assert result.artifact_ref is not None
+        assert result.artifact_ref.backend == "local"
+        assert result.artifact_ref.resource_rel == "source"
+        root = Path(result.artifact_ref.root) / "source"
+        assert (root / "main.py").read_text() == "print('ok')"
+        assert (root / "guide" / "guide.md").read_text() == "# Guide\n\nbody"
+        assert set(await read_artifact_manifest(store, result.artifact_ref)) == {
+            "source/main.py",
+            "source/guide/guide.md",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +399,8 @@ class TestNestedDirectory:
     @pytest.mark.asyncio
     async def test_file_count(self, tmp_nested_code: Path, parser, fake_fs) -> None:
         await parser.parse(str(tmp_nested_code))
-        assert len(fake_fs.files) == 4
+        business_files = [uri for uri in fake_fs.files if not uri.endswith(ARTIFACT_MANIFEST_NAME)]
+        assert len(business_files) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -428,9 +455,7 @@ class TestParserDelegation:
     ) -> None:
         nested = tmp_path / "scripts"
         nested.mkdir()
-        content = "\n\n".join(
-            f"paragraph {index} " + "x" * 1000 for index in range(20)
-        )
+        content = "\n\n".join(f"paragraph {index} " + "x" * 1000 for index in range(20))
         (nested / "screenplay.md").write_text(content, encoding="utf-8")
 
         result = await parser.parse(str(tmp_path), split_content=False)
@@ -441,9 +466,7 @@ class TestParserDelegation:
             for uri, value in fake_fs.files.items()
             if uri.startswith(root) and uri.endswith(".md")
         }
-        assert body_files == {
-            f"{root}/scripts/screenplay.md": content.encode("utf-8")
-        }
+        assert body_files == {f"{root}/scripts/screenplay.md": content.encode("utf-8")}
 
     @pytest.mark.asyncio
     async def test_txt_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:

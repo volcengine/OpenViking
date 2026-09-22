@@ -4,7 +4,7 @@ Community-maintained integrations for various agent runtimes. Each differs in ta
 
 ## ZCode memory integration
 
-Source: [examples/zcode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin)
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
 The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks and an OpenViking MCP server:
 
@@ -45,7 +45,7 @@ After restarting ZCode, verify that:
 | MCP tools not appearing | The MCP proxy failed to start | Check the absolute `mcp.servers.openviking` command in `~/.zcode/cli/config.json` |
 | Duplicate captures | An older installation left duplicate hook entries | Run `install.sh --harness zcode --uninstall`, then reinstall |
 
-Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/zcode-memory-plugin/DESIGN.md).
+Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
 
 ## AstrBot plugin
 

@@ -475,15 +475,19 @@ class LocalCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ) -> None:
-        with self._index_mutation_barrier.mutation() as mutation:
+        with self._index_mutation_barrier.exclusive_mutation():
             index = self.indexes.get(index_name)
             if not index:
                 return
-            index.update(scalar_index, description)
-            mutation.mark_changed()
+            if scalar_index is not None:
+                if not self.store_mgr:
+                    raise RuntimeError("Store manager is not initialized")
+                index.rebuild_scalar_index(scalar_index, self.store_mgr.iter_all_cands_fields())
+            if description is not None:
+                index.update(None, description)
 
     def get_index_meta_data(self, index_name: str) -> Optional[Dict[str, Any]]:
         index = self.indexes.get(index_name)
@@ -691,6 +695,7 @@ class LocalCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         dense_vector = [random.uniform(-1, 1) for _ in range(self.meta.vector_dim)]
         return self.search_by_vector(
@@ -748,9 +753,9 @@ class LocalCollection(ICollection):
             new_filters["filter"] = filters
 
         # Copy output_fields to avoid modifying the original list
-        if output_fields is None:
-            output_fields_copy = [field]
-            remove_field = True
+        if not output_fields:
+            output_fields_copy = None
+            remove_field = False
         else:
             output_fields_copy = list(output_fields)
             if field not in output_fields_copy:
@@ -1344,17 +1349,18 @@ class PersistCollection(LocalCollection):
             newest_version = index.get_newest_version()
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
-            delta_list = self.store_mgr.get_delta_data_after_ts(newest_version)
+            delta_records = self.store_mgr.get_delta_data_after_ts(newest_version)
             logger.info(
-                "Index '%s': replaying %d delta records to recover from last persistent snapshot",
+                "Index '%s': replaying delta records lazily to recover from last persistent snapshot",
                 index_name,
-                len(delta_list),
             )
             upsert_list: List[DeltaRecord] = []
             delete_list: List[DeltaRecord] = []
             _processed = 0
+            _seen = 0
             _last_log = 0.0
-            for data in delta_list:
+            for data in delta_records:
+                _seen += 1
                 if data.type == OpType.PUT.value:
                     if delete_list:
                         _processed += self._replay_recovery_records(
@@ -1376,11 +1382,11 @@ class PersistCollection(LocalCollection):
                         upsert_list = []
                     delete_list.append(data)
                 now = time.time()
-                if now - _last_log >= 5.0 and _processed > 0:
+                if now - _last_log >= 5.0 and _seen > 0:
                     logger.info(
                         "Delta replay progress: %d/%d records for index '%s'",
                         _processed,
-                        len(delta_list),
+                        _seen,
                         index_name,
                     )
                     _last_log = now

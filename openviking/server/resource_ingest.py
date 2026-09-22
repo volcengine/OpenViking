@@ -25,6 +25,7 @@ async def ingest_temp_upload(
     ctx: RequestContext,
     *,
     to: str = "",
+    parent: str = "",
     reason: str = "",
     args: Optional[dict[str, Any]] = None,
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
@@ -47,17 +48,22 @@ async def ingest_temp_upload(
         try:
             ingest_args = dict(args or {})
             if parse_mode != ParseMode.DEFAULT and parse_mode != ParseMode.DEFAULT.value:
-                ingest_args.setdefault("parse_mode", str(parse_mode.value if isinstance(parse_mode, ParseMode) else parse_mode))
+                ingest_args.setdefault(
+                    "parse_mode",
+                    str(parse_mode.value if isinstance(parse_mode, ParseMode) else parse_mode),
+                )
             result = await get_service().resources.add_resource(
                 path=resolved.local_path,
                 ctx=ctx,
                 to=to or None,
+                parent=parent or None,
                 reason=reason,
                 source_name=resolved.original_filename,
                 wait=False,
                 processing_mode=processing_mode,
                 allow_local_path_resolution=True,
                 enforce_public_remote_targets=True,
+                temp_file_id=temp_file_id,
                 args=ingest_args,
                 tags=tags,
                 tag_mode=tag_mode,

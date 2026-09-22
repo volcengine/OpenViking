@@ -21,14 +21,14 @@ Skill source: [examples/compile/ov-compile-skills/knowledge-graph](https://githu
 ## Step 1: Prepare the sources
 
 ```bash
-ov add-resource ./journal-to-the-west --to viking://resources/journal --wait
+ov add-resource ./journal-to-the-west --to viking://resources/journal
 ov ls -r viking://resources/journal
 ```
 
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-graph --wait
+ov add-skill examples/compile/ov-compile-skills/knowledge-graph
 ov skills list
 # → viking://agent/skills/knowledge-graph
 ```
@@ -40,11 +40,10 @@ ov compile \
   --from viking://resources/journal \
   --to viking://resources/journal-kg \
   --skill viking://agent/skills/knowledge-graph \
-  --reason "Extract characters, places, artifacts and their relationships into a traversable graph" \
-  --wait
+  --instruction "Extract characters, places, artifacts and their relationships into a traversable graph"
 ```
 
-Drop `--wait` to get a `task_id` back immediately, then:
+The command returns a `task_id` immediately. Then:
 
 ```bash
 ov task status cmp_01abc      # progress and final result
@@ -103,4 +102,4 @@ Open `journal-kg.html` in a browser. The script validates first — `relations.j
 
 - [Context Compilation Overview](./01-overview.md)
 - [LLM Wiki example](./02-llm-wiki.md)
-- [VikingBot API → compile()](../api/24-vikingbot.md#compile)
+- [Agent Runtime API](../api/23-agent-runtime.md)

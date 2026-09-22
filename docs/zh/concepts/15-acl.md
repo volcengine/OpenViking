@@ -1,0 +1,166 @@
+# 资源访问控制（ACL）
+
+OpenViking ACL 用于在同一个 account 内，把共享资源目录或文件授权给用户或用户组。ACL 不改变 account 隔离：任何授权都只在当前 account 内生效。
+
+ACL 采用协作文档式的继承模型。目录授权默认持续作用于所有后代，子目录和文件可以继续增加直接授权，也可以用 restricted 模式在某个节点切断继承权限。
+
+## 适用 URI
+
+ACL 只作用于共享资源：
+
+```text
+viking://resources/...
+```
+
+- `viking://resources/...` 的 account `ADMIN` 隐式拥有 `manage`。
+- `viking://resources` 是固定共享 scope，本身不能设置直接 ACL；ACL 从它下面的文件和目录开始。
+- `viking://user/{user_id}/resources/...` 是个人私有区，不接受 ACL。需要分享时，将资源移动到有权写入的共享目录，并继承该目录的 ACL。
+
+隐式管理权不会写入 ACL 条目，也不能被 ACL 删除。它保证共享资源始终有人能够首次设置或恢复权限。
+
+## Principal 与权限级别
+
+ACL 条目使用带类型的 principal：
+
+- `user:{user_id}`：当前 account 内的用户。
+- `group:{group_id}`：由调用者指定、在当前 account 内唯一的用户组 ID。
+- `user:*`：当前 account 内任意用户。
+
+不支持 `group:*`。用户组是平铺结构；修改成员关系不会重写资源 ACL 或 context 记录，而是在下一次请求构造 `RequestContext.group_ids` 时生效。
+请求创建的异步解析和语义任务会携带同一份 group 身份。`add-resource` 写入目标通过鉴权后，自动语义维护会保留原调用者身份，并显式使用内部 ACL bypass，不会把调用者角色改成 `ADMIN`。
+
+| Level | 允许的操作 |
+|-------|------------|
+| `read` | 读取、列目录、`find/search/grep` |
+| `write` | `read` 的能力，以及写入、创建、删除或移动文件、修改 tags |
+| `manage` | `write` 的能力，以及删除或移动目录、管理 ACL |
+
+高等级包含低等级能力。授予 `manage`，等价于同时授予 `read` 和 `write`。
+
+## 继承规则
+
+普通节点合并 direct 与 inherited；restricted 节点只使用 direct：
+
+```text
+effective(node) = direct(node) + (acl_mode(node) == "restricted" ? empty : inherited(node))
+```
+
+`inherited(node)` 始终保存父节点当前的有效权限。即使节点处于 restricted 模式，这个字段也会随父节点继续更新；退出 restricted 后会立即使用最新 inherited。后代继承的是当前节点的有效权限，因此不会绕过中间的 restricted 边界。
+
+例如：
+
+```text
+read user:bob   on viking://resources/A
+write group:engineering on viking://resources/A/B
+read user:carol on viking://resources/A/B/C/report.md
+```
+
+`report.md` 的有效权限为：
+
+- Bob：`read`
+- `engineering` 的成员：`write`
+- Carol：`read`
+
+如果把 `A/B` 设为 restricted，Bob 在 `A` 上的权限不会对 `A/B` 及其后代生效，但保存的 inherited 不会被删除。删除 restricted 后，Bob 会立即恢复从 `A` 继承的权限。
+
+## 默认行为与 `acl_mode`
+
+账号级 `acl.enabled` 默认关闭。关闭时，共享资源继续使用原有 URI namespace
+可见性和写入规则，不解析或校验 ACL，也不为新建内容写入 ACL。
+
+开启后，新建共享文件或目录的创建者会在首条 context 记录上获得直接 `manage`；
+父目录权限作为继承 ACL 合并。已有且未设置 ACL 的内容不会迁移或改权，仍按公开
+规则访问；重新关闭后，已有 ACL 也不再参与访问判断。`add-resource` 只把本次生成
+的根目录（`no_split` 时为根文件）作为创建节点：根节点获得创建者直接 `manage`，
+内部节点只继承，不重复写直接授权。重新向量化或覆盖已有 context 不会改变直接 ACL。
+
+`acl_mode` 表示当前资源如何使用 ACL，与账号总开关 `acl.enabled` 不是一回事：
+
+- `none`：该资源不受 ACL 控制，沿用原有可见性规则。
+- `inherit`：使用直接权限和父目录传下来的权限。
+- `restricted`：只使用直接权限，但仍保存并更新父目录传下来的权限。
+
+有 `manage` 权限的用户可以切换 `inherit` / `restricted`，不能直接设置 `none` 绕过父目录权限。退出 restricted 且没有直接权限、父目录也不受 ACL 控制时，系统会恢复为 `none`。restricted 节点即使没有直接权限也不会变公开，其没有单独授权的后代同样不可访问；账号管理员仍有隐式管理权。
+
+## 文件操作
+
+所有文件接口使用同一套权限判断：
+
+| 操作 | 所需能力 |
+|------|----------|
+| read、stat、list、tree、find、search、grep、glob | read |
+| write、create、mkdir、set tags | write |
+| 删除或移动文件 | write |
+| 删除或移动目录 | 目录及完整子树的 manage |
+| 管理 ACL | manage |
+| move 目标父目录 | write |
+
+服务端会先 canonicalize URI，再在同一个鉴权入口中依次执行 account/owner/actor peer 等硬边界、有效 ACL 或 legacy fallback，以及写入和删除的 namespace 防护。
+
+账号开启 `acl.enabled` 时，新建共享节点由创建者的直接 `manage` 完成权限
+bootstrap，后续 ACL 修改要求有效 `manage` 能力。
+
+目录上的 ACL 授权会被所有后代继承。`list`、`tree` 和批量结果仍逐个检查有效 ACL，因为未设置 ACL 的目录可能按原有 URI 规则可见，而某个后代已经通过自己的 ACL 进入控制域。
+
+共享区内部移动时，节点自己的 direct ACL 和 restricted 状态随节点移动，inherited 按新父节点重新计算。个人资源移入共享区时不携带 ACL，只继承目标目录权限；共享资源移回个人区时清空 ACL。
+
+递归修改 tags、删除或移动目录会先校验完整目标子树。任一节点缺少所需能力，或子树扫描不完整，操作都会整体中止。
+
+目录 `stat` 的 `count` 使用相同的路径和 ACL 标量过滤，表示当前用户可见的 context 数量。
+
+## 检索过滤
+
+ACL 只保存在 context collection。每条 context 记录维护当前节点和继承权限两组原生标量字段：
+
+```text
+acl_mode
+acl_direct_grants
+acl_inherited_grants
+```
+
+`acl_direct_grants` 是当前节点直接 ACL，`acl_inherited_grants` 是父节点当前有效 ACL，`acl_mode` 决定 inherited 是否参与当前节点的有效权限。每个 principal 只保存最高 level，编码为 `{mask}:{principal}`：`1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。不维护独立 ACL collection。
+
+请求的可用 principal 为 `user:{ctx.user_id}`、`user:*`，以及 `ctx.group_ids` 中每个 ID 对应的 `group:{group_id}`。检索在共享区内用 `acl_mode IN [inherit, restricted]` 判断受控资源，再匹配各 principal 的 `1`、`3`、`7` grant token：inherit 匹配 direct 或 inherited，restricted 只匹配 direct。旧记录字段缺失、为 `null` 或 `none` 时仍走原有可见性规则，不会因空值漏检，也不会被当作 ACL 已开启。个人资源始终按 URI owner 隔离。
+
+检索 target URI 只是搜索范围，不要求调用者能够读取 target 节点本身。用户即使不能读取中间目录，也可以检索到深层单独授权给自己的文件。
+
+账号开启 `acl.enabled` 时，共享区 context 写入会保留同 URI 已有 direct ACL；
+新创建节点为创建者生成直接 `manage`，并从父节点生成 inherited ACL。
+`add-resource` 的内部节点只继承导入根节点。重新向量化和普通覆盖写不会把受控记录
+恢复为默认可见，也不能通过普通 context 字段直接改 ACL。账号关闭该开关时，检索
+只使用原有 account 和 URI scope 过滤，不使用这些 ACL 字段。
+
+## 示例
+
+将目录授权给 Bob 只读：
+
+```bash
+ov acl grant viking://resources/project-a --principal user:bob --level read
+```
+
+Bob 可以读取和检索该目录的后代，但不能写入或删除。升级为 `write`：
+
+```bash
+ov acl grant viking://resources/project-a --principal user:bob --level write
+```
+
+删除 Bob 在当前节点上的直接授权：
+
+```bash
+ov acl revoke viking://resources/project-a --principal user:bob
+```
+
+如果 Bob 仍被祖先目录授权，该继承权限继续有效。
+
+只使用当前节点直接授权，同时保留并继续更新继承字段：
+
+```bash
+ov acl set viking://resources/project-a --acl-mode restricted
+```
+
+## 相关文档
+
+- [ACL API](../api/12-acl.md) - HTTP、SDK 和 CLI 接口
+- [多租户](./11-multi-tenant.md) - account、user 和角色边界
+- [Viking URI](./04-viking-uri.md) - URI namespace
+- [检索](./07-retrieval.md) - 分层检索流程

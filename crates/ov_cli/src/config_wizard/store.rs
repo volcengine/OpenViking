@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::{
     base_client::BaseClient,
-    config::{Config, DEFAULT_CUSTOM_PORT, default_config_path},
+    config::{Config, DEFAULT_CUSTOM_PORT, KNOWN_CONFIG_KEYS, default_config_path},
     error::{Error, Result},
 };
 
@@ -232,7 +232,18 @@ impl ConfigStore {
         }
         let content = fs::read(&path)
             .map_err(|e| Error::Config(format!("Failed to read config '{name}': {e}")))?;
-        write_file_atomically(&self.active_path, &content)
+        // The connection fields switch wholesale, but the keys `Config` does not
+        // model are machine-level settings rather than part of the profile, so
+        // they stay with the active file — unless the incoming profile names
+        // them itself.
+        match serde_json::from_slice::<Value>(&content) {
+            Ok(mut value) if value.is_object() => {
+                carry_over_unmodeled_keys(&self.active_path, &mut value);
+                let merged = serde_json::to_string_pretty(&value)?;
+                write_file_atomically(&self.active_path, merged.as_bytes())
+            }
+            _ => write_file_atomically(&self.active_path, &content),
+        }
     }
 
     pub fn save_and_activate(&self, name: &str, config: &Config) -> Result<()> {
@@ -258,7 +269,7 @@ impl ConfigStore {
             return Err(Error::Config(format!("Config '{new_name}' already exists")));
         }
 
-        self.save_named_config(new_name, config)?;
+        write_config_file_inheriting(&new_path, config, &old_path)?;
         if was_active {
             // Keep the active config consistent before removing the old saved file. If cleanup
             // fails, the user may see both names, but the active config still points at the edit.
@@ -729,8 +740,38 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
 }
 
 fn write_config_file(path: &Path, config: &Config) -> Result<()> {
-    let content = serde_json::to_string_pretty(config)?;
+    write_config_file_inheriting(path, config, path)
+}
+
+/// `inherit_from` is the file whose unmodeled keys survive the write: the file
+/// being replaced, except on a rename, where they live under the old name.
+fn write_config_file_inheriting(path: &Path, config: &Config, inherit_from: &Path) -> Result<()> {
+    let mut value = serde_json::to_value(config)?;
+    carry_over_unmodeled_keys(inherit_from, &mut value);
+    let content = serde_json::to_string_pretty(&value)?;
     write_file_atomically(path, content.as_bytes())
+}
+
+/// Re-attach the top-level keys `Config` does not model — above all the
+/// `plugin` section the memory plugins keep in ovcli.conf — to a freshly
+/// serialized config that is about to replace the whole file. Modeled keys are
+/// deliberately not carried over: one that is `None` was cleared on purpose,
+/// and restoring it would make clearing impossible.
+fn carry_over_unmodeled_keys(path: &Path, value: &mut Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    let Ok(previous) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(Value::Object(previous)) = serde_json::from_str::<Value>(&previous) else {
+        return;
+    };
+    for (key, previous_value) in previous {
+        if !KNOWN_CONFIG_KEYS.contains(&key.as_str()) {
+            object.entry(key).or_insert(previous_value);
+        }
+    }
 }
 
 fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
@@ -801,6 +842,116 @@ mod tests {
         config.url = url.to_string();
         config.api_key = api_key.map(ToString::to_string);
         config
+    }
+
+    fn plugin_section() -> serde_json::Value {
+        serde_json::json!({
+            "recallCompress": "auto",
+            "claude_code": { "recallCompress": "client" },
+        })
+    }
+
+    fn read_json(path: &Path) -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(path).expect("config should exist"))
+            .expect("config should be valid JSON")
+    }
+
+    #[test]
+    fn rewriting_a_config_keeps_the_plugin_section() {
+        let dir = unique_dir("plugin-passthrough");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("ovcli.conf");
+        fs::write(
+            &path,
+            serde_json::json!({
+                "url": "http://old", "api_key": "old-key", "plugin": plugin_section(),
+            })
+            .to_string(),
+        )
+        .expect("seed config");
+
+        super::write_config_file(&path, &sample_config("http://new", Some("new-key"))).unwrap();
+
+        let written = read_json(&path);
+        assert_eq!(written["url"], "http://new");
+        assert_eq!(written["api_key"], "new-key");
+        assert_eq!(written["plugin"], plugin_section());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rewriting_a_config_still_clears_a_modeled_key() {
+        let dir = unique_dir("plugin-clear");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("ovcli.conf");
+        fs::write(
+            &path,
+            serde_json::json!({
+                "url": "http://local", "api_key": "old-key", "gateway_token": "old-token",
+            })
+            .to_string(),
+        )
+        .expect("seed config");
+
+        super::write_config_file(&path, &sample_config("http://local", Some("new-key"))).unwrap();
+
+        let written = read_json(&path);
+        assert_eq!(written["api_key"], "new-key");
+        assert!(
+            written.get("gateway_token").is_none(),
+            "a modeled key cleared to None must not come back from the old file",
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn renaming_a_config_carries_the_plugin_section_to_the_new_name() {
+        let dir = unique_dir("plugin-rename");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        let old_path = dir.join("ovcli.conf.before");
+        fs::write(
+            &old_path,
+            serde_json::json!({ "url": "http://local", "plugin": plugin_section() }).to_string(),
+        )
+        .expect("seed config");
+
+        store
+            .save_edited_config("before", "after", &sample_config("http://local", None))
+            .expect("rename should succeed");
+
+        assert_eq!(
+            read_json(&dir.join("ovcli.conf.after"))["plugin"],
+            plugin_section()
+        );
+        assert!(!old_path.exists(), "the old name should be removed");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn activating_a_config_keeps_the_active_files_plugin_section() {
+        let dir = unique_dir("plugin-activate");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let store = ConfigStore::for_config_dir(dir.clone());
+        fs::write(
+            dir.join("ovcli.conf"),
+            serde_json::json!({ "url": "http://old", "plugin": plugin_section() }).to_string(),
+        )
+        .expect("seed active config");
+        fs::write(
+            dir.join("ovcli.conf.other"),
+            serde_json::json!({ "url": "http://other" }).to_string(),
+        )
+        .expect("seed saved config");
+
+        store
+            .activate_config("other")
+            .expect("activate should succeed");
+
+        let active = read_json(&dir.join("ovcli.conf"));
+        assert_eq!(active["url"], "http://other");
+        assert_eq!(active["plugin"], plugin_section());
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -15,6 +15,10 @@ variables:
     type: "string"
     description: "New conversation content since the last update."
     required: true
+  - name: "output_language"
+    type: "string"
+    description: "Language for generated Working Memory section content"
+    required: true
   - name: "wm_section_reminders"
     type: "string"
     description: "Dynamic section-size warnings generated from the current Working Memory."
@@ -50,6 +54,8 @@ template: |
   {% endif %}
 
   # RULE 0 — Produce a continuation-grade Working Memory.
+
+  Write all generated section content in {{ output_language }}. Keep the 7 canonical English section headers unchanged because the update parser relies on them.
 
   The goal is a document that lets a future assistant seamlessly continue the
   conversation. Concrete facts (names, dates, decisions, relationships, exact

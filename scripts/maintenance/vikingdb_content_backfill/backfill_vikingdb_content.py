@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import sys
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from openviking.core.namespace import context_type_for_uri, owner_fields_for_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.storage.vectordb_adapters.base import _truncate_text_field
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.agfs_utils import (
     RagfsBindingConfig,
@@ -25,26 +25,6 @@ from openviking.utils.agfs_utils import (
 )
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
-
-
-def seed_uri_for_level(uri: str, level: Any) -> str:
-    """Build the deterministic ID seed URI used by embedding writes."""
-    try:
-        level_int = int(level)
-    except (TypeError, ValueError):
-        level_int = 2
-
-    if level_int == 0:
-        return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
-    if level_int == 1:
-        return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
-    return uri
-
-
-def vector_record_id(account_id: str, uri: str, level: Any) -> str:
-    """Return the deterministic vector record ID for account, URI, and level."""
-    seed_uri = seed_uri_for_level(uri, level)
-    return hashlib.md5(f"{account_id}:{seed_uri}".encode("utf-8")).hexdigest()
 
 
 def has_empty_content(record: dict[str, Any]) -> bool:

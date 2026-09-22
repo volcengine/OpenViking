@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from openviking.models.embedder.base import query_embed_cache_scope
 from openviking.retrieve.context_assembler.budget import (
     oversized_abstract_needs_body,
     per_entry_cap,
@@ -80,19 +81,23 @@ async def assemble_context(
     cooled = ledger.cooled_uris() if ledger else set()
     excluded = normalize_exclude_uris(params.exclude_uris) | cooled
 
-    candidates, gather_stats = await gather_candidates(
-        service=service,
-        ctx=ctx,
-        queries=queries,
-        quotas=quotas,
-        limit=params.limit,
-        score_threshold=params.score_threshold,
-        filter=params.filter,
-        image_url=params.image_url,
-        peer_scope=params.peer_scope,
-        penalties=penalties,
-        excluded=excluded,
-    )
+    # The fan-out below embeds each planned query once per (query, target)
+    # find, so wrap it in the request-scoped query embedding cache: sibling
+    # finds share the first in-flight embed of each distinct query text.
+    with query_embed_cache_scope():
+        candidates, gather_stats = await gather_candidates(
+            service=service,
+            ctx=ctx,
+            queries=queries,
+            quotas=quotas,
+            limit=params.limit,
+            score_threshold=params.score_threshold,
+            filter=params.filter,
+            image_url=params.image_url,
+            peer_scope=params.peer_scope,
+            penalties=penalties,
+            excluded=excluded,
+        )
 
     # Read only the candidates whose planned tier actually needs a body: with
     # the default tiers that is the events bucket, not every hit.

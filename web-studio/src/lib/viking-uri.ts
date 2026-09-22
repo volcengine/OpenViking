@@ -5,6 +5,25 @@ export function fileNameFromUri(uri: string): string {
   return trimmed.slice(index + 1) || trimmed
 }
 
+const DIRECTORY_SEMANTIC_SIDECARS = new Set(['.abstract.md', '.overview.md'])
+
+export function isDirectorySemanticSidecarUri(uri: string): boolean {
+  return DIRECTORY_SEMANTIC_SIDECARS.has(fileNameFromUri(uri))
+}
+
+/**
+ * L0/L1 hits all share one of two hidden filenames, so a bare basename loses
+ * the identity of the directory they summarize. Keep ordinary result names
+ * compact while adding exactly one parent segment for semantic sidecars.
+ */
+export function retrievalResultNameFromUri(uri: string): string {
+  const name = fileNameFromUri(uri)
+  if (!DIRECTORY_SEMANTIC_SIDECARS.has(name)) return name
+
+  const parentName = fileNameFromUri(parentUri(uri))
+  return parentName ? `${parentName}/${name}` : name
+}
+
 export function normalizeDirUri(uri: string): string {
   const value = uri.trim()
   if (!value) {

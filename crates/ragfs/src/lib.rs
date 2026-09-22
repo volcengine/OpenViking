@@ -31,9 +31,12 @@
 
 #[cfg(feature = "cache")]
 pub mod cache;
+#[cfg(feature = "cache")]
+pub mod cache_runtime;
 pub mod core;
 pub mod crypto;
 pub mod lock;
+pub mod metrics;
 pub mod multibackend;
 pub mod git;
 pub mod plugins;

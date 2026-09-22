@@ -35,6 +35,15 @@ impl Message {
     }
 }
 
+/// Current queue occupancy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct QueueState {
+    /// Messages available for dequeue.
+    pub pending: usize,
+    /// Messages dequeued but not acknowledged.
+    pub processing: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct StoredMessage {
     id: String,
@@ -161,6 +170,9 @@ pub trait QueueBackend: Send + Sync {
     /// Get the number of messages in the queue
     fn size(&self, queue_name: &str) -> Result<usize>;
 
+    /// Get pending and processing message counts from one backend snapshot
+    fn status(&self, queue_name: &str) -> Result<QueueState>;
+
     /// List every unacknowledged message without changing queue state
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>>;
 
@@ -193,6 +205,7 @@ impl Default for SQLiteQueueOptions {
 /// A single queue with its messages
 struct Queue {
     messages: VecDeque<Message>,
+    processing: VecDeque<Message>,
     last_enqueue_time: SystemTime,
 }
 
@@ -200,6 +213,7 @@ impl Queue {
     fn new() -> Self {
         Self {
             messages: VecDeque::new(),
+            processing: VecDeque::new(),
             last_enqueue_time: SystemTime::UNIX_EPOCH,
         }
     }
@@ -271,7 +285,11 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
-        Ok(queue.messages.pop_front())
+        let message = queue.messages.pop_front();
+        if let Some(message) = &message {
+            queue.processing.push_back(message.clone());
+        }
+        Ok(message)
     }
 
     fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
@@ -292,12 +310,28 @@ impl QueueBackend for MemoryBackend {
         Ok(queue.messages.len())
     }
 
+    fn status(&self, queue_name: &str) -> Result<QueueState> {
+        let queue = self
+            .queues
+            .get(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
+        Ok(QueueState {
+            pending: queue.messages.len(),
+            processing: queue.processing.len(),
+        })
+    }
+
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
         let queue = self
             .queues
             .get(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
-        Ok(queue.messages.iter().cloned().collect())
+        Ok(queue
+            .messages
+            .iter()
+            .chain(queue.processing.iter())
+            .cloned()
+            .collect())
     }
 
     fn clear(&mut self, queue_name: &str) -> Result<()> {
@@ -307,6 +341,7 @@ impl QueueBackend for MemoryBackend {
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         queue.messages.clear();
+        queue.processing.clear();
         Ok(())
     }
 
@@ -325,10 +360,9 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
-        // Find and remove message by ID
-        let original_len = queue.messages.len();
-        queue.messages.retain(|msg| msg.id != msg_id);
-        Ok(queue.messages.len() != original_len)
+        let original_len = queue.processing.len();
+        queue.processing.retain(|msg| msg.id != msg_id);
+        Ok(queue.processing.len() != original_len)
     }
 }
 
@@ -702,6 +736,30 @@ impl QueueBackend for SQLiteQueueBackend {
         Ok(count as usize)
     }
 
+    fn status(&self, queue_name: &str) -> Result<QueueState> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
+
+        Self::require_queue_exists(&conn, queue_name)?;
+
+        let (pending, processing): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0)
+                 FROM queue_messages WHERE queue_name = ?1",
+                params![queue_name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| Error::internal(format!("sqlite status query error: {}", e)))?;
+        Ok(QueueState {
+            pending: pending as usize,
+            processing: processing as usize,
+        })
+    }
+
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
         let conn = self
             .conn
@@ -866,11 +924,27 @@ mod tests {
 
         let dequeued1 = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(dequeued1.data, b"message 1");
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 1,
+                processing: 1,
+            }
+        );
+        assert!(backend.ack("test", &dequeued1.id).unwrap());
 
         let dequeued2 = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(dequeued2.data, b"message 2");
+        assert!(backend.ack("test", &dequeued2.id).unwrap());
 
         assert_eq!(backend.size("test").unwrap(), 0);
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 0,
+                processing: 0,
+            }
+        );
         assert!(backend.dequeue("test").unwrap().is_none());
     }
 
@@ -941,6 +1015,7 @@ mod tests {
         assert!(backend.dequeue("nonexistent").is_err());
         assert!(backend.peek("nonexistent").is_err());
         assert!(backend.size("nonexistent").is_err());
+        assert!(backend.status("nonexistent").is_err());
         assert!(backend.clear("nonexistent").is_err());
     }
 
@@ -955,14 +1030,35 @@ mod tests {
 
         backend.enqueue("test", msg1).unwrap();
         backend.enqueue("test", msg2).unwrap();
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 2,
+                processing: 0,
+            }
+        );
 
         let first = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(first.data, b"message 1");
         assert_eq!(backend.size("test").unwrap(), 1);
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 1,
+                processing: 1,
+            }
+        );
         let unacked = backend.list_unacked("test").unwrap();
         assert_eq!(unacked.len(), 2);
         assert_eq!(unacked[0].id, msg1_id);
         assert!(backend.ack("test", &msg1_id).unwrap());
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 1,
+                processing: 0,
+            }
+        );
 
         let second = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(second.data, b"message 2");

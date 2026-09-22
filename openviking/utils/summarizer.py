@@ -39,6 +39,9 @@ class Summarizer:
         ctx: "RequestContext",
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
+        created: bool = False,
+        file_md5: str | None = None,
+        file_abstract: str = "",
     ) -> Dict[str, Any]:
         """Summarize one flat file and refresh its parent directory semantics."""
         parent = VikingURI(file_uri).parent
@@ -59,7 +62,7 @@ class Summarizer:
             role=str(ctx.role),
             skip_vectorization=skip_vectorization,
             telemetry_id=telemetry_id,
-            changes={"modified": [file_uri]},
+            changes={"added" if created else "modified": [file_uri]},
             coalesce_key=build_semantic_coalesce_key(
                 context_type=context_type_for_uri(file_uri),
                 uri=parent_uri,
@@ -68,6 +71,8 @@ class Summarizer:
                 peer_id=ctx.user.user_id,
             ),
             ingest_options=ingest_options,
+            file_md5s={file_uri: file_md5} if file_md5 else None,
+            file_abstracts={file_uri: file_abstract} if file_abstract else None,
         )
         if telemetry_id:
             get_request_wait_tracker().register_semantic_root(telemetry_id, msg.id)
@@ -110,6 +115,17 @@ class Summarizer:
         ingest_options = IngestOptions.from_value(kwargs.get("ingest_options"))
         source = kwargs.get("semantic_source")
         generation_trigger = str(kwargs.get("generation_trigger") or "manual_refresh")
+        # Pre-computed change set (local incremental import): when present, the
+        # semantic tree restricts re-summarization/vectorization to these files
+        # instead of diffing the whole tree.
+        changes = kwargs.get("changes")
+        # Per-file md5 (target-URI keyed) for those changed files, so the tree executor's
+        # re-vectorization records the fresh fingerprint.
+        file_md5s = kwargs.get("file_md5s") or {}
+        artifact_ref = kwargs.get("artifact_ref")
+        artifact_files = kwargs.get("artifact_files") or []
+        file_abstracts = kwargs.get("file_abstracts") or {}
+        semantic_plan = kwargs.get("semantic_plan")
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
@@ -182,6 +198,7 @@ class Summarizer:
                     context_type=context_type,
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
+                    group_ids=ctx.group_ids,
                     peer_id=ctx.user.user_id,
                     role=str(ctx.role),
                     skip_vectorization=skip_vectorization,
@@ -193,6 +210,12 @@ class Summarizer:
                     ingest_options=ingest_options,
                     source=source,
                     generation_trigger=generation_trigger,
+                    changes=changes,
+                    file_md5s=file_md5s,
+                    artifact_ref=artifact_ref,
+                    artifact_files=artifact_files,
+                    file_abstracts=file_abstracts,
+                    plan=semantic_plan,
                 )
                 if msg.telemetry_id:
                     get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
