@@ -16,7 +16,6 @@ from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
-    AlreadyExistsError,
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
@@ -1111,26 +1110,40 @@ async def test_create_mode_refreshes_canonical_user_memory_uri(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_mode_existing_file_raises_409(monkeypatch):
+async def test_create_mode_overwrites_existing_file(monkeypatch):
+    # create is an upsert alias for replace: an existing target is overwritten,
+    # never rejected with AlreadyExistsError.
     file_uri = "viking://user/default/memories/existing.md"
     root_uri = "viking://user/default/memories"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=True)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
 
-    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None, lease_ref=None):
-        del uri, content, mode, ctx, lock_handle, lease_ref
-        return None
+    write_calls = []
 
-    async def _fake_wait_for_queues(*, timeout):
-        del timeout
-        return None
+    async def _fake_write_in_place(uri, content, *, mode, ctx, lock_handle=None, lease_ref=None):
+        del ctx, lock_handle, lease_ref
+        write_calls.append((uri, content, mode))
+        return content.encode("utf-8")
+
+    async def _fake_refresh_schema_overview(**kwargs):
+        del kwargs
+        return True
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
-    monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+    monkeypatch.setattr(
+        "openviking.storage.content_write.MemoryUpdater.refresh_schema_overview",
+        _fake_refresh_schema_overview,
+    )
 
-    with pytest.raises(AlreadyExistsError):
-        await coordinator.write(uri=file_uri, content="content", mode="create", ctx=ctx, wait=True)
+    result = await coordinator.write(
+        uri=file_uri, content="content", mode="create", ctx=ctx, wait=False
+    )
+
+    # response echoes the requested mode, but an existing target uses replace
+    # rendering (memory keeps its metadata trailer).
+    assert result["mode"] == "create"
+    assert write_calls == [(file_uri, "content", "replace")]
 
 
 @pytest.mark.asyncio

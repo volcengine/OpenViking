@@ -224,8 +224,8 @@ async def test_api_create_mode_write_then_read(client):
     assert read_resp.json()["result"] == "# Hello\n\nWrite-then-read verification."
 
 
-async def test_api_create_mode_existing_file_409(client_with_resource):
-    """Test create mode on an existing file should return 409."""
+async def test_api_create_mode_existing_file_overwrites(client_with_resource):
+    """create is an upsert: writing an existing file overwrites it, no 409."""
     client, uri = client_with_resource
     file_uri = await _first_file_uri(client, uri)
 
@@ -233,15 +233,19 @@ async def test_api_create_mode_existing_file_409(client_with_resource):
         "/api/v1/content/write",
         json={
             "uri": file_uri,
-            "content": "new content",
+            "content": "# Overwritten\n\nvia create.",
             "mode": "create",
             "wait": True,
         },
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "ALREADY_EXISTS"
+    assert body["status"] == "ok"
+    assert body["result"]["mode"] == "create"
+
+    read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
+    assert read_resp.status_code == 200
+    assert read_resp.json()["result"] == "# Overwritten\n\nvia create."
 
 
 async def test_api_create_mode_invalid_extension_400(client):
