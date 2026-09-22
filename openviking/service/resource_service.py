@@ -21,9 +21,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from openviking.connector.auth import (
-    LOCAL_REFRESH_DISABLED,
     OAUTH_REF_ARG,
-    external_auth_url,
     feishu_token_scope,
     is_external_feishu_auth,
     prepare_feishu_auth,
@@ -482,7 +480,7 @@ class ResourceService:
             )
 
         normalized = dict(args)
-        validate_feishu_auth_args(normalized, watch_interval)
+        validate_feishu_auth_args(normalized)
         raw_parse_mode = normalized.pop("parse_mode", ParseMode.DEFAULT)
         try:
             parse_mode = normalize_parse_mode(raw_parse_mode)
@@ -930,8 +928,6 @@ class ResourceService:
             watch_auth_state = dict(task_auth) if creating_watch else None
             return {"auth_config": auth_config}, watch_auth_state
         if is_feishu_auth_state(task_auth):
-            if msg.watch_interval > 0 and external_auth_url():
-                raise InvalidArgumentError(LOCAL_REFRESH_DISABLED)
             token = task_auth.get("access_token")
             if not isinstance(token, str) or not token.strip():
                 raise InvalidArgumentError("Stored Feishu task credentials are invalid.")
@@ -1941,7 +1937,7 @@ class ResourceService:
             kwargs.setdefault("request_validator", ensure_public_remote_target)
 
         external_auth_state, token_provider = await prepare_feishu_auth(
-            connector, path=path, ctx=ctx, args=kwargs, watch_interval=watch_interval
+            connector, path=path, ctx=ctx, args=kwargs
         )
         if external_auth_state is not None:
             normalized_args.watch_auth_state = external_auth_state

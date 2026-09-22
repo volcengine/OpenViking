@@ -60,7 +60,7 @@ class ConnectorClient:
         """Read a centrally managed token from synchronous Feishu worker threads."""
         try:
             with httpx.Client(timeout=10.0) as client:
-                rsp = client.post(auth_url, json=reference, headers=self._request_headers(api_key))
+                rsp = client.post(auth_url, json=reference, headers={"X-API-Key": api_key})
             rsp.raise_for_status()
             return _unwrap_connector_response(rsp.json())
         except (httpx.HTTPError, ValueError, InternalError):

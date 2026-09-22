@@ -17,7 +17,7 @@ from openviking.parse.understanding_api import UnderstandingAPI
 from openviking.resource.feishu_watch_auth import (
     FeishuAppCredentials,
     FeishuOAuthClient,
-    FeishuTokenRefreshError,
+    FeishuRefreshedToken,
 )
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
 
@@ -40,18 +40,15 @@ def external_endpoint(monkeypatch):
 def test_http_contract_and_secret_safe_errors(monkeypatch):
     responses = iter(
         [
-            {
-                "code": 0,
-                "data": {"access_token": "user-token", "expires_at": 4102444800, "version": 2},
-            },
+            {"access_token": "user-token", "expires_at": 4102444800, "version": 2},
             {"code": 123, "message": "must-not-expose-secret"},
         ]
     )
 
     def handle(request):
         assert request.method == "POST"
-        assert request.headers["authorization"] == "Bearer key"
-        assert request.headers["v-account-id"] == "cloud-account"
+        assert request.headers["x-api-key"] == "key"
+        assert "authorization" not in request.headers
         assert json.loads(request.content) == REFERENCE
         return httpx.Response(200, json=next(responses))
 
@@ -131,25 +128,34 @@ def test_reference_identity_is_checked(reference):
 
 
 @pytest.mark.asyncio
-async def test_external_mode_never_refreshes_locally(monkeypatch):
+async def test_external_endpoint_does_not_disable_local_refresh(monkeypatch):
     credentials = FeishuAppCredentials("app", "secret", "https://open.feishu.cn", 30)
     client = FeishuOAuthClient(credentials)
-    refresh = Mock(side_effect=AssertionError("local refresh must not run"))
+    refreshed = FeishuRefreshedToken("new-access", "new-refresh", 7200)
+    refresh = Mock(return_value=refreshed)
     monkeypatch.setattr(client, "_refresh_user_access_token_sync", refresh)
-    with pytest.raises(FeishuTokenRefreshError, match="disabled"):
-        await client.refresh_user_access_token("shared-refresh-token")
-    refresh.assert_not_called()
+    assert await client.refresh_user_access_token("local-refresh-token") == refreshed
+    refresh.assert_called_once_with("local-refresh-token")
 
 
 @pytest.mark.asyncio
-async def test_partial_directory_auth_failure_never_reaches_finalization(monkeypatch, tmp_path):
+@pytest.mark.parametrize("local_output", [False, True])
+async def test_partial_directory_auth_failure_never_reaches_finalization(
+    monkeypatch, tmp_path, local_output
+):
     from contextlib import nullcontext
     from unittest.mock import AsyncMock
 
     from openviking.parse.feishu_import import FeishuImportPlan
     from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.utils.config.parser_config import FeishuConfig
 
-    accessor = FeishuAccessor()
+    artifact_ref = SimpleNamespace(backend="local") if local_output else None
+    output_store = SimpleNamespace(backend="local", cleanup=AsyncMock()) if local_output else None
+
+    accessor = FeishuAccessor()._new_operation(
+        "https://example.feishu.cn/drive/folder/test", config=FeishuConfig()
+    )
     monkeypatch.setattr(
         accessor,
         "_list_drive_folder_children",
@@ -181,11 +187,17 @@ async def test_partial_directory_auth_failure_never_reaches_finalization(monkeyp
         )
         assert [p.name for p in tmp_path.iterdir()] == ["A.txt"]
         assert len(skipped) == 1
-        return SimpleNamespace(temp_dir_path="viking://temp/partial")
+        return SimpleNamespace(temp_dir_path="viking://temp/partial", artifact_ref=artifact_ref)
 
     fs = SimpleNamespace(bind_request_context=lambda _: nullcontext(), delete_temp=AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fs)
-    processor = ResourceProcessor(Mock())
+    processor = ResourceProcessor(
+        Mock(),
+        runtime_config_manager=SimpleNamespace(
+            resolve_account=AsyncMock(return_value=FeishuConfig())
+        ),
+    )
+    monkeypatch.setattr(processor, "_build_parse_output_store", lambda: output_store)
     processor._media_processor = SimpleNamespace(process=parse)
     processor.tree_builder.finalize_from_temp = AsyncMock()
     ctx = Mock()
@@ -194,7 +206,11 @@ async def test_partial_directory_auth_failure_never_reaches_finalization(monkeyp
             path="https://example.feishu.cn/drive/folder/test", ctx=ctx
         )
     processor.tree_builder.finalize_from_temp.assert_not_awaited()
-    fs.delete_temp.assert_awaited_once_with("viking://temp/partial", ctx=ctx)
+    if local_output:
+        output_store.cleanup.assert_awaited_once_with(artifact_ref)
+        fs.delete_temp.assert_not_awaited()
+    else:
+        fs.delete_temp.assert_awaited_once_with("viking://temp/partial", ctx=ctx)
 
 
 @pytest.mark.asyncio

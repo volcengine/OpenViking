@@ -16,10 +16,6 @@ from openviking_cli.exceptions import InternalError, InvalidArgumentError
 
 OAUTH_REF_ARG = "openviking_oauth_ref"
 EXTERNAL_FEISHU_PROVIDER = "feishu_external"
-LOCAL_REFRESH_DISABLED = (
-    "connector.auth disables local Feishu token refresh; "
-    "recreate the watch with args.openviking_oauth_ref."
-)
 current_feishu_token: ContextVar[Optional["ExternalFeishuToken"]] = ContextVar(
     "external_feishu_token", default=None
 )
@@ -31,7 +27,7 @@ def external_auth_url() -> str:
     return get_openviking_config().connector.auth
 
 
-def validate_feishu_auth_args(args: Dict[str, Any], watch_interval: float) -> None:
+def validate_feishu_auth_args(args: Dict[str, Any]) -> None:
     if OAUTH_REF_ARG in args and any(
         key in args
         for key in (
@@ -45,15 +41,13 @@ def validate_feishu_auth_args(args: Dict[str, Any], watch_interval: float) -> No
         raise InvalidArgumentError(
             "OAuth references cannot be combined with explicit Feishu credentials."
         )
-    if watch_interval > 0 and args.get("feishu_access_token") and external_auth_url():
-        raise InvalidArgumentError(LOCAL_REFRESH_DISABLED)
 
 
 async def prepare_feishu_auth(
-    connector, *, path: str, ctx: RequestContext, args: Dict[str, Any], watch_interval: float
+    connector, *, path: str, ctx: RequestContext, args: Dict[str, Any]
 ) -> tuple[Optional[Dict[str, Any]], Optional["ExternalFeishuToken"]]:
     """Consume the reference before native source preparation and persist no token copies."""
-    validate_feishu_auth_args(args, watch_interval)
+    validate_feishu_auth_args(args)
     if OAUTH_REF_ARG not in args:
         return None, None
     from openviking.parse.accessors.feishu_accessor import FeishuAccessor

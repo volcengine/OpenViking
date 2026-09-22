@@ -722,8 +722,9 @@ class ResourceProcessor:
                 try:
                     check_feishu_auth()
                 except OpenVikingError:
-                    if parse_result.temp_dir_path:
-                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                    await self._cleanup_parse_result_artifact(
+                        parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
+                    )
                     raise
                 result["source_path"] = parse_result.source_path or path
                 result["meta"] = parse_result.meta
