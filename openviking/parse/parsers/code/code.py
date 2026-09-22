@@ -11,10 +11,8 @@ Implements V5.0 asynchronous architecture:
 
 import asyncio
 import os
-import shutil
 import stat
 import time
-import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional, Set, Tuple, Union
@@ -39,6 +37,9 @@ from openviking.parse.parsers.constants import (
 from openviking.parse.parsers.upload_utils import upload_directory
 from openviking.utils import is_github_url, parse_code_hosting_url
 from openviking.utils.code_hosting_utils import _domain_matches
+from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.remote_fetch import download_remote_file
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
@@ -426,19 +427,15 @@ class CodeRepositoryParser(BaseParser):
         extract_dir = os.path.join(target_dir, "_extracted")
         os.makedirs(extract_dir, exist_ok=True)
 
-        # Download (blocking HTTP; run in thread pool to avoid stalling event loop).
-        def _download() -> None:
-            headers = {"User-Agent": "OpenViking"}
-            github_token = os.environ.get("GITHUB_TOKEN")
-            if github_token:
-                headers["Authorization"] = f"token {github_token}"
-
-            req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
+        headers = {"User-Agent": "OpenViking"}
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
 
         try:
-            await asyncio.to_thread(_download)
+            await download_remote_file(zip_url, zip_path, headers=headers)
+        except PermissionDeniedError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
 
@@ -492,6 +489,7 @@ class CodeRepositoryParser(BaseParser):
         Returns:
             Repository name derived from the URL (e.g. "OpenViking").
         """
+        await asyncio.to_thread(ensure_public_remote_target, url)
         name = self._get_repo_name(url)
         logger.info(f"Cloning {url} to {target_dir}...")
 
