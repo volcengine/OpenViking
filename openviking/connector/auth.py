@@ -1,0 +1,167 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+"""Task-scoped access to centrally managed Feishu OAuth credentials."""
+
+import asyncio
+import math
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from threading import Lock
+from typing import Any, Dict, Optional
+
+from openviking.connector.client import ConnectorClient
+from openviking.server.identity import RequestContext
+from openviking_cli.exceptions import InternalError, InvalidArgumentError
+
+OAUTH_REF_ARG = "openviking_oauth_ref"
+EXTERNAL_FEISHU_PROVIDER = "feishu_external"
+LOCAL_REFRESH_DISABLED = (
+    "connector.auth disables local Feishu token refresh; "
+    "recreate the watch with args.openviking_oauth_ref."
+)
+current_feishu_token: ContextVar[Optional["ExternalFeishuToken"]] = ContextVar(
+    "external_feishu_token", default=None
+)
+
+
+def external_auth_url() -> str:
+    from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+    return get_openviking_config().connector.auth
+
+
+def validate_feishu_auth_args(args: Dict[str, Any], watch_interval: float) -> None:
+    if OAUTH_REF_ARG in args and any(
+        key in args
+        for key in (
+            "feishu_access_token",
+            "feishu_refresh_token",
+            "feishu_app_id",
+            "feishu_app_secret",
+            "lark_file",
+        )
+    ):
+        raise InvalidArgumentError(
+            "OAuth references cannot be combined with explicit Feishu credentials."
+        )
+    if watch_interval > 0 and args.get("feishu_access_token") and external_auth_url():
+        raise InvalidArgumentError(LOCAL_REFRESH_DISABLED)
+
+
+async def prepare_feishu_auth(
+    connector, *, path: str, ctx: RequestContext, args: Dict[str, Any], watch_interval: float
+) -> tuple[Optional[Dict[str, Any]], Optional["ExternalFeishuToken"]]:
+    """Consume the reference before native source preparation and persist no token copies."""
+    validate_feishu_auth_args(args, watch_interval)
+    if OAUTH_REF_ARG not in args:
+        return None, None
+    from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+    if not FeishuAccessor._is_feishu_url(path):
+        raise InvalidArgumentError("OAuth references require a Feishu document URL.")
+    reference = validate_oauth_ref(args.pop(OAUTH_REF_ARG), ctx.user.user_id)
+    provider = ExternalFeishuToken(reference, ctx.api_key or "")
+    args["feishu_access_token"] = await asyncio.to_thread(provider.get_token)
+    state = {
+        "provider": EXTERNAL_FEISHU_PROVIDER,
+        "credentials": await connector.create_watch_auth_state(
+            api_key=ctx.api_key,
+            account_id=ctx.account_id,
+            add_type="feishu_doc",
+            path=path,
+            connector_args={OAUTH_REF_ARG: reference},
+        ),
+    }
+    return state, provider
+
+
+async def restore_feishu_request(
+    connector, state: Dict[str, Any], *, path: str, ctx: RequestContext
+) -> tuple[str, Dict[str, str]]:
+    api_key, add_type, args = await connector.restore_watch_request(
+        state.get("credentials", {}), account_id=ctx.account_id, path=path
+    )
+    if add_type != "feishu_doc":
+        raise InvalidArgumentError("Stored external Feishu credentials are invalid.")
+    return api_key, validate_oauth_ref(args.get(OAUTH_REF_ARG), ctx.user.user_id)
+
+
+async def restore_feishu_token(
+    connector, state: Dict[str, Any], *, path: str, ctx: RequestContext
+) -> tuple["ExternalFeishuToken", str]:
+    api_key, reference = await restore_feishu_request(connector, state, path=path, ctx=ctx)
+    provider = ExternalFeishuToken(reference, api_key)
+    return provider, await asyncio.to_thread(provider.get_token)
+
+
+def validate_oauth_ref(value: Any, ov_user_id: str) -> Dict[str, str]:
+    keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
+    if (
+        not isinstance(value, dict)
+        or set(value) != keys
+        or any(not isinstance(value[key], str) or not value[key].strip() for key in keys)
+    ):
+        raise InvalidArgumentError("args.openviking_oauth_ref contains an invalid OAuth reference.")
+    ref = {key: value[key].strip() for key in keys}
+    if ref["type"] != "oauth" or ref["platform"] != "feishu_doc":
+        raise InvalidArgumentError("Native Feishu imports require a feishu_doc OAuth reference.")
+    if ref["ov_user_id"] != ov_user_id:
+        raise InvalidArgumentError(
+            "OAuth reference does not belong to the current OpenViking user."
+        )
+    return ref
+
+
+def is_external_feishu_auth(state: Optional[Dict[str, Any]]) -> bool:
+    return isinstance(state, dict) and state.get("provider") == EXTERNAL_FEISHU_PROVIDER
+
+
+class ExternalFeishuToken:
+    """Cache only access tokens, within one execution; never refresh OAuth locally."""
+
+    def __init__(self, reference: Dict[str, str], api_key: str):
+        self._url = external_auth_url()
+        if not self._url:
+            raise InvalidArgumentError(
+                "connector.auth is required for external Feishu authorization."
+            )
+        if not api_key:
+            raise InvalidArgumentError("External Feishu authorization requires an API key.")
+        self._reference = reference
+        self._api_key = api_key
+        self._client = ConnectorClient("", "", account_id=reference["account_id"])
+        self._lock = Lock()
+        self._token = ""
+        self._valid_until = 0.0
+
+    def get_token(self) -> str:
+        with self._lock:
+            if self._token and time.time() < self._valid_until:
+                return self._token
+            data = self._client.get_oauth_access_token(self._url, self._api_key, self._reference)
+            token = data.get("access_token")
+            expires_at = data.get("expires_at", 0)
+            now = time.time()
+            if (
+                not isinstance(token, str)
+                or not token.strip()
+                or type(expires_at) not in (int, float)
+                or not math.isfinite(expires_at)
+                or expires_at < 0
+                or (expires_at > 0 and expires_at <= now)
+            ):
+                raise InternalError("External OAuth returned an invalid or expired access token.")
+            self._token = token.strip()
+            self._valid_until = min(now + 60, expires_at - 30) if expires_at else now + 60
+            return self._token
+
+
+@contextmanager
+def feishu_token_scope(token: Optional[ExternalFeishuToken]):
+    """Context variables also follow asyncio.to_thread into the synchronous SDK."""
+    handle = current_feishu_token.set(token)
+    try:
+        yield
+    finally:
+        current_feishu_token.reset(handle)

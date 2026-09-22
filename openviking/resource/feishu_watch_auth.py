@@ -191,6 +191,12 @@ class FeishuOAuthClient:
         return token.strip()
 
     async def refresh_user_access_token(self, refresh_token: str) -> FeishuRefreshedToken:
+        from openviking.connector.auth import external_auth_url
+
+        if external_auth_url():
+            raise FeishuTokenRefreshError(
+                "Local Feishu token refresh is disabled by connector.auth.", permanent=True
+            )
         if not isinstance(refresh_token, str) or not refresh_token.strip():
             raise FeishuTokenRefreshError(
                 "Feishu refresh token is missing for watch task.",

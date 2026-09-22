@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -64,6 +65,7 @@ class ConnectorConfig(BaseModel):
     enable: bool = False
     connector: str = ""
     tracker: str = ""
+    auth: str = ""
     timeout_seconds: int = 3600
     poll_interval_ms: int = 5000
     allowed_add_types: List[str] = Field(default_factory=lambda: ["tos"])
@@ -72,6 +74,19 @@ class ConnectorConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "ConnectorConfig":
+        self.auth = self.auth.strip()
+        if self.auth:
+            url = urlsplit(self.auth)
+            if (
+                url.scheme not in {"http", "https"}
+                or not url.hostname
+                or url.username
+                or url.password
+                or url.fragment
+            ):
+                raise ValueError(
+                    "connector.auth must be an HTTP(S) endpoint URL without credentials or fragment"
+                )
         if self.enable:
             for name, url in (("connector", self.connector), ("tracker", self.tracker)):
                 if not url.strip():
