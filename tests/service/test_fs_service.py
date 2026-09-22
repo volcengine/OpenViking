@@ -914,12 +914,22 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "name",
-    [".path.ovlock", ".exact.ovlock.notes.md.0123abcd", ".redirect.json", ".sync_log.json"],
+    [
+        ".path.ovlock",
+        ".exact.ovlock.",
+        ".exact.ovlock.probe.md",
+        ".exact.ovlock.notes.md.0123abcd",
+        ".redirect.json",
+        ".sync_log.json",
+    ],
 )
-async def test_mkdir_cp_mv_reject_storage_internal_names(request_context, name):
+@pytest.mark.parametrize("suffix", ["", "/", "/child", "/child/notes.md"])
+async def test_mkdir_cp_mv_reject_storage_internal_names(request_context, name, suffix):
     viking_fs = _FakeVikingFS(events=[])
     service = FSService(viking_fs=viking_fs)
-    target = f"viking://resources/project/{name}"
+    target = f"viking://resources/project/{name}{suffix}"
+    viking_fs.exists = AsyncMock()
+    viking_fs.mkdir = AsyncMock()
 
     with pytest.raises(InvalidArgumentError, match="storage internal name"):
         await service.mkdir(target, ctx=request_context)
@@ -928,6 +938,9 @@ async def test_mkdir_cp_mv_reject_storage_internal_names(request_context, name):
     with pytest.raises(InvalidArgumentError, match="storage internal name"):
         await service.mv("viking://resources/project/a.md", target, ctx=request_context)
     assert viking_fs.mv_calls == []
+    assert viking_fs.cp_calls == []
+    viking_fs.exists.assert_not_called()
+    viking_fs.mkdir.assert_not_called()
 
 
 async def test_resource_mv_without_watch_scheduler_moves_resource_directly(request_context):

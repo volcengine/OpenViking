@@ -11,7 +11,7 @@ from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from openviking.core.context import ContextLevel
-from openviking.core.namespace import classify_uri, context_type_for_uri, uri_leaf_name
+from openviking.core.namespace import classify_uri, context_type_for_uri, uri_leaf_name, uri_parts
 from openviking.privacy import (
     UserPrivacyConfigService,
     get_skill_name_from_uri,
@@ -323,8 +323,8 @@ class FSService:
 
     @staticmethod
     def _reject_storage_internal_target(uri: str) -> None:
-        """Refuse to create an entry whose name belongs to the storage layer."""
-        if is_storage_internal_name(uri_leaf_name(uri)):
+        """Reject reserved names in targets and implicitly created parent directories."""
+        if any(is_storage_internal_name(part) for part in uri_parts(uri)):
             raise InvalidArgumentError(f"cannot create storage internal name: {uri}")
 
     async def mkdir(
