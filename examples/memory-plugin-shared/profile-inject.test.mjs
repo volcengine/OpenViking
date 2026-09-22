@@ -446,3 +446,102 @@ test("a peer profile left with only headings after dedup is omitted", async () =
   assert.ok(out.block.includes("- a"));
   assert.equal((out.block.match(/<user-profile /g) || []).length, 1);
 });
+
+// lsDir() and readProfile() turn every failure into [] and null with no log and
+// no marker, so a transient error at session start renders a block that looks
+// normal and is nearly empty. The block is only built at session start and on
+// compaction, so one bad request costs the whole session and nothing says why.
+test("a failed profile read is reported instead of silently returning null", async () => {
+  const logged = [];
+  const fetchJSON = async (path) => {
+    if (path.startsWith("/api/v1/content/read")) return { ok: false, status: 503 };
+    return { ok: true, result: [] };
+  };
+
+  const result = await buildProfileBlock(fetchJSON, 2000, "", {
+    log: (stage, data) => logged.push([stage, data]),
+  });
+
+  assert.equal(result, null);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0][0], "profile_read_failed");
+  assert.equal(logged[0][1].status, 503);
+  assert.ok(logged[0][1].uri.includes("profile.md"));
+});
+
+test("a failed memory listing is reported instead of silently returning empty", async () => {
+  const logged = [];
+  const fetchJSON = async (path) => {
+    if (path.startsWith("/api/v1/content/read")) return { ok: false, status: 404 };
+    if (path.startsWith("/api/v1/fs/ls") && path.includes("preferences")) {
+      return { ok: false, status: 500 };
+    }
+    return { ok: true, result: [] };
+  };
+
+  const result = await buildProfileBlock(fetchJSON, 2000, "", {
+    log: (stage, data) => logged.push([stage, data]),
+  });
+
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0][0], "profile_ls_failed");
+  assert.equal(logged[0][1].status, 500);
+  assert.ok(logged[0][1].uri.includes("preferences"));
+  // A successful listing still renders; only the failed one is absent.
+  assert.ok(result === null || typeof result.block === "string");
+});
+
+test("peer read failures are logged without losing the user profile", async () => {
+  const logged = [];
+  const fetchJSON = async (path) => {
+    const uri = decodeURIComponent((path.match(/uri=([^&]+)/) || [])[1] || "");
+    if (path.startsWith("/api/v1/content/read")) {
+      return uri.includes("/peers/p1/")
+        ? { ok: false, status: 503 }
+        : { ok: true, result: "# User\n- likes tea" };
+    }
+    if (uri.includes("/peers/p1/") && uri.endsWith("/preferences")) {
+      return { ok: false, status: 500 };
+    }
+    return { ok: true, result: [] };
+  };
+  const result = await buildProfileBlock(fetchJSON, 2000, "p1", {
+    log: (stage, data) => logged.push([stage, data]),
+  });
+
+  assert.ok(result.block.includes("likes tea"));
+  assert.equal(logged.length, 2);
+  const byStage = Object.fromEntries(logged);
+  assert.equal(byStage.profile_read_failed.status, 503);
+  assert.match(byStage.profile_read_failed.uri, /\/peers\/p1\/memories\/profile\.md$/);
+  assert.equal(byStage.profile_ls_failed.status, 500);
+  assert.match(byStage.profile_ls_failed.uri, /\/peers\/p1\/memories\/preferences$/);
+});
+
+test("an absent profile is a legitimate 404 and stays silent", async () => {
+  const logged = [];
+  const fetchJSON = async (path) => {
+    if (path.startsWith("/api/v1/content/read")) return { ok: false, status: 404 };
+    return { ok: true, result: [] };
+  };
+
+  await buildProfileBlock(fetchJSON, 2000, "", { log: (stage, data) => logged.push([stage, data]) });
+
+  // A user who has never written a profile must not produce a warning on every
+  // session start.
+  assert.deepEqual(logged, []);
+});
+
+test("successful reads stay silent and the log hook is optional", async () => {
+  const { fetchJSON } = fakeServer({ profile: "# User\n- likes tea", memories: [] });
+  const logged = [];
+
+  const withHook = await buildProfileBlock(fetchJSON, 2000, "", {
+    log: (stage, data) => logged.push([stage, data]),
+  });
+  assert.deepEqual(logged, []);
+  assert.ok(withHook.block.includes("<user-profile"));
+
+  const withoutHook = await buildProfileBlock(fetchJSON, 2000, "");
+  assert.ok(withoutHook.block.includes("<user-profile"));
+});
