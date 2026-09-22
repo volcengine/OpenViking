@@ -1,0 +1,40 @@
+bot/tests/test_compile_evidence_spans.py
+  h_b34c679d17e2ac 142
+bot/tests/test_compile_plans.py
+  h_b34c679d17e2ac 1-219
+bot/vikingbot/compile/file_ops.py
+  h_b34c679d17e2ac 157,187-199
+bot/vikingbot/compile/ops/common.py
+  h_b34c679d17e2ac 123-134,202-203
+bot/vikingbot/compile/ops/map.py
+  h_b34c679d17e2ac 1,9,11,17,20-21,25-33,54-55,61-62,65,67-71
+bot/vikingbot/compile/ops/reduce.py
+  h_b34c679d17e2ac 16,24,59,67,78-87,92-96,98-103,105-113,116-123,125-139,141-151,153-167,187-188,200-204,264,286-289,295-296
+bot/vikingbot/compile/ops/shuffle.py
+  h_b34c679d17e2ac 15,256-277,299
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 32-44,47-48,69-71,74,76-77
+bot/vikingbot/compile/pipeline_agent.py
+  h_b34c679d17e2ac 62-94,243-246,282
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 9,13,53-56,90-103,115,118-119,306
+bot/vikingbot/compile/resume.py
+  h_b34c679d17e2ac 13,21,49,62-68,79,142,151-152
+bot/vikingbot/openviking_mount/ov_server.py
+  h_b34c679d17e2ac 646,663
+docs/design/compile-pipeline.md
+  h_b34c679d17e2ac 4,21,30-31,36,41,44,49,53,73,83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f006f25ba749e64c2d412a2f915b156d28fd6b37",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
