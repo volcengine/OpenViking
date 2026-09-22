@@ -240,12 +240,23 @@ class OpenSandboxBackend(SandboxBackend):
         self._ensure_command_succeeded(output, "sandbox tree removal")
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
+        if not self._sandbox:
+            raise SandboxNotStartedError()
+        from opensandbox.models.execd import RunCommandOpts
+
         script = (
             "import json, os; "
             f"print(json.dumps([(e.name, e.is_dir()) for e in os.scandir({self._sandbox_path(path)!r})]))"
         )
-        output = await self.execute(f"python3 -c {shlex.quote(script)}")
-        self._ensure_command_succeeded(output, "directory listing")
+        # Structured data must not go through execute()'s display truncation or
+        # stderr formatting. SDK stdout chunks may split a JSON token anywhere.
+        execution = await self._sandbox.commands.run(
+            f"python3 -c {shlex.quote(script)}",
+            opts=RunCommandOpts(timeout=timedelta(seconds=30)),
+        )
+        if execution.error:
+            raise IOError(f"Sandbox directory listing failed: {execution.error.value}")
+        output = "".join(message.text for message in execution.logs.stdout)
         return [(name, is_dir) for name, is_dir in json.loads(output)]
 
     async def list_files(
