@@ -375,6 +375,114 @@ async def test_sqlite_usage_audit_store_aggregates_dashboard_data(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sqlite_usage_audit_store_accumulates_retrieval_result_count(tmp_path):
+    """`retrieval.completed` result counts must land in the same hourly
+    retrieval buckets as the search API requests that triggered them, instead
+    of leaving `result_count` permanently zero (#5285)."""
+    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
+    await store.initialize()
+    try:
+        async def _batch() -> None:
+            await store.record_batch(
+                [
+                    # Real emission order: the retrieval completes before the
+                    # `http.request` event of the same request.
+                    _event(
+                        "retrieval.completed",
+                        {
+                            "request_id": "req-find",
+                            "context_type": "resource",
+                            "result_count": 4,
+                            "latency_seconds": 0.05,
+                        },
+                    ),
+                    _event(
+                        "retrieval.completed",
+                        {
+                            "request_id": "req-find-zero",
+                            "context_type": "resource",
+                            "result_count": 0,
+                            "latency_seconds": 0.01,
+                        },
+                    ),
+                    _event(
+                        "retrieval.completed",
+                        {
+                            "request_id": "req-orphan",
+                            "context_type": "memory",
+                            "result_count": 7,
+                            "latency_seconds": 0.02,
+                        },
+                    ),
+                    _event(
+                        "retrieval.completed",
+                        {
+                            "request_id": "req-search-error",
+                            "context_type": "resource",
+                            "result_count": 3,
+                            "latency_seconds": 0.03,
+                        },
+                    ),
+                    _event(
+                        "http.request",
+                        {
+                            "request_id": "req-find",
+                            "method": "POST",
+                            "route": "/api/v1/search/find",
+                            "status": "200",
+                            "duration_seconds": 0.1,
+                        },
+                    ),
+                    _event(
+                        "http.request",
+                        {
+                            "request_id": "req-find-zero",
+                            "method": "POST",
+                            "route": "/api/v1/search/find",
+                            "status": "200",
+                            "duration_seconds": 0.1,
+                        },
+                    ),
+                    _event(
+                        "http.request",
+                        {
+                            "request_id": "req-search-error",
+                            "method": "POST",
+                            "route": "/api/v1/search/search",
+                            "status": "500",
+                            "duration_seconds": 0.1,
+                        },
+                    ),
+                ]
+            )
+
+        await _batch()
+        # A second batch for the same hour must accumulate, not overwrite.
+        await _batch()
+
+        assert store._conn is not None
+        rows = {
+            (row["operation"], row["status"]): (row["request_count"], row["result_count"])
+            for row in store._conn.execute(
+                "SELECT operation, status, request_count, result_count"
+                " FROM usage_retrieval_hourly"
+            )
+        }
+        # "req-find" (4 results) + "req-find-zero" (0 results) per batch;
+        # the orphan retrieval without a matching search request is skipped.
+        assert rows == {
+            ("find", "success"): (4, 8),
+            ("search", "error"): (2, 6),
+        }
+        # Dashboard read path is unchanged: only successful request counts.
+        assert await store.get_today_retrievals(
+            account_id="acct-1", user_date="2026-05-12", tz=UTC
+        ) == {"find": 4, "search": 0, "total": 4}
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_sqlite_usage_audit_store_resets_incompatible_legacy_schema(tmp_path):
     db_path = tmp_path / "usage.sqlite3"
     _create_legacy_usage_audit_db(db_path)

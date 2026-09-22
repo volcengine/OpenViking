@@ -81,6 +81,11 @@ def project_events(
     context_rows: defaultdict[tuple, int] = defaultdict(int)
     audit_rows: list[tuple] = []
     touched_audit_accounts: set[str] = set()
+    # request_id -> retrieval row key, used to attribute `retrieval.completed`
+    # result counts to the hourly bucket of the search API request that
+    # triggered them.
+    retrieval_keys_by_request: dict[str, tuple] = {}
+    pending_retrieval_results: list[tuple[str, int]] = []
 
     for event in events:
         account_id = normalize_identity(event.account_id, unknown=True)
@@ -136,6 +141,15 @@ def project_events(
             )
             continue
 
+        if event.event_name == "retrieval.completed":
+            # Emitted mid-request (before the matching `http.request` event),
+            # so stash the result count and attribute it after the loop once
+            # every request key is known.
+            result_count = max(safe_int(payload.get("result_count")), 0)
+            if result_count and event.request_id:
+                pending_retrieval_results.append((str(event.request_id), result_count))
+            continue
+
         if event.event_name == "http.request":
             _project_http_request(
                 event,
@@ -146,7 +160,19 @@ def project_events(
                 context_rows=context_rows,
                 audit_rows=audit_rows,
                 touched_audit_accounts=touched_audit_accounts,
+                retrieval_keys_by_request=retrieval_keys_by_request,
             )
+
+    for request_id, result_count in pending_retrieval_results:
+        key = retrieval_keys_by_request.get(request_id)
+        if key is None:
+            # Retrieval with no matching search API request in this batch
+            # (internal context assembly, or the request's `http.request`
+            # event landed in another batch). Skip rather than attribute
+            # results to the wrong bucket.
+            continue
+        count, results = retrieval_rows[key]
+        retrieval_rows[key] = (count, results + result_count)
 
     return UsageAuditProjection(
         token_rows=dict(token_rows),
@@ -217,6 +243,7 @@ def _project_http_request(
     context_rows: defaultdict[tuple, int],
     audit_rows: list[tuple],
     touched_audit_accounts: set[str],
+    retrieval_keys_by_request: dict[str, tuple],
 ) -> None:
     payload = event.payload
     route = str(payload.get("route") or "")
@@ -261,6 +288,9 @@ def _project_http_request(
         )
         prev_count, prev_results = retrieval_rows[retrieval_key]
         retrieval_rows[retrieval_key] = (prev_count + 1, prev_results)
+        request_id = payload.get("request_id") or event.request_id
+        if request_id:
+            retrieval_keys_by_request[str(request_id)] = retrieval_key
 
     context_operation = context_write_operation_for_http(method, route, status_code)
     if context_operation:
