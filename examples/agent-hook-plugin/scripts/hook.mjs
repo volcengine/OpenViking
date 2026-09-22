@@ -52,7 +52,8 @@ function emit(block) {
   if (emitted) return;
   emitted = true;
   const value = host.envelope(event, block || "");
-  if (value) process.stdout.write(`${JSON.stringify(value)}\n`);
+  if (typeof value === "string") process.stdout.write(`${value}\n`);
+  else if (value) process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 const normalize = (input) => (host.normalizeInput ? host.normalizeInput(input) : input);
@@ -68,6 +69,7 @@ async function sessionStart(ctx) {
     if (now - Number(state.lastSessionStartAt || 0) < 2000) return "";
     await writeHookState(clientId, ctx.nativeSessionId, { ...state, lastSessionStartAt: now });
     await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
+    if ((host.profileStage || "session-start") !== "session-start") return "";
     const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
       logError("profile", error);
       return null;
@@ -89,6 +91,16 @@ async function promptSubmit(ctx) {
       ? state.promptEventId === promptEventId
       : state.promptHash === promptHash && now - Number(state.promptAt || 0) < 500;
     if (duplicateEvent) return "";
+    const parts = [];
+    let profileInjected = Boolean(state.profileInjected);
+    if (host.profileStage === "first-prompt" && !profileInjected) {
+      const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
+        logError("profile", error);
+        return null;
+      });
+      if (profile) parts.push(contextBlock("session-start", profile));
+      profileInjected = Boolean(profile);
+    }
     const recallBlock = state.promptHash === promptHash && state.recallBlock
       ? state.recallBlock
       : await recallForPrompt(ctx.fetchJSON, ctx.cfg, prompt, ctx.cwd, log, { sessionId: ctx.sessionId })
@@ -96,16 +108,38 @@ async function promptSubmit(ctx) {
           logError("recall", error);
           return null;
         });
+    if (recallBlock) parts.push(recallBlock);
     await writeHookState(clientId, ctx.nativeSessionId, {
       ...state,
       promptHash,
       promptEventId,
       promptAt: now,
       recallBlock,
+      ...(host.profileStage === "first-prompt" ? { profileInjected } : {}),
       ...(host.tracksPendingPrompt ? { pendingPrompt: { prompt, hash: promptHash, at: now } } : {}),
     });
-    return recallBlock || "";
+    return parts.join("\n\n");
   });
+}
+
+function withRequestBudget(fetchJSON, budgetMs) {
+  if (!budgetMs) return fetchJSON;
+  const deadline = Date.now() + budgetMs;
+  return (path, init = {}, options = {}) => {
+    const remaining = deadline - Date.now();
+    // ov-http deliberately clamps individual requests to one second. Do not
+    // start one inside that final second or the host-level total can overrun.
+    if (remaining < 1000) {
+      return Promise.resolve({
+        ok: false,
+        status: 0,
+        result: null,
+        error: { name: "AbortError", aborted: true, message: "hook request budget exhausted" },
+      });
+    }
+    const requested = Number(options.timeoutMs) || remaining;
+    return fetchJSON(path, init, { ...options, timeoutMs: Math.min(requested, remaining) });
+  };
 }
 
 async function capture(ctx) {
@@ -138,13 +172,14 @@ async function main() {
     cfg = resolved;
     const payload = normalize(input);
     if (!stageName) return "";
+    const baseFetchJSON = makeAgentFetchJSON(cfg, cwd).fetchJSON;
     const ctx = {
       cfg,
       cwd,
       input: payload,
       nativeSessionId: resolveNativeSessionId(payload),
       sessionId: deriveAgentSessionId(host.prefix, payload),
-      fetchJSON: makeAgentFetchJSON(cfg, cwd).fetchJSON,
+      fetchJSON: withRequestBudget(baseFetchJSON, host.requestBudgets?.[event]),
       log,
       logError,
     };

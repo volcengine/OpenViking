@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
 # OpenViking Memory Plugin shared installer for Claude Code, Codex, Cursor,
-# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, OpenCode, and pi.
+# TRAE / TRAE CN, TraeCode CLI 2.0, ZCode, Kimi Code, OpenCode, and pi.
 #
 # One-liner (GitHub):
 #   bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
 # One-liner (TOS mirror, for regions where GitHub is unreachable):
 #   bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) --dist tos
 # Non-interactive:
-#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,trae-cli,zcode,opencode,pi,dsh --dist github --lang en --url http://127.0.0.1:1933
+#   bash install.sh --harness claude,codex,cursor,trae,trae-cn,trae-cli,zcode,kimicode,opencode,pi,dsh --dist github --lang en --url http://127.0.0.1:1933
 # Format-compatible CLI aliases:
 #   bash install.sh --harness trae-cli
 #   bash install.sh --harness claude --claude-bin claude,seed
@@ -143,7 +143,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, opencode, pi, dsh.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, opencode, pi, dsh.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
   --claude-bin LIST  Comma-separated Claude-format CLI commands (default: claude).
   --codex-bin LIST   Comma-separated Codex-format CLI commands (default: codex).
@@ -157,7 +157,7 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove Cursor/TRAE/TRAE CN/ZCode integration files and config,
+  --uninstall        Remove Cursor/TRAE/TRAE CN/ZCode/Kimi Code integration files and config,
                      plus any legacy TraeCode CLI hook config.
                      For Codex-format plugins, use the client's plugin uninstall command.
   --yes, -y          Use defaults for prompts when possible.
@@ -382,7 +382,7 @@ EOF
 }
 
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_DSH=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -393,6 +393,7 @@ refresh_available_harnesses() {
   command -v pi >/dev/null 2>&1 && HAVE_PI=1
   command -v dsh >/dev/null 2>&1 && HAVE_DSH=1
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
+  { command -v kimi >/dev/null 2>&1 || [ -d "$HOME/.kimi-code" ]; } && HAVE_KIMICODE=1
   return 0
 }
 
@@ -543,7 +544,7 @@ EOF
 }
 
 tui_selectable_count() {
-  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 7 ))
+  printf '%s' $(( $(list_count "$TUI_CLAUDE_BINS") + $(list_count "$TUI_CODEX_BINS") + 8 ))
 }
 
 tui_total_count() {
@@ -579,6 +580,8 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'trae-cn|trae-cn'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'zcode|zcode'; return 0; fi
+  i=$((i + 1))
+  if [ "$i" -eq "$idx" ]; then printf 'kimicode|kimi'; return 0; fi
   printf 'add|'
 }
 
@@ -611,6 +614,7 @@ tui_bin_label() {
     trae:*) printf 'TRAE' ;;
     trae-cn:*) printf 'TRAE CN' ;;
     zcode:*) printf 'ZCode' ;;
+    kimicode:*) printf 'Kimi Code' ;;
     claude:*) printf '%s %s' "$bin" "$(t '(Claude-format)' '（Claude 格式）')" ;;
     codex:*) printf '%s %s' "$bin" "$(t '(Codex-format)' '（Codex 格式）')" ;;
   esac
@@ -634,8 +638,10 @@ tui_bin_selected() {
     [ "$SEL_TRAE" -eq 1 ]
   elif [ "$kind" = "trae-cn" ]; then
     [ "$SEL_TRAE_CN" -eq 1 ]
-  else
+  elif [ "$kind" = "zcode" ]; then
     [ "$SEL_ZCODE" -eq 1 ]
+  else
+    [ "$SEL_KIMICODE" -eq 1 ]
   fi
 }
 
@@ -645,6 +651,7 @@ tui_bin_detected() { # tui_bin_detected <kind> <bin>
     trae) [ "$HAVE_TRAE" -eq 1 ] ;;
     trae-cn) [ "$HAVE_TRAE_CN" -eq 1 ] ;;
     zcode) [ "$HAVE_ZCODE" -eq 1 ] ;;
+    kimicode) [ "$HAVE_KIMICODE" -eq 1 ] ;;
     *) command -v "$2" >/dev/null 2>&1 ;;
   esac
 }
@@ -659,6 +666,7 @@ tui_set_all_bins() {
   SEL_TRAE=1
   SEL_TRAE_CN=1
   SEL_ZCODE=1
+  SEL_KIMICODE=1
 }
 
 tui_toggle_bin() {
@@ -682,8 +690,10 @@ tui_toggle_bin() {
     SEL_TRAE=$((1 - SEL_TRAE)); return 0
   elif [ "$kind" = "trae-cn" ]; then
     SEL_TRAE_CN=$((1 - SEL_TRAE_CN)); return 0
-  else
+  elif [ "$kind" = "zcode" ]; then
     SEL_ZCODE=$((1 - SEL_ZCODE)); return 0
+  else
+    SEL_KIMICODE=$((1 - SEL_KIMICODE)); return 0
   fi
   if list_contains_line "$selected" "$bin"; then
     while IFS= read -r item; do
@@ -754,6 +764,7 @@ tui_reset_bin_selection() {
   SEL_TRAE=0
   SEL_TRAE_CN=0
   SEL_ZCODE=0
+  SEL_KIMICODE=0
   while IFS= read -r bin; do
     [ -n "$bin" ] || continue
     if command -v "$bin" >/dev/null 2>&1; then
@@ -779,6 +790,7 @@ EOF
   if [ "$HAVE_TRAE" -eq 1 ]; then SEL_TRAE=1; any=1; fi
   if [ "$HAVE_TRAE_CN" -eq 1 ]; then SEL_TRAE_CN=1; any=1; fi
   if [ "$HAVE_ZCODE" -eq 1 ]; then SEL_ZCODE=1; any=1; fi
+  if [ "$HAVE_KIMICODE" -eq 1 ]; then SEL_KIMICODE=1; any=1; fi
   if [ "$any" -ne 1 ]; then
     SEL_CLAUDE_BINS="$TUI_CLAUDE_BINS"
     SEL_CODEX_BINS="$TUI_CODEX_BINS"
@@ -866,7 +878,8 @@ tui_add_compatible_cli() {
 tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
-    || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ]
+    || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
+    || [ "$SEL_KIMICODE" -eq 1 ]
 }
 
 tui_finish_selection() {
@@ -882,6 +895,7 @@ tui_finish_selection() {
   [ "$SEL_TRAE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae"
   [ "$SEL_TRAE_CN" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}trae-cn"
   [ "$SEL_ZCODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}zcode"
+  [ "$SEL_KIMICODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}kimicode"
   return 0
 }
 
@@ -954,6 +968,7 @@ select_harnesses() {
   [ "$HAVE_PI" -eq 1 ] && detected="${detected:+$detected,}pi"
   [ "$HAVE_DSH" -eq 1 ] && detected="${detected:+$detected,}dsh"
   [ "$HAVE_ZCODE" -eq 1 ] && detected="${detected:+$detected,}zcode"
+  [ "$HAVE_KIMICODE" -eq 1 ] && detected="${detected:+$detected,}kimicode"
 
   if [ -n "$REQUESTED_HARNESSES" ]; then
     SELECTED_HARNESSES="$REQUESTED_HARNESSES"
@@ -1107,7 +1122,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|dsh) ;;
+      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|dsh) ;;
       trae-cli) [ "$UNINSTALL" -eq 1 ] || bad=1 ;;
       *) err "Unsupported harness: $h"; bad=1 ;;
     esac
@@ -1148,7 +1163,7 @@ EOF
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode; then ok=1; fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -1928,15 +1943,15 @@ install_codex_tos_git() {
 # Cursor / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode"
+AGENT_HOOK_HOSTS="cursor trae zcode kimicode"
 
-copy_agent_integration() { # copy_agent_integration <host> <dest-name>
-  local host="$1" dest_name="$2" source dest tmp other
+copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
+  local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other
   source="$(plugin_dir_on_disk agent-hook-plugin)" || {
     err "$(t 'Agent integration sources not found:' '未找到 Agent 接入源码：') agent-hook-plugin"
     return 1
   }
-  dest="$OV_HOME/agent-integrations/$dest_name"
+  dest="${explicit_dest:-$OV_HOME/agent-integrations/$dest_name}"
   tmp="$dest.tmp"
   rm -rf "$tmp"
   mkdir -p "$tmp"
@@ -1956,18 +1971,24 @@ copy_agent_integration() { # copy_agent_integration <host> <dest-name>
   printf '%s' "$dest"
 }
 
-# Cursor, TRAE and ZCode keep only their client-specific adapters in the repository.
+# Thin hook hosts keep only their client-specific adapters in the repository.
 # Assemble a self-contained installation by adding the canonical shared runtime
 # at install time instead of committing generated copies for every client.
-assemble_agent_integration() { # assemble_agent_integration <host> <dest-name>
-  local host="$1" dest_name="$2" root shared shared_dest manifest file
-  root="$(copy_agent_integration "$host" "$dest_name")" || return 1
+assemble_agent_integration() { # assemble_agent_integration <host> <dest-name> [bundle-root]
+  local host="$1" dest_name="$2" bundle_root="${3:-}" root_dest root shared shared_dest manifest file
+  if [ -n "$bundle_root" ]; then
+    root_dest="$bundle_root/agent-integrations/$dest_name"
+    shared_dest="$bundle_root/agent-integrations/memory-plugin-shared/lib"
+  else
+    root_dest="$OV_HOME/agent-integrations/$dest_name"
+    shared_dest="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
+  fi
+  root="$(copy_agent_integration "$host" "$dest_name" "$root_dest")" || return 1
   shared="$(plugin_dir_on_disk memory-plugin-shared)" || {
     err "$(t 'Shared agent runtime not found.' '未找到共享 Agent 运行时。')"
     return 1
   }
-  shared_dest="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
-  # The closure of what cursor, trae and zcode import, written by sync.mjs and
+  # The closure of what the hook hosts import, written by sync.mjs and
   # shipped beside the modules. Regenerating it here is not an option: the
   # generator finds no plugin sources in a flat marketplace archive.
   manifest="$shared/lib/MANIFEST"
@@ -1982,9 +2003,12 @@ assemble_agent_integration() { # assemble_agent_integration <host> <dest-name>
     cp "$shared/lib/$file" "$shared_dest.tmp/$file" || return 1
   done < "$manifest"
   cp "$manifest" "$shared_dest.tmp/MANIFEST"
-  # Not part of the closure and never imported by a hook; it is here so that an
-  # uninstall piped from a URL can reclaim this host's entries without a source.
-  cp -R "$shared/lib/install" "$shared_dest.tmp/install" || return 1
+  # Config-driven installs retain the uninstall helpers beside the shared
+  # runtime. A native Kimi bundle persists its one helper outside the plugin,
+  # so carrying every installer module inside that bundle would be dead weight.
+  if [ -z "$bundle_root" ]; then
+    cp -R "$shared/lib/install" "$shared_dest.tmp/install" || return 1
+  fi
   rm -rf "$shared_dest"
   mkdir -p "$(dirname "$shared_dest")"
   mv "$shared_dest.tmp" "$shared_dest"
@@ -2100,11 +2124,44 @@ CLEAN_NODE
     rm -rf "$OV_HOME/agent-integrations/zcode"
     info "$(t 'Removed ZCode OpenViking hooks and MCP config.' '已移除 ZCode OpenViking hooks 与 MCP 配置。')"
   fi
+  if contains_harness kimicode; then
+    local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimicode_lib kimicode_installed
+    kimicode_lib="$OV_HOME/agent-integrations/kimicode/lib/install"
+    kimicode_installed="$($NODE_BIN - "$kimi_home" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const file = path.join(process.argv[2], "plugins", "installed.json");
+if (!fs.existsSync(file)) process.stdout.write("no");
+else {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    process.stdout.write(Array.isArray(value.plugins)
+      && value.plugins.some((plugin) => plugin?.id === "openviking-memory") ? "yes" : "no");
+  } catch { process.stdout.write("invalid"); }
+}
+NODE
+)"
+    [ -e "$kimi_home/plugins/managed/openviking-memory" ] && kimicode_installed="yes"
+    if [ "$kimicode_installed" = "invalid" ]; then
+      err "$(t 'Kimi Code plugin registry is invalid; refusing to overwrite it.' 'Kimi Code 插件注册表无效，拒绝覆盖。')"
+      return 1
+    fi
+    if [ "$kimicode_installed" = "yes" ]; then
+      [ -f "$kimicode_lib/kimicode-plugin.mjs" ] || {
+        err "$(t 'Kimi Code uninstall runtime is missing.' 'Kimi Code 卸载运行时缺失。')"
+        return 1
+      }
+      "$NODE_BIN" "$kimicode_lib/kimicode-plugin.mjs" remove "$kimi_home" || return 1
+    fi
+    rm -rf "$OV_HOME/agent-integrations/kimicode"
+    info "$(t 'Removed the native Kimi Code plugin.' '已移除 Kimi Code 原生插件。')"
+  fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
-    && [ ! -d "$OV_HOME/agent-integrations/zcode" ]; then
+    && [ ! -d "$OV_HOME/agent-integrations/zcode" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/kimicode" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
 }
@@ -2191,6 +2248,64 @@ install_zcode() {
     || { warn "$(t 'Failed to merge ZCode config' 'ZCode 配置合并失败')"; return 1; }
   info "$(t 'ZCode hooks installed:' 'ZCode hooks 已安装：') $config_path (hooks.events)"
   info "$(t 'ZCode MCP installed:' 'ZCode MCP 已安装：') $config_path (mcp.servers)"
+}
+
+install_kimicode() {
+  heading "$(t 'Kimi Code CLI integration' 'Kimi Code CLI 集成')"
+  local bundle kimi_home install_lib persisted_dir persisted_tmp persisted_backup root
+  bundle="$OV_HOME/agent-integrations/kimicode-bundle.$$"
+  rm -rf "$bundle"
+  mkdir -p "$bundle"
+  root="$(assemble_agent_integration kimicode kimicode "$bundle")" || {
+    rm -rf "$bundle"
+    return 1
+  }
+  rm -rf "$root/tests"
+  rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
+  cp "$root/hosts/kimicode/kimi.plugin.json" "$bundle/kimi.plugin.json" || {
+    rm -rf "$bundle"
+    return 1
+  }
+  cp "$root/hosts/kimicode/runtime-index.mjs" "$root/hosts/index.mjs" || {
+    rm -rf "$bundle"
+    return 1
+  }
+  local host_module
+  for host_module in "$root"/hosts/*.mjs; do
+    case "$(basename "$host_module")" in
+      index.mjs|incremental-turn-capture.mjs|kimicode.mjs|kimicode-turns.mjs) ;;
+      *) rm -f "$host_module" ;;
+    esac
+  done
+  rm -rf "$root/hosts/kimicode"
+  kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+  install_lib="$(require_install_lib_dir)" || { rm -rf "$bundle"; return 1; }
+  persisted_dir="$OV_HOME/agent-integrations/kimicode/lib/install"
+  persisted_tmp="$persisted_dir.tmp.$$"
+  persisted_backup="$persisted_dir.previous.$$"
+  rm -rf "$persisted_tmp"
+  mkdir -p "$persisted_tmp"
+  cp "$install_lib/kimicode-plugin.mjs" "$persisted_tmp/kimicode-plugin.mjs" || {
+    rm -rf "$bundle" "$persisted_tmp"
+    return 1
+  }
+  mkdir -p "$(dirname "$persisted_dir")"
+  rm -rf "$persisted_backup"
+  [ ! -e "$persisted_dir" ] || mv "$persisted_dir" "$persisted_backup"
+  mv "$persisted_tmp" "$persisted_dir" || {
+    [ ! -e "$persisted_backup" ] || mv "$persisted_backup" "$persisted_dir"
+    rm -rf "$bundle"
+    return 1
+  }
+  "$NODE_BIN" "$persisted_dir/kimicode-plugin.mjs" install "$kimi_home" "$bundle" || {
+    rm -rf "$bundle" "$persisted_dir"
+    [ ! -e "$persisted_backup" ] || mv "$persisted_backup" "$persisted_dir"
+    return 1
+  }
+  rm -rf "$persisted_backup"
+  rm -rf "$bundle"
+  info "$(t 'Kimi Code native plugin installed:' 'Kimi Code 原生插件已安装：') openviking-memory"
+  info "$(t 'Run /reload or start a new session to activate it.' '请运行 /reload 或新建会话以启用。')"
 }
 
 install_trae_variant() { # install_trae_variant <trae|trae-cn>
@@ -2550,6 +2665,30 @@ EOF
       ok=0; agent_fatal=1
     fi
   fi
+  if contains_harness kimicode; then
+    local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+    local kimi_root="$kimi_home/plugins/managed/openviking-memory"
+    local kimi_installer="$OV_HOME/agent-integrations/kimicode/lib/install/kimicode-plugin.mjs"
+    if [ -f "$kimi_installer" ] \
+      && "$NODE_BIN" "$kimi_installer" verify "$kimi_home" \
+      && [ -f "$kimi_root/kimi.plugin.json" ] \
+      && [ -f "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" ] \
+      && [ -f "$kimi_root/agent-integrations/kimicode/scripts/uri-guard.mjs" ] \
+      && [ -f "$kimi_root/agent-integrations/kimicode/servers/mcp-proxy.mjs" ] \
+      && [ -f "$kimi_root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
+      "$NODE_BIN" --check "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" \
+        || { ok=0; agent_fatal=1; }
+      if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
+        "$NODE_BIN" "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" session-start kimicode >/dev/null; then
+        warn "kimicode: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+        ok=0; agent_fatal=1
+      fi
+      info "kimicode: $(t 'native plugin installed (Hooks + MCP)' '原生插件已安装（Hooks + MCP）')"
+    else
+      warn "kimicode: $(t 'native plugin installation is incomplete' '原生插件安装不完整')"
+      ok=0; agent_fatal=1
+    fi
+  fi
   if contains_harness opencode; then
     local ocfg="$HOME/.config/opencode/opencode.json"
     local ocfgc="$HOME/.config/opencode/opencode.jsonc"
@@ -2691,6 +2830,7 @@ if contains_harness cursor; then install_cursor; fi
 if contains_harness trae; then install_trae_variant trae; fi
 if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi
+if contains_harness kimicode; then install_kimicode; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 if contains_harness dsh; then install_dsh; fi
@@ -2712,6 +2852,7 @@ if contains_harness cursor; then info "Cursor: Hooks + MCP + Rule + Skill"; fi
 if contains_harness trae; then info "TRAE: ~/.trae/hooks.json + MCP"; fi
 if contains_harness trae-cn; then info "TRAE CN: ~/.trae-cn/hooks.json + MCP"; fi
 if contains_harness zcode; then info "ZCode: ~/.zcode/cli/config.json (hooks + MCP)"; fi
+if contains_harness kimicode; then info "Kimi Code: native plugin (hooks + MCP)"; fi
 if contains_harness opencode; then info "OpenCode: @openviking/opencode-plugin"; fi
 if contains_harness pi; then info "pi: ~/.pi/agent/extensions/openviking"; fi
 if contains_harness dsh; then info "DeepSeek Harness: $DSH_PACKAGE ($(t 'profile' '配置档') ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT})"; fi

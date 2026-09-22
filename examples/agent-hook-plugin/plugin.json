@@ -1,7 +1,7 @@
 {
   "name": "agent-hook-plugin",
-  "version": "0.4.0",
-  "description": "Long-term semantic memory for the config-driven hook hosts — Cursor, TRAE, TRAE CN and ZCode — powered by OpenViking. Auto-recall relevant memories at session start and capture the conversation as it happens.",
+  "version": "0.5.0",
+  "description": "Long-term semantic memory for Cursor, TRAE, TRAE CN, ZCode and Kimi Code — powered by OpenViking. Auto-recall relevant memories and capture the conversation as it happens.",
   "author": {
     "name": "OpenViking",
     "url": "https://github.com/volcengine/OpenViking"

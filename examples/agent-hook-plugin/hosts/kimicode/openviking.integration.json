@@ -3,7 +3,7 @@
   "id": "openviking-memory",
   "version": "0.5.0",
   "clients": [
-    "zcode"
+    "kimicode"
   ],
   "capabilities": [
     "hooks",

@@ -100,6 +100,31 @@ test("release marketplace archive supports ZCode and pi TOS installs", () => {
 
     const bin = join(tmp, "bin");
     mkdirSync(bin);
+    writeFileSync(join(bin, "kimi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const kimiInstalled = run("bash", [
+      installer,
+      "--harness", "kimicode",
+      "--dist", "tos",
+      "--source", "archive",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:1933",
+      "--api-key", "",
+      "--yes",
+    ], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH}`,
+        OPENVIKING_HOME: join(home, ".openviking"),
+        OPENVIKING_MARKETPLACE_ARCHIVE_URL: `file://${join(tmp, "memory-plugin-marketplace.zip")}`,
+      },
+    });
+    assert.equal(kimiInstalled.status, 0, kimiInstalled.stdout + kimiInstalled.stderr);
+    const kimiRoot = join(home, ".kimi-code", "plugins", "managed", "openviking-memory");
+    assert.ok(existsSync(join(kimiRoot, "kimi.plugin.json")));
+    assert.ok(existsSync(join(kimiRoot, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
+    assert.ok(existsSync(join(kimiRoot, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+
     writeFileSync(join(bin, "pi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const piArgs = [installer, "--harness", "pi", "--dist", "tos", "--source", "archive",
       "--lang", "en", "--url", "http://127.0.0.1:1933", "--api-key", "", "--yes"];
