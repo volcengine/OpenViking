@@ -124,19 +124,31 @@ pub fn unwrap_success_envelope(json: Value, preserve_profile: bool) -> Value {
         return result.clone();
     }
 
-    let Some(profile) = json.get("profile").filter(|profile| !profile.is_null()) else {
+    let profile = json.get("profile").filter(|profile| !profile.is_null());
+    let has_more = json.get("has_more").filter(|has_more| !has_more.is_null());
+    if profile.is_none() && has_more.is_none() {
         return result.clone();
-    };
+    }
 
     if let Some(result_obj) = result.as_object() {
         let mut merged = result_obj.clone();
-        merged.insert("profile".to_string(), profile.clone());
+        if let Some(profile) = profile {
+            merged.insert("profile".to_string(), profile.clone());
+        }
+        if let Some(has_more) = has_more {
+            merged.insert("has_more".to_string(), has_more.clone());
+        }
         return Value::Object(merged);
     }
 
     let mut wrapped = serde_json::Map::new();
     wrapped.insert("result".to_string(), result.clone());
-    wrapped.insert("profile".to_string(), profile.clone());
+    if let Some(profile) = profile {
+        wrapped.insert("profile".to_string(), profile.clone());
+    }
+    if let Some(has_more) = has_more {
+        wrapped.insert("has_more".to_string(), has_more.clone());
+    }
     Value::Object(wrapped)
 }
 
@@ -668,6 +680,25 @@ mod tests {
                     "line one",
                     "line two"
                 ]
+            })
+        );
+    }
+
+    #[test]
+    fn unwrap_success_envelope_preserves_listing_metadata_for_value_results() {
+        let body = json!({
+            "status": "ok",
+            "result": [{"name": "a.md"}],
+            "has_more": true
+        });
+
+        let result = unwrap_success_envelope(body, true);
+
+        assert_eq!(
+            result,
+            json!({
+                "result": [{"name": "a.md"}],
+                "has_more": true
             })
         );
     }

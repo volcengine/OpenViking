@@ -818,7 +818,8 @@ async def ls(
     if sort_by is not None:
         options["sort_by"] = sort_by
         options["sort_order"] = sort_order
-    entries = await service.fs.ls(resolved_uri, **options)
+    page = await service.fs.ls(resolved_uri, **options)
+    entries = page.entries
     if not entries:
         return f"(no entries under {uri})"
 
@@ -831,6 +832,8 @@ async def ls(
             lines.append(f"[{'dir' if is_dir else 'file'}] {entry_uri}")
         else:
             lines.append(f"[{'dir' if is_dir else 'file'}] {name}")
+    if page.has_more:
+        lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
 
 
@@ -887,7 +890,7 @@ async def tree(
     output = "agent" if include_abstract else "original"
     effective_limit = limit if limit is not None else node_limit
     try:
-        entries = await service.fs.tree(
+        page = await service.fs.tree(
             resolved_uri,
             ctx=ctx,
             output=output,
@@ -897,7 +900,8 @@ async def tree(
             offset=offset,
         )
     except NotFoundError:
-        entries = []
+        page = None
+    entries = page.entries if page is not None else []
     if not entries:
         return f"(nothing under {uri})"
 
@@ -916,7 +920,7 @@ async def tree(
         abstract = _tree_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
-    if len(entries) >= effective_limit:
+    if page is not None and page.has_more:
         lines.append(
             f"(truncated at node_limit={effective_limit}; narrow the uri or raise node_limit to see more)"
         )

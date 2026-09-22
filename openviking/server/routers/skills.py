@@ -138,13 +138,14 @@ async def _list_skills_from_root(
     nested directories like ``<skill>/scripts`` out of the listing.
     """
     try:
-        entries = await service.fs.ls(
+        page = await service.fs.ls(
             root_uri,
             ctx=ctx,
             output="agent",
             abs_limit=1024,
             node_limit=node_limit,
         )
+        entries = page.entries
     except NotFoundError:
         return []
 
@@ -322,7 +323,7 @@ async def _list_skill_files(
         child_limit = max(node_limit - len(entries), 0)
         if child_limit <= 0:
             break
-        children = await service.fs.ls(
+        page = await service.fs.ls(
             current_uri,
             ctx=ctx,
             output="agent",
@@ -330,6 +331,7 @@ async def _list_skill_files(
             show_all_hidden=True,
             node_limit=child_limit,
         )
+        children = page.entries
         for entry in children:
             if not isinstance(entry, dict):
                 continue

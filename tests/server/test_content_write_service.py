@@ -186,7 +186,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     imported_acl = await service.fs.get_acl(import_root, ctx=creator)
     assert imported_acl["direct_entries"] == [creator_entry]
     assert imported_acl["inherited_entries"] == inherited_entries
-    children = await service.fs.ls(import_root, ctx=creator, simple=True)
+    children = (await service.fs.ls(import_root, ctx=creator, simple=True)).entries
     child_acl = await service.fs.get_acl(children[0], ctx=creator)
     assert child_acl["direct_entries"] == []
     assert child_acl["inherited_entries"] == [*inherited_entries, creator_entry]
@@ -234,7 +234,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     )
     assert inherited_acl["acl_mode"] == "inherit"
     assert inherited_acl["inherited_entries"] == refreshed_inherited_entries
-    assert await service.fs.ls(import_root, ctx=late_reader, simple=True) == children
+    assert (await service.fs.ls(import_root, ctx=late_reader, simple=True)).entries == children
 
     await service.fs.set_acl(import_root, [], acl_mode=AclMode.RESTRICTED, ctx=creator)
     child_acl = await service.fs.get_acl(children[0], ctx=admin)
