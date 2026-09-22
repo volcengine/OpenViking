@@ -1787,22 +1787,6 @@ class FeishuAccessor(DataAccessor):
     # ========== Mindnote Parsing ==========
 
     @staticmethod
-    def _require_mindnote_user_token(feishu_access_token: Optional[str]) -> str:
-        token = str(feishu_access_token or "").strip()
-        if token:
-            return token
-        raise OpenVikingError(
-            "Feishu Mindnote requires args.feishu_access_token with user scope "
-            "mindnote:node:read; tenant/app token fallback is not supported",
-            code="UNAUTHENTICATED",
-            details={
-                "operation": "fetch Mindnote nodes",
-                "required_argument": "args.feishu_access_token",
-                "required_scope": "mindnote:node:read",
-            },
-        )
-
-    @staticmethod
     def _redact_feishu_identifier(value: str) -> str:
         value = str(value or "")
         if len(value) <= 8:
@@ -1815,19 +1799,20 @@ class FeishuAccessor(DataAccessor):
         *,
         feishu_access_token: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Fetch a complete Mindnote node list with a user access token."""
+        """Fetch a complete Mindnote node list."""
         import lark_oapi as lark
 
-        user_token = self._require_mindnote_user_token(feishu_access_token)
-        client = self._get_client(use_user_token=True)
+        access_token = str(feishu_access_token or "").strip() or None
+        client = self._get_client(use_user_token=bool(access_token))
+        token_type = lark.AccessTokenType.USER if access_token else lark.AccessTokenType.TENANT
         request = (
             lark.BaseRequest.builder()
             .http_method(lark.HttpMethod.GET)
             .uri(f"/open-apis/mindnote/v1/mindnotes/{mindnote_id}/nodes")
-            .token_types({lark.AccessTokenType.USER})
+            .token_types({token_type})
             .build()
         )
-        response = self._call_api(client.request, request, user_token)
+        response = self._call_api(client.request, request, access_token)
         if not response.success():
             _raise_from_lark_response(
                 response,
@@ -1856,12 +1841,12 @@ class FeishuAccessor(DataAccessor):
                     "resource": self._redact_feishu_identifier(mindnote_id),
                 },
             )
-        invalid_fields = [
+        invalid_fields = {
             field_name
             for node in nodes
             for field_name in ("texts", "notes", "images")
             if node.get(field_name) is not None and not isinstance(node.get(field_name), list)
-        ]
+        }
         if invalid_fields:
             raise OpenVikingError(
                 "Feishu Mindnote nodes response contains an invalid list field",
@@ -1869,7 +1854,7 @@ class FeishuAccessor(DataAccessor):
                 details={
                     "operation": "fetch Mindnote nodes",
                     "resource": self._redact_feishu_identifier(mindnote_id),
-                    "invalid_fields": sorted(set(invalid_fields)),
+                    "invalid_fields": sorted(invalid_fields),
                 },
             )
         return nodes
@@ -1880,7 +1865,7 @@ class FeishuAccessor(DataAccessor):
             return value
         if not isinstance(value, dict):
             return ""
-        for key in ("content", "name", "title", "text", "label"):
+        for key in ("content", "name", "title"):
             nested = value.get(key)
             if isinstance(nested, str) and nested:
                 return nested
@@ -1911,56 +1896,46 @@ class FeishuAccessor(DataAccessor):
 
     @classmethod
     def _mindnote_element_payload(cls, element: Dict[str, Any], element_type: str) -> Any:
-        aliases = {
-            "user": ("mention_user", "user"),
-            "doc": ("mention_doc", "doc"),
-        }
-        for key in aliases.get(element_type, (element_type,)):
-            if element.get(key) is not None:
-                return element[key]
-        return element
+        payload_key = {"user": "mention_user", "doc": "mention_doc"}.get(
+            element_type, element_type
+        )
+        return element.get(payload_key) if element.get(payload_key) is not None else element
 
     @staticmethod
     def _mindnote_element_type(element: Dict[str, Any]) -> str:
-        element_type = str(element.get("element_type") or "text").lower()
-        return {
-            "mention_user": "user",
-            "mention_doc": "doc",
-        }.get(element_type, element_type)
+        return str(element.get("element_type") or "text").lower()
 
     @classmethod
-    def _mindnote_plain_element(cls, element: Any) -> str:
-        if not isinstance(element, dict):
-            return str(element) if element is not None else ""
-        element_type = cls._mindnote_element_type(element)
-        payload = cls._mindnote_element_payload(element, element_type)
-        if element_type == "user":
-            name = cls._mindnote_value_text(payload)
-            if name:
-                return f"@{name}"
-            user_id = ""
-            if isinstance(payload, dict):
-                user_id = str(
-                    payload.get("user_id") or payload.get("open_id") or payload.get("id") or ""
-                )
-            return f"@{cls._redact_feishu_identifier(user_id)}"
-        return cls._mindnote_value_text(payload) or cls._mindnote_value_text(element)
-
-    @classmethod
-    def _mindnote_plain_elements(cls, elements: List[Any]) -> str:
-        return "".join(cls._mindnote_plain_element(element) for element in elements)
-
-    @staticmethod
-    def _mindnote_list(node: Dict[str, Any], key: str) -> List[Any]:
-        value = node.get(key)
-        return value if isinstance(value, list) else []
+    def _mindnote_user_label(cls, payload: Any) -> str:
+        label = cls._mindnote_value_text(payload)
+        if label:
+            return label
+        if isinstance(payload, dict):
+            user_id = payload.get("user_id") or payload.get("open_id") or payload.get("id")
+            return cls._redact_feishu_identifier(str(user_id or ""))
+        return "***"
 
     @classmethod
     def _mindnote_title(cls, nodes: List[Dict[str, Any]]) -> str:
         roots = [node for node in nodes if not node.get("parent_id")]
         children = [node for node in nodes if node.get("parent_id")]
         for node in roots + children:
-            title = " ".join(cls._mindnote_plain_elements(cls._mindnote_list(node, "texts")).split())
+            parts: List[str] = []
+            for element in node.get("texts") or []:
+                if not isinstance(element, dict):
+                    if element is not None:
+                        parts.append(str(element))
+                    continue
+
+                element_type = cls._mindnote_element_type(element)
+                payload = cls._mindnote_element_payload(element, element_type)
+                if element_type == "user":
+                    parts.append(f"@{cls._mindnote_user_label(payload)}")
+                    continue
+
+                parts.append(cls._mindnote_value_text(payload) or cls._mindnote_value_text(element))
+
+            title = " ".join("".join(parts).split())
             if title:
                 return title
         return "Mindnote"
@@ -1987,16 +1962,7 @@ class FeishuAccessor(DataAccessor):
                 style = style or payload.get("style")
 
             if element_type == "user":
-                name = cls._mindnote_value_text(payload)
-                if name:
-                    rendered.append(cls._escape_mindnote_text(f"@{name}"))
-                    continue
-                user_id = ""
-                if isinstance(payload, dict):
-                    user_id = str(
-                        payload.get("user_id") or payload.get("open_id") or payload.get("id") or ""
-                    )
-                rendered.append(f"@{cls._redact_feishu_identifier(user_id)}")
+                rendered.append(cls._escape_mindnote_text(f"@{cls._mindnote_user_label(payload)}"))
                 continue
 
             if element_type == "link":
@@ -2044,7 +2010,7 @@ class FeishuAccessor(DataAccessor):
         depth: int,
     ) -> List[str]:
         indent = "  " * depth
-        text = cls._render_mindnote_elements(cls._mindnote_list(node, "texts"))
+        text = cls._render_mindnote_elements(node.get("texts") or [])
         text = text or "*(untitled)*"
         highlight = str(node.get("highlight") or "").strip()
         if highlight:
@@ -2054,16 +2020,11 @@ class FeishuAccessor(DataAccessor):
             text = f"✅ {text}"
 
         lines = [f"{indent}- {text}"]
-        note = cls._render_mindnote_elements(cls._mindnote_list(node, "notes"))
+        note = cls._render_mindnote_elements(node.get("notes") or [])
         if note:
             lines.append(f"{indent}  > {note}")
-        for image in cls._mindnote_list(node, "images"):
-            if isinstance(image, str):
-                token = image
-            elif isinstance(image, dict):
-                token = str(image.get("token") or image.get("file_token") or "")
-            else:
-                token = ""
+        for image in node.get("images") or []:
+            token = str(image.get("token") or "") if isinstance(image, dict) else ""
             if token and re.fullmatch(r"[A-Za-z0-9._-]+", token):
                 lines.append(f"{indent}  ![mindnote image](feishu://image/{token})")
         return lines

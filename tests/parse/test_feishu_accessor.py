@@ -1138,17 +1138,78 @@ def test_mindnote_url_is_supported(path_type):
     assert accessor._parse_feishu_url(url) == ("mindnote", "mindnote_token")
 
 
-def test_mindnote_preflight_requires_user_token(monkeypatch):
+def _mindnote_node(node_id, text, parent_id=None, **extra):
+    node = {
+        "node_id": node_id,
+        "texts": [{"text": {"content": text}}],
+        **extra,
+    }
+    if parent_id is not None:
+        node["parent_id"] = parent_id
+    return node
+
+
+@pytest.mark.parametrize(
+    ("nodes", "expected"),
+    [
+        (
+            [
+                _mindnote_node("root", "Root"),
+                _mindnote_node("child", "Child", parent_id="root"),
+                _mindnote_node("orphan", "Orphan", parent_id="missing"),
+            ],
+            "# Title\n\n- Root\n  - Child\n- Orphan",
+        ),
+        (
+            [
+                _mindnote_node("self", "Self", parent_id="self"),
+                _mindnote_node("child", "Child", parent_id="self"),
+            ],
+            "# Title\n\n- Self\n  - Child",
+        ),
+        (
+            [
+                _mindnote_node("a", "A", parent_id="b"),
+                _mindnote_node("b", "B", parent_id="a"),
+            ],
+            "# Title\n\n- A\n  - B",
+        ),
+        (
+            [
+                _mindnote_node("dup", "First"),
+                _mindnote_node("dup", "Second"),
+                _mindnote_node("child", "Child", parent_id="dup"),
+            ],
+            "# Title\n\n- First\n  - Child\n- Second",
+        ),
+    ],
+)
+def test_render_mindnote_handles_noncanonical_tree_shapes(nodes, expected):
+    assert FeishuAccessor._render_mindnote(nodes, "Title") == expected
+
+
+def test_mindnote_preflight_uses_tenant_token_without_user_token(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
+    nodes = {
+        "data": {
+            "nodes": [
+                _mindnote_node("root", "Tenant Mindnote")
+            ]
+        }
+    }
+    request = MagicMock(return_value=_FakeMediaResponse(json.dumps(nodes).encode()))
+    accessor = FeishuAccessor()
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request))
 
-    with pytest.raises(OpenVikingError, match="args.feishu_access_token") as exc_info:
-        asyncio.run(
-            FeishuAccessor().preflight_source(
-                "https://example.feishu.cn/mindnote/mindnote_token"
-            )
-        )
+    identity = asyncio.run(
+        accessor.preflight_source("https://example.feishu.cn/mindnote/mindnote_token")
+    )
 
-    assert exc_info.value.code == "UNAUTHENTICATED"
+    assert identity.source_name == "Tenant Mindnote"
+    node_request = request.call_args.args[0]
+    assert node_request.uri == "/open-apis/mindnote/v1/mindnotes/mindnote_token/nodes"
+    assert node_request.token_types == {"tenant"}
+    assert len(request.call_args.args) == 1
 
 
 def test_access_mindnote_preserves_user_token_for_media(monkeypatch):
@@ -1156,10 +1217,7 @@ def test_access_mindnote_preserves_user_token_for_media(monkeypatch):
     nodes = {
         "data": {
             "nodes": [
-                {
-                    "node_id": "root",
-                    "texts": [{"text": {"content": "Launch Plan"}}],
-                },
+                _mindnote_node("root", "Launch Plan"),
                 {
                     "node_id": "child",
                     "parent_id": "root",
