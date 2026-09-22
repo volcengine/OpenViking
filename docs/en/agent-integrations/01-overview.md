@@ -14,6 +14,7 @@ OpenViking can act as the long-term memory and context backend for many agent ru
 | **DeepSeek Harness (`dsh`)** | [DeepSeek Harness Memory Bundle](./17-dsh.md) — in-process Cordis plugin with pre-step recall, event capture, and the OpenViking MCP tools |
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md) — built-in OpenViking memory provider, no plugin install needed |
 | **OpenCode** | [OpenCode Plugin](./10-opencode.md) — MCP tools plus lifecycle hooks for repo context, auto-recall, and capture |
+| **GitHub Copilot** | [Copilot Plugin](../../examples/copilot-plugin/README.md) — MCP wiring for VSCode Copilot Chat, `gh copilot` CLI, and the GitHub.com cloud agent, plus an Agent Skill that supplies the recall/remember policy (Copilot has no lifecycle hooks) |
 | **pi** | [pi Coding Agent Extension](./11-pi.md) — native extension with auto-recall, turn capture, and threshold commit |
 | **LangChain / LangGraph** | [LangChain and LangGraph](./07-langchain-langgraph.md) — retriever, tools, context backend, store, and middleware |
 | **Multiple local coding agents / a desktop UI** | [OpenViking Helper](./14-openviking-helper.md) — visual agent setup, session inspection, and memory management |
