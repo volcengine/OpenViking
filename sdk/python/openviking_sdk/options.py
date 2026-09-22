@@ -59,6 +59,7 @@ class SearchContextOptions(_ExtraOptions, total=False):
 
 
 class AddResourceOptions(_ExtraOptions, total=False):
+    attrs: Dict[str, Any]
     reason: str
     instruction: str
     create_parent: bool
@@ -87,6 +88,7 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
+    attrs: Dict[str, Any]
     telemetry: Any
     processing_mode: ProcessingMode
     tags: List[str]

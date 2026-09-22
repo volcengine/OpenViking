@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers import attrs as attrs_router
 from openviking.server.routers import filesystem
 from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.session.user_id import UserIdentifier
@@ -169,7 +170,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         "-->"
     )
 
-    async def fake_stat(uri, ctx=None):
+    async def fake_stat(uri, ctx=None, skip_count=False):
         return {"isDir": False}
 
     async def fake_read(uri, ctx=None):
@@ -186,7 +187,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
             ]
 
     monkeypatch.setattr(
-        filesystem,
+        attrs_router,
         "get_service",
         lambda: SimpleNamespace(
             fs=SimpleNamespace(stat=fake_stat, read=fake_read),
@@ -194,7 +195,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         ),
     )
 
-    response = await filesystem.attrs(
+    response = await attrs_router.attrs(
         uri="viking://user/alice/memories/preferences/theme.md",
         _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
     )

@@ -24,6 +24,8 @@ from openviking.storage.acl import (
     AclEntry,
     AclLevel,
     AclMode,
+    AclUpdate,
+    ResourceAttrs,
     acl_allows,
     acl_ancestors,
     has_implicit_manage,
@@ -34,6 +36,7 @@ from openviking.storage.acl import (
 from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 from openviking_cli.exceptions import (
     FailedPreconditionError,
+    InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
 )
@@ -274,9 +277,10 @@ class _AccessMixin:
         acl_ancestors(uri)
         if has_implicit_manage(real_ctx, uri):
             return real_ctx
-        effective = await self.acl_manager.resolve(uri, real_ctx)
-        if effective.enabled and acl_allows(effective, real_ctx, AclAction.MANAGE):
-            return real_ctx
+        if await self.acl_manager.is_enabled(real_ctx.account_id):
+            effective = await self.acl_manager.resolve(uri, real_ctx)
+            if acl_allows(effective, real_ctx, AclAction.MANAGE):
+                return real_ctx
         raise PermissionDeniedError(f"ACL management denied for {uri}", resource=uri)
 
     async def _ensure_acl_target_exists(self, uri: str, ctx: RequestContext) -> bool:
@@ -309,6 +313,21 @@ class _AccessMixin:
         await self._ensure_acl_target_exists(uri, real_ctx)
         effective = await self.acl_manager.resolve(uri, real_ctx)
         return self.acl_manager.to_report(uri, effective)
+
+    async def prepare_acl_update(
+        self,
+        uri: str,
+        attrs: ResourceAttrs | Mapping[str, Any] | None,
+        ctx: RequestContext,
+    ) -> AclUpdate | None:
+        """Authorize explicit creation attributes against the pre-write ACL."""
+        attributes = ResourceAttrs.model_validate(attrs or {})
+        if attributes.acl is None:
+            return None
+        if len(acl_ancestors(uri)) == 1:
+            raise InvalidArgumentError("ACL cannot be set on viking://resources")
+        await self._ensure_acl_manage(uri, ctx)
+        return AclUpdate(uri=uri, acl=attributes.acl)
 
     async def set_acl(
         self,

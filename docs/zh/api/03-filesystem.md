@@ -403,6 +403,8 @@ openviking stat viking://resources/my-project/docs
 
 ### attrs()
 
+共享资源支持 `attrs.acl`，查询和修改均要求 manage；普通属性查询会省略无权查看的 ACL。`mkdir` 和 `write` 也接受 `attrs.acl`。参数及示例见 [ACL 属性](12-acl.md)。
+
 获取文件或目录的逻辑扩展属性。
 
 **参数**

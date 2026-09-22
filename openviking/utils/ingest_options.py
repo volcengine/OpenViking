@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional
 
+from openviking.storage.acl import AclUpdate
 from openviking.utils.tags import normalize_search_tags
 
 
@@ -22,6 +23,7 @@ class IngestOptions:
 
     search_tags: Optional[list[str]] = None
     search_tag_mode: str = "replace"
+    acl_update: AclUpdate | None = None
 
     @classmethod
     def from_search_tags(
@@ -50,10 +52,16 @@ class IngestOptions:
                 else None
             ),
             search_tag_mode=str(value.get("search_tag_mode", "replace")),
+            acl_update=(
+                AclUpdate.model_validate(value["acl_update"])
+                if value.get("acl_update") is not None
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "search_tags": list(self.search_tags) if self.search_tags is not None else None,
             "search_tag_mode": self.search_tag_mode,
+            "acl_update": self.acl_update.model_dump(mode="json") if self.acl_update else None,
         }

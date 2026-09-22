@@ -74,7 +74,7 @@ The server adds memberships to `RequestContext.group_ids` for each request. Addi
 ```bash
 ov --sudo admin create-group acme engineering
 ov --sudo admin add-group-member acme engineering alice
-ov acl grant viking://resources/project-a \
+ov attrs grant-acl viking://resources/project-a \
   --principal group:engineering --level read
 ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering

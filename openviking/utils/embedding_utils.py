@@ -108,7 +108,13 @@ def _apply_ingest_options(
     ingest_options: IngestOptions | None,
 ) -> None:
     ingest_options = IngestOptions.from_value(ingest_options)
-    if not embedding_msg or ingest_options.search_tags is None:
+    if not embedding_msg:
+        return
+    if ingest_options.acl_update is not None:
+        embedding_msg.context_data.setdefault("_upsert_options", {})["acl_update"] = (
+            ingest_options.acl_update.model_dump(mode="json")
+        )
+    if ingest_options.search_tags is None:
         return
     incoming_tags = list(ingest_options.search_tags or [])
     if ingest_options.search_tag_mode == "append" and (

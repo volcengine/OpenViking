@@ -33,6 +33,7 @@ pub async fn handle_add_resource(
     resource_args: Option<String>,
     tags: Vec<String>,
     tag_mode: String,
+    attrs: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
@@ -123,6 +124,7 @@ pub async fn handle_add_resource(
         add_resource_args,
         tags,
         tag_mode,
+        attrs,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),
@@ -1398,6 +1400,7 @@ pub async fn handle_write(
     processing_mode: String,
     tags: Vec<String>,
     tag_mode: String,
+    attrs: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1421,6 +1424,7 @@ pub async fn handle_write(
         &processing_mode,
         tags,
         &tag_mode,
+        attrs,
         ctx.output_format,
         ctx.compact,
     )
@@ -1781,12 +1785,18 @@ pub async fn handle_tree(
     .await
 }
 
-pub async fn handle_mkdir(uri: String, description: Option<String>, ctx: CliContext) -> Result<()> {
+pub async fn handle_mkdir(
+    uri: String,
+    description: Option<String>,
+    attrs: Option<Value>,
+    ctx: CliContext,
+) -> Result<()> {
     let client = ctx.get_client();
     commands::filesystem::mkdir(
         &client,
         &uri,
         description.as_deref(),
+        attrs,
         ctx.output_format,
         ctx.compact,
     )
@@ -1841,30 +1851,15 @@ pub async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
-pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> Result<()> {
-    let client = ctx.get_client();
-    commands::filesystem::attrs(
-        &client,
-        &uri,
-        key.as_deref(),
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
-}
-
-pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<()> {
+pub async fn handle_attrs(action: crate::AttrsCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match action {
-        crate::AclCommands::Get { uri } => {
-            commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
-        }
-        crate::AclCommands::Set {
+        crate::AttrsCommands::SetAcl {
             uri,
             entries,
             acl_mode,
         } => {
-            commands::acl::set(
+            commands::attrs::set(
                 &client,
                 &uri,
                 entries,
@@ -1874,12 +1869,12 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
             )
             .await
         }
-        crate::AclCommands::Grant {
+        crate::AttrsCommands::GrantAcl {
             uri,
             principal,
             level,
         } => {
-            commands::acl::grant(
+            commands::attrs::grant(
                 &client,
                 &uri,
                 &principal,
@@ -1889,11 +1884,17 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
             )
             .await
         }
-        crate::AclCommands::Revoke { uri, principal } => {
-            commands::acl::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
+        crate::AttrsCommands::RevokeAcl { uri, principal } => {
+            commands::attrs::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
         }
-        crate::AclCommands::Rm { uri } => {
-            commands::acl::remove(&client, &uri, ctx.output_format, ctx.compact).await
+        crate::AttrsCommands::ResetAcl { uri } => {
+            commands::attrs::remove(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+        crate::AttrsCommands::Get { uri, key } => {
+            commands::filesystem::attrs(&client, &uri, key.as_deref(), ctx.output_format, ctx.compact).await
+        }
+        crate::AttrsCommands::SetTags { uri, tags, mode, recursive } => {
+            commands::content::set_tags(&client, &uri, tags, &mode, recursive, ctx.output_format, ctx.compact).await
         }
     }
 }

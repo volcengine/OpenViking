@@ -22,6 +22,7 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
+	Attrs               *ResourceAttrs
 	To                  string
 	Parent              string
 	CreateParent        *bool
@@ -214,6 +215,7 @@ type RemoveOptions struct {
 
 // WriteOptions controls Write.
 type WriteOptions struct {
+	Attrs          *ResourceAttrs
 	Mode           string
 	Wait           bool
 	Timeout        *float64

@@ -55,7 +55,7 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.storage.acl import AclAction
+from openviking.storage.acl import AclAction, ResourceAttrs
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -142,6 +142,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "prepared_resource",
         "tags",
         "tag_mode",
+        "attrs",
         "internal_task",
     }
 )
@@ -296,6 +297,7 @@ class ResourceService:
                 "understanding_response_id",
                 "understanding_file_id",
                 "temp_file_id",
+                "attrs",
             }:
                 continue
             try:
@@ -311,7 +313,7 @@ class ResourceService:
         tags: Optional[List[str]],
         tag_mode: str,
     ) -> Dict[str, Any]:
-        watch_kwargs = dict(processor_kwargs)
+        watch_kwargs = {key: value for key, value in processor_kwargs.items() if key != "attrs"}
         if tags is not None:
             watch_kwargs["tags"] = tags
             watch_kwargs["tag_mode"] = tag_mode
@@ -819,6 +821,7 @@ class ResourceService:
                     watch_interval=msg.watch_interval,
                     is_active=msg.is_active,
                     manage_watch=not msg.skip_watch_management,
+                    attrs=msg.attrs,
                     tags=msg.tags,
                     tag_mode=msg.tag_mode,
                     allow_local_path_resolution=msg.allow_local_path_resolution,
@@ -1254,6 +1257,7 @@ class ResourceService:
                 parse_mode=mode.value,
                 watch_interval=watch_interval,
                 is_active=is_active,
+                attrs=processor_kwargs.get("attrs"),
                 skip_watch_management=not manage_watch,
                 tags=tags,
                 tag_mode=tag_mode,
@@ -1479,6 +1483,7 @@ class ResourceService:
         internal_task: bool = False,
         args: Optional[Dict[str, Any]] = None,
         shared_source: Optional["SharedSource"] = None,
+        attrs: ResourceAttrs | dict[str, Any] | None = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Accept and route a new resource-add request."""
@@ -1505,6 +1510,7 @@ class ResourceService:
             processing_mode=processing_mode,
             watch_interval=watch_interval,
             is_active=is_active,
+            attrs=attrs,
             manage_watch=True,
             tags=tags,
             tag_mode=tag_mode,
@@ -1722,6 +1728,12 @@ class ResourceService:
         target_to = to or ""
         target_parent = parent or ""
         target_create_parent = bool(kwargs.get("create_parent", False))
+        attributes = None
+        if kwargs.get("attrs") is not None:
+            attributes = ResourceAttrs.model_validate(kwargs["attrs"])
+            kwargs["attrs"] = attributes.model_dump(mode="json", exclude_none=True)
+            if attributes.acl is not None:
+                await self._viking_fs._ensure_acl_manage(target_to or target_parent, ctx)
 
         connector = self._connector
         delegate_to_connector = connector.should_delegate(
@@ -1831,6 +1843,22 @@ class ResourceService:
 
                 on_complete = record_first_run
                 on_success = store_connector_states
+            if attributes is not None and attributes.acl is not None:
+                acl_update = await self._viking_fs.prepare_acl_update(target_to, attributes, ctx)
+                watch_on_success = on_success
+
+                async def apply_connector_acl(new_states=None):
+                    await self._viking_fs.set_acl(
+                        acl_update.uri,
+                        acl_update.acl.entries,
+                        ctx=ctx,
+                        acl_mode=acl_update.acl.acl_mode,
+                    )
+                    if watch_on_success is not None:
+                        await watch_on_success(new_states)
+
+                on_success = apply_connector_acl
+            kwargs.pop("attrs", None)
             try:
                 result = await connector.submit(
                     path=path,

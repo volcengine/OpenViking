@@ -828,10 +828,11 @@ pub async fn mkdir(
     client: &HttpClient,
     uri: &str,
     description: Option<&str>,
+    attrs: Option<Value>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.mkdir(uri, description).await?;
+    let result = client.mkdir(uri, description, attrs).await?;
     output_message_result(
         result,
         format!("Directory created: {}", uri),
@@ -919,7 +920,7 @@ pub async fn attrs(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let mut result = client.attrs(uri).await?;
+    let mut result = client.attrs(uri, key).await?;
     if let Some(key) = key {
         result = select_attr_key(&result, key)
             .cloned()

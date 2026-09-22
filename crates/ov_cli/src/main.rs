@@ -269,7 +269,7 @@ enum AttrsCommands {
         /// Viking URI to get attributes for
         #[arg(value_name = "uri")]
         uri: String,
-        /// Optional attrs key, for example tags, memory, or memory.tags
+        /// Optional attrs key, for example acl, tags, memory, or memory.tags
         #[arg(value_name = "key")]
         key: Option<String>,
     },
@@ -287,14 +287,7 @@ enum AttrsCommands {
         #[arg(long, default_value = "false")]
         recursive: bool,
     },
-}
-
-#[derive(Subcommand)]
-enum AclCommands {
-    Get {
-        uri: String,
-    },
-    Set {
+    SetAcl {
         uri: String,
         #[arg(long = "entry")]
         entries: Vec<String>,
@@ -302,19 +295,19 @@ enum AclCommands {
         #[arg(long, value_parser = ["inherit", "restricted"])]
         acl_mode: Option<String>,
     },
-    Grant {
+    GrantAcl {
         uri: String,
         #[arg(long)]
         principal: String,
         #[arg(long)]
         level: String,
     },
-    Revoke {
+    RevokeAcl {
         uri: String,
         #[arg(long)]
         principal: String,
     },
-    Rm {
+    ResetAcl {
         uri: String,
     },
 }
@@ -353,7 +346,7 @@ enum Commands {
             conflicts_with_all = [
                 "add_type", "to", "parent", "parent_auto_create",
                 "strict_mode", "ignore_dirs", "include", "exclude",
-                "no_directly_upload_media", "tags", "tag_mode",
+                "no_directly_upload_media", "tags", "tag_mode", "attrs",
                 "reason", "instruction"
             ]
         )]
@@ -465,6 +458,9 @@ enum Commands {
         tag_mode: String,
         #[command(flatten)]
         upload_options: UploadCliOptions,
+        /// Resource attributes JSON, for example {"acl":{"acl_mode":"restricted","entries":[]}}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        attrs: Option<serde_json::Value>,
     },
     /// [Data] Add skills from a source (same as `skills add`)
     AddSkill(SkillAddArgs),
@@ -614,6 +610,9 @@ enum Commands {
         /// Initial directory description
         #[arg(long, value_name = "text", help_heading = "Common options")]
         description: Option<String>,
+        /// Resource attributes JSON, for example {"acl":{"acl_mode":"restricted","entries":[]}}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        attrs: Option<serde_json::Value>,
     },
     /// [Data] Remove resource
     #[command(alias = "del", alias = "delete")]
@@ -668,11 +667,6 @@ enum Commands {
     Attrs {
         #[command(subcommand)]
         action: AttrsCommands,
-    },
-    /// [Data] Manage resource ACL
-    Acl {
-        #[command(subcommand)]
-        action: AclCommands,
     },
     /// [Data] Read file content (Level 2)
     Read {
@@ -749,6 +743,9 @@ enum Commands {
         /// Tag update mode when --tags is provided
         #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append"])]
         tag_mode: String,
+        /// Resource attributes JSON, for example {"acl":{"acl_mode":"restricted","entries":[]}}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        attrs: Option<serde_json::Value>,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -3219,6 +3216,7 @@ async fn main() {
             timeout,
             tags,
             tag_mode,
+            attrs,
             strict_mode,
             ignore_dirs,
             include,
@@ -3275,6 +3273,7 @@ async fn main() {
                     resource_args,
                     tags,
                     tag_mode,
+                    attrs,
                     ctx,
                 )
                 .await
@@ -3559,7 +3558,11 @@ async fn main() {
             )
             .await
         }
-        Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
+        Commands::Mkdir {
+            uri,
+            description,
+            attrs,
+        } => handlers::handle_mkdir(uri, description, attrs, ctx).await,
         Commands::Rm {
             uri,
             recursive,
@@ -3573,16 +3576,7 @@ async fn main() {
         } => handlers::handle_cp(from_uri, to_uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
-        Commands::Attrs { action } => match action {
-            AttrsCommands::Get { uri, key } => handlers::handle_attrs(uri, key, ctx).await,
-            AttrsCommands::SetTags {
-                uri,
-                tags,
-                mode,
-                recursive,
-            } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
-        },
-        Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
+        Commands::Attrs { action } => handlers::handle_attrs(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {
@@ -3678,6 +3672,7 @@ async fn main() {
             timeout,
             tags,
             tag_mode,
+            attrs,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3696,6 +3691,7 @@ async fn main() {
                 processing_mode,
                 tags,
                 tag_mode,
+                attrs,
                 ctx,
             )
             .await

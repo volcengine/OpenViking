@@ -379,9 +379,13 @@ impl HttpClient {
         processing_mode: &str,
         tags: Vec<String>,
         tag_mode: &str,
+        attrs: Option<Value>,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
+        if let Some(attrs) = attrs {
+            body["attrs"] = attrs;
+        }
         self.post("/api/v1/content/write", &body).await
     }
 
@@ -401,12 +405,7 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
-    pub async fn acl_get(&self, uri: &str) -> Result<Value> {
-        self.get("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
-            .await
-    }
-
-    pub async fn acl_set(
+    pub async fn attrs_set_acl(
         &self,
         uri: &str,
         entries: Vec<Value>,
@@ -419,28 +418,31 @@ impl HttpClient {
         if let Some(acl_mode) = acl_mode {
             body["acl_mode"] = serde_json::Value::String(acl_mode);
         }
-        self.put("/api/v1/acl", &body).await
+        self.post("/api/v1/fs/attrs/set_acl", &body).await
     }
 
-    pub async fn acl_grant(&self, uri: &str, principal: &str, level: &str) -> Result<Value> {
+    pub async fn attrs_grant_acl(&self, uri: &str, principal: &str, level: &str) -> Result<Value> {
         self.post(
-            "/api/v1/acl/grant",
+            "/api/v1/fs/attrs/grant_acl",
             &serde_json::json!({"uri": uri, "principal": principal, "level": level}),
         )
         .await
     }
 
-    pub async fn acl_revoke(&self, uri: &str, principal: &str) -> Result<Value> {
+    pub async fn attrs_revoke_acl(&self, uri: &str, principal: &str) -> Result<Value> {
         self.post(
-            "/api/v1/acl/revoke",
+            "/api/v1/fs/attrs/revoke_acl",
             &serde_json::json!({"uri": uri, "principal": principal}),
         )
         .await
     }
 
-    pub async fn acl_delete(&self, uri: &str) -> Result<Value> {
-        self.delete("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
-            .await
+    pub async fn attrs_reset_acl(&self, uri: &str) -> Result<Value> {
+        self.post(
+            "/api/v1/fs/attrs/reset_acl",
+            &serde_json::json!({"uri": uri}),
+        )
+        .await
     }
 
     fn build_write_body(
@@ -641,11 +643,19 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<serde_json::Value> {
-        let body = match description {
+    pub async fn mkdir(
+        &self,
+        uri: &str,
+        description: Option<&str>,
+        attrs: Option<Value>,
+    ) -> Result<serde_json::Value> {
+        let mut body = match description {
             Some(description) => serde_json::json!({ "uri": uri, "description": description }),
             None => serde_json::json!({ "uri": uri }),
         };
+        if let Some(attrs) = attrs {
+            body["attrs"] = attrs;
+        }
         self.post("/api/v1/fs/mkdir", &body).await
     }
 
@@ -694,8 +704,11 @@ impl HttpClient {
         self.get("/api/v1/fs/stat", &params).await
     }
 
-    pub async fn attrs(&self, uri: &str) -> Result<serde_json::Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
+    pub async fn attrs(&self, uri: &str, key: Option<&str>) -> Result<serde_json::Value> {
+        let mut params = vec![("uri".to_string(), uri.to_string())];
+        if let Some(key) = key {
+            params.push(("key".to_string(), key.to_string()));
+        }
         self.get("/api/v1/fs/attrs", &params).await
     }
 
@@ -842,6 +855,7 @@ impl HttpClient {
         resource_args: Option<Map<String, Value>>,
         tags: Vec<String>,
         tag_mode: String,
+        attrs: Option<Value>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -861,6 +875,9 @@ impl HttpClient {
 
         let build_body = |base: serde_json::Value| {
             let mut body = base;
+            if let Some(attrs) = &attrs {
+                body["attrs"] = attrs.clone();
+            }
             add_resource_tag_fields(&mut body, &tags, &tag_mode);
             if create_parent {
                 body.as_object_mut()
@@ -2034,6 +2051,7 @@ mod tests {
                 None,
                 Vec::new(),
                 "replace".to_string(),
+                None,
                 false,
                 false,
             )
@@ -2070,6 +2088,7 @@ mod tests {
                 Some(no_split_args),
                 Vec::new(),
                 "replace".to_string(),
+                None,
                 false,
                 false,
             )

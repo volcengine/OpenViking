@@ -157,6 +157,8 @@ class SemanticMsg:
         """Convert object to dictionary."""
         data = asdict(self)
         data["ingest_options"] = self.ingest_options.to_dict()
+        if self.plan is not None:
+            data["plan"] = self.plan.to_dict()
         return data
 
     def to_json(self) -> str:

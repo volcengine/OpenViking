@@ -8,6 +8,8 @@ import {
 import { OpenVikingTransport, type TransportOptions } from "./transport.js";
 import type {
   AddResourceOptions,
+  AclSpec,
+  ResourceAttrs,
   BatchAddMessagesOptions,
   BatchWriteOperation,
   BatchWriteOptions,
@@ -156,6 +158,7 @@ export class OpenVikingClient {
           ? options.args
           : undefined,
       tags: options.tags,
+      attrs: options.attrs,
       tag_mode: options.tags ? options.tagMode : undefined,
       telemetry: options.telemetry,
     });
@@ -519,15 +522,43 @@ export class OpenVikingClient {
     });
   }
   /** Return URI logical attributes. */
-  attrs(uri: string): Promise<JsonObject> {
+  attrs(uri: string, key?: string): Promise<JsonObject> {
     return this.request("GET", "/api/v1/fs/attrs", {
-      query: { uri: normalizeURI(uri) },
+      query: { uri: normalizeURI(uri), key },
     });
   }
   /** Create a directory. */
-  mkdir(uri: string, description?: string): Promise<void> {
+  mkdir(
+    uri: string,
+    description?: string,
+    attrs?: ResourceAttrs,
+  ): Promise<void> {
     return this.request("POST", "/api/v1/fs/mkdir", {
-      body: compact({ uri: normalizeURI(uri), description }),
+      body: compact({ uri: normalizeURI(uri), description, attrs }),
+    });
+  }
+  attrsSetAcl(uri: string, acl: AclSpec): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/fs/attrs/set_acl", {
+      body: { uri: normalizeURI(uri), ...acl },
+    });
+  }
+  attrsGrantAcl(
+    uri: string,
+    principal: string,
+    level: "read" | "write" | "manage",
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/fs/attrs/grant_acl", {
+      body: { uri: normalizeURI(uri), principal, level },
+    });
+  }
+  attrsRevokeAcl(uri: string, principal: string): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/fs/attrs/revoke_acl", {
+      body: { uri: normalizeURI(uri), principal },
+    });
+  }
+  attrsResetAcl(uri: string): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/fs/attrs/reset_acl", {
+      body: { uri: normalizeURI(uri) },
     });
   }
   /** Remove a resource or directory. */
@@ -596,6 +627,7 @@ export class OpenVikingClient {
       mode: options.mode,
       processing_mode: options.processingMode,
       tags: options.tags,
+      attrs: options.attrs,
       tag_mode:
         options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
       wait: options.wait,
@@ -1178,7 +1210,12 @@ export class OpenVikingClient {
   /** List users in an account, in creation order. `name` supports wildcard (* and ?) matching. */
   adminListUsers(
     accountId: string,
-    options: { limit?: number; name?: string; role?: string; page?: number } = {},
+    options: {
+      limit?: number;
+      name?: string;
+      role?: string;
+      page?: number;
+    } = {},
   ): Promise<unknown[]> {
     return this.request(
       "GET",

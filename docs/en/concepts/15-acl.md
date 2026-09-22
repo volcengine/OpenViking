@@ -67,17 +67,16 @@ If `A/B` becomes restricted, Bob's grant on `A` no longer applies to `A/B` or it
 
 The account-level `acl.enabled` setting is disabled by default. While disabled,
 shared resources keep the existing URI namespace visibility and write rules.
-ACLs are neither resolved nor enforced, and new content does not receive ACL
-fields.
+ACL is not enforced. Indexed content still stores ACL fields using the same inheritance rules; the switch only controls access checks and retrieval filtering.
 
 When enabled, the root grants `user:* = manage`, so all account members can
-manage shared content that continues to inherit from the root. New nodes have
+manage shared content that continues to inherit from the root. Without `attrs.acl`, new nodes have
 empty direct ACLs and inherit their parent’s effective permissions. Creating
 content grants no additional permissions. Import roots and descendants follow
 the same rule. Existing shared content without ACL fields uses default
 inheritance without a historical data migration. Disabling the setting stops
 enforcing existing ACLs. Re-embedding or replacing an existing context record
-does not change its direct ACL.
+does not change its direct ACL unless explicitly supplied. See [ACL attributes](../api/12-acl.md) for creation parameters.
 
 `acl_mode` describes a resource's ACL behavior, separately from the account-wide `acl.enabled` switch:
 
@@ -147,19 +146,19 @@ Assume `project-a` is already restricted and the caller has `manage` on it.
 Grant Bob read-only access to the directory:
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level read
+ov attrs grant-acl viking://resources/project-a --principal user:bob --level read
 ```
 
 Bob can read and retrieve descendants, but cannot write or delete them. Upgrade the grant to `write`:
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level write
+ov attrs grant-acl viking://resources/project-a --principal user:bob --level write
 ```
 
 Remove Bob's direct grant from this node:
 
 ```bash
-ov acl revoke viking://resources/project-a --principal user:bob
+ov attrs revoke-acl viking://resources/project-a --principal user:bob
 ```
 
 If an ancestor still grants Bob access, that inherited permission remains effective.
@@ -167,7 +166,7 @@ If an ancestor still grants Bob access, that inherited permission remains effect
 Use only direct grants on the current node while preserving and refreshing inherited grants:
 
 ```bash
-ov acl set viking://resources/project-a --acl-mode restricted
+ov attrs set-acl viking://resources/project-a --acl-mode restricted
 ```
 
 ## Related Documentation

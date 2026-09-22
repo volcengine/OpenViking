@@ -119,6 +119,18 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     uri = f"{parent_uri}/journal.md"
     everyone = [{"principal": "user:*", "level": "manage"}]
 
+    # Disabled ACL does not change access, but explicit inherited ACL must survive
+    # writes and retain the fixed root grant when the account enables enforcement.
+    off_file = "viking://resources/created_while_disabled.md"
+    await service.fs.write(
+        off_file,
+        "before",
+        ctx=admin,
+        wait=True,
+        attrs={"acl": {"entries": [{"principal": "user:reader", "level": "read"}]}},
+    )
+    await service.fs.write(off_file, "after", ctx=admin, wait=True)
+
     # Content created with ACL disabled gains default management when enabled.
     await service.fs.mkdir(public_uri, ctx=writer)
     await service.resources.wait_processed()
@@ -130,6 +142,9 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert (await service.fs.get_acl("viking://resources", ctx=outsider))[
         "direct_entries"
     ] == everyone
+    off_acl = await service.fs.get_acl(off_file, ctx=outsider)
+    assert off_acl["direct_entries"] == [{"principal": "user:reader", "level": "read"}]
+    assert off_acl["inherited_entries"] == everyone
     public_acl = await service.fs.get_acl(public_uri, ctx=outsider)
     assert public_acl["direct_entries"] == []
     assert public_acl["inherited_entries"] == everyone
@@ -217,6 +232,56 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     restored_acl = await service.fs.delete_acl(parent_uri, ctx=admin)
     assert restored_acl["effective_entries"] == everyone
     assert (await service.fs.get_acl(uri, ctx=outsider))["effective_entries"] == everyone
+
+    # Creation attributes share one ACL contract across directories, files and imports.
+    restricted = {"acl": {"acl_mode": "restricted", "entries": inherited_entries}}
+    explicit_dir = "viking://resources/explicit"
+    await service.fs.mkdir(explicit_dir, ctx=outsider, attrs=restricted)
+    await service.resources.wait_processed()
+    assert (await service.fs.get_acl(explicit_dir, ctx=admin))[
+        "effective_entries"
+    ] == inherited_entries
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.write(f"{explicit_dir}/denied.md", "denied", ctx=writer, attrs=restricted)
+    assert not await service.viking_fs.exists(f"{explicit_dir}/denied.md", ctx=admin)
+
+    explicit_file = f"{explicit_dir}/explicit.md"
+    await service.fs.write(
+        explicit_file, "first", ctx=admin, mode="create", wait=True, attrs=restricted
+    )
+    assert (await service.fs.get_acl(explicit_file, ctx=admin))[
+        "direct_entries"
+    ] == inherited_entries
+    assert (await service.fs.get_acl(explicit_dir, ctx=admin))[
+        "direct_entries"
+    ] == inherited_entries
+    await service.fs.write(
+        explicit_file, "first", ctx=admin, wait=True, attrs={"acl": {"entries": []}}
+    )
+    assert (await service.fs.get_acl(explicit_file, ctx=admin))["effective_entries"] == []
+
+    explicit_import = "viking://resources/explicit_import"
+    await service.resources.add_resource(
+        path=str(sample_markdown_file), to=explicit_import, ctx=admin, wait=True, attrs=restricted
+    )
+    await service.resources.wait_processed()
+    assert (await service.fs.get_acl(explicit_import, ctx=admin))[
+        "direct_entries"
+    ] == inherited_entries
+    imported_children = await service.fs.ls(explicit_import, ctx=admin, simple=True)
+    for child in imported_children:
+        report = await service.fs.get_acl(child, ctx=admin)
+        assert report["direct_entries"] == []
+        assert report["effective_entries"] == inherited_entries
+    await service.resources.add_resource(
+        path=str(sample_markdown_file),
+        to=explicit_import,
+        ctx=admin,
+        wait=True,
+        attrs={"acl": {"entries": []}},
+    )
+    await service.resources.wait_processed()
+    assert (await service.fs.get_acl(explicit_import, ctx=admin))["effective_entries"] == []
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
-from openviking.storage.acl import AclAction, AclMode
+from openviking.storage.acl import AclAction, AclMode, ResourceAttrs
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -40,6 +40,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
@@ -321,15 +322,28 @@ class FSService:
         uri: str,
         ctx: RequestContext,
         description: Optional[str] = None,
+        attrs: ResourceAttrs | Dict[str, Any] | None = None,
     ) -> None:
         """Create directory."""
         viking_fs = self._ensure_initialized()
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
+        acl_update = (
+            await viking_fs.prepare_acl_update(directory_uri, attrs, ctx)
+            if attrs is not None
+            else None
+        )
         await viking_fs.mkdir(uri, ctx=ctx)
 
         abstract = self._normalize_directory_description(description)
         if not abstract:
             if await viking_fs.exists(abstract_uri, ctx=ctx):
+                if acl_update:
+                    await viking_fs.set_acl(
+                        directory_uri,
+                        acl_update.acl.entries,
+                        ctx=ctx,
+                        acl_mode=acl_update.acl.acl_mode,
+                    )
                 return
             abstract = f"# {uri_leaf_name(directory_uri)}"
 
@@ -361,6 +375,7 @@ class FSService:
             context_type=context_type_for_uri(directory_uri),
             ctx=ctx,
             include_overview=False,
+            ingest_options=IngestOptions(acl_update=acl_update),
         )
 
     @staticmethod
@@ -1122,6 +1137,7 @@ class FSService:
         processing_mode: str = "semantic_and_vectors",
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
+        attrs: ResourceAttrs | Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Write to an existing file and refresh semantics/vectors."""
         viking_fs = self._ensure_initialized()
@@ -1136,6 +1152,7 @@ class FSService:
             processing_mode=processing_mode,
             tags=tags,
             tag_mode=tag_mode,
+            attrs=attrs,
         )
 
     async def batch_write(

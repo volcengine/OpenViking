@@ -881,12 +881,12 @@ class SemanticTreeExecutor:
 
     def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
         if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
-            return IngestOptions()
+            return IngestOptions(acl_update=self._ingest_options.acl_update)
         return self._ingest_options
 
     def _ingest_options_for_directory(self) -> IngestOptions:
         if self._generation_trigger == "content_write":
-            return IngestOptions()
+            return IngestOptions(acl_update=self._ingest_options.acl_update)
         return self._ingest_options
 
     def _plan_scalar_override(self, uri: str, level: int) -> Optional[Dict[str, Any]]:
@@ -1157,7 +1157,7 @@ class SemanticTreeExecutor:
                     ctx=self._ctx,
                     use_summary=use_summary,
                     ingest_options=(
-                        IngestOptions()
+                        IngestOptions(acl_update=self._ingest_options.acl_update)
                         if self._semantic_plan is not None
                         else self._ingest_options_for_file(file_path)
                     ),
@@ -1520,7 +1520,7 @@ class SemanticTreeExecutor:
                             overview=overview,
                             ctx=self._ctx,
                             ingest_options=(
-                                IngestOptions()
+                                IngestOptions(acl_update=self._ingest_options.acl_update)
                                 if self._semantic_plan is not None
                                 else self._ingest_options_for_directory()
                             ),

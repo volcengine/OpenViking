@@ -66,13 +66,13 @@ read user:carol on viking://resources/A/B/C/report.md
 ## 默认行为与 `acl_mode`
 
 账号级 `acl.enabled` 默认关闭。关闭时，共享资源继续使用原有 URI namespace
-可见性和写入规则，不解析或校验 ACL，也不为新建内容写入 ACL。
+可见性和写入规则，不执行 ACL 鉴权和过滤。索引仍按统一继承规则保存 ACL，开关不影响已存权限。
 
 开启后，根目录固定授予 `user:* = manage`，当前 account 内所有成员都可以管理
-持续继承根权限的共享内容。新节点的直接授权为空，只继承父目录的有效权限，
+持续继承根权限的共享内容。未传 `attrs.acl` 时，新节点的直接授权为空，只继承父目录的有效权限，
 不会因为创建了内容而获得额外权限。`add-resource` 的根节点和内部节点遵循相同规则。
 已有且未设置 ACL 的共享内容按默认继承计算，不进行历史数据迁移；重新关闭后，
-已有 ACL 不参与访问判断。重新向量化或覆盖已有 context 不改变直接 ACL。
+已有 ACL 不参与访问判断。重新向量化或未显式传入 ACL 的覆盖写不改变直接 ACL。创建时可通过 [attrs.acl](../api/12-acl.md) 设置目标节点权限。
 
 `acl_mode` 表示当前资源如何使用 ACL，与账号总开关 `acl.enabled` 不是一回事：
 
@@ -138,19 +138,19 @@ ACL 随索引更新，允许同一 URI 的不同索引记录短暂保留不同�
 将目录授权给 Bob 只读：
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level read
+ov attrs grant-acl viking://resources/project-a --principal user:bob --level read
 ```
 
 Bob 可以读取和检索该目录的后代，但不能写入或删除。升级为 `write`：
 
 ```bash
-ov acl grant viking://resources/project-a --principal user:bob --level write
+ov attrs grant-acl viking://resources/project-a --principal user:bob --level write
 ```
 
 删除 Bob 在当前节点上的直接授权：
 
 ```bash
-ov acl revoke viking://resources/project-a --principal user:bob
+ov attrs revoke-acl viking://resources/project-a --principal user:bob
 ```
 
 如果 Bob 仍被祖先目录授权，该继承权限继续有效。
@@ -158,7 +158,7 @@ ov acl revoke viking://resources/project-a --principal user:bob
 只使用当前节点直接授权，同时保留并继续更新继承字段：
 
 ```bash
-ov acl set viking://resources/project-a --acl-mode restricted
+ov attrs set-acl viking://resources/project-a --acl-mode restricted
 ```
 
 ## 相关文档

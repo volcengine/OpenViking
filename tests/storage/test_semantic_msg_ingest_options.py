@@ -1,15 +1,21 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from openviking.storage.acl import AclSpec, AclUpdate
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.utils.ingest_options import IngestOptions
 
 
 def test_semantic_msg_serializes_ingest_options():
+    update = AclUpdate(
+        uri="viking://resources/demo", acl=AclSpec(acl_mode="restricted", entries=[])
+    )
     msg = SemanticMsg(
         uri="viking://resources/demo",
         context_type="resource",
-        ingest_options=IngestOptions(search_tags=["team=search"], search_tag_mode="append"),
+        ingest_options=IngestOptions(
+            search_tags=["team=search"], search_tag_mode="append", acl_update=update
+        ),
         source={"kind": "git", "uri": "https://example.com/acme/demo.git"},
         generation_trigger="resource_ingest",
     )
@@ -19,11 +25,13 @@ def test_semantic_msg_serializes_ingest_options():
     assert data["ingest_options"] == {
         "search_tags": ["team=search"],
         "search_tag_mode": "append",
+        "acl_update": update.model_dump(mode="json"),
     }
-    restored = SemanticMsg.from_dict(data)
+    restored = SemanticMsg.from_json(msg.to_json())
     assert restored.ingest_options == IngestOptions(
         search_tags=["team=search"],
         search_tag_mode="append",
+        acl_update=update,
     )
     assert restored.source == {
         "kind": "git",

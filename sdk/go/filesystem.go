@@ -109,17 +109,23 @@ func (c *Client) Stat(ctx context.Context, uri string) (map[string]any, error) {
 }
 
 // Attrs returns logical extended attributes for a URI.
-func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) {
+func (c *Client) Attrs(ctx context.Context, uri string, key ...string) (map[string]any, error) {
 	query := url.Values{"uri": []string{NormalizeURI(uri)}}
+	if len(key) > 0 {
+		query.Set("key", key[0])
+	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/attrs", query, nil, &result)
 	return result, err
 }
 
 // Mkdir creates a directory.
-func (c *Client) Mkdir(ctx context.Context, uri string, description string) error {
+func (c *Client) Mkdir(ctx context.Context, uri string, description string, attrs ...ResourceAttrs) error {
 	payload := map[string]any{"uri": NormalizeURI(uri)}
 	setString(payload, "description", description)
+	if len(attrs) > 0 {
+		payload["attrs"] = attrs[0]
+	}
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/fs/mkdir", nil, payload, nil)
 }
 
@@ -224,6 +230,9 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
+	if opts.Attrs != nil {
+		payload["attrs"] = opts.Attrs
+	}
 	if opts.Tags != nil {
 		payload["tags"] = opts.Tags
 		tagMode := opts.TagMode

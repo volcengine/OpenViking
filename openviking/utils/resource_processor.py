@@ -12,6 +12,7 @@ import inspect
 import os
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
@@ -26,7 +27,7 @@ from openviking.resource.processing_mode import (
     normalize_processing_mode,
 )
 from openviking.server.identity import RequestContext
-from openviking.storage.acl import AclAction
+from openviking.storage.acl import AclAction, AclUpdate
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
@@ -644,6 +645,7 @@ class ResourceProcessor:
         defer_post_processing = bool(kwargs.pop("defer_post_processing", False))
         preacquired_lock = kwargs.pop("resource_lock", None)
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
+        attrs = kwargs.pop("attrs", None)
         to_is_directory = bool(kwargs.pop("to_is_directory", False))
         telemetry = get_current_telemetry()
         metrics_account_id = getattr(ctx, "account_id", None)
@@ -897,6 +899,11 @@ class ResourceProcessor:
                                 uri=root_uri,
                                 root_is_file=root_is_file,
                             )
+                    if attrs is not None:
+                        ingest_options = replace(
+                            ingest_options,
+                            acl_update=await viking_fs.prepare_acl_update(root_uri, attrs, ctx),
+                        )
                     artifact_ref = self._ensure_parse_artifact_ref(parse_result)
                     artifact_store = self._store_for_parse_artifact(
                         artifact_ref, output_store=output_store, viking_fs=viking_fs, ctx=ctx
@@ -971,6 +978,9 @@ class ResourceProcessor:
                 "is_code_repo": parse_result.source_format == "repository",
                 "root_is_file": root_is_file,
                 "incremental_noop": incremental_noop,
+                "acl_update": ingest_options.acl_update.model_dump(mode="json")
+                if ingest_options.acl_update
+                else None,
                 "context_update_plan": (
                     context_update_plan.to_dict() if context_update_plan is not None else None
                 ),
@@ -1037,6 +1047,10 @@ class ResourceProcessor:
         vectors_only = processing_mode == VECTORS_ONLY
         root_is_file = bool(prepared.get("root_is_file"))
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
+        if prepared.get("acl_update") is not None:
+            ingest_options = replace(
+                ingest_options, acl_update=AclUpdate.model_validate(prepared["acl_update"])
+            )
         semantic_source = prepared.get("semantic_source")
         context_update_plan_data = prepared.get("context_update_plan")
         context_update_plan = None
@@ -1096,6 +1110,10 @@ class ResourceProcessor:
         try:
             with get_current_telemetry().measure("resource.derived_enqueue"):
                 if prepared.get("incremental_noop") and not direct_index_actions:
+                    if ingest_options.acl_update:
+                        await get_viking_fs().acl_manager.apply_indexed_update(
+                            ingest_options.acl_update, ctx
+                        )
                     await cleanup_artifact_if_owned()
                     if resource_lock is not None:
                         await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
@@ -1103,7 +1121,9 @@ class ResourceProcessor:
                     return result
 
                 if direct_index_actions:
-                    await self._enqueue_index_actions(direct_index_actions, ctx=ctx)
+                    await self._enqueue_index_actions(
+                        direct_index_actions, ctx=ctx, ingest_options=ingest_options
+                    )
 
                 if should_summarize:
                     try:
@@ -1257,6 +1277,8 @@ class ResourceProcessor:
             except BaseException:
                 await cleanup_artifact_if_owned()
                 raise
+        if ingest_options.acl_update:
+            await get_viking_fs().acl_manager.apply_indexed_update(ingest_options.acl_update, ctx)
         await cleanup_artifact_if_owned()
         return result
 
@@ -1284,7 +1306,9 @@ class ResourceProcessor:
             kind = "local"
         return {"kind": kind, "uri": str(path)}
 
-    async def _enqueue_index_actions(self, actions: Any, *, ctx: RequestContext) -> None:
+    async def _enqueue_index_actions(
+        self, actions: Any, *, ctx: RequestContext, ingest_options: IngestOptions | None = None
+    ) -> None:
         from collections import Counter
 
         from openviking.storage.index_action import IndexAction
@@ -1321,6 +1345,7 @@ class ResourceProcessor:
                     action.uri,
                     ctx=ctx,
                     file_md5=action.md5,
+                    ingest_options=ingest_options,
                     scalar_override={
                         **dict(action.upsert_fields),
                         "_record_id": action.record_id,
