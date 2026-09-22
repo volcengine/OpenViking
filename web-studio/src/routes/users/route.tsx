@@ -16,6 +16,9 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '#/components/ui/tabs'
+import { UserGroups } from './-components/user-groups'
+
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
@@ -107,6 +110,47 @@ function resolveKeyLabel(user: AdminUser): string {
 }
 
 function UserManagementRoute() {
+  const { t } = useTranslation('settings')
+  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
+    useAppConnection()
+  const { canManageUsers } = resolveStudioManagementCapabilities({
+    hasControlCredential: Boolean(connection.adminApiKey.trim()),
+    isRoleLoading: isConnectionRoleLoading,
+    role: connectionRole,
+    serverMode,
+  })
+  if (!canManageUsers) return <UserManagementPanel />
+  const adminConnection: AdminConnection = {
+    accountId: connection.accountId,
+    apiKey: connection.adminApiKey,
+    baseUrl: connection.baseUrl,
+    userId: connection.userId,
+  }
+  return (
+    <Tabs
+      key={JSON.stringify([
+        connection.baseUrl,
+        connection.accountId,
+        connection.adminApiKey,
+      ])}
+      defaultValue="users"
+      className="w-full min-w-0"
+    >
+      <TabsList aria-label={t('groups.navigation')}>
+        <TabsTrigger value="users">{t('groups.usersTab')}</TabsTrigger>
+        <TabsTrigger value="groups">{t('groups.title')}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="users">
+        <UserManagementPanel />
+      </TabsContent>
+      <TabsContent value="groups">
+        <UserGroups connection={adminConnection} />
+      </TabsContent>
+    </Tabs>
+  )
+}
+
+function UserManagementPanel() {
   const { t } = useTranslation('settings')
   const queryClient = useQueryClient()
   const {
