@@ -2816,6 +2816,55 @@ async def test_resource_processor_preserves_skill_metadata_in_direct_directory_m
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scalar_override", "expected_summary"),
+    [
+        # An existing L2 abstract carried by the V snapshot is seeded into
+        # summary_dict so vectorize_file can honor text_source downstream.
+        ({"abstract": "existing summary"}, "existing summary"),
+        # No abstract (new file / empty record) leaves the summary empty, so
+        # vectorize_file falls back to the file body regardless of text_source.
+        ({"abstract": ""}, ""),
+        ({}, ""),
+    ],
+)
+async def test_vectorize_resource_file_seeds_summary_from_existing_abstract(
+    monkeypatch, scalar_override, expected_summary
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage import context_update_execution
+    from openviking_cli.session.user_id import UserIdentifier
+
+    captured = {}
+
+    async def _fake_vectorize_file(*, summary_dict, **kwargs):
+        captured["summary_dict"] = summary_dict
+        captured["scalar_override"] = kwargs.get("scalar_override")
+        return True
+
+    monkeypatch.setattr(
+        "openviking.utils.embedding_utils.vectorize_file", _fake_vectorize_file
+    )
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    await context_update_execution.vectorize_resource_file(
+        "viking://resources/repo/a.py",
+        ctx=ctx,
+        scalar_override={"_record_id": "id-a", **scalar_override},
+        action="upsert",
+    )
+
+    # The existing abstract (if any) is seeded into summary_dict; text_source
+    # policy (summary vs body) is applied inside vectorize_file, not here. The
+    # abstract still travels unchanged as a stored scalar.
+    assert captured["summary_dict"]["summary"] == expected_summary
+    assert captured["scalar_override"]["_record_id"] == "id-a"
+    if scalar_override.get("abstract"):
+        assert captured["scalar_override"]["abstract"] == scalar_override["abstract"]
+
+
+
 def test_semantic_message_roundtrip_uses_explicit_plan():
     from openviking.storage.context_update_plan import (
         IndexSlot,

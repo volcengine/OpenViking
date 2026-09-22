@@ -141,16 +141,27 @@ async def vectorize_resource_file(
     field_patch: FieldPatch | None = None,
     action: str = "merge",
 ) -> bool:
-    """Enqueue a single file's L2 vector using the standard file text policy."""
+    """Enqueue a single file's L2 vector using the standard file text policy.
+
+    In ``vectors_only`` mode no semantic node regenerates a summary, but the RNFV
+    V snapshot already carries the existing L2 ``abstract`` (it is projected into
+    the inventory and travels through the direct index action's scalar fields).
+    Seed ``summary_dict`` with that abstract so ``vectorize_file`` can honor the
+    configured ``text_source``: ``summary_first`` embeds the existing abstract
+    when present, ``content_only`` still embeds the file body. When no abstract is
+    available (new file / empty record) the summary stays empty and the body is
+    used regardless of ``text_source``.
+    """
     from openviking.utils.embedding_utils import vectorize_file
 
     parent = VikingURI(file_uri).parent
     if parent is None:
         return False
     name = file_uri.rsplit("/", 1)[-1]
+    existing_abstract = str((scalar_override or {}).get("abstract") or "")
     return await vectorize_file(
         file_path=file_uri,
-        summary_dict={"name": name, "summary": ""},
+        summary_dict={"name": name, "summary": existing_abstract},
         parent_uri=parent.uri,
         context_type=context_type_for_uri(file_uri),
         ctx=ctx,

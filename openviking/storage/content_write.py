@@ -19,7 +19,6 @@ from openviking.core.namespace import (
 )
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
-    VECTORS_ONLY,
     ProcessingMode,
     normalize_processing_mode,
 )
@@ -57,7 +56,7 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.content_hash import content_md5
-from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
+from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import normalize_storage_target_uri, validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
@@ -181,40 +180,38 @@ class ContentWriteCoordinator:
                 acl_update=await self._viking_fs.prepare_acl_update(normalized_uri, acl, ctx),
             )
 
-        # Single stat is the sole source of truth for existence and kind; the
-        # create/replace/append modes are unified below rather than pre-checked
-        # twice against the same URI.
+        # ``create`` is an upsert alias for ``replace``: it overwrites an existing
+        # file or materializes a missing one, never conflicting. Normalize it away
+        # so no create-specific write branch survives; ``response_mode`` still
+        # echoes the caller's requested mode for API stability.
+        response_mode = mode
+        if mode == "create":
+            mode = "replace"
+
+        # Single stat is the sole source of truth for existence and kind.
         stat = await self._safe_stat(normalized_uri, ctx=ctx, allow_not_found=True)
         exists = not stat.get("not_found")
-        if mode == "create" and exists:
-            raise AlreadyExistsError(normalized_uri, "file")
         if exists and stat.get("isDir"):
             raise InvalidArgumentError(
                 f"write only supports existing files, got directory: {normalized_uri}"
             )
         if not exists:
-            # create validates its extension; replace/append fall back to a fresh
-            # file while retaining the caller's requested response mode.
-            if mode == "create":
-                if is_abstract_overview_uri(normalized_uri):
-                    raise InvalidArgumentError(
-                        f"cannot create generated abstract overview directly: {normalized_uri}"
-                    )
-                self._validate_create_extension(normalized_uri)
-            elif is_abstract_overview_uri(normalized_uri):
+            # Materializing a new file (any mode): a generated sidecar can never be
+            # created directly, and the file type must pass the create whitelist.
+            if is_abstract_overview_uri(normalized_uri):
                 raise InvalidArgumentError(
                     f"cannot create generated abstract overview directly: {normalized_uri}"
                 )
+            self._validate_create_extension(normalized_uri)
 
         context_type = context_type_for_uri(normalized_uri)
         root_uri = await self._resolve_root_uri(
             normalized_uri, ctx=ctx, _allow_not_found=not exists, anchor_to_parent=True
         )
         telemetry_id = get_current_telemetry().telemetry_id
-        # A missing target is written as an initial file but keeps the caller's
-        # requested response mode (replace/append echo back their own name).
-        effective_mode = mode if exists else "create"
-        response_mode = mode
+        # A missing target is materialized via ``create`` rendering (memory files
+        # need a fresh trailer); an existing target keeps the requested mode.
+        effective_mode = "create" if not exists else mode
 
         if context_type == "memory" and not is_abstract_overview_uri(normalized_uri):
             return await self._write_memory_with_refresh(
@@ -227,7 +224,6 @@ class ContentWriteCoordinator:
                 timeout=timeout,
                 ctx=ctx,
                 telemetry_id=telemetry_id,
-                processing_mode=processing_mode,
                 ingest_options=ingest_options,
             )
 
@@ -777,17 +773,11 @@ class ContentWriteCoordinator:
         context_type: str,
         mode: str,
         written_bytes: int,
-        wait: bool,
         queue_status: Optional[Dict[str, Any]],
-        semantic_status: Optional[str] = None,
-        vector_status: Optional[str] = None,
+        semantic_status: str,
+        vector_status: str,
         overview_status: Optional[str] = None,
     ) -> Dict[str, Any]:
-        if semantic_status is None or vector_status is None:
-            semantic_status, vector_status = self._refresh_statuses(
-                wait=wait,
-                queue_status=queue_status,
-            )
         result = {
             "uri": uri,
             "root_uri": root_uri,
@@ -827,29 +817,19 @@ class ContentWriteCoordinator:
             "tags_updated": len(updated_uris) > 0,
         }
 
-    def _refresh_statuses(
-        self,
+    @staticmethod
+    def _queue_work_status(
         *,
+        requested: bool,
         wait: bool,
         queue_status: Optional[Dict[str, Any]],
-    ) -> tuple[str, str]:
+        queue_name: str,
+    ) -> str:
+        if not requested:
+            return "skipped"
         if not wait:
-            return "queued", "queued"
-        if not queue_status:
-            return "complete", "complete"
-
-        def _has_errors(name: str) -> bool:
-            status = queue_status.get(name, {})
-            if not isinstance(status, dict):
-                return False
-            try:
-                return int(status.get("error_count", 0) or 0) > 0
-            except (TypeError, ValueError):
-                return bool(status.get("errors"))
-
-        semantic_status = "failed" if _has_errors("Semantic") else "complete"
-        vector_status = "failed" if _has_errors("Embedding") else "complete"
-        return semantic_status, vector_status
+            return "queued"
+        return "failed" if _queue_has_errors(queue_status, queue_name) else "complete"
 
     async def _write_direct_with_refresh(
         self,
@@ -858,7 +838,7 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
-        response_mode: Optional[str] = None,
+        response_mode: str,
         context_type: str,
         target_preexisting: bool,
         wait: bool,
@@ -964,7 +944,6 @@ class ContentWriteCoordinator:
                 # ``force_refresh=wait`` behavior).
                 force_refresh=wait,
                 generation_trigger="content_write",
-                summarizer=self._summarizer(),
             )
             if ingest_options.acl_update:
                 await self._viking_fs.acl_manager.apply_indexed_update(
@@ -987,9 +966,8 @@ class ContentWriteCoordinator:
                 uri=uri,
                 root_uri=root_uri,
                 context_type=context_type,
-                mode=response_mode or mode,
+                mode=response_mode,
                 written_bytes=written_bytes,
-                wait=wait,
                 queue_status=queue_status,
                 semantic_status=semantic_status,
                 vector_status=vector_status,
@@ -1004,11 +982,6 @@ class ContentWriteCoordinator:
         finally:
             if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
-
-    def _summarizer(self) -> Any:
-        from openviking.utils.summarizer import Summarizer
-
-        return Summarizer(vlm_processor=None)
 
     @staticmethod
     def _plan_statuses(
@@ -1050,7 +1023,7 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
-        response_mode: Optional[str],
+        response_mode: str,
         context_type: str,
         wait: bool,
         timeout: Optional[float],
@@ -1088,17 +1061,18 @@ class ContentWriteCoordinator:
                 if wait
                 else None
             )
-            if vector_enqueued:
-                _, vector_status = self._refresh_statuses(wait=wait, queue_status=queue_status)
-            else:
-                vector_status = "skipped"
+            vector_status = self._queue_work_status(
+                requested=vector_enqueued,
+                wait=wait,
+                queue_status=queue_status,
+                queue_name="Embedding",
+            )
             return self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
                 context_type=context_type,
-                mode=response_mode or mode,
+                mode=response_mode,
                 written_bytes=len(content.encode("utf-8")),
-                wait=wait,
                 queue_status=queue_status,
                 semantic_status="skipped",
                 vector_status=vector_status,
@@ -1209,7 +1183,7 @@ class ContentWriteCoordinator:
     def _validate_create_extension(self, uri: str) -> None:
         _, ext = os.path.splitext(uri)
         if ext.lower() not in _CREATE_ALLOWED_EXTENSIONS:
-            raise InvalidArgumentError(f"create mode does not allow extension '{ext}': {uri}")
+            raise InvalidArgumentError(f"creating a new file does not allow extension '{ext}': {uri}")
 
     def _render_final_bytes(
         self,
@@ -1346,16 +1320,13 @@ class ContentWriteCoordinator:
         root_uri: str,
         content: str,
         mode: str,
-        response_mode: Optional[str] = None,
+        response_mode: str,
         wait: bool,
         timeout: Optional[float],
         ctx: RequestContext,
         telemetry_id: str,
-        processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
-        del processing_mode
-
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         try:
             lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
@@ -1395,18 +1366,18 @@ class ContentWriteCoordinator:
                     if telemetry_id
                     else await self._wait_for_queues(timeout=timeout)
                 )
-            vector_status = self._memory_vector_status(
-                embedding_requested=embedding_requested,
+            vector_status = self._queue_work_status(
+                requested=embedding_requested,
                 wait=wait,
                 queue_status=queue_status,
+                queue_name="Embedding",
             )
             return self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
                 context_type="memory",
-                mode=response_mode or mode,
+                mode=response_mode,
                 written_bytes=written_bytes,
-                wait=wait,
                 queue_status=queue_status,
                 semantic_status="skipped",
                 vector_status=vector_status,
@@ -1424,20 +1395,6 @@ class ContentWriteCoordinator:
         if not self._vikingdb:
             return False
         return bool(getattr(self._vikingdb, "has_queue_manager", False))
-
-    def _memory_vector_status(
-        self,
-        *,
-        embedding_requested: bool,
-        wait: bool,
-        queue_status: Optional[Dict[str, Any]],
-    ) -> str:
-        if not embedding_requested:
-            return "skipped"
-        if not wait:
-            return "queued"
-        _, vector_status = self._refresh_statuses(wait=True, queue_status=queue_status)
-        return vector_status
 
     async def _set_single_uri_tags(
         self,
