@@ -70,7 +70,11 @@ export async function nodePathToBlob(
   const [fs, paths, stat] = await Promise.all([
     nodeFs(),
     nodePath(),
-    statOrUndefined(path),
+    statOrUndefined(path).catch((error: NodeJS.ErrnoException) => {
+      // Inline skill content can exceed filesystem filename limits.
+      if (error.code === "ENAMETOOLONG") return undefined;
+      throw error;
+    }),
   ]);
   if (!stat) return undefined;
   if (stat.isFile())
