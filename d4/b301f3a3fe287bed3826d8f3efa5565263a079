@@ -1,0 +1,18 @@
+bot/vikingbot/compile/ops/shuffle.py
+  h_b34c679d17e2ac 276,278-291,323-325,328-331
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 214,286-287,341,354-358,363
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d4b301f3a3fe287bed3826d8f3efa5565263a079",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
