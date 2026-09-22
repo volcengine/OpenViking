@@ -755,19 +755,6 @@ class ResourceService:
                 internal_kwargs["create_parent"] = True
             if msg.source_name is not None:
                 internal_kwargs["source_name"] = msg.source_name
-            token_provider = None
-            if is_external_feishu_auth(task_auth):
-                token_provider, token = await restore_feishu_token(
-                    self._connector, task_auth, path=msg.path, ctx=ctx
-                )
-                auth_kwargs = {FEISHU_ACCESS_TOKEN_ARG: token}
-                watch_auth_state = task_auth if msg.watch_interval > 0 else None
-            else:
-                auth_kwargs, watch_auth_state = self._restore_source_task_auth(
-                    msg,
-                    task_auth or {},
-                )
-            internal_kwargs.update(auth_kwargs)
             if feishu_prepared:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -803,6 +790,21 @@ class ResourceService:
 
                 internal_kwargs[PREPARED_FILE_ID_ARG] = msg.understanding_file_id
             try:
+                token_provider = None
+                if is_external_feishu_auth(task_auth):
+                    auth_kwargs = {}
+                    if msg.understanding_response_id is None and msg.understanding_file_id is None:
+                        token_provider, token = await restore_feishu_token(
+                            self._connector, task_auth, path=msg.path, ctx=ctx
+                        )
+                        auth_kwargs = {FEISHU_ACCESS_TOKEN_ARG: token}
+                    watch_auth_state = task_auth if msg.watch_interval > 0 else None
+                else:
+                    auth_kwargs, watch_auth_state = self._restore_source_task_auth(
+                        msg,
+                        task_auth or {},
+                    )
+                internal_kwargs.update(auth_kwargs)
                 with feishu_token_scope(token_provider):
                     result = await self._execute_resource_ingestion(
                         path=msg.path,

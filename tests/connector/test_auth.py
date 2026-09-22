@@ -139,3 +139,121 @@ async def test_external_mode_never_refreshes_locally(monkeypatch):
     with pytest.raises(FeishuTokenRefreshError, match="disabled"):
         await client.refresh_user_access_token("shared-refresh-token")
     refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_partial_directory_auth_failure_never_reaches_finalization(monkeypatch, tmp_path):
+    from contextlib import nullcontext
+    from unittest.mock import AsyncMock
+
+    from openviking.parse.feishu_import import FeishuImportPlan
+    from openviking.utils.resource_processor import ResourceProcessor
+
+    accessor = FeishuAccessor()
+    monkeypatch.setattr(
+        accessor,
+        "_list_drive_folder_children",
+        Mock(
+            return_value=[
+                {"type": "file", "token": name, "name": name} for name in ("A.txt", "B.txt")
+            ]
+        ),
+    )
+    fetch = Mock(side_effect=[{"access_token": "valid"}, InternalError("auth unavailable")])
+    monkeypatch.setattr(ConnectorClient, "get_oauth_access_token", fetch)
+    provider = auth.ExternalFeishuToken(REFERENCE, "key")
+
+    def download(token, **kwargs):
+        accessor._user_request_option(kwargs["feishu_access_token"])
+        provider._valid_until = 0
+        return b"content", "text/plain", token
+
+    monkeypatch.setattr(accessor, "_download_drive_file", download)
+
+    async def parse(**_kwargs):
+        skipped = []
+        await accessor._materialize_drive_folder(
+            "folder",
+            tmp_path,
+            feishu_access_token="snapshot",
+            skipped_items=skipped,
+            plan=FeishuImportPlan(tmp_path),
+        )
+        assert [p.name for p in tmp_path.iterdir()] == ["A.txt"]
+        assert len(skipped) == 1
+        return SimpleNamespace(temp_dir_path="viking://temp/partial")
+
+    fs = SimpleNamespace(bind_request_context=lambda _: nullcontext(), delete_temp=AsyncMock())
+    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fs)
+    processor = ResourceProcessor(Mock())
+    processor._media_processor = SimpleNamespace(process=parse)
+    processor.tree_builder.finalize_from_temp = AsyncMock()
+    ctx = Mock()
+    with auth.feishu_token_scope(provider), pytest.raises(InternalError, match="auth unavailable"):
+        await processor.process_resource(
+            path="https://example.feishu.cn/drive/folder/test", ctx=ctx
+        )
+    processor.tree_builder.finalize_from_temp.assert_not_awaited()
+    fs.delete_temp.assert_awaited_once_with("viking://temp/partial", ctx=ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prepared", [None, "understanding_response_id", "understanding_file_id"])
+@pytest.mark.parametrize("watch_interval", [0, 60])
+async def test_queue_auth_failure_cleanup_and_prepared_results(
+    monkeypatch, prepared, watch_interval
+):
+    from unittest.mock import AsyncMock
+
+    from openviking.server.identity import RequestContext, Role
+    from openviking.service.resource_service import ResourceService
+    from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(user=UserIdentifier("ov", "alice"), role=Role.USER)
+    state = {"provider": auth.EXTERNAL_FEISHU_PROVIDER, "credentials": {}}
+    service = ResourceService()
+    service._connector_delegate = SimpleNamespace(
+        restore_watch_request=AsyncMock(
+            return_value=("key", "feishu_doc", {auth.OAUTH_REF_ARG: REFERENCE})
+        )
+    )
+    service._execute_resource_ingestion = AsyncMock(return_value={"status": "success"})
+    service._cleanup_reserved_target_if_empty = AsyncMock()
+    fetch = Mock(side_effect=InternalError("auth unavailable"))
+    monkeypatch.setattr(ConnectorClient, "get_oauth_access_token", fetch)
+    msg = AddResourceMsg(
+        task_id="task",
+        path="https://example.feishu.cn/docx/doc",
+        root_uri="viking://resources/reserved",
+        account_id="ov",
+        user_id="alice",
+        role="user",
+        cleanup_empty_target_on_failure=True,
+        watch_interval=watch_interval,
+        **({prepared: "submitted"} if prepared else {}),
+    )
+    lock = {"lease": "reserved"}
+    job = service.execute_add_resource_job(
+        msg,
+        ctx=ctx,
+        resource_lock=lock,
+        stage_callback=AsyncMock(),
+        task_auth=state,
+    )
+    if prepared:
+        assert await job == {"status": "success"}
+        fetch.assert_not_called()
+        call = service._execute_resource_ingestion.await_args.kwargs
+        assert "feishu_access_token" not in call
+        assert call["watch_auth_state"] == (state if watch_interval else None)
+        service._cleanup_reserved_target_if_empty.assert_not_awaited()
+    else:
+        with pytest.raises(InternalError, match="auth unavailable"):
+            await job
+        service._execute_resource_ingestion.assert_not_awaited()
+        service._cleanup_reserved_target_if_empty.assert_awaited_once_with(
+            root_uri=msg.root_uri,
+            ctx=ctx,
+            resource_lock=lock,
+        )

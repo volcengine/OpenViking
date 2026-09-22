@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.connector.auth import check_feishu_auth
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
 from openviking.parse.image_rewrite import rewrite_image_uris
@@ -270,6 +271,12 @@ class ResourceProcessor:
                         prepared_resource=prepared_resource,
                         **kwargs,
                     )
+                try:
+                    check_feishu_auth()
+                except OpenVikingError:
+                    if parse_result.temp_dir_path:
+                        await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                    raise
                 result["source_path"] = parse_result.source_path or path
                 result["meta"] = parse_result.meta
 

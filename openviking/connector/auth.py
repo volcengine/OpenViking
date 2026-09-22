@@ -134,12 +134,21 @@ class ExternalFeishuToken:
         self._lock = Lock()
         self._token = ""
         self._valid_until = 0.0
+        self._error: Optional[InternalError] = None
 
     def get_token(self) -> str:
         with self._lock:
+            if self._error is not None:
+                raise self._error
             if self._token and time.time() < self._valid_until:
                 return self._token
-            data = self._client.get_oauth_access_token(self._url, self._api_key, self._reference)
+            try:
+                data = self._client.get_oauth_access_token(
+                    self._url, self._api_key, self._reference
+                )
+            except InternalError as exc:
+                self._error = exc
+                raise
             token = data.get("access_token")
             expires_at = data.get("expires_at", 0)
             now = time.time()
@@ -151,10 +160,20 @@ class ExternalFeishuToken:
                 or expires_at < 0
                 or (expires_at > 0 and expires_at <= now)
             ):
-                raise InternalError("External OAuth returned an invalid or expired access token.")
+                self._error = InternalError(
+                    "External OAuth returned an invalid or expired access token."
+                )
+                raise self._error
             self._token = token.strip()
             self._valid_until = min(now + 60, expires_at - 30) if expires_at else now + 60
             return self._token
+
+
+def check_feishu_auth() -> None:
+    """Reject partial parse results after an execution-scoped auth failure."""
+    provider = current_feishu_token.get()
+    if provider is not None and provider._error is not None:
+        raise provider._error
 
 
 @contextmanager
