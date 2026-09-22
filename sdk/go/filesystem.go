@@ -120,11 +120,11 @@ func (c *Client) Attrs(ctx context.Context, uri string, key ...string) (map[stri
 }
 
 // Mkdir creates a directory.
-func (c *Client) Mkdir(ctx context.Context, uri string, description string, attrs ...ResourceAttrs) error {
+func (c *Client) Mkdir(ctx context.Context, uri string, description string, acl ...ACLSpec) error {
 	payload := map[string]any{"uri": NormalizeURI(uri)}
 	setString(payload, "description", description)
-	if len(attrs) > 0 {
-		payload["attrs"] = attrs[0]
+	if len(acl) > 0 {
+		payload["acl"] = acl[0]
 	}
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/fs/mkdir", nil, payload, nil)
 }
@@ -230,8 +230,8 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
-	if opts.Attrs != nil {
-		payload["attrs"] = opts.Attrs
+	if opts.ACL != nil {
+		payload["acl"] = opts.ACL
 	}
 	if opts.Tags != nil {
 		payload["tags"] = opts.Tags

@@ -37,7 +37,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     prepare_abstract_overview_write,
 )
-from openviking.storage.acl import AclAction, ResourceAttrs
+from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
@@ -131,7 +131,7 @@ class ContentWriteCoordinator:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
-        attrs: ResourceAttrs | Dict[str, Any] | None = None,
+        acl: AclSpec | Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
@@ -139,10 +139,10 @@ class ContentWriteCoordinator:
         self._ensure_content_write_policy(normalized_uri)
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
-        if attrs is not None:
+        if acl is not None:
             ingest_options = replace(
                 ingest_options,
-                acl_update=await self._viking_fs.prepare_acl_update(normalized_uri, attrs, ctx),
+                acl_update=await self._viking_fs.prepare_acl_update(normalized_uri, acl, ctx),
             )
 
         if mode == "create":

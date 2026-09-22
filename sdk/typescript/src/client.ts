@@ -9,7 +9,6 @@ import { OpenVikingTransport, type TransportOptions } from "./transport.js";
 import type {
   AddResourceOptions,
   AclSpec,
-  ResourceAttrs,
   BatchAddMessagesOptions,
   BatchWriteOperation,
   BatchWriteOptions,
@@ -158,7 +157,7 @@ export class OpenVikingClient {
           ? options.args
           : undefined,
       tags: options.tags,
-      attrs: options.attrs,
+      acl: options.acl,
       tag_mode: options.tags ? options.tagMode : undefined,
       telemetry: options.telemetry,
     });
@@ -528,13 +527,9 @@ export class OpenVikingClient {
     });
   }
   /** Create a directory. */
-  mkdir(
-    uri: string,
-    description?: string,
-    attrs?: ResourceAttrs,
-  ): Promise<void> {
+  mkdir(uri: string, description?: string, acl?: AclSpec): Promise<void> {
     return this.request("POST", "/api/v1/fs/mkdir", {
-      body: compact({ uri: normalizeURI(uri), description, attrs }),
+      body: compact({ uri: normalizeURI(uri), description, acl }),
     });
   }
   attrsSetAcl(uri: string, acl: AclSpec): Promise<JsonObject> {
@@ -627,7 +622,7 @@ export class OpenVikingClient {
       mode: options.mode,
       processing_mode: options.processingMode,
       tags: options.tags,
-      attrs: options.attrs,
+      acl: options.acl,
       tag_mode:
         options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
       wait: options.wait,

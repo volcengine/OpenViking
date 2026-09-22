@@ -127,7 +127,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         "before",
         ctx=admin,
         wait=True,
-        attrs={"acl": {"entries": [{"principal": "user:reader", "level": "read"}]}},
+        acl={"entries": [{"principal": "user:reader", "level": "read"}]},
     )
     await service.fs.write(off_file, "after", ctx=admin, wait=True)
 
@@ -233,21 +233,21 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert restored_acl["effective_entries"] == everyone
     assert (await service.fs.get_acl(uri, ctx=outsider))["effective_entries"] == everyone
 
-    # Creation attributes share one ACL contract across directories, files and imports.
-    restricted = {"acl": {"acl_mode": "restricted", "entries": inherited_entries}}
+    # Creation ACL shares one contract across directories, files and imports.
+    restricted = {"acl_mode": "restricted", "entries": inherited_entries}
     explicit_dir = "viking://resources/explicit"
-    await service.fs.mkdir(explicit_dir, ctx=outsider, attrs=restricted)
+    await service.fs.mkdir(explicit_dir, ctx=outsider, acl=restricted)
     await service.resources.wait_processed()
     assert (await service.fs.get_acl(explicit_dir, ctx=admin))[
         "effective_entries"
     ] == inherited_entries
     with pytest.raises(PermissionDeniedError):
-        await service.fs.write(f"{explicit_dir}/denied.md", "denied", ctx=writer, attrs=restricted)
+        await service.fs.write(f"{explicit_dir}/denied.md", "denied", ctx=writer, acl=restricted)
     assert not await service.viking_fs.exists(f"{explicit_dir}/denied.md", ctx=admin)
 
     explicit_file = f"{explicit_dir}/explicit.md"
     await service.fs.write(
-        explicit_file, "first", ctx=admin, mode="create", wait=True, attrs=restricted
+        explicit_file, "first", ctx=admin, mode="create", wait=True, acl=restricted
     )
     assert (await service.fs.get_acl(explicit_file, ctx=admin))[
         "direct_entries"
@@ -256,13 +256,13 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         "direct_entries"
     ] == inherited_entries
     await service.fs.write(
-        explicit_file, "first", ctx=admin, wait=True, attrs={"acl": {"entries": []}}
+        explicit_file, "first", ctx=admin, wait=True, acl={"entries": []}
     )
     assert (await service.fs.get_acl(explicit_file, ctx=admin))["effective_entries"] == []
 
     explicit_import = "viking://resources/explicit_import"
     await service.resources.add_resource(
-        path=str(sample_markdown_file), to=explicit_import, ctx=admin, wait=True, attrs=restricted
+        path=str(sample_markdown_file), to=explicit_import, ctx=admin, wait=True, acl=restricted
     )
     await service.resources.wait_processed()
     assert (await service.fs.get_acl(explicit_import, ctx=admin))[
@@ -278,7 +278,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         to=explicit_import,
         ctx=admin,
         wait=True,
-        attrs={"acl": {"entries": []}},
+        acl={"entries": []},
     )
     await service.resources.wait_processed()
     assert (await service.fs.get_acl(explicit_import, ctx=admin))["effective_entries"] == []

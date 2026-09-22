@@ -24,8 +24,8 @@ from openviking.storage.acl import (
     AclEntry,
     AclLevel,
     AclMode,
+    AclSpec,
     AclUpdate,
-    ResourceAttrs,
     acl_allows,
     acl_ancestors,
     has_implicit_manage,
@@ -317,17 +317,15 @@ class _AccessMixin:
     async def prepare_acl_update(
         self,
         uri: str,
-        attrs: ResourceAttrs | Mapping[str, Any] | None,
+        acl: AclSpec | Mapping[str, Any],
         ctx: RequestContext,
-    ) -> AclUpdate | None:
-        """Authorize explicit creation attributes against the pre-write ACL."""
-        attributes = ResourceAttrs.model_validate(attrs or {})
-        if attributes.acl is None:
-            return None
+    ) -> AclUpdate:
+        """Authorize an explicit ACL against the permissions before the write."""
+        spec = AclSpec.model_validate(acl)
         if len(acl_ancestors(uri)) == 1:
             raise InvalidArgumentError("ACL cannot be set on viking://resources")
         await self._ensure_acl_manage(uri, ctx)
-        return AclUpdate(uri=uri, acl=attributes.acl)
+        return AclUpdate(uri=uri, acl=spec)
 
     async def set_acl(
         self,

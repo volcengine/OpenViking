@@ -21,7 +21,7 @@ from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.service.skill_sources import describe_skill_sources, resolve_skill_source
-from openviking.storage.acl import ResourceAttrs
+from openviking.storage.acl import AclSpec
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -106,7 +106,7 @@ class AddResourceRequest(BaseModel):
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
-    attrs: ResourceAttrs | None = None
+    acl: AclSpec | None = None
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -324,7 +324,7 @@ async def add_resource(
                 instruction=request.instruction,
                 wait=request.wait,
                 timeout=request.timeout,
-                attrs=request.attrs,
+                acl=request.acl,
                 tags=request.tags,
                 tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,

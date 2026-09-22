@@ -34,15 +34,13 @@ Example `set_acl` body:
 
 ## Creation and content writes
 
-`POST /api/v1/resources`, `POST /api/v1/fs/mkdir`, and `POST /api/v1/content/write` accept:
+`POST /api/v1/resources`, `POST /api/v1/fs/mkdir`, and `POST /api/v1/content/write` accept a top-level `acl` field, alongside `tags` and `tag_mode` where supported:
 
 ```json
 {
-  "attrs": {
-    "acl": {
-      "acl_mode": "restricted",
-      "entries": [{"principal": "user:bob", "level": "read"}]
-    }
+  "acl": {
+    "acl_mode": "restricted",
+    "entries": [{"principal": "user:bob", "level": "read"}]
   }
 }
 ```
@@ -64,18 +62,18 @@ ov attrs grant-acl viking://resources/project-a --principal user:bob --level wri
 ov attrs revoke-acl viking://resources/project-a --principal user:bob
 ov attrs reset-acl viking://resources/project-a
 
-ov mkdir viking://resources/project-a --attrs '{"acl":{"acl_mode":"restricted","entries":[{"principal":"user:bob","level":"read"}]}}'
-ov add-resource ./docs --to viking://resources/docs --attrs '{"acl":{"acl_mode":"restricted","entries":[]}}'
-ov write viking://resources/project-a/a.md --content hello --mode create --attrs '{"acl":{"acl_mode":"inherit"}}'
+ov mkdir viking://resources/project-a --acl '{"acl_mode":"restricted","entries":[{"principal":"user:bob","level":"read"}]}'
+ov add-resource ./docs --to viking://resources/docs --acl '{"acl_mode":"restricted","entries":[]}'
+ov write viking://resources/project-a/a.md --content hello --mode create --acl '{"acl_mode":"inherit"}'
 ```
 
 ## SDK
 
 ```python
-attrs = {"acl": {"acl_mode": "restricted", "entries": [{"principal": "user:bob", "level": "read"}]}}
-client.mkdir(uri, attrs=attrs)
-client.add_resource("./docs", to=uri, options={"attrs": attrs})
-client.write(file_uri, "hello", options={"attrs": attrs})
+acl = {"acl_mode": "restricted", "entries": [{"principal": "user:bob", "level": "read"}]}
+client.mkdir(uri, acl=acl)
+client.add_resource("./docs", to=uri, options={"acl": acl})
+client.write(file_uri, "hello", options={"acl": acl})
 report = client.attrs(uri, key="acl")["attrs"]["acl"]
 client.attrs_set_acl(uri, [], acl_mode="restricted")
 client.attrs_grant_acl(uri, "user:bob", "read")
@@ -83,4 +81,4 @@ client.attrs_revoke_acl(uri, "user:bob")
 client.attrs_reset_acl(uri)
 ```
 
-Async Python uses the same method names. TypeScript provides `attrs(uri, "acl")`, `attrsSetAcl`, `attrsGrantAcl`, `attrsRevokeAcl`, and `attrsResetAcl`; creation options accept `attrs`, while mkdir accepts it as its third argument. Go provides `Attrs(ctx, uri, "acl")`, `AttrsSetACL`, `AttrsGrantACL`, `AttrsRevokeACL`, and `AttrsResetACL`, with `ResourceAttrs` / `ACLSpec` values for creation.
+Async Python uses the same method names. TypeScript provides `attrs(uri, "acl")`, `attrsSetAcl`, `attrsGrantAcl`, `attrsRevokeAcl`, and `attrsResetAcl`; creation options accept `acl`, while mkdir accepts it as its third argument. Go provides `Attrs(ctx, uri, "acl")`, `AttrsSetACL`, `AttrsGrantACL`, `AttrsRevokeACL`, and `AttrsResetACL`, with `ACLSpec` values for creation.

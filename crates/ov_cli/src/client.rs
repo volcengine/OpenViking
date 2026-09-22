@@ -379,12 +379,12 @@ impl HttpClient {
         processing_mode: &str,
         tags: Vec<String>,
         tag_mode: &str,
-        attrs: Option<Value>,
+        acl: Option<Value>,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
-        if let Some(attrs) = attrs {
-            body["attrs"] = attrs;
+        if let Some(acl) = acl {
+            body["acl"] = acl;
         }
         self.post("/api/v1/content/write", &body).await
     }
@@ -647,14 +647,14 @@ impl HttpClient {
         &self,
         uri: &str,
         description: Option<&str>,
-        attrs: Option<Value>,
+        acl: Option<Value>,
     ) -> Result<serde_json::Value> {
         let mut body = match description {
             Some(description) => serde_json::json!({ "uri": uri, "description": description }),
             None => serde_json::json!({ "uri": uri }),
         };
-        if let Some(attrs) = attrs {
-            body["attrs"] = attrs;
+        if let Some(acl) = acl {
+            body["acl"] = acl;
         }
         self.post("/api/v1/fs/mkdir", &body).await
     }
@@ -859,7 +859,7 @@ impl HttpClient {
         resource_args: Option<Map<String, Value>>,
         tags: Vec<String>,
         tag_mode: String,
-        attrs: Option<Value>,
+        acl: Option<Value>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -879,8 +879,8 @@ impl HttpClient {
 
         let build_body = |base: serde_json::Value| {
             let mut body = base;
-            if let Some(attrs) = &attrs {
-                body["attrs"] = attrs.clone();
+            if let Some(acl) = &acl {
+                body["acl"] = acl.clone();
             }
             add_resource_tag_fields(&mut body, &tags, &tag_mode);
             if create_parent {

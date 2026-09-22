@@ -72,16 +72,14 @@ export interface WaitOptions {
   timeout?: number;
   telemetry?: unknown;
 }
-/** Resource import options. */
+/** Writable direct grants and inheritance mode. */
 export interface AclSpec {
   acl_mode?: "inherit" | "restricted";
   entries?: { principal: string; level: "read" | "write" | "manage" }[];
 }
-export interface ResourceAttrs {
-  acl?: AclSpec;
-}
+/** Resource import options. */
 export interface AddResourceOptions extends WaitOptions {
-  attrs?: ResourceAttrs;
+  acl?: AclSpec;
   to?: string;
   parent?: string;
   createParent?: boolean;
@@ -102,7 +100,7 @@ export interface AddResourceOptions extends WaitOptions {
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
-  attrs?: ResourceAttrs;
+  acl?: AclSpec;
   mode?: string;
   processingMode?: ProcessingMode;
   tags?: string[];

@@ -18,10 +18,6 @@ type ACLSpec struct {
 	Entries []ACLEntry `json:"entries"`
 }
 
-type ResourceAttrs struct {
-	ACL *ACLSpec `json:"acl,omitempty"`
-}
-
 // AttrsSetACL updates the ACL attribute.
 func (c *Client) AttrsSetACL(ctx context.Context, uri string, acl ACLSpec) (map[string]any, error) {
 	body := map[string]any{"uri": NormalizeURI(uri)}

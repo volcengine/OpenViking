@@ -33,7 +33,7 @@ pub async fn handle_add_resource(
     resource_args: Option<String>,
     tags: Vec<String>,
     tag_mode: String,
-    attrs: Option<Value>,
+    acl: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url =
@@ -124,7 +124,7 @@ pub async fn handle_add_resource(
         add_resource_args,
         tags,
         tag_mode,
-        attrs,
+        acl,
         ctx.output_format,
         ctx.compact,
         ctx.should_show_progress(),
@@ -1400,7 +1400,7 @@ pub async fn handle_write(
     processing_mode: String,
     tags: Vec<String>,
     tag_mode: String,
-    attrs: Option<Value>,
+    acl: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1424,7 +1424,7 @@ pub async fn handle_write(
         &processing_mode,
         tags,
         &tag_mode,
-        attrs,
+        acl,
         ctx.output_format,
         ctx.compact,
     )
@@ -1788,7 +1788,7 @@ pub async fn handle_tree(
 pub async fn handle_mkdir(
     uri: String,
     description: Option<String>,
-    attrs: Option<Value>,
+    acl: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1796,7 +1796,7 @@ pub async fn handle_mkdir(
         &client,
         &uri,
         description.as_deref(),
-        attrs,
+        acl,
         ctx.output_format,
         ctx.compact,
     )

@@ -828,11 +828,11 @@ pub async fn mkdir(
     client: &HttpClient,
     uri: &str,
     description: Option<&str>,
-    attrs: Option<Value>,
+    acl: Option<Value>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.mkdir(uri, description, attrs).await?;
+    let result = client.mkdir(uri, description, acl).await?;
     output_message_result(
         result,
         format!("Directory created: {}", uri),

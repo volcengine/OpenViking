@@ -356,7 +356,7 @@ The `count` field (directories only) contains the estimated number of items (fil
 
 ### attrs()
 
-Shared resources expose `attrs.acl`; reading and changing it requires manage. A general attributes query omits ACL when unauthorized. `mkdir` and `write` also accept `attrs.acl`. See [ACL attributes](12-acl.md) for parameters and examples.
+Shared resources expose `attrs.acl`; reading and changing it requires manage. A general attributes query omits ACL when unauthorized. `mkdir` and `write` accept a top-level `acl` field at creation or write time. See [ACL attributes](12-acl.md) for parameters and examples.
 
 Get logical extended attributes for a file or directory.
 

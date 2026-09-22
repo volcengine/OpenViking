@@ -43,8 +43,8 @@ func (c *Client) AddResource(ctx context.Context, path string, opts *AddResource
 	if len(opts.Args) > 0 {
 		payload["args"] = opts.Args
 	}
-	if opts.Attrs != nil {
-		payload["attrs"] = opts.Attrs
+	if opts.ACL != nil {
+		payload["acl"] = opts.ACL
 	}
 	if opts.Tags != nil {
 		payload["tags"] = opts.Tags

@@ -15,7 +15,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking.storage.acl import ResourceAttrs
+from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking_cli.exceptions import NotFoundError
 
@@ -161,7 +161,7 @@ class MkdirRequest(BaseModel):
 
     uri: str
     description: Optional[str] = None
-    attrs: ResourceAttrs | None = None
+    acl: AclSpec | None = None
 
 
 @router.post("/mkdir")
@@ -178,7 +178,7 @@ async def mkdir(
             uri,
             ctx=_ctx,
             description=request.description,
-            **({"attrs": request.attrs} if request.attrs is not None else {}),
+            **({"acl": request.acl} if request.acl is not None else {}),
         )
     except AGFSClientError as e:
         mapped = map_exception(e, resource=uri, resource_type="file")

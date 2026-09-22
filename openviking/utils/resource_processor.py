@@ -676,7 +676,7 @@ class ResourceProcessor:
         defer_post_processing = bool(kwargs.pop("defer_post_processing", False))
         preacquired_lock = kwargs.pop("resource_lock", None)
         ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
-        attrs = kwargs.pop("attrs", None)
+        acl = kwargs.pop("acl", None)
         to_is_directory = bool(kwargs.pop("to_is_directory", False))
         telemetry = get_current_telemetry()
         metrics_account_id = getattr(ctx, "account_id", None)
@@ -930,10 +930,10 @@ class ResourceProcessor:
                                 uri=root_uri,
                                 root_is_file=root_is_file,
                             )
-                    if attrs is not None:
+                    if acl is not None:
                         ingest_options = replace(
                             ingest_options,
-                            acl_update=await viking_fs.prepare_acl_update(root_uri, attrs, ctx),
+                            acl_update=await viking_fs.prepare_acl_update(root_uri, acl, ctx),
                         )
                     artifact_ref = self._ensure_parse_artifact_ref(parse_result)
                     artifact_store = self._store_for_parse_artifact(

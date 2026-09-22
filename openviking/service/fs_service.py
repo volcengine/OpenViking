@@ -27,7 +27,7 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     render_abstract_overview,
 )
-from openviking.storage.acl import AclAction, AclMode, ResourceAttrs
+from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -322,14 +322,14 @@ class FSService:
         uri: str,
         ctx: RequestContext,
         description: Optional[str] = None,
-        attrs: ResourceAttrs | Dict[str, Any] | None = None,
+        acl: AclSpec | Dict[str, Any] | None = None,
     ) -> None:
         """Create directory."""
         viking_fs = self._ensure_initialized()
         directory_uri, abstract_uri = self._resolve_directory_uris(uri)
         acl_update = (
-            await viking_fs.prepare_acl_update(directory_uri, attrs, ctx)
-            if attrs is not None
+            await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
+            if acl is not None
             else None
         )
         await viking_fs.mkdir(uri, ctx=ctx)
@@ -1141,7 +1141,7 @@ class FSService:
         processing_mode: str = "semantic_and_vectors",
         tags: Optional[List[str]] = None,
         tag_mode: str = "replace",
-        attrs: ResourceAttrs | Dict[str, Any] | None = None,
+        acl: AclSpec | Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Write to an existing file and refresh semantics/vectors."""
         viking_fs = self._ensure_initialized()
@@ -1156,7 +1156,7 @@ class FSService:
             processing_mode=processing_mode,
             tags=tags,
             tag_mode=tag_mode,
-            attrs=attrs,
+            acl=acl,
         )
 
     async def batch_write(

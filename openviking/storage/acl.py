@@ -77,13 +77,6 @@ class AclSpec(BaseModel):
         return self
 
 
-class ResourceAttrs(BaseModel):
-    """Writable resource attributes accepted by creation and content APIs."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    acl: AclSpec | None = None
-
-
 class AclUpdate(BaseModel):
     """An authorized ACL change bound to its final target URI."""
 

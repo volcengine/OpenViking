@@ -70,7 +70,7 @@ shared resources keep the existing URI namespace visibility and write rules.
 ACL is not enforced. Indexed content still stores ACL fields using the same inheritance rules; the switch only controls access checks and retrieval filtering.
 
 When enabled, the root grants `user:* = manage`, so all account members can
-manage shared content that continues to inherit from the root. Without `attrs.acl`, new nodes have
+manage shared content that continues to inherit from the root. Without `acl`, new nodes have
 empty direct ACLs and inherit their parent’s effective permissions. Creating
 content grants no additional permissions. Import roots and descendants follow
 the same rule. Existing shared content without ACL fields uses default

@@ -24,7 +24,7 @@ pub async fn add_resource(
     resource_args: Option<Map<String, Value>>,
     tags: Vec<String>,
     tag_mode: String,
-    attrs: Option<serde_json::Value>,
+    acl: Option<serde_json::Value>,
     format: OutputFormat,
     compact: bool,
     show_progress: bool,
@@ -51,7 +51,7 @@ pub async fn add_resource(
             resource_args,
             tags,
             tag_mode,
-            attrs,
+            acl,
             show_progress,
             verbose,
         )
