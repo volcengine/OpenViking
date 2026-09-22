@@ -152,7 +152,7 @@ def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
 
 
 @pytest.mark.asyncio
-async def test_stale_memory_semantic_write_is_skipped(monkeypatch):
+async def test_stale_memory_semantic_write_is_success(monkeypatch):
     pathlock = _FakePathLock()
     viking_fs = _FakeVikingFS(pathlock)
     processor = SemanticProcessor()

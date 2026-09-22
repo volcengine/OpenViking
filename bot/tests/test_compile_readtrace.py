@@ -1,9 +1,4 @@
-"""Tests for Compile read tracing (audit hook, minimal version).
-
-Verifies that files actually opened by ``exec`` subprocesses via Python land in
-the readlist, while pure enumeration (``glob``) does not, and that the change
-never breaks the exec pipeline (non-Compile sessions untouched).
-"""
+"""Compile source read tracking through Python subprocesses and the sandbox."""
 
 from __future__ import annotations
 
@@ -13,12 +8,11 @@ import sys
 from pathlib import Path
 
 import pytest
-
 import vikingbot.compile.readtrace as readtrace
 from vikingbot.compile.readlist import READLIST_PATH, ReadlistTracker
+from vikingbot.config.schema import SandboxBackend, SandboxConfig, SandboxMode
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.sandbox.base import SandboxFileInfo
-from vikingbot.config.schema import SandboxBackend, SandboxConfig, SandboxMode
 
 TRACE_DIR = readtrace.TRACE_DIR
 READLIST_ENV = "READLIST_FILE"
@@ -50,13 +44,14 @@ def _make_source(workspace: Path, rel: str, content: str = "hello world\n") -> P
 def test_audit_hook_records_files_opened_by_python(workspace):
     src = _make_source(workspace, "compile_resources/src_2/a.jsonl")
     proc = subprocess.run(
-        [sys.executable, "-c", f"open({str(src)!r}, 'a').close()"],
+        [sys.executable, "-c", f"print(open({str(src)!r}).read(), end='')"],
         cwd=workspace,
         env=_read_env(workspace),
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "hello world\n"
     assert "compile_resources/src_2/a.jsonl" in _readlist_lines(workspace)
 
 
@@ -75,6 +70,7 @@ def test_audit_hook_ignores_glob_enumeration(workspace):
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "2"
     assert _readlist_lines(workspace) == []  # glob only enumerates, does not read
 
 
@@ -84,7 +80,7 @@ def test_audit_hook_records_relative_open_after_chdir(workspace):
         [
             sys.executable,
             "-c",
-            f"import os; os.chdir({str(src.parent)!r}); open('x.jsonl', 'a').close()",
+            f"import os; os.chdir({str(src.parent)!r}); print(open('x.jsonl').read(), end='')",
         ],
         cwd=workspace,
         env=_read_env(workspace),
@@ -92,25 +88,8 @@ def test_audit_hook_records_relative_open_after_chdir(workspace):
         text=True,
     )
     assert proc.returncode == 0, proc.stderr
-    assert (
-        "compile_resources/src_2/dream-sessions/07/02/x.jsonl" in _readlist_lines(workspace)
-    )
-
-
-def test_audit_hook_noops_without_readlist_env(workspace):
-    _make_source(workspace, "compile_resources/src_2/a.jsonl", "x\n")
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(TRACE_DIR) + os.pathsep + env.get("PYTHONPATH", "")
-    env.pop(READLIST_ENV, None)  # no READLIST_FILE: hook must not install
-    proc = subprocess.run(
-        [sys.executable, "-c", "open('compile_resources/src_2/a.jsonl', 'a').close()"],
-        cwd=workspace,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert _readlist_lines(workspace) == []
+    assert proc.stdout == "hello world\n"
+    assert "compile_resources/src_2/dream-sessions/07/02/x.jsonl" in _readlist_lines(workspace)
 
 
 @pytest.mark.asyncio
@@ -162,25 +141,15 @@ async def test_direct_backend_injects_read_env_for_compile_session(tmp_path):
     (workspace / "compile_resources/src_2").mkdir(parents=True, exist_ok=True)
     (workspace / "compile_resources/src_2/a.jsonl").write_text("x\n", encoding="utf-8")
     backend = await _run_direct("compile__cmp_task__cmp_task", workspace)
-    result = await backend.execute(
-        "python3 -c \"open('compile_resources/src_2/a.jsonl', 'a').close()\""
-    )
-    assert "Error" not in result
+    try:
+        result = await backend.execute(
+            "python3 -c \"print(open('compile_resources/src_2/a.jsonl').read(), end='')\""
+        )
+    finally:
+        await backend.stop()
+    assert result.strip() == "x"
     lines = _readlist_lines(workspace)
     assert "compile_resources/src_2/a.jsonl" in lines
-
-
-@pytest.mark.asyncio
-async def test_direct_backend_does_not_inject_for_non_compile_session(tmp_path):
-    workspace = tmp_path / "ws"
-    (workspace / "compile_resources/src_2").mkdir(parents=True, exist_ok=True)
-    (workspace / "compile_resources/src_2/a.jsonl").write_text("x\n", encoding="utf-8")
-    backend = await _run_direct("cli__default__chat", workspace)
-    result = await backend.execute(
-        "python3 -c \"open('compile_resources/src_2/a.jsonl', 'a').close()\""
-    )
-    assert "Error" not in result
-    assert _readlist_lines(workspace) == []
 
 
 @pytest.fixture

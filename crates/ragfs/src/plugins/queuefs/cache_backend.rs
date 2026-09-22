@@ -1,13 +1,14 @@
-use super::backend::{Message, StoredMessage};
+use super::backend::{Message, QueueState, StoredMessage};
 use super::cache_protocol::{
     heartbeat_key, instance_key_prefix, last_enqueue_time_from_pending_payloads, queue_key_prefix,
     queue_names_key, unix_secs, QueueKeys, ACK_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT,
     DEQUEUE_SCRIPT, ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS,
     LIST_UNACKED_SCRIPT, PEEK_SCRIPT, RECOVER_STALE_SCRIPT, REMOVE_QUEUE_SCRIPT,
-    STARTUP_RECOVERY_SWEEPS,
+    STARTUP_RECOVERY_SWEEPS, STATUS_SCRIPT,
 };
 use crate::cache_runtime::{
-    CacheError, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest, ScriptValue, SetOptions,
+    CacheError, CacheOperation, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest,
+    ScriptValue, SetOptions,
 };
 use crate::core::errors::{Error, Result};
 use bytes::Bytes;
@@ -24,6 +25,7 @@ const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v1";
 const ENQUEUE_ID: &str = "queuefs.enqueue.v1";
 const DEQUEUE_ID: &str = "queuefs.dequeue.v1";
 const PEEK_ID: &str = "queuefs.peek.v1";
+const STATUS_ID: &str = "queuefs.status.v1";
 const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v1";
 const ACK_ID: &str = "queuefs.ack.v1";
 const CLEAR_ID: &str = "queuefs.clear.v1";
@@ -49,6 +51,10 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
     ScriptDefinition {
         id: PEEK_ID,
         redis_lua: PEEK_SCRIPT,
+    },
+    ScriptDefinition {
+        id: STATUS_ID,
+        redis_lua: STATUS_SCRIPT,
     },
     ScriptDefinition {
         id: LIST_UNACKED_ID,
@@ -81,6 +87,18 @@ pub(super) struct CacheQueueStorage {
 
 impl CacheQueueStorage {
     pub(super) async fn open(runtime: Arc<CacheRuntime>, key_prefix: String) -> Result<Self> {
+        runtime
+            .require_operations(&[
+                CacheOperation::Set,
+                CacheOperation::Del,
+                CacheOperation::Mget,
+                CacheOperation::Sismember,
+                CacheOperation::Smembers,
+                CacheOperation::Llen,
+                CacheOperation::Lrange,
+                CacheOperation::ExecuteScript,
+            ])
+            .map_err(|error| cache_error("validate provider operations", error))?;
         for definition in SCRIPT_DEFINITIONS {
             runtime
                 .register_script(*definition)
@@ -319,6 +337,42 @@ impl CacheQueueStorage {
                 .map_err(|error| cache_error("size", error))?,
         )
         .map_err(|_| Error::internal("redis size returned an invalid value"))
+    }
+
+    pub(super) async fn status(&self, queue_name: &str) -> Result<QueueState> {
+        let keys = QueueKeys::new(&self.key_prefix, queue_name);
+        let value = self
+            .execute(
+                "status",
+                STATUS_ID,
+                vec![
+                    queue_names_key(&self.key_prefix),
+                    keys.pending,
+                    keys.processing,
+                ],
+                vec![bytes(queue_name)],
+            )
+            .await?;
+        if matches!(value, ScriptValue::Null) {
+            return Err(Error::NotFound(format!(
+                "queue '{}' not found",
+                queue_name
+            )));
+        }
+        let ScriptValue::Array(values) = value else {
+            return Err(invalid_result("queue status", value));
+        };
+        if values.len() != 2 {
+            return Err(Error::internal(
+                "redis queue status returned an invalid value",
+            ));
+        }
+        Ok(QueueState {
+            pending: usize::try_from(integer(values[0].clone())?)
+                .map_err(|_| Error::internal("redis pending count is invalid"))?,
+            processing: usize::try_from(integer(values[1].clone())?)
+                .map_err(|_| Error::internal("redis processing count is invalid"))?,
+        })
     }
 
     pub(super) async fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {

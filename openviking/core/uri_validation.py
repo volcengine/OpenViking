@@ -99,7 +99,7 @@ def validate_content_target_uri(
 
     canonical_uri = validate_request_viking_uri(raw_uri, ctx, field_name=field_name)
 
-    if _matches_content_kind(canonical_uri, kind):
+    if matches_content_kind(canonical_uri, kind):
         if is_accessible(canonical_uri, ctx):
             return canonical_uri
         raise PermissionDeniedError(f"Access denied for {canonical_uri}", resource=canonical_uri)
@@ -107,7 +107,7 @@ def validate_content_target_uri(
     raise InvalidURIError(raw_uri, f"{field_name} must target {kind} content")
 
 
-def _matches_content_kind(uri: str, kind: str) -> bool:
+def matches_content_kind(uri: str, kind: str) -> bool:
     if kind not in {"resource", "skill"}:
         raise ValueError(f"Unsupported content target kind: {kind}")
     parts = uri_parts(uri)

@@ -130,10 +130,17 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `tree` - Show a hierarchical tree.
 - `mkdir` - Create a directory.
 - `rm` - Remove a resource or directory.
+- `cp` - Copy a file, or copy a directory recursively with `-r`.
 - `mv` - Move or rename a resource.
 - `stat` - Show resource metadata.
 - `attrs` - Get logical extended attributes.
 - `get` - Download a file to a local path.
+
+```bash
+# The destination parent must exist. Existing files are overwritten; directories are merged.
+ov cp viking://resources/docs/guide.md viking://resources/archive/guide-copy.md
+ov cp -r viking://resources/docs viking://resources/docs-backup
+```
 
 ### Content Access
 
@@ -266,6 +273,13 @@ ov find "authentication" --uri viking://resources/project --level 0,1
 # Recursive list
 ov ls viking://resources --recursive
 
+# Write caller-provided tags, then filter or project them
+ov write viking://resources/docs/api.md --content "# API" \
+  --tags team=search,env=prod
+ov ls viking://resources/docs --tags team=search,env=prod --fields tags
+ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
+ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
+
 # Temporarily override identity from CLI flags
 ov --account acme --user alice ls viking://
 
@@ -276,6 +290,7 @@ ov admin regenerate-key acme bob --seed bob-new-seed
 
 # Glob search
 ov glob "**/*.md" --uri viking://resources
+ov glob "**/*.md" --uri viking://resources -f tags
 
 # Session workflow
 SESSION=$(ov -o json session new | jq -r '.result.session_id')

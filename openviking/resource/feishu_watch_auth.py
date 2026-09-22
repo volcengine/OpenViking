@@ -6,9 +6,17 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
+
+import httpx
+from lark_oapi.core.cache import ICache
+
+from openviking.parse.accessors.feishu_token import (
+    resolve_feishu_tenant_token_cache,
+)
+from openviking_cli.utils.config.parser_config import FeishuConfig
 
 FEISHU_AUTH_PROVIDER = "feishu"
 FEISHU_ACCESS_TOKEN_ARG = "feishu_access_token"
@@ -17,6 +25,8 @@ FEISHU_APP_ID_ARG = "feishu_app_id"
 FEISHU_APP_SECRET_ARG = "feishu_app_secret"
 FEISHU_REFRESH_GRANT_TYPE = "refresh_token"
 FEISHU_REFRESH_SKEW = timedelta(minutes=5)
+FEISHU_OAUTH_TOKEN_URL = "https://accounts.feishu.cn/oauth/v3/token"
+LARK_OAUTH_TOKEN_URL = "https://accounts.larksuite.com/oauth/v3/token"
 
 
 @dataclass(frozen=True)
@@ -48,13 +58,13 @@ class FeishuTenantTokenError(Exception):
 
 def load_feishu_app_credentials(
     *,
+    config=None,
     app_id: Optional[str] = None,
     app_secret: Optional[str] = None,
 ) -> FeishuAppCredentials:
     """Load Feishu app credentials from OpenViking config or environment."""
-    from openviking_cli.utils.config import get_openviking_config
-
-    config = get_openviking_config().feishu
+    if config is None:
+        raise ValueError("Feishu credentials require explicit account configuration")
     if app_id is None and app_secret is None:
         resolved_app_id = (config.app_id or os.getenv("FEISHU_APP_ID", "")).strip()
         resolved_app_secret = (config.app_secret or os.getenv("FEISHU_APP_SECRET", "")).strip()
@@ -78,6 +88,8 @@ def create_feishu_auth_state(
     access_token: str,
     refresh_token: str,
     app_credentials: Optional[FeishuAppCredentials] = None,
+    *,
+    persist_app_secret: bool = True,
 ) -> Dict[str, Any]:
     """Create the private watch auth state for Feishu user-token watch tasks."""
     state = {
@@ -88,12 +100,29 @@ def create_feishu_auth_state(
     }
     if app_credentials is not None:
         state["app_id"] = app_credentials.app_id
-        state["app_secret"] = app_credentials.app_secret
+        if persist_app_secret:
+            state["app_secret"] = app_credentials.app_secret
     return state
 
 
 def is_feishu_auth_state(auth_state: Optional[Dict[str, Any]]) -> bool:
     return isinstance(auth_state, dict) and auth_state.get("provider") == FEISHU_AUTH_PROVIDER
+
+
+def feishu_config_from_auth_state(
+    auth_state: Dict[str, Any], current: FeishuConfig
+) -> FeishuConfig:
+    """Bind a watch execution to the app identity stored at creation.
+
+    Non-identity parsing options keep their current account values. Legacy
+    states without a complete app identity retain current-account fallback.
+    """
+    update: Dict[str, Any] = {}
+    for key in ("app_id", "app_secret"):
+        value = auth_state.get(key)
+        if value is not None:
+            update[key] = value
+    return replace(current, **update)
 
 
 def feishu_auth_state_needs_refresh(
@@ -135,30 +164,47 @@ def apply_feishu_refreshed_token(
 
 
 class FeishuOAuthClient:
-    """Small wrapper around lark-oapi user and tenant token operations."""
+    """Small wrapper around Feishu/Lark user and tenant token operations."""
 
-    def __init__(self, credentials: FeishuAppCredentials):
+    def __init__(
+        self,
+        credentials: FeishuAppCredentials,
+        *,
+        tenant_token_cache: ICache | None = None,
+    ):
         self._credentials = credentials
+        self._tenant_token_cache = resolve_feishu_tenant_token_cache(tenant_token_cache)
         self._client = None
 
     @classmethod
-    def from_config(cls) -> "FeishuOAuthClient":
-        return cls(load_feishu_app_credentials())
+    def from_config(
+        cls,
+        config,
+        *,
+        tenant_token_cache: ICache | None = None,
+    ) -> "FeishuOAuthClient":
+        return cls(
+            load_feishu_app_credentials(config=config),
+            tenant_token_cache=tenant_token_cache,
+        )
 
     @classmethod
-    def from_auth_state(cls, auth_state: Dict[str, Any]) -> "FeishuOAuthClient":
-        app_id = auth_state.get("app_id")
-        app_secret = auth_state.get("app_secret")
-        if app_id is None and app_secret is None:
-            return cls.from_config()
+    def from_auth_state(
+        cls,
+        auth_state: Dict[str, Any],
+        *,
+        config,
+        tenant_token_cache: ICache | None = None,
+    ) -> "FeishuOAuthClient":
         try:
-            credentials = load_feishu_app_credentials(app_id=app_id, app_secret=app_secret)
+            bound = feishu_config_from_auth_state(auth_state, config)
+            credentials = load_feishu_app_credentials(config=bound)
         except ValueError as exc:
             raise FeishuTokenRefreshError(
                 "Feishu app credentials in watch task are invalid.",
                 permanent=True,
             ) from exc
-        return cls(credentials)
+        return cls(credentials, tenant_token_cache=tenant_token_cache)
 
     async def get_tenant_access_token(self) -> str:
         return await asyncio.to_thread(self._get_tenant_access_token_sync)
@@ -179,7 +225,12 @@ class FeishuOAuthClient:
         config.domain = self._credentials.domain
         config.timeout = self._credentials.request_timeout
         try:
-            token = TokenManager.get_self_tenant_token(config)
+            with self._tenant_token_cache.sdk_scope(
+                app_id=self._credentials.app_id,
+                app_secret=self._credentials.app_secret,
+                domain=self._credentials.domain,
+            ):
+                token = TokenManager.get_self_tenant_token(config)
         except Exception as exc:
             raise FeishuTenantTokenError("Failed to obtain Feishu tenant token.") from exc
         if not isinstance(token, str) or not token.strip():
@@ -195,6 +246,71 @@ class FeishuOAuthClient:
         return await asyncio.to_thread(self._refresh_user_access_token_sync, refresh_token.strip())
 
     def _refresh_user_access_token_sync(self, refresh_token: str) -> FeishuRefreshedToken:
+        if refresh_token.count(".") != 2:
+            return self._refresh_legacy_user_access_token_sync(refresh_token)
+
+        try:
+            response = httpx.post(
+                (
+                    LARK_OAUTH_TOKEN_URL
+                    if "larksuite.com" in self._credentials.domain.lower()
+                    else FEISHU_OAUTH_TOKEN_URL
+                ),
+                data={
+                    "grant_type": FEISHU_REFRESH_GRANT_TYPE,
+                    "client_id": self._credentials.app_id,
+                    "client_secret": self._credentials.app_secret,
+                    "refresh_token": refresh_token,
+                },
+                timeout=self._credentials.request_timeout,
+            )
+            payload = response.json()
+        except Exception as exc:
+            raise FeishuTokenRefreshError(
+                f"Failed to refresh Feishu user token: {exc}",
+                permanent=False,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise FeishuTokenRefreshError(
+                "Feishu user token refresh response is not an object.",
+                permanent=False,
+            )
+
+        code = payload.get("code")
+        if response.status_code >= 400 or payload.get("error") or code not in (None, 0):
+            error = payload.get("error")
+            msg = str(
+                payload.get("error_description")
+                or payload.get("msg")
+                or payload.get("message")
+                or error
+                or f"HTTP {response.status_code}"
+            )
+            raise FeishuTokenRefreshError(
+                f"Feishu user token refresh failed: code={code}, msg={msg}",
+                permanent=_is_permanent_refresh_error(code, f"{error or ''} {msg}"),
+            )
+
+        access_token = payload.get("access_token")
+        new_refresh_token = payload.get("refresh_token")
+        expires_in = payload.get("expires_in")
+        access_token = access_token.strip() if isinstance(access_token, str) else ""
+        new_refresh_token = new_refresh_token.strip() if isinstance(new_refresh_token, str) else ""
+        if not access_token or not new_refresh_token or not isinstance(expires_in, int):
+            raise FeishuTokenRefreshError(
+                "Feishu user token refresh response is missing access_token, "
+                "refresh_token, or expires_in.",
+                permanent=False,
+            )
+
+        return FeishuRefreshedToken(
+            access_token=access_token,
+            refresh_token=new_refresh_token,
+            expires_in=expires_in,
+        )
+
+    def _refresh_legacy_user_access_token_sync(self, refresh_token: str) -> FeishuRefreshedToken:
         try:
             from lark_oapi.api.authen.v1 import (
                 CreateRefreshAccessTokenRequest,
@@ -202,7 +318,7 @@ class FeishuOAuthClient:
             )
         except ImportError as exc:
             raise FeishuTokenRefreshError(
-                "lark-oapi is required to refresh Feishu user tokens. "
+                "lark-oapi is required to refresh legacy Feishu user tokens. "
                 "Install it with: pip install lark-oapi>=1.0.0",
                 permanent=True,
             ) from exc
@@ -217,7 +333,6 @@ class FeishuOAuthClient:
             )
             .build()
         )
-
         try:
             response = self._get_client().authen.v1.refresh_access_token.create(request)
         except FeishuTokenRefreshError:
@@ -238,7 +353,7 @@ class FeishuOAuthClient:
 
         data = getattr(response, "data", None)
         access_token = (getattr(data, "access_token", None) or "").strip()
-        new_refresh_token = (getattr(data, "refresh_token", None) or refresh_token).strip()
+        new_refresh_token = (getattr(data, "refresh_token", None) or "").strip()
         expires_in = getattr(data, "expires_in", None)
         if not access_token or not new_refresh_token or not isinstance(expires_in, int):
             raise FeishuTokenRefreshError(
@@ -259,7 +374,7 @@ class FeishuOAuthClient:
                 import lark_oapi as lark
             except ImportError as exc:
                 raise FeishuTokenRefreshError(
-                    "lark-oapi is required to refresh Feishu user tokens. "
+                    "lark-oapi is required to refresh legacy Feishu user tokens. "
                     "Install it with: pip install lark-oapi>=1.0.0",
                     permanent=True,
                 ) from exc

@@ -2,6 +2,15 @@
 
 本文档定义 `docs/zh/api/` 目录下各 API 模块文档的统一结构和编写规范。
 
+## 保持文档可用与及时
+
+- 在同一 PR 中更新中英文页面、导航和示例。相同内容保留一个主要说明入口，相关页面通过链接引用。
+- 先写读者任务、前置条件、可运行示例和预期结果，实现细节放在使用说明之后。
+- 根据当前实现核验默认值和支持的选项。区分已发布行为、`main` 上的实现和后续计划，必要时链接到对应 release 或 PR。
+- 可复制配置使用合法 JSON；片段或伪代码需明确标注，不在 `json` 代码块中混入注释。
+- 外部工具和服务引用官方文档，只介绍当前任务需要的配置，不复制整套手册。
+- 提交前在 `docs/` 运行 `npm run check:docs`、`npm run check:api` 和 `npm run docs:build`。自动检查覆盖结构与示例，不能替代事实核验和翻译 review。
+
 ## 目录结构
 
 API 文档按模块组织，每个模块一个文件，使用两位数字序号前缀。
@@ -135,6 +144,8 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 #### 3. 使用示例
 
+对于返回后台任务的操作，默认示例优先使用“提交任务 → 查询状态”，尽量不主动设置 `wait`、`timeout`，也不使用全局 `wait_processed()` 代替任务状态。完整参数参考应保留受支持参数及其真实默认值。后续操作依赖异步产物时，应展示按 `task_id` 轮询至 `completed`，并处理 `failed`、`cancelled`；不能仅删除等待参数后立即读取结果。
+
 当一个接口并列展示所有调用方式时，建议按以下顺序提供：
 - Python SDK 示例
 - TypeScript SDK 示例
@@ -210,8 +221,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation",
-    "wait": true
+    "reason": "User guide documentation"
   }'
 ```
 
@@ -226,15 +236,15 @@ result = client.add_resource(
     path="./documents/guide.md",
     options={"reason": "User guide documentation"},
 )
-print(f"Added: {result['root_uri']}")
+print(f"Task ID: {result['task_id']}")
 
-client.wait_processed()
+print(client.get_task(result["task_id"]))
 ```
 
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation" --wait
+openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 **响应示例**
@@ -245,7 +255,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
   "result": {
     "status": "success",
     "root_uri": "viking://resources/documents/guide.md",
-    "source_path": "./documents/guide.md",
+    "task_id": "uuid-xxx",
     "errors": []
   },
   "time": 0.123

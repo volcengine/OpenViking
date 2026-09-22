@@ -187,6 +187,7 @@ claude mcp add --transport http openviking \
 ```yaml
 services:
   openviking:
+    # 推荐优先使用 ghcr.io；如果访问有问题，可改用 openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
     image: ghcr.io/volcengine/openviking:latest
     environment:
       OPENVIKING_PUBLIC_BASE_URL: "https://ov.your-domain.com"

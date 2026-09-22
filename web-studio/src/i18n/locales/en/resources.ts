@@ -7,8 +7,8 @@ const resources = {
   requestLogs: {
     accessRequired: {
       description:
-        'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
-      title: 'Admin access required',
+        'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
+      title: 'Connection identity required',
     },
     clear: 'Clear',
     description:
@@ -62,9 +62,9 @@ const resources = {
     reset: 'Reset',
     searchPlaceholder: 'Filter method, path, or status',
     scope: {
-      currentIdentity: 'Current scope: Current API key identity',
+      currentIdentity: 'Current scope: Current connection identity',
       currentIdentityWithName:
-        'Current scope: Current API key identity ({{identity}})',
+        'Current scope: Current connection identity ({{identity}})',
     },
     status: {
       error: 'ERR',
@@ -133,6 +133,10 @@ const resources = {
     tooManyFiles: 'Only the first {{count}} files were kept.',
     error: 'Request Failed',
     dirPicker: {
+      scope: 'Resource scope',
+      mine: 'My resources',
+      shared: 'Shared resources',
+
       title: 'Select Directory',
       select: 'Select',
       cancel: 'Cancel',
@@ -415,6 +419,12 @@ const resources = {
       },
     },
     filePreview: {
+      directoryLevels: {
+        abstractLabel: 'Abstract',
+        overviewLabel: 'Overview',
+        abstractDescription: 'Short semantic abstract',
+        overviewDescription: 'Directory overview',
+      },
       cancel: 'Cancel',
       edit: 'Edit',
       emptyFile: '(empty file)',
@@ -429,6 +439,14 @@ const resources = {
       loadingEditor: 'Loading editor...',
       markdownPreview: 'Preview',
       markdownSource: 'Source',
+      mermaid: {
+        diagramLabel: 'Mermaid diagram',
+        errorDetails: 'Error details',
+        loading: 'Rendering Mermaid diagram...',
+        renderFailed: 'Unable to render Mermaid diagram.',
+        showSource: 'Show Mermaid source',
+        unknownError: 'Unknown Mermaid rendering error.',
+      },
       noDirectoryContext: 'No abstract or overview available for this folder.',
       save: 'Save',
       selectDirectoryContext: 'Select a chip to show folder context.',

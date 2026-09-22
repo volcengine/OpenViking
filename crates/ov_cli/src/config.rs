@@ -100,6 +100,38 @@ pub struct Config {
     pub oidc_token: Option<String>,
 }
 
+/// Every top-level key `Config` models, deserialization aliases included.
+///
+/// `Config` has no catch-all, so serializing it over ovcli.conf silently drops
+/// any key it does not declare — including the `plugin` section the memory
+/// plugins read. The config writers carry the keys missing from this list over
+/// from the file they replace. `extra_header` is listed because it deserializes
+/// into `extra_headers` and is written back under the new spelling; preserving
+/// the old one would duplicate it.
+pub(crate) const KNOWN_CONFIG_KEYS: &[&str] = &[
+    "url",
+    "api_key",
+    "root_api_key",
+    "account",
+    "user",
+    "actor_peer_id",
+    "agent_id",
+    "timeout",
+    "output",
+    "echo_command",
+    "show_progress",
+    "verbose",
+    "profile",
+    "upload",
+    "extra_headers",
+    "extra_header",
+    "gateway_token",
+    "auth_mode",
+    "ldap_username",
+    "ldap_password",
+    "oidc_token",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectiveAuth {
     pub api_key: Option<String>,
@@ -416,7 +448,62 @@ pub fn get_or_create_machine_id() -> Result<String> {
 mod tests {
     use crate::error::Error;
 
-    use super::{Config, merge_csv_options};
+    use super::{Config, KNOWN_CONFIG_KEYS, UploadConfig, merge_csv_options};
+
+    // A field added to `Config` but missing from KNOWN_CONFIG_KEYS would be
+    // treated as somebody else's key and restored from the file being replaced,
+    // making it impossible to clear.
+    #[test]
+    fn known_config_keys_covers_every_serialized_field() {
+        let config = Config {
+            url: "http://not-the-default".to_string(),
+            api_key: Some("k".into()),
+            root_api_key: Some("k".into()),
+            account: Some("a".into()),
+            user: Some("u".into()),
+            actor_peer_id: Some("p".into()),
+            agent_id: Some("g".into()),
+            timeout: 1.0,
+            output: "json".to_string(),
+            echo_command: false,
+            show_progress: true,
+            verbose: true,
+            profile: true,
+            upload: UploadConfig {
+                ignore_dirs: Some("d".into()),
+                include: Some("i".into()),
+                exclude: Some("e".into()),
+            },
+            extra_headers: Some(std::collections::HashMap::new()),
+            gateway_token: Some("t".into()),
+            auth_mode: Some("m".into()),
+            ldap_username: Some("n".into()),
+            ldap_password: Some("w".into()),
+            oidc_token: Some("o".into()),
+        };
+
+        let value = serde_json::to_value(&config).expect("config should serialize");
+        let serialized: Vec<&str> = value
+            .as_object()
+            .expect("config serializes to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        for key in &serialized {
+            assert!(
+                KNOWN_CONFIG_KEYS.contains(key),
+                "Config serializes `{key}` but KNOWN_CONFIG_KEYS omits it",
+            );
+        }
+        for key in KNOWN_CONFIG_KEYS {
+            // `extra_header` is a deserialization alias, never serialized.
+            assert!(
+                serialized.contains(key) || *key == "extra_header",
+                "KNOWN_CONFIG_KEYS lists `{key}` but Config never serializes it",
+            );
+        }
+    }
 
     #[test]
     fn load_required_from_path_reports_missing_cli_config() {

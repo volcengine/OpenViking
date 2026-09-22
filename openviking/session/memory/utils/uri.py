@@ -17,6 +17,7 @@ from openviking.session.memory.utils.template_utils import TemplateUtils
 _PORTABLE_SEGMENT_MARKER = "~ov~"
 _PORTABLE_SEGMENT_HASH_LENGTH = 16
 _WINDOWS_INVALID_CHARS = frozenset('<>:"\\|?*')
+_TRUSTED_PATH_SEGMENT_TEMPLATE = re.compile(r"^\{\{\s*user_space\s*\}\}$")
 _WINDOWS_RESERVED_STEMS = frozenset(
     {
         "CON",
@@ -100,23 +101,42 @@ def _portable_uri_segment(segment: str) -> str:
     return f"{stem}{suffix}{extension}"
 
 
-def _make_uri_path_segments_portable(uri: str) -> str:
-    """Make every rendered memory URI segment portable on supported filesystems.
+def _render_portable_uri_template(
+    template: str,
+    context: Dict[str, Any],
+    extract_context: Any,
+) -> str:
+    """Render template-defined path segments without treating field data as hierarchy.
 
-    Clean segments remain byte-identical. A non-portable segment keeps a readable
-    safe prefix and receives a deterministic digest of its original value, so
-    values such as ``Desktop``, ``Desktop ``, and ``Desktop.`` stay distinct.
+    ``user_space`` is an internal path fragment that may contain the explicit
+    ``peers/<peer_id>`` namespace. Other expressions render into exactly one path
+    segment. A slash in dynamic data aliases an underscore because both spellings
+    identify the same memory name.
     """
     scheme_separator = "://"
-    if scheme_separator in uri:
-        scheme, _, path = uri.partition(scheme_separator)
+    if scheme_separator in template:
+        scheme, _, path_template = template.partition(scheme_separator)
         prefix = f"{scheme}{scheme_separator}"
     else:
-        prefix, path = "", uri
+        prefix, path_template = "", template
 
-    if not path:
-        return uri
-    return prefix + "/".join(_portable_uri_segment(segment) for segment in path.split("/"))
+    if not path_template:
+        return prefix
+
+    segments = []
+    for segment_template in path_template.split("/"):
+        rendered = TemplateUtils.render(
+            segment_template,
+            context,
+            extract_context=extract_context,
+            debug_undefined=True,
+            strip=False,
+        )
+        if _TRUSTED_PATH_SEGMENT_TEMPLATE.fullmatch(segment_template):
+            segments.extend(rendered.split("/"))
+        else:
+            segments.append(rendered.replace("/", "_"))
+    return prefix + "/".join(_portable_uri_segment(segment) for segment in segments)
 
 
 def render_template(
@@ -175,18 +195,15 @@ def generate_uri(
         uri_template = f"{dir_template.rstrip('/')}/{filename_template.lstrip('/')}"
     else:
         uri_template = dir_template or filename_template
-    context = {"user_space": user_space}
-    # Add all fields to context (uri_fields with actual values)
-    context.update(fields)
+    context = dict(fields)
+    context["user_space"] = user_space
     template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", uri_template))
     for var in template_vars:
         if var not in context:
             raise ValueError(f"Missing template variable: {var}")
         if context[var] is None:
             raise ValueError(f"Template variable '{var}' has None value")
-    # Render using unified render_template method (same as content_template)
-    uri = render_template(uri_template, context, extract_context)
-    return _make_uri_path_segments_portable(uri)
+    return _render_portable_uri_template(uri_template, context, extract_context)
 
 
 def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:

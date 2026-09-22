@@ -622,7 +622,9 @@ class MessageRange:
             if not current_messages:
                 return
             content = self._format_merged_content(current_messages)
-            formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
+            # Tool-only messages have no chat text, but must keep their range indices.
+            if content.strip():
+                formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
             current_messages = []
 
         for msg in msg_group:
@@ -790,9 +792,9 @@ class MemoryUpdater:
         if not memory_type:
             return False
         try:
-            from openviking.session.memory.memory_type_registry import create_default_registry
+            from openviking.session.memory.memory_type_registry import get_default_registry
 
-            updater = cls(registry=create_default_registry())
+            updater = cls(registry=get_default_registry())
             updater._viking_fs = viking_fs
             return await updater.generate_overview(memory_type, directory_uri, ctx)
         except Exception:
@@ -815,20 +817,22 @@ class MemoryUpdater:
         memory_type: Optional[str],
         ctx: RequestContext,
         strict: bool = False,
+        ingest_options=None,
     ) -> bool:
         if not vikingdb or not bool(getattr(vikingdb, "has_queue_manager", False)):
             return False
         try:
-            from openviking.session.memory.memory_type_registry import create_default_registry
+            from openviking.session.memory.memory_type_registry import get_default_registry
 
             result = MemoryUpdateResult()
             result.add_written(uri)
-            updater = cls(registry=create_default_registry(), vikingdb=vikingdb)
+            updater = cls(registry=get_default_registry(), vikingdb=vikingdb)
             updater._viking_fs = viking_fs
             attempted = await updater._vectorize_memories(
                 result,
                 ctx,
                 uri_memory_type_map={uri: memory_type} if memory_type else {},
+                ingest_options=ingest_options,
             )
             return attempted > 0
         except Exception:
@@ -1194,6 +1198,9 @@ class MemoryUpdater:
             new_full_content = MemoryFileUtils.write(
                 mf,
                 content_template=schema.content_template,
+                account_content_template_type=(
+                    schema.memory_type if schema._account_content_template else None
+                ),
                 extract_context=extract_context,
             )
             await viking_fs.write_file(
@@ -1284,8 +1291,10 @@ class MemoryUpdater:
             try:
                 content = await viking_fs.read_file(deleted_uri, ctx=ctx)
             except Exception as e:
-                tracer.error(
-                    f"Failed to read deleted memory links for replacement {deleted_uri}: {e}"
+                # Benign: the replacement/deleted file may already be gone in the
+                # same batch. Link inheritance is best-effort, so warn and skip.
+                logger.warning(
+                    f"Skipping link inheritance; could not read deleted memory {deleted_uri}: {e}"
                 )
                 continue
             if not content:
@@ -1361,6 +1370,10 @@ class MemoryUpdater:
                     lease_ref=lease_ref,
                 )
                 result.add_edited(uri)
+            except (NotFoundError, FileNotFoundError) as e:
+                # Benign: a linked neighbor may have been deleted in the same
+                # batch. Link inheritance is best-effort, so warn and skip.
+                logger.warning(f"Skipping link inheritance; could not read memory {uri}: {e}")
             except Exception as e:
                 tracer.error(f"Failed to inherit deleted memory links for {uri}: {e}")
 
@@ -1388,6 +1401,7 @@ class MemoryUpdater:
         extract_context: Any = None,
         uri_memory_type_map: Dict[str, str] = None,
         search_tags_by_uri: Dict[str, List[str]] = None,
+        ingest_options: Any = None,
     ) -> int:
         """Vectorize written and edited memory files.
 
@@ -1397,6 +1411,7 @@ class MemoryUpdater:
             extract_context: Extract context for embedding template rendering
             uri_memory_type_map: Mapping from URI to memory_type
             search_tags_by_uri: Transient search tags to attach while indexing each URI
+            ingest_options: Write options for a single-file content write.
         """
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
@@ -1484,12 +1499,18 @@ class MemoryUpdater:
                 # Convert to embedding msg and enqueue
                 embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
                 if embedding_msg:
-                    transient_tags = search_tags_by_uri.get(uri)
-                    if transient_tags:
-                        embedding_msg.context_data["search_tags"] = list(transient_tags)
+                    if getattr(ingest_options, "search_tags", None) is not None:
+                        embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags)
                         embedding_msg.context_data["_upsert_options"] = {
-                            "search_tag_mode": "append"
+                            "search_tag_mode": ingest_options.search_tag_mode
                         }
+                    else:
+                        transient_tags = search_tags_by_uri.get(uri)
+                        if transient_tags:
+                            embedding_msg.context_data["search_tags"] = list(transient_tags)
+                            embedding_msg.context_data["_upsert_options"] = {
+                                "search_tag_mode": "append"
+                            }
                     if embedding_msg.telemetry_id:
                         request_wait_tracker.register_embedding_root(
                             embedding_msg.telemetry_id, embedding_msg.id

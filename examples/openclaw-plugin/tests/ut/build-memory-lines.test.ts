@@ -270,16 +270,23 @@ describe("buildAutoRecallContext trace", () => {
 
   it("records auto-recall trace without changing the generated context block", async () => {
     const cfg = makeCfg({ recallTargetTypes: ["user"] });
-    const memory = makeMemory({
+    const entry = {
       uri: "viking://user/memories/rust-pref",
       category: "preferences",
-      abstract: "User prefers Rust for backend tasks.",
+      text: "User prefers Rust for backend tasks.",
       score: 0.91,
-    });
+      detail: "abstract",
+      origin: "self",
+    };
     const makeClient = () => ({
       healthCheck: vi.fn().mockResolvedValue(undefined),
-      find: vi.fn().mockResolvedValue({ memories: [memory], total: 1 }),
-      read: vi.fn().mockResolvedValue("unused"),
+      searchContext: vi.fn().mockResolvedValue({
+        entries: [entry],
+        rendered: '<memory uri="viking://user/memories/rust-pref">User prefers Rust for backend tasks.</memory>',
+        stats: { candidates: 1, used_tokens: 18 },
+      }),
+      find: vi.fn(),
+      read: vi.fn(),
     });
     const logger = { info: vi.fn(), warn: vi.fn() };
 
@@ -332,20 +339,22 @@ describe("buildAutoRecallContext trace", () => {
 
   it("defaults auto-recall to backward-compatible user and agent memory recall", async () => {
     const cfg = makeCfg();
-    const userMemory = makeMemory({
+    const userMemory = {
       uri: "viking://user/memories/project-docs",
       category: "memory",
-      abstract: "Project documentation preference.",
+      text: "Project documentation preference.",
       score: 0.9,
-    });
+      origin: "self",
+    };
     const client = {
       healthCheck: vi.fn().mockResolvedValue(undefined),
-      find: vi.fn(async (_query: string, options: { contextType?: string }) => ({
-        memories: options.contextType === "memory" ? [userMemory] : [],
-        resources: [],
-        total: options.contextType === "memory" ? 1 : 0,
-      })),
-      read: vi.fn().mockResolvedValue("unused"),
+      searchContext: vi.fn().mockResolvedValue({
+        entries: [userMemory],
+        rendered: '<memory uri="viking://user/memories/project-docs">Project documentation preference.</memory>',
+        stats: { candidates: 1, used_tokens: 16 },
+      }),
+      find: vi.fn(),
+      read: vi.fn(),
     };
     const traces = new RecallTraceMemoryStore(10);
 
@@ -360,35 +369,47 @@ describe("buildAutoRecallContext trace", () => {
       ovSessionId: "ov-1",
     });
 
-    expect(client.find).toHaveBeenCalledTimes(1);
-    expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+    expect(client.searchContext).toHaveBeenCalledTimes(1);
+    expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
+      sessionId: "ov-1",
+      limit: 6,
+      scoreThreshold: 0.15,
       contextType: "memory",
-      targetUri: undefined,
+      queryExpansion: "auto",
+      maxTokens: 1000,
+      detail: "abstract",
+      dedupTurns: 5,
+      peerScope: "actor",
+      requestTimeoutMs: 15000,
     });
+    expect(client.find).not.toHaveBeenCalled();
+    expect(client.read).not.toHaveBeenCalled();
     const recorded = traces.query({ turn: "latest", sessionId: "session-resource-only", limit: 10 }).entries[0]!;
     expect(recorded.resourceTypes).toEqual(["user", "agent"]);
     expect(recorded.searches.map((search) => search.resourceType)).toEqual(["user"]);
   });
 
-  it("uses configured autoRecallTimeoutMs as the outer timeout budget", async () => {
+  it("uses configured autoRecallTimeoutMs for both the request and outer budget", async () => {
     vi.useFakeTimers();
     try {
       const cfg = makeCfg({ autoRecallTimeoutMs: 30000, recallTargetTypes: ["user"] });
       const client = {
         healthCheck: vi.fn().mockResolvedValue(undefined),
-        find: vi.fn().mockImplementation(() =>
+        searchContext: vi.fn().mockImplementation(() =>
           new Promise((resolve) => {
             setTimeout(() => resolve({
-              memories: [makeMemory({
+              entries: [{
                 uri: "viking://user/memories/slow-backend",
-                abstract: "Slow local backend recall still completes within the configured budget.",
+                text: "Slow local backend recall still completes within the configured budget.",
                 score: 0.9,
-              })],
-              total: 1,
+              }],
+              rendered: '<memory uri="viking://user/memories/slow-backend">Slow local backend recall still completes within the configured budget.</memory>',
+              stats: { candidates: 1, used_tokens: 20 },
             }), 10000);
           })
         ),
-        read: vi.fn().mockResolvedValue("unused"),
+        find: vi.fn(),
+        read: vi.fn(),
       };
 
       const resultPromise = buildAutoRecallContext({
@@ -405,6 +426,7 @@ describe("buildAutoRecallContext trace", () => {
       });
       const result = await resultPromise;
       expect(result.block).toContain("Slow local backend recall still completes within the configured budget.");
+      expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({ requestTimeoutMs: 30000 });
     } finally {
       vi.useRealTimers();
     }
@@ -414,17 +436,18 @@ describe("buildAutoRecallContext trace", () => {
     const cfg = makeCfg({ recallTargetTypes: ["resource", "user"] });
     const client = {
       healthCheck: vi.fn().mockResolvedValue(undefined),
-      find: vi.fn()
-        .mockRejectedValueOnce(new Error("resource search failed"))
-        .mockResolvedValueOnce({
-          memories: [makeMemory({
-            uri: "viking://user/memories/backend-pref",
-            abstract: "Agent recommends TypeScript for this service.",
-            score: 0.88,
-          })],
-          total: 1,
-        }),
-      read: vi.fn().mockResolvedValue("unused"),
+      searchContext: vi.fn().mockResolvedValue({
+        entries: [{
+          uri: "viking://user/memories/backend-pref",
+          text: "Agent recommends TypeScript for this service.",
+          score: 0.88,
+          origin: "self",
+        }],
+        rendered: '<memory uri="viking://user/memories/backend-pref">Agent recommends TypeScript for this service.</memory>',
+        stats: { candidates: 1, used_tokens: 18, retrieval_errors: ["resource search failed"] },
+      }),
+      find: vi.fn(),
+      read: vi.fn(),
     };
     const logger = { info: vi.fn(), warn: vi.fn() };
     const traces = new RecallTraceMemoryStore(10);
@@ -444,13 +467,47 @@ describe("buildAutoRecallContext trace", () => {
     expect(recorded.searches).toHaveLength(2);
     expect(recorded.searches[0]).toMatchObject({
       resourceType: "resource",
-      error: "Error: resource search failed",
+      error: "resource search failed",
     });
     expect(recorded.searches[1]).toMatchObject({
       resourceType: "user",
       total: 1,
     });
     expect(recorded.selected[0]).toMatchObject({ injected: true });
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("auto-recall search failed"));
+    expect(client.searchContext).toHaveBeenCalledTimes(1);
+    expect(client.searchContext.mock.calls[0]?.[1]).toMatchObject({
+      contextType: ["resource", "memory"],
+    });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("auto-recall context search failed"));
+  });
+
+  it("records a rejected context request and skips injection", async () => {
+    const cfg = makeCfg({ recallTargetTypes: ["user"] });
+    const client = {
+      healthCheck: vi.fn().mockResolvedValue(undefined),
+      searchContext: vi.fn().mockRejectedValue(new Error("backend unavailable")),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const traces = new RecallTraceMemoryStore(10);
+
+    const result = await buildAutoRecallContext({
+      cfg,
+      client: client as any,
+      agentId: "agent-1",
+      queryText: "which backend preference should be applied?",
+      logger,
+      traceRecorder: traces,
+      sessionId: "session-failed-request",
+    });
+
+    expect(result).toEqual({ memoryCount: 0, estimatedTokens: 0 });
+    const recorded = traces.query({ turn: "latest", sessionId: "session-failed-request", limit: 10 }).entries[0]!;
+    expect(recorded.searches[0]).toMatchObject({
+      resourceType: "user",
+      total: 0,
+      error: "Error: backend unavailable",
+    });
+    expect(recorded.stats.injectedCount).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("backend unavailable"));
   });
 });

@@ -107,10 +107,14 @@ class TestScanDirectoryTraversal:
         assert not any("node_modules" in p for p in rel_paths)
 
     def test_skips_dot_files_and_empty(self, tmp_tree: Path, registry: ParserRegistry) -> None:
+        (tmp_tree / "application.properties").write_bytes(b"\n")
+        (tmp_tree / "blank.txt").write_bytes(b" \t\r\n")
         result: DirectoryScanResult = scan_directory(tmp_tree, registry=registry, strict=False)
         all_rel = [f.rel_path for f in result.processable + result.unsupported]
         assert ".hidden" not in all_rel
         assert "empty.txt" not in all_rel
+        assert "application.properties" not in all_rel
+        assert "blank.txt" not in all_rel
         assert any("empty" in s or "dot" in s for s in result.skipped)
 
 

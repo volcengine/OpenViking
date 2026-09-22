@@ -12,6 +12,7 @@ const workspace = {
       currentUser: {
         account: 'Account',
         accountSummary: 'Account · {{account}}',
+        keyUnavailable: 'User key unavailable',
         loadingUsers: 'Loading users',
         loadUsersFailed: 'Failed to load users',
         noUsers: 'No users in this account',
@@ -29,6 +30,7 @@ const workspace = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
+      compile: { title: 'Compile' },
       home: {
         title: 'Home',
       },
@@ -46,6 +48,9 @@ const workspace = {
       },
       skills: {
         title: 'Skills',
+      },
+      agentExperience: {
+        title: 'Agent Experience',
       },
       tasks: {
         title: 'Task Center',
@@ -203,6 +208,140 @@ const workspace = {
       action: 'Open connection settings',
     },
   },
+  agentExperiencePage: {
+    pageCount: '{{count}} experiences on this page',
+    setup: {
+      expand: 'Expand steps',
+      collapse: 'Collapse',
+      title: 'Give your Agent experience and evolution capabilities',
+      connect: 'Connect OpenViking to your Agent',
+      docs: 'View integration guide',
+      install: 'Install the experience Skill for your Agent',
+      hint: 'Run this command in your terminal and select your Agent when prompted.',
+      copy: 'Copy install command',
+      view: 'View command',
+      copied: 'Install command copied',
+      copyFailed: 'Copy failed. Expand the command and copy it manually.',
+      enable: 'Enable Agent Evolution',
+      enableHint:
+        'Ask an account administrator to enable Agent Evolution so future session commits can generate experiences.',
+    },
+    title: 'Agent Experience',
+    description:
+      'Track experiences distilled from committed sessions, along with the trajectories and outcomes produced after they are applied.',
+    refresh: 'Refresh',
+    searchPlaceholder: 'Search this page by name or URI',
+    searchClear: 'Clear',
+    searchNoResults: 'No matching experiences on this page',
+    searchNoResultsDescription:
+      'Clear the search or switch pages to continue browsing.',
+    loading: 'Loading experiences...',
+    loadFailed: 'Could not load experiences',
+    networkError:
+      'Could not connect to the OpenViking service. Check the server URL and connection status.',
+    connectionSettings: 'Open connection settings',
+    empty: 'No Agent experiences yet',
+    emptyDescription:
+      'Experiences are distilled automatically from committed sessions. Once a session is committed, reusable experiences will appear here.',
+    emptyAction: 'Go to Sessions',
+    directoryHint: 'memories / experiences',
+    updated: 'Updated {{time}}',
+    updatedBadge: 'Updated',
+    columnFile: 'Experience file',
+    columnUpdated: 'Updated',
+    columnActions: 'Actions',
+    viewAnalysis: 'Impact',
+    openDetail: 'View impact for {{name}}',
+    pagination: {
+      summary: 'Page {{page}}',
+      pageSize: 'Rows per page',
+      pageSizeValue: '{{count}} / page',
+      previous: 'Previous',
+      next: 'Next',
+    },
+    help: {
+      title: 'No experiences yet? Check:',
+      reasonConnected: 'Whether the Agent is connected to OpenViking',
+      reasonSessions: 'Whether new sessions ran after connecting',
+      reasonCommit: 'Whether those sessions were committed to OpenViking',
+    },
+    settings: {
+      title: 'Experience settings',
+      description:
+        'Agent Evolution switch for the target account. When off, new session commits in that account stop extracting experiences and trajectories.',
+      scopeMismatch:
+        'The API target account differs from the current account or cannot be confirmed. Changes are disabled. Use an administrator credential for the current account.',
+      loading: 'Reading switch status...',
+      loadFailed: 'Could not read switch status',
+      statusEnabled: 'Enabled',
+      statusDisabled: 'Disabled',
+      statusEnabledHint:
+        'Session commits extract experiences and trajectories.',
+      statusDisabledHint:
+        'While disabled no new experiences or trajectories are produced, and impact panels stay empty.',
+      pending: 'Applying...',
+      enabledToast: 'Agent Experience enabled',
+      disabledToast: 'Agent Experience disabled',
+      toggleFailed: 'Could not update the switch',
+    },
+    detail: {
+      back: 'Back',
+      copyUri: 'Copy URI',
+      openPlayground: 'Open in Workbench',
+      copied: 'Copied',
+      copyFailed: 'Copy failed',
+      contentTitle: 'Experience content',
+      contentLoading: 'Loading experience content...',
+      contentLoadFailed: 'Could not load experience content',
+      analysisTitle: 'Application impact',
+      analysisDescription:
+        'Trajectories and task outcomes produced by commits that read this experience.',
+      tabImpact: 'Impact',
+      tabSource: 'Source',
+      sourceTitle: 'Source trace',
+      sourceDescription:
+        'Trajectories that generated and evolved this experience, via experience relations.',
+      sourceLoading: 'Loading source relations...',
+      sourceLoadFailed: 'Could not load source relations',
+      sourceEmpty:
+        'No source relations yet. Links are established as later commits evolve this experience.',
+      rangeLabel: 'Time range',
+      rangeAll: 'All time',
+      range7d: 'Last 7 days',
+      range30d: 'Last 30 days',
+      rangeCustom: 'Custom',
+      rangeStart: 'Start date (UTC)',
+      rangeEnd: 'End date (UTC)',
+      rangeApply: 'Apply',
+      rangeCancel: 'Cancel',
+      rangeOrderError: 'Start date must not be after end date',
+      rangeInvalidError: 'Invalid date format, expected YYYY-MM-DD',
+      rangeUtcHint: 'Filtered by UTC date',
+      outcomeTitle: 'Outcome distribution',
+      outcomeTotal: '{{count}} trajectories',
+      outcomeEmpty: 'No applied trajectories in this time range',
+      outcomeEmptyDescription:
+        'This experience has not been applied yet, or its trajectories carry no outcome tags. Switch to “All time” to see historical trajectories.',
+      trajectoriesTitle: 'Applied trajectories',
+      trajectoriesLoadFailed: 'Could not load trajectories',
+      trajectoryView: 'View trajectory {{name}}',
+      loadMore: 'Load more',
+      loadingMore: 'Loading...',
+      noMore: 'All {{count}} trajectories shown',
+      previewTitle: 'Trajectory content',
+      previewLoading: 'Loading trajectory content...',
+      previewLoadFailed: 'Could not load trajectory content',
+      totalApplied: 'Applied {{count}} times',
+      successRate: '{{rate}}% success',
+    },
+    outcomes: {
+      success: 'Success',
+      failure: 'Failure',
+      partial: 'Partial',
+      unknown: 'Unknown',
+      unfinished: 'Unfinished',
+    },
+  },
   skillsPage: {
     title: 'Skills',
     description:
@@ -249,6 +388,42 @@ const workspace = {
     },
   },
   tasksPage: {
+    labels: {
+      timing: 'Duration',
+      totalDuration: 'Total Time',
+      processingNotStarted: 'Not started',
+      processingDurationHelp: 'Worker processing time, including model and I/O calls. Excludes queue and downstream waits; overlapping workers count once. Incomplete or legacy records are unavailable.',
+      processingDuration: 'Processing Time',
+      waitingDuration: 'Waiting Time',
+      timingUnavailable: 'Not recorded',
+
+      missingResource: 'Missing resource ID for task',
+      requeueFailed: 'Re-queue failed',
+      requeueSubmitted: 'Re-queue request submitted successfully!',
+      successRate: 'Success Rate',
+      avgDuration: 'Avg Total Duration',
+      avgProcessingTime: 'Finished tasks only, including queue time',
+      totalTasks: 'Total Tasks',
+      activePending: 'Active/Pending',
+      runningPending: 'Running / Pending Workloads',
+      taskQueueStatus: 'Task Queue Status',
+      processQueueStatus: 'Process Queue Status',
+      queuePipeline: 'Queue Pipeline',
+      duration: 'Total Duration (incl. queue)',
+      taskSummary: 'Total {{total}} ({{failed}} failed)',
+      taskCount: 'Tasks: {{count}}',
+      completedTasks: 'Completed: {{count}}',
+      serialFlow: 'Sequential process flow',
+      parallelBatch: 'Parallel process batch',
+      serialBatch: 'Sequential process batch',
+      latestPerResource: 'Latest per Resource',
+      individualTasks: 'Individual Tasks',
+    },
+    retry: {
+      noPendingMessages:
+        'No new task created: this session has no pending messages',
+      commitSkipped: 'No new task created: this session commit was skipped',
+    },
     title: 'Task Center',
     description:
       'Track background work such as resource processing, session commits, and reindexing.',
@@ -276,6 +451,15 @@ const workspace = {
       },
       error: 'Failure reason',
       result: 'Result',
+      noResultRunning: 'Task in progress',
+      noResultRunningDescription:
+        'No final result is available yet. See the reported stages and execution log above.',
+      noResultPending: 'Task queued',
+      noResultPendingDescription:
+        'The task has not started yet. Reported stages and execution events will appear when available.',
+      noResultCompleted: 'Task completed',
+      noResultCompletedDescription:
+        'This task did not return a displayable result.',
       noResult: 'No result yet',
       noResultDescription:
         'Results returned by the API will appear here when the task completes.',
@@ -284,6 +468,27 @@ const workspace = {
       noResultCancelledDescription:
         'This task was cancelled before it returned a result.',
     },
+    events: {
+      title: 'Task execution log',
+      description:
+        'Reported task events. Times show when the backend recorded each event.',
+      created: 'Task registered',
+      statusChanged: 'Task status changed to {{status}}',
+      stageChanged: 'Reported stage changed to {{stage}}',
+      errorRecorded: 'Backend recorded an error',
+      waitingForDescendants:
+        'Unfinished work remains; waiting for owned work to settle',
+      stageContext: 'Last reported stage: {{stage}}',
+      operation: 'Operation: {{operation}}',
+      partial: 'Only events recorded after tracking began are available.',
+      truncated: '{{count}} earlier events were truncated.',
+      unsupported: 'The server did not provide task events.',
+      empty: 'No execution events were recorded for this task.',
+      copy: 'Copy events',
+      copied: 'Events copied',
+      copyFailed: 'Could not copy events',
+      context: 'Current task context',
+    },
     filters: {
       label: 'Filter',
       type: 'Task type',
@@ -291,6 +496,29 @@ const workspace = {
       allTypes: 'All types',
       allStatuses: 'All statuses',
       clear: 'Clear filters',
+    },
+    actions: {
+      retrigger: 'Re-trigger Task',
+    },
+    pipeline: {
+      steps: 'Pipeline Steps',
+      duration: 'Duration',
+      count: '{{count}} items',
+      status: {
+        completed: 'Completed',
+        running: 'Running',
+        failed: 'Failed',
+        pending: 'Pending',
+      },
+      step: {
+        sessionPersistence: 'Session Persistence',
+        sessionCommit: 'Session Commit',
+        connectorAuth: 'Connector Auth',
+        resourceFetching: 'Resource Fetching',
+        externalParse: 'Document Parsing',
+        semantic: 'Semantic Processing',
+        embedding: 'Vector Embedding',
+      },
     },
     pagination: {
       next: 'Next',
@@ -318,6 +546,7 @@ const workspace = {
       unknown: 'Unknown',
     },
     types: {
+      compile: 'Compile',
       session_commit: 'Session commit',
       add_resource: 'Resource processing',
       add_skill: 'Skill import',
@@ -464,6 +693,19 @@ const workspace = {
     unset: 'No account selected',
   },
   common: {
+    ui: {
+      close: 'Close',
+      loading: 'Loading',
+      pagination: 'Pagination',
+      previous: 'Previous',
+      next: 'Next',
+      previousPage: 'Go to previous page',
+      nextPage: 'Go to next page',
+      morePages: 'More pages',
+      sidebar: 'Sidebar',
+      mobileSidebar: 'Mobile navigation sidebar',
+      toggleSidebar: 'Toggle Sidebar',
+    },
     action: {
       cancel: 'Cancel',
       saveConnection: 'Save Connection',
@@ -690,6 +932,19 @@ const workspace = {
       title: 'New API key',
     },
     loading: 'Loading identities...',
+    userList: {
+      search: 'Search all users by username',
+      noResults: 'No matching users',
+      noResultsDescription: 'Try another username or clear the search.',
+      pagination: 'User pagination',
+      summary: '{{total}} users · Page {{page}} of {{pageCount}}',
+      pageSize: 'Users per page',
+      pageSizeValue: '{{count}} per page',
+      first: 'First',
+      previous: 'Previous',
+      next: 'Next',
+      last: 'Last',
+    },
     management: {
       accountFilter: 'Accounts',
       accessDeniedDescription:
@@ -756,9 +1011,9 @@ const workspace = {
     },
     toast: {
       accountCreated: 'Account created',
-      accountDeleted: '{{account}} deleted',
-      accountDeletedRecoveryFailed:
-        'The account was deleted, but the remaining account list could not be loaded: {{error}}',
+      accountDeletionStarted: '{{account}} disabled. Cleanup task: {{taskId}}',
+      accountDeletionRecoveryFailed:
+        'Account cleanup was submitted, but the remaining account list could not be loaded: {{error}}',
       connectionSaved: 'Connection saved',
       copyFailed: 'Copy failed',
       copied: 'Copied',
@@ -842,7 +1097,7 @@ const workspace = {
     usageDisabled:
       'Usage/Audit is not initialized, so live usage stats are unavailable.',
     usageAccessRequired:
-      'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
+      'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
   },
 } as const
 

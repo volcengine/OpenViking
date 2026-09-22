@@ -51,23 +51,16 @@ class TestBuildTextResources:
             cleanup_temp_dir(temp_dir)
 
     def test_build_empty_file(self, api_client):
-        """TC-B15 空文件构建：验证空 .txt 文件添加不崩溃并返回合理结果"""
+        """TC-B15 空文件构建：验证空 .txt 文件被明确拒绝"""
         test_file_path, temp_dir = create_test_file(content="", suffix=".txt")
         try:
             response = api_client.add_resource(path=test_file_path, wait=True)
-            assert response.status_code == 200
-
+            assert response.status_code == 400, response.text
             data = response.json()
-            assert data.get("status") in ("ok", "error"), (
-                f"空文件构建应返回 ok 或 error, 实际: {data.get('status')}"
-            )
+            assert data["status"] == "error"
+            assert data["error"]["code"] == "INVALID_ARGUMENT"
+            assert "empty" in data["error"]["message"].lower()
 
-            if data.get("status") == "ok":
-                result = data.get("result", {})
-                root_uri = result.get("root_uri")
-                if root_uri:
-                    assert_root_uri_valid(root_uri)
-
-            print("✓ TC-B15 空文件构建通过")
+            print("✓ TC-B15 空文件被拒绝并返回 INVALID_ARGUMENT")
         finally:
             cleanup_temp_dir(temp_dir)

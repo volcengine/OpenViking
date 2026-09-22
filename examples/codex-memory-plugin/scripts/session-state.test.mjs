@@ -52,6 +52,19 @@ test("concurrent stale takeovers leave exactly one holder", async () => {
   assert.equal(await exists(dir), false, "the last holder releases the lock");
 });
 
+test("a claim left behind by a dead taker does not wedge the lock", async () => {
+  const dir = join(STATE_DIR, "wedged.lock");
+  // A taker that died between winning its claim and stamping the lock.
+  await mkdir(join(dir, "claim-deadbeef"), { recursive: true });
+  const old = new Date(Date.now() - 600_000);
+  await utimes(join(dir, "claim-deadbeef"), old, old);
+  await utimes(dir, old, old);
+
+  const outcome = await withSessionLock("wedged", async () => "taken", { waitMs: 0, staleMs: 300_000 });
+  assert.equal(outcome.value, "taken", "the abandoned lock is still takeable");
+  assert.equal(await exists(dir), false, "the release clears the abandoned claim with the lock");
+});
+
 test("clearEnded honours the `before` cutoff", async () => {
   const at = await markEnded("cutoff");
   assert.ok(at > 0);

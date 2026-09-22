@@ -468,7 +468,7 @@ describe("plugin module seams", () => {
 
   it("registers the context engine through a dedicated plugin module", () => {
     const engine = { id: "openviking", commitOVSession: vi.fn() };
-    const api = { registerContextEngine: vi.fn() };
+    const api = { runtime: { version: "2026.9.3" }, registerContextEngine: vi.fn() };
     const logger = { info: vi.fn(), warn: vi.fn() };
     const getClient = vi.fn();
     const resolveAgentId = vi.fn();
@@ -502,6 +502,7 @@ describe("plugin module seams", () => {
       id: "openviking",
       name: "OpenViking",
       version: "0.1.0",
+      hostVersion: "2026.9.3",
       cfg: { baseUrl: "http://127.0.0.1:1933" },
       logger,
       getClient,
@@ -816,7 +817,7 @@ describe("plugin module seams", () => {
       getClient: async () => ({ addSessionMessage, commitSession, deleteUri, find }),
       normalizeSessionId: (sessionId: string) => `normalized:${sessionId}`,
       createTempSessionId: () => "memory-store-temp",
-      peerRole: "person" as const,
+      peerRole: "sender" as const,
       resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerId: "ou_01_abc" }),
       isBypassedSession: () => false,
       makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),

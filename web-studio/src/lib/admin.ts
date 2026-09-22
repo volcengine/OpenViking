@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { fetchServerHealth } from '#/hooks/use-server-mode'
 
 import { createClient } from '#/gen/ov-client/client'
 import {
@@ -8,10 +9,11 @@ import {
   getAdminAccounts,
   getOvResult,
   postAdminAccountIdUserIdKey,
-  postAdminAccountIdUsers,
   postAdminAccounts,
   putAdminAccountIdUserIdRole,
 } from '#/lib/ov-client'
+
+import type { UserMemoryPolicy } from './user-memory-policy'
 
 export type AdminUserRole = 'admin' | 'root' | 'user'
 
@@ -42,6 +44,7 @@ export type CreateAccountInput = {
 }
 
 export type CreateUserInput = {
+  memoryPolicy?: UserMemoryPolicy
   accountId: string
   role: string
   userId: string
@@ -73,12 +76,15 @@ export type CapabilityDetailCode =
 export type CapabilityProbeResult = {
   detail?: string
   detailCode?: CapabilityDetailCode
+  errorCode?: string
+  statusCode?: number
   state: ProbeState
 }
 
 export type StudioConnectionProbe = {
   admin: CapabilityProbeResult
   data: CapabilityProbeResult
+  rootApiKeyRequired?: boolean
 }
 
 export type ProbeConnectionInput = {
@@ -165,6 +171,20 @@ function setApiKeyHeader(
   setOptionalHeader(headers, 'X-API-Key', apiKey)
 }
 
+function probeError(error: unknown): CapabilityProbeResult {
+  const response = axios.isAxiosError(error) ? error.response : undefined
+  const payload: unknown = response?.data
+  return {
+    detail: getErrorMessage(error),
+    errorCode:
+      isRecord(payload) && isRecord(payload.error)
+        ? asString(payload.error.code)
+        : undefined,
+    statusCode: response?.status,
+    state: 'error',
+  }
+}
+
 async function probeAdminAccess(
   input: ProbeConnectionInput,
 ): Promise<CapabilityProbeResult> {
@@ -182,7 +202,7 @@ async function probeAdminAccess(
   // never promoted to admin access, so management stays gated behind the root
   // or account-admin key alone.
   const controlKey = input.adminApiKey.trim()
-  if (input.serverMode === 'api_key' && !controlKey) {
+  if (!controlKey) {
     return {
       detailCode: 'controlKeyRequired',
       state: 'skipped',
@@ -205,10 +225,7 @@ async function probeAdminAccess(
       accountsError.response?.status !== 403 ||
       !input.accountId
     ) {
-      return {
-        detail: getErrorMessage(accountsError),
-        state: 'error',
-      }
+      return probeError(accountsError)
     }
 
     try {
@@ -224,10 +241,7 @@ async function probeAdminAccess(
         state: 'ok',
       }
     } catch (usersError) {
-      return {
-        detail: getErrorMessage(usersError),
-        state: 'error',
-      }
+      return probeError(usersError)
     }
   }
 }
@@ -256,7 +270,10 @@ async function probeDataAccess(
 
   const client = createProbeClient(input.baseUrl)
   const headers: Record<string, string> = {}
-  setApiKeyHeader(headers, input.apiKey)
+  setApiKeyHeader(
+    headers,
+    input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : ''),
+  )
 
   if (input.serverMode === 'trusted') {
     setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
@@ -277,26 +294,40 @@ async function probeDataAccess(
       state: 'ok',
     }
   } catch (error) {
-    return {
-      detail: getErrorMessage(error),
-      state: 'error',
-    }
+    return probeError(error)
   }
 }
 
 export async function probeStudioConnection(
   input: ProbeConnectionInput,
 ): Promise<StudioConnectionProbe> {
-  const [admin, data] = await Promise.all([
+  const headers: Record<string, string> = {}
+  setApiKeyHeader(headers, input.adminApiKey || input.apiKey)
+  setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
+  setOptionalHeader(headers, 'X-OpenViking-User', input.userId)
+  const [admin, data, health] = await Promise.all([
     probeAdminAccess(input),
     probeDataAccess(input),
+    Promise.allSettled(
+      input.serverMode === 'trusted'
+        ? [fetchServerHealth(input.baseUrl, headers)]
+        : [],
+    ),
   ])
-
-  return { admin, data }
+  const metadata =
+    health[0]?.status === 'fulfilled' ? health[0].value : undefined
+  return {
+    admin,
+    data,
+    rootApiKeyRequired:
+      typeof metadata?.root_api_key_required === 'boolean'
+        ? metadata.root_api_key_required
+        : undefined,
+  }
 }
 
 function normalizeAccount(value: unknown): AdminAccount | null {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || value.status === 'deleting') {
     return null
   }
 
@@ -366,14 +397,53 @@ export async function fetchAdminUsers(
       path: {
         account_id: accountId,
       },
-      query: {
-        limit: 500,
-      },
     }),
   )
   return result
     .map((item) => normalizeUser(accountId, item))
     .filter((item): item is AdminUser => Boolean(item))
+}
+
+export type AdminUserPage = {
+  users: AdminUser[]
+  total: number
+  accountTotal: number
+  managerCount: number
+  keyCount: number
+}
+
+export async function fetchAdminUsersPage(
+  connection: AdminConnection,
+  accountId: string,
+  options: { page: number; pageSize: number; search: string },
+): Promise<AdminUserPage> {
+  const result = await getOvResult<{
+    users: unknown[]
+    total: number
+    account_total: number
+    manager_count: number
+    key_count: number
+  }>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      path: { account_id: accountId },
+      query: {
+        page: options.page,
+        limit: options.pageSize,
+        query: options.search.trim() || undefined,
+        include_summary: true,
+      },
+    }),
+  )
+  return {
+    users: result.users
+      .map((item) => normalizeUser(accountId, item))
+      .filter((item): item is AdminUser => Boolean(item)),
+    total: result.total,
+    accountTotal: result.account_total,
+    managerCount: result.manager_count,
+    keyCount: result.key_count,
+  }
 }
 
 export async function createAdminAccount(
@@ -395,8 +465,8 @@ export async function createAdminAccount(
 export async function deleteAdminAccount(
   connection: AdminConnection,
   accountId: string,
-): Promise<void> {
-  await getOvResult<unknown>(
+): Promise<string> {
+  const result = await getOvResult<{ task_id: string }>(
     deleteAdminAccountByAccountId({
       client: createAdminClient(connection),
       path: {
@@ -404,6 +474,7 @@ export async function deleteAdminAccount(
       },
     }),
   )
+  return result.task_id
 }
 
 export async function createAdminUser(
@@ -411,12 +482,16 @@ export async function createAdminUser(
   input: CreateUserInput,
 ): Promise<KeyResult> {
   const result = await getOvResult<unknown>(
-    postAdminAccountIdUsers({
+    createAdminClient(connection).post({
+      url: '/api/v1/admin/accounts/{account_id}/users',
+      headers: { 'Content-Type': 'application/json' },
       body: {
         role: input.role,
         user_id: input.userId,
+        ...(input.memoryPolicy
+          ? { user_config: { memory_policy: input.memoryPolicy } }
+          : {}),
       },
-      client: createAdminClient(connection),
       path: {
         account_id: input.accountId,
       },
@@ -476,6 +551,37 @@ export async function updateAdminUserRole(
         account_id: input.accountId,
         user_id: input.userId,
       },
+    }),
+  )
+}
+
+export type UserMemorySettings = { memory_policy: UserMemoryPolicy }
+
+export async function fetchUserMemorySettings(
+  connection: AdminConnection,
+  accountId: string,
+  userId: string,
+): Promise<UserMemorySettings> {
+  return getOvResult<UserMemorySettings>(
+    createAdminClient(connection).get({
+      url: '/api/v1/admin/accounts/{account_id}/users/{user_id}/settings',
+      path: { account_id: accountId, user_id: userId },
+    }),
+  )
+}
+
+export async function updateUserMemorySettings(
+  connection: AdminConnection,
+  accountId: string,
+  userId: string,
+  memoryPolicy: UserMemoryPolicy,
+): Promise<UserMemorySettings> {
+  return getOvResult<UserMemorySettings>(
+    createAdminClient(connection).patch({
+      url: '/api/v1/admin/accounts/{account_id}/users/{user_id}/settings',
+      path: { account_id: accountId, user_id: userId },
+      headers: { 'Content-Type': 'application/json' },
+      body: { memory_policy: memoryPolicy },
     }),
   )
 }

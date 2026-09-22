@@ -1,3 +1,5 @@
+import pytest
+import requests
 from volcengine.base.Request import Request
 
 from openviking.storage.vectordb.collection.volcengine_clients import (
@@ -6,6 +8,11 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApiWithApiKey,
 )
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
+from openviking.storage.vectordb_adapters.base import VIKINGDB_STRING_FIELD_BYTE_LIMIT
+from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
+from openviking.storage.vectordb_adapters.vikingdb_private_adapter import (
+    VikingDBPrivateCollectionAdapter,
+)
 from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
 from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
@@ -52,13 +59,10 @@ def test_console_client_do_req_uses_signed_query_params(monkeypatch):
         }
         return request
 
-    monkeypatch.setattr(
-        "openviking.storage.vectordb.collection.volcengine_clients.requests.request",
-        fake_request,
-    )
     monkeypatch.setattr(ClientForConsoleApi, "prepare_request", fake_prepare_request)
 
     client = ClientForConsoleApi("test-ak", "test-sk", "cn-beijing")
+    monkeypatch.setattr(client._session, "request", fake_request)
     client.do_req(
         "POST",
         req_params={"Action": "ListVikingdbCollection", "Version": "2025-06-09"},
@@ -90,13 +94,10 @@ def test_data_client_do_req_uses_signed_query_params(monkeypatch):
         }
         return request
 
-    monkeypatch.setattr(
-        "openviking.storage.vectordb.collection.volcengine_clients.requests.request",
-        fake_request,
-    )
     monkeypatch.setattr(ClientForDataApi, "prepare_request", fake_prepare_request)
 
     client = ClientForDataApi("test-ak", "test-sk", "cn-beijing")
+    monkeypatch.setattr(client._session, "request", fake_request)
     client.do_req(
         "POST",
         "/api/vikingdb/data/search/vector",
@@ -106,6 +107,49 @@ def test_data_client_do_req_uses_signed_query_params(monkeypatch):
 
     assert captured["params"]["X-Date"] == "20260405T091640Z"
     assert captured["params"]["X-Signature"] == "signed"
+
+
+def test_clients_keep_pooled_session_reused_across_calls(monkeypatch):
+    """Each client owns one keep-alive session that serves every request."""
+    from requests.adapters import HTTPAdapter
+
+    for client in (
+        ClientForConsoleApi("test-ak", "test-sk", "cn-beijing"),
+        ClientForDataApi("test-ak", "test-sk", "cn-beijing"),
+        ClientForDataApiWithApiKey(
+            api_key="vk-test-token",
+            host="api-vikingdb.vikingdb.cn-beijing.volces.com",
+        ),
+    ):
+        adapter = client._session.get_adapter("https://example.com")
+        assert isinstance(adapter, HTTPAdapter)
+        # HTTP and HTTPS share the same pooled adapter instance.
+        assert client._session.get_adapter("http://example.com") is adapter
+
+    seen_sessions = []
+
+    def fake_prepare_request(self, *args, **kwargs):
+        request = Request()
+        request.method = "POST"
+        request.path = "/api/vikingdb/data/search/vector"
+        request.body = "{}"
+        request.headers = {}
+        request.query = {}
+        return request
+
+    def fake_request(self, **kwargs):
+        seen_sessions.append(self)
+        return object()
+
+    monkeypatch.setattr(ClientForDataApi, "prepare_request", fake_prepare_request)
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+
+    client = ClientForDataApi("test-ak", "test-sk", "cn-beijing")
+    client.do_req("POST", "/api/vikingdb/data/search/vector")
+    client.do_req("POST", "/api/vikingdb/data/search/vector")
+
+    assert len(seen_sessions) == 2
+    assert seen_sessions[0] is seen_sessions[1] is client._session
 
 
 def test_data_api_key_client_prepare_request_sets_bearer_auth():
@@ -253,6 +297,7 @@ def test_volcengine_collection_update_data_posts_to_update_endpoint(monkeypatch)
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "name": "updated"}],
+        "ignore_unknown_fields": True,
     }
 
 
@@ -290,6 +335,7 @@ def test_volcengine_collection_update_data_sanitizes_uri_fields(monkeypatch):
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "uri": "/resources/demo", "parent_uri": "/resources"}],
+        "ignore_unknown_fields": True,
     }
 
 
@@ -440,6 +486,7 @@ def test_volcengine_api_key_collection_update_data_posts_to_update_endpoint(monk
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "name": "updated"}],
+        "ignore_unknown_fields": True,
     }
 
 
@@ -479,6 +526,7 @@ def test_volcengine_api_key_collection_update_data_sanitizes_uri_fields(monkeypa
         "project": "default",
         "collection_name": "context",
         "data": [{"id": "doc-1", "uri": "/resources/demo", "parent_uri": "/resources"}],
+        "ignore_unknown_fields": True,
     }
 
 
@@ -620,6 +668,84 @@ def test_volcengine_adapter_update_data_returns_ids():
     result = adapter.update_data([{"id": "doc-1", "name": "updated"}])
 
     assert result == ["doc-1"]
+
+
+@pytest.mark.parametrize("operation", ["upsert", "update_data"])
+def test_volcengine_adapter_truncates_abstract_at_remote_string_limit(operation):
+    adapter = VolcengineCollectionAdapter(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        session_token=None,
+        api_key=None,
+        host=None,
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    captured = {}
+
+    class _Collection:
+        def upsert_data(self, data_list, ttl=0):
+            captured["data"] = data_list
+            return None
+
+        def update_data(self, data_list):
+            captured["data"] = data_list
+            return {"updated": 1, "primary_keys": ["doc-1"]}
+
+    adapter._collection = _Collection()
+    abstract = "a" * (VIKINGDB_STRING_FIELD_BYTE_LIMIT - 3) + "你好"
+
+    getattr(adapter, operation)([{"id": "doc-1", "abstract": abstract}])
+
+    stored = captured["data"][0]["abstract"]
+    assert len(stored.encode("utf-8")) <= VIKINGDB_STRING_FIELD_BYTE_LIMIT
+    assert abstract.startswith(stored)
+    assert stored.endswith("你")
+
+
+def test_private_vikingdb_update_normalizes_remote_fields():
+    adapter = VikingDBPrivateCollectionAdapter(
+        host="unused.invalid",
+        headers=None,
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    captured = {}
+
+    class _Collection:
+        def update_data(self, data_list):
+            captured["data"] = data_list
+            return {"updated": 1, "primary_keys": ["doc-1"]}
+
+    adapter._collection = _Collection()
+    result = adapter.update_data(
+        [
+            {
+                "id": "doc-1",
+                "uri": "viking://resources/sample",
+                "abstract": "😀" * VIKINGDB_STRING_FIELD_BYTE_LIMIT,
+            }
+        ]
+    )
+
+    stored = captured["data"][0]
+    assert stored["uri"] == "/resources/sample"
+    assert len(stored["abstract"].encode("utf-8")) <= VIKINGDB_STRING_FIELD_BYTE_LIMIT
+    assert result == ["doc-1"]
+
+
+def test_local_adapter_does_not_apply_remote_abstract_limit():
+    adapter = LocalCollectionAdapter(
+        collection_name="context", project_path="", index_name="default"
+    )
+    abstract = "😀" * VIKINGDB_STRING_FIELD_BYTE_LIMIT
+
+    normalized = adapter._normalize_record_for_write({"abstract": abstract})
+
+    assert normalized["abstract"] == abstract
 
 
 def test_volcengine_adapter_update_data_returns_batch_primary_keys():
@@ -957,3 +1083,70 @@ def test_http_collection_update_data_posts_to_update_endpoint(monkeypatch):
         "collection_name": "context",
         "fields": '[{"id": "doc-1", "name": "updated"}]',
     }
+
+
+def test_http_adapter_strict_count_propagates_http_failure(monkeypatch):
+    from openviking.storage.vectordb.collection.collection import Collection
+    from openviking.storage.vectordb.collection.http_collection import HttpCollection
+    from openviking.storage.vectordb_adapters.http_adapter import HttpCollectionAdapter
+
+    class _Response:
+        status_code = 503
+        text = "unavailable"
+
+        @staticmethod
+        def raise_for_status():
+            raise requests.HTTPError("503 unavailable")
+
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.http_collection.requests.post",
+        lambda *args, **kwargs: _Response(),
+    )
+    adapter = HttpCollectionAdapter(
+        host="127.0.0.1",
+        port=1933,
+        project_name="default",
+        collection_name="context",
+        index_name="default",
+    )
+    adapter._collection = Collection(
+        HttpCollection(
+            ip="127.0.0.1",
+            port=1933,
+            meta_data={"ProjectName": "default", "CollectionName": "context"},
+        )
+    )
+
+    with pytest.raises(requests.HTTPError, match="503 unavailable"):
+        adapter.strict_count()
+
+
+def test_http_collection_update_index_preserves_explicit_empty_scalar_index(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status_code = 200
+        text = '{"data": {}}'
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        return _Response()
+
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.http_collection.requests.post",
+        _fake_post,
+    )
+
+    from openviking.storage.vectordb.collection.http_collection import HttpCollection
+
+    collection = HttpCollection(
+        ip="127.0.0.1",
+        port=1933,
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+
+    collection.update_index("default", [])
+
+    assert captured["url"].endswith("UpdateVikingdbIndex")
+    assert captured["json"]["ScalarIndex"] == "[]"

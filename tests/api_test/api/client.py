@@ -476,20 +476,22 @@ class OpenVikingAPIClient:
         url = self._build_url(self.server_url, endpoint)
         return self.session.post(url, json={"from_uri": from_uri, "to_uri": to_uri})
 
-    def session_used(
+    def fs_cp(
         self,
-        session_id: str,
-        contexts: Optional[list] = None,
-        skill: Optional[Dict[str, Any]] = None,
+        from_uri: str,
+        to_uri: str,
+        recursive: bool = False,
     ) -> requests.Response:
-        endpoint = f"/api/v1/sessions/{session_id}/used"
+        endpoint = "/api/v1/fs/cp"
         url = self._build_url(self.server_url, endpoint)
-        payload = {}
-        if contexts:
-            payload["contexts"] = contexts
-        if skill:
-            payload["skill"] = skill
-        return self.session.post(url, json=payload)
+        return self.session.post(
+            url,
+            json={
+                "from_uri": from_uri,
+                "to_uri": to_uri,
+                "recursive": recursive,
+            },
+        )
 
     def session_commit(self, session_id: str) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}/commit"

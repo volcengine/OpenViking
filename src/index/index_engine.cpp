@@ -70,6 +70,12 @@ int IndexEngine::delete_data(const std::vector<DeleteDataRequest>& data_list) {
   return impl_->delete_data(data_list);
 }
 
+int IndexEngine::rebuild_scalar_index(
+    const std::string& scalar_index_json,
+    const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) {
+  return impl_->rebuild_scalar_index(scalar_index_json, read_batch);
+}
+
 int64_t IndexEngine::dump(const std::string& dir) {
   return impl_->dump(dir);
 }

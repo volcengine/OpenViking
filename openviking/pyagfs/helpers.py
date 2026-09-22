@@ -55,6 +55,7 @@ def cp(
     recursive: bool = False,
     stream: bool = False,
     fs_ctx: dict[str, str] | None = None,
+    allow_same_mount_fast_path: bool = False,
 ) -> None:
     """Copy a file or directory within AGFS.
 
@@ -64,6 +65,9 @@ def cp(
         dst: Destination path in AGFS
         recursive: If True, copy directories recursively
         stream: If True, use streaming for large files (memory efficient)
+        allow_same_mount_fast_path: If True, allow a backend verbatim copy. This
+            is reserved for already-encrypted internal trees whose bytes are safe
+            to preserve unchanged.
 
     Raises:
         AGFSClientError: If source doesn't exist or operation fails
@@ -81,9 +85,23 @@ def cp(
     if is_dir:
         if not recursive:
             raise ValueError(f"Cannot copy directory '{src}' without recursive=True")
-        _copy_directory(client, src, dst, stream, fs_ctx=fs_ctx)
+        _copy_directory(
+            client,
+            src,
+            dst,
+            stream,
+            fs_ctx=fs_ctx,
+            allow_same_mount_fast_path=allow_same_mount_fast_path,
+        )
     else:
-        _copy_file(client, src, dst, stream, fs_ctx=fs_ctx)
+        _copy_file(
+            client,
+            src,
+            dst,
+            stream,
+            fs_ctx=fs_ctx,
+            allow_same_mount_fast_path=allow_same_mount_fast_path,
+        )
 
 
 def upload(
@@ -168,6 +186,7 @@ def _copy_file(
     stream: bool,
     *,
     fs_ctx: dict[str, str] | None = None,
+    allow_same_mount_fast_path: bool = False,
 ) -> None:
     """Copy a single file within AGFS.
 
@@ -177,18 +196,31 @@ def _copy_file(
     # Ensure parent directory exists
     _ensure_remote_parent_dir(client, dst, fs_ctx=fs_ctx)
 
-    if _try_copy_within_mount_fast_path(client, src, dst, fs_ctx=fs_ctx):
+    if allow_same_mount_fast_path and _try_copy_within_mount_fast_path(
+        client, src, dst, fs_ctx=fs_ctx
+    ):
         return
 
     if stream:
-        # The binding client returns bytes or an iterator of bytes, not an
-        # HTTP response object with iter_content().
-        _call_with_optional_ctx(
-            client.write,
-            dst,
-            _iter_file_bytes(_call_with_optional_ctx(client.cat, src, stream=True, ctx=fs_ctx)),
-            ctx=fs_ctx,
-        )
+        try:
+            source = _call_with_optional_ctx(client.cat, src, stream=True, ctx=fs_ctx)
+        except RuntimeError as exc:
+            if "streaming not supported" not in str(exc).lower():
+                raise
+            # The embedded Rust binding currently accepts only complete byte
+            # buffers. Keep this correctness fallback separate from the raw
+            # same-mount path, whose offset writes are unsafe on object stores.
+            data = _call_with_optional_ctx(client.cat, src, ctx=fs_ctx)
+            _call_with_optional_ctx(client.write, dst, data, ctx=fs_ctx)
+        else:
+            # Streaming clients return bytes or an iterator of bytes, not an
+            # HTTP response object with iter_content().
+            _call_with_optional_ctx(
+                client.write,
+                dst,
+                _iter_file_bytes(source),
+                ctx=fs_ctx,
+            )
     else:
         # Read entire file and write
         data = _call_with_optional_ctx(client.cat, src, ctx=fs_ctx)
@@ -202,6 +234,7 @@ def _copy_directory(
     stream: bool,
     *,
     fs_ctx: dict[str, str] | None = None,
+    allow_same_mount_fast_path: bool = False,
 ) -> None:
     """Recursively copy a directory within AGFS."""
     # Create destination directory
@@ -221,10 +254,24 @@ def _copy_directory(
 
         if item.get("isDir", False):
             # Recursively copy subdirectory
-            _copy_directory(client, src_path, dst_path, stream, fs_ctx=fs_ctx)
+            _copy_directory(
+                client,
+                src_path,
+                dst_path,
+                stream,
+                fs_ctx=fs_ctx,
+                allow_same_mount_fast_path=allow_same_mount_fast_path,
+            )
         else:
             # Copy file
-            _copy_file(client, src_path, dst_path, stream, fs_ctx=fs_ctx)
+            _copy_file(
+                client,
+                src_path,
+                dst_path,
+                stream,
+                fs_ctx=fs_ctx,
+                allow_same_mount_fast_path=allow_same_mount_fast_path,
+            )
 
 
 def _upload_file(

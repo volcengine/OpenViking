@@ -53,7 +53,10 @@ class _NoWriteVikingFS:
 )
 @pytest.mark.asyncio
 async def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_ctx, uri):
-    bare_viking_fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+    async def acl_enabled(_account_id):
+        return True
+
+    bare_viking_fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
     await bare_viking_fs._ensure_access(uri, root_ctx)
     with pytest.raises(PermissionDeniedError):
         await bare_viking_fs._ensure_access(uri, user_ctx)
@@ -63,7 +66,7 @@ async def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, 
 async def test_hidden_listing_filters_watch_task_control_files_for_non_root(
     bare_viking_fs, root_ctx, user_ctx
 ):
-    async def ls_entries(path, ctx=None):
+    async def ls_entries(path, **_kwargs):
         return [
             {
                 "name": ".watch_tasks.json",

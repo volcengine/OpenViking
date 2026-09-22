@@ -6,6 +6,7 @@
 //! - `/queue_name/dequeue` - Read from this file to remove and return the first message
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
+//! - `/queue_name/status` - Read pending and processing message counts
 //! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
 //! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
@@ -53,6 +54,10 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
     },
     ControlFileSpec {
         name: "size",
+        mode: 0o444,
+    },
+    ControlFileSpec {
+        name: "status",
         mode: 0o444,
     },
     ControlFileSpec {
@@ -176,6 +181,14 @@ impl QueueStorage {
             Self::Local(backend) => backend.lock().await.size(queue_name),
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.size(queue_name).await,
+        }
+    }
+
+    async fn status(&self, queue_name: &str) -> Result<backend::QueueState> {
+        match self {
+            Self::Local(backend) => backend.lock().await.status(queue_name),
+            #[cfg(feature = "cache")]
+            Self::Cache(storage) => storage.status(queue_name).await,
         }
     }
 
@@ -383,6 +396,10 @@ impl FileSystem for QueueFileSystem {
                 let size = self.storage.size(&queue_name).await?;
                 Ok(size.to_string().into_bytes())
             }
+            "status" => {
+                let status = self.storage.status(&queue_name).await?;
+                Ok(serde_json::to_vec(&status)?)
+            }
             "messages" => {
                 let messages = self
                     .storage
@@ -397,7 +414,7 @@ impl FileSystem for QueueFileSystem {
                 Ok(serde_json::to_vec(&messages)?)
             }
             _ => Err(Error::InvalidOperation(format!(
-                "Cannot read from '{}'. Use dequeue, peek, size, or messages",
+                "Cannot read from '{}'. Use dequeue, peek, size, status, or messages",
                 operation
             ))),
         }
@@ -436,7 +453,14 @@ impl FileSystem for QueueFileSystem {
         }
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let parsed = Self::parse_queue_path(path)?;
 
         if !parsed.is_dir {
@@ -456,7 +480,7 @@ impl FileSystem for QueueFileSystem {
                 }
             }
 
-            return Ok(top_level
+            let entries = top_level
                 .into_iter()
                 .map(|name| FileInfo {
                     name,
@@ -465,7 +489,10 @@ impl FileSystem for QueueFileSystem {
                     mod_time: now,
                     is_dir: true,
                 })
-                .collect());
+                .collect();
+            return Ok(crate::core::filesystem::apply_read_dir_options(
+                entries, offset, limit, sort_by, sort_order,
+            ));
         }
 
         // Queue directory: check if it has nested queues
@@ -489,7 +516,7 @@ impl FileSystem for QueueFileSystem {
                 }
             }
 
-            return Ok(subdirs
+            let entries = subdirs
                 .into_iter()
                 .map(|name| FileInfo {
                     name,
@@ -498,7 +525,10 @@ impl FileSystem for QueueFileSystem {
                     mod_time: now,
                     is_dir: true,
                 })
-                .collect());
+                .collect();
+            return Ok(crate::core::filesystem::apply_read_dir_options(
+                entries, offset, limit, sort_by, sort_order,
+            ));
         }
 
         // Leaf queue: return control files
@@ -506,7 +536,13 @@ impl FileSystem for QueueFileSystem {
             return Err(Error::NotFound(format!("queue not found: {}", queue_name)));
         }
 
-        Ok(Self::leaf_control_files(now))
+        Ok(crate::core::filesystem::apply_read_dir_options(
+            Self::leaf_control_files(now),
+            offset,
+            limit,
+            sort_by,
+            sort_order,
+        ))
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -793,6 +829,7 @@ impl ServicePlugin for QueueFSPlugin {
          - dequeue: Read to remove and return the first message\n\
          - peek: Read to view the first message without removing it\n\
          - size: Read to get the current queue size\n\
+         - status: Read pending and processing message counts\n\
          - clear: Write to clear all messages from the queue\n\
          - ack: Write message id to acknowledge and delete it\n\
          \n\
@@ -979,20 +1016,24 @@ mod tests {
         let fs = queuefs_with("test").await;
 
         // Root should list the queue
-        let entries = fs.read_dir("/").await.unwrap();
+        let entries = fs.read_dir("/", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "test");
         assert!(entries[0].is_dir);
 
         // Queue directory should list control files
-        let entries = fs.read_dir("/test").await.unwrap();
-        assert_eq!(entries.len(), 7);
+        let entries = fs
+            .read_dir("/test", None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 8);
 
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains(&"enqueue".to_string()));
         assert!(names.contains(&"dequeue".to_string()));
         assert!(names.contains(&"peek".to_string()));
         assert!(names.contains(&"size".to_string()));
+        assert!(names.contains(&"status".to_string()));
         assert!(names.contains(&"messages".to_string()));
         assert!(names.contains(&"clear".to_string()));
         assert!(names.contains(&"ack".to_string()));
@@ -1144,7 +1185,10 @@ mod tests {
         fs.mkdir("/logs/warnings", 0o755).await.unwrap();
 
         // List /logs should show subdirectories
-        let entries = fs.read_dir("/logs").await.unwrap();
+        let entries = fs
+            .read_dir("/logs", None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(entries.len(), 2);
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"errors"));
@@ -1202,11 +1246,20 @@ mod tests {
         let dequeued: TestQueueMessage =
             serde_json::from_slice(&fs.read("/Semantic/dequeue", 0, 0).await.unwrap()).unwrap();
         assert_eq!(dequeued.data, "payload");
+        assert_eq!(
+            fs.read("/Semantic/status", 0, 0).await.unwrap(),
+            br#"{"pending":0,"processing":1}"#
+        );
         fs.write("/Semantic/ack", dequeued.id.as_bytes(), 0, WriteFlag::None)
             .await
             .unwrap();
+        assert_eq!(
+            fs.read("/Semantic/status", 0, 0).await.unwrap(),
+            br#"{"pending":0,"processing":0}"#
+        );
         assert_eq!(fs.read("/Semantic/size", 0, 0).await.unwrap(), b"0");
         fs.remove_all("/Semantic").await.unwrap();
+        assert!(fs.read("/Semantic/status", 0, 0).await.is_err());
         drop(fs);
         runtime.close().await.unwrap();
     }
@@ -1252,7 +1305,10 @@ mod tests {
         provider.set_unavailable(true);
 
         assert!(matches!(fs.stat("/Semantic").await, Err(Error::Network(_))));
-        assert!(matches!(fs.read_dir("/").await, Err(Error::Network(_))));
+        assert!(matches!(
+            fs.read_dir("/", None, None, None, None).await,
+            Err(Error::Network(_))
+        ));
     }
 
     #[tokio::test]

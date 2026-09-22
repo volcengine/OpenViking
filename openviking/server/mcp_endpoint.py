@@ -22,7 +22,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
@@ -47,6 +47,7 @@ from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
     DEFAULT_MAX_TOKENS,
+    MAX_EXCLUDE_URIS,
     AssembleParams,
     assemble_context,
 )
@@ -65,6 +66,7 @@ from openviking.server.local_input_guard import (
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -74,6 +76,7 @@ from openviking_cli.exceptions import (
     UnauthenticatedError,
 )
 from openviking_cli.utils import get_logger
+from openviking.server.routers.search import context_only_fields_error
 
 logger = get_logger(__name__)
 
@@ -271,6 +274,14 @@ async def find(
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
+# This tool exposes two of the router's context-only fields as a pair each, so a caller
+# that sets either half has set the field the router names.
+_MCP_CONTEXT_ONLY_ALIASES = {
+    "detail_by_category": "detail",
+    "other_peer_penalties": "other_peer_penalty",
+}
+
+
 @mcp.tool()
 async def search(
     query: str,
@@ -282,18 +293,18 @@ async def search(
     context_type: Optional[Union[str, List[str]]] = None,
     mode: Literal["list", "context"] = "list",
     query_expansion: Literal["off", "auto"] = "auto",
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
     quotas: Optional[Dict[str, int]] = None,
     purpose: Optional[Literal["chat", "coding"]] = None,
     detail: Literal["auto", "abstract", "overview", "full"] = "auto",
     detail_by_category: Optional[Dict[str, str]] = None,
-    dedup_turns: int = 0,
-    exclude_uris: Optional[List[str]] = None,
+    dedup_turns: Annotated[int, Field(ge=0, le=100)] = 0,
+    exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
     peer_scope: Literal["actor", "all"] = "all",
     other_peer_penalty: Optional[float] = None,
     other_peer_penalties: Optional[Dict[str, float]] = None,
     rewrite: Literal["off", "auto"] = "off",
-    rewrite_max_bullets: int = 6,
+    rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis.
@@ -352,6 +363,40 @@ async def search(
         if result.rendered.strip():
             return result.rendered
         return "No matching context found."
+
+    # POST /search rejects these in list mode and this tool did not, so the two faces of
+    # one feature disagreed about whether the request was valid. The list path calls
+    # SearchService.search, whose signature has no parameter for any of them, so passing
+    # one here did nothing at all -- for exclude_uris that means excluded URIs come back
+    # in the results with no error.
+    #
+    # The names and the wording come from the router rather than being restated here, so
+    # a field added to CONTEXT_ONLY_FIELDS reaches both faces at once. This tool splits
+    # two of those fields in two, and each half maps back onto the one the router knows.
+    supplied_by_caller = {
+        name: value
+        for name, (value, default) in {
+            "query_expansion": (query_expansion, "auto"),
+            "max_tokens": (max_tokens, DEFAULT_MAX_TOKENS),
+            "quotas": (quotas, None),
+            "purpose": (purpose, None),
+            "detail": (detail, "auto"),
+            "detail_by_category": (detail_by_category, None),
+            "dedup_turns": (dedup_turns, 0),
+            "exclude_uris": (exclude_uris, None),
+            "peer_scope": (peer_scope, "all"),
+            "other_peer_penalty": (other_peer_penalty, None),
+            "other_peer_penalties": (other_peer_penalties, None),
+            "rewrite": (rewrite, "off"),
+            "rewrite_max_bullets": (rewrite_max_bullets, 6),
+        }.items() if value != default
+    }
+    as_named_by_caller: Dict[str, set] = {}
+    for name in supplied_by_caller:
+        as_named_by_caller.setdefault(_MCP_CONTEXT_ONLY_ALIASES.get(name, name), set()).add(name)
+    error = context_only_fields_error(as_named_by_caller, as_named_by_caller=as_named_by_caller)
+    if error:
+        raise InvalidArgumentError(error)
 
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
@@ -425,9 +470,7 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
 _MCP_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 _MCP_AUDIO_EXTENSIONS = {".flac", ".m4a", ".mp3", ".oga", ".ogg", ".wav"}
 _MCP_VIDEO_EXTENSIONS = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
-# Common clients cap an inline result at 5 MiB base64, or 3.75 MiB raw.
-# Apply the same limit to one file and to the aggregate media in one tool call.
-_MCP_MEDIA_MAX_BYTES = 3_932_160
+_MCP_MEDIA_MAX_BYTES = MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 
 
 def _mcp_uri_suffix(uri: str) -> str:
@@ -499,8 +542,12 @@ def _mcp_media_download_hint(uri: str) -> str:
 
 
 @mcp.tool(structured_output=False)
-async def read(uris: str | list[str]) -> str | list[ContentBlock]:
-    """Read one or more viking:// file URIs. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+async def read(
+    uris: str | list[str],
+    offset: int = 0,
+    limit: int = -1,
+) -> str | list[ContentBlock]:
+    """Read one or more viking:// file URIs. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -519,7 +566,7 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 return resolved_uri, None, None
 
             async with semaphore:
-                stat = await service.fs.stat(resolved_uri, ctx=ctx)
+                stat = await service.fs.stat(resolved_uri, ctx=ctx, skip_count=True)
             if stat.get("isDir"):
                 return (
                     resolved_uri,
@@ -597,7 +644,12 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                     if is_image:
                         return _mcp_image_content(data, mime_type)
                     return _mcp_audio_content(data, mime_type)
-                content = await service.fs.read_visible(resolved_uri, ctx=ctx)
+                content = await service.fs.read_visible(
+                    resolved_uri,
+                    ctx=ctx,
+                    offset=offset,
+                    limit=limit,
+                )
                 return content
             except OpenVikingError as exc:
                 return str(exc)
@@ -631,13 +683,49 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
 
 
 @mcp.tool(name="list")
-async def ls(uri: str, recursive: bool = False) -> str:
-    """List files and subdirectories under a viking:// directory URI. Use recursive=true for deep listing."""
+async def ls(
+    uri: str,
+    recursive: bool = False,
+    offset: int = 0,
+    limit: int | None = None,
+    sort_by: Literal["name", "mtime"] | None = None,
+    sort_order: Literal["asc", "desc"] = "asc",
+) -> str:
+    """List one sorted page under a viking:// directory URI.
+
+    Args:
+        uri: Directory URI to list.
+        recursive: Whether to recursively list descendants.
+        offset: Number of visible entries to skip.
+        limit: Optional maximum number of entries.
+        sort_by: Optional name or modification-time ordering.
+        sort_order: Ascending or descending order.
+
+    Returns:
+        A line-oriented directory listing.
+    """
+    if offset < 0:
+        raise InvalidArgumentError("offset must be greater than or equal to 0")
+    if limit is not None and limit <= 0:
+        raise InvalidArgumentError("limit must be greater than 0")
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
 
-    entries = await service.fs.ls(resolved_uri, ctx=ctx, recursive=recursive, output="original")
+    options: dict[str, Any] = {
+        "ctx": ctx,
+        "recursive": recursive,
+        "output": "original",
+    }
+    if offset:
+        options["offset"] = offset
+    if limit is not None:
+        options["node_limit"] = limit
+    if sort_by is not None:
+        options["sort_by"] = sort_by
+        options["sort_order"] = sort_order
+    entries = await service.fs.ls(resolved_uri, **options)
     if not entries:
         return f"(no entries under {uri})"
 
@@ -662,19 +750,40 @@ async def tree(
     level_limit: int = 3,
     node_limit: int = 1000,
     include_abstract: bool = False,
+    offset: int = 0,
+    limit: int | None = None,
 ) -> str:
-    """Show the recursive directory tree under a viking:// URI, indented by depth, so you can understand the whole layout at a glance. Use this when you need a full picture of the file tree; use list for a single directory level, glob for filename patterns, and grep for content. level_limit caps the depth (default 3); node_limit caps the total entries. Set include_abstract=true to also see each file's summary (slower, but useful for orientation in unfamiliar directories)."""
+    """Show one visible page from a recursive directory tree.
+
+    Args:
+        uri: Directory URI to traverse.
+        level_limit: Maximum traversal depth.
+        node_limit: Existing default result limit.
+        include_abstract: Whether to include file summaries.
+        offset: Number of visible nodes to skip.
+        limit: Optional result limit that overrides node_limit.
+
+    Returns:
+        An indented directory tree.
+    """
+    if offset < 0:
+        raise InvalidArgumentError("offset must be greater than or equal to 0")
+    if limit is not None and limit <= 0:
+        raise InvalidArgumentError("limit must be greater than 0")
+
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
     output = "agent" if include_abstract else "original"
+    effective_limit = limit if limit is not None else node_limit
     try:
         entries = await service.fs.tree(
             resolved_uri,
             ctx=ctx,
             output=output,
-            node_limit=node_limit,
+            node_limit=effective_limit,
             level_limit=level_limit,
+            offset=offset,
         )
     except NotFoundError:
         entries = []
@@ -696,9 +805,9 @@ async def tree(
         abstract = (e.get("abstract") or "").strip().replace("\n", " ")
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
-    if len(entries) >= node_limit:
+    if len(entries) >= effective_limit:
         lines.append(
-            f"(truncated at node_limit={node_limit}; narrow the uri or raise node_limit to see more)"
+            f"(truncated at node_limit={effective_limit}; narrow the uri or raise node_limit to see more)"
         )
     return "\n".join(lines)
 
@@ -969,11 +1078,16 @@ async def add_resource(
             Only applies to remote-URL invocations.
         processing_mode: "semantic_and_vectors" for normal semantic processing, or
             "vectors_only" to skip semantic understanding and only build vector indexes.
-        to: Target URI under viking://resources/ (e.g. "viking://resources/volcengine/OpenViking").
-            Required when ``add_type`` is set; otherwise leave empty to derive a URI
-            from the source.
-        parent: Parent URI under viking://resources/ for remote imports. Mutually exclusive
-            with ``to`` and not supported when ``add_type`` is set.
+        to: Exact final URI including the leaf name (e.g.
+            "viking://resources/volcengine/OpenViking"). Written verbatim; an existing
+            target is synced to match the new source, so visible entries it does not
+            contain are deleted. Required when ``add_type`` is set.
+        parent: Existing directory to store the resource under, for remote or
+            local-file imports; the leaf name comes from the source. Never overwrites
+            — a collision reserves the next free name ("name_1", "name_2", ...) and
+            returns a warning. Mutually exclusive with ``to``; not supported when
+            ``add_type`` is set. Leaving both empty derives the directory and the name
+            from the source and handles collisions like ``parent``.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
         tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
@@ -1021,6 +1135,8 @@ async def add_resource(
         return "Error: add_type cannot be combined with parent."
     if add_type and not to:
         return "Error: add_type requires an exact 'to' target."
+    if to and parent:
+        return "Error: Cannot specify both 'to' and 'parent' at the same time."
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
@@ -1035,6 +1151,7 @@ async def add_resource(
                 temp_file_id,
                 ctx,
                 to=to,
+                parent=parent,
                 reason=description,
                 args=args,
                 processing_mode=processing_mode,
@@ -1133,6 +1250,7 @@ async def add_resource(
         ctx.user.user_id,
         ttl_seconds=ttl_seconds,
         to=to,
+        parent=parent,
         reason=description,
         actor_peer_id=ctx.actor_peer_id or "",
         processing_mode=processing_mode,
@@ -1152,8 +1270,16 @@ async def add_resource(
         "\n"
         f"  {upload_url}\n"
         "\n"
-        "The URL's token authorizes the upload (no API key needed); the server ingests "
-        "the file automatically once received — you do NOT need to call add_resource again.\n"
+        "The URL's token authorizes the upload against OpenViking itself (no OpenViking "
+        "API key needed); the server ingests the file automatically once received — you "
+        "do NOT need to call add_resource again.\n"
+        "\n"
+        "If the OpenViking server sits behind a private gateway or reverse proxy that "
+        "requires extra request headers (e.g. `openviking_name`, tenant/vault headers, "
+        "or a gateway API key), those headers are enforced on every request including "
+        "this upload — replay the same headers you use for MCP calls when POSTing the "
+        "file. A gateway rejection typically looks like HTTP 400/401/403 before the "
+        "token is even checked.\n"
         "\n"
         f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
     )
@@ -1268,7 +1394,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], Optional[str]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -1278,21 +1404,35 @@ async def grep(
                     case_insensitive=case_insensitive,
                     node_limit=node_limit,
                 )
-                return (p, result.get("matches", []))
-            except Exception:
-                return (p, [])
+                return (p, result.get("matches", []), None)
+            except Exception as exc:
+                # One bad pattern must not cost the others their matches -- that is what
+                # the fan-out is for -- but an empty list is indistinguishable from a real
+                # miss, so carry the reason instead of dropping it. POST /search/grep maps
+                # and re-raises these; reporting them is what keeps the two faces agreeing
+                # about whether a failure is a result.
+                return (p, [], f"{type(exc).__name__}: {exc}")
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
     merged: dict[str, list[tuple]] = {}
     total = 0
-    for p, matches in results:
+    failures: list[tuple[str, str]] = []
+    for p, matches, error in results:
+        if error is not None:
+            failures.append((p, error))
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
             merged.setdefault(m_uri, []).append((m.get("line", "?"), m.get("content", ""), p))
 
+    failure_lines = [f"  {p}: {error}" for p, error in failures]
+
     if not merged:
+        if failures:
+            # Nothing was searched successfully, so "no matches" would be an answer to a
+            # question that was never asked.
+            return "grep failed for every pattern:\n" + "\n".join(failure_lines)
         return f"No matches found for pattern(s): {', '.join(patterns)}"
 
     lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
@@ -1301,6 +1441,9 @@ async def grep(
         lines.append(f"\n{m_uri}")
         for line_no, content, p in hits:
             lines.append(f"  L{line_no} [{p}]: {content}")
+    if failures:
+        lines.append("\nPatterns that could not be searched:")
+        lines.extend(failure_lines)
     return "\n".join(lines)
 
 

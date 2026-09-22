@@ -10,21 +10,22 @@
  * (most mature, production-hardened), Hermes (anti-pattern: stale prefetch).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { loadConfigFromModuleUrl, type OVConfig } from "./config.js";
+import { isCaptureEnabled } from "./shared/capture-utils.mjs";
+import { createLogger } from "./shared/debug-log.mjs";
+import { loadConfig, type OVConfig } from "./config.js";
 import { OVClient } from "./client.js";
 import { RecallManager } from "./recall.js";
-import { RecallLedger } from "./shared/recall-ledger.mjs";
+import { RecallLedger } from "./lib/recall-ledger.mjs";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
-import { guardVikingUriToolCall } from "./lib/uri-guard-adapter.mjs";
+import { isBypassed } from "./shared/session-model.mjs";
+import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
 import { registerTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
 
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
-  const config = loadConfigFromModuleUrl(import.meta.url);
+  const config = loadConfig();
   if (!config.enabled) return;
 
   // Env overrides
@@ -40,17 +41,14 @@ export default async function (pi: ExtensionAPI) {
     // caches (#4137); it is per pi session and opened once the id is known.
     config.recallLedger ? new RecallLedger() : null,
   );
-  const debugLog = (message: string) => {
-    const file = process.env.OV_DEBUG_LOG;
-    if (!file) return;
-    try {
-      mkdirSync(dirname(file), { recursive: true });
-      appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
-    } catch {
-      // Best effort; logging must never affect pi.
-    }
-  };
-  const takeover = createTakeoverManager({ pi, client, sync, config, log: debugLog });
+  const logger = createLogger("pi", {
+    debug: Boolean(config.debugLogPath),
+    debugLogPath: config.debugLogPath,
+  });
+  const takeover = createTakeoverManager({
+    pi, client, sync, config,
+    log: (message: string) => logger.log("takeover", message),
+  });
 
   // Session state
   let connected = false;
@@ -72,13 +70,10 @@ export default async function (pi: ExtensionAPI) {
 
     startPromise = (async () => {
       // Bypass check
-      const cwd = process.cwd();
-      for (const pattern of config.bypassPatterns) {
-        if (matchBypass(cwd, pattern)) {
-          bypassed = true;
-          started = true;
-          return;
-        }
+      if (isBypassed(config, { cwd: process.cwd() })) {
+        bypassed = true;
+        started = true;
+        return;
       }
 
       // Health check
@@ -136,7 +131,14 @@ export default async function (pi: ExtensionAPI) {
 
   // --- session_start ---
   pi.on("session_start", async (event, ctx) => {
-    await start(ctx);
+    // Fire-and-forget: the OV chain (health check, session ensure, profile
+    // build) costs ~2s against the remote server; blocking session_start on it
+    // delays every pi startup. start() is memoized via startPromise, so
+    // before_agent_start awaits the same in-flight chain before the first
+    // provider request — the first turn still gets profile + recall.
+    void start(ctx).catch((error) => {
+      logger.logError("session_start", error);
+    });
   });
 
   // --- before_agent_start ---
@@ -174,13 +176,28 @@ export default async function (pi: ExtensionAPI) {
     // still receives current-query memory, without blocking user-message UI.
     await recall.searchPending();
 
-    // The context hook omits persisted entry ids, but its user messages are a
-    // deep copy of the active SessionManager context. Associate those objects
-    // with stable ids before takeover may filter the array; retained messages
-    // keep object identity through that transform.
-    const userEntryIds = ctx.sessionManager.buildContextEntries()
-      .filter((entry: any) => entry?.type === "message" && entry.message?.role === "user")
-      .map((entry: any) => entry.id as string);
+    // The entry IDs are an optional optimization for replaying the recall
+    // ledger. Compatible hosts may omit buildContextEntries(), so fail closed
+    // to nullable IDs rather than guessing from another SessionManager API.
+    const sessionManager = ctx.sessionManager;
+    const entries = typeof sessionManager?.buildContextEntries === "function"
+      ? sessionManager.buildContextEntries()
+      : [];
+    const userEntryIds = entries
+      .filter((entry: unknown): entry is { id?: unknown; type: "message"; message: { role: "user" } } => {
+        if (!entry || typeof entry !== "object") return false;
+        if (!("type" in entry) || !("message" in entry)) return false;
+        const type = entry.type;
+        const message = entry.message;
+        return type === "message" &&
+          !!message &&
+          typeof message === "object" &&
+          "role" in message &&
+          message.role === "user";
+      })
+      .map((entry): string | undefined =>
+        typeof entry.id === "string" ? entry.id : undefined
+      );
     const messageIds = new WeakMap<object, string>();
     let userIndex = 0;
     for (const message of event.messages as any[]) {
@@ -208,13 +225,20 @@ export default async function (pi: ExtensionAPI) {
     return decision;
   });
 
+  // --- tool_result ---
+  pi.on("tool_result", async (event, _ctx) => {
+    const notice = noticeVikingUriToolResult(event);
+    if (!notice) return;
+    return notice;
+  });
+
   // --- turn_end ---
   pi.on("turn_end", async (event, ctx) => {
-    if (!connected || bypassed || !config.syncTurns) return;
+    if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
     const branch = ctx.sessionManager.getBranch();
     const result = await sync.syncBranch(branch);
-    debugLog(`turn_end: synced ${result.added} entries, ~${result.tokens} tokens`);
+    logger.log("turn_end", { added: result.added, tokens: result.tokens });
     await takeover.onTurnSynced(result.tokens);
     updateStatus(ctx, connected, result.added, sync.sessionId, config, takeover.state);
   });
@@ -308,24 +332,13 @@ export default async function (pi: ExtensionAPI) {
 // Helper Functions
 // ================================================================
 
-/** Simple bypass pattern matching (prefix and glob). */
-function matchBypass(cwd: string, pattern: string): boolean {
-  if (pattern.startsWith("*")) {
-    return cwd.endsWith(pattern.slice(1));
-  }
-  if (pattern.endsWith("*")) {
-    return cwd.startsWith(pattern.slice(0, -1));
-  }
-  return cwd === pattern || cwd.startsWith(pattern + "/");
-}
-
 /** Build the <openviking-context> profile block. */
 async function buildSessionProfileBlock(
   client: OVClient, config: OVConfig,
 ): Promise<string> {
   try {
     const profile = await buildProfileBlock(
-      (path: string, init?: any, options?: any) => client.fetchJSON(path, init, 10000),
+      (path, init, options) => client.fetchJSON(path, init, options),
       config.profileTokenBudget,
       config.peerId,
     );

@@ -1,62 +1,21 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
-const HARNESS_SHARED_FILES = [
-  "credentials.mjs",
-  "capture-utils.mjs",
-  "session-model.mjs",
-  "pending-queue.mjs",
-  "debug-log.mjs",
-  "setup-wizard.mjs",
-  "recall-core.mjs",
-  "workspace-peer.mjs",
-  "profile-inject.mjs",
-  "uri-guard.mjs",
-];
-const OPENCODE_SHARED_FILES = [...HARNESS_SHARED_FILES, "mcp-proxy-core.mjs", "async-writer.mjs", "batch-send.mjs"];
-const DOCTOR_SHARED_FILES = [...OPENCODE_SHARED_FILES, "doctor-core.mjs"];
-const ZCODE_SHARED_FILES = [...OPENCODE_SHARED_FILES, "agent-hook-runtime.mjs", "agent-uri-guard.mjs"];
-const AGENT_PLUGINS_SHARED_FILES = [
-  "credentials.mjs",
-  "debug-log.mjs",
-  "mcp-proxy-core.mjs",
-  "workspace-peer.mjs",
-];
-const TARGETS = [
-  { dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
-  { dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"), files: DOCTOR_SHARED_FILES },
-  { dir: join(ROOT, "examples", "opencode-plugin", "lib", "shared"), files: OPENCODE_SHARED_FILES },
-  { dir: join(ROOT, "examples", "dsh-memory-plugin", "shared"), files: HARNESS_SHARED_FILES },
-  { dir: join(ROOT, "examples", "pi-coding-agent-extension", "shared"), files: HARNESS_SHARED_FILES },
-  { dir: join(ROOT, "examples", "zcode-memory-plugin", "scripts", "shared") , files: ZCODE_SHARED_FILES },
-  { dir: join(ROOT, "agent-plugins", "servers", "shared"), files: AGENT_PLUGINS_SHARED_FILES },
-];
-const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
-const SKILLS_DIR = join(ROOT, "examples", "skills");
-const SKILL_TARGETS = [
-  {
-    skill: "openviking-memory",
-    dirs: [
-      join(ROOT, "examples", "codex-memory-plugin", "skills"),
-      join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
-      join(ROOT, "examples", "cursor-memory-plugin", "skills"),
-    ],
-  },
-];
+// Imported, not re-declared: the copies kept here had drifted from sync.mjs
+// (dsh, opencode and agent-plugins were all missing modules the sync actually
+// ships), so a stale vendored file went unnoticed by this very test.
+import { GENERATED_HEADER, ROOT, SHARED_DIR, SKILLS_DIR, SKILL_TARGETS, assembledClosure, resolveTargets } from "./sync.mjs";
 
 test("vendored shared modules are synchronized", async () => {
   const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
   assert.ok(files.length > 0, "expected shared modules");
 
-  for (const target of TARGETS) {
-    const targetFiles = target.files ?? files;
-    for (const file of files) {
-      if (!targetFiles.includes(file)) continue;
+  for (const target of await resolveTargets()) {
+    for (const file of target.files) {
+      assert.ok(files.includes(file), `${file} is in ${relative(ROOT, target.dir)}'s closure but missing from lib/`);
       const expected = `${GENERATED_HEADER}${await readFile(join(SHARED_DIR, file), "utf-8")}`;
       const actual = await readFile(join(target.dir, file), "utf-8");
       assert.equal(
@@ -68,25 +27,174 @@ test("vendored shared modules are synchronized", async () => {
   }
 });
 
+// The two directions the hand-kept lists used to get wrong: a module a plugin
+// imports but does not ship is ERR_MODULE_NOT_FOUND on the first hook of a
+// fresh install, and one it ships but never imports is dead weight that still
+// lands in every review diff. Both sides are derived from the imports now, so
+// this asserts what is on disk agrees with them.
+test("what each plugin ships equals the closure of what it imports", async () => {
+  for (const target of await resolveTargets()) {
+    const onDisk = [];
+    for (const name of (await readdir(target.dir)).filter((file) => file.endsWith(".mjs")).sort()) {
+      // A target dir may also hold plugin-local modules; only a file carrying
+      // the banner is a generated copy this sync owns.
+      const body = await readFile(join(target.dir, name), "utf-8");
+      if (body.startsWith(GENERATED_HEADER)) onDisk.push(name);
+    }
+    assert.deepEqual(
+      onDisk,
+      target.files,
+      `${relative(ROOT, target.dir)} does not hold the closure of its imports; run node examples/memory-plugin-shared/sync.mjs`,
+    );
+  }
+});
+
+// Which copies git holds is a delivery decision, and getting it backwards fails
+// in a way nobody sees until an install breaks: a committed plugin whose copies
+// were ignored ships nothing, and a packaged plugin whose copies were committed
+// taxes every review diff with 12,000 generated lines.
+test("git holds the copies the directory-installed plugins need, and no others", async () => {
+  const targets = [
+    ...(await resolveTargets()),
+    // A skill copy is delivered by path, never regenerated by the host, so
+    // every one of them is committed; the flag is here to be asserted on.
+    ...SKILL_TARGETS.map((target) => ({ ...target, dir: join(target.dir, target.skill) })),
+  ];
+  for (const target of targets) {
+    const dir = relative(ROOT, target.dir);
+    const tracked = execFileSync("git", ["ls-files", "--", dir], { cwd: ROOT, encoding: "utf-8" })
+      .split("\n")
+      .filter(Boolean);
+    if (target.committed) {
+      assert.ok(tracked.length > 0, `${dir} is installed from this repository, so its copies must be committed`);
+    } else {
+      assert.deepEqual(tracked, [], `${dir} is generated at pack time; it must not be committed`);
+    }
+  }
+});
+
+// The portable bundle is the one target whose copies are both committed and
+// carried by hosts that install it as a plain directory, so every module it
+// reaches is committed code a reviewer reads. It has no hooks and no knobs; the
+// connection half of the shared loader (`buildProxyConnection`) is what keeps
+// it at five modules instead of the whole schema-and-workspace closure.
+test("the portable agent-plugins bundle stays connection-only", async () => {
+  const target = (await resolveTargets())
+    .find((entry) => relative(ROOT, entry.dir) === join("agent-plugins", "servers", "shared"));
+  assert.ok(target, "the agent-plugins bundle must stay a sync target");
+  assert.deepEqual(target.files, [
+    "credentials.mjs",
+    "debug-log.mjs",
+    "mcp-proxy-config.mjs",
+    "mcp-proxy-core.mjs",
+    "ov-http.mjs",
+  ]);
+});
+
+// A module lib/ carries that no plugin reaches is a capability with no consumer:
+// either a harness lost its wiring, or the module should go.
+test("every shared module is reachable from some plugin", async () => {
+  const targets = await resolveTargets();
+  const claimed = new Set(targets.flatMap((target) => target.files));
+  // cursor, trae and zcode vendor nothing: the installer assembles their
+  // runtime instead, so they claim through the manifest it reads.
+  for (const entry of await assembledClosure()) claimed.add(entry);
+  const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
+  assert.deepEqual(
+    files.filter((file) => !claimed.has(file)),
+    [],
+    "shared modules that no plugin imports",
+  );
+});
+
 test("vendored skills are byte-identical to examples/skills", async () => {
-  for (const { skill, dirs } of SKILL_TARGETS) {
+  for (const { skill, dir } of SKILL_TARGETS) {
     const files = (await readdir(join(SKILLS_DIR, skill))).sort();
     assert.ok(files.includes("SKILL.md"), `${skill} must ship a SKILL.md`);
 
-    for (const dir of dirs) {
-      const target = join(dir, skill);
-      assert.deepEqual(
-        (await readdir(target)).sort(),
-        files,
-        `${relative(ROOT, target)} has a different file set; run node examples/memory-plugin-shared/sync.mjs`,
+    const target = join(dir, skill);
+    assert.deepEqual(
+      (await readdir(target)).sort(),
+      files,
+      `${relative(ROOT, target)} has a different file set; run node examples/memory-plugin-shared/sync.mjs`,
+    );
+    for (const file of files) {
+      assert.equal(
+        await readFile(join(target, file), "utf-8"),
+        await readFile(join(SKILLS_DIR, skill, file), "utf-8"),
+        `${relative(ROOT, join(target, file))} is out of sync; run node examples/memory-plugin-shared/sync.mjs`,
       );
-      for (const file of files) {
-        assert.equal(
-          await readFile(join(target, file), "utf-8"),
-          await readFile(join(SKILLS_DIR, skill, file), "utf-8"),
-          `${relative(ROOT, join(target, file))} is out of sync; run node examples/memory-plugin-shared/sync.mjs`,
-        );
-      }
     }
+  }
+});
+
+// Skill loaders reject a description longer than this, and the skill then
+// silently fails to load. Guard every SKILL.md we ship, synced or not.
+const MAX_DESCRIPTION_LENGTH = 1024;
+
+function readDescription(source) {
+  const frontmatter = /^---\n([\s\S]*?)\n---\n/.exec(source);
+  if (!frontmatter) return null;
+  const lines = frontmatter[1].split("\n");
+  const start = lines.findIndex((line) => /^description:/.test(line));
+  if (start === -1) return null;
+  const head = lines[start].slice("description:".length).trim();
+  if (head && head !== ">" && head !== "|" && head !== ">-" && head !== "|-") {
+    return head.replace(/^["']|["']$/g, "");
+  }
+  const body = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/.test(line)) break;
+    body.push(line.trim());
+  }
+  return body.join(" ").trim();
+}
+
+async function findSkillFiles(dir) {
+  const found = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...(await findSkillFiles(full)));
+    else if (entry.name === "SKILL.md") found.push(full);
+  }
+  return found;
+}
+
+// viking://~ is the home alias for the caller's own space, and a server older
+// than the alias rejects it outright instead of searching. A skill that sends
+// the agent to the Experience root therefore has to name the explicit
+// viking://user/<user_id> root it falls back to, or the whole workflow stops
+// against those servers.
+test("skills scoping the Experience root document the explicit-root fallback", async () => {
+  const files = [
+    ...(await findSkillFiles(join(ROOT, "examples"))),
+    ...(await findSkillFiles(join(ROOT, "agent-plugins"))),
+  ];
+  const scoped = [];
+  for (const file of files) {
+    const source = await readFile(file, "utf-8");
+    if (!source.includes("viking://~/memories/experiences")) continue;
+    scoped.push(file);
+    assert.match(
+      source,
+      /viking:\/\/user\/<user_id>/,
+      `${relative(ROOT, file)} scopes by viking://~ without naming the viking://user/<user_id> fallback`,
+    );
+  }
+  assert.ok(scoped.length > 0, "expected at least one skill scoping the Experience root");
+});
+
+test("shipped skill descriptions stay within the loader limit", async () => {
+  const files = await findSkillFiles(join(ROOT, "examples"));
+  assert.ok(files.length > 0, "expected at least one SKILL.md");
+
+  for (const file of files) {
+    const description = readDescription(await readFile(file, "utf-8"));
+    assert.ok(description, `${relative(ROOT, file)} has no frontmatter description`);
+    assert.ok(
+      description.length <= MAX_DESCRIPTION_LENGTH,
+      `${relative(ROOT, file)} description is ${description.length} chars, over the ${MAX_DESCRIPTION_LENGTH} limit`,
+    );
   }
 });

@@ -115,7 +115,7 @@ pub async fn write_shape_guard(
 
 /// Probe existing backend files to infer the legacy storage shape.
 pub async fn detect_legacy_shape(raw_fs: &Arc<dyn FileSystem>) -> Result<Option<StorageShape>> {
-    let entries = raw_fs.tree_directory("/", true, None, None).await?;
+    let entries = raw_fs.tree_directory("/", true, None, None, None, None, None).await?;
     let mut candidates = Vec::new();
 
     for entry in entries {

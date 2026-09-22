@@ -34,6 +34,9 @@ class _ResourceProcessor:
     async def prepare_durable_source(self, *_args, **_kwargs):
         return None
 
+    async def github_token_for(self, *_args, **_kwargs):
+        return None
+
     async def finish_prepared_resource(self, *_args, **_kwargs):
         return {"status": "success"}
 
@@ -95,7 +98,6 @@ async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
     ctx: RequestContext,
 ):
     watch_manager = SimpleNamespace(
-        get_upsertable_task_by_uri=AsyncMock(return_value=None),
         create_task=AsyncMock(return_value=SimpleNamespace(task_id="watch-1")),
     )
     scheduler = SimpleNamespace(watch_manager=watch_manager)

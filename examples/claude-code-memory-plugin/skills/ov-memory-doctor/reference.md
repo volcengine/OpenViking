@@ -12,13 +12,15 @@ and `OPENVIKING_PENDING_DIR` relocate individual pieces.
 | `~/.openviking/ovcli.conf` | Client connection: `url`, `api_key`, `account`, `user`, optional `plugin.claude_code.*` tuning. Mode 0600. |
 | `~/.openviking/ov.conf` | Server config. The plugin reads only `server.url/host/port`, `server.root_api_key` (last-resort key) and the legacy `claude_code` block. |
 | `~/.openviking/ovcli.conf.<name>` | Saved CLI profiles (`ov config switch` copies one over `ovcli.conf`). `ovcli.conf.bak.<epoch>` are installer backups, not profiles. |
+| `<repo root>/.openviking/config.json` / `config.local.json` | Workspace config layers, `version: 1` required: `peer.source`, `peer.id`, `recall.*`, `capture.*`, `bypass.session_patterns`, `labels`. `config.json` is committed and shared; `config.local.json` is private and gitignored. Trusted without a prompt, but connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded. A blanket `.openviking/` rule in `.gitignore` stops `config.json` from ever being committed — narrow it to `.openviking/media/` and `.openviking/downloads/`. |
+| `~/.openviking/workspaces/<slot>.json` | Per-machine workspace registry, one file per workspace (`<dir name>-<hash>.json`, mode 0600). Outranks both workspace files, and nothing writes it — a user creates the file by hand. An entry recorded for a different repository is ignored, not inherited. |
 | `~/.claude/plugins/installed_plugins.json` | Install registry: `plugins["openviking-memory@openviking"][0].installPath/version/lastUpdated`. |
 | `~/.claude/plugins/known_marketplaces.json` | Marketplace `openviking` → `source` (`directory` path or `github`), `installLocation`. |
 | `~/.claude/plugins/cache/openviking/openviking-memory/<version>/` | The copy Claude Code actually runs. Keyed by `plugin.json` version. |
 | `~/.claude/settings.json` | `enabledPlugins`, `statusLine`, optional `env`, legacy `hooks`. |
 | `~/.openviking/marketplaces/openviking-claude/` | Installer-generated directory marketplace (GitHub dist) whose manifest points at `git-subdir` `examples/claude-code-memory-plugin`. |
 | `~/.openviking/memory-plugin-marketplace/` | Unpacked TOS archive (TOS dist); cannot self-update. |
-| `~/.openviking/state/` | `last-recall.json`, `last-capture.json`, `last-session-event.json`, `daily-stats.json`, `server-probe.json`, `host-cli-probe.json`, `context-face.json`, `recall-digest.json`, `ws-peer-<session>.json`. Anything else there is residue. |
+| `~/.openviking/state/` | `last-recall.json`, `last-capture.json`, `last-session-event.json`, `daily-stats.json`, `server-probe.json`, `host-cli-probe.json`, `context-face.json`, `recall-digest.json`, `ws-peer-<session>.json`, `ws-identity-<hash>.json` (60s cache of the git identity behind the peer). Anything else there is residue. |
 | `~/.openviking/last_inject.md` | Full text of the last SessionStart injection. |
 | `~/.openviking/logs/cc-hooks.log` | JSONL hook + proxy log; written only when `OPENVIKING_DEBUG=1` or `debug: true`. |
 | `~/.openviking/pending/` | Offline write queue (retryable failures only); drained at SessionStart after `/health` passes. |
@@ -29,20 +31,49 @@ and `OPENVIKING_PENDING_DIR` relocate individual pieces.
 | Field | Order |
 |---|---|
 | url | `OPENVIKING_URL` → `OPENVIKING_BASE_URL` → `ovcli.conf url` → `ov.conf server.url` → `http://{server.host\|127.0.0.1}:{server.port\|1933}` |
-| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ov.conf claude_code.apiKey` → `ov.conf server.root_api_key` |
-| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/user` → `ov.conf claude_code.accountId/userId` |
-| peer | `OPENVIKING_PEER_ID` → `claude_code.peerId` → derived from cwd (`/Users/x/proj` → `-Users-x-proj`) unless `OPENVIKING_WORKSPACE_PEER=0` |
+| api_key | `OPENVIKING_BEARER_TOKEN` → `OPENVIKING_API_KEY` → `ovcli.conf api_key` → `ovcli.conf plugin.claude_code.apiKey` → `ovcli.conf plugin.apiKey` → `ov.conf claude_code.apiKey` → `ov.conf server.root_api_key` |
+| account / user | `OPENVIKING_ACCOUNT` / `OPENVIKING_USER` → `ovcli.conf account/user` → `ovcli.conf plugin.claude_code.accountId/userId` → `ovcli.conf plugin.accountId/userId` → `ov.conf claude_code.accountId/userId` |
+| peer | `OPENVIKING_PEER_ID` → registry → `config.local.json` → `config.json` (`peer.id`) → `ovcli.conf plugin.claude_code.peerId` → `ovcli.conf plugin.peerId` → `ovcli.conf actor_peer_id/peer_id` → `ov.conf claude_code.peerId` → derived per `peer.source` unless `OPENVIKING_WORKSPACE_PEER=0` |
+| peer.source | `OPENVIKING_PEER_SOURCE` → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.claude_code.peerSource` → `ovcli.conf plugin.peerSource` → `ov.conf claude_code.peerSource` → `git` |
+| auth mode | `OPENVIKING_AUTH_MODE` → `ovcli.conf plugin.claude_code.authMode` → `ovcli.conf plugin.authMode` → `ov.conf claude_code.authMode` → `ov.conf server.auth_mode` → `trusted` when account/user are set, else `api_key` |
 | enabled | `OPENVIKING_MEMORY_ENABLED` → `ov.conf claude_code.enabled === false` → "ov.conf or ovcli.conf exists and parses" |
-| tuning | env → `ovcli.conf plugin.claude_code.*` → `ovcli.conf plugin.*` → `ov.conf claude_code.*` → defaults |
+| tuning | env → registry → `config.local.json` → `config.json` → `ovcli.conf plugin.claude_code.*` → `ovcli.conf plugin.*` → `ov.conf claude_code.*` → defaults |
+
+The order above is the `auto` mode with a credential variable set, or with no ovcli.conf credentials. When ovcli.conf names a url, key, identity or peer and no credential variable is set, the chain is pinned to that file: the credential variables are skipped, `api_key` still falls back through the `plugin` keys, `ov.conf claude_code.apiKey` and `server.root_api_key`, and account/user stop at the `plugin` keys. `OPENVIKING_CREDENTIAL_SOURCE=cli` forces that; `=env` reads the variables only, and neither file. The MCP proxy resolves this same chain.
 
 Only trailing slashes are stripped from the url; no scheme check, no path
 normalisation. `https://api.vikingdb.cn-beijing.volces.com/openviking` (the Volcengine-hosted OpenViking Service)
 is a legitimate path prefix; `/api/v1` or `/mcp` suffixes are not.
 
-Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account`,
-`X-OpenViking-User`, `X-OpenViking-Actor-Peer`, `User-Agent: openviking-memory-claude-code/<version>`.
-The open-source server also accepts `X-API-Key` (and prefers it when both are
-sent); the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
+`peer.source` decides the derivation. `git` (the default) is the template list `["{git_remote}", "{git_root}"]`: the normalized origin URL (`git@github.com:volcengine/OpenViking.git` → `github.com-volcengine-openviking`, userinfo dropped so an embedded token can never reach the id), else the repository root path (the legacy `[^A-Za-z0-9] → -` rule), else nothing — outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space. `{cwd}` is still a variable but sits in no default chain, and `{dir}` is the workspace root's directory name, empty when the directory is not a workspace. `cwd` is that legacy rule alone (the pre-git behaviour); `none` sends no peer, which is also what `OPENVIKING_WORKSPACE_PEER=0` means. Anything else is a template, or a list of templates tried in order (`"git-{git_remote}"`, `["team-{dir}", "{cwd}"]`); a template naming an empty variable falls through to the next. Derivation is filesystem-only — no `git` subprocess — so it survives a missing `git` and a dubious-ownership refusal; worktrees converge through `commondir`, a submodule keeps its own identity, and `$HOME` and `/` are never workspace roots. Every clone of one repository shares one peer; a fork's origin differs, so it stays separate, and `gh pr checkout` does not change origin.
+
+Peers minted before this need no migration: the old cwd-derived id is recomputed locally, `peer_scope: "all"` already sweeps it, and under `"actor"` recall asks it separately. Doctor prints it as `previous peer`. Across the workspace layers lists union rather than replace, with a leading `"!reset"` dropping what the lower layers contributed; unknown keys are kept and ignored, and a file declaring a version other than `1` is skipped with a warning.
+
+Hook budgets in `hooks/hooks.json`: SessionStart 120s, UserPromptSubmit 60s, Stop and SubagentStop 45s, PreCompact and SessionEnd 30s, SubagentStart 10s, PreToolUse and PostToolUse 5s. `timeoutMs` (default 15000) must stay below 60s and `captureTimeoutMs` (default 30000, derived as twice `timeoutMs` when it is not set) at or below 45s; doctor warns when either outgrows its hook.
+
+Sent headers: `Authorization: Bearer <key>`, `X-OpenViking-Account/User` (trusted
+mode only), `X-OpenViking-Actor-Peer`, `User-Agent: openviking-memory-claude-code/<version>`.
+The plugin never sends `X-API-Key`. The open-source server still accepts it (and
+prefers it when both are sent), so a gateway that injects one shadows the key
+here; the Volcengine-hosted OpenViking Service (`https://api.vikingdb.cn-beijing.volces.com/openviking`) accepts Bearer only.
+
+## Peer: giving a directory its own memory
+
+```json
+{"version": 1, "peer": {"id": "my-project"}}
+```
+
+Stored as `.openviking/config.json` in the directory to be named; that directory and everything below it then writes to that peer, repository or not.
+
+| What the user says | What to do |
+|---|---|
+| "make this folder remember separately" | Write `peer.id` in `.openviking/config.json` in that folder |
+| "these two repos should share memory" | Write the same `peer.id` in `.openviking/config.json` in both |
+| "only recall this project's memories" | Set `recall.peer_scope` to `"actor"` in the same file |
+| "go back to the old per-directory behaviour" | `peer.source: "cwd"` in the same file, or `OPENVIKING_PEER_SOURCE=cwd` for every directory on this machine |
+| "do not separate by project at all" | `peer.source: "none"` in the same file |
+
+That file and the registry file whose path the doctor prints are the whole surface. No `ov` subcommand creates, renames or merges a peer. Changing the id moves no existing memory: the cross-peer sweep under `peer_scope: "all"` still reaches what was written before, and under `"actor"` the extra query still reaches the pre-git cwd-derived id.
 
 ## Server auth modes (from `GET /health` → `auth_mode`)
 
@@ -90,7 +121,7 @@ Plugin MCP proxy (what Claude Code shows for a failing tool call):
 
 Hook log (`cc-hooks.log`) stages worth grepping: `health_check`
 (connectivity), `push_turns` / `capture_write` / `pending_enqueue` (capture),
-`recall_context_assembled` / `search_summary` / `injection_built` (recall),
+`recall_context_assembled` / `recall_search_summary` / `recall_injection_built` (recall),
 `mcp-proxy` `start` (resolved `mcpUrl`, `hasApiKey` = present, not valid),
 `uncaught` (crash). Hooks: `session-start`, `auto-recall`, `auto-capture`,
 `session-end`, `pre-compact`, `subagent-start`, `subagent-stop`,
@@ -140,10 +171,10 @@ Startup failures (printed by the server; exit 1 unless noted):
 | Text | Cause |
 |---|---|
 | `OpenViking configuration file not found.` | No ov.conf at any resolved path |
-| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including `claude_code`, `codex` and `server.url`, which only the plugins read |
+| `Unknown config field '…' in OpenVikingConfig` / `Extra inputs are not permitted` | Unknown key — including a top-level block named after any harness (`claude_code`, `codex`, `cursor`, `trae`, `trae_cn`, `zcode`, `opencode`, `dsh`, `pi`) and `server.url`, which only the plugins read |
 | `SECURITY: server.auth_mode='dev' requires server.host to be localhost` | Dev mode (no `auth_mode`, no `root_api_key`) on a non-loopback bind |
 | `Invalid server.root_api_key: empty string is not allowed` | `""` instead of `null` |
-| `Another OpenViking process (PID n) is already using the data directory` | Two servers on one workspace (exit 3, `Application startup failed. Exiting.`) |
+| `Another OpenViking process is already using the data directory` | Two servers on one workspace (exit 3, `Application startup failed. Exiting.`) |
 | `EmbeddingRebuildRequiredError` / `embedding dimension (…) does not match current configuration` | Embedding model changed on an existing workspace (exit 3) |
 | `[Errno 48] / [Errno 98] Address already in use` | Port taken — `lsof -nP -iTCP:1933 -sTCP:LISTEN` |
 | `FATAL: AUTHENTICATION HEALTH CHECK FAILED` | OIDC/LDAP backend unreachable |
@@ -167,7 +198,9 @@ reports `unknown command`.
 | Worked until an edit to `ovcli.conf` | JSON broken by the edit | doctor "cannot be parsed" | Fix JSON |
 | Edits to `ovcli.conf` have no effect | Env var or rc-file export wins | doctor "← env"; `env \| grep OPENVIKING_` | Remove the export |
 | Recall empty on a healthy server | Wrong key (401 reads as no results), wrong user space, peer scope, threshold | `/health` with key; `/api/v1/system/status` → `result.user`; `last-recall.json.reason` | Fix key; `OPENVIKING_PEER_ID`; lower `OPENVIKING_SCORE_THRESHOLD` |
-| Recall empty after moving/renaming the repo | Workspace peer derived from cwd changed (with `recallPeerScope: actor`) | log `auto-recall/start` → `peerSource: workspace` | Pin `OPENVIKING_PEER_ID` or `OPENVIKING_WORKSPACE_PEER=0` |
+| Recall empty after moving/renaming the repo | Mostly gone: the peer follows `origin`, so a move, rename, worktree or fresh clone keeps it. What still changes identity is a repository with no origin, which falls back to the root path | doctor `peer … ← workspace (…)` — `{git_remote}` is move-proof, `{git_root}` is not; `previous peer` names the id left behind | `git remote add origin …`, or pin `peer.id` in `.openviking/config.json` / `OPENVIKING_PEER_ID` |
+| No project memory in a directory that is not a repository | By design: no `.git` and no `.openviking/config.json` above it means no peer, so those memories are in the user-level space | doctor Workspace section: `not a workspace: …` | Create `.openviking/config.json` there with a `peer.id`, or leave it as it is |
+| Recall or capture dead in one repository only | A committed `.openviking/config.json` turns `recall.enabled` / `capture.enabled` off, or pins `peer.id` | doctor Workspace section: `<key> = … ← config.json (workspace)` plus the announcement warning | Override in `.openviking/config.local.json` or `~/.openviking/workspaces/<slot>.json` |
 | Statusline green, MCP tools 401 | `/health` needs no auth | doctor "api key rejected" | Fix key |
 | Statusline green, MCP tools missing | Plugin MCP not loaded, node missing for `.mcp.json`, or `/mcp` not proxied | `claude mcp list`; `/mcp` | Fix node/PATH; reverse proxy `/mcp` |
 | Everything duplicated (two context blocks, doubled latency) | Legacy `settings.json` hooks + plugin; or two plugin ids enabled | doctor legacy/duplicate warnings | Remove legacy entries |

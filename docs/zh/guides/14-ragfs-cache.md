@@ -2,12 +2,14 @@
 
 RAGFS 缓存是 OpenViking 的可选读缓存层，用于加速文件全量读取和目录读取。它只作为加速层，不作为事实数据源；数据仍以 backend filesystem 为准。
 
-适用前提：
+CachedFileSystem 适用前提：
 
 - 只有一个 OpenViking / RAGFS 进程写入同一 namespace。
 - 文件和目录变更都经过 RAGFS。
 - backend 不被外部绕过 RAGFS 直接修改。
 - 缓存 Provider 的同一 key 写入或删除成功后，后续读取不会返回旧值。
+
+这些前提只适用于读缓存层。QueueFS 和 PathLock 也复用 CacheRuntime，但有各自的一致性规则。
 
 ## 快速开始
 
@@ -42,6 +44,11 @@ openviking-server doctor
         "namespace": "openviking",
         "max_file_size_bytes": 1048576,
         "bypass_prefixes": ["/queue", "/tmp"]
+      },
+      "pathlock": {
+        "provider": "cache",
+        "namespace": "openviking",
+        "lock_expire_secs": 30.0
       }
     }
   }
@@ -66,9 +73,32 @@ openviking-server
 | Provider | 适用场景 | 备注 |
 |----------|----------|------|
 | `redis` | 默认交付、普通网络环境 | 内置于 RAGFS，支持 standalone、Cluster 和 Sentinel |
-| `dynamic` | YuanRong、Mooncake 或闭源缓存系统 | 本期未实现，配置后返回 UnsupportedProvider |
+| `dynamic` | YuanRong、Mooncake 或闭源缓存系统 | 通过版本化 C ABI 从外部动态库加载 |
 
 `MemoryMockProvider` 只用于单元测试和 smoke test，不是生产配置项。
+
+### Cache PathLock
+
+将 `storage.agfs.pathlock.provider` 设为 `cache`，即可通过共享 Redis
+CacheRuntime 协调多个 OpenViking 进程的路径锁。`pathlock.namespace`
+为必填项，同一 OpenViking 部署的所有进程必须使用相同值。Cache PathLock
+只支持内置 Redis Provider。
+
+Redis HASH key 按逻辑路径 scope 拆分：
+
+```text
+ov:pathlock:{namespace}:global:tokens
+ov:pathlock:{namespace}:scope:_system:tokens
+ov:pathlock:{namespace}:scope:account:{account}:tokens
+```
+
+`{namespace}` 是 Redis Cluster hash tag，因此同一部署的 PathLock key
+仍位于同一 slot。Tree 冲突检查只扫描请求所属 scope 的 HASH。`/` 和
+`/local` 使用 global HASH，但不会扫描 account 或 `_system` HASH。
+跨 scope batch 会被拒绝。
+
+不要混部仍使用旧单 HASH key 的版本和使用 scope key 的版本。先停止旧版本
+写入，至少等待 `2 * lock_expire_secs` 让旧 key 过期，再启动新版本。
 
 ## 配置破坏性变更
 
@@ -85,9 +115,9 @@ openviking-server
 
 OpenViking 会对已删除字段直接返回迁移错误，不再静默转换。
 
-## 后续 DynamicProvider
+## DynamicProvider
 
-本期标准 OpenViking wheel 只内置 RedisProvider。DynamicProvider、`.so` 加载器和版本化 C ABI 放在后续阶段实现；当前配置 `provider=dynamic` 会在启动阶段返回 UnsupportedProvider。
+OpenViking 已内置 DynamicProvider 加载器和版本化 C ABI。默认 wheel 不携带第三方 SDK 或 Provider 动态库；需要接入外部缓存系统时，独立部署 Provider 动态库并配置 `provider=dynamic`。
 
 动态库必须导出以下版本化入口：
 
@@ -95,7 +125,9 @@ OpenViking 会对已删除字段直接返回迁移错误，不再静默转换。
 openviking_cache_provider_v1
 ```
 
-Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低 glibc 版本、外部 SDK 版本、动态依赖和 SHA256。依赖外部原生库时，由 Provider 发布方通过 RPATH、`LD_LIBRARY_PATH` 或部署说明保证动态链接器能够找到依赖。
+C 接口契约定义在 `crates/ragfs/include/openviking_cache_provider_v1.h`。Provider 返回的数据必须使用 Host allocator 分配，遵守文档中的内存所有权和关闭语义，禁止异常穿过 C ABI，并保证 handle 可以安全并发调用。
+
+Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低运行时版本、外部 SDK 版本、动态依赖和 SHA256。依赖外部原生库时，由 Provider 发布方通过 RPATH、`LD_LIBRARY_PATH` 或部署说明保证动态链接器能够找到依赖。
 
 外部 Provider 可以独立升级，不需要重新构建默认 OpenViking wheel；只有 DynamicProvider ABI 不兼容时，才需要同步升级 OpenViking。
 
@@ -105,7 +137,7 @@ Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低 glibc 版本、�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `provider` | str | 无 | Provider 名称，本期支持 `redis` |
+| `provider` | str | 无 | Provider 名称，支持 `redis` 和 `dynamic` |
 | `params` | object | `{}` | Provider 自有参数 |
 
 `storage.agfs.cachefs` 支持以下业务配置：
@@ -117,6 +149,14 @@ Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低 glibc 版本、�
 | `max_file_size_bytes` | int | `1048576` | 允许进入缓存的最大完整文件大小 |
 | `traversal_mode` | str | `"backend"` | 递归 API 使用 backend 遍历或 `cached_traversal` |
 | `bypass_prefixes` | list[str] | `[]` | 强制绕过缓存的路径前缀 |
+
+`storage.agfs.pathlock` 控制 PathLock 存储：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `provider` | str | `"filesystem"` | `filesystem`、`memory` 或 `cache` |
+| `namespace` | str 或 null | `null` | `provider=cache` 时必填的 OpenViking 实例名 |
+| `lock_expire_secs` | float | `30.0` | 锁 stale 超时；不得小于 `1.0` |
 
 Redis 配置：
 
@@ -134,9 +174,9 @@ Redis 配置：
 
 所有 Redis 读命令均发送到主节点，避免 QueueFS 读取到延迟的队列状态。需要传输加密时使用 Redis TLS，CacheRuntime 不额外增加应用层数据加密格式。
 
-未来 DynamicProvider 配置结构：
+DynamicProvider 配置：
 
-`cache.params` 完全由外部 Provider 定义，下面的字段只用于说明配置传递方式，实际配置以 Provider 发布说明为准。
+`cache.params.library` 由 OpenViking 用于加载动态库，其余字段由外部 Provider 定义并作为 JSON 传入 `create`。实际参数以 Provider 发布说明为准。
 
 ```json
 {
@@ -153,23 +193,27 @@ Redis 配置：
 
 ## 整体架构
 
-RAGFS 将缓存拆成两层：
+RAGFS 将 Provider 访问和各业务消费者分开：
 
 - `CachedFileSystem`：实现文件系统语义，包括 cache hit/miss、backend 回源、回填、失效、generation 校验和指标。
-- `CacheRuntime`：向业务层提供统一基础操作，本期在启动时绑定内置 RedisProvider；DynamicProvider 为后续扩展。
+- `CacheRuntime`：向业务层提供统一基础操作，启动时绑定内置 RedisProvider 或外部 DynamicProvider。
+- `QueueFS` 和 `RedisPathLockProvider`：复用共享 CacheRuntime 存储队列和分布式锁。RedisPathLockProvider 要求使用内置 RedisProvider。
 
 调用关系：
 
 ```text
 OpenViking
   -> RAGFS / MountableFS
-  -> CachedFileSystem
-       |-> CacheRuntime -> RedisProvider
-       |               `-> DynamicProvider（后续）
+       |-> CachedFileSystem ------\
+       |-> QueueFS cache backend --+-> shared CacheRuntime -> RedisProvider
+       `-> RedisPathLockProvider --/                     `-> DynamicProvider
        `-> Backend FileSystem
 ```
 
-这种边界让文件、目录、rename、递归删除和写后失效逻辑只在公共层实现。外部 Provider 不需要理解路径语义，只需要通过稳定 C ABI 提供 key-value 基础操作。
+CachedFileSystem 和 QueueFS 可以使用 RedisProvider 或 DynamicProvider。
+RedisPathLockProvider 依赖 Redis Lua，因此只使用 RedisProvider。文件系统语义
+保留在 CachedFileSystem；外部 Provider 只通过稳定 C ABI 提供 key-value
+基础操作。
 
 ## 缓存对象
 

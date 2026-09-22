@@ -134,12 +134,12 @@ class SQLiteUsageAuditStore:
             self._conn.close()
             self._conn = None
 
-    async def delete_user_data(self, *, account_id: str, user_id: str) -> dict[str, int]:
-        """Delete all usage/audit rows for an account/user pair."""
+    async def delete_data(self, *, account_id: str, user_id: str | None = None) -> dict[str, int]:
+        """Delete all usage/audit rows for an account, or one user within it."""
         async with self._lock:
-            return await asyncio.to_thread(self._delete_user_data_sync, account_id, user_id)
+            return await asyncio.to_thread(self._delete_data_sync, account_id, user_id)
 
-    def _delete_user_data_sync(self, account_id: str, user_id: str) -> dict[str, int]:
+    def _delete_data_sync(self, account_id: str, user_id: str | None = None) -> dict[str, int]:
         assert self._conn is not None
         tables = (
             "usage_token_hourly",
@@ -147,12 +147,14 @@ class SQLiteUsageAuditStore:
             "usage_context_write_bucket",
             "request_audit",
         )
+        predicate = "account_id = ?" + (" AND user_id = ?" if user_id is not None else "")
+        params = (account_id, user_id) if user_id is not None else (account_id,)
         self._conn.execute("BEGIN")
         try:
             deleted = {
                 table: self._conn.execute(
-                    f"DELETE FROM {table} WHERE account_id = ? AND user_id = ?",
-                    (account_id, user_id),
+                    f"DELETE FROM {table} WHERE {predicate}",
+                    params,
                 ).rowcount
                 for table in tables
             }

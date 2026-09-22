@@ -21,7 +21,10 @@ Enhanced features from RooCode:
 import re
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from rapidfuzz.distance import Levenshtein
 
 from openviking.session.memory.merge_op.base import DeleteBlock, StrPatch
 from openviking.session.memory.utils.line_numbers import (
@@ -47,27 +50,6 @@ class PatchParseError(Exception):
 # ============================================================================
 # Core Algorithm Functions (from RooCode)
 # ============================================================================
-
-
-def levenshtein_distance(s1: str, s2: str) -> int:
-    """Calculate Levenshtein distance between two strings."""
-    if len(s1) < len(s2):
-        return levenshtein_distance(s2, s1)
-
-    if len(s2) == 0:
-        return len(s1)
-
-    previous_row = list(range(len(s2) + 1))
-    for i, c1 in enumerate(s1):
-        current_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (c1 != c2)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-
-    return previous_row[-1]
 
 
 def normalize_string(text: str) -> str:
@@ -101,7 +83,7 @@ def get_similarity(original: str, search: str) -> float:
     if normalized_original == normalized_search:
         return 1.0
 
-    dist = levenshtein_distance(normalized_original, normalized_search)
+    dist = Levenshtein.distance(normalized_original, normalized_search)
     max_length = max(len(normalized_original), len(normalized_search))
 
     return 1.0 - (dist / max_length) if max_length > 0 else 1.0
@@ -130,6 +112,9 @@ def fuzzy_search(
     # For single-line search, enable substring matching mode
     is_single_line = search_len == 1
     search_str = search_lines[0] if is_single_line else ""
+    # Bound retained candidate text and discard it when this search returns.
+    substring_match = lru_cache(maxsize=128)(_find_best_substring_match)
+    chunk_similarity = lru_cache(maxsize=128)(get_similarity)
 
     while left_index >= start_index or right_index <= end_index - search_len:
         if left_index >= start_index:
@@ -144,7 +129,7 @@ def fuzzy_search(
                     left_index -= 1
                     continue
                 # If no exact match, try the best similarity with substrings
-                line_score, line_content = _find_best_substring_match(line, search_str)
+                line_score, line_content = substring_match(line, search_str)
                 if line_score > best_score:
                     best_score = line_score
                     best_match_index = left_index
@@ -152,7 +137,7 @@ def fuzzy_search(
             else:
                 # Original multi-line logic
                 original_chunk = "\n".join(lines[left_index : left_index + search_len])
-                similarity = get_similarity(original_chunk, search_chunk)
+                similarity = chunk_similarity(original_chunk, search_chunk)
                 if similarity > best_score:
                     best_score = similarity
                     best_match_index = left_index
@@ -171,7 +156,7 @@ def fuzzy_search(
                     right_index += 1
                     continue
                 # If no exact match, try the best similarity with substrings
-                line_score, line_content = _find_best_substring_match(line, search_str)
+                line_score, line_content = substring_match(line, search_str)
                 if line_score > best_score:
                     best_score = line_score
                     best_match_index = right_index
@@ -179,7 +164,7 @@ def fuzzy_search(
             else:
                 # Original multi-line logic
                 original_chunk = "\n".join(lines[right_index : right_index + search_len])
-                similarity = get_similarity(original_chunk, search_chunk)
+                similarity = chunk_similarity(original_chunk, search_chunk)
                 if similarity > best_score:
                     best_score = similarity
                     best_match_index = right_index

@@ -313,3 +313,69 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     processor.process_resource.assert_not_awaited()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
     agfs.pathlock_handoff.assert_awaited_once_with(lock)
+
+
+@pytest.mark.asyncio
+async def test_background_directory_keeps_extension_routing(monkeypatch, tmp_path):
+    from openviking.parse.base import NodeType, ResourceNode, create_parse_result
+    from openviking.parse.parsers.base_parser import BaseParser
+    from openviking.parse.parsers.directory import DirectoryParser
+    from openviking.parse.parsers.pdf import PDFParser
+    from openviking.parse.understanding_api import UnderstandingAPI
+    from openviking.utils.media_processor import UnifiedResourceProcessor
+    from tests.parse.test_add_directory import FakeVikingFS
+    from tests.parse.test_directory_understanding_routing import _configure_understanding
+
+    _configure_understanding(monkeypatch, ["pdf"])
+    (tmp_path / "paper.pdf").write_bytes(b"%PDF-1.7")
+    prepared = LocalResource(tmp_path, SourceType.LOCAL, str(tmp_path), is_temporary=False)
+    fs = FakeVikingFS()
+    service = ResourceService(viking_fs=fs)
+    parsed = create_parse_result(
+        root=ResourceNode(type=NodeType.ROOT, title="paper"),
+        source_path=str(tmp_path / "paper.pdf"),
+        source_format="pdf",
+        parser_name="test",
+    )
+    parsed.temp_dir_path = "viking://temp/parsed"
+    native_parse = AsyncMock(return_value=parsed)
+    api_parse = AsyncMock(return_value=parsed)
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+
+    async def execute(**kwargs):
+        await processor.process(
+            str(tmp_path),
+            prepared_resource=kwargs["prepared_resource"],
+            parser_backend=kwargs["parser_backend"],
+        )
+        return {"status": "success"}
+
+    monkeypatch.setattr(service, "_execute_resource_ingestion", execute)
+    monkeypatch.setattr(BaseParser, "_get_viking_fs", lambda self: fs)
+    monkeypatch.setattr(
+        "openviking.resource.staged_source.materialize_source", AsyncMock(return_value=prepared)
+    )
+    monkeypatch.setattr(PDFParser, "parse", native_parse)
+    monkeypatch.setattr(UnderstandingAPI, "parse", api_parse)
+    monkeypatch.setattr(DirectoryParser, "_merge_parser_result", AsyncMock())
+    msg = AddResourceMsg(
+        task_id="task-1",
+        path=str(tmp_path),
+        root_uri="viking://resources/directory",
+        account_id="acct",
+        user_id="alice",
+        role="user",
+        staged_source={
+            "temp_uri": "viking://temp/staged",
+            "source_uri": "viking://temp/staged/source/directory",
+            "source_type": SourceType.LOCAL,
+            "original_source": str(tmp_path),
+            "meta": {},
+        },
+    )
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
+    await service.execute_add_resource_job(
+        msg, ctx=ctx, resource_lock=None, stage_callback=AsyncMock()
+    )
+    api_parse.assert_awaited_once()
+    native_parse.assert_not_awaited()

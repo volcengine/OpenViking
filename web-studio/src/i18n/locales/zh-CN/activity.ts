@@ -23,6 +23,8 @@ const activity = {
       shortcut: '⌘ N 新建会话',
     },
     chat: {
+      historyLoadFailed: '会话记录加载失败：{{error}}',
+      sendFailed: '消息发送失败：{{error}}',
       copy: '复制',
       emptyDescription: '探索你的知识库，开始一段对话。',
       placeholder: '输入消息...',
@@ -71,6 +73,7 @@ const activity = {
       loadFailed: '记忆变更加载失败',
       retry: '重试',
       empty: '本次会话提交没有产生记忆变更。',
+      viewExperienceImpact: '查看该经验的应用效果',
     },
     empty: {
       description: '从左侧选择一个会话，或创建新会话。',
@@ -175,7 +178,7 @@ const activity = {
       botDisabledFooter: '启用 VikingBot 后即可与 Agent 对话',
       historyTitle: 'Agent 会话历史',
       historyDescription:
-        '这里只显示 Agent 面板使用过的会话。新建会话会创建一段空白的 Agent 上下文。',
+        '工作台与 VikingBot 共用对话记录，也包含当前浏览器保存的旧 Agent 会话。',
       loadingSessions: '正在加载会话...',
       noSessions: '暂无历史会话',
       createTimeout: '创建工作台会话超时，请检查连接设置后重试。',
@@ -228,7 +231,7 @@ const activity = {
         '已打开添加资源弹窗。提交后左侧目录会刷新，也可以用 /ls 或 /search 继续定位新内容。',
       addResourceTitle: '添加资源',
       sessionUsage:
-        '用法：/session [current|list|create|switch|get|context|messages|archive|commit|extract|message|used|tool-results|tool-result|tool-search|delete] ...',
+        '用法：/session [current|list|create|switch|get|context|messages|archive|commit|extract|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: '用法：/session delete <session_id>',
       sessionMissing:
         '当前没有会话，请先打开 Agent 面板创建会话，或指定 session_id。',
@@ -284,7 +287,7 @@ const activity = {
         sessionAction: {
           name: '子命令',
           description:
-            'current、list、create、switch、get、context、messages、archive、commit、extract、message、used、tool-results、tool-result、tool-search、delete。',
+            'current、list、create、switch、get、context、messages、archive、commit、extract、message、tool-results、tool-result、tool-search、delete。',
         },
         sessionId: {
           name: 'session_id',
@@ -302,14 +305,6 @@ const activity = {
         messageContent: {
           name: 'content',
           description: '用于 message 子命令，指定要追加到会话的文本内容。',
-        },
-        contexts: {
-          name: '--context uri',
-          description: 'used 子命令可重复传入，记录本轮实际使用的上下文。',
-        },
-        skillJson: {
-          name: '--skill-json JSON',
-          description: 'used 子命令使用，记录实际使用的技能信息。',
         },
         keepRecent: {
           name: '--keep-recent 数量',
@@ -449,10 +444,6 @@ const activity = {
           message: {
             code: '/session message [session_id] user hello',
             description: '向会话追加消息',
-          },
-          used: {
-            code: '/session used [session_id] --context viking://resources/...',
-            description: '记录实际使用的上下文或技能',
           },
           toolResults: {
             code: '/session tool-results [session_id] --limit 20',

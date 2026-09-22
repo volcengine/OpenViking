@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Bootstrap script for OpenViking HTTP Server."""
 
-import asyncio
 import argparse
+import asyncio
 import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -216,7 +217,19 @@ def main():
         config = load_server_config(args.config)
         OpenVikingConfigSingleton.initialize(config_path=args.config)
     except (FileNotFoundError, ValueError) as e:
-        print(e, file=sys.stderr)
+        if isinstance(e, ValueError):
+            print(
+                f"Failed to load OpenViking server configuration from {resolved_config_path}:\n{e}",
+                file=sys.stderr,
+            )
+            print(
+                "\nValidate the configuration with:\n"
+                "  openviking-server doctor\n\n"
+                "See examples/ov.conf.example for supported fields.",
+                file=sys.stderr,
+            )
+        else:
+            print(e, file=sys.stderr)
         sys.exit(1)
 
     # Configure logging early so that all subsequent steps have proper logging
@@ -225,6 +238,7 @@ def main():
     # 🔍 Authentication health check - CRITICAL: will exit if check fails
     try:
         from openviking.server.auth.health_check import run_startup_health_check_or_exit
+
         asyncio.run(run_startup_health_check_or_exit(config))
     except Exception as e:
         # Don't fail startup if health check itself has issues
@@ -264,6 +278,10 @@ def main():
 
     bot_process: Optional[BotProcess] = None
     if config.with_bot:
+        import secrets
+
+        # Shared only by this server and its managed child, never returned to Studio.
+        os.environ["OPENVIKING_BOT_STUDIO_TOKEN"] = secrets.token_urlsafe(32)
         bot_port = args.bot_port
         config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
         _abort_if_port_in_use(bot_port, "vikingbot gateway")
@@ -354,6 +372,29 @@ def _handle_vikingbot_failure(output: str, returncode: int) -> None:
         print(f"\nDetailed error:\n{output}", file=sys.stderr)
 
 
+def _wait_for_bot_ready(process, status_path: Path) -> None:
+    """A running child is not ready until its sandbox and HTTP server are ready."""
+    started = time.monotonic()
+    timeout = 900
+    while time.monotonic() - started < timeout:
+        if process.poll() is not None:
+            raise RuntimeError(
+                f"VikingBot exited before becoming ready (code {process.returncode})."
+            )
+        try:
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, ValueError):
+            status = {}
+        if status.get("pid") == process.pid:
+            timeout = max(timeout, int(status.get("timeout", timeout)))
+            if status.get("status") == "failed":
+                raise RuntimeError(status.get("error") or "VikingBot initialization failed")
+            if status.get("status") == "ready":
+                return
+        time.sleep(0.1)
+    raise TimeoutError("VikingBot readiness timed out; check Docker/image pulls and the Bot log.")
+
+
 def _start_vikingbot_gateway(
     enable_logging: bool,
     log_dir: str,
@@ -386,11 +427,14 @@ def _start_vikingbot_gateway(
         return None
 
     vikingbot_cmd.extend(["--host", VIKINGBOT_DEFAULT_HOST, "--port", str(port)])
+    resolved_config = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if resolved_config is not None:
+        vikingbot_cmd.extend(["--config", str(resolved_config)])
 
     # Prepare logging
     log_file = None
-    stdout_handler = subprocess.PIPE
-    stderr_handler = subprocess.PIPE
+    stdout_handler = None
+    stderr_handler = None
     log_file_path = None
 
     if enable_logging:
@@ -407,13 +451,18 @@ def _start_vikingbot_gateway(
             if log_file:
                 log_file.close()
                 log_file = None
-            stdout_handler = subprocess.PIPE
-            stderr_handler = subprocess.PIPE
+            stdout_handler = None
+            stderr_handler = None
 
+    # Keep the handshake outside the sandbox workspace and unique to this child.
+    startup_directory = tempfile.TemporaryDirectory(prefix="vikingbot-startup-")
+    status_path = Path(startup_directory.name) / "status.json"
+    process = None
     # Start vikingbot gateway process
     try:
         # Set environment to ensure it uses the same Python environment
         env = os.environ.copy()
+        env["VIKINGBOT_STARTUP_STATUS"] = str(status_path)
         cli_config_path = _resolve_cli_config_for_bot(config_path)
         if cli_config_path is not None:
             env[OPENVIKING_CLI_CONFIG_ENV] = cli_config_path
@@ -427,32 +476,36 @@ def _start_vikingbot_gateway(
             stderr=stderr_handler,
             text=True,
             env=env,
+            # Parent handles terminal signals and then shuts Gateway down once.
+            # Avoid Ctrl+C cancelling child cleanup before its sandbox is released.
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
 
-        # Wait a moment to check if it started successfully
-        time.sleep(2)
-        if process.poll() is not None:
-            # Process exited early
-            if log_file:
-                log_file.close()
-                if log_file_path:
-                    with open(log_file_path, "r") as f:
-                        output = f.read()
-                    _handle_vikingbot_failure(output, process.returncode)
-            else:
-                stdout, stderr = process.communicate(timeout=1)
-                _handle_vikingbot_failure(stderr, process.returncode)
-            sys.exit(1)
+        _wait_for_bot_ready(process, status_path)
 
         print(f"Vikingbot gateway started (PID: {process.pid})")
 
         return BotProcess(process=process, log_file=log_file)
 
-    except Exception as e:
+    except BaseException as e:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
         if log_file:
             log_file.close()
-        print(f"Warning: Failed to start vikingbot gateway: {e}")
+        print(f"Failed to start vikingbot gateway: {e}")
+        if log_file_path:
+            print(f"VikingBot startup details: {log_file_path}")
+        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+            raise
         return None
+    finally:
+        startup_directory.cleanup()
 
 
 def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
@@ -466,7 +519,7 @@ def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
         # Try graceful termination first
         bot_process.process.terminate()
         try:
-            bot_process.process.wait(timeout=5)
+            bot_process.process.wait(timeout=30)
             print("Vikingbot gateway stopped gracefully.")
         except subprocess.TimeoutExpired:
             # Force kill if it doesn't stop in time

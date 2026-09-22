@@ -1,6 +1,6 @@
 # 导入本地 Agent 日志（openviking-server ingest）
 
-`openviking-server ingest` 把你本地已有的 AI 编码 / agent harness 的对话日志（Claude Code、Codex、OpenCode、Hermes、OpenClaw）解析成标准消息，再通过 OpenViking 既有的会话管线“重放”进去（`创建会话 → 批量追加消息 → 提交`，提交时触发记忆抽取），从而把这些历史与新增对话沉淀为长期记忆。它与各 harness 的“记忆插件”互补：插件在对话**进行时**实时挂载捕获，而本工具用于**导入既有日志**与**离线监听新增日志**，无需插件、也无需改动对应 harness。
+`openviking-server ingest` 把你本地已有的 AI 编码 / agent harness 的对话日志（Claude Code、Codex、WorkBuddy、OpenCode、MiMo、Hermes、OpenClaw）解析成标准消息，再通过 OpenViking 既有的会话管线“重放”进去（`创建会话 → 批量追加消息 → 提交`，提交时触发记忆抽取），从而把这些历史与新增对话沉淀为长期记忆。它与各 harness 的“记忆插件”互补：插件在对话**进行时**实时挂载捕获，而本工具用于**导入既有日志**与**离线监听新增日志**，无需插件、也无需改动对应 harness。
 
 与插件方案的关键区别：本工具是 OpenViking 的**客户端**，跑在日志所在的机器上，通过 SDK 指向本地或远端 server；它默认**完全关闭**，不会“装上就扫你本地文件”。
 
@@ -20,14 +20,25 @@
 |---|---|---|---|
 | `claude_code` | 支持 | `~/.claude/projects/*/*.jsonl` | append-only JSONL，字节偏移游标 |
 | `codex` | 支持 | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | append-only JSONL |
+| `workbuddy` | 支持 | `~/.workbuddy/projects/*/*.jsonl` | append-only JSONL；会把系统提示等注入到 user 轮里，适配器会剥离并只保留 `<user_query>` |
 | `hermes` | 支持 | `~/.hermes/sessions/*.jsonl` | 群聊 agent，user 取原始用户名 |
 | `openclaw` | 支持 | `~/.openclaw/agents/*/sessions/*.jsonl` | 群聊 agent，user 取原始用户名 |
 | `opencode` | 实验性 | `~/.local/share/opencode/opencode.db` | SQLite，按 `(time, id)` 轮询；旧版文件存储暂不支持 |
+| `mimo` | 实验性 | `~/.local/share/mimocode/mimocode.db` | SQLite，按 `(time, id)` 轮询；跳过 `part.synthetic` 文本与 `agent_id != main` |
 | `cursor` | 暂缓 | `~/Library/Application Support/Cursor/User/**/state.vscdb` | 无文档、随版本漂移的 KV blob，暂未实现 |
 
 > 这里的 harness（agent 框架）指 CC / Codex 等整套工具，区别于 OpenViking 里“tool（工具调用）”的概念。
 
 ## 在 ov.conf 中开启
+
+先在运行 ingest 命令的同一 shell 中设置以下变量。示例连接本地 dev 服务；认证部署应替换 URL，并使用绑定租户身份的 user/admin API Key：
+
+```bash
+export OPENVIKING_URL="http://localhost:1933"
+export OPENVIKING_API_KEY=""  # 仅用于本地 dev；认证部署应填写 user/admin key。
+```
+
+配置加载器会展开这些变量。未设置的变量会保留为字面字符串，因此使用下面的占位值时不要跳过此步骤。
 
 在 `ov.conf` 增加 `ingest` 段，列出要导入的 harness 并设置其模式：
 
@@ -42,7 +53,9 @@
     "harnesses": {
       "claude_code": { "enabled": true, "mode": "both" },
       "codex":       { "enabled": true, "mode": "backfill" },
+      "workbuddy":   { "enabled": true, "mode": "both" },
       "opencode":    { "enabled": false, "mode": "watch", "experimental": true },
+      "mimo":        { "enabled": false, "mode": "watch", "experimental": true },
       "hermes":      { "enabled": false, "mode": "both", "user_field": "sender" },
       "openclaw":    { "enabled": false, "mode": "both", "user_field": "sender" }
     }

@@ -121,6 +121,8 @@ function PlaygroundWorkbench() {
       ? createEntryFromUri(search.file, false)
       : createEntryFromUri(initialCurrentUri, true),
   )
+  const selectedFileRef = useRef(selectedFile)
+  selectedFileRef.current = selectedFile
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() =>
     mergeExpanded(
       new Set(readPlaygroundExpandedUris(identityScopeKey)),
@@ -400,6 +402,26 @@ function PlaygroundWorkbench() {
     [syncSearch],
   )
 
+  const handleRefreshContextTree = useCallback(async () => {
+    const refreshedFile = selectedFileRef.current
+    await invalidateList()
+    if (!refreshedFile || refreshedFile.isDir) return
+
+    try {
+      await fetchFsStat(refreshedFile.uri, { throwOnError: true })
+      return
+    } catch (error) {
+      if ((error as { statusCode?: number }).statusCode !== 404) return
+    }
+    if (selectedFileRef.current?.uri !== refreshedFile.uri) return
+
+    setSelectedFile(null)
+    syncSearch({
+      file: undefined,
+      uri: normalizeDirUri(parentUri(refreshedFile.uri)),
+    })
+  }, [invalidateList, syncSearch])
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -544,10 +566,7 @@ function PlaygroundWorkbench() {
             onAddResource={() => setUploadDialogOpen(true)}
             onOpenProcessingTasks={handleOpenProcessingTasks}
             onOpenSearch={handleOpenSearch}
-            onRefresh={() => {
-              void invalidateList(currentUri)
-              void listQuery.refetch()
-            }}
+            onRefresh={() => void handleRefreshContextTree()}
           />
           <div className="min-h-0 flex-1">
             <ContextTree

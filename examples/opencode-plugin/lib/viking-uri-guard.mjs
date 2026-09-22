@@ -1,5 +1,5 @@
 import { log } from "./utils.mjs"
-import { buildGuardMessage, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
+import { evaluateUriGuard, evaluateUriNotice, findVikingUri, normalizeToolName } from "./shared/uri-guard.mjs"
 
 const FILESYSTEM_TOOL_HINTS = {
   read: {
@@ -14,23 +14,38 @@ const FILESYSTEM_TOOL_HINTS = {
     tool: "openviking_search",
     example: (uri, args = {}) => `openviking_search(query="${String(args.pattern ?? "").replaceAll('"', '\\"')}", target_uri="${uri}")`,
   },
+  bash: {
+    tool: "openviking_read or openviking_search",
+    example: (uri) => `openviking_read(uris=["${uri}"])`,
+  },
 }
 
 export function createVikingUriGuard() {
   return async (input, output) => {
     const toolName = normalizeToolName(input?.tool ?? input?.name)
-    const hint = FILESYSTEM_TOOL_HINTS[toolName]
-    if (!hint) return
-
     const args = output?.args ?? input?.args ?? {}
-    const uri = findVikingUri(args)
-    if (!uri) return
+    const decision = evaluateUriGuard(toolName, args, { hints: FILESYSTEM_TOOL_HINTS })
+    if (!decision) return
 
     log("INFO", "viking-uri-guard", "Blocked filesystem tool for viking URI", {
       tool: toolName,
-      uri,
+      uri: decision.uri,
     })
-    throw new Error(buildGuardMessage(uri, { ...hint, example: hint.example(uri, args) }))
+    throw new Error(decision.reason)
+  }
+}
+
+export function createVikingUriNotice() {
+  return async (input, output) => {
+    const toolName = normalizeToolName(input?.tool ?? input?.name)
+    const notice = evaluateUriNotice(toolName, input?.args ?? {}, { hints: FILESYSTEM_TOOL_HINTS })
+    if (!notice || !output) return
+
+    log("INFO", "viking-uri-guard", "Attached viking URI notice to shell tool output", {
+      tool: toolName,
+      uri: notice.uri,
+    })
+    output.output = output.output ? `${output.output}\n\n${notice.reason}` : notice.reason
   }
 }
 

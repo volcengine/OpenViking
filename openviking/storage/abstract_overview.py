@@ -9,8 +9,10 @@ its frontmatter as user content and is never parsed implicitly.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Sequence, TypeVar
+from urllib.parse import quote
 
 import yaml
 
@@ -139,7 +141,9 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
             "pending_child_changes",
         }
         if not isinstance(freshness, Mapping) or not required.issubset(freshness):
-            raise AbstractOverviewFormatError("abstract overview freshness has an invalid field set")
+            raise AbstractOverviewFormatError(
+                "abstract overview freshness has an invalid field set"
+            )
         counters: Dict[str, int] = {}
         for field in (
             "total_entries",
@@ -153,6 +157,14 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
                     f"abstract overview freshness.{field} must be a non-negative integer"
                 )
             counters[field] = value
+        if "missing_summary_entries" in freshness:
+            value = freshness["missing_summary_entries"]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise AbstractOverviewFormatError(
+                    "abstract overview freshness.missing_summary_entries "
+                    "must be a non-negative integer"
+                )
+            counters["missing_summary_entries"] = value
         if counters["sampled_entries"] + counters["unsampled_entries"] != counters["total_entries"]:
             raise AbstractOverviewFormatError(
                 "abstract overview freshness sampled + unsampled must equal total"
@@ -236,6 +248,59 @@ def render_abstract_overview(
         sort_keys=False,
     ).rstrip()
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
+
+
+def rewrite_viking_uri_references(text: str, source_uri: str, target_uri: str) -> str:
+    """Rewrite generated raw or URL-encoded URI references within one transfer scope."""
+
+    if not isinstance(text, str):
+        raise TypeError("abstract overview body must be a string")
+    source = source_uri.rstrip("/")
+    target = target_uri.rstrip("/")
+    if not source or source == target:
+        return text
+
+    variants = (
+        (quote(source, safe=":/"), quote(target, safe=":/")),
+        (source, target),
+    )
+    rewritten = text
+    seen: set[str] = set()
+    # Generated summaries contain Markdown links and occasional URI prose.  A
+    # boundary is required so moving ``.../foo`` never rewrites ``.../foobar``.
+    suffix_boundary = r"(?=$|[/#\s)\]}>,'\"`.,;:!?])"
+    for old, new in variants:
+        if old in seen:
+            continue
+        seen.add(old)
+        rewritten = re.sub(
+            re.escape(old) + suffix_boundary,
+            lambda _match, replacement=new: replacement,
+            rewritten,
+        )
+    return rewritten
+
+
+def rewrite_abstract_overview_for_transfer(
+    raw: str | bytes,
+    *,
+    level: int | ContextLevel,
+    source_dir_uri: str,
+    target_dir_uri: str,
+    source_scope_uri: Optional[str] = None,
+    target_scope_uri: Optional[str] = None,
+) -> str:
+    """Retarget generated sidecar metadata and body links without regeneration."""
+
+    document = parse_abstract_overview(raw)
+    body = rewrite_viking_uri_references(
+        document.body,
+        source_scope_uri or source_dir_uri,
+        target_scope_uri or target_dir_uri,
+    )
+    if document.legacy:
+        return body
+    return render_abstract_overview(level, target_dir_uri, body, document.metadata)
 
 
 def prepare_abstract_overview_write(
@@ -338,27 +403,33 @@ def deterministic_sample(items: Sequence[_T], limit: int) -> list[_T]:
 
 
 def freshness_metadata(
-    total_entries: int, sampled_entries: int, pending: int = 0
+    total_entries: int,
+    sampled_entries: int,
+    pending: int = 0,
+    missing_summary_entries: Optional[int] = None,
 ) -> Dict[str, int]:
     """Create validated direct-child freshness counters."""
 
-    return _normalize_metadata(
-        {
-            "freshness": {
-                "total_entries": total_entries,
-                "sampled_entries": sampled_entries,
-                "unsampled_entries": total_entries - sampled_entries,
-                "pending_child_changes": pending,
-            }
-        }
-    )["freshness"]
+    freshness = {
+        "total_entries": total_entries,
+        "sampled_entries": sampled_entries,
+        "unsampled_entries": total_entries - sampled_entries,
+        "pending_child_changes": pending,
+    }
+    if missing_summary_entries is not None:
+        freshness["missing_summary_entries"] = missing_summary_entries
+    return _normalize_metadata({"freshness": freshness})["freshness"]
 
 
 async def _read_existing_document(
     viking_fs: Any, uri: str, ctx: Optional[RequestContext]
 ) -> Optional[AbstractOverviewDocument]:
     raw = await _raw_if_exists(viking_fs, uri, ctx)
-    return parse_abstract_overview(raw) if raw is not None else None
+    try:
+        return parse_abstract_overview(raw) if raw is not None else None
+    except AbstractOverviewFormatError as exc:
+        logger.warning("[Semantic] Ignoring malformed sidecar %s: %s", uri, exc)
+        return None
 
 
 async def write_abstract_overview(
@@ -420,19 +491,15 @@ async def write_abstract_overview(
                     )
             next_freshness = dict(requested_freshness)
             consumed = current_pending if consume_pending is None else max(consume_pending, 0)
-            next_freshness["pending_child_changes"] = max(
-                current_pending - consumed, 0
-            )
+            next_freshness["pending_child_changes"] = max(current_pending - consumed, 0)
             merged_metadata["freshness"] = next_freshness
 
-        overview_body_changed = (
-            existing_overview is None
-            or semantic_body_digest(existing_overview.body) != semantic_body_digest(overview)
-        )
-        abstract_body_changed = (
-            existing_abstract is None
-            or semantic_body_digest(existing_abstract.body) != semantic_body_digest(abstract)
-        )
+        overview_body_changed = existing_overview is None or semantic_body_digest(
+            existing_overview.body
+        ) != semantic_body_digest(overview)
+        abstract_body_changed = existing_abstract is None or semantic_body_digest(
+            existing_abstract.body
+        ) != semantic_body_digest(abstract)
 
         rendered_overview = render_abstract_overview(
             ContextLevel.OVERVIEW, dir_uri, overview, merged_metadata
@@ -488,6 +555,7 @@ async def plan_abstract_overview_refresh(
     force_refresh: bool = False,
     overview_sample_limit: int = 32,
     refresh_ratio: float = 0.10,
+    lock_timeout_secs: float = 0.0,
 ) -> FreshnessDecision:
     """Atomically record direct-child changes and choose refresh scheduling.
 
@@ -530,7 +598,9 @@ async def plan_abstract_overview_refresh(
             force_refresh=force_refresh,
         )
     lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
-    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+    lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+        lock_paths, timeout_secs=lock_timeout_secs
+    )
     try:
         documents = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
         baselines = [
@@ -599,19 +669,28 @@ async def read_abstract_overview_pending_snapshot(
         f"{dir_uri.rstrip('/')}/.overview.md",
         f"{dir_uri.rstrip('/')}/.abstract.md",
     ]
-    owns_lease = lock is None
-    snapshot_lease = lock
-    if owns_lease:
-        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
-        snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
-    try:
+
+    def _pending_of(documents: Sequence[Optional[AbstractOverviewDocument]]) -> int:
         pending_values = []
-        for uri in uris:
-            document = await _read_existing_document(viking_fs, uri, ctx)
+        for document in documents:
             freshness = document.metadata.get("freshness") if document else None
             if document is not None and not document.legacy and isinstance(freshness, Mapping):
                 pending_values.append(int(freshness["pending_child_changes"]))
         return max(pending_values, default=0)
+
+    owns_lease = lock is None
+    snapshot_lease = lock
+    if owns_lease:
+        # Read-only: when neither sidecar exists there is no counter to
+        # snapshot, and acquiring exact locks there would create the parent
+        # directory just to hold lock metadata (a deleted directory reappears).
+        preliminary = [await _read_existing_document(viking_fs, uri, ctx) for uri in uris]
+        if all(document is None for document in preliminary):
+            return 0
+        lock_paths = [viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris]
+        snapshot_lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(lock_paths)
+    try:
+        return _pending_of([await _read_existing_document(viking_fs, uri, ctx) for uri in uris])
     finally:
         if owns_lease:
             await viking_fs._async_agfs.pathlock_release(snapshot_lease)

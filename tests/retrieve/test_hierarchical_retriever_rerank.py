@@ -56,8 +56,8 @@ class DummyStorage:
         self.search_calls = []
         self.child_search_calls = []
 
-    def _acl_enabled(self, ctx: RequestContext) -> bool:
-        return self.acl_manager is not None and self.acl_manager.is_enabled(ctx.account_id)
+    async def _acl_enabled(self, ctx: RequestContext) -> bool:
+        return self.acl_manager is not None and await self.acl_manager.is_enabled(ctx.account_id)
 
     async def collection_exists_bound(self) -> bool:
         return True
@@ -374,7 +374,10 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
         _result("viking://resources/a/deep-a.md", 0.2, abstract="deep A"),
         _result("viking://resources/b/deep-b.md", 0.8, abstract="deep B"),
     ])
-    storage.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+    async def acl_enabled(_account_id):
+        return True
+
+    storage.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
     async def no_hierarchical_children(*_args, **_kwargs):
         return []
@@ -697,13 +700,20 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
                 ),
             ),
             _result("viking://resources/demo.md", 0.8, level=2, abstract=markdown),
+            _result(
+                "viking://resources/malformed",
+                0.7,
+                level=int(ContextLevel.ABSTRACT),
+                abstract="---\n",
+            ),
         ],
         ctx=_ctx(),
     )
 
-    assert [item.search_tags for item in result] == [[], [], []]
+    assert [item.search_tags for item in result] == [[], [], [], []]
     assert [item.abstract for item in result] == [
         "Visible abstract.",
         "# Visible overview",
         markdown,
+        "",
     ]

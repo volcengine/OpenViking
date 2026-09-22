@@ -23,6 +23,8 @@ def test_public_http_error_is_bounded_and_redacts_credentials() -> None:
         ),
         details={
             "api_key": "sk-secret",
+            "app_secret": "app-secret",
+            "custom_secret": "custom-secret",
             "rejected_value": "Bearer another-secret",
             "nested": {
                 "client-secret": "very-secret",
@@ -38,6 +40,8 @@ def test_public_http_error_is_bounded_and_redacts_credentials() -> None:
     assert "bearer-secret" not in error.message
     assert error.details == {
         "api_key": "[REDACTED]",
+        "app_secret": "[REDACTED]",
+        "custom_secret": "[REDACTED]",
         "rejected_value": "Bearer [REDACTED]",
         "nested": {
             "client-secret": "[REDACTED]",

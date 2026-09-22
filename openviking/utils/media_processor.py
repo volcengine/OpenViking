@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unified resource processor with strategy-based routing."""
 
+import time
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 from urllib.parse import urlparse
 
+from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
@@ -19,12 +22,14 @@ from openviking.parse.parsers.constants import (
     TYPESCRIPT_MPEG_TS_EXTENSION,
 )
 from openviking.parse.parsers.media.utils import is_mpeg_ts, read_mpeg_ts_probe
+from openviking.parse.parsers.upload_utils import is_empty_file
 from openviking.parse.registry import parse
 from openviking.server.local_input_guard import (
     is_remote_resource_source,
     looks_like_local_path,
 )
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking.telemetry import get_current_telemetry
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
 # All known valid extensions - only these should be stripped when getting stem
@@ -200,9 +205,72 @@ class UnifiedResourceProcessor:
                 "direct host filesystem paths are not allowed."
             )
 
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+        from openviking.parse.feishu_import import recursive_wiki
+
+        if FeishuAccessor._is_feishu_url(str(source)) and (
+            FeishuAccessor._parse_feishu_url(str(source))[0] == "folder"
+            or (
+                FeishuAccessor._parse_feishu_url(str(source))[0] == "wiki"
+                and recursive_wiki(kwargs)
+            )
+        ):
+            backend = normalize_parser_backend(kwargs.get("parser_backend"))
+            mode = normalize_parse_mode(kwargs.get("parse_mode", ParseMode.DEFAULT))
+            kwargs["_feishu_use_understanding"] = bool(
+                mode is ParseMode.DEFAULT
+                and backend is not ParserBackend.INTERNAL
+                and (
+                    backend is ParserBackend.UNDERSTANDING
+                    or self._get_parser_router().should_use_understanding_api(source)
+                )
+            )
         resource = await self._get_accessor_registry().access(source, **kwargs)
-        self._set_resolved_identity(resource, kwargs.get("source_name"))
+        try:
+            self._set_resolved_identity(resource, kwargs.get("source_name"))
+            self._reject_empty_resource(resource, kwargs.get("source_name"))
+        except Exception:
+            # Ownership transfers to the caller only after prepare succeeds.
+            # Until then, release temporary accessor results on every error.
+            resource.cleanup()
+            raise
         return resource
+
+    @staticmethod
+    def _reject_empty_resource(resource: LocalResource, source_name: Optional[str]) -> None:
+        """Refuse a source with no content, wherever it was fetched from.
+
+        Every ingestion path reaches this method: prepare_durable_source
+        freezes a source here before the request touches the tree, and
+        process() calls it for anything that was not frozen earlier. An empty
+        file is refused once, at the point the bytes are first in hand, rather
+        than being parsed and indexed as an empty resource.
+
+        Directories are skipped: their size is not meaningful, and
+        directory_scan already drops empty or whitespace-only members. content/write is a
+        different path and still allows an empty file, because creating one
+        there is an explicit user action.
+        """
+        try:
+            if not resource.path.is_file() or not is_empty_file(resource.path):
+                return
+        except OSError:
+            # An unreadable source is not this check's business; let the normal
+            # ingestion path report it.
+            return
+
+        meta = resource.meta
+        name = (
+            source_name
+            or meta.get("resolved_name")
+            or meta.get("original_filename")
+            or resource.path.name
+        )
+        raise InvalidArgumentError(
+            f"'{name}' is empty or contains only whitespace, so there is nothing to extract or index. "
+            "Add a resource with content, or use content/write if an empty file is "
+            "what you want."
+        )
 
     async def process(
         self,
@@ -223,6 +291,25 @@ class UnifiedResourceProcessor:
         - Directories needed for TreeBuilder are preserved via ParseResult.temp_dir_path
         """
 
+        metrics_account_id = kwargs.pop("_metrics_account_id", None)
+
+        async def run_stage(stage: str, operation: Awaitable[ParseResult | LocalResource]):
+            started_at = time.perf_counter()
+            status = "ok"
+            try:
+                with get_current_telemetry().measure(f"resource.{stage}"):
+                    return await operation
+            except Exception:
+                status = "error"
+                raise
+            finally:
+                ResourceIngestionEventDataSource.record_stage(
+                    stage=stage,
+                    status=status,
+                    duration_seconds=time.perf_counter() - started_at,
+                    account_id=metrics_account_id,
+                )
+
         mode = normalize_parse_mode(parse_mode)
 
         # First check if source is raw content (not URL/path)
@@ -231,10 +318,13 @@ class UnifiedResourceProcessor:
         )
         if not is_potential_path and not self._is_url(source):
             # Treat as raw content
-            return await parse(
-                source,
-                instruction=instruction,
-                split_content=mode is ParseMode.DEFAULT,
+            return await run_stage(
+                "parse_artifact",
+                parse(
+                    source,
+                    instruction=instruction,
+                    split_content=mode is ParseMode.DEFAULT,
+                ),
             )
 
         if (
@@ -259,7 +349,9 @@ class UnifiedResourceProcessor:
             explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
             if explicit_name:
                 parse_kwargs["resource_name"] = _smart_stem(explicit_name)
-            return await self._get_parser_router().parse(source, **parse_kwargs)
+            return await run_stage(
+                "parse_artifact", self._get_parser_router().parse(source, **parse_kwargs)
+            )
 
         if (
             mode is ParseMode.DEFAULT
@@ -281,15 +373,24 @@ class UnifiedResourceProcessor:
             explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
             if explicit_name:
                 parse_kwargs["resource_name"] = _smart_stem(explicit_name)
-            return await self._get_parser_router().parse(source, **parse_kwargs)
+            return await run_stage(
+                "parse_artifact", self._get_parser_router().parse(source, **parse_kwargs)
+            )
 
         # Phase 1: Accessor - get local resource. A caller may prepare a remote
         # resource first so async routing uses the same detected file type.
-        local_resource = prepared_resource or await self.prepare(
-            source,
-            allow_local_path_resolution=allow_local_path_resolution,
-            **kwargs,
-        )
+        if prepared_resource is not None:
+            local_resource = prepared_resource
+        else:
+            local_resource = await run_stage(
+                "source_prepare",
+                self.prepare(
+                    source,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    **({"parse_mode": mode} if mode is ParseMode.NO_SPLIT else {}),
+                    **kwargs,
+                ),
+            )
 
         # Use context manager for automatic cleanup, but preserve directories for TreeBuilder
         try:
@@ -298,6 +399,7 @@ class UnifiedResourceProcessor:
             # Source credentials are consumed by the accessor. Never forward
             # them into parser kwargs, parse results, or later queue payloads.
             parse_kwargs.pop("auth_config", None)
+            parse_kwargs.pop("github_token", None)
             parse_kwargs.pop("tos_signature", None)
             parse_kwargs.pop("tos_access", None)
             parse_kwargs["instruction"] = instruction
@@ -342,8 +444,11 @@ class UnifiedResourceProcessor:
                 from openviking.parse.parsers.directory import DirectoryParser
 
                 parser = DirectoryParser()
+                parse_kwargs["_feishu_import_plan"] = local_resource.feishu_plan
 
-                result = await parser.parse(str(local_resource.path), **parse_kwargs)
+                result = await run_stage(
+                    "parse_artifact", parser.parse(str(local_resource.path), **parse_kwargs)
+                )
                 # Preserve temporary directory for TreeBuilder
                 if local_resource.is_temporary and not result.temp_dir_path:
                     result.temp_dir_path = str(local_resource.path)
@@ -353,7 +458,27 @@ class UnifiedResourceProcessor:
 
             # For files, use ParserRouter to decide which parser to use
             parser_router = self._get_parser_router()
-            return await parser_router.parse(local_resource, **parse_kwargs)
+            if (
+                mode is ParseMode.NO_SPLIT
+                and local_resource.source_type == SourceType.FEISHU
+                and local_resource.meta.get("feishu_content_kind") == "file"
+            ):
+                parse_kwargs["parser_backend"] = ParserBackend.INTERNAL
+            parse_kwargs.pop("feishu_access_token", None)
+            parse_kwargs.pop("lark_file", None)
+            checkpoint = parse_kwargs.pop("_feishu_checkpoint", None)
+            if checkpoint is not None and local_resource.meta.get("feishu_content_kind") == "file":
+                saved, save = checkpoint
+                if "file" in saved:
+                    parse_kwargs["understanding_response_id"] = saved["file"]
+
+                async def record(response_id):
+                    await save("file", response_id)
+
+                parse_kwargs["_response_checkpoint"] = record
+            return await run_stage(
+                "parse_artifact", parser_router.parse(local_resource, **parse_kwargs)
+            )
         finally:
             # Clean up temporary resources unless they need to be preserved
             local_resource.cleanup()

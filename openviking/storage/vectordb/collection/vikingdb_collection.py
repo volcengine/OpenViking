@@ -169,7 +169,7 @@ class VikingDBCollection(ICollection):
     def update_index(
         self,
         index_name: str,
-        scalar_index: Optional[Dict[str, Any]] = None,
+        scalar_index: Optional[List[str]] = None,
         description: Optional[str] = None,
     ):
         raise NotImplementedError("index should be managed manually")
@@ -351,6 +351,7 @@ class VikingDBCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/random"
         data = {
@@ -363,6 +364,8 @@ class VikingDBCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
+        if advance is not None:
+            data["advance"] = advance
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 

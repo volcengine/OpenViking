@@ -22,6 +22,7 @@ pub use redis::{RedisDeploymentMode, RedisProviderConfig};
 
 use bytes::Bytes;
 use executor::RuntimeExecutor;
+pub(crate) use provider::CacheOperation;
 use provider::CacheProvider;
 pub(crate) use script::{ScriptDefinition, ScriptRegistry, ScriptValue};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -120,10 +121,17 @@ impl CacheRuntime {
     }
 
     /// Load one provider through the versioned dynamic C ABI.
-    pub async fn dynamic(_config: DynamicProviderConfig) -> CacheResult<Arc<Self>> {
-        Err(CacheError::UnsupportedProvider(
-            "DynamicProvider is planned for a later release".into(),
+    pub async fn dynamic(config: DynamicProviderConfig) -> CacheResult<Arc<Self>> {
+        let scripts = Arc::new(ScriptRegistry::default());
+        let provider = dynamic::DynamicProvider::connect(config, Arc::clone(&scripts)).await?;
+        Ok(Self::from_provider_with_scripts(
+            Arc::new(provider),
+            scripts,
         ))
+    }
+
+    pub(crate) fn require_operations(&self, operations: &[CacheOperation]) -> CacheResult<()> {
+        self.provider.validate_operations(operations)
     }
 
     pub(crate) fn register_script(&self, definition: ScriptDefinition) -> CacheResult<()> {

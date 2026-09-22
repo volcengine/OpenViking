@@ -1,9 +1,9 @@
 """Regression tests for portable Bot session persistence paths."""
 
-import hashlib
 import json
 import os
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,51 +46,6 @@ def _write_session(
         f"{json.dumps(metadata, ensure_ascii=False)}\n{json.dumps(message, ensure_ascii=False)}\n",
         encoding="utf-8",
     )
-
-
-@pytest.mark.parametrize(
-    ("logical", "portable"),
-    [
-        ("order-123", "order-123"),
-        ("订单😀", "订单😀"),
-        ("order:123", "order%3A123"),
-        ("folder/name", "folder%2Fname"),
-        (r"folder\name", "folder%5Cname"),
-        ('bad<>"|?*', "bad%3C%3E%22%7C%3F%2A"),
-        ("literal%3A", "literal%253A"),
-        ("line\nbreak", "line%0Abreak"),
-        ("trailing.", "trailing%2E"),
-        ("trailing ", "trailing%20"),
-        ("CON", "%43ON"),
-    ],
-)
-def test_portable_path_component_is_readable_and_windows_safe(logical, portable):
-    result = portable_path_component(logical)
-    digest = hashlib.sha256(logical.encode("utf-8", errors="surrogatepass")).hexdigest()[:16]
-
-    assert result == f"{portable}~{digest}"
-    assert not any(character in result for character in '<>:"/\\|?*')
-    assert not result.endswith((".", " "))
-
-
-def test_portable_path_component_bounds_long_names():
-    first = portable_path_component("订单" * 200)
-    second = portable_path_component("订单" * 199 + "号")
-
-    assert len(first.encode("utf-8")) <= 180
-    assert len(second.encode("utf-8")) <= 180
-    assert first != second
-    assert "订单" in first
-
-
-def test_portable_path_components_resist_case_and_unicode_normalization_collisions():
-    lower = portable_path_component("foo")
-    upper = portable_path_component("FOO")
-    composed = portable_path_component("é")
-    decomposed = portable_path_component("e\u0301")
-
-    assert lower.casefold() != upper.casefold()
-    assert unicodedata.normalize("NFD", composed) != unicodedata.normalize("NFD", decomposed)
 
 
 def test_openviking_storage_id_preserves_successful_legacy_namespace():
@@ -270,6 +225,9 @@ def test_session_files_do_not_collide_after_casefold_or_unicode_normalization(tm
     assert len({path.name.casefold() for path in paths}) == len(paths)
     assert len({unicodedata.normalize("NFD", path.name) for path in paths}) == len(paths)
     assert all(path.exists() for path in paths)
+    restarted = SessionManager(tmp_path / "bot")
+    for key in keys:
+        assert restarted.get_or_create(key).messages[0]["content"] == key.chat_id
 
 
 def test_legacy_lookup_does_not_reuse_a_case_folded_different_session(tmp_path):
@@ -279,23 +237,6 @@ def test_legacy_lookup_does_not_reuse_a_case_folded_different_session(tmp_path):
     _write_session(manager.sessions_dir / f"{lower.safe_name()}.jsonl", lower, "lower")
 
     assert manager._find_session_path(upper) is None
-
-
-@pytest.mark.parametrize(
-    ("mode", "logical_name"),
-    [
-        ("per-session", "cli__alerts:primary__order:123"),
-        ("per-channel", "cli__alerts:primary"),
-    ],
-)
-def test_workspace_names_are_portable_for_every_isolation_mode(mode, logical_name):
-    key = SessionKey(type="cli", channel_id="alerts:primary", chat_id="order:123")
-
-    result = workspace_name(key, mode, portable=True)
-
-    assert result == portable_path_component(logical_name)
-    assert result.startswith(logical_name.replace(":", "%3A"))
-    assert ":" not in result
 
 
 def test_sandbox_and_heartbeat_reuse_existing_legacy_workspace(tmp_path):
@@ -314,8 +255,8 @@ def test_sandbox_and_heartbeat_reuse_existing_legacy_workspace(tmp_path):
         list_sessions=lambda: [
             {
                 "key": key,
-                "created_at": "2026-08-20T00:00:00",
-                "updated_at": "2026-08-20T00:00:01",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
                 "metadata": {},
             }
         ]

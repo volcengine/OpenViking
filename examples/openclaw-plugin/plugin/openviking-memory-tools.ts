@@ -114,7 +114,7 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
           const peerId = resolveOpenVikingMessagePeerId({
             peerRole: deps.peerRole,
             role,
-            personPeerId: session.actorPeerId,
+            senderPeerId: session.actorPeerId,
             assistantPeerId: session.actorPeerId,
           });
           await client.addSessionMessage(

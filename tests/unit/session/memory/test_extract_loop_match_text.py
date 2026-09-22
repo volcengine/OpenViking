@@ -17,6 +17,9 @@ from openviking.session.memory.dataclass import (
     WikiLink,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
+from openviking.session.memory.extraction_output_protocol import (
+    create_extraction_output_protocol,
+)
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.page_id_map import PageIdMap
 
@@ -726,7 +729,8 @@ class TestResolutionRepair:
             errors=[],
         )
 
-        issues = self._loop()._retryable_resolution_issues(operations)
+        loop = self._loop()
+        issues = loop._retryable_resolution_issues(operations)
 
         assert issues == [
             {
@@ -737,7 +741,8 @@ class TestResolutionRepair:
                 "operation": {"ranges": "99"},
             }
         ]
-        instruction = ExtractLoop._build_resolution_repair_instruction(issues)
+        loop._output_protocol = create_extraction_output_protocol("json")
+        instruction = loop._build_resolution_repair_instruction(issues)
         assert "valid in-bounds message indexes" in instruction
         assert '"reason_code": "invalid_ranges"' in instruction
         assert "server has preserved all successful operations" in instruction
@@ -1185,14 +1190,8 @@ class TestPageIdInstruction:
         loop._check_unread_existing_files = AsyncMock(return_value=[])
         loop.finalize_operations = AsyncMock()
 
-        captured_messages = []
-
-        def capture_messages(messages):
-            captured_messages.extend(messages)
-
         with (
             patch("openviking.session.memory.extract_loop.get_openviking_config") as mock_config,
-            patch("openviking.session.memory.extract_loop.pretty_print_messages", capture_messages),
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.generate_all_models"
             ),
@@ -1200,12 +1199,14 @@ class TestPageIdInstruction:
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
         ):
-            mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
+            mock_config.return_value = SimpleNamespace(
+                memory=SimpleNamespace(link_enabled=False, extraction_output_format="json")
+            )
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
 
             await loop.run()
 
-        system_content = captured_messages[0]["content"]
+        system_content = loop._call_llm.await_args.args[0][0]["content"]
         assert "## Page ID Rules" in system_content
         assert "## Read Format Rules" in system_content
         assert 'Every memory item you create or edit MUST include "page_id".' in system_content
@@ -1215,7 +1216,7 @@ class TestPageIdInstruction:
         )
         assert "each visible line is prefixed with `line_number<TAB>`" in system_content
         assert (
-            "Never include the line-number prefix itself in `search` or `replace`."
+            "Never include the line-number prefix itself in `search`, `replace`, or `delete`."
             in system_content
         )
         assert "For existing items, use the page_id shown in read/search results." in system_content
@@ -1264,14 +1265,8 @@ class TestPageIdInstruction:
         loop._check_unread_existing_files = AsyncMock(return_value=[])
         loop.finalize_operations = AsyncMock()
 
-        captured_messages = []
-
-        def capture_messages(messages):
-            captured_messages.extend(messages)
-
         with (
             patch("openviking.session.memory.extract_loop.get_openviking_config") as mock_config,
-            patch("openviking.session.memory.extract_loop.pretty_print_messages", capture_messages),
             patch(
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.generate_all_models"
             ),
@@ -1279,12 +1274,14 @@ class TestPageIdInstruction:
                 "openviking.session.memory.extract_loop.SchemaModelGenerator.create_structured_operations_model"
             ) as mock_create_model,
         ):
-            mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=True))
+            mock_config.return_value = SimpleNamespace(
+                memory=SimpleNamespace(link_enabled=True, extraction_output_format="json")
+            )
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
 
             await loop.run()
 
-        system_content = captured_messages[0]["content"]
+        system_content = loop._call_llm.await_args.args[0][0]["content"]
         assert "## Page ID Rules" in system_content
         assert "## Read Format Rules" in system_content
         assert "## Link Rules" in system_content
@@ -1345,7 +1342,9 @@ class TestFinalOperationsHydration:
             ) as mock_create_model,
             patch("openviking.session.memory.extract_loop.tracer.info") as mock_tracer_info,
         ):
-            mock_config.return_value = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
+            mock_config.return_value = SimpleNamespace(
+                memory=SimpleNamespace(link_enabled=False, extraction_output_format="json")
+            )
             mock_create_model.return_value = SimpleNamespace(model_json_schema=lambda: {})
 
             final_operations, _ = await loop.run()
@@ -1361,3 +1360,37 @@ class TestFinalOperationsHydration:
             message for message in logged_messages if message.startswith("final_operations=")
         )
         assert '"old_memory_file_content":null' not in final_log
+
+
+class TestExtractionMaxOutputTokens:
+    """The extraction floor (32768) suits Doubao; vlm.max_tokens must override it."""
+
+    def _loop(self, *, vlm_max_tokens, per_loop=None):
+        loop = ExtractLoop(
+            vlm=Mock(model="test-model"),
+            viking_fs=Mock(),
+            context_provider=Mock(),
+            isolation_handler=Mock(),
+            max_output_tokens=per_loop,
+        )
+        with patch(
+            "openviking.session.memory.extract_loop.get_openviking_config"
+        ) as mock_config:
+            mock_config.return_value = SimpleNamespace(
+                memory=SimpleNamespace(link_enabled=False, extraction_output_format="python"),
+                vlm=SimpleNamespace(max_tokens=vlm_max_tokens),
+            )
+            loop._resolve_effective_max_output_tokens()
+        return loop
+
+    def test_default_floor_used_when_unconfigured(self):
+        loop = self._loop(vlm_max_tokens=None)
+        assert loop._effective_max_output_tokens == 32768
+
+    def test_vlm_max_tokens_overrides_default_for_small_models(self):
+        loop = self._loop(vlm_max_tokens=16384)
+        assert loop._effective_max_output_tokens == 16384
+
+    def test_per_loop_value_wins_over_config(self):
+        loop = self._loop(vlm_max_tokens=16384, per_loop=8192)
+        assert loop._effective_max_output_tokens == 8192

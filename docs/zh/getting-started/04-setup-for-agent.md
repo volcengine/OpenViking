@@ -228,6 +228,7 @@ docker run --rm \
 ```
 
 说明：
+- 镜像推荐优先使用 `ghcr.io`；如果拉取失败，改用 `openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest`
 - 容器内默认配置路径是 `/app/.openviking/ov.conf`
 - 容器内 `HOME=/app`
 - 建议把宿主机 `~/.openviking` 挂载到容器 `/app/.openviking` 持久化配置、CLI 配置和 workspace 数据
@@ -236,7 +237,7 @@ docker run --rm \
 ##### 方案 2：使用 `docker-compose.yml`
 
 如果用户希望使用 compose，仓库里已有示例：
-- 镜像：`ghcr.io/volcengine/openviking:latest`
+- 镜像：`ghcr.io/volcengine/openviking:latest`（拉取失败时改用 `openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest`）
 - 端口：`1933:1933`
 - volume：`~/.openviking:/app/.openviking`
 

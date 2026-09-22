@@ -109,14 +109,12 @@ const gettingStartedSidebar = {
   en: [
     ['01-introduction.md', 'Introduction'],
     ['02-quickstart.md', 'Quick Start'],
-    ['03-quickstart-server.md', 'Server Deployment'],
     ['04-setup-for-agent.md', 'Server Setup for Agent'],
     ['05-cli-setup.md', 'OpenViking CLI']
   ],
   zh: [
     ['01-introduction.md', '简介'],
     ['02-quickstart.md', '快速开始'],
-    ['03-quickstart-server.md', '服务端部署'],
     ['04-setup-for-agent.md', '服务端安装（Agent 版）'],
     ['05-cli-setup.md', 'OpenViking CLI']
   ]
@@ -125,7 +123,10 @@ const gettingStartedSidebar = {
 const agentIntegrationSidebar = {
   en: {
     overview: 'Integration Overview',
-    topItems: [['16-capability-reference.md', 'Capability Reference']],
+    topItems: [
+      ['16-capability-reference.md', 'Capability Reference'],
+      ['18-plugin-development.md', 'Plugin Development']
+    ],
     groups: [
       {
         text: 'Developer Tools',
@@ -161,7 +162,10 @@ const agentIntegrationSidebar = {
   },
   zh: {
     overview: '集成概览',
-    topItems: [['16-capability-reference.md', '集成能力参考']],
+    topItems: [
+      ['16-capability-reference.md', '集成能力参考'],
+      ['18-plugin-development.md', '插件开发与维护']
+    ],
     groups: [
       {
         text: '开发工具',
@@ -246,6 +250,7 @@ const apiReferenceSidebar = {
         items: [
           ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
+          ['23-agent-runtime.md', 'Agent Runtime API'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
       },
@@ -303,6 +308,7 @@ const apiReferenceSidebar = {
         items: [
           ['22-openviking-assets.md', 'OpenViking Assets'],
           ['20-webdav.md', 'WebDAV'],
+          ['23-agent-runtime.md', 'Agent Runtime API'],
           ['24-vikingbot.md', 'VikingBot API']
         ]
       },
@@ -343,7 +349,8 @@ const conceptsSidebar = {
           ['11-multi-tenant.md', 'Multi-Tenancy'],
           ['12-metrics.md', 'Metrics'],
           ['13-privacy.md', 'Privacy'],
-          ['14-multi-write-storage.md', 'Multi-Write Storage']
+          ['14-multi-write-storage.md', 'Multi-Write Storage'],
+          ['16-queue-lifecycle.md', 'Queue State and Completion']
         ]
       },
       {
@@ -380,7 +387,8 @@ const conceptsSidebar = {
           ['11-multi-tenant.md', '多租户'],
           ['12-metrics.md', '监控指标'],
           ['13-privacy.md', '隐私配置'],
-          ['14-multi-write-storage.md', '多写存储']
+          ['14-multi-write-storage.md', '多写存储'],
+          ['16-queue-lifecycle.md', '队列状态与完成语义']
         ]
       },
       {
@@ -421,7 +429,8 @@ const guidesSidebar = {
         items: [
           ['05-observability.md', 'Observability & Diagnostics'],
           ['07-operation-telemetry.md', 'Operation Telemetry'],
-          ['11-grafana-prometheus.md', 'Prometheus / Grafana']
+          ['11-grafana-prometheus.md', 'Prometheus / Grafana'],
+          ['12-vikingbot-metrics-validation.md', 'VikingBot Metrics Validation']
         ]
       },
       {

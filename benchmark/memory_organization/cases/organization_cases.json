@@ -1,0 +1,157 @@
+[
+  {
+    "case_id": "merge_travel_aliases",
+    "category": "merge",
+    "canonical_topics": ["travel"],
+    "initial_files": {
+      "travel": "[F01] Prefers quiet mountain towns.",
+      "trip_ideas": "[F02] Wants direct flights when possible.",
+      "vacation": "[F03] Avoids crowded resorts."
+    },
+    "expected_files": {"travel": ["F01", "F02", "F03"]},
+    "expected_replacements": {"travel": "travel", "trip_ideas": "travel", "vacation": "travel"}
+  },
+  {
+    "case_id": "merge_pet_care_new_canonical",
+    "category": "merge",
+    "canonical_topics": ["pet_care"],
+    "initial_files": {
+      "dog_safety": "[F01] Uses protective boots on long hikes.",
+      "dog_wellness": "[F02] Prioritizes daily exercise for dogs.",
+      "pet_routine": "[F03] Brushes dogs every evening."
+    },
+    "expected_files": {"pet_care": ["F01", "F02", "F03"]},
+    "expected_replacements": {
+      "dog_safety": "pet_care",
+      "dog_wellness": "pet_care",
+      "pet_routine": "pet_care"
+    }
+  },
+  {
+    "case_id": "merge_entity_aliases",
+    "category": "merge",
+    "canonical_topics": ["john_smith"],
+    "initial_files": {
+      "john_smith": "[F01] John is a mechanical engineer.",
+      "john": "[F02] John lives in Boston.",
+      "j_smith": "[F03] John mentors junior engineers."
+    },
+    "expected_files": {"john_smith": ["F01", "F02", "F03"]},
+    "expected_replacements": {"john_smith": "john_smith", "john": "john_smith", "j_smith": "john_smith"}
+  },
+  {
+    "case_id": "merge_workflow_duplicates",
+    "category": "merge",
+    "canonical_topics": ["workflow"],
+    "initial_files": {
+      "workflow": "[F01] Prefers small reviewable pull requests.",
+      "work_habits": "[F02] Runs focused tests before broad suites.",
+      "development_process": "[F03] Documents behavioral changes."
+    },
+    "expected_files": {"workflow": ["F01", "F02", "F03"]},
+    "expected_replacements": {
+      "workflow": "workflow",
+      "work_habits": "workflow",
+      "development_process": "workflow"
+    }
+  },
+  {
+    "case_id": "split_food_and_travel",
+    "category": "split",
+    "canonical_topics": ["food", "travel"],
+    "initial_files": {
+      "mixed": "[F01] Loves spicy noodles.\n[F02] Prefers overnight trains.\n[F03] Avoids shellfish.\n[F04] Likes historic cities."
+    },
+    "expected_files": {"food": ["F01", "F03"], "travel": ["F02", "F04"]},
+    "expected_replacements": {}
+  },
+  {
+    "case_id": "split_people_and_pet",
+    "category": "split",
+    "canonical_topics": ["john", "maria", "max"],
+    "initial_files": {
+      "people_and_pet": "[F01] John is a teacher.\n[F02] Maria is a nurse.\n[F03] Max is a golden retriever.\n[F04] Maria lives in Toronto."
+    },
+    "expected_files": {"john": ["F01"], "maria": ["F02", "F04"], "max": ["F03"]},
+    "expected_replacements": {}
+  },
+  {
+    "case_id": "split_large_preferences",
+    "category": "split",
+    "canonical_topics": ["food", "games", "workflow"],
+    "initial_files": {
+      "preferences": "[F01] Likes mango desserts.\n[F02] Enjoys turn-based strategy games.\n[F03] Uses squash merges.\n[F04] Dislikes bitter melon.\n[F05] Prefers concise code reviews.\n[F06] Loves cooperative puzzle games."
+    },
+    "expected_files": {
+      "food": ["F01", "F04"],
+      "games": ["F02", "F06"],
+      "workflow": ["F03", "F05"]
+    },
+    "expected_replacements": {}
+  },
+  {
+    "case_id": "split_work_and_personal",
+    "category": "split",
+    "canonical_topics": ["career", "wellbeing"],
+    "initial_files": {
+      "catchall": "[F01] Works as a data engineer.\n[F02] Uses evening walks to decompress.\n[F03] Wants to lead a platform team.\n[F04] Practices meditation every morning."
+    },
+    "expected_files": {"career": ["F01", "F03"], "wellbeing": ["F02", "F04"]},
+    "expected_replacements": {}
+  },
+  {
+    "case_id": "mixed_merge_travel_split_food",
+    "category": "mixed",
+    "canonical_topics": ["travel", "food"],
+    "initial_files": {
+      "travel": "[F01] Prefers rail travel.",
+      "vacation": "[F02] Avoids crowded destinations.",
+      "mixed": "[F03] Loves sour soup.\n[F04] Likes walking tours."
+    },
+    "expected_files": {"travel": ["F01", "F02", "F04"], "food": ["F03"]},
+    "expected_replacements": {"travel": "travel", "vacation": "travel"}
+  },
+  {
+    "case_id": "mixed_merge_person_extract_pet",
+    "category": "mixed",
+    "canonical_topics": ["john", "max"],
+    "initial_files": {
+      "john": "[F01] John is a teacher.\n[F03] Max is John's dog.",
+      "john_smith": "[F02] John lives in Boston.\n[F04] Max is a golden retriever."
+    },
+    "expected_files": {"john": ["F01", "F02"], "max": ["F03", "F04"]},
+    "expected_replacements": {}
+  },
+  {
+    "case_id": "mixed_merge_workflow_split_communication",
+    "category": "mixed",
+    "canonical_topics": ["workflow", "communication"],
+    "initial_files": {
+      "workflow": "[F01] Prefers incremental changes.",
+      "dev_process": "[F02] Runs focused tests first.",
+      "mixed": "[F03] Wants concise status updates.\n[F04] Documents rollout impact."
+    },
+    "expected_files": {
+      "workflow": ["F01", "F02", "F04"],
+      "communication": ["F03"]
+    },
+    "expected_replacements": {"workflow": "workflow", "dev_process": "workflow"}
+  },
+  {
+    "case_id": "mixed_reorganize_catchall_and_alias",
+    "category": "mixed",
+    "canonical_topics": ["food", "travel", "games", "workflow"],
+    "initial_files": {
+      "travel": "[F01] Prefers direct flights.",
+      "trip_notes": "[F02] Likes coastal cities.",
+      "catchall": "[F03] Loves dumplings.\n[F04] Plays cooperative games.\n[F05] Uses rebase before merging.\n[F06] Avoids red-eye flights.\n[F07] Dislikes cilantro.\n[F08] Enjoys story-rich games."
+    },
+    "expected_files": {
+      "food": ["F03", "F07"],
+      "travel": ["F01", "F02", "F06"],
+      "games": ["F04", "F08"],
+      "workflow": ["F05"]
+    },
+    "expected_replacements": {"travel": "travel", "trip_notes": "travel"}
+  }
+]

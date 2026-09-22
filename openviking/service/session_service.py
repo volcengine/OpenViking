@@ -12,8 +12,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
-from openviking.server.agent_evolution_config import AgentEvolutionConfigProvider
-from openviking.server.config import AgentEvolutionConfig, ToolOutputExternalizationConfig
+from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import read_user_memory_policy
 from openviking.service.session_auto_commit import (
@@ -30,7 +29,7 @@ from openviking.service.session_auto_commit import (
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.session.auto_commit_policy import AutoCommitPolicy
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -42,6 +41,7 @@ from openviking_cli.exceptions import (
     NotInitializedError,
 )
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
 logger = get_logger(__name__)
@@ -64,11 +64,10 @@ class SessionService:
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
         self._tool_output_externalization_config = ToolOutputExternalizationConfig()
-        self._agent_evolution_enabled = AgentEvolutionConfig().enabled
-        self._agent_evolution_config_provider: Optional[AgentEvolutionConfigProvider] = None
-        self._agent_evolution_config_path: Optional[str] = None
+        self._agent_evolution_default_enabled = AgentEvolutionConfig().enabled
+        self._runtime_config_manager: Optional[Any] = None
         self._default_user_memory_policy: Optional[Dict[str, Any]] = None
-        self._configure_agent_evolution_provider()
+        self._default_user_auto_commit_policy: Optional[Dict[str, Any]] = None
         self._usage_reporter: Optional["UsageReporter"] = None
         # Server-wide controls remain disabled until configured during app setup.
         self._session_auto_commit_config = SessionAutoCommitConfig()
@@ -89,7 +88,6 @@ class SessionService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
-        self._configure_agent_evolution_provider()
 
     def set_tool_output_externalization_config(
         self, config: ToolOutputExternalizationConfig
@@ -103,35 +101,31 @@ class SessionService:
             self._default_user_memory_policy = None
             return
         policy = MemoryPolicy.from_dict(memory_policy)
-        policy.validate_memory_types(set(MemoryTypeRegistry().list_names(include_disabled=False)))
+        policy.validate_memory_types(set(get_default_registry().list_names(include_disabled=False)))
         self._default_user_memory_policy = policy.to_dict()
+
+    def set_default_user_auto_commit_policy(self, policy: Optional[Dict[str, Any]]) -> None:
+        self._default_user_auto_commit_policy = (
+            None if policy is None else AutoCommitPolicy.from_dict(policy).to_dict()
+        )
 
     def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
         """Set the default used when an account has no persisted override."""
-        self._agent_evolution_enabled = config.enabled
-        if self._agent_evolution_config_provider is not None:
-            self._agent_evolution_config_provider.set_default_enabled(config.enabled)
+        self._agent_evolution_default_enabled = config.enabled
 
-    def set_agent_evolution_config_path(self, config_path: Optional[str]) -> None:
-        """Enable account settings layered over the resolved ov.conf."""
-        self._agent_evolution_config_path = config_path
-        self._configure_agent_evolution_provider()
-
-    def _configure_agent_evolution_provider(self) -> None:
-        if self._viking_fs is None:
-            self._agent_evolution_config_provider = None
-            return
-        self._agent_evolution_config_provider = AgentEvolutionConfigProvider(
-            default_enabled=self._agent_evolution_enabled,
-            viking_fs=self._viking_fs,
-            config_path=self._agent_evolution_config_path,
-        )
+    def set_runtime_config_manager(self, manager: Any) -> None:
+        """Bind the authoritative account runtime-config reader."""
+        self._runtime_config_manager = manager
 
     async def get_agent_evolution_enabled(self, account_id: str) -> bool:
         """Return the effective Agent Evolution switch for one account."""
-        if self._agent_evolution_config_provider is None:
-            return self._agent_evolution_enabled
-        return await self._agent_evolution_config_provider.is_enabled(account_id)
+        if self._runtime_config_manager is None:
+            return self._agent_evolution_default_enabled
+        setting = await self._runtime_config_manager.get_account(
+            account_id,
+            "agent_evolution",
+        )
+        return self._agent_evolution_default_enabled if setting is None else setting.enabled
 
     def set_usage_reporter(self, usage_reporter: Optional["UsageReporter"]) -> None:
         """Set the usage reporter for newly created sessions."""
@@ -140,6 +134,13 @@ class SessionService:
     def set_session_auto_commit_config(self, config: SessionAutoCommitConfig) -> None:
         """Set server-wide controls for automatic session commits."""
         self._session_auto_commit_config = config.model_copy(deep=True)
+
+    def _new_session_auto_commit_policy(self) -> Optional[Dict[str, Any]]:
+        if self._default_user_auto_commit_policy is not None:
+            return dict(self._default_user_auto_commit_policy)
+        if self._session_auto_commit_config.default_enabled:
+            return AutoCommitPolicy.from_dict(None).to_dict()
+        return None
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -207,7 +208,6 @@ class SessionService:
             session_id=session_id,
             session_uri=session_uri,
             tool_output_externalization_config=self._tool_output_externalization_config,
-            agent_evolution_enabled=self._agent_evolution_enabled,
             agent_evolution_enabled_provider=lambda: self.get_agent_evolution_enabled(
                 ctx.account_id
             ),
@@ -257,19 +257,19 @@ class SessionService:
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
                 policy.validate_memory_types(
-                    set(MemoryTypeRegistry().list_names(include_disabled=False))
+                    set(get_default_registry().list_names(include_disabled=False))
                 )
                 session.meta.memory_policy = policy.to_dict()
             # Auto-commit is enabled when the caller supplies a policy, or when
             # the server default turns it on. Absent both, it stays disabled.
             if update_auto_commit_policy and auto_commit_policy is None:
                 session.meta.auto_commit_policy = None
-            elif auto_commit_policy is not None or self._session_auto_commit_config.default_enabled:
+            elif auto_commit_policy is not None:
                 session.meta.auto_commit_policy = AutoCommitPolicy.from_dict(
                     auto_commit_policy
                 ).to_dict()
             else:
-                session.meta.auto_commit_policy = None
+                session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
             if event_tags is not None:
                 session.meta.event_search_tags = normalize_search_tags(
                     event_tags,
@@ -298,8 +298,7 @@ class SessionService:
             if not await session.exists():
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
-                if self._session_auto_commit_config.default_enabled:
-                    session.meta.auto_commit_policy = AutoCommitPolicy.from_dict(None).to_dict()
+                session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
                 await session.ensure_exists()
             await session.load()
             self._record_lifecycle_metric("get", "ok")
@@ -373,6 +372,7 @@ class SessionService:
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -394,6 +394,7 @@ class SessionService:
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
             event_tags=event_tags,
+            reset_context=reset_context,
         )
 
     async def commit_async(
@@ -407,6 +408,7 @@ class SessionService:
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
         event_tags: Optional[List[str]] = None,
+        reset_context: bool = False,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -436,6 +438,8 @@ class SessionService:
         )
         if event_tags is not None:
             commit_kwargs["event_tags"] = event_tags
+        if reset_context:
+            commit_kwargs["reset_context"] = True
         result = await session.commit_async(**commit_kwargs)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")

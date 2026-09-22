@@ -4,9 +4,8 @@
 """
 Event collector: SessionCollector.
 
-Tracks session lifecycle and usage signals emitted from session-related code paths:
+Tracks session lifecycle signals emitted from session-related code paths:
 - create/get/delete/commit/extract lifecycle outcomes
-- contexts and skills usage counts
 - archive outcome (ok/skip)
 
 Labels are bounded:
@@ -26,7 +25,7 @@ from .base import EventMetricCollector
 @dataclass
 class SessionCollector(EventMetricCollector):
     """
-    Translate session lifecycle and usage events into bounded session counters.
+    Translate session lifecycle events into bounded session counters.
 
     The collector receives coarse-grained events from session management code paths and records
     only stable labels such as action and status so the exported series remain suitable for
@@ -37,11 +36,6 @@ class SessionCollector(EventMetricCollector):
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_lifecycle_total
     # e.g.: openviking_session_lifecycle_total
     LIFECYCLE_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "lifecycle", unit="total")
-    # rule: <METRICS_NAMESPACE>_<DOMAIN>_contexts_used_total
-    # e.g.: openviking_session_contexts_used_total
-    CONTEXTS_USED_TOTAL: ClassVar[str] = MetricCollector.metric_name(
-        DOMAIN, "contexts_used", unit="total"
-    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_archive_total
     # e.g.: openviking_session_archive_total
     ARCHIVE_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "archive", unit="total")
@@ -49,7 +43,6 @@ class SessionCollector(EventMetricCollector):
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset(
         {
             "session.lifecycle",
-            "session.contexts_used",
             "session.archive",
         }
     )
@@ -75,17 +68,6 @@ class SessionCollector(EventMetricCollector):
                 status=str(status),
             )
             return
-        if event_name == "session.contexts_used":
-            action = payload.get("action")
-            delta = payload.get("delta")
-            if action is None or delta is None:
-                return
-            self.record_contexts_used(
-                registry,
-                action=str(action),
-                delta=int(delta),
-            )
-            return
         if event_name == "session.archive":
             status = payload.get("status")
             if status is None:
@@ -101,17 +83,6 @@ class SessionCollector(EventMetricCollector):
             self.LIFECYCLE_TOTAL,
             labels={"action": str(action), "status": str(status)},
             label_names=("action", "status"),
-        )
-
-    def record_contexts_used(self, registry, *, action: str, delta: int) -> None:
-        """Increase the contexts-used counter by the positive number of contexts consumed."""
-        if delta <= 0:
-            return
-        registry.inc_counter(
-            self.CONTEXTS_USED_TOTAL,
-            labels={"action": str(action)},
-            label_names=("action",),
-            amount=int(delta),
         )
 
     def record_archive(self, registry, *, status: str) -> None:

@@ -13,6 +13,7 @@
 #   ./run_full_eval.sh --retry-wrong result/locomo_result_xxx.csv  # 只重跑错题
 #   ./run_full_eval.sh --parallel-import-sessions 20 0 1  # 覆盖默认 session 导入并发数
 #   ./run_full_eval.sh --parallel-import-sessions 50 --parallel-run-eval 20 --parallel-judge 40  # 分别设置导入、评测和裁判并发数
+#   ./run_full_eval.sh --keep-runs 20               # 保留最近 20 次实验（默认 10）
 
 set -e
 
@@ -73,7 +74,7 @@ ui_step() {
 # --help 提前处理，避免触发 Python preflight
 for arg in "$@"; do
     if [ "$arg" = "--help" ] || [ "$arg" = "-h" ]; then
-        sed -n '2,10p' "$0" | sed 's/^# \?//'
+        sed -n '2,17p' "$0" | sed 's/^# \?//'
         echo ""
         echo "位置参数:"
         echo "  sample_index      数字索引 (0,1,2...)"
@@ -89,6 +90,7 @@ for arg in "$@"; do
         echo "  --parallel-import-sessions N  导入 session 并发数（默认 50）"
         echo "  --parallel-run-eval N         run_eval 并发线程数（默认 100）"
         echo "  --parallel-judge N            judge 并发请求数（默认 100）"
+        echo "  --keep-runs N                 保留最近 N 次实验目录（默认 10）"
         exit 0
     fi
 done
@@ -98,6 +100,7 @@ SKIP_IMPORT=false
 GROUP_CHAT=false
 AUTO_COMMIT=false
 RETRY_WRONG=""
+KEEP_RUNS=10
 PARALLEL_IMPORT_SESSIONS="50"
 PARALLEL_RUN_EVAL="100"
 PARALLEL_JUDGE="100"
@@ -111,7 +114,21 @@ else
     exit 1
 fi
 
+# 实验输出目录：result/locomo/runs/<timestamp>[_<commit>]
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+RESULTS_ROOT="$REPO_ROOT/result/locomo"
+mkdir -p "$RESULTS_ROOT"
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+RUN_DIR_NAME="${TIMESTAMP}"
+RUN_DIR="$RESULTS_ROOT/runs/$RUN_DIR_NAME"
+mkdir -p "$RUN_DIR"
+echo "$RUN_DIR" > "$RESULTS_ROOT/.latest_run"
+
 ui_banner "LoCoMo · VikingBot Evaluation"
+ui_kv "实验目录" "$RUN_DIR"
+
 ui_section "1. 环境预检"
 
 DEFAULT_OV_CONF_PATH="$($PYTHON_BIN - <<'PY'
@@ -198,6 +215,11 @@ for arg in "$@"; do
         PREV_ARG=""
         continue
     fi
+    if [ "$PREV_ARG" = "--keep-runs" ]; then
+        KEEP_RUNS="$arg"
+        PREV_ARG=""
+        continue
+    fi
     if [ "$arg" = "--skip-import" ]; then
         SKIP_IMPORT=true
     elif [ "$arg" = "--group-chat" ]; then
@@ -209,13 +231,7 @@ for arg in "$@"; do
     elif [ "$arg" = "--retry-wrong" ]; then
         PREV_ARG="$arg"
         continue
-    elif [ "$arg" = "--parallel-import-sessions" ]; then
-        PREV_ARG="$arg"
-        continue
-    elif [ "$arg" = "--parallel-run-eval" ]; then
-        PREV_ARG="$arg"
-        continue
-    elif [ "$arg" = "--parallel-judge" ]; then
+    elif [ "$arg" = "--parallel-import-sessions" ] || [ "$arg" = "--parallel-run-eval" ] || [ "$arg" = "--parallel-judge" ] || [ "$arg" = "--keep-runs" ]; then
         PREV_ARG="$arg"
         continue
     fi
@@ -226,7 +242,17 @@ if [ -n "$PREV_ARG" ]; then
     exit 1
 fi
 
-# 过滤掉开关参数和 --retry-wrong 的值，获取位置参数
+# auto-commit runs AFTER arg parsing so --auto-commit is actually honored, and
+# GIT_COMMIT_ID is captured AFTER the commit so run metadata records the real HEAD.
+if [ "$AUTO_COMMIT" = "true" ]; then
+    if [ -n "$(cd "$SCRIPT_DIR/../../.." && git status --porcelain)" ]; then
+        ui_info "检测到未提交变更，正在自动提交…"
+        (cd "$SCRIPT_DIR/../../.." && git add -A && git commit -m "auto-commit before eval $(date +%Y%m%d_%H%M%S)")
+    fi
+fi
+GIT_COMMIT_ID=$(cd "$SCRIPT_DIR/../../.." && git rev-parse --short HEAD 2>/dev/null || echo "nogit")
+
+# 过滤掉开关参数和带值参数，获取位置参数
 ARGS=()
 SKIP_NEXT=false
 for arg in "$@"; do
@@ -234,7 +260,7 @@ for arg in "$@"; do
         SKIP_NEXT=false
         continue
     fi
-    if [ "$arg" = "--retry-wrong" ] || [ "$arg" = "--parallel-import-sessions" ] || [ "$arg" = "--parallel-run-eval" ] || [ "$arg" = "--parallel-judge" ]; then
+    if [ "$arg" = "--retry-wrong" ] || [ "$arg" = "--parallel-import-sessions" ] || [ "$arg" = "--parallel-run-eval" ] || [ "$arg" = "--parallel-judge" ] || [ "$arg" = "--keep-runs" ]; then
         SKIP_NEXT=true
         continue
     fi
@@ -273,12 +299,23 @@ if ! [[ "$PARALLEL_JUDGE" =~ ^[1-9][0-9]*$ ]]; then
     ui_error "--parallel-judge requires a positive integer"
     exit 1
 fi
+if ! [[ "$KEEP_RUNS" =~ ^[1-9][0-9]*$ ]]; then
+    ui_error "--keep-runs requires a positive integer"
+    exit 1
+fi
 RUN_EVAL_OPTS=("--threads" "$PARALLEL_RUN_EVAL")
 JUDGE_OPTS=("--parallel" "$PARALLEL_JUDGE")
 
 SAMPLE=${ARGS[0]}
 QUESTION_INDEX=${ARGS[1]}
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
+
+# 实验目录内的输出文件
+RESULT_BASENAME="locomo_result"
+RESULT_FILE="$RUN_DIR/${RESULT_BASENAME}.csv"
+IMPORT_SUCCESS_CSV="$RUN_DIR/import_success.csv"
+BOT_LOG_DIR="$RUN_DIR/${RESULT_BASENAME}_bot_logs"
+MEMORY_SNAPSHOT_DIR="$RUN_DIR/memories"
 
 ui_section "2. 运行配置"
 ui_kv "配置文件" "$OPENVIKING_CONFIG_FILE"
@@ -289,23 +326,12 @@ ui_kv "导入并发" "$PARALLEL_IMPORT_SESSIONS sessions"
 ui_kv "评测并发" "$PARALLEL_RUN_EVAL threads"
 ui_kv "裁判并发" "$PARALLEL_JUDGE requests"
 ui_kv "导入策略" "$([ "$SKIP_IMPORT" = "true" ] && printf '跳过导入' || printf '强制导入')"
+ui_kv "保留实验数" "$KEEP_RUNS"
 
 # Export for inline Python usage
 export SCRIPT_DIR INPUT_FILE RETRY_WRONG PARALLEL_IMPORT_SESSIONS ACCOUNT OPENVIKING_URL OPENVIKING_API_KEY OPENVIKING_USER OPENVIKING_AUTH_MODE GROUP_CHAT
+export IMPORT_SUCCESS_CSV BOT_LOG_DIR MEMORY_SNAPSHOT_DIR RUN_DIR RESULTS_ROOT
 
-# auto-commit 逻辑
-if [ "$AUTO_COMMIT" = "true" ]; then
-    if [ -n "$(git status --porcelain)" ]; then
-        ui_info "检测到未提交变更，正在自动提交…"
-        git add -A
-        git commit -m "auto-commit before eval $(date +%Y%m%d_%H%M%S)"
-    else
-        ui_success "工作区干净，无需自动提交"
-    fi
-fi
-GIT_COMMIT_ID=$(git rev-parse --short HEAD)
-TIMESTAMP=$(date +%Y%m%d%H%M%S)
-IMPORT_SUCCESS_CSV="./result/locomo/import_success.csv"
 IMPORT_ROW_START=0
 IMPORT_PERFORMED=false
 
@@ -426,11 +452,89 @@ PY
 }
 
 prepare_bot_log_dir() {
-    local output_file="$1"
-    local base="${output_file%.csv}"
-    export LOCOMO_VIKINGBOT_LOG_DIR="${base}_bot_logs"
-    mkdir -p "$LOCOMO_VIKINGBOT_LOG_DIR"
-    ui_kv "VikingBot 日志" "$LOCOMO_VIKINGBOT_LOG_DIR"
+    mkdir -p "$BOT_LOG_DIR"
+    export LOCOMO_VIKINGBOT_LOG_DIR="$BOT_LOG_DIR"
+    ui_kv "VikingBot 日志" "$BOT_LOG_DIR"
+}
+
+# 保存运行元信息
+write_run_metadata() {
+    cat > "$RUN_DIR/run_metadata.txt" <<EOF
+timestamp: $TIMESTAMP
+git_commit: $GIT_COMMIT_ID
+config_file: $OPENVIKING_CONFIG_FILE
+openviking_url: $OPENVIKING_URL
+skip_import: $SKIP_IMPORT
+group_chat: $GROUP_CHAT
+parallel_import_sessions: $PARALLEL_IMPORT_SESSIONS
+parallel_run_eval: $PARALLEL_RUN_EVAL
+parallel_judge: $PARALLEL_JUDGE
+sample: ${SAMPLE:-all}
+question_index: ${QUESTION_INDEX:-}
+EOF
+}
+
+# 拷贝生成的记忆文件快照
+copy_memory_snapshot() {
+    if [ "$SKIP_IMPORT" = "true" ]; then
+        return
+    fi
+    ui_step_copy="copy_memory_snapshot"
+    ui_info "正在保存记忆文件快照…"
+
+    # 从配置中提取 workspace 路径
+    local workspace
+    workspace=$("$PYTHON_BIN" - <<'PY'
+import json, os
+config_path = os.environ["OPENVIKING_CONFIG_FILE"]
+try:
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    print(config.get("storage", {}).get("workspace", ""))
+except Exception:
+    print("")
+PY
+)
+    if [ -z "$workspace" ]; then
+        ui_warn "无法从配置中提取 workspace 路径，跳过记忆快照"
+        return
+    fi
+
+    local peers_dir="$workspace/viking/default/user/default/peers"
+    if [ ! -d "$peers_dir" ]; then
+        # 尝试其他路径模式
+        peers_dir=$(find "$workspace" -type d -name "peers" -path "*/user/*" 2>/dev/null | head -1)
+    fi
+
+    if [ -n "$peers_dir" ] && [ -d "$peers_dir" ]; then
+        mkdir -p "$MEMORY_SNAPSHOT_DIR"
+        cp -R "$peers_dir/." "$MEMORY_SNAPSHOT_DIR/" 2>/dev/null || true
+        local mem_file_count
+        mem_file_count=$(find "$MEMORY_SNAPSHOT_DIR" -name "*.md" ! -name ".overview.md" ! -name ".abstract.md" | wc -l | tr -d ' ')
+        ui_success "记忆快照已保存：$mem_file_count 个 .md 文件 → $MEMORY_SNAPSHOT_DIR"
+    else
+        ui_warn "未找到 peers 记忆目录，跳过记忆快照"
+    fi
+}
+
+# 清理旧实验目录，只保留最近 N 次
+cleanup_old_runs() {
+    local runs_root="$RESULTS_ROOT/runs"
+    if [ ! -d "$runs_root" ]; then
+        return
+    fi
+    local count
+    count=$(find "$runs_root" -maxdepth 1 -type d | tail -n +2 | wc -l | tr -d ' ')
+    if [ "$count" -le "$KEEP_RUNS" ]; then
+        return
+    fi
+    ui_info "清理旧实验目录（保留最近 $KEEP_RUNS 次，当前 $count 次）…"
+    # 按名称排序（时间戳），删除最旧的
+    find "$runs_root" -maxdepth 1 -type d | tail -n +2 | sort | head -n "$((count - KEEP_RUNS))" | while read -r old_dir; do
+        ui_info "  删除 $(basename "$old_dir")"
+        rm -rf "$old_dir"
+    done
+    ui_success "旧实验目录已清理"
 }
 
 # ========== 重跑错题模式（优先） ==========
@@ -440,16 +544,11 @@ if [ -n "$RETRY_WRONG" ]; then
         exit 1
     fi
 
+    write_run_metadata
     ui_section "3. 执行评测 · 错题重跑"
     ui_kv "错题文件" "$RETRY_WRONG"
 
-    if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo/locomo_retry_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
-    else
-        RESULT_FILE="./result/locomo/locomo_retry_${TIMESTAMP}.csv"
-    fi
-
-    # 从错题 CSV 中提取需要导入的对话（复用 import_to_ov.py 的并行逻辑）
+    # 从错题 CSV 中提取需要导入的对话
     ui_step 1 3 "导入错题相关对话"
     capture_import_row_start
     "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
@@ -458,6 +557,7 @@ if [ -n "$RETRY_WRONG" ]; then
         --force-ingest \
         --account "$ACCOUNT" \
         --openviking-url "$OPENVIKING_URL" \
+        --success-csv "$IMPORT_SUCCESS_CSV" \
         "${IMPORT_OPTS[@]}" \
         "${COMMON_OPTS[@]}"
     IMPORT_PERFORMED=true
@@ -467,7 +567,7 @@ if [ -n "$RETRY_WRONG" ]; then
 
     # 评估错题
     ui_step 2 3 "重新评估错题"
-    prepare_bot_log_dir "$RESULT_FILE"
+    prepare_bot_log_dir
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --output "$RESULT_FILE" \
@@ -484,21 +584,20 @@ if [ -n "$RETRY_WRONG" ]; then
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
     print_import_summary_table
 
+    copy_memory_snapshot
+    cleanup_old_runs
+
     ui_section "完成"
     ui_success "错题重跑完成"
+    ui_kv "实验目录" "$RUN_DIR"
     ui_kv "结果文件" "$RESULT_FILE"
     exit 0
 fi
 
 # ========== 全量评测模式 ==========
 if [ -z "$SAMPLE" ]; then
+    write_run_metadata
     ui_section "3. 执行评测 · 全量模式"
-
-    if [ "$AUTO_COMMIT" = "true" ]; then
-        RESULT_FILE="./result/locomo/locomo_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv"
-    else
-        RESULT_FILE="./result/locomo/locomo_result_${TIMESTAMP}.csv"
-    fi
 
     # 导入数据
     if [ "$SKIP_IMPORT" = "true" ]; then
@@ -506,7 +605,14 @@ if [ -z "$SAMPLE" ]; then
     else
         ui_step 1 4 "导入数据"
         capture_import_row_start
-        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" --input "$INPUT_FILE" --force-ingest --account "$ACCOUNT" --openviking-url "$OPENVIKING_URL" "${IMPORT_OPTS[@]}" "${COMMON_OPTS[@]}"
+        "$PYTHON_BIN" "$SCRIPT_DIR/import_to_ov.py" \
+            --input "$INPUT_FILE" \
+            --force-ingest \
+            --account "$ACCOUNT" \
+            --openviking-url "$OPENVIKING_URL" \
+            --success-csv "$IMPORT_SUCCESS_CSV" \
+            "${IMPORT_OPTS[@]}" \
+            "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
         ui_info "等待数据处理完成（60 秒）…"
         sleep 60
@@ -518,8 +624,13 @@ if [ -z "$SAMPLE" ]; then
     else
         ui_step 2 4 "运行评估"
     fi
-    prepare_bot_log_dir "$RESULT_FILE"
-    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" "$INPUT_FILE" --output "$RESULT_FILE" --config "$OPENVIKING_CONFIG_FILE" "${RUN_EVAL_OPTS[@]}" "${COMMON_OPTS[@]}"
+    prepare_bot_log_dir
+    "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
+        "$INPUT_FILE" \
+        --output "$RESULT_FILE" \
+        --config "$OPENVIKING_CONFIG_FILE" \
+        "${RUN_EVAL_OPTS[@]}" \
+        "${COMMON_OPTS[@]}"
 
     # 裁判打分
     if [ "$SKIP_IMPORT" = "true" ]; then
@@ -538,8 +649,12 @@ if [ -z "$SAMPLE" ]; then
     "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
     print_import_summary_table
 
+    copy_memory_snapshot
+    cleanup_old_runs
+
     ui_section "完成"
     ui_success "全量评测完成"
+    ui_kv "实验目录" "$RUN_DIR"
     ui_kv "结果文件" "$RESULT_FILE"
     exit 0
 fi
@@ -579,11 +694,11 @@ fi
 
 # 判断是单题模式还是批量模式
 if [ -n "$QUESTION_INDEX" ]; then
+    write_run_metadata
     # ========== 单题模式 ==========
     ui_section "3. 执行评测 · 单题模式"
     ui_kv "评测范围" "sample=$SAMPLE · question=$QUESTION_INDEX"
 
-    # 导入对话
     if [ "$SKIP_IMPORT" = "true" ]; then
         ui_warn "已通过 --skip-import 跳过导入对话"
     else
@@ -596,6 +711,7 @@ if [ -n "$QUESTION_INDEX" ]; then
             --force-ingest \
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
+            --success-csv "$IMPORT_SUCCESS_CSV" \
             "${IMPORT_OPTS[@]}" \
             "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
@@ -604,40 +720,32 @@ if [ -n "$QUESTION_INDEX" ]; then
         sleep 3
     fi
 
-    # 运行评测
     if [ "$SKIP_IMPORT" = "true" ]; then
         ui_step 1 2 "运行评估"
     else
         ui_step 2 3 "运行评估"
     fi
-    if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
-    else
-        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_${QUESTION_INDEX}_result_${TIMESTAMP}.csv
-    fi
-    prepare_bot_log_dir "$OUTPUT_FILE"
+    prepare_bot_log_dir
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
         --question-index "$QUESTION_INDEX" \
         --count 1 \
-        --output "$OUTPUT_FILE" \
+        --output "$RESULT_FILE" \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${RUN_EVAL_OPTS[@]}" \
         "${COMMON_OPTS[@]}"
 
-    # 运行 Judge 评分
     if [ "$SKIP_IMPORT" = "true" ]; then
         ui_step 2 2 "裁判打分"
     else
         ui_step 3 3 "裁判打分"
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" "${JUDGE_OPTS[@]}"
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" "${JUDGE_OPTS[@]}"
 
-    # 输出结果
     ui_section "评测结果"
     print_import_summary_table
-    OUTPUT_FILE="$OUTPUT_FILE" QUESTION_INDEX="$QUESTION_INDEX" "$PYTHON_BIN" - <<'PY'
+    OUTPUT_FILE="$RESULT_FILE" QUESTION_INDEX="$QUESTION_INDEX" "$PYTHON_BIN" - <<'PY'
 import csv
 import json
 import os
@@ -669,12 +777,17 @@ print(f"结果: {row.get('result', 'N/A')}")
 print(f"原因: {row.get('reasoning', 'N/A')}")
 PY
 
+    copy_memory_snapshot
+    cleanup_old_runs
+
+    ui_kv "实验目录" "$RUN_DIR"
+
 else
+    write_run_metadata
     # ========== 批量模式 ==========
     ui_section "3. 执行评测 · Sample 批量模式"
     ui_kv "评测范围" "sample=$SAMPLE · 所有问题"
 
-    # 获取该 sample 的问题数量
     QUESTION_COUNT=$(SAMPLE_INDEX="$SAMPLE_INDEX" INPUT_FILE="$INPUT_FILE" "$PYTHON_BIN" - <<'PY'
 import json
 import os
@@ -691,7 +804,6 @@ PY
 )
     ui_kv "问题数量" "$QUESTION_COUNT"
 
-    # 导入所有 sessions
     if [ "$SKIP_IMPORT" = "true" ]; then
         ui_warn "已通过 --skip-import 跳过导入所有 Sessions"
     else
@@ -703,6 +815,7 @@ PY
             --force-ingest \
             --account "$ACCOUNT" \
             --openviking-url "$OPENVIKING_URL" \
+            --success-csv "$IMPORT_SUCCESS_CSV" \
             "${IMPORT_OPTS[@]}" \
             "${COMMON_OPTS[@]}"
         IMPORT_PERFORMED=true
@@ -711,44 +824,40 @@ PY
         sleep 10
     fi
 
-    # 运行评测（所有问题）
     if [ "$SKIP_IMPORT" = "true" ]; then
         ui_step 1 3 "评估所有问题"
     else
         ui_step 2 4 "评估所有问题"
     fi
-    if [ "$AUTO_COMMIT" = "true" ]; then
-        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_result_${TIMESTAMP}_${GIT_COMMIT_ID}.csv
-    else
-        OUTPUT_FILE=./result/locomo/locomo_${SAMPLE}_result_${TIMESTAMP}.csv
-    fi
-    prepare_bot_log_dir "$OUTPUT_FILE"
+    prepare_bot_log_dir
     "$PYTHON_BIN" "$SCRIPT_DIR/run_eval.py" \
         "$INPUT_FILE" \
         --sample "$SAMPLE_ID_FOR_CMD" \
-        --output "$OUTPUT_FILE" \
+        --output "$RESULT_FILE" \
         --config "$OPENVIKING_CONFIG_FILE" \
         "${RUN_EVAL_OPTS[@]}" \
         "${COMMON_OPTS[@]}"
 
-    # 运行 Judge 评分
     if [ "$SKIP_IMPORT" = "true" ]; then
         ui_step 2 3 "裁判打分"
     else
         ui_step 3 4 "裁判打分"
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$OUTPUT_FILE" "${JUDGE_OPTS[@]}"
+    "$PYTHON_BIN" "$SCRIPT_DIR/judge.py" --input "$RESULT_FILE" "${JUDGE_OPTS[@]}"
 
-    # 输出统计结果
     if [ "$SKIP_IMPORT" = "true" ]; then
         ui_step 3 3 "汇总结果"
     else
         ui_step 4 4 "汇总结果"
     fi
-    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$OUTPUT_FILE"
+    "$PYTHON_BIN" "$SCRIPT_DIR/stat_judge_result.py" --input "$RESULT_FILE"
     print_import_summary_table
+
+    copy_memory_snapshot
+    cleanup_old_runs
 
     ui_section "完成"
     ui_success "批量评测完成"
-    ui_kv "结果文件" "$OUTPUT_FILE"
+    ui_kv "实验目录" "$RUN_DIR"
+    ui_kv "结果文件" "$RESULT_FILE"
 fi

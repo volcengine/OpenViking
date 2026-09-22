@@ -12,7 +12,10 @@ use std::path::{Component, Path};
 
 use super::errors::{Error, Result};
 use super::glob::{compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob};
-use super::types::{FileInfo, GlobEntry, GlobPage, GrepResult, TreeEntry, WriteFlag};
+use super::types::{
+    FileInfo, GlobEntry, GlobPage, GrepMatch, GrepOptions, GrepResult, ListSortBy, SortOrder,
+    TreeEntry, WriteFlag,
+};
 
 /// Reject virtual paths that can escape a mounted backend lexically.
 pub(crate) fn validate_virtual_path(path: &str) -> Result<()> {
@@ -51,6 +54,70 @@ pub(crate) fn sort_directory_entries(entries: &mut [FileInfo]) {
             .cmp(&a.is_dir)
             .then_with(|| compare_listing_names(&a.name, &b.name))
     });
+}
+
+/// Sort entries by `sort_by` and `sort_order`, keeping directories before files.
+///
+/// Returns through the mutable `entries` slice.
+pub(crate) fn sort_directory_entries_by(
+    entries: &mut [FileInfo],
+    sort_by: Option<ListSortBy>,
+    sort_order: Option<SortOrder>,
+) {
+    let Some(sort_by) = sort_by else {
+        return;
+    };
+    let descending = matches!(sort_order, Some(SortOrder::Desc));
+    entries.sort_by(|a, b| {
+        let group_order = b.is_dir.cmp(&a.is_dir);
+        if group_order != Ordering::Equal {
+            return group_order;
+        }
+        match sort_by {
+            ListSortBy::Name => {
+                let order = compare_listing_names(&a.name, &b.name);
+                if descending {
+                    order.reverse()
+                } else {
+                    order
+                }
+            }
+            ListSortBy::Mtime => {
+                let order = a.mod_time.cmp(&b.mod_time);
+                let order = if descending { order.reverse() } else { order };
+                order.then_with(|| compare_listing_names(&a.name, &b.name))
+            }
+        }
+    });
+}
+
+/// Consume `entries` and return the range selected by `offset` and `limit`.
+pub(crate) fn paginate_entries<T>(
+    entries: Vec<T>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Vec<T> {
+    entries
+        .into_iter()
+        .skip(offset.unwrap_or(0))
+        .take(limit.unwrap_or(usize::MAX))
+        .collect()
+}
+
+/// Apply the requested sorting and pagination options and return the selected entries.
+pub(crate) fn apply_read_dir_options(
+    mut entries: Vec<FileInfo>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    sort_by: Option<ListSortBy>,
+    sort_order: Option<SortOrder>,
+) -> Vec<FileInfo> {
+    if sort_by.is_some() {
+        sort_directory_entries_by(&mut entries, sort_by, sort_order);
+    } else {
+        sort_directory_entries(&mut entries);
+    }
+    paginate_entries(entries, offset, limit)
 }
 
 /// Check whether `path` is under `exclude_path` (including itself).
@@ -247,6 +314,10 @@ pub trait FileSystem: Send + Sync + Any {
     ///
     /// # Arguments
     /// * `path` - The path of the directory to list
+    /// * `offset` - Number of sorted entries to skip
+    /// * `limit` - Maximum number of entries to return
+    /// * `sort_by` - Optional field used to sort entries
+    /// * `sort_order` - Optional sort direction
     ///
     /// # Returns
     /// A vector of FileInfo for each entry in the directory
@@ -254,7 +325,14 @@ pub trait FileSystem: Send + Sync + Any {
     /// # Errors
     /// * `Error::NotFound` - If the directory doesn't exist
     /// * `Error::NotADirectory` - If the path is not a directory
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>>;
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
+    ) -> Result<Vec<FileInfo>>;
 
     /// List directory contents without public internal-name filtering.
     ///
@@ -264,7 +342,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// # Returns
     /// Raw directory entries visible to filesystem internals.
     async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        self.read_dir(path).await
+        self.read_dir(path, None, None, None, None).await
     }
 
     /// Get file or directory metadata
@@ -350,11 +428,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// # Arguments
     /// * `path` - The path to search (file or directory)
     /// * `pattern` - The regular expression pattern to search for
-    /// * `recursive` - Whether to search recursively in subdirectories
-    /// * `case_insensitive` - Whether to perform case-insensitive matching
-    /// * `node_limit` - Maximum number of matches to return (None means no limit)
-    /// * `exclude_path` - Optional path prefix to exclude from search
-    /// * `level_limit` - Optional maximum depth relative to query root
+    /// * `options` - Search behavior and result limits
     ///
     /// # Returns
     /// A GrepResult containing all matches found
@@ -366,26 +440,23 @@ pub trait FileSystem: Send + Sync + Any {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
-        let re = compile_grep_regex(pattern, case_insensitive)?;
+        let re = compile_grep_regex(pattern, options.case_insensitive)?;
 
         let mut result = GrepResult::new();
         let normalized_path = normalize_prefix_path(path);
-        let normalized_exclude = exclude_path.map(normalize_prefix_path);
+        let normalized_exclude = options.exclude_path.map(normalize_prefix_path);
+        let normalized_options = GrepOptions {
+            exclude_path: normalized_exclude.as_deref(),
+            ..options
+        };
 
         self.grep_internal(
             normalized_path.as_str(),
             normalized_path.as_str(),
             &re,
-            recursive,
-            node_limit,
-            normalized_exclude.as_deref(),
-            level_limit,
+            normalized_options,
             &mut result,
         )
         .await?;
@@ -399,17 +470,17 @@ pub trait FileSystem: Send + Sync + Any {
         base_path: &str,
         current_path: &str,
         re: &Regex,
-        recursive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
         result: &mut GrepResult,
     ) -> Result<()> {
-        if node_limit.is_some_and(|limit| result.count >= limit) {
+        if options
+            .node_limit
+            .is_some_and(|limit| result.count >= limit)
+        {
             return Ok(());
         }
 
-        if let Some(exclude) = exclude_path {
+        if let Some(exclude) = options.exclude_path {
             if is_excluded_path(current_path, exclude) {
                 return Ok(());
             }
@@ -418,11 +489,11 @@ pub trait FileSystem: Send + Sync + Any {
         let stat = self.stat(current_path).await?;
 
         if stat.is_dir {
-            if !recursive && current_path != base_path {
+            if !options.recursive && current_path != base_path {
                 return Ok(());
             }
 
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(base_path, current_path);
                 let depth = relative_depth(&rel);
                 // Directories at depth >= limit cannot contain files within the limit.
@@ -431,10 +502,13 @@ pub trait FileSystem: Send + Sync + Any {
                 }
             }
 
-            let entries = self.read_dir(current_path).await?;
+            let entries = self.read_dir(current_path, None, None, None, None).await?;
 
             for entry in entries {
-                if node_limit.is_some_and(|limit| result.count >= limit) {
+                if options
+                    .node_limit
+                    .is_some_and(|limit| result.count >= limit)
+                {
                     break;
                 }
 
@@ -444,20 +518,11 @@ pub trait FileSystem: Send + Sync + Any {
                     format!("{}/{}", current_path, entry.name)
                 };
 
-                self.grep_internal(
-                    base_path,
-                    &entry_path,
-                    re,
-                    recursive,
-                    node_limit,
-                    exclude_path,
-                    level_limit,
-                    result,
-                )
-                .await?;
+                self.grep_internal(base_path, &entry_path, re, options, result)
+                    .await?;
             }
         } else {
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(base_path, current_path);
                 let depth = relative_depth(&rel);
                 if depth > limit {
@@ -465,7 +530,7 @@ pub trait FileSystem: Send + Sync + Any {
                 }
             }
 
-            self.grep_file(base_path, current_path, re, node_limit, result)
+            self.grep_file(base_path, current_path, re, options, result)
                 .await?;
         }
 
@@ -478,26 +543,39 @@ pub trait FileSystem: Send + Sync + Any {
         base_path: &str,
         path: &str,
         re: &Regex,
-        node_limit: Option<usize>,
+        options: GrepOptions<'_>,
         result: &mut GrepResult,
     ) -> Result<()> {
-        if node_limit.is_some_and(|limit| result.count >= limit) {
+        if options
+            .node_limit
+            .is_some_and(|limit| result.count >= limit)
+        {
             return Ok(());
         }
 
         let content = self.read(path, 0, 0).await?;
 
         let content_str = String::from_utf8_lossy(&content);
-
         let rel_file = relative_match_file(base_path, path);
+        let lines: Vec<_> = content_str.lines().collect();
 
-        for (line_num, line) in content_str.lines().enumerate() {
-            if node_limit.is_some_and(|limit| result.count >= limit) {
+        for (line_index, line) in lines.iter().enumerate() {
+            if options
+                .node_limit
+                .is_some_and(|limit| result.count >= limit)
+            {
                 break;
             }
 
             if re.is_match(line) {
-                result.add_match(rel_file.clone(), (line_num + 1) as u64, line.to_string());
+                result.matches.push(GrepMatch::from_lines(
+                    rel_file.clone(),
+                    &lines,
+                    line_index,
+                    options.before_context,
+                    options.after_context,
+                ));
+                result.count += 1;
             }
         }
 
@@ -514,6 +592,9 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `show_hidden` - Whether to include hidden files (names starting with `.`)
     /// * `node_limit` - Maximum number of nodes to return (None means no limit)
     /// * `level_limit` - Maximum depth relative to query root (None means no limit)
+    /// * `offset` - Number of flattened DFS entries to skip
+    /// * `sort_by` - Optional sibling sort field
+    /// * `sort_order` - Optional sibling sort direction
     ///
     /// # Returns
     /// A flat `Vec<TreeEntry>` in DFS order (directories before their children).
@@ -523,21 +604,27 @@ pub trait FileSystem: Send + Sync + Any {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
         let normalized_path = normalize_prefix_path(path);
         let mut result = Vec::new();
+        let traversal_limit = node_limit.map(|limit| offset.unwrap_or(0).saturating_add(limit));
 
         self.tree_directory_internal(
             normalized_path.as_str(),
             normalized_path.as_str(),
             show_hidden,
-            node_limit,
+            traversal_limit,
             level_limit,
+            sort_by,
+            sort_order,
             &mut result,
         )
         .await?;
 
-        Ok(result)
+        Ok(paginate_entries(result, offset, node_limit))
     }
 
     /// Return one page of flat glob results under `path`.
@@ -560,7 +647,7 @@ pub trait FileSystem: Send + Sync + Any {
         }
 
         let entries = self
-            .tree_directory(path, show_hidden, None, level_limit)
+            .tree_directory(path, show_hidden, None, level_limit, None, None, None)
             .await?;
 
         let mut matched = Vec::new();
@@ -607,6 +694,8 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `show_hidden` - Whether to include hidden files
     /// * `node_limit` - Maximum number of nodes to return
     /// * `level_limit` - Maximum depth relative to base_path
+    /// * `sort_by` - Optional sibling sort field
+    /// * `sort_order` - Optional sibling sort direction
     /// * `result` - Accumulator for the flat result list
     async fn tree_directory_internal(
         &self,
@@ -615,6 +704,8 @@ pub trait FileSystem: Send + Sync + Any {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        sort_by: Option<ListSortBy>,
+        sort_order: Option<SortOrder>,
         result: &mut Vec<TreeEntry>,
     ) -> Result<()> {
         if node_limit.is_some_and(|limit| result.len() >= limit) {
@@ -633,8 +724,9 @@ pub trait FileSystem: Send + Sync + Any {
             }
         }
 
-        let mut entries = self.read_dir(current_path).await?;
+        let mut entries = self.read_dir(current_path, None, None, None, None).await?;
         sort_directory_entries(&mut entries);
+        sort_directory_entries_by(&mut entries, sort_by, sort_order);
 
         for entry in entries {
             if node_limit.is_some_and(|limit| result.len() >= limit) {
@@ -668,6 +760,8 @@ pub trait FileSystem: Send + Sync + Any {
                     show_hidden,
                     node_limit,
                     level_limit,
+                    sort_by,
+                    sort_order,
                     result,
                 )
                 .await?;
@@ -756,7 +850,14 @@ mod tests {
             Ok(_data.len() as u64)
         }
 
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<ListSortBy>,
+            _sort_order: Option<SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             Ok(vec![])
         }
 
@@ -846,12 +947,22 @@ mod tests {
             Ok(data.len() as u64)
         }
 
-        async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            path: &str,
+            offset: Option<usize>,
+            limit: Option<usize>,
+            sort_by: Option<ListSortBy>,
+            sort_order: Option<SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             let entries = self.dirs.get(path).cloned().unwrap_or_default();
-            Ok(entries
+            let entries = entries
                 .into_iter()
                 .map(|(name, is_dir)| TreeFS::file_info(name, is_dir))
-                .collect())
+                .collect::<Vec<_>>();
+            Ok(apply_read_dir_options(
+                entries, offset, limit, sort_by, sort_order,
+            ))
         }
 
         async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -881,13 +992,53 @@ mod tests {
             .with_file("/root/sub/b.txt", "hello\n");
 
         let out = fs
-            .grep("/root", "hello", true, false, None, None, None)
+            .grep(
+                "/root",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
         let files: Vec<String> = out.matches.into_iter().map(|m| m.file).collect();
         assert!(files.contains(&"a.txt".to_string()));
         assert!(files.contains(&"sub/b.txt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_default_grep_includes_bounded_context() {
+        let fs = TreeFS::default().with_file("/root/a.txt", "first\nbefore\nhit\nafter\n");
+
+        let out = fs
+            .grep(
+                "/root/a.txt",
+                "hit",
+                GrepOptions {
+                    recursive: false,
+                    before_context: 2,
+                    after_context: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 1);
+        let matched = &out.matches[0];
+        assert_eq!(matched.line, 3);
+        let before = matched.before_context.as_ref().unwrap();
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].line, 1);
+        assert_eq!(before[0].content, "first");
+        assert_eq!(before[1].line, 2);
+        assert_eq!(before[1].content, "before");
+        let after = matched.after_context.as_ref().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].line, 4);
+        assert_eq!(after[0].content, "after");
     }
 
     #[tokio::test]
@@ -903,11 +1054,12 @@ mod tests {
             .grep(
                 "/root",
                 "hit",
-                true,
-                false,
-                Some(1),
-                Some("/root/excluded"),
-                None,
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    exclude_path: Some("/root/excluded"),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -925,7 +1077,16 @@ mod tests {
             .with_file("/root/deep/b.txt", "hit\n");
 
         let out = fs
-            .grep("/root", "hit", true, false, Some(1), None, Some(1))
+            .grep(
+                "/root",
+                "hit",
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    level_limit: Some(1),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -954,9 +1115,17 @@ mod tests {
         node_limit: Option<usize>,
         level_limit: Option<usize>,
     ) -> Vec<TreeEntry> {
-        fs.tree_directory("/root", show_hidden, node_limit, level_limit)
-            .await
-            .unwrap()
+        fs.tree_directory(
+            "/root",
+            show_hidden,
+            node_limit,
+            level_limit,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     /// Assert tree entry names in order.
@@ -987,14 +1156,52 @@ mod tests {
     async fn test_tree_single_layer_files() {
         let fs = TreeFS::default().with_dir_entries(
             "/root",
-            vec![("a.txt", false), ("b.txt", false), ("c.txt", false)],
+            vec![("c.txt", false), ("a.txt", false), ("b.txt", false)],
         );
 
         let entries = root_tree(&fs, false, None, None).await;
+        let default_page = fs
+            .read_dir("/root", Some(1), Some(1), None, None)
+            .await
+            .unwrap();
+        let page = fs
+            .read_dir(
+                "/root",
+                Some(1),
+                Some(1),
+                Some(ListSortBy::Name),
+                Some(SortOrder::Desc),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 3);
         assert_tree_names(&entries, &["a.txt", "b.txt", "c.txt"]);
         assert_tree_rel_paths(&entries, &["a.txt", "b.txt", "c.txt"]);
+        assert_eq!(default_page[0].name, "b.txt");
+        assert_eq!(page[0].name, "b.txt");
+
+        let mut by_mtime = vec![
+            TreeFS::file_info("a.txt".to_string(), false),
+            TreeFS::file_info("b.txt".to_string(), false),
+            TreeFS::file_info("c.txt".to_string(), false),
+        ];
+        by_mtime[0].mod_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        by_mtime[1].mod_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(2);
+        by_mtime[2].mod_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(2);
+        let page = apply_read_dir_options(
+            by_mtime,
+            None,
+            Some(2),
+            Some(ListSortBy::Mtime),
+            Some(SortOrder::Desc),
+        );
+        assert_eq!(
+            page.iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b.txt", "c.txt"]
+        );
     }
 
     #[tokio::test]
@@ -1035,10 +1242,21 @@ mod tests {
             ],
         );
 
-        let entries = root_tree(&fs, false, Some(3), None).await;
+        let entries = fs
+            .tree_directory(
+                "/root",
+                false,
+                Some(3),
+                None,
+                Some(1),
+                Some(ListSortBy::Name),
+                Some(SortOrder::Asc),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 3);
-        assert_tree_names(&entries, &["a.txt", "b.txt", "c.txt"]);
+        assert_tree_names(&entries, &["b.txt", "c.txt", "d.txt"]);
     }
 
     #[tokio::test]
@@ -1135,7 +1353,10 @@ mod tests {
     async fn test_tree_root_path() {
         let fs = TreeFS::default().with_dir_entries("/", vec![("a.txt", false), ("sub", true)]);
 
-        let entries = fs.tree_directory("/", false, None, None).await.unwrap();
+        let entries = fs
+            .tree_directory("/", false, None, None, None, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].path, "/sub");
@@ -1151,7 +1372,10 @@ mod tests {
             .with_dir_entries("/a/b/c/d", vec![("e", true)])
             .with_dir_entries("/a/b/c/d/e", vec![("f.txt", false)]);
 
-        let entries = fs.tree_directory("/a", false, None, None).await.unwrap();
+        let entries = fs
+            .tree_directory("/a", false, None, None, None, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(entries.len(), 5);
         assert_eq!(

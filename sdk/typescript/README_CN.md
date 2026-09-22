@@ -27,12 +27,14 @@ Node.js 中存在的本地文件路径会自动上传，目录会先压缩后上
 如果只希望入库并生成向量、不走 VLM 语义理解，可以给 `addResource` 传 `processingMode: "vectors_only"`。该模式会写入/同步资源树并向量化当前文件，但不会生成或刷新 `.abstract.md` / `.overview.md`。
 
 ```ts
-await client.addResource("./docs/guide.md", {
+const task = await client.addResource("./docs/guide.md", {
   to: "viking://resources/guide",
   processingMode: "vectors_only",
-  wait: true,
 });
+console.log(task.task_id);
 ```
+
+通过 `client.getTask(task.task_id as string)` 查询导入状态，任务为 `completed` 后再检索导入内容。
 
 事件记忆 tags 可设置为 session 默认值、后续更新，也可在单次 commit 时覆盖。向 `commitSession` 传 `[]` 表示本次显式跳过 session 默认 tags。
 

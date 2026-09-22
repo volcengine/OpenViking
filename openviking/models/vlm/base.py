@@ -112,6 +112,7 @@ class VLMBase(ABC):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously
 
@@ -121,6 +122,7 @@ class VLMBase(ABC):
             tools: Optional list of tool definitions in OpenAI function format
             tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
             messages: Optional list of message dicts (takes precedence over prompt)
+            max_tokens: Optional per-call output cap; overrides the configured value
 
         Returns:
             str if no tools provided, VLMResponse if tools provided
@@ -330,6 +332,9 @@ class VLMBase(ABC):
     def reset_token_usage(self) -> None:
         """Reset token usage"""
         self._token_tracker.reset()
+
+    def close(self) -> None:
+        """Release provider resources, if any."""
 
     def _extract_content_from_response(self, response) -> str:
         if isinstance(response, str):
@@ -598,6 +603,7 @@ class FailoverVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with failover support."""
         return await self._get_completion_with_failover_async(
@@ -607,6 +613,7 @@ class FailoverVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            max_tokens=max_tokens,
         )
 
     def get_vision_completion(
@@ -757,6 +764,11 @@ class FailoverVLM(VLMBase):
         """Reset token usage for both primary and backup instances."""
         self.primary.reset_token_usage()
         self.backup.reset_token_usage()
+
+    def close(self) -> None:
+        """Close both provider instances."""
+        self.primary.close()
+        self.backup.close()
 
 
 class MultiCredentialVLM(VLMBase):
@@ -972,6 +984,7 @@ class MultiCredentialVLM(VLMBase):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously with multi-credential failover support."""
         return await self._get_completion_with_failover_async(
@@ -981,6 +994,7 @@ class MultiCredentialVLM(VLMBase):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            max_tokens=max_tokens,
         )
 
     def get_vision_completion(
@@ -1122,3 +1136,8 @@ class MultiCredentialVLM(VLMBase):
         """Reset token usage for all credential instances."""
         for instance in self._vlm_instances:
             instance.reset_token_usage()
+
+    def close(self) -> None:
+        """Close all credential provider instances."""
+        for instance in self._vlm_instances:
+            instance.close()

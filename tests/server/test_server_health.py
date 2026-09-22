@@ -8,8 +8,9 @@ import time
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
-from openviking.server.app import _initialize_runtime_state, create_app
+from openviking.server.app import _initialize_auth_plugin, _initialize_runtime_state, create_app
 from openviking.server.config import ServerConfig
 
 
@@ -20,7 +21,7 @@ async def test_health_endpoint(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
-async def test_health_endpoint_resolves_identity_with_api_key(caplog):
+async def test_health_endpoint_resolves_identity_with_api_key(caplog, service):
     """When an API key is provided, /health should return identity information."""
     app = create_app(
         config=ServerConfig(
@@ -28,8 +29,9 @@ async def test_health_endpoint_resolves_identity_with_api_key(caplog):
             host="127.0.0.1",
             root_api_key="test-root-key",
         ),
-        service=SimpleNamespace(),
+        service=service,
     )
+    await _initialize_auth_plugin(app, service, app.state.config)
     transport = httpx.ASGITransport(app=app)
 
     with caplog.at_level("WARNING", logger="openviking.server.routers.system"):
@@ -68,6 +70,42 @@ async def test_health_endpoint_without_api_key():
     assert "account_id" not in body
     assert "user_id" not in body
     assert "role" not in body
+
+
+@pytest.mark.parametrize("root_key", [None, "test-root-key"])
+@pytest.mark.parametrize(
+    "credentials", ["anonymous", "partial", "trusted", "keyed", "malformed", "asserted-root"]
+)
+async def test_health_trusted_identity_contract(root_key, credentials, caplog, service):
+    app = create_app(
+        config=ServerConfig(auth_mode="trusted", host="127.0.0.1", root_api_key=root_key),
+        service=service,
+    )
+    await _initialize_auth_plugin(app, service, app.state.config)
+    headers = {}
+    if credentials != "anonymous":
+        headers["X-OpenViking-Account"] = "account-a"
+    if credentials in ("trusted", "keyed", "malformed", "asserted-root"):
+        headers["X-OpenViking-User"] = "alice"
+    if credentials in ("keyed", "asserted-root"):
+        headers["X-API-Key"] = "test-root-key"
+    if credentials == "malformed":
+        headers["X-OpenViking-User"] = "alice/../root"
+    if credentials == "asserted-root":
+        headers["X-OpenViking-Role"] = "root"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/health", headers=headers)
+    body = response.json()
+    assert response.status_code == 200
+    if credentials == "keyed" or (credentials == "trusted" and not root_key):
+        assert (body["account_id"], body["user_id"], body["role"]) == ("account-a", "alice", "user")
+    else:
+        assert "role" not in body
+    assert body["root_api_key_required"] is bool(root_key)
+    if credentials in ("anonymous", "partial"):
+        assert "Failed to resolve identity" not in caplog.text
 
 
 async def test_system_status(client: httpx.AsyncClient):

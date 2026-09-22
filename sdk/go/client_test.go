@@ -230,12 +230,18 @@ func TestFindUsesDefaultLimitAndPreservesEmptyValues(t *testing.T) {
 }
 
 func TestListAndTreeSendQueryOptions(t *testing.T) {
-	wantTreeLimits := []string{"0", "3"}
+	treeCalls := 0
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/fs/ls":
 			if got := r.URL.Query().Get("node_limit"); got != "200" {
 				t.Fatalf("node_limit = %q", got)
+			}
+			if got := r.URL.Query().Get("offset"); got != "4" {
+				t.Fatalf("offset = %q", got)
+			}
+			if got := r.URL.Query().Get("limit"); got != "5" {
+				t.Fatalf("limit = %q", got)
 			}
 			if got := r.URL.Query().Get("sort_by"); got != "mtime" {
 				t.Fatalf("sort_by = %q", got)
@@ -243,11 +249,35 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 			if got := r.URL.Query().Get("sort_order"); got != "desc" {
 				t.Fatalf("sort_order = %q", got)
 			}
-		case "/api/v1/fs/tree":
-			if got := r.URL.Query().Get("level_limit"); got != wantTreeLimits[0] {
-				t.Fatalf("level_limit = %q, want %q", got, wantTreeLimits[0])
+			if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod", "team=search"}) {
+				t.Fatalf("tags = %#v", got)
 			}
-			wantTreeLimits = wantTreeLimits[1:]
+		case "/api/v1/fs/tree":
+			if treeCalls == 0 {
+				if got := r.URL.Query().Get("level_limit"); got != "0" {
+					t.Fatalf("level_limit = %q, want 0", got)
+				}
+				if got := r.URL.Query().Get("offset"); got != "6" {
+					t.Fatalf("offset = %q", got)
+				}
+				if got := r.URL.Query().Get("limit"); got != "7" {
+					t.Fatalf("limit = %q", got)
+				}
+				if got := r.URL.Query()["tags"]; !reflect.DeepEqual(got, []string{"env=prod"}) {
+					t.Fatalf("tags = %#v", got)
+				}
+			} else {
+				if got := r.URL.Query().Get("level_limit"); got != "3" {
+					t.Fatalf("level_limit = %q, want 3", got)
+				}
+				if _, ok := r.URL.Query()["offset"]; ok {
+					t.Fatal("default tree request should omit offset")
+				}
+				if _, ok := r.URL.Query()["limit"]; ok {
+					t.Fatal("default tree request should omit limit")
+				}
+			}
+			treeCalls++
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
@@ -257,12 +287,21 @@ func TestListAndTreeSendQueryOptions(t *testing.T) {
 
 	if _, err := client.List(context.Background(), "viking://session", &ListOptions{
 		NodeLimit: 200,
+		Offset:    4,
+		Limit:     5,
 		SortBy:    "mtime",
 		SortOrder: "desc",
+		Tags:      []string{"env=prod", "team=search"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{LevelLimit: Int(0)}); err != nil {
+	if _, err := client.Tree(context.Background(), "viking://resources/docs", &TreeOptions{
+		NodeLimit:  200,
+		LevelLimit: Int(0),
+		Offset:     6,
+		Limit:      7,
+		Tags:       []string{"env=prod"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Tree(context.Background(), "viking://resources/docs", nil); err != nil {
@@ -613,7 +652,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true {
+		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -622,8 +661,66 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
 		ProcessingMode: "vectors_only",
+		Tags:           []string{},
+		TagMode:        "replace",
 		Wait:           true,
 		Extra:          map[string]any{"future_flag": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFilesystemTagProjectionOptionsAreSent(t *testing.T) {
+	requests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			if r.URL.Query().Get("include_tags") != "true" {
+				t.Fatalf("list query = %s", r.URL.RawQuery)
+			}
+		case 2:
+			if r.URL.Query().Get("include_tags") != "true" {
+				t.Fatalf("tree query = %s", r.URL.RawQuery)
+			}
+		case 3:
+			body := readJSONBody(t, r)
+			if body["include_tags"] != true {
+				t.Fatalf("grep body = %#v", body)
+			}
+		case 4:
+			if _, ok := r.URL.Query()["include_tags"]; ok {
+				t.Fatalf("default list query unexpectedly includes tags projection: %s", r.URL.RawQuery)
+			}
+		case 5:
+			body := readJSONBody(t, r)
+			if !reflect.DeepEqual(body["tags"], []any{"team=search", "env=prod"}) || body["include_tags"] != true {
+				t.Fatalf("glob body = %#v", body)
+			}
+		}
+		if requests == 3 || requests == 5 {
+			writeOK(t, w, map[string]any{})
+			return
+		}
+		writeOK(t, w, []any{})
+	}))
+	defer closeServer()
+
+	if _, err := client.List(context.Background(), "resources", &ListOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Tree(context.Background(), "resources", &TreeOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Grep(context.Background(), "resources", "needle", &GrepOptions{IncludeTags: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.List(context.Background(), "resources", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Glob(context.Background(), "**/*.md", "resources", &GlobOptions{
+		Tags:        []string{"team=search", "env=prod"},
+		IncludeTags: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1569,26 +1666,58 @@ func TestSessionExistsHandlesNotFound(t *testing.T) {
 	}
 }
 
-func TestListTasksRequest(t *testing.T) {
+func TestCompileAndListTasksRequests(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %s", r.Method)
-		}
-		if r.URL.Path != "/api/v1/tasks" {
+		switch r.URL.Path {
+		case "/api/v1/compile":
+			if r.Method != http.MethodPost {
+				t.Fatalf("method = %s", r.Method)
+			}
+			body := readJSONBody(t, r)
+			if !reflect.DeepEqual(body["from"], []any{"viking://resources/source"}) ||
+				body["to"] != "viking://resources/output" ||
+				body["skill"] != "viking://agent/skills/wiki" ||
+				body["instruction"] != "Keep supporting evidence." ||
+				!reflect.DeepEqual(body["args"], map[string]any{"model_name": "endpoint-1"}) {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
+		case "/api/v1/tasks":
+			if r.Method != http.MethodGet {
+				t.Fatalf("method = %s", r.Method)
+			}
+			query := r.URL.Query()
+			if query.Get("task_type") != "session_commit" ||
+				query.Get("status") != "running" ||
+				query.Get("resource_id") != "session-1" ||
+				query.Get("limit") != "20" {
+				t.Fatalf("query = %s", r.URL.RawQuery)
+			}
+			writeOK(t, w, []map[string]any{
+				{"task_id": "task-1", "status": "running"},
+			})
+		default:
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		query := r.URL.Query()
-		if query.Get("task_type") != "session_commit" ||
-			query.Get("status") != "running" ||
-			query.Get("resource_id") != "session-1" ||
-			query.Get("limit") != "20" {
-			t.Fatalf("query = %s", r.URL.RawQuery)
-		}
-		writeOK(t, w, []map[string]any{
-			{"task_id": "task-1", "status": "running"},
-		})
 	}))
 	defer closeServer()
+
+	compiled, err := client.Compile(
+		context.Background(),
+		[]string{"viking://resources/source"},
+		"viking://resources/output",
+		"viking://agent/skills/wiki",
+		&CompileOptions{
+			Instruction: "Keep supporting evidence.",
+			Args:        map[string]any{"model_name": "endpoint-1"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled["task_id"] != "cmp_1" {
+		t.Fatalf("compiled = %#v", compiled)
+	}
 
 	tasks, err := client.ListTasks(context.Background(), &ListTasksOptions{
 		TaskType:   "session_commit",
@@ -1726,12 +1855,15 @@ func TestGrepForwardsLevelLimit(t *testing.T) {
 		if got, ok := body["level_limit"]; !ok || got != float64(3) {
 			t.Fatalf("level_limit = %#v (ok=%v)", body["level_limit"], ok)
 		}
+		if !reflect.DeepEqual(body["tags"], []any{"env=prod"}) {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
 		writeOK(t, w, map[string]any{"matches": []any{}})
 	}))
 	defer closeServer()
 
 	level := 3
-	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level}); err != nil {
+	if _, err := client.Grep(context.Background(), "viking://user", "pat", &GrepOptions{LevelLimit: &level, Tags: []string{"env=prod"}}); err != nil {
 		t.Fatal(err)
 	}
 }

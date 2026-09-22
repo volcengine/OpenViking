@@ -15,6 +15,8 @@ export type ResourceRef = {
 }
 
 export type TerminalEntry = {
+  compileTaskId?: string
+  compileForm?: boolean
   id: string
   kind: 'command' | 'error' | 'info' | 'success'
   title: string
@@ -27,7 +29,6 @@ export type TerminalCommandGroup = 'core' | 'filesystem' | 'search' | 'status'
 export type TerminalCommandParameterKey =
   | 'archiveId'
   | 'contextChars'
-  | 'contexts'
   | 'keepRecent'
   | 'limit'
   | 'messageContent'
@@ -37,7 +38,6 @@ export type TerminalCommandParameterKey =
   | 'scope'
   | 'sessionAction'
   | 'sessionId'
-  | 'skillJson'
   | 'tokenBudget'
   | 'toolName'
   | 'toolResultId'

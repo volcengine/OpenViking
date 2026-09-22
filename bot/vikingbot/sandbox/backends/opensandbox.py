@@ -1,157 +1,45 @@
 """OpenSandbox backend implementation using official SDK."""
 
-import asyncio
-import atexit
-import base64
 import json
-import os
 import posixpath
 import shlex
-import subprocess
-import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
 from loguru import logger
 
 from vikingbot.config.schema import SandboxConfig, SessionKey
 from vikingbot.sandbox.backends import register_backend
 from vikingbot.sandbox.base import SandboxBackend, SandboxFileInfo, SandboxNotStartedError
-
-# Global to track the opensandbox-server process
-_OSB_SERVER_PROCESS: "subprocess.Popen | None" = None
-
-
-def _is_kubernetes_env() -> bool:
-    if "KUBERNETES_SERVICE_HOST" in os.environ:
-        return True
-    if Path("/var/run/secrets/kubernetes.io/serviceaccount").exists():
-        return True
-    return False
-
-
-async def _wait_for_server(url: str, timeout: int = 60) -> bool:
-    logger.info("Waiting for OpenSandbox server at {}...", url)
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                health_url = f"{url}/health"
-                logger.debug("Checking health at: {}", health_url)
-                response = await client.get(health_url)
-                logger.debug("Health check response: {} - {}", response.status_code, response.text)
-                if response.status_code == 200:
-                    logger.info("OpenSandbox server is ready!")
-                    return True
-        except Exception as e:
-            logger.debug("Health check failed: {}", e)
-        await asyncio.sleep(1)
-    logger.warning("OpenSandbox server not ready after {}s", timeout)
-    return False
-
-
-def _start_opensandbox_server() -> "subprocess.Popen | None":
-    global _OSB_SERVER_PROCESS
-
-    if _OSB_SERVER_PROCESS is not None:
-        if _OSB_SERVER_PROCESS.poll() is None:
-            logger.info("OpenSandbox server already running")
-            return _OSB_SERVER_PROCESS
-        else:
-            logger.warning("OpenSandbox server process died, restarting")
-            _OSB_SERVER_PROCESS = None
-
-    try:
-        config_path = Path.home() / ".sandbox.toml"
-        if not config_path.exists():
-            logger.info("Initializing OpenSandbox config at {}", config_path)
-            try:
-                result = subprocess.run(
-                    ["opensandbox-server", "init-config", str(config_path), "--example", "docker"],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    logger.warning("Failed to init config with --example, trying without...")
-                    result = subprocess.run(
-                        ["opensandbox-server", "init-config", str(config_path)],
-                        capture_output=True,
-                        text=True,
-                    )
-                    if result.returncode != 0:
-                        logger.warning("Failed to init config, stderr: {}", result.stderr)
-            except Exception as e:
-                logger.warning("Failed to run init-config: {}", e)
-
-        logger.info("Starting OpenSandbox server...")
-        _OSB_SERVER_PROCESS = subprocess.Popen(
-            ["opensandbox-server"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-
-        return _OSB_SERVER_PROCESS
-    except FileNotFoundError:
-        logger.error("opensandbox-server command not found.")
-        logger.error("Please start it manually first: opensandbox-server")
-        return None
-    except Exception as e:
-        logger.error("Failed to start OpenSandbox server: {}", e)
-        return None
-
-
-def cleanup_opensandbox_server():
-    global _OSB_SERVER_PROCESS
-    if _OSB_SERVER_PROCESS is not None and _OSB_SERVER_PROCESS.poll() is None:
-        logger.info("Stopping OpenSandbox server...")
-        _OSB_SERVER_PROCESS.terminate()
-        try:
-            _OSB_SERVER_PROCESS.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _OSB_SERVER_PROCESS.kill()
-        _OSB_SERVER_PROCESS = None
-
-
-# Register cleanup on exit
-atexit.register(cleanup_opensandbox_server)
+from vikingbot.sandbox.managed_server import WORKSPACE_GID_LABEL, WORKSPACE_UID_LABEL
 
 
 @register_backend("opensandbox")
 class OpenSandboxBackend(SandboxBackend):
-    def __init__(self, config: "SandboxConfig", session_key: SessionKey, workspace: Path):
-        # OpenSandbox has built-in isolation, restrict_to_workspace is not needed
+    def __init__(
+        self,
+        config: "SandboxConfig",
+        session_key: SessionKey,
+        workspace: Path,
+        *,
+        host_workspace: Path | None = None,
+    ):
+        # Paths belong to the remote container, not the Bot host filesystem.
         super().__init__()
         self.config = config
         self.session_key = session_key
         self._workspace = workspace
+        self._host_workspace = host_workspace
         self._sandbox = None
         self._connection_config = None
 
         self._osb_config = config.backends.opensandbox
 
-        self._is_vke = _is_kubernetes_env()
-        if self._is_vke:
-            self._server_url = "http://opensandbox-server:8080"
-            logger.info(
-                "Detected VKE environment, using OpenSandbox server at: {}", self._server_url
-            )
-        else:
-            self._server_url = self._osb_config.server_url
-            logger.info(
-                "Detected local environment, using OpenSandbox server at: {}", self._server_url
-            )
+        self._server_url = self._osb_config.server_url
 
     async def start(self) -> None:
         self._workspace.mkdir(parents=True, exist_ok=True)
-
-        if not self._is_vke:
-            server_process = _start_opensandbox_server()
-            if server_process:
-                ready = await _wait_for_server(self._server_url, timeout=10)
-                if not ready:
-                    logger.info(
-                        "OpenSandbox server not ready. Please start it manually: opensandbox-server"
-                    )
 
         try:
             from opensandbox.config import ConnectionConfig
@@ -160,55 +48,64 @@ class OpenSandboxBackend(SandboxBackend):
             self._connection_config = ConnectionConfig(
                 domain=self._server_url,
                 api_key=self._osb_config.api_key,
-                request_timeout=timedelta(seconds=300),
+                request_timeout=timedelta(seconds=self._osb_config.startup_timeout),
+                use_server_proxy=self._osb_config.use_server_proxy,
             )
 
             timeout_seconds = self._osb_config.runtime.timeout
 
-            # Configure volumes
-            volumes = None
-            if not self._is_vke:
-                # Local environment: mount host volume
-                from opensandbox.models.sandboxes import Host, Volume
+            from opensandbox.models.sandboxes import Host, NetworkPolicy, NetworkRule, Volume
 
-                volumes = [
+            volume_options = {}
+            if self._osb_config.managed:
+                if self._host_workspace is None:
+                    raise ValueError("Managed OpenSandbox requires a dedicated host workspace")
+                owner = self._host_workspace.stat()
+                volume_options["metadata"] = {
+                    WORKSPACE_UID_LABEL: str(owner.st_uid),
+                    WORKSPACE_GID_LABEL: str(owner.st_gid),
+                }
+                # Numeric users may not have a passwd entry or access to image /root.
+                volume_options["env"] = {"HOME": "/workspace"}
+                volume_options["volumes"] = [
                     Volume(
                         name="workspace",
-                        host=Host(path=str(self._workspace.resolve())),
-                        mountPath="/workspace",
+                        host=Host(path=str(self._host_workspace.resolve())),
+                        mount_path="/workspace",
+                        read_only=False,
                     )
                 ]
-            else:
-                # VKE environment: always mount TOS PVC to /workspace
-                try:
-                    from opensandbox.models.sandboxes import Volume
 
-                    # Build Volume with PVC using dictionary approach for compatibility
-                    volume_dict = {
-                        "name": "tos-workspace",
-                        "persistentVolumeClaim": {"claimName": "vikingbot-data"},
-                        "mountPath": "/workspace",
-                    }
-
-                    # Try to create Volume object
-                    volumes = [Volume(**volume_dict)]
-                    logger.info("Configured TOS PVC mount: vikingbot-data -> /workspace")
-                except Exception as e:
-                    logger.warning("Failed to create Volume object with PVC, falling back: {}", e)
-                    volumes = None
-
+            network = self._osb_config.network
+            policy = NetworkPolicy(
+                default_action="deny",
+                egress=[
+                    NetworkRule(action="deny", target=domain) for domain in network.denied_domains
+                ]
+                + [
+                    NetworkRule(action="allow", target=domain) for domain in network.allowed_domains
+                ],
+            )
             self._sandbox = await Sandbox.create(
                 self._osb_config.default_image,
                 connection_config=self._connection_config,
                 timeout=timedelta(seconds=timeout_seconds),
-                volumes=volumes,
+                ready_timeout=timedelta(seconds=self._osb_config.startup_timeout),
+                resource={
+                    "cpu": self._osb_config.runtime.cpu,
+                    "memory": self._osb_config.runtime.memory,
+                },
+                network_policy=policy,
+                **volume_options,
             )
+            # External services still use an API-only workspace without local mounts.
+            await self._sandbox.commands.run("mkdir -p /workspace")
 
             logger.info("OpenSandbox created successfully")
 
         except ImportError:
             logger.error(
-                "opensandbox SDK not installed. Install with: uv pip install opensandbox>=0.1.0 opensandbox-server>=0.1.0"
+                'OpenSandbox SDK missing or incompatible. Install: pip install "openviking[bot]"'
             )
             raise
         except Exception as e:
@@ -225,13 +122,13 @@ class OpenSandboxBackend(SandboxBackend):
         logger.info("[OpenSandbox] Executing: {}", repr(command))
 
         if command.strip() == "pwd":
-            return "/workspace" if self._is_vke else "/"
+            return "/workspace"
 
         try:
             from opensandbox.models.execd import RunCommandOpts
 
             opts = RunCommandOpts(timeout=timedelta(seconds=timeout))
-            execution = await self._sandbox.commands.run(command, opts=opts)
+            execution = await self._sandbox.commands.run(f"cd /workspace && {command}", opts=opts)
 
             output_parts = []
 
@@ -247,7 +144,11 @@ class OpenSandboxBackend(SandboxBackend):
                     [chunk.text for chunk in execution.logs.stderr if chunk.text]
                 )
 
-            exit_code = execution.exit_code if hasattr(execution, "exit_code") else 0
+            error = getattr(execution, "error", None)
+            exit_code = getattr(execution, "exit_code", 0)
+            if error:
+                stderr_text = "\n".join(filter(None, [stderr_text, f"{error.name}: {error.value}"]))
+                exit_code = exit_code or 1
 
             if stdout_text:
                 output_parts.append(stdout_text)
@@ -277,17 +178,25 @@ class OpenSandboxBackend(SandboxBackend):
             try:
                 if hasattr(self._sandbox, "kill"):
                     await self._sandbox.kill()
-                if hasattr(self._sandbox, "close"):
-                    await self._sandbox.close()
                 logger.info("OpenSandbox stopped")
             except Exception as e:
                 logger.warning("Error stopping sandbox: {}", e)
+            finally:
+                await self._sandbox.close()
 
         self._sandbox = None
         self._connection_config = None
 
     def is_running(self) -> bool:
         return self._sandbox is not None
+
+    async def is_healthy(self) -> bool:
+        if self._sandbox is None:
+            return False
+        healthy = await self._sandbox.is_healthy()
+        if healthy:
+            await self._sandbox.renew(timedelta(seconds=self._osb_config.runtime.timeout))
+        return healthy
 
     @property
     def workspace(self) -> Path:
@@ -304,103 +213,51 @@ class OpenSandboxBackend(SandboxBackend):
         return self.sandbox_cwd if not relative else f"{self.sandbox_cwd}/{relative}"
 
     def local_file_path(self, path: str) -> Path | None:
-        if self._is_vke:
-            return None
-        return super().local_file_path(path)
+        return None
 
     async def read_file(self, path: str) -> str:
-        """Read file from OpenSandbox."""
         if not self._sandbox:
             raise SandboxNotStartedError()
-
-        # In VKE environment, use SDK API; in local, use base implementation (host mount)
-        if self._is_vke:
-            try:
-                return await self._sandbox.files.read_file(self._sandbox_path(path))
-            except Exception as e:
-                logger.error(f"[OpenSandbox] Failed to read file {path}: {e}")
-                raise
-        else:
-            return await super().read_file(path)
+        return await self._sandbox.files.read_file(self._sandbox_path(path))
 
     async def write_file(self, path: str, content: str) -> None:
-        """Write file to OpenSandbox."""
         if not self._sandbox:
             raise SandboxNotStartedError()
-
-        # In VKE environment, use SDK API; in local, use base implementation (host mount)
-        if self._is_vke:
-            try:
-                await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=0o644)
-            except Exception as e:
-                logger.error(f"[OpenSandbox] Failed to write file {path}: {e}")
-                raise
-        else:
-            await super().write_file(path, content)
+        # Execd interprets mode as octal digits (644), not Python's 0o644 (=420).
+        await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=644)
 
     async def write_file_bytes(self, path: str, content: bytes) -> None:
-        """Write binary content to OpenSandbox, including remote VKE sandboxes."""
         if not self._sandbox:
             raise SandboxNotStartedError()
-        if not self._is_vke:
-            await super().write_file_bytes(path, content)
-            return
-        sandbox_path = path if path.startswith("/") else f"/workspace/{path}"
-        try:
-            await self._sandbox.files.write_file(sandbox_path, content, mode=0o644)
-        except TypeError:
-            encoded_path = f"{sandbox_path}.vikingbot-b64"
-            encoded = base64.b64encode(content).decode("ascii")
-            await self._sandbox.files.write_file(encoded_path, encoded, mode=0o600)
-            output = await self.execute(
-                f"base64 -d {shlex.quote(encoded_path)} > {shlex.quote(sandbox_path)} "
-                f"&& rm -f {shlex.quote(encoded_path)}"
-            )
-            self._ensure_command_succeeded(output, "binary file decode")
+        await self._sandbox.files.write_file(self._sandbox_path(path), content, mode=644)
 
     async def remove_tree(self, path: str) -> None:
         if not self._sandbox:
             raise SandboxNotStartedError()
         if not path or path.startswith("/") or ".." in Path(path).parts:
             raise PermissionError("remove_tree requires a safe sandbox-relative path")
-        if not self._is_vke:
-            await super().remove_tree(path)
-            return
-        sandbox_path = f"/workspace/{path}"
-        output = await self.execute(f"rm -rf -- {shlex.quote(sandbox_path)}")
+        output = await self.execute(f"rm -rf -- {shlex.quote(self._sandbox_path(path))}")
         self._ensure_command_succeeded(output, "sandbox tree removal")
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
-        """List directory in OpenSandbox."""
         if not self._sandbox:
             raise SandboxNotStartedError()
+        from opensandbox.models.execd import RunCommandOpts
 
-        # In VKE environment, use SDK API; in local, use base implementation (host mount)
-        if self._is_vke:
-            try:
-                sandbox_path = path
-                if not path.startswith("/"):
-                    sandbox_path = f"/workspace/{path}"
-
-                # Use execute to list directory as fallback
-                result = await self.execute(f"ls -la {sandbox_path}")
-
-                items = []
-                lines = result.strip().split("\n")
-                for line in lines[1:]:
-                    parts = line.split()
-                    if len(parts) >= 9:
-                        name = " ".join(parts[8:])
-                        is_dir = parts[0].startswith("d")
-                        if name not in (".", ".."):
-                            items.append((name, is_dir))
-
-                return items
-            except Exception as e:
-                logger.error(f"[OpenSandbox] Failed to list directory {path}: {e}")
-                raise
-        else:
-            return await super().list_dir(path)
+        script = (
+            "import json, os; "
+            f"print(json.dumps([(e.name, e.is_dir()) for e in os.scandir({self._sandbox_path(path)!r})]))"
+        )
+        # Structured data must not go through execute()'s display truncation or
+        # stderr formatting. SDK stdout chunks may split a JSON token anywhere.
+        execution = await self._sandbox.commands.run(
+            f"python3 -c {shlex.quote(script)}",
+            opts=RunCommandOpts(timeout=timedelta(seconds=30)),
+        )
+        if execution.error:
+            raise IOError(f"Sandbox directory listing failed: {execution.error.value}")
+        output = "".join(message.text for message in execution.logs.stdout)
+        return [(name, is_dir) for name, is_dir in json.loads(output)]
 
     async def list_files(
         self,
@@ -409,8 +266,6 @@ class OpenSandboxBackend(SandboxBackend):
         max_entries: int,
     ) -> list[SandboxFileInfo]:
         """List remote VKE files without materializing an unbounded search response."""
-        if not self._is_vke:
-            return await super().list_files(path, max_entries=max_entries)
         if not self._sandbox:
             raise SandboxNotStartedError()
         self._validate_max_entries(max_entries)
@@ -497,8 +352,6 @@ class OpenSandboxBackend(SandboxBackend):
         return sorted(files, key=lambda item: item.path)
 
     async def read_file_bytes(self, path: str, *, max_bytes: int | None = None) -> bytes:
-        if not self._is_vke:
-            return await super().read_file_bytes(path, max_bytes=max_bytes)
         if not self._sandbox:
             raise SandboxNotStartedError()
         self._validate_max_bytes(max_bytes)
@@ -516,8 +369,6 @@ class OpenSandboxBackend(SandboxBackend):
         *,
         max_bytes: int | None = None,
     ) -> int:
-        if not self._is_vke:
-            return await super().export_file(path, destination, max_bytes=max_bytes)
         if not self._sandbox:
             raise SandboxNotStartedError()
         self._validate_max_bytes(max_bytes)

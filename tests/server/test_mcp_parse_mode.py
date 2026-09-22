@@ -106,6 +106,39 @@ async def test_mcp_local_upload_token_binds_no_split(
 
 
 @pytest.mark.asyncio
+async def test_mcp_local_upload_token_binds_parent(
+    monkeypatch: pytest.MonkeyPatch,
+    mcp_context,
+):
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "_resolve_public_base_url",
+        lambda: ("https://ov.example.com", "config"),
+    )
+
+    await mcp_endpoint.add_resource(
+        path="/tmp/manual.pdf",
+        parent="viking://~/resources/team",
+    )
+
+    assert len(upload_token_store._store) == 1
+    token_info = next(iter(upload_token_store._store.values()))
+    assert token_info.parent == "viking://user/test_user/resources/team"
+
+
+@pytest.mark.asyncio
+async def test_mcp_rejects_to_and_parent_together(mcp_context):
+    result = await mcp_endpoint.add_resource(
+        path="/tmp/manual.pdf",
+        to="viking://resources/exact-target",
+        parent="viking://~/resources/team",
+    )
+
+    assert result == "Error: Cannot specify both 'to' and 'parent' at the same time."
+    assert upload_token_store._store == {}
+
+
+@pytest.mark.asyncio
 async def test_mcp_rejects_invalid_parse_mode(mcp_context):
     result = await mcp_endpoint.add_resource(
         path="https://example.com/manual.pdf",

@@ -396,7 +396,6 @@ async def test_phase2_processes_only_current_archive(
         task_id=task_id,
         archive_uri=current_uri,
         messages=[current],
-        usage_records=[],
         first_message_id=current.id,
         last_message_id=current.id,
         memory_policy={"working_memory": {"enabled": True}},
@@ -474,7 +473,6 @@ async def test_phase2_retry_does_not_repeat_completed_current_archive_steps(
         task_id=task_id,
         archive_uri=current_uri,
         messages=[current],
-        usage_records=[],
         first_message_id=current.id,
         last_message_id=current.id,
         memory_policy={
@@ -665,7 +663,6 @@ async def test_phase2_persists_checkpoint_from_same_summary_call(
         task_id=task_id,
         archive_uri=archive_uri,
         messages=[anchor, early],
-        usage_records=[],
         first_message_id="u1",
         last_message_id="a1",
         memory_policy={"working_memory": {"enabled": True}},
@@ -749,6 +746,70 @@ async def test_wm_creation_returns_two_products_in_one_model_call(
     assert calls[0]["prompt"].count("queried the service") == 1
     assert "secret-anchor-id" not in calls[0]["prompt"]
     assert "secret-source-id" not in calls[0]["prompt"]
+
+
+async def test_wm_creation_passes_configured_output_language_to_prompt(client, monkeypatch):
+    session = client(session_id="wm_output_language_prompt_test")
+    prompts: list[dict] = []
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, **kwargs):
+            prompts.append(kwargs)
+            return "# Working Memory"
+
+    vlm = FakeVLM()
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm, output_language_override="zh-CN"),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [_text_message("zh-user", "user", "请总结当前部署状态")]
+    )
+
+    assert result == "# Working Memory"
+    assert len(prompts) == 1
+    assert "zh-CN" in prompts[0]["prompt"]
+
+
+async def test_wm_creation_detects_language_from_multiline_user_message(client, monkeypatch):
+    session = client(session_id="wm_multiline_output_language_detection_test")
+    prompts: list[dict] = []
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, **kwargs):
+            prompts.append(kwargs)
+            return "# Working Memory"
+
+    vlm = FakeVLM()
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [
+            _text_message(
+                "multiline-user",
+                "user",
+                "Task details:\n"
+                "当前生产环境已经完成部署。\n"
+                "请用中文总结当前状态和后续风险。",
+            )
+        ]
+    )
+
+    assert result == "# Working Memory"
+    assert len(prompts) == 1
+    assert "zh-CN" in prompts[0]["prompt"]
 
 
 async def test_wm_update_returns_two_products_in_one_model_call(
@@ -1114,7 +1175,6 @@ async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
         task_id=task_id,
         archive_uri=archive_uri,
         messages=[anchor, early],
-        usage_records=[],
         first_message_id="u1",
         last_message_id="a1",
         memory_policy={"working_memory": {"enabled": True}},
@@ -1184,7 +1244,6 @@ async def test_working_memory_disabled_does_not_generate_or_restore_checkpoint(
         task_id=task_id,
         archive_uri=archive_uri,
         messages=[anchor, early],
-        usage_records=[],
         first_message_id="u1",
         last_message_id="a1",
         memory_policy={

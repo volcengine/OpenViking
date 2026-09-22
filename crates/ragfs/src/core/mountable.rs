@@ -14,6 +14,9 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::lock::{AutoPathLockAction, PathLockKind, PathLockManager, PathLockRequest};
+use crate::metrics::{
+    lock_metrics, merge_metrics, operation_metrics, RagfsMetric, RagfsMetricValue,
+};
 use crate::multibackend::factory::build_multi_write_fs;
 use crate::multibackend::types::MultiBackendBuildContext;
 use crate::plugins::QueueFileSystem;
@@ -23,13 +26,16 @@ use super::internal_names::is_hidden_internal_name;
 
 use super::encryption_wrapper::EncryptionWrappedFS;
 use super::errors::{Error, Result};
-use super::filesystem::{sort_directory_entries, validate_virtual_path, FileSystem};
+use super::filesystem::{
+    apply_read_dir_options, paginate_entries, sort_directory_entries, validate_virtual_path,
+    FileSystem,
+};
 use super::multibackend_wrapper::MultiWriteWrappedFS;
 use super::plugin::ServicePlugin;
 use super::stats::{FilesystemStats, StatsCollector};
 use super::stats_wrapper::StatsWrappedFS;
 use super::types::{
-    BackendsConfig, FileInfo, GlobPage, GrepResult, PluginConfig, TreeEntry, WriteFlag,
+    BackendsConfig, FileInfo, GlobPage, GrepOptions, GrepResult, PluginConfig, TreeEntry, WriteFlag,
 };
 #[cfg(feature = "cache")]
 use crate::cache::{CacheNamespace, CachePolicy, CacheTraversalMode, CachedFileSystem};
@@ -592,6 +598,55 @@ impl MountableFS {
         result
     }
 
+    /// Read current mount and lock collectors; return merged, sorted native metrics or an error.
+    pub async fn metrics(&self) -> Result<Vec<RagfsMetric>> {
+        let mut mounts: Vec<_> = {
+            let mounts = self.mounts.read().await;
+            mounts.iter().map(|(_, info)| info.clone()).collect()
+        };
+        mounts.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let mut metrics = Vec::new();
+        for mount in mounts {
+            metrics.extend(operation_metrics(
+                &mount.plugin_name,
+                &mount.stats.snapshot().await,
+            ));
+            #[cfg(feature = "cache")]
+            if let Some(cache) = Self::as_cached(&mount.fs) {
+                metrics.extend(crate::metrics::cache_metrics(cache.metrics().snapshot()));
+            }
+            if let Some(multiwrite) = Self::as_multiwrite(&mount.fs) {
+                metrics.push(RagfsMetric {
+                    name: "ragfs_multiwrite_background_tasks".into(),
+                    labels: Default::default(),
+                    value: RagfsMetricValue::Gauge(multiwrite.background_task_count() as f64),
+                });
+                let routes = multiwrite.inner.read_route_metrics();
+                for (route, key) in [
+                    ("primary", "primary_hits"),
+                    ("backup", "backup_hits"),
+                    ("redirect", "redirect_hits"),
+                    ("miss", "misses"),
+                ] {
+                    let count = routes[key].as_u64().ok_or_else(|| {
+                        Error::internal(format!("invalid read-route counter '{key}'"))
+                    })?;
+                    metrics.push(RagfsMetric::counter(
+                        "ragfs_multiwrite_read_routes_total",
+                        &[("route", route)],
+                        count,
+                        1.0,
+                    ));
+                }
+            }
+        }
+        if let Some(manager) = self.pathlock_manager.get() {
+            metrics.extend(lock_metrics(manager.metrics_snapshot().await));
+        }
+        merge_metrics(metrics)
+    }
+
     /// Read raw bytes from the underlying plugin backend, bypassing the encryption layer.
     ///
     /// Used by tests to verify ciphertext on disk and by cp/persist for verbatim blob copies.
@@ -642,8 +697,7 @@ impl MountableFS {
             Ok(AutoPathLockAction::Acquire) => Some(
                 manager
                     .acquire_exact(dst_path, Duration::ZERO, None)
-                    .await
-                    .map_err(|error| Error::internal(format!("lock error: {error}")))?,
+                    .await?,
             ),
             Err(error) => {
                 return Err(Error::internal(format!("lock lease error: {error}")));
@@ -809,8 +863,17 @@ impl FileSystem for ArcFileSystem {
         self.0.write(path, data, offset, flags).await
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
-        self.0.read_dir(path).await
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
+        self.0
+            .read_dir(path, offset, limit, sort_by, sort_order)
+            .await
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
@@ -958,11 +1021,20 @@ impl FileSystem for MountableFS {
         Ok(changed)
     }
 
-    async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
+    async fn read_dir(
+        &self,
+        path: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
+    ) -> Result<Vec<FileInfo>> {
         let mut entries = self.read_internal_dir(path).await?;
         entries.retain(|entry| !is_hidden_internal_name(&entry.name));
         sort_directory_entries(&mut entries);
-        Ok(entries)
+        Ok(apply_read_dir_options(
+            entries, offset, limit, sort_by, sort_order,
+        ))
     }
 
     async fn read_internal_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
@@ -1023,11 +1095,7 @@ impl FileSystem for MountableFS {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         // Route grep to the mounted plugin so plugin-specific fast paths (e.g. localfs + rg)
         // can take effect. If a plugin doesn't override grep, it will fall back to the trait
@@ -1036,7 +1104,7 @@ impl FileSystem for MountableFS {
 
         // Exclude path only applies when it resolves to the same mount point; otherwise it
         // should not affect searching under `path`.
-        let exclude_rel: Option<String> = match exclude_path {
+        let exclude_rel: Option<String> = match options.exclude_path {
             None => None,
             Some(excl_abs) => match self.find_mount(excl_abs).await {
                 Ok((exclude_mount, excl_rel)) => {
@@ -1055,11 +1123,10 @@ impl FileSystem for MountableFS {
             .grep(
                 &rel_path,
                 pattern,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_rel.as_deref(),
-                level_limit,
+                GrepOptions {
+                    exclude_path: exclude_rel.as_deref(),
+                    ..options
+                },
             )
             .await?;
 
@@ -1080,6 +1147,9 @@ impl FileSystem for MountableFS {
         show_hidden: bool,
         node_limit: Option<usize>,
         level_limit: Option<usize>,
+        offset: Option<usize>,
+        sort_by: Option<crate::core::ListSortBy>,
+        sort_order: Option<crate::core::SortOrder>,
     ) -> Result<Vec<TreeEntry>> {
         let (mount_info, rel_path) = self.find_mount(path).await?;
 
@@ -1091,7 +1161,15 @@ impl FileSystem for MountableFS {
 
         let mut entries = mount_info
             .fs
-            .tree_directory(&rel_path, show_hidden, node_limit, level_limit)
+            .tree_directory(
+                &rel_path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                sort_by,
+                sort_order,
+            )
             .await?;
 
         for entry in &mut entries {
@@ -1112,7 +1190,7 @@ impl FileSystem for MountableFS {
                 .map_or(true, |name| !is_hidden_internal_name(name))
         });
 
-        Ok(entries)
+        Ok(paginate_entries(entries, offset, node_limit))
     }
 
     async fn glob_directory(
@@ -1277,7 +1355,14 @@ mod tests {
             Ok(data.len() as u64)
         }
 
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             Ok(self
                 .tree_entries
                 .iter()
@@ -1301,11 +1386,7 @@ mod tests {
             &self,
             path: &str,
             pattern: &str,
-            _recursive: bool,
-            _case_insensitive: bool,
-            _node_limit: Option<usize>,
-            _exclude_path: Option<&str>,
-            _level_limit: Option<usize>,
+            _options: GrepOptions<'_>,
         ) -> Result<GrepResult> {
             let mut out = GrepResult::new();
             // Encode the received rel_path into the match so the test can assert routing worked.
@@ -1319,6 +1400,9 @@ mod tests {
             _show_hidden: bool,
             _node_limit: Option<usize>,
             _level_limit: Option<usize>,
+            _offset: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
         ) -> Result<Vec<TreeEntry>> {
             Ok(self.tree_entries.clone())
         }
@@ -1412,7 +1496,14 @@ mod tests {
             Ok(data.len() as u64)
         }
 
-        async fn read_dir(&self, _path: &str) -> Result<Vec<FileInfo>> {
+        async fn read_dir(
+            &self,
+            _path: &str,
+            _offset: Option<usize>,
+            _limit: Option<usize>,
+            _sort_by: Option<crate::core::ListSortBy>,
+            _sort_order: Option<crate::core::SortOrder>,
+        ) -> Result<Vec<FileInfo>> {
             Ok(vec![])
         }
 
@@ -1739,7 +1830,7 @@ mod tests {
 
         assert_eq!(mfs.read("/local/dir/b.md", 0, 0).await.unwrap(), b"old");
         assert_eq!(
-            mfs.read_dir("/local/dir")
+            mfs.read_dir("/local/dir", None, None, None, None)
                 .await
                 .unwrap()
                 .into_iter()
@@ -1756,7 +1847,7 @@ mod tests {
 
         let copied = mfs.read("/local/dir/b.md", 0, 0).await.unwrap();
         let copied_size = mfs
-            .read_dir("/local/dir")
+            .read_dir("/local/dir", None, None, None, None)
             .await
             .unwrap()
             .into_iter()
@@ -2114,7 +2205,7 @@ mod tests {
         let mfs = mounted_mock("mock", "/mock").await;
 
         let result = mfs
-            .grep("/mock/a.txt", "foo", false, false, None, None, None)
+            .grep("/mock/a.txt", "foo", GrepOptions::default())
             .await
             .unwrap();
 
@@ -2148,13 +2239,14 @@ mod tests {
                 make_tree_entry("/A.txt", "A.txt", "A.txt", false),
                 make_tree_entry("/c", "c", "c", true),
                 make_tree_entry("/B", "B", "B", true),
+                make_tree_entry("/.path.ovlock", ".path.ovlock", ".path.ovlock", false),
             ],
         );
         mfs.register_plugin(plugin).await;
         mfs.mount(test_config("sorted", "/sorted")).await.unwrap();
 
         let names: Vec<String> = mfs
-            .read_dir("/sorted")
+            .read_dir("/sorted", None, None, None, None)
             .await
             .unwrap()
             .into_iter()
@@ -2162,13 +2254,28 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["B", "c", "A.txt", "b.txt"]);
+
+        let page: Vec<String> = mfs
+            .read_dir(
+                "/sorted",
+                Some(1),
+                Some(2),
+                Some(crate::core::ListSortBy::Name),
+                Some(crate::core::SortOrder::Desc),
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(page, vec!["B", "b.txt"]);
     }
 
     #[tokio::test]
     async fn test_tree_directory_no_mount_returns_error() {
         let mfs = MountableFS::new();
         let result = mfs
-            .tree_directory("/nonexistent/subdir", false, None, None)
+            .tree_directory("/nonexistent/subdir", false, None, None, None, None, None)
             .await;
         assert!(result.is_err());
     }
@@ -2189,7 +2296,7 @@ mod tests {
         mfs.mount(test_config("rewrite", "/rewrite")).await.unwrap();
 
         let result = mfs
-            .tree_directory("/rewrite/sub", false, None, None)
+            .tree_directory("/rewrite/sub", false, None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
@@ -2210,7 +2317,7 @@ mod tests {
             .unwrap();
 
         let result = mfs
-            .tree_directory("/local/test_account/a", false, None, None)
+            .tree_directory("/local/test_account/a", false, None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(result.len(), 1);

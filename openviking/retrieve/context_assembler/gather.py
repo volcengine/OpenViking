@@ -12,7 +12,7 @@ import asyncio
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from openviking.core.namespace import AGENT_SHARED_ROOTS, canonical_user_root
+from openviking.core.namespace import AGENT_SKILLS_ROOT, canonical_user_root
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.retrieve.context_assembler.params import (
     MEMORY_CATEGORIES,
@@ -105,7 +105,7 @@ def category_targets(category: str, ctx: RequestContext) -> List[str]:
     if category == "skills":
         return default_target_directories(ctx, context_type=ContextType.SKILL) or [
             f"{user_root}/skills",
-            *AGENT_SHARED_ROOTS,
+            AGENT_SKILLS_ROOT,
         ]
     return [f"{root.rstrip('/')}/{category}" for root in memory_target_roots(ctx)]
 

@@ -39,7 +39,7 @@ results = await client.search(
 
 ## 意图分析
 
-IntentAnalyzer 使用 LLM 分析查询意图，生成 0-5 个 TypedQuery。该阶段使用的模型可通过 [`query_planner`](../guides/01-configuration.md#query_planner) 配置项单独指定，未设置时回退到 `vlm`。
+IntentAnalyzer 使用 LLM 分析查询意图，生成 0-5 个 TypedQuery。该阶段使用的模型可通过 [`query_planner`](../guides/01-configuration.md#query-planner) 配置项单独指定，未设置时回退到 `vlm`。
 
 ### 输入
 

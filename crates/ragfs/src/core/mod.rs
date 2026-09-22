@@ -13,6 +13,7 @@ pub mod encryption_wrapper;
 pub mod errors;
 pub mod filesystem;
 pub mod glob;
+pub(crate) mod grep;
 pub mod internal_names;
 pub mod mountable;
 pub mod multibackend_wrapper;
@@ -23,13 +24,13 @@ pub mod types;
 
 // Re-export commonly used types
 pub use crate::multibackend::{FsContextResolver, MetaStateStore};
-pub use builder::{
-    build_default_stack, build_stack_with_mountable, register_builtin_plugins,
-    EncryptionConfig as BuilderEncryptionConfig, RagfsConfig, RagfsStack,
-};
 #[cfg(feature = "cache")]
 pub use builder::{
     build_configured_stack, CacheFsConfig, CacheRuntimeProviderConfig, CacheStackConfig,
+};
+pub use builder::{
+    build_default_stack, build_stack_with_mountable, register_builtin_plugins,
+    EncryptionConfig as BuilderEncryptionConfig, RagfsConfig, RagfsStack,
 };
 pub use context::{FsContext, FsContextInner, FsContextView, PathLockContext, FS_CTX};
 pub use encryption_wrapper::EncryptionWrappedFS;
@@ -42,7 +43,7 @@ pub use stats::{FilesystemStats, FsOperation, OperationStats, OperationTimer, St
 pub use stats_wrapper::StatsWrappedFS;
 pub use types::{
     BackendItemConfig, BackendRole, BackendSyncState, BackendsConfig, ConfigParameter, ConfigValue,
-    EncryptionConfig, FileInfo, GlobEntry, GlobPage, GrepMatch, GrepResult,
-    OperationItemConfig, PluginConfig, RedirectEntry, RedirectMeta, RedirectPolicy,
-    SyncLogEntry, SyncLogMeta, SyncOp, SyncType, TreeEntry, WriteFlag,
+    EncryptionConfig, FileInfo, GlobEntry, GlobPage, GrepMatch, GrepOptions, GrepResult,
+    ListSortBy, OperationItemConfig, PluginConfig, RedirectEntry, RedirectMeta, RedirectPolicy,
+    SortOrder, SyncLogEntry, SyncLogMeta, SyncOp, SyncType, TreeEntry, WriteFlag,
 };

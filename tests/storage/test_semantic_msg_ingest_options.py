@@ -74,3 +74,52 @@ def test_semantic_msg_round_trips_hierarchical_aggregation_policy():
 
     assert restored.use_hierarchical_aggregation is True
     assert restored.propagate_to_parent is False
+
+
+def test_semantic_msg_roundtrip_preserves_file_md5s():
+    msg = SemanticMsg(
+        uri="viking://resources/x",
+        context_type="resource",
+        file_md5s={"viking://resources/x/a.py": "md5a"},
+    )
+
+    assert SemanticMsg.from_dict(msg.to_dict()).file_md5s == {"viking://resources/x/a.py": "md5a"}
+
+
+def test_semantic_msg_defaults_file_md5s_to_empty():
+    msg = SemanticMsg(uri="viking://resources/x", context_type="resource")
+
+    assert msg.file_md5s == {}
+    assert SemanticMsg.from_dict(msg.to_dict()).file_md5s == {}
+
+
+def test_semantic_msg_roundtrip_preserves_queue_enqueue_time():
+    msg = SemanticMsg(
+        uri="viking://resources/x",
+        context_type="resource",
+        queue_enqueued_at=123.456,
+    )
+
+    assert SemanticMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
+
+
+def test_semantic_msg_roundtrip_preserves_local_artifact_snapshot():
+    msg = SemanticMsg(
+        uri="viking://resources/x",
+        context_type="resource",
+        artifact_ref={
+            "backend": "local",
+            "root": "/tmp/artifact-1",
+            "resource_rel": "repository",
+            "root_type": "dir",
+        },
+        artifact_files=["a.py", "src/b.py"],
+        file_abstracts={"viking://resources/x/a.py": "summary a"},
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.artifact_ref == msg.artifact_ref
+    assert restored.artifact_ref["resource_rel"] == "repository"
+    assert restored.artifact_files == ["a.py", "src/b.py"]
+    assert restored.file_abstracts == {"viking://resources/x/a.py": "summary a"}

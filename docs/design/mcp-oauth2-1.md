@@ -110,7 +110,7 @@
 OAuth token = API Key 等效，能调任何当前用户身份能调的 REST 端点（不仅 `/mcp`）。
 
 - **不是权限放大**：opaque token 都钉死 `(account_id, user_id, role)`
-- **撤销粒度**：以 `(account, user)` 为单位 — 删除某 user 的 API Key 时一刀切撤销该 user 名下所有 OAuth token，见 `OAuthStore.revoke_user_tokens()`
+- **撤销粒度**：以 `(account, user)` 为单位 — 删除某 user 的 API Key 时一刀切撤销该 user 名下所有 OAuth token，见 `OAuthStore.revoke_tokens()`
 - Phase 2 计划引入 OAuth scope 做更细收紧
 
 ### 3. Token 形态（全部 opaque）
@@ -281,7 +281,7 @@ server {
 
 ### ✅ M1 — 基础设施
 - `OAuthConfig` 接入 `OpenVikingConfig`（默认 disabled）
-- `OAuthStore` 5 张表 + CRUD + 原子一次性消费 + revoke_user_tokens
+- `OAuthStore` 5 张表 + CRUD + 原子一次性消费 + revoke_tokens
 - `oauth/otp.py` OTP 生成
 - `app.py` lifespan 注入 store + provider + GC
 
@@ -395,7 +395,7 @@ curl -X POST -H "Authorization: Bearer ovat_..." \
 | 反代后 `issuer` 派生错（HTTPS 终结于代理） | `OPENVIKING_PUBLIC_BASE_URL` env 或 `oauth.issuer` 配置；非 localhost 部署强烈建议显式设 |
 | 同源 quick-authorize 是隐式确认 | 即使检测到 sessionStorage，**仍需点击 "Authorize" 按钮**才生效，不会一步跳转 |
 | display_code 暴力枚举 | 6 字符 × 32 字母表 = ~1B 组合；TTL 10min；pending 一次性消费；建议在反代层加每 IP 速率限制 |
-| Refresh token 重放 | 实现：检测重放→`store.revoke_user_tokens(account, user)` 一并撤销该 user 名下所有 OAuth state |
+| Refresh token 重放 | 实现：检测重放→`store.revoke_tokens(account, user)` 一并撤销该 user 名下所有 OAuth state |
 | Token 权限范围 = 整个 REST API | 已与用户确认 Phase 1 不限制；Phase 2 引入 scope 机制收紧 |
-| API Key → 撤销 OAuth token 的精度 | 当前粒度 `(account, user)`：删 user 时调 `revoke_user_tokens` cascade；满足需求 |
+| API Key → 撤销 OAuth token 的精度 | 当前粒度 `(account, user)`：删 user 时调 `revoke_tokens` cascade；满足需求 |
 | Console 与 OAuth page 同源依赖反代 | 文档提供 nginx 模板；不反代时退化为"console 复制 OTP，page 输入"流程仍可用 |
