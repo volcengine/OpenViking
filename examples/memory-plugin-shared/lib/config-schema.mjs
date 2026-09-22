@@ -92,6 +92,17 @@ export const KNOBS = [
   { name: "logRankingDetails", type: "bool", default: false, env: "OPENVIKING_LOG_RANKING_DETAILS", capability: "recall" },
   { name: "recallLedger", type: "bool", default: true, env: "OPENVIKING_RECALL_LEDGER", capability: "recall" },
   { name: "recallQueryFilters", type: "list", default: [], env: "OPENVIKING_RECALL_QUERY_FILTERS", capability: "recall" },
+  // Subtree URIs the recall search must never return. Without this there is no
+  // way to keep generated directory files (viking://user/<space>/skills,
+  // viking://user/<space>/resources, viking://agent/skills) out of the hits:
+  // they match like ordinary content and carry only boilerplate text.
+  {
+    name: "recallExcludeUris",
+    type: "list",
+    default: [],
+    env: "OPENVIKING_RECALL_EXCLUDE_URIS",
+    capability: "recall",
+  },
 
   // Digest compression. Claude Code reads this as the tri-state
   // off/client/server/auto through `normalizeRewriteMode`; Codex reads the same
