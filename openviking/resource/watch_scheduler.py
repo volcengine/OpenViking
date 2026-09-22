@@ -11,9 +11,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
 from openviking.connector.auth import (
-    LOCAL_REFRESH_DISABLED,
     OAUTH_REF_ARG,
-    external_auth_url,
     is_external_feishu_auth,
     restore_feishu_request,
 )
@@ -566,11 +564,6 @@ class WatchScheduler:
         task,
         auth_state: Dict[str, Any],
     ) -> Dict[str, Any]:
-        if external_auth_url():
-            raise FeishuTokenRefreshError(
-                LOCAL_REFRESH_DISABLED,
-                permanent=True,
-            )
         if not feishu_auth_state_needs_refresh(auth_state):
             return auth_state
 
