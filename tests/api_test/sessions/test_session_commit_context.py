@@ -1,4 +1,4 @@
-class TestSessionCommitUsedContext:
+class TestSessionCommitContext:
     def test_session_commit_flow(self, api_client):
         session_id = None
         try:
@@ -60,84 +60,6 @@ class TestSessionCommitUsedContext:
             assert commit_resp.status_code == 200
             data = commit_resp.json()
             assert data.get("status") == "ok"
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
-    def test_session_used_records_usage(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            api_client.add_message(session_id, "user", "Test used tracking")
-
-            used_resp = api_client.session_used(
-                session_id,
-                contexts=["viking://resources/some_context"],
-                skill={"name": "test-skill"},
-            )
-            assert used_resp.status_code == 200
-            used_data = used_resp.json()
-            assert used_data.get("status") == "ok"
-            result = used_data.get("result", {})
-            assert result.get("session_id") == session_id
-            assert "contexts_used" in result
-            assert "skills_used" in result
-            assert isinstance(result["contexts_used"], (int, list))
-            assert isinstance(result["skills_used"], (int, list))
-            ctx_used = result["contexts_used"]
-            if isinstance(ctx_used, int):
-                assert ctx_used >= 1
-            elif isinstance(ctx_used, list):
-                assert len(ctx_used) >= 1
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
-    def test_session_used_with_multiple_contexts(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            api_client.add_message(session_id, "user", "Multi context test")
-
-            used_resp = api_client.session_used(
-                session_id,
-                contexts=[
-                    "viking://resources/context1",
-                    "viking://resources/context2",
-                    "viking://~/skills/skill1",
-                ],
-                skill={"name": "multi-context-skill", "uri": "viking://~/skills/multi"},
-            )
-            assert used_resp.status_code == 200
-            data = used_resp.json()
-            assert data.get("status") == "ok"
-            result = data.get("result", {})
-            assert result.get("session_id") == session_id
-            assert "contexts_used" in result
-            assert "skills_used" in result
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
-    def test_session_used_without_contexts_or_skill(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            used_resp = api_client._request_with_retry(
-                "POST",
-                f"{api_client.server_url}/api/v1/sessions/{session_id}/used",
-                json={},
-            )
-            assert used_resp.status_code == 200
         finally:
             if session_id:
                 api_client.delete_session(session_id)

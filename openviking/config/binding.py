@@ -21,7 +21,11 @@ from openviking.config.source.file_source import FileConfigSource
 from openviking.config.validate import validate_patch
 from openviking.pyagfs import AsyncAGFSClient
 from openviking_cli.utils.config import get_openviking_config, set_openviking_config
+from openviking_cli.utils.config.config_utils import warn_unknown_config_fields
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig, RuntimeConfigSettings
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # The concrete manager type this module hands back.
 OpenVikingRuntimeConfigManager = RuntimeConfigManager[OpenVikingConfig, AccountConfig]
@@ -49,8 +53,16 @@ def _build_cluster(old: OpenVikingConfig, override: dict) -> OpenVikingConfig:
 
 
 def _build_account(override: Optional[dict]) -> AccountConfig:
-    """Construct (and thereby validate) an account config from its sparse override."""
-    return AccountConfig.model_validate(override or {})
+    """Construct (and thereby validate) an account config from its sparse override.
+
+    A persisted account override may carry fields this binary does not declare --
+    a retired ``namespace`` block, or a section written by a newer binary. They
+    stay ignored so legacy settings keep loading, and the warning keeps the drop
+    visible. Only field names are logged, never values.
+    """
+    sparse = override or {}
+    warn_unknown_config_fields(data=sparse, model=AccountConfig, logger=logger)
+    return AccountConfig.model_validate(sparse)
 
 
 def _validate_request(patch: dict, is_account: bool, creating: bool) -> None:

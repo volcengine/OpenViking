@@ -355,6 +355,9 @@ When `storage.workspace` is omitted, the default is `~/.openviking/data/bot/work
 vikingbot status
 ```
 
+With managed OpenSandbox (`backend=opensandbox`, `managed=true`), the active workspace root is
+`<storage.workspace>/bot/runtime/opensandbox/workspaces`, bind-mounted into containers as described below.
+
 The active directory used by the Agent also depends on `bot.sandbox.mode`:
 
 | Mode | Active Workspace |
@@ -489,6 +492,82 @@ DirectBackend defaults to `restrict_to_workspace: false`. For a Gateway exposed 
     }
   }
 }
+```
+
+### Managed Docker sandboxes for Gateway
+
+The default remains `direct`: no Docker checks or OpenSandbox service are started. To opt in,
+install and start Docker (Docker Desktop on macOS; Docker Desktop with WSL2 integration on Windows),
+then set `bot.sandbox.backend` to `opensandbox` and optionally `bot.sandbox.mode` to `per-session`
+in the `ov.conf` used by Gateway.
+
+Both `vikingbot gateway --config /path/to/ov.conf` and OpenViking `--with-bot` check dependencies,
+prepare images, generate a private Server configuration and API key, start OpenSandbox, and verify
+command execution plus file round trips **before accepting requests**. Failure aborts startup;
+there is no fallback to Direct. `--with-bot` waits for readiness rather than process existence.
+
+Generated configuration and logs live in `{storage.workspace}/bot/runtime/opensandbox/gateway-*/`.
+The generated credential-bearing configuration is removed on normal shutdown; logs are retained.
+There is no need to edit `~/.sandbox.toml`.
+The managed service also restricts Docker-published sandbox ports to `127.0.0.1`, adapting
+OpenSandbox Server 0.1.6's all-interface bindings without modifying external Servers.
+
+Settings under `bot.sandbox.backends.opensandbox`:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `managed` | `true` | Manage a local Docker-backed Server; `false` connects to an external service |
+| `server_url` | `http://localhost:18792` | Local HTTP endpoint in managed mode; port is configurable |
+| `api_key` | empty | Generated in managed mode; supply the external service's key otherwise |
+| `startup_timeout` | `600` | Total startup timeout in seconds, including first-time image pulls |
+| `use_server_proxy` | `true` | Access sandbox endpoints through the Server |
+| `default_image` | `opensandbox/code-interpreter:v1.0.1` | Workload image; needs shell and Python 3 |
+| `execd_image` | `opensandbox/execd:v1.0.6` | Execution daemon image |
+| `egress_image` | `opensandbox/egress:v1.0.1` | Network policy sidecar image |
+| `pids_limit` | `256` | Managed Docker sandbox process limit |
+| `runtime.cpu` / `runtime.memory` | `500m` / `1Gi` | Per-sandbox resource limits |
+| `runtime.timeout` | `300` | Sandbox lifetime in seconds, renewed on use |
+| `network.allowed_domains` / `network.denied_domains` | `[]` / `[]` | Default-deny egress; deny rules precede allow rules |
+
+Managed sandboxes use bridge networking, dropped capabilities and no-new-privileges. Each container
+bind-mounts only its dedicated host workspace at `/workspace`, with read/write access:
+
+The workload container, including execd, runs as the workspace owner's numeric UID/GID with
+`HOME=/workspace`. This supports ordinary Linux users' `0755` directories and `0644` files without
+relaxing permissions or restoring `CAP_DAC_OVERRIDE`. Egress and image-cache containers keep their
+own execution identities.
+
+```text
+{storage.workspace}/bot/runtime/opensandbox/
+├── gateway-*/                  # Server configuration and logs; never mounted
+└── workspaces/
+    ├── shared/                 # shared mode → container /workspace
+    ├── <session/channel-key>/  # one workspace per session/channel
+    └── compile/<task-id>/      # isolated Compile task workspaces
+```
+
+Files are directly visible in Finder and edits from either side affect the same directory.
+Chat workspace files survive container destruction and are reused on recreation. Bootstrap files
+and enabled local Skills are initialized only when the directory is first created; user edits are
+preserved thereafter. Compile task directories retain their existing cleanup lifecycle. Bot config,
+Server credentials, the Docker socket and other session directories are not mounted.
+Existing `bot/workspace/shared` files are not migrated automatically; customize the new workspace.
+
+`shared` creates and retains one sandbox at startup. Other modes use a disposable startup probe and
+create real instances on demand. Compile gets a sandbox per task. Shutdown cancels active work,
+cleans up sandboxes, then stops the owned Server. SIGKILL/power loss can leave containers behind;
+expiration cleanup cannot run while the managed Server is stopped, so verify recovery on restart.
+
+External mode uses file APIs without local bind mounts, skips local Docker checks and never starts or stops the external service. Its operator
+must configure the runtime, egress component and security policy. Automatic management applies to
+Gateway / `--with-bot`; standalone `vikingbot chat` requires a prestarted OpenSandbox service.
+
+Run the optional Docker permission regression with the images above available. It uses native
+Linux volume storage to exercise UID 1000 ownership, `0755` directories, `0644` files, command/file
+API writes and container recreation without Docker Desktop host file-sharing permission translation:
+
+```bash
+VIKINGBOT_TEST_DOCKER=1 PYTHONPATH=bot python -m pytest -q -o addopts='' bot/tests/test_opensandbox_docker_permissions.py
 ```
 
 ## HTTP API

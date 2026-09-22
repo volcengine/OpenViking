@@ -309,21 +309,46 @@ async function resolveTargetUri(fetchJSON, targetUri, actorPeerId = "") {
   return `viking://user/${space}/${parts.join("/")}`;
 }
 
-async function searchOneSource(fetchJSON, query, source, limit, actorPeerId = "") {
-  const resolvedUri = await resolveTargetUri(fetchJSON, source.uri, actorPeerId);
-  const body = { query, target_uri: resolvedUri, limit, score_threshold: 0 };
-  const res = await fetchJSON("/api/v1/search/find", {
-    method: "POST",
-    body: JSON.stringify(body),
-  }, { actorPeerId });
-  if (!res.ok) return [];
-  const items = res.result?.[source.bucket] || [];
-  return items.map((item) => ({ ...item, _sourceType: source.type }));
+async function searchOneSource(fetchJSON, cfg, query, source, limit, options) {
+  const actorPeerId = options.actorPeerId || "";
+  const home = await resolveTargetUri(fetchJSON, source.uri, actorPeerId);
+  const targets = [...new Set(cfg.user
+    ? [`viking://user/${cfg.user}/${source.bucket}`, home] : [home])];
+  const sessionId = String(options.sessionId || "").trim();
+  const search = async (target, session) => {
+    const body = { query, target_uri: target, limit, score_threshold: 0 };
+    if (session) body.session_id = session;
+    const init = { method: "POST", body: JSON.stringify(body) };
+    // Session-aware retrieval may decide no context is needed. Only after all
+    // targets are empty do we retry without the session. Old servers still
+    // support find; an unsupported search route can fall back to it.
+    let res = await fetchJSON(sessionId ? "/api/v1/search/search" : "/api/v1/search/find", init, { actorPeerId });
+    if (sessionId && !res.ok && (
+      !res.status || res.status === 404 || res.status === 405 || res.status >= 500
+      || ((res.status === 400 || res.status === 422) && looksLikeUnknownField(res))
+    )) {
+      const { session_id, ...findBody } = body;
+      res = await fetchJSON("/api/v1/search/find", { method: "POST", body: JSON.stringify(findBody) }, { actorPeerId });
+    }
+    const items = res.ok && Array.isArray(res.result?.[source.bucket]) ? res.result[source.bucket] : [];
+    return items.map((item) => ({ ...item, _sourceType: source.type }));
+  };
+  for (const target of targets) {
+    const items = await search(target, sessionId);
+    if (items.length) return items;
+  }
+  if (sessionId) {
+    for (const target of targets) {
+      const items = await search(target, "");
+      if (items.length) return items;
+    }
+  }
+  return [];
 }
 
-async function searchAllSources(fetchJSON, query, perSourceLimit, actorPeerId = "", log = () => {}) {
+async function searchAllSources(fetchJSON, cfg, query, perSourceLimit, options, log = () => {}) {
   const results = await Promise.all(
-    SOURCES.map((src) => searchOneSource(fetchJSON, query, src, perSourceLimit, actorPeerId)),
+    SOURCES.map((src) => searchOneSource(fetchJSON, cfg, query, src, perSourceLimit, options)),
   );
   const all = results.flat();
   log("recall_search_summary", {
@@ -359,50 +384,30 @@ async function resolveItemContent(fetchJSON, item, cfg, actorPeerId = "") {
   return content;
 }
 
-async function buildFallbackInjectionBlock(fetchJSON, items, cfg, actorPeerId = "", log = () => {}) {
+function formatFallback(items, cfg, log = () => {}) {
   const budgetTotal = Math.max(200, Number(cfg.recallTokenBudget || 2000));
-  let budgetRemaining = budgetTotal;
-  const lines = [
-    "<openviking-context>",
-    "Relevant context from OpenViking. Use the read MCP tool to expand URIs.",
-  ];
+  const lines = [];
   let contentCount = 0;
   let hintCount = 0;
-
+  const maxChars = Math.max(50, Number(cfg.recallMaxContentChars || 500));
   for (const item of items) {
     const score = (clampScore(item.score) * 100).toFixed(0);
-    const uriLine = `- [${item._sourceType} ${score}%] ${item.uri}`;
-
-    if (budgetRemaining > 0) {
-      const content = await resolveItemContent(fetchJSON, item, cfg, actorPeerId);
-      const contentLine = `- [${item._sourceType} ${score}%] ${content}`;
-      const lineTokens = estimateTokens(contentLine);
-
-      if (lineTokens > budgetRemaining && contentCount > 0) {
-        lines.push(uriLine);
-        hintCount++;
-      } else {
-        lines.push(contentLine);
-        budgetRemaining -= lineTokens;
-        contentCount++;
-      }
-    } else {
+    const kind = item._sourceType || item.category || "memory";
+    const uriLine = `- [${kind} ${score}%] ${item.uri}`;
+    const text = String(item.text || item.uri);
+    const content = text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
+    const contentLine = `- [${kind} ${score}%] ${content}`;
+    if (estimateTokens(wrapContext([...lines, uriLine, contentLine].join("\n"))) <= budgetTotal) {
+      lines.push(uriLine, contentLine);
+      contentCount += 1;
+    } else if (estimateTokens(wrapContext([...lines, uriLine].join("\n"))) <= budgetTotal) {
       lines.push(uriLine);
-      hintCount++;
+      hintCount += 1;
     }
   }
-
-  lines.push("</openviking-context>");
-
-  const budgetUsed = budgetTotal - budgetRemaining;
-  log("recall_injection_built", {
-    contentItems: contentCount,
-    hintItems: hintCount,
-    budgetUsed,
-    budgetTotal,
-  });
-
-  return { block: lines.join("\n"), contentCount, hintCount, budgetUsed, stage: "ranked" };
+  const budgetUsed = lines.length ? estimateTokens(wrapContext(lines.join("\n"))) : 0;
+  log("recall_injection_built", { contentItems: contentCount, hintItems: hintCount, budgetUsed, budgetTotal });
+  return { rendered: lines.join("\n"), contentCount, hintCount, budgetUsed };
 }
 
 const LEGACY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -469,10 +474,14 @@ function looksLikeUnknownField(res) {
 }
 
 function wrapContext(body) {
+  // Retrieved text cannot introduce a second capture delimiter inside ours.
+  const text = String(body)
+    .replace(/<\/?relevant-memor(?:y|ies)\b[^>]*>/gi, "legacy memory wrapper")
+    .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker");
   return [
     "<openviking-context>",
     "Relevant memory from OpenViking. Use the search/read MCP tools to expand URIs.",
-    body,
+    text,
     "</openviking-context>",
   ].join("\n");
 }
@@ -488,7 +497,7 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 
   const block = await recallViaContextFace(fetchJSON, cfg, query, { ...options, actorPeerId }, log);
   if (block !== null) return block;
-  return recallViaEndpoint(fetchJSON, cfg, query, actorPeerId, log);
+  return recallViaEndpoint(fetchJSON, cfg, query, { ...options, actorPeerId }, log);
 }
 
 /**
@@ -552,53 +561,65 @@ export function normalizeContextEntry(entry = {}) {
   };
 }
 
+/** Server relevance decisions and digest precedence are shared by every host. */
+export function selectRecallContent(result = {}) {
+  if (String(result.stats?.rewrite || "").toLowerCase() === "no_relevant") return "";
+  return String(result.digest || "").trim() || String(result.rendered || "").trim();
+}
+
+function wantsLocalCompression(cfg, options) {
+  const mode = String(cfg.recallRewrite || "off").toLowerCase();
+  return (mode === "client" || mode === "auto")
+    && options.localCompressorAvailable !== false
+    && typeof options.runCompressor === "function";
+}
+
+// Context, legacy recall, and raw retrieval share the same result policy.
+// The host callback only runs its model; it never chooses a fallback or digest.
+async function finalizeRecall(result, cfg, query, options, log, shortContext) {
+  const selected = selectRecallContent(result);
+  if (String(result.stats?.rewrite || "").toLowerCase() === "no_relevant") return "";
+  const entries = (result.entries || []).map(normalizeContextEntry).filter((entry) => entry.uri);
+  const rendered = String(result.rendered || "").trim();
+  if (String(result.digest || "").trim() || !wantsLocalCompression(cfg, options)) return selected;
+  const fallback = shortContext ?? (entries.length ? formatFallback(entries, cfg).rendered : rendered);
+  const input = rendered || entries.map((entry) => `${entry.uri}\n${entry.text}`).join("\n");
+  if (!input) return "";
+  try {
+    const compression = await compressRecallContext({
+      query, rendered: input, shortContext: shortContext ?? (rendered || fallback),
+      entries, cfg, runCompressor: options.runCompressor,
+      cachePath: options.digestCachePath || stateFile("recall-digest.json"), now: Date.now(),
+    });
+    log("recall_local_compression", { status: compression.status });
+    if (compression.status === "ok") return compression.context;
+    if (compression.status === "empty") return "";
+  } catch (err) {
+    log("recall_local_compression_failed", { error: String(err?.message || err) });
+  }
+  return fallback;
+}
+
 async function recallViaContextFace(fetchJSON, cfg, query, options, log) {
   const assembled = await fetchAssembledContext(fetchJSON, cfg, query, { ...options, log });
   if (assembled === null) return null;
-
-  const { rendered, entries } = assembled;
-  let digest = assembled.digest;
-  const mode = String(cfg.recallRewrite || "off").toLowerCase();
-  if (String(assembled.stats?.rewrite || "").toLowerCase() === "no_relevant") {
-    log("recall_server_compression", { status: "empty" });
-    return "";
-  }
-  const wantsLocal = mode === "client" || (mode === "auto" && !digest);
-  if (wantsLocal && rendered && typeof options.runCompressor === "function") {
-    try {
-      const compression = await compressRecallContext({
-        query,
-        rendered,
-        entries,
-        cfg,
-        runCompressor: options.runCompressor,
-        cachePath: options.digestCachePath || stateFile("recall-digest.json"),
-        now: Date.now(),
-      });
-      log("recall_local_compression", { status: compression.status });
-      if (compression.status === "ok") digest = compression.context;
-      if (compression.status === "empty") return "";
-    } catch (err) {
-      log("recall_local_compression_failed", { error: String(err?.message || err) });
-    }
-  }
-
-  const injected = digest || rendered;
-  if (!injected) return "";
-  return wrapContext(injected);
+  const text = await finalizeRecall(assembled, cfg, query, options, log);
+  return text ? wrapContext(text) : "";
 }
 
-async function recallViaEndpoint(fetchJSON, cfg, query, actorPeerId = "", log = () => {}) {
+async function recallViaEndpoint(fetchJSON, cfg, query, options, log) {
   const body = buildRecallEndpointBody(cfg);
   body.query = query;
-  const res = await postRecall(fetchJSON, body, { actorPeerId, log });
+  if (wantsLocalCompression(cfg, options)) {
+    body.max_chars = Math.max(1000, Number(cfg.recallCompressMaxInputChars || 18000));
+  }
+  const res = await postRecall(fetchJSON, body, { actorPeerId: options.actorPeerId, log });
   if (!res.ok) {
     log("recall_endpoint_fallback", { status: res.status || 0 });
     return null;
   }
-  const rendered = String(res.result?.rendered || "").trim();
-  if (!rendered) return "";
-  return wrapContext(rendered);
+  const text = await finalizeRecall(res.result || {}, cfg, query, options, log);
+  return text ? wrapContext(text) : "";
 }
 
 export async function postRecall(fetchJSON, body, opts = {}) {
@@ -711,7 +732,7 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
 
   const recallLimit = Math.max(1, Number(cfg.recallLimit || DEFAULT_CONTEXT_LIMIT));
   const perSourceLimit = Math.max(recallLimit * 2, 8);
-  const raw = await searchAllSources(fetchJSON, trimmed, perSourceLimit, actorPeerId, log);
+  const raw = await searchAllSources(fetchJSON, cfg, trimmed, perSourceLimit, { ...options, actorPeerId }, log);
   if (raw.length === 0) return emptyRecall("no_results");
 
   const profile = buildQueryProfile(trimmed);
@@ -727,5 +748,25 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
   });
 
   if (picked.length === 0) return emptyRecall("filtered_out");
-  return buildFallbackInjectionBlock(fetchJSON, picked, cfg, actorPeerId, log);
+  const local = wantsLocalCompression(cfg, options);
+  const inputLimit = Math.max(1000, Number(cfg.recallCompressMaxInputChars || 18000));
+  const contentCfg = local ? { ...cfg, recallPreferAbstract: false, recallMaxContentChars: inputLimit } : cfg;
+  const entries = await Promise.all(picked.map(async (item) => ({
+    ...item, text: await resolveItemContent(fetchJSON, item, contentCfg, actorPeerId),
+  })));
+  const fallback = formatFallback(entries, cfg, log);
+  let text = await finalizeRecall({
+    rendered: local ? entries.map((item) => `${item.uri}\n${item.text}`).join("\n").slice(0, inputLimit) : fallback.rendered,
+    entries,
+  }, cfg, trimmed, options, log, fallback.rendered);
+  if (estimateTokens(wrapContext(text)) > Math.max(200, Number(cfg.recallTokenBudget || 2000))) {
+    text = fallback.rendered;
+  }
+  if (!text) return emptyRecall("no_results");
+  const unchanged = text === fallback.rendered;
+  return {
+    block: wrapContext(text), contentCount: unchanged ? fallback.contentCount : 1,
+    hintCount: unchanged ? fallback.hintCount : 0,
+    budgetUsed: estimateTokens(wrapContext(text)), stage: "ranked",
+  };
 }

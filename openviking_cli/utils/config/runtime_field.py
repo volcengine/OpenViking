@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Declarative marker for config fields the runtime config API may touch.
 
-A plain top-level Pydantic ``Field`` is not on the config API surface: PATCH
-requests targeting it are rejected. Declaring :func:`RuntimeField` opts it in
-and records two orthogonal attributes so generic code can decide what the API
-may do with it without any per-field branching:
+A plain Pydantic ``Field`` is not on the config API surface: PATCH requests
+targeting it are rejected. Every component of a writable nested path must use
+:func:`RuntimeField`; marking a section does not grant access to its ordinary
+``Field`` descendants. ``RuntimeField`` records two orthogonal attributes so
+generic code can decide what the API may do without per-field branching:
 
 - ``dynamic`` — the field's writable lifecycle, a single boolean covering all
   mutability. ``True`` (default): writable both at creation and by later PATCH.
@@ -144,10 +145,9 @@ def collect_runtime_field_paths(model: type[BaseModel]) -> set[tuple[str, ...]]:
     """Collect dotted field paths that are on ``model``'s config surface.
 
     Collect explicitly marked paths, including their marked parent sections,
-    regardless of ``dynamic``. A section with no marked descendants is treated
-    by the validator as one configurable object; its ordinary model fields are
-    accepted inside that object. Objects still merge recursively during PATCH.
-    Sections with marked descendants restrict input to those declared paths.
+    regardless of ``dynamic``. Every component of a writable nested path must
+    be marked: a ``RuntimeField`` section does not implicitly make ordinary
+    ``Field`` descendants writable.
 
     Whether a non-creating PATCH may write a path is further gated by
     ``dynamic`` (see :func:`collect_frozen_paths`). Cluster-vs-account scope is

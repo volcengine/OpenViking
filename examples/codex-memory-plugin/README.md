@@ -46,8 +46,10 @@ Claude Code and Codex share this installer (drop `--harness codex` to pick inter
 After install:
 
 ```bash
-codex             # first run: review /hooks once
+codex             # first run: pick "Trust all and continue" at the hook review prompt
 ```
+
+Startup stops on `6 hooks need review` — pick **Trust all and continue**. Every later update that touches a hook asks again, for however many changed. Choosing *Continue without trusting*, or skipping the prompt, leaves the hooks off: MCP tools still work, but recall and capture never fire. Two independent switches have to be on to get them back: `/hooks` (hook trust and on/off) and `/plugins` (the plugin's own enabled state). The same applies to TraeCode CLI 2.0, which runs this plugin under `trae-cli`.
 
 ### B. Codex marketplace install
 
@@ -76,7 +78,7 @@ hooks = true
 Finally start Codex and trust the plugin hooks once:
 
 ```bash
-codex            # then run /hooks inside Codex to review & approve the hooks
+codex            # then trust the hooks at the startup prompt, or via /hooks
 ```
 
 > **Requirements & notes**
@@ -283,13 +285,30 @@ On `resume`, the script skips commit/sweep. It still injects the profile block. 
 
 ### Auto-recall (every UserPromptSubmit)
 
-`auto-recall.mjs` reads `prompt` and `session_id` from stdin. It first asks `/api/v1/search/recall` for bounded, type-quota candidates and passes those entries through the same relevance compressor used by the fallback path. If that endpoint is unavailable, the hook derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, and reads full content for top-ranked leaves before compression.
+`auto-recall.mjs` adapts the Codex prompt/session payload and calls the shared
+`buildRecallBlockDetailed()` pipeline. The shared core owns context search,
+legacy `/recall`, raw-search fallback, ranking, injection budgets, digest selection,
+compression caching and URI repair. Codex owns the `cx-<safe-session-id>` mapping,
+model/profile selection, CLI execution and the hook deadline.
 
 ```json
-{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }
+{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context>\n...\n</openviking-context>" } }
 ```
 
-Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default, recalled context below `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` is injected directly; larger blocks pass through the shared relevance compressor, and an identical query/context pair reuses its cached digest. If the compressor returns `NO_RELEVANT_MEMORY`, empty text, or non-digest chatter, the hook emits `{}` and injects nothing. The whole hook has its own `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled `hooks.json` gives Codex 130s so the script can return `{}` before Codex kills it. Digests keep validated `viking://` source URIs and point the model at the OpenViking MCP `read`/`search` tools for details when the inline bullet is intentionally short. The outer `<openviking-context ...>` wrapper is deterministic, not compressor-generated; capture strips it to distinguish recalled context from the user's prompt. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
+The shared core prefers a server digest and suppresses injection for
+`no_relevant` / `NO_RELEVANT_MEMORY`. Local compressor failures retain bounded
+retrieved context. Raw fallback uses session-aware search when a session exists,
+then retries without the session if all targets are empty; unavailable search
+can fall back to `find`. Explicit user targets retain the home-alias fallback.
+Local compression receives bounded full leaf content before injection truncation.
+Without local compression, `recallPreferAbstract` and the shared token budget
+control the fallback (including URI and wrapper overhead).
+
+The hook has an `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled
+hook allows 130s. Nested compressor calls disable automatic memory hooks and are
+killed on timeout. A failed compressor is not restarted for a legacy-peer pass
+within the same turn. Capture recognizes the shared `<openviking-context>` wrapper
+and removes injected context from newly captured messages.
 
 The compressor profile is recreated on every `SessionStart` and cached under `OPENVIKING_CODEX_STATE_DIR` so cross-session config changes are picked up but each `UserPromptSubmit` does not probe models. Default fallback order:
 
@@ -303,8 +322,8 @@ Config knobs:
 | Env var | Default | Meaning |
 |---|---|---|
 | `OPENVIKING_RECALL_LIMIT` | `10` | Legacy quota-scaling input; explicit values are converted to six coding quotas, not enforced as a final result cap. |
-| `OPENVIKING_RECALL_COMPRESS` | `1` | Set `0` / `off` to disable `codex exec` compression. |
-| `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable compression. |
+| `OPENVIKING_RECALL_COMPRESS` | `auto` | `server`: cloud rewrite, never launches `codex exec`; `client`: local only; `auto`: local when available, otherwise cloud; `off` / `0`: uncompressed. `1` aliases `auto`. |
+| `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable the local compressor (`auto` then uses cloud compression). |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |
 | `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | Base URL for the nested compressor's provider. Use this when `--ignore-user-config` prevents the compressor from reading the main Codex provider configuration. |
 | `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` | `1500` | Skip the nested compressor below this recalled-context size. Set `0` to compress every non-empty result. |
@@ -487,3 +506,16 @@ The Codex marketplace catalog that exposes this plugin for `codex plugin marketp
 ## License
 
 Apache-2.0 — same as [OpenViking](https://github.com/volcengine/OpenViking).
+
+
+### Cloud recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to request `POST /api/v1/search/search`
+with `mode: "context", rewrite: true`. This also disables local startup compressor
+probes. A returned server digest is injected without a second local compression
+pass; a server `no_relevant` result injects nothing. If rewrite is unavailable,
+the hook preserves the existing raw-context / legacy retrieval fallback.
+
+`auto` uses `rewrite: "auto"` when the Codex executable or its compressor profile
+is unavailable (including a cached runtime failure). A first local failure still
+uses the deterministic fallback for that turn; later turns use the server.

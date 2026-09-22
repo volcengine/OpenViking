@@ -2493,7 +2493,12 @@ async def test_reindex_file_summary_reads_existing_record_as_uri_owner(monkeypat
     raw = render_abstract_overview(
         ContextLevel.OVERVIEW,
         "viking://resources/demo",
-        "# Demo\n\n## image.png\nVisible file summary.",
+        (
+            "# Demo\n\n"
+            "## Detailed Description\n\n"
+            "### [Image](viking://resources/demo/image.png)\n"
+            "Visible file summary."
+        ),
         {
             "source": {
                 "kind": "http",

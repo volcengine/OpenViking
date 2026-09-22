@@ -554,6 +554,9 @@ class FeishuConfig(ParserConfig):
         30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
     )
 
+    def __post_init__(self) -> None:
+        self.validate()
+
     def validate(self) -> None:
         """
         Validate configuration.
@@ -563,16 +566,29 @@ class FeishuConfig(ParserConfig):
         """
         super().validate()
 
-        if not self.domain:
+        if not isinstance(self.domain, str) or not self.domain.strip():
             raise ValueError("domain cannot be empty")
+        self.domain = self.domain.strip()
 
-        if self.max_rows_per_sheet <= 0:
+        if (
+            isinstance(self.max_rows_per_sheet, bool)
+            or not isinstance(self.max_rows_per_sheet, int)
+            or self.max_rows_per_sheet <= 0
+        ):
             raise ValueError("max_rows_per_sheet must be positive")
 
-        if self.max_records_per_table <= 0:
+        if (
+            isinstance(self.max_records_per_table, bool)
+            or not isinstance(self.max_records_per_table, int)
+            or self.max_records_per_table <= 0
+        ):
             raise ValueError("max_records_per_table must be positive")
 
-        if self.request_timeout <= 0:
+        if (
+            isinstance(self.request_timeout, bool)
+            or not isinstance(self.request_timeout, (int, float))
+            or self.request_timeout <= 0
+        ):
             raise ValueError("request_timeout must be positive")
 
 

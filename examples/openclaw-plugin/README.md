@@ -385,3 +385,14 @@ ov tui
 For installation, upgrade, and uninstall operations, use [INSTALL.md](./INSTALL.md).
 
 </details>
+
+
+### Cloud recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to enable cloud recall compression, or
+`auto` to let the server decide whether to rewrite. Both use search
+`mode=context`; `server` sends `rewrite=true`, and `auto` sends `rewrite="auto"`.
+The server digest takes precedence over raw rendered context, and `no_relevant`
+suppresses injection. The default remains `off`; no local compressor is launched.
+
+The plugin config equivalent is `recallCompress: "server"`.

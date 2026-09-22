@@ -25,11 +25,34 @@ GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装�
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
-现在不再需要任何 shell wrapper——插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。安装完成后：
+现在不再需要任何 shell wrapper——插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。安装完成后启动 Codex（TraeCode CLI 2.0 是 `trae-cli`）：
 
 ```bash
-codex              # 首次启动需进入 /hooks 完成一次审批
+codex
 ```
+
+### 首次启动：信任 hooks
+
+插件的 hooks 对 Codex 是新的，启动时会先停在一次信任确认上，选 **Trust all and continue**；想先看一眼 hook 命令就选 Review hooks：
+
+```text
+Hooks need review
+6 hooks are new or changed.
+Hooks can run outside the sandbox after you trust them.
+
+  1. Review hooks
+> 2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+```
+
+全新安装会一次列出插件注册的全部 6 个 hook。之后每次插件更新只要动了 hook，Codex 都会再拦一次，数字是这次新增或改动的条数（比如只改了一个就是 `1 hook is new or changed`），同样选 Trust all and continue。
+
+选第 3 项或错过这一步，hooks 就不会运行：MCP 工具仍能调用，但自动召回和捕获全部停摆。要恢复，得让两个彼此独立的开关都处于开启状态：
+
+- `/hooks` — hook 的信任与开关，把标着 *New hook - review required* 或 *Modified since last trusted* 的条目信任并打开。
+- `/plugins` — 插件本身的启用状态，确认 `openviking-memory` 是 enabled。
+
+任何一边是关着的，自动召回和捕获都不会发生。
 
 <details>
 <summary><b>手动安装</b></summary>
@@ -102,7 +125,7 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 |------|------|------|
 | MCP 工具调用报认证错误 | 当前 ovcli 配置没有 authenticated server 所需的有效 `api_key` | 修正 `~/.openviking/ovcli.conf`（或运行 `node <插件目录>/scripts/setup.mjs`）后重启 Codex；stdio 代理会在启动时和认证失败后重新读取配置 |
 | MCP 工具调用报连接错误 | 服务器不可达或 URL 配置错误 | 执行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查服务器状态 |
-| `6 hooks need review` | 首次启动需要进行安全审批；升级新增 hook 后，Codex 会要求再次审批新增的 hook | 在 Codex 终端内输入 `/hooks` 完成审批 |
+| `6 hooks need review`，或插件已装但 hook 不生效 | 全新安装要信任全部 6 个 hook，之后每次插件更新改动到 hook 时还会再问一次；当时选了 *Continue without trusting* 或直接跳过，hooks 就一直不会运行 | `/hooks` 里信任并开启相关条目，`/plugins` 里确认 `openviking-memory` 已启用——两个开关相互独立，都要是开着的 |
 | `ov config switch` 后插件仍指向旧服务器 | 上个会话的代理进程仍在运行 | 重启 Codex；代理在启动时解析凭据 |
 | Hook 与 MCP 指向不同服务器 | 某一侧残留了过期的 `OPENVIKING_*` 凭据环境变量（默认环境变量优先于 ovcli.conf） | 清除过期环境变量（让 ovcli.conf 同时驱动两者）、设置 `OPENVIKING_CREDENTIAL_SOURCE=cli`，或保证环境变量一致 |
 
@@ -114,3 +137,9 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — 提交（commit）决策树
 - [MCP 客户端](./06-mcp-clients.md) — MCP 协议、工具列表及其他客户端
 - [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置说明
+
+### 召回压缩
+
+设置 `OPENVIKING_RECALL_COMPRESS=server` 可让 OpenViking 服务端压缩召回内容，Codex 不启动本地压缩进程。`client` 仅用本地压缩，`auto`（默认）在本地压缩器不可用时走服务端，`off` 关闭压缩。服务端已有摘要时直接使用；明确返回无相关记忆时不注入。
+
+Codex 通过共享 `buildRecallBlockDetailed()` 执行召回、排序、预算和旧服务端回退，仅保留会话映射、模型调用与 hook 输出适配。本地压缩失败保留预算内的检索结果；原始检索回退在不使用本地压缩时遵循 `recallPreferAbstract`，不再固定读取所有叶子全文。预算包含正文、URI 和包装文本。配置详见 [共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)。

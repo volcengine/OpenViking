@@ -1303,64 +1303,6 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 ---
 
-### used()
-
-#### 1. API 实现介绍
-
-记录会话中实际使用的上下文和技能。调用 `commit()` 时，会根据此使用数据更新资源的 `active_count`，用于优化未来的检索排序。
-
-**代码入口**：
-- `openviking/session/session.py:Session.used()` - 核心实现
-- `openviking/server/routers/sessions.py:record_used()` - HTTP 路由
-
-#### 2. 接口和参数说明
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| session_id | str | 是 | - | 会话 ID |
-| contexts | List[str] | 否 | None | 实际使用的上下文 URI 列表 |
-| skill | Dict[str, Any] | 否 | None | 技能使用记录，包含 `uri`、`input`、`output`、`success` 字段 |
-
-#### 3. 使用示例
-
-**HTTP API**
-
-```http
-POST /api/v1/sessions/{session_id}/used
-```
-
-```bash
-# 记录使用的上下文
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"contexts": ["viking://resources/docs/auth/"]}'
-
-# 记录使用的技能
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://~/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
-```
-
-**响应示例**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "session_id": "a1b2c3d4",
-    "contexts_used": 1,
-    "skills_used": 0
-  },
-  "time": 0.1
-}
-```
-
----
-
 ### commit()
 
 #### 1. API 实现介绍
@@ -1369,7 +1311,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 **两阶段提交流程**：
 - **Phase 1（同步）**: 快照当前消息，清空 live session，创建归档目录，写入原始消息
-- **Phase 2（异步）**: 生成摘要（L0/L1），提取长期记忆，更新关系和 active_count
+- **Phase 2（异步）**: 生成摘要（L0/L1），提取长期记忆并更新关系
 
 **注意事项**：
 - 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`
@@ -1549,7 +1491,6 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 | messages | List[Message] | 会话中的当前消息 |
 | stats | SessionStats | 会话统计信息 |
 | summary | str | 压缩摘要 |
-| usage_records | List[Usage] | 上下文和技能使用记录 |
 
 ---
 
@@ -1726,13 +1667,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "X-API-Key: your-key" \
   -d '{"role": "assistant", "content": "Based on the documentation, you can configure embedding..."}'
 
-# 步骤 5：记录使用的上下文
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"contexts": ["viking://resources/docs/embedding/"]}'
-
-# 步骤 6：提交会话（立即返回 task_id）
+# 步骤 5：提交会话（立即返回 task_id）
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"

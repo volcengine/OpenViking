@@ -59,7 +59,7 @@ def _configure_understanding(
     max_depth: int = 10,
     upload_simple_max_bytes: int = 512 * 1024 * 1024,
     enable_resumable_upload: bool = False,
-) -> None:
+) -> SimpleNamespace:
     config = SimpleNamespace(
         parser_api=SimpleNamespace(
             enable=enabled,
@@ -84,6 +84,7 @@ def _configure_understanding(
         "openviking_cli.utils.config.open_viking_config.get_openviking_config",
         lambda: config,
     )
+    return config
 
 
 def _fake_understanding_parse(calls: list[Path]):
@@ -180,6 +181,14 @@ async def test_html_url_routes_materialized_pages(
     monkeypatch, tmp_path: Path, url, depth, enabled, extensions, expected_parser
 ):
     _configure_understanding(monkeypatch, extensions, enabled=enabled)
+    monkeypatch.setattr(
+        "openviking.parse.accessors.git_accessor.is_git_repo_url",
+        MagicMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.parse.accessors.http_accessor.is_code_hosting_blob_url",
+        MagicMock(return_value=False),
+    )
     pages = [CrawledPage(url=url, html="<html><h1>Home</h1><p>Home content</p></html>")]
     if depth:
         pages.append(

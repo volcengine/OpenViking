@@ -36,7 +36,7 @@ openviking-server --config /path/to/ov.conf
 }
 ```
 
-未配置的可选模块使用默认值。`ov.conf` 及账户配置会忽略未知字段，兼容旧版本遗留配置；已知字段仍校验类型和取值。字段名拼写错误也会被忽略。
+未配置的可选模块使用默认值。`ov.conf` 及账户配置会忽略未知字段，兼容旧版本遗留配置；已知字段仍校验类型和取值。字段名拼写错误也会被忽略，但服务端会输出 WARNING，逐项列出未被采用的字段。
 
 ## 顶层配置
 
@@ -142,14 +142,15 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
-| `provider` | `vikingdb`、`cohere`、`openai`、`litellm` / `null` | `null` | Rerank 服务类型；省略时根据凭证字段推断 |
-| `model` | string / `null` | `null` | OpenAI 兼容或 LiteLLM Rerank 模型 |
+| `provider` | `vikingdb`、`cohere`、`openai`、`litellm`、`jev` / `null` | `null` | Rerank 服务类型；省略时根据凭证字段推断 |
+| `model` | string / `null` | `null` | OpenAI 兼容、LiteLLM 或 Jev Rerank 模型 |
 | `threshold` | number | `0.1` | 判定结果相关的最低分数 |
 | `max_input_tokens` | integer；`0` 或 `>= 128` | `0` | 每个 query-document pair 的最大估算 token；`0` 表示不截断 |
+| `log_payloads` | boolean | `false` | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容 |
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
-显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
+`jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe`，模型 `typesafe-ai/jev`），两者协议相同。它将 query 和候选文档作为结构化 `state`，为每个候选提出一个独立的相关性问题，并将各自的 yes 概率作为 rerank 分数。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
 
 ## 检索配置
 

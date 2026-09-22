@@ -8,7 +8,7 @@ import { isBypassed } from "./shared/session-model.mjs";
 
 // The layers, the knobs and the peer are the shared loader's, and
 // memory-plugin-shared/plugin-config.test.mjs holds this harness to them. What
-// is left here is the compression switch this harness reads as a boolean, and
+// is left here is the compression modes this harness preserves, and
 // the bypass patterns it is the only harness to resolve from every layer.
 const OVERRIDES = [
   "OPENVIKING_CONFIG_FILE",
@@ -18,6 +18,7 @@ const OVERRIDES = [
   "OPENVIKING_BYPASS_SESSION",
   "OPENVIKING_BYPASS_SESSION_PATTERNS",
   "OPENVIKING_RECALL_COMPRESS",
+  "OPENVIKING_RECALL_REWRITE",
   "OPENVIKING_RECALL_COMPRESS_MODEL",
   "OPENVIKING_RECALL_COMPRESS_THINKING",
   "OPENVIKING_URL",
@@ -114,21 +115,21 @@ test("ov.conf's codex section still supplies the patterns when no env var does",
   });
 });
 
-// This harness reads the shared compression knob as a boolean, and calls a
-// compressor configured only once it has been told what to run.
-test("the compression switch is a boolean here, and a model is what configures one", () => {
+// Naming the mode must not count as configuring a local model.
+test("compression modes survive config resolution, and a model configures the local compressor", () => {
   withConfigs({
     cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli", plugin: { recallCompress: "auto" } },
   }, ({ otherDir }) => {
     const cfg = loadConfig(otherDir);
-    assert.equal(cfg.recallCompress, true, "\"auto\" is the Claude Code spelling of on");
+    assert.equal(cfg.recallCompress, "auto");
+    assert.equal(cfg.recallRewrite, "auto");
     assert.equal(cfg.recallCompressConfigured, false, "naming the switch is not naming a compressor");
   });
 
   withConfigs({
     cli: { url: "http://127.0.0.1:1933", api_key: "sk-cli", plugin: { recallCompress: "off" } },
   }, ({ otherDir }) => {
-    assert.equal(loadConfig(otherDir).recallCompress, false);
+    assert.equal(loadConfig(otherDir).recallCompress, "off");
   });
 
   withConfigs({
@@ -205,3 +206,12 @@ test("a comma survives in a configured rule but splits an env one", () => {
     assert.deepEqual(loadConfig().captureFilters, ["s/a{2", "}/X/"]);
   });
 });
+
+for (const mode of ["off", "client", "server", "auto", "0", "1"]) {
+  test(`compression env preserves ${mode}`, () => {
+    withConfigs({env: {OPENVIKING_RECALL_COMPRESS: mode}}, ({otherDir}) => {
+      const expected = mode === "0" ? "off" : mode === "1" ? "auto" : mode;
+      assert.equal(loadConfig(otherDir).recallRewrite, expected);
+    });
+  });
+}

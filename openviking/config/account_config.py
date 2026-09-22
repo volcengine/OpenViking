@@ -22,7 +22,23 @@ from openviking_cli.utils.config.runtime_field import RuntimeField
 class AccountAclSettings(BaseModel):
     """Account-scoped ACL switch."""
 
-    enabled: bool = False
+    enabled: bool = RuntimeField(default=False)
+
+
+class AccountFeishuConfig(BaseModel):
+    """Sparse account-level Feishu overrides.
+
+    ``domain`` intentionally does not exist here. It is a cluster deployment
+    setting and is selected from the cluster configuration by the business
+    resolver.
+    """
+
+    app_id: Optional[str] = RuntimeField(default=None)
+    app_secret: Optional[str] = RuntimeField(default=None)
+    max_rows_per_sheet: Optional[int] = RuntimeField(default=None, gt=0)
+    max_records_per_table: Optional[int] = RuntimeField(default=None, gt=0)
+    download_images: Optional[bool] = RuntimeField(default=None)
+    request_timeout: Optional[float] = RuntimeField(default=None, gt=0)
 
 
 class AccountConfig(BaseModel):
@@ -33,7 +49,8 @@ class AccountConfig(BaseModel):
     unset.
     """
 
-    # These are the only account-level settings with active business consumers.
+    # Account-level settings with active business consumers.
+    feishu: Optional[AccountFeishuConfig] = RuntimeField(default=None)
     github: Optional[GitHubConfig] = RuntimeField(default=None)
     agent_evolution: Optional[AgentEvolutionConfig] = RuntimeField(
         default=None,
@@ -41,7 +58,7 @@ class AccountConfig(BaseModel):
     )
     acl: Optional[AccountAclSettings] = RuntimeField(default=None)
 
-    # Deferred account-level sections (vlm, memory, feishu, embedding, vectordb)
+    # Deferred account-level sections (vlm, memory, embedding, vectordb)
     # have no active consumers. Ignore historical or newer persisted sections;
     # validate_patch() still keeps API writes limited to the fields above.
     model_config = {"arbitrary_types_allowed": True, "extra": "ignore"}

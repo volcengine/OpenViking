@@ -29,7 +29,6 @@ vi.mock('#/gen/ov-client/sdk.gen', () => ({
   postSessionIdCommit: vi.fn(),
   postSessionIdExtract: vi.fn(),
   postSessionIdMessages: vi.fn(),
-  postSessionIdUsed: vi.fn(),
 }))
 
 function response(result: unknown) {

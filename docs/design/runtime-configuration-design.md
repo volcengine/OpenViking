@@ -31,11 +31,11 @@ Current runtime field declarations:
 | Scope | Field | Lifecycle | Fallback / consumer status |
 | --- | --- | --- | --- |
 | Cluster | `agent_evolution` | Dynamic | Cluster default; consumed by session and Agent Evolution paths |
-| Account | `vlm`, `memory`, `feishu`, `agent_evolution` | Dynamic | All four declare Cluster fallback; Agent Evolution is consumed through the manager, while the complete VLM, memory, and Feishu consumer paths are not yet wired |
+| Account | `agent_evolution` | Dynamic | Declares whole-section fallback to Cluster `agent_evolution`; consumed through the manager |
+| Account | `feishu` | Dynamic | No declarative fallback; an unset section uses Cluster `feishu`, while a set section uses Account values/defaults for every field except the Cluster-owned `domain`. Used by Feishu imports, preflight, and watch token refresh |
 | Account | `github`, `acl` | Dynamic | No Cluster fallback; GitHub and ACL consumers read the Account value through the manager |
-| Account | `embedding`, `vectordb` | Create-only | Fallback to Cluster `embedding` and `storage.vectordb`; both fields must be set together when explicitly configured |
 
-`query_planner`, Cluster `embedding`, Cluster `vlm`, Cluster `memory`, and the other plain configuration sections are not currently writable through the runtime configuration API.
+Account `vlm`, `memory`, `embedding`, and `vectordb` are not declared on the current Account runtime model and are rejected by both creation-time settings validation and later PATCH requests. `query_planner`, Cluster `embedding`, Cluster `vlm`, Cluster `memory`, Cluster `feishu`, and the other plain Cluster configuration sections are not writable through the runtime configuration API.
 
 ## 3. RuntimeConfigManager
 
@@ -80,9 +80,9 @@ Validation has two stages:
 1. Structural validation checks that every path is on the target model's `RuntimeField` surface, rejects unknown paths, and rejects `dynamic=False` paths on a non-creating PATCH.
 2. The merged result is constructed into the target Pydantic model for type validation and cross-field constraints.
 
-A `dynamic=False` field can be supplied while an Account is created, but any later PATCH touching that field is rejected. `embedding` and `vectordb` are validated as a pair, including their dimensions.
+A `dynamic=False` field can be supplied while an Account is created, but any later PATCH touching that field is rejected. The current Account model does not declare any create-only fields.
 
-The API returns the explicit override at the addressed scope. It does not return inherited or effective values. Fallback is a whole-section operation: if an Account supplies `vlm`, omitted properties use the VLM model defaults rather than being merged property-by-property from the Cluster VLM.
+The API returns the explicit override at the addressed scope. It does not return inherited or effective values. Declarative fallback is a whole-section operation, currently used by Account `agent_evolution`. Feishu intentionally uses a domain-specific resolver instead: an absent Account Feishu section returns the complete Cluster section; once the Account section exists, only `domain` is copied from Cluster and omitted or reset Account leaves use `FeishuConfig` defaults.
 
 ## 5. Publication and consumers
 
@@ -99,7 +99,7 @@ Consumer exceptions are logged and swallowed. They do not roll back persistence 
 
 Cluster publication uses atomic pointer replacement. The new object is built and validated before the singleton is swapped, so concurrent readers see either the old or new object. Account consumers are notified of eviction independently of section filters so they can drop account-local derived state.
 
-The current implementation only wires a subset of declared fields into business consumers. Account GitHub, ACL, and Agent Evolution reads use the manager. Account `vlm`, `memory`, `feishu`, `embedding`, and `vectordb` can be validated and persisted, but their complete business read paths remain follow-up work.
+All currently declared Account sections have business consumers: GitHub, ACL, and Agent Evolution read through the manager, while Feishu is resolved for resource imports, source preflight, and watch token refresh. VLM, memory, embedding, and vector database account overrides remain follow-up work and are not accepted by the current API.
 
 ## 6. Persistence
 
@@ -137,4 +137,4 @@ The focused mechanism tests are:
 pytest tests/config/test_runtime_config.py
 ```
 
-They cover field discovery, three-state merging, dynamic/create-only validation, lazy Account loading, publication isolation, consumer notification, idle eviction, fallback, and file-source backup behavior.
+They cover field discovery, three-state merging, runtime-surface validation, lazy Account loading, publication isolation, consumer notification, idle eviction, fallback, Feishu overlay behavior, and file-source backup behavior.

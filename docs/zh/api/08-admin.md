@@ -353,7 +353,7 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 {% endfor %}
 ```
 
-### runtime_configuration
+### Runtime Configuration
 
 ROOT 可管理 Cluster 配置和任意 Account 配置；ADMIN 只能管理所属账号的 Account 层。
 
@@ -371,21 +371,22 @@ Content-Type: application/json
 `settings` 始终表示目标层的显式设置值。PATCH 为三态语义：字段缺失表示不修改，
 `null` 表示删除当前层配置，具体值表示更新。
 
-当前 Cluster 运行时配置面仅包含 agent_evolution。Account 配置面包含
-vlm、memory、feishu、agent_evolution、github、acl 这些动态字段，以及
-embedding、vectordb 这两个仅创建时可设置的字段。Cluster 的 embedding、vlm、
-query_planner、memory、存储、解析器和检索配置没有声明为运行时字段，因此仍然
-只能在启动配置中修改。
+当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
+`feishu`、`agent_evolution`、`github` 和 `acl`，且均为动态字段。Account 的
+`vlm`、`memory`、`embedding` 和 `vectordb` 不在当前 API 范围内，即使创建
+Account 时提交也会被拒绝。Cluster 的 `embedding`、`vlm`、`query_planner`、
+`memory`、`feishu`、存储、解析器和检索配置没有声明为运行时字段，因此仍然只能
+在启动配置中修改。
 
-dynamic=True 的字段可以在创建 Account 时设置，也可以通过后续 PATCH 修改；
-dynamic=False 的字段只能在创建 Account 时设置，后续 PATCH 触及时会被拒绝。
-显式配置 embedding 和 vectordb 时必须成对提供，并且维度必须一致。Account
-字段可以声明整个配置段的 Cluster fallback。Account 一旦显式设置某个配置段，
-其中省略的属性不会逐项从 Cluster 配置合并，而是使用该模型的默认值。
+Account Agent Evolution 未设置时整段回落到 Cluster 配置。Account 未设置
+Feishu 时也整段使用 Cluster 配置；一旦设置，`app_id`、`app_secret`、
+`max_rows_per_sheet`、`max_records_per_table`、`download_images` 和
+`request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
+Cluster 管理。GitHub 和 ACL 没有 Cluster fallback。
 
-PATCH 会先做结构校验，再构造合并后的配置：未知路径、运行时配置面之外的字段会被拒绝，
-普通 PATCH 触及仅创建字段时也会被拒绝。对象递归合并，数组整体替换；嵌套 null
-只删除对应叶子。删除整个对象覆盖需要在父路径传 null，传空对象仍表示显式空对象。
+PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
+对象递归合并，数组整体替换；嵌套 null 只删除对应叶子。删除整个对象覆盖需要在父路径
+传 null，传空对象仍表示显式空对象。
 
 两个 GET 接口只返回目标层持久化的显式值，不展开 fallback。配置持久化后会发布新配置并等待
 匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的覆盖，因此接口成功只表示

@@ -725,48 +725,6 @@ class TestCommit:
         assert seen["summary"] == previous_overview
         assert seen["extract"] == previous_overview
 
-    async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
-        service, client_ctx, uri = client_with_resource_sync
-        vikingdb = service.vikingdb_manager
-
-        # Look up the record by URI
-        records_before = await vikingdb.get_context_by_uri(
-            uri=uri,
-            limit=1,
-            ctx=client_ctx,
-        )
-        assert records_before, f"Resource not found for URI: {uri}"
-        count_before = records_before[0].get("active_count") or 0
-
-        # Mark as used and commit
-        session = service.sessions.session(
-            client_ctx,
-            session_id="active_count_regression_test",
-        )
-        await session.ensure_exists()
-        session._session_compressor.extract_long_term_memories = AsyncMock(return_value=[])
-        session.add_message("user", [TextPart("Query")])
-        session.used(contexts=[uri])
-        session.add_message("assistant", [TextPart("Answer")])
-        result = await session.commit_async()
-
-        # Wait for background task to complete (active_count is updated there)
-        task_result = await _wait_for_task(result["task_id"])
-        assert task_result["status"] == "completed"
-        assert task_result["result"]["active_count_updated"] == 1
-
-        # Verify the count actually changed in storage
-        records_after = await vikingdb.get_context_by_uri(
-            uri=uri,
-            limit=1,
-            ctx=client_ctx,
-        )
-        assert records_after, f"Record disappeared after commit for URI: {uri}"
-        count_after = records_after[0].get("active_count") or 0
-        assert count_after == count_before + 1, (
-            f"active_count not incremented: before={count_before}, after={count_after}"
-        )
-
     async def test_commit_failed_after_long_term_extraction_failure_does_not_block(self, client):
         """Binary archive outcome: if long-term extraction fails (after retries),
         the whole archive is marked .failed.json and skipped — there is no

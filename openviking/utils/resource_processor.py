@@ -130,12 +130,43 @@ class ResourceProcessor:
         ctx: RequestContext,
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
-        """Add account-scoped source credentials without persisting them."""
+        """Add account-scoped source configuration without persisting it."""
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+
+        if FeishuAccessor._is_feishu_url(source):
+            return await self._feishu_source_config_kwargs(ctx, kwargs)
+        return await self._github_source_config_kwargs(source, ctx, kwargs)
+
+    async def _github_source_config_kwargs(
+        self,
+        source: str,
+        ctx: RequestContext,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add the account-scoped GitHub token for one request."""
         github_token = await self.github_token_for(source, ctx)
         if not github_token:
             return kwargs
         result = dict(kwargs)
         result["github_token"] = github_token
+        return result
+
+    async def _feishu_source_config_kwargs(
+        self,
+        ctx: RequestContext,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add the account-scoped Feishu config for one request."""
+        if self.runtime_config_manager is None:
+            raise RuntimeError("Runtime config manager is not initialized")
+        from openviking.config.feishu import get_effective_feishu_config
+
+        feishu_config = await get_effective_feishu_config(
+            self.runtime_config_manager,
+            ctx.account_id,
+        )
+        result = dict(kwargs)
+        result["feishu_config"] = feishu_config
         return result
 
     def _get_summarizer(self) -> "Summarizer":

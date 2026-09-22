@@ -10,9 +10,9 @@ Included by default in `openviking[bot]` installation.
 """
 
 import asyncio
+import copy
 import json
 import mimetypes
-import os
 import re
 import shutil
 import tempfile
@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
 from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
+from lark_oapi.core.cache import ICache
+
 from openviking.parse.base import format_table_to_markdown
 from openviking.parse.feishu_import import FeishuImportPlan, recursive_wiki
 from openviking.utils.exceptions import error_code_from_http_status
@@ -28,6 +30,7 @@ from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
+from .feishu_session import FeishuAccessContext, FeishuApiSession
 from .mime_types import get_preferred_extension
 
 logger = get_logger(__name__)
@@ -363,11 +366,37 @@ class FeishuAccessor(DataAccessor):
         }
     )
 
-    def __init__(self):
-        """Initialize Feishu accessor."""
-        self._client = None
-        self._user_token_client = None
-        self._config = None
+    def __init__(
+        self,
+        session: Optional[FeishuApiSession] = None,
+        *,
+        tenant_token_cache: Optional[ICache] = None,
+    ):
+        """Initialize a shared selector or a request-scoped worker."""
+        self._session = session
+        self._tenant_token_cache = tenant_token_cache
+
+    def _new_operation(
+        self,
+        source: Union[str, Path],
+        *,
+        config: Any = None,
+    ) -> "FeishuAccessor":
+        context = FeishuAccessContext.from_request(
+            str(source),
+            config=config,
+        )
+        worker = copy.copy(self)
+        worker._session = FeishuApiSession(
+            context,
+            tenant_token_cache=self._tenant_token_cache,
+        )
+        return worker
+
+    def _require_session(self) -> FeishuApiSession:
+        if self._session is None:
+            raise RuntimeError("Feishu operation requires a request-scoped API session")
+        return self._session
 
     @property
     def priority(self) -> int:
@@ -388,6 +417,14 @@ class FeishuAccessor(DataAccessor):
         return self._is_feishu_url(source_str)
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
+        """Bind request-scoped state, then fetch the source."""
+        worker = self._new_operation(
+            source,
+            config=kwargs.get("feishu_config"),
+        )
+        return await worker._access(source, **kwargs)
+
+    async def _access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
         Fetch a Feishu document and save to a temporary Markdown file.
 
@@ -591,12 +628,18 @@ class FeishuAccessor(DataAccessor):
         source: Union[str, Path],
         *,
         feishu_access_token: Optional[str] = None,
+        feishu_config: Any = None,
         feishu_recursive: bool = False,
     ) -> FeishuSourcePreflight:
         """Resolve lightweight source identity and root permission before enqueueing."""
+        source_str = str(source)
+        worker = self._new_operation(
+            source_str,
+            config=feishu_config,
+        )
         return await asyncio.to_thread(
-            self._preflight_source_sync,
-            str(source),
+            worker._preflight_source_sync,
+            source_str,
             feishu_access_token,
             feishu_recursive,
         )
@@ -940,10 +983,9 @@ class FeishuAccessor(DataAccessor):
         finally:
             seen.discard(folder_token)
 
-    @classmethod
-    def _import_doc_url(cls, plan: FeishuImportPlan, doc_type: str, token: str) -> str:
+    def _import_doc_url(self, plan: FeishuImportPlan, doc_type: str, token: str) -> str:
         if not plan.source_url:
-            return cls._build_feishu_doc_url(doc_type, token)
+            return self._build_feishu_doc_url(doc_type, token)
         source = urlparse(plan.source_url)
         path_type = "docs" if doc_type == "doc" else doc_type
         query = source.query if source.path.rstrip("/").endswith(f"/{token}") else ""
@@ -1470,11 +1512,11 @@ class FeishuAccessor(DataAccessor):
             token = str(_getattr_safe(shortcut_info, "target_token", token) or token)
         return item_type, token, name, url
 
-    @staticmethod
-    def _build_feishu_doc_url(doc_type: str, token: str) -> str:
+    def _build_feishu_doc_url(self, doc_type: str, token: str) -> str:
         if doc_type == "doc":
             doc_type = "docs"
-        return f"https://open.feishu.cn/{doc_type}/{token}"
+        domain = self._get_config().domain.rstrip("/")
+        return f"{domain}/{doc_type}/{token}"
 
     @staticmethod
     def _unique_child_path(parent: Path, name: str, reserved: Optional[set[Path]] = None) -> Path:
@@ -1564,42 +1606,12 @@ class FeishuAccessor(DataAccessor):
     # ========== Configuration & Client ==========
 
     def _get_config(self):
-        """Get FeishuConfig from OpenViking config."""
-        if self._config is None:
-            from openviking_cli.utils.config import get_openviking_config
-
-            self._config = get_openviking_config().feishu
-        return self._config
+        """Return the configuration for the current operation."""
+        return self._require_session().context.config
 
     def _get_client(self, *, use_user_token: bool = False):
-        """Lazy-init lark-oapi client."""
-        cache_attr = "_user_token_client" if use_user_token else "_client"
-        client = getattr(self, cache_attr)
-        if client is None:
-            try:
-                import lark_oapi as lark
-            except ImportError:
-                raise ImportError(
-                    "lark-oapi is required for Feishu document parsing. "
-                    "Install it with: pip install lark-oapi>=1.0.0"
-                )
-            config = self._get_config()
-            app_id = config.app_id or os.getenv("FEISHU_APP_ID", "")
-            app_secret = config.app_secret or os.getenv("FEISHU_APP_SECRET", "")
-            if (not app_id or not app_secret) and not use_user_token:
-                raise ValueError(
-                    "Feishu credentials not configured. Set FEISHU_APP_ID and "
-                    "FEISHU_APP_SECRET environment variables, or configure in ov.conf."
-                )
-            domain = config.domain or "https://open.feishu.cn"
-            builder = lark.Client.builder().domain(domain)
-            if app_id and app_secret:
-                builder = builder.app_id(app_id).app_secret(app_secret)
-            if use_user_token:
-                builder = builder.enable_set_token(True)
-            client = builder.build()
-            setattr(self, cache_attr, client)
-        return client
+        """Return the request-scoped lark-oapi client."""
+        return self._require_session().client(use_user_token=use_user_token)
 
     @staticmethod
     def _user_request_option(feishu_access_token: Optional[str]):
@@ -1611,7 +1623,10 @@ class FeishuAccessor(DataAccessor):
 
     def _call_api(self, method, request, feishu_access_token: Optional[str] = None):
         option = self._user_request_option(feishu_access_token)
-        return method(request) if option is None else method(request, option)
+        if option is not None:
+            return method(request, option)
+        with self._require_session().tenant_token_cache_scope():
+            return method(request)
 
     @classmethod
     def _raw_feishu_error(cls, raw_resp: Any) -> Optional[Tuple[int, str]]:
@@ -1654,8 +1669,13 @@ class FeishuAccessor(DataAccessor):
         from lark_oapi.core.token import verify
 
         option = self._user_request_option(feishu_access_token) or RequestOption()
-        verify(client._config, request, option)
-        raw_resp = Transport.execute(client._config, request, option)
+        if feishu_access_token:
+            verify(client._config, request, option)
+            raw_resp = Transport.execute(client._config, request, option)
+        else:
+            with self._require_session().tenant_token_cache_scope():
+                verify(client._config, request, option)
+                raw_resp = Transport.execute(client._config, request, option)
 
         response = BaseResponse()
         feishu_error = self._raw_feishu_error(raw_resp)

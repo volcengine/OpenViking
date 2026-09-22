@@ -1332,64 +1332,6 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 ---
 
-### used()
-
-#### 1. API Implementation Introduction
-
-Record actually used contexts and skills in the session. When `commit()` is called, `active_count` is updated based on this usage data to optimize future retrieval ranking.
-
-**Code Entries:**
-- `openviking/session/session.py:Session.used()` - Core implementation
-- `openviking/server/routers/sessions.py:record_used()` - HTTP route
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID |
-| contexts | List[str] | No | None | List of context URIs that were actually used |
-| skill | Dict[str, Any] | No | None | Skill usage record with keys: `uri`, `input`, `output`, `success` |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-POST /api/v1/sessions/{session_id}/used
-```
-
-```bash
-# Record used contexts
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"contexts": ["viking://resources/docs/auth/"]}'
-
-# Record used skill
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"skill": {"uri": "viking://~/skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
-```
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "session_id": "a1b2c3d4",
-    "contexts_used": 1,
-    "skills_used": 0
-  },
-  "time": 0.1
-}
-```
-
----
-
 ### commit()
 
 #### 1. API Implementation Introduction
@@ -1398,7 +1340,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
-- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1), extract long-term memories, and update active_count
+- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1) and extract long-term memories
 
 **Notes:**
 - Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
@@ -1579,7 +1521,6 @@ The endpoint returns the extracted memory write results as a JSON list. The exac
 | messages | List[Message] | Current messages in the session |
 | stats | SessionStats | Session statistics |
 | summary | str | Compression summary |
-| usage_records | List[Usage] | Context and skill usage records |
 
 ---
 
@@ -1756,13 +1697,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "X-API-Key: your-key" \
   -d '{"role": "assistant", "content": "Based on the documentation, you can configure embedding..."}'
 
-# Step 5: Record used contexts
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"contexts": ["viking://resources/docs/embedding/"]}'
-
-# Step 6: Commit session (returns immediately with task_id)
+# Step 5: Commit session (returns immediately with task_id)
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"

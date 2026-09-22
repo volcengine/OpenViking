@@ -421,7 +421,7 @@ active configuration remains unchanged. Structurally valid older overrides using
 unsupported Jinja can still be read, replaced or reset, but extraction refuses to
 execute them unchecked. Corrupt YAML remains an explicit error.
 
-### runtime_configuration
+### Runtime Configuration
 
 ROOT can manage Cluster configuration and any Account configuration. ADMIN can
 manage only its own Account layer.
@@ -441,26 +441,26 @@ Content-Type: application/json
 three-state: an absent key is unchanged, `null` deletes that layer's value, and
 a concrete value updates it.
 
-The Cluster runtime surface currently contains agent_evolution. The Account
-surface contains vlm, memory, feishu, agent_evolution, github, and acl as
-dynamic fields, plus embedding and vectordb as create-only fields. Cluster
-embedding, vlm, query_planner, memory, storage, parser, and retrieval fields
-are startup-only because they are not declared as runtime fields.
+The Cluster runtime surface currently contains `agent_evolution`. The Account
+surface contains `feishu`, `agent_evolution`, `github`, and `acl`, all of which
+are dynamic. Account `vlm`, `memory`, `embedding`, and `vectordb` are not on the
+current API surface and are rejected even during Account creation. Cluster
+`embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, and
+retrieval fields are startup-only because they are not declared as runtime
+fields.
 
-dynamic=True fields may be set when an Account is created and changed by a
-later PATCH. dynamic=False fields may be set only during Account creation;
-later PATCH requests that touch them are rejected. embedding and vectordb must
-be supplied together when explicitly configured, and their dimensions must
-match. Account fields may declare a whole-section Cluster fallback. An Account
-section that is explicitly set does not merge individual omitted properties
-from the Cluster section; omitted properties use the model defaults.
+Account Agent Evolution uses whole-section Cluster fallback when unset. Account
+Feishu also uses the complete Cluster section when unset. Once an Account Feishu
+section is set, `app_id`, `app_secret`, `max_rows_per_sheet`,
+`max_records_per_table`, `download_images`, and `request_timeout` come from the
+Account section or their Feishu defaults; only `domain` remains Cluster-owned.
+GitHub and ACL have no Cluster fallback.
 
 The PATCH is validated structurally before the merged configuration is built:
-unknown paths and fields outside the runtime surface are rejected, and
-create-only fields are rejected on ordinary PATCH. Objects merge recursively;
-arrays replace wholesale. A nested null removes only that leaf. To remove a
-whole object override, send null at the parent path; an empty object remains an
-explicit empty object.
+unknown paths and fields outside the runtime surface are rejected. Objects merge
+recursively; arrays replace wholesale. A nested null removes only that leaf. To
+remove a whole object override, send null at the parent path; an empty object
+remains an explicit empty object.
 
 Both GET endpoints return only the explicit values persisted at the addressed
 layer. They do not expand fallback values. After persistence, the new

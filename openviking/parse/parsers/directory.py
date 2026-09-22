@@ -298,6 +298,7 @@ class DirectoryParser(BaseParser):
                             _source=entry.url,
                             resource_name=cf.path.name,
                             feishu_access_token=kwargs.get("feishu_access_token"),
+                            feishu_config=kwargs.get("feishu_config"),
                         )
                         if kwargs.get("lark_file"):
                             parse_options["lark_file"] = kwargs["lark_file"]

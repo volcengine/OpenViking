@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import re
 import time
 from unittest.mock import AsyncMock
 
@@ -145,7 +146,15 @@ async def test_grep_vikingdb_does_not_project_tags_without_filter_or_request(mon
     )
     monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
 
-    async def fake_grep_in_files(file_uris, pattern, case_insensitive, node_limit, ctx):
+    async def fake_grep_in_files(
+        file_uris,
+        pattern,
+        case_insensitive,
+        node_limit,
+        ctx,
+        before_context,
+        after_context,
+    ):
         return {
             "matches": [{"uri": "viking://resources/a.md", "line": 1, "content": "needle"}],
             "count": 1,
@@ -209,6 +218,8 @@ async def test_grep_vikingdb_remote_error_falls_back_to_fs(monkeypatch):
             "node_limit": 10,
             "level_limit": 3,
             "ctx": None,
+            "before_context": 0,
+            "after_context": 0,
         }
     ]
 
@@ -293,7 +304,15 @@ async def test_grep_vikingdb_keeps_local_exclude_uri_guard(monkeypatch):
 
     grep_in_files_calls = []
 
-    async def fake_grep_in_files(file_uris, pattern, case_insensitive, node_limit, ctx):
+    async def fake_grep_in_files(
+        file_uris,
+        pattern,
+        case_insensitive,
+        node_limit,
+        ctx,
+        before_context,
+        after_context,
+    ):
         grep_in_files_calls.append(file_uris)
         return {"matches": [], "count": 0, "match_count": 0, "files_scanned": len(file_uris)}
 
@@ -325,7 +344,15 @@ async def test_grep_vikingdb_pushes_tag_filter_into_bm25_request(monkeypatch):
 
     calls = []
 
-    async def fake_grep_in_files(file_uris, pattern, case_insensitive, node_limit, ctx):
+    async def fake_grep_in_files(
+        file_uris,
+        pattern,
+        case_insensitive,
+        node_limit,
+        ctx,
+        before_context,
+        after_context,
+    ):
         calls.append(file_uris)
         return {
             "matches": [{"uri": "viking://resources/tagged.md", "line": 1, "content": "needle"}],
@@ -478,8 +505,11 @@ async def test_grep_applies_content_transform_before_matching(monkeypatch):
             return [{"name": "memory.md", "isDir": False}]
         return []
 
+    read_paths = []
+
     def fake_agfs_read(path, offset=0, size=-1):
-        return b'visible\n<!-- MEMORY_FIELDS {"secret":"hidden"} -->'
+        read_paths.append(path)
+        return b'before\nvisible\nafter\n<!-- MEMORY_FIELDS {"secret":"hidden"} -->'
 
     monkeypatch.setattr(fs, "stat", fake_stat)
     monkeypatch.setattr(fs, "ls", fake_ls)
@@ -494,15 +524,82 @@ async def test_grep_applies_content_transform_before_matching(monkeypatch):
         "viking://resources",
         pattern="visible|secret",
         content_transform=lambda content, _uri: content.split("<!--", 1)[0].rstrip(),
+        before_context=2,
+        after_context=2,
     )
 
     assert result["matches"] == [
         {
-            "line": 1,
+            "line": 2,
             "uri": "viking://resources/memory.md",
             "content": "visible",
+            "before_context": [{"line": 1, "content": "before"}],
+            "after_context": [{"line": 3, "content": "after"}],
         }
     ]
+    assert read_paths == ["/resources/memory.md"]
+
+
+@pytest.mark.asyncio
+async def test_grep_in_files_generates_context_from_single_read(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    read = AsyncMock(return_value=b"first\nbefore\nmatch\nafter\nlast")
+    monkeypatch.setattr(fs, "read", read)
+
+    result = await fs._grep_in_files(
+        ["viking://resources/a.md"],
+        pattern="match",
+        case_insensitive=False,
+        node_limit=None,
+        ctx=None,
+        before_context=2,
+        after_context=1,
+    )
+
+    assert result["matches"] == [
+        {
+            "line": 3,
+            "uri": "viking://resources/a.md",
+            "content": "match",
+            "before_context": [
+                {"line": 1, "content": "first"},
+                {"line": 2, "content": "before"},
+            ],
+            "after_context": [{"line": 4, "content": "after"}],
+        }
+    ]
+    read.assert_awaited_once_with("viking://resources/a.md", ctx=None)
+
+
+@pytest.mark.asyncio
+async def test_grep_parallel_limits_context_construction_per_file(monkeypatch):
+    fs = VikingFS(agfs=_DummyAgfs())
+    lines = ["hit"] * 400
+    monkeypatch.setattr(fs, "read", AsyncMock(return_value="\n".join(lines)))
+
+    build_calls = 0
+    original_build_match = fs._build_grep_match
+
+    def count_build_calls(*args, **kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        return original_build_match(*args, **kwargs)
+
+    monkeypatch.setattr(fs, "_build_grep_match", count_build_calls)
+
+    matches, files_scanned = await fs._grep_files_parallel(
+        ["viking://resources/a.md"],
+        compiled_pattern=re.compile("hit"),
+        node_limit=1,
+        before_context=400,
+        after_context=400,
+    )
+
+    assert files_scanned == 1
+    assert len(matches) == 1
+    assert build_calls == 1
+    assert matches[0]["before_context"] == []
+    assert len(matches[0]["after_context"]) == 399
 
 
 @pytest.mark.asyncio
@@ -653,6 +750,59 @@ async def test_grep_delegates_to_agfs_with_expected_filters(monkeypatch, fs):
             "node_limit": 10,
             "exclude_path": "/resources/archive",
             "level_limit": 3,
+            "before_context": 0,
+            "after_context": 0,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_grep_with_context_uses_agfs_and_maps_context(monkeypatch, fs):
+    agfs_grep = AsyncMock(
+        return_value={
+            "matches": [
+                {
+                    "file": "a.md",
+                    "line": 2,
+                    "content": "needle",
+                    "before_context": [{"line": 1, "content": "before"}],
+                    "after_context": [{"line": 3, "content": "after"}],
+                }
+            ],
+            "files_scanned": 1,
+        }
+    )
+    fallback = AsyncMock()
+    monkeypatch.setattr(fs._async_agfs, "grep", agfs_grep)
+    monkeypatch.setattr(fs, "_grep_encrypted", fallback)
+
+    result = await fs.grep(
+        "viking://resources",
+        pattern="needle",
+        before_context=1,
+        after_context=2,
+    )
+
+    agfs_grep.assert_awaited_once_with(
+        path="/resources",
+        pattern="needle",
+        recursive=True,
+        case_insensitive=False,
+        stream=False,
+        node_limit=None,
+        exclude_path=None,
+        level_limit=10,
+        before_context=1,
+        after_context=2,
+    )
+    fallback.assert_not_awaited()
+    assert result["matches"] == [
+        {
+            "line": 2,
+            "uri": "viking://resources/a.md",
+            "content": "needle",
+            "before_context": [{"line": 1, "content": "before"}],
+            "after_context": [{"line": 3, "content": "after"}],
         }
     ]
 

@@ -75,23 +75,6 @@ class TestSessionContextAssembly:
             if session_id:
                 api_client.delete_session(session_id)
 
-    def test_context_after_add_used_records(self, api_client):
-        session_id = None
-        try:
-            r = api_client.create_session()
-            session_id = r.json()["result"]["session_id"]
-
-            ctx_uri = f"viking://resources/ctx_used_{uuid.uuid4().hex[:6]}"
-            api_client.session_used(session_id, contexts=[ctx_uri])
-
-            ctx = api_client.get_session_context(session_id, token_budget=128000)
-            assert ctx.status_code == 200
-            result = ctx.json().get("result", {})
-            assert isinstance(result, dict), "context result should be dict"
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
     def test_context_stats_all_integer_fields(self, api_client):
         session_id = None
         try:

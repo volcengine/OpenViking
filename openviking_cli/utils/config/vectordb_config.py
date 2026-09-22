@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
@@ -44,6 +44,216 @@ class VikingDBConfig(BaseModel):
     headers: Optional[Dict[str, str]] = Field(
         default_factory=dict, description="Custom headers for requests"
     )
+
+
+_OPENGAUSS_MODES = frozenset({"standalone", "distributed"})
+# Distance metrics with a DataVec operator class; l1 is plain-HNSW only.
+_OPENGAUSS_DISTANCE_METRICS = frozenset({"cosine", "l2", "ip", "l1"})
+_OPENGAUSS_INDEX_TYPES = frozenset(
+    {
+        "hnsw",
+        "hnsw-pq",
+        "hnsw-rabitq",
+        "ivfflat",
+        "ivf-pq",
+        "ivf-rabitq",
+        "diskann",
+    }
+)
+_OPENGAUSS_INDEX_TYPE_ALIASES = {
+    "hnsw_pq": "hnsw-pq",
+    "hnswpq": "hnsw-pq",
+    "hnsw_rabitq": "hnsw-rabitq",
+    "hnswrabitq": "hnsw-rabitq",
+    "ivf_flat": "ivfflat",
+    "ivfflat-pq": "ivf-pq",
+    "ivf_pq": "ivf-pq",
+    "ivfpq": "ivf-pq",
+    "ivfflat-rabitq": "ivf-rabitq",
+    "ivf_rabitq": "ivf-rabitq",
+    "ivfrabitq": "ivf-rabitq",
+}
+_OPENGAUSS_COMMON_QUANT_BUILD_PARAMS = frozenset(
+    {"pq_m", "pq_ksub", "rabitq_refine_type", "rabitq_fht"}
+)
+_OPENGAUSS_BUILD_PARAMS = {
+    "hnsw": frozenset({"m", "ef_construction"}) | _OPENGAUSS_COMMON_QUANT_BUILD_PARAMS,
+    "ivfflat": frozenset({"lists", "by_residual"}) | _OPENGAUSS_COMMON_QUANT_BUILD_PARAMS,
+    "diskann": frozenset({"index_size"}),
+}
+_OPENGAUSS_SEARCH_PARAMS = {
+    "hnsw": frozenset({"ef_search", "earlystop_threshold", "rbq_query_bits", "rbq_refinek"}),
+    "ivfflat": frozenset({"probes", "ivfpq_kreorder", "rbq_query_bits", "rbq_refinek"}),
+    "diskann": frozenset({"probes"}),
+}
+_OPENGAUSS_SEARCH_ALIASES = {
+    "hnsw": {"hnsw_ef_search": "ef_search", "hnsw_earlystop_threshold": "earlystop_threshold"},
+    "ivfflat": {"ivfflat_probes": "probes"},
+    "diskann": {"diskann_probes": "probes"},
+}
+
+
+def normalize_opengauss_index_type(index_type: str | None) -> str:
+    value = (index_type or "hnsw").strip().lower()
+    value = _OPENGAUSS_INDEX_TYPE_ALIASES.get(value, value)
+    if value not in _OPENGAUSS_INDEX_TYPES:
+        raise ValueError(
+            f"Invalid openGauss index_type: {value!r}. "
+            f"Must be one of: {sorted(_OPENGAUSS_INDEX_TYPES)}"
+        )
+    return value
+
+
+def resolve_opengauss_index_spec(index_type: str) -> tuple[str, Optional[str]]:
+    normalized = normalize_opengauss_index_type(index_type)
+    if normalized.startswith("hnsw"):
+        access_method = "hnsw"
+    elif normalized.startswith("ivf"):
+        access_method = "ivfflat"
+    else:
+        access_method = "diskann"
+
+    if normalized.endswith("-pq"):
+        quantization = "pq"
+    elif normalized.endswith("-rabitq"):
+        quantization = "rabitq"
+    else:
+        quantization = None
+    return access_method, quantization
+
+
+class OpenGaussIndexConfig(BaseModel):
+    """Canonical adapter options; database-specific numerical limits belong to DataVec."""
+
+    index_type: str = "hnsw"
+    build_params: Dict[str, Any] = Field(default_factory=dict)
+    search_params: Dict[str, Any] = Field(default_factory=dict)
+    parallel_workers: StrictInt = Field(default=0, ge=0)
+    maintenance_work_mem_mb: StrictInt = Field(default=64, gt=0)
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_index_options(cls, value):
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        index_type = normalize_opengauss_index_type(data.get("index_type", "hnsw"))
+        method, quantization = resolve_opengauss_index_spec(index_type)
+        build = data.get("build_params", {})
+        search = data.get("search_params", {})
+        if not isinstance(build, dict) or not isinstance(search, dict):
+            raise ValueError("openGauss build_params and search_params must be objects")
+        build, search = dict(build), dict(search)
+        flags = {}
+        for name in ("enable_pq", "enable_rabitq"):
+            if name in build:
+                flags[name] = build.pop(name)
+                if type(flags[name]) is not bool:
+                    raise ValueError(f"openGauss build_params.{name} must be a boolean")
+        for name, kind in (("enable_pq", "pq"), ("enable_rabitq", "rabitq")):
+            if flags.get(name) is False and quantization == kind:
+                raise ValueError(f"openGauss {name}=false conflicts with index_type={index_type}")
+            if flags.get(name):
+                if quantization and quantization != kind:
+                    raise ValueError("openGauss PQ and RabitQ cannot be enabled together")
+                if method == "diskann":
+                    raise ValueError("openGauss DiskANN does not support PQ or RabitQ")
+                quantization = kind
+        if quantization:
+            index_type = f"{'ivf' if method == 'ivfflat' else method}-{quantization}"
+        for alias, canonical in _OPENGAUSS_SEARCH_ALIASES[method].items():
+            if alias in search:
+                alias_value = search.pop(alias)
+                if canonical in search and search[canonical] != alias_value:
+                    raise ValueError(f"Conflicting openGauss search_params {alias} and {canonical}")
+                search[canonical] = alias_value
+        for group, params, allowed in (
+            ("build_params", build, _OPENGAUSS_BUILD_PARAMS[method]),
+            ("search_params", search, _OPENGAUSS_SEARCH_PARAMS[method]),
+        ):
+            unknown = sorted(set(params) - allowed)
+            if unknown:
+                raise ValueError(f"Unsupported openGauss {index_type} {group}: {unknown}")
+            for name, parameter in params.items():
+                if name in {"by_residual", "rabitq_fht"}:
+                    if type(parameter) is not bool:
+                        raise ValueError(f"openGauss {group}.{name} must be a boolean")
+                elif name == "rabitq_refine_type":
+                    if not isinstance(parameter, str):
+                        raise ValueError(f"openGauss {group}.{name} must be a string")
+                    params[name] = parameter.lower()
+                elif type(parameter) is not int:
+                    raise ValueError(f"openGauss {group}.{name} must be an integer")
+        if quantization != "pq" and (
+            {"pq_m", "pq_ksub", "by_residual"} & build.keys() or "ivfpq_kreorder" in search
+        ):
+            raise ValueError("openGauss PQ parameters require a *-pq index_type")
+        if quantization != "rabitq" and (
+            {"rabitq_refine_type", "rabitq_fht"} & build.keys()
+            or {"rbq_query_bits", "rbq_refinek"} & search.keys()
+        ):
+            raise ValueError("openGauss RabitQ parameters require a *-rabitq index_type")
+        data.update(index_type=index_type, build_params=build, search_params=search)
+        return data
+
+    @property
+    def access_method(self) -> str:
+        return resolve_opengauss_index_spec(self.index_type)[0]
+
+    @property
+    def quantization(self) -> Optional[str]:
+        return resolve_opengauss_index_spec(self.index_type)[1]
+
+    def validate_capabilities(self, *, distributed: bool, distance: str = "cosine") -> None:
+        if distributed and self.index_type != "hnsw":
+            raise ValueError(
+                "openGauss SPQ distributed mode currently supports only plain HNSW; "
+                "use standalone mode for PQ, RabitQ, IVF, or DiskANN indexes"
+            )
+        if distance not in _OPENGAUSS_DISTANCE_METRICS:
+            raise ValueError("Unsupported openGauss distance_metric")
+        if distance == "l1" and self.index_type != "hnsw":
+            raise ValueError("openGauss distance='l1' requires plain hnsw without PQ or RabitQ")
+
+
+class OpenGaussConfig(OpenGaussIndexConfig):
+    """Configuration for openGauss DataVec vector database."""
+
+    host: str = Field(
+        default="127.0.0.1",
+        description="openGauss host address (CN node when mode=distributed)",
+    )
+    port: int = Field(default=5432, ge=1, le=65535, description="openGauss port")
+    user: str = Field(default="gaussdb", description="Database user")
+    password: str = Field(default="", description="Database password")
+    db_name: str = Field(default="openviking", description="Database name")
+    mode: Literal["standalone", "distributed"] = Field(
+        default="standalone",
+        description="Deployment mode; distributed connects to an spq CN node.",
+    )
+    shard_count: int = Field(
+        default=32,
+        ge=1,
+        description="Number of shards per distributed collection table.",
+    )
+    connection_pool_min_size: int = Field(default=1, ge=1, le=64)
+    connection_pool_max_size: int = Field(default=8, ge=1, le=128)
+
+    model_config = {"extra": "forbid"}
+
+    @property
+    def is_distributed(self) -> bool:
+        return self.mode == "distributed"
+
+    @model_validator(mode="after")
+    def validate_opengauss(self):
+        self.validate_capabilities(distributed=self.is_distributed)
+        if self.connection_pool_min_size > self.connection_pool_max_size:
+            raise ValueError(
+                "openGauss connection_pool_min_size cannot exceed connection_pool_max_size"
+            )
+        return self
 
 
 class CuVSConfig(BaseModel):
@@ -195,7 +405,7 @@ class VectorDBBackendConfig(BaseModel):
         description=(
             "VectorDB backend type: 'local', 'cuvs', 'http', "
             "'volcengine' (AK/SK signed or API key data-plane only), "
-            "or 'vikingdb' (private deployment)"
+            "'vikingdb' (private deployment), or 'opengauss'"
         ),
     )
 
@@ -254,6 +464,11 @@ class VectorDBBackendConfig(BaseModel):
         description="NVIDIA cuVS dense-vector search configuration for the 'cuvs' backend",
     )
 
+    opengauss: Optional[OpenGaussConfig] = Field(
+        default_factory=OpenGaussConfig,
+        description="openGauss DataVec configuration for the 'opengauss' backend",
+    )
+
     custom_params: Dict[str, Any] = Field(
         default_factory=dict,
         description="Custom parameters for custom backend adapters",
@@ -268,6 +483,7 @@ class VectorDBBackendConfig(BaseModel):
             "http",
             "volcengine",
             "vikingdb",
+            "opengauss",
         ]
 
         # Allow custom backend classes (containing dot) without standard validation
@@ -317,4 +533,27 @@ class VectorDBBackendConfig(BaseModel):
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
 
+        elif self.backend == "opengauss":
+            if not self.opengauss:
+                raise ValueError("VectorDB opengauss backend requires 'opengauss' config")
+            if not self.opengauss.host:
+                raise ValueError("VectorDB opengauss backend requires 'opengauss.host' to be set")
+            if self.sparse_weight > 0.0:
+                raise ValueError("VectorDB opengauss backend does not support sparse_weight > 0")
+            distance = (self.distance_metric or "cosine").lower()
+            if distance not in _OPENGAUSS_DISTANCE_METRICS:
+                raise ValueError(
+                    "VectorDB opengauss backend supports distance_metric values: "
+                    + ", ".join(sorted(_OPENGAUSS_DISTANCE_METRICS))
+                )
+            self.distance_metric = distance
+            self.opengauss.validate_capabilities(
+                distributed=self.opengauss.is_distributed, distance=distance
+            )
+
         return self
+
+    def apply_resolved_dimension(self, embedding_dimension: Any) -> None:
+        """Resolve an unspecified collection dimension from the embedding configuration."""
+        if int(self.dimension or 0) == 0 and embedding_dimension:
+            self.dimension = int(embedding_dimension)

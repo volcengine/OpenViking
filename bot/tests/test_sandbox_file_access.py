@@ -5,6 +5,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from vikingbot.sandbox.backends.aiosandbox import AioSandboxBackend
@@ -225,3 +226,46 @@ async def test_opensandbox_vke_inventory_stops_at_the_remote_limit(tmp_path: Pat
     with pytest.raises(ValueError, match="inventory exceeds 1 entries"):
         await backend.list_files(max_entries=1)
     assert "limit = 1" in commands.calls[0][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,chunk_size", [(0, 10000), (500, 20000), (500, 257)])
+async def test_opensandbox_directory_json_is_never_display_truncated(tmp_path, count, chunk_size):
+    expected = [(f"document-{index:04d}.txt", False) for index in range(count)]
+    payload = json.dumps(expected)
+    if count == 500:
+        assert len(payload) == 15000
+    execution = SimpleNamespace(
+        error=None,
+        logs=SimpleNamespace(
+            stdout=[
+                SimpleNamespace(text=payload[offset : offset + chunk_size])
+                for offset in range(0, len(payload), chunk_size)
+            ],
+            stderr=[SimpleNamespace(text="unrelated diagnostic")],
+        ),
+    )
+    commands = SimpleNamespace(run=AsyncMock(return_value=execution))
+    backend = _opensandbox_vke_backend(tmp_path, _OpenSandboxFiles(), commands)
+    assert await backend.list_dir(".") == expected
+
+
+@pytest.mark.asyncio
+async def test_opensandbox_directory_command_error_is_reported_before_json_parsing(tmp_path):
+    execution = SimpleNamespace(error=SimpleNamespace(value="Permission denied"))
+    commands = SimpleNamespace(run=AsyncMock(return_value=execution))
+    backend = _opensandbox_vke_backend(tmp_path, _OpenSandboxFiles(), commands)
+    with pytest.raises(IOError, match="directory listing failed: Permission denied"):
+        await backend.list_dir("private")
+
+
+@pytest.mark.asyncio
+async def test_opensandbox_exec_retains_display_output_limit(tmp_path):
+    execution = SimpleNamespace(
+        error=None,
+        logs=SimpleNamespace(stdout=[SimpleNamespace(text="x" * 15000)], stderr=[]),
+    )
+    commands = SimpleNamespace(run=AsyncMock(return_value=execution))
+    backend = _opensandbox_vke_backend(tmp_path, _OpenSandboxFiles(), commands)
+    output = await backend.execute("generate-long-output")
+    assert output == "x" * 10000 + "\n... (truncated, 5000 more chars)"

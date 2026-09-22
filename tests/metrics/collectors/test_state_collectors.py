@@ -3,17 +3,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from types import SimpleNamespace
 
 import pytest
 
+from openviking.metrics.collectors.async_system_probe import AsyncSystemProbeCollector
 from openviking.metrics.collectors.observer_health import ObserverHealthCollector
 from openviking.metrics.collectors.queue import QueueCollector
 from openviking.metrics.collectors.task_tracker import TaskTrackerCollector
 from openviking.metrics.collectors.vikingdb import VikingDBCollector
+from openviking.metrics.core.base import ReadEnvelope
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.core.runtime import install_executor_monitor, uninstall_executor_monitor
 from openviking.metrics.datasources.observer_state import (
     ObserverStateDataSource,
     VikingDBStateDataSource,
@@ -21,6 +26,107 @@ from openviking.metrics.datasources.observer_state import (
 from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
 from openviking.metrics.datasources.task import TaskStateDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
+
+
+def test_executor_collector_exports_default_executor_metrics(registry, render_prometheus):
+    class DummyDataSource:
+        def read_async_system_state(self):
+            return ReadEnvelope(
+                ok=True,
+                value={
+                    "probes": {"queue": True},
+                    "probes_valid": True,
+                    "executor": {
+                        "process_role": "legacy_server",
+                        "worker": "MainProcess",
+                        "pool": "asyncio_default",
+                        "max_workers": 4,
+                        "threads": 2,
+                        "active_tasks": 1,
+                        "pending_tasks": 3,
+                        "submitted_total": 5,
+                        "completed_total": 4,
+                        "failed_total": 1,
+                    },
+                },
+            )
+
+    AsyncSystemProbeCollector(data_source=DummyDataSource()).collect(registry)
+    text = render_prometheus(registry)
+    labels = 'pool="asyncio_default",process_role="legacy_server",worker="MainProcess"'
+    expected = {
+        "openviking_executor_max_workers": "4.0",
+        "openviking_executor_threads": "2.0",
+        "openviking_executor_active_tasks": "1.0",
+        "openviking_executor_pending_tasks": "3.0",
+        "openviking_executor_submitted_total": "5",
+        "openviking_executor_completed_total": "4",
+        "openviking_executor_failed_total": "1",
+    }
+    for name, value in expected.items():
+        assert f"{name}{{{labels}}} {value}" in text
+
+
+@pytest.mark.asyncio
+async def test_executor_monitor_tracks_default_executor_only():
+    loop = asyncio.get_running_loop()
+    previous_default = getattr(loop, "_default_executor", None)
+    default_executor = ThreadPoolExecutor(max_workers=1)
+    custom_executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(default_executor)
+    monitor = install_executor_monitor(
+        loop=loop,
+        process_role="legacy_server",
+    )
+    started, release = Event(), Event()
+
+    def blocking_default():
+        started.set()
+        release.wait(5)
+        return "ok"
+
+    def raising_default():
+        raise RuntimeError("boom")
+
+    try:
+        first = loop.run_in_executor(None, blocking_default)
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        second = loop.run_in_executor(None, lambda: "queued")
+
+        metrics = monitor.read_metrics()
+        assert metrics["active_tasks"] == 1
+        assert metrics["pending_tasks"] == 1
+        assert metrics["submitted_total"] == 2
+
+        release.set()
+        assert await first == "ok"
+        assert await second == "queued"
+        with pytest.raises(RuntimeError, match="boom"):
+            await loop.run_in_executor(None, raising_default)
+        assert await loop.run_in_executor(custom_executor, lambda: "custom") == "custom"
+
+        final = monitor.read_metrics()
+        assert final == {
+            "process_role": "legacy_server",
+            "worker": multiprocessing.current_process().name,
+            "pool": "asyncio_default",
+            "max_workers": 1,
+            "threads": 1,
+            "active_tasks": 0,
+            "pending_tasks": 0,
+            "submitted_total": 3,
+            "completed_total": 3,
+            "failed_total": 1,
+        }
+    finally:
+        uninstall_executor_monitor()
+        if previous_default is not None:
+            loop.set_default_executor(previous_default)
+        else:
+            loop._default_executor = None  # type: ignore[attr-defined]
+        custom_executor.shutdown(wait=True)
+        default_executor.shutdown(wait=True)
 
 
 def test_queue_collector_maps_status(monkeypatch):

@@ -4,8 +4,10 @@
 
 from pydantic import BaseModel
 
+from .runtime_field import RuntimeField
+
 
 class GitHubConfig(BaseModel):
     """Configuration for GitHub access."""
 
-    token: str = ""
+    token: str = RuntimeField(default="")

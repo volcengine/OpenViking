@@ -168,8 +168,8 @@ bot = [
   "dingtalk-stream>=0.4.0",
   "slack-sdk>=3.26.0",
   "qq-botpy>=1.0.0",
-  "opensandbox>=0.1.0",
-  "opensandbox-server>=0.1.0",
+  "opensandbox>=0.1.5",
+  "opensandbox-server>=0.1.6",
   "agent-sandbox>=0.0.23",
   "fusepy>=3.0.1",
   "opencode-ai>=0.1.0a0",
@@ -187,6 +187,11 @@ benchmark = [
 ]
 local-embed = [
     "llama-cpp-python>=0.3.0",
+]
+
+opengauss = [
+  # PostgreSQL wire-compatible driver verified against openGauss DataVec 7.0.
+  "psycopg2-binary>=2.9,<3",
 ]
 
 [project.urls]

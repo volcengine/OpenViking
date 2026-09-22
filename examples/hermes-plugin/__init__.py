@@ -88,6 +88,12 @@ _CONFIG_SCHEMA = [
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
+    _cfg_field(
+        "recall_compress",
+        "Cloud recall compression: off, server or auto (no local compressor)",
+        type="string",
+        default="off",
+    ),
     _cfg_field("recall_limit", "Maximum memories injected by automatic recall", type="integer", minimum=1, maximum=100, default=6),
     _cfg_field("recall_score_threshold", "Minimum relevance score for automatic recall", type="number", minimum=0.0, maximum=1.0, step=0.01, default=0.15),
     _cfg_field("recall_max_injected_chars", "Maximum total characters injected by recall", type="integer", minimum=100, maximum=50000, default=4000),
@@ -101,9 +107,9 @@ _CONFIG_SCHEMA = [
 # Typed settings (config.yaml primary, env override) keyed by config key.
 _SETTING_SPECS = {f["key"]: f for f in _CONFIG_SCHEMA if "type" in f}
 _RECALL_SETTING_KEYS = tuple(k for k in _SETTING_SPECS if k.startswith("recall_"))
-# Explicit-uid URIs (viking://user/<uid>/...) work under every auth mode; the `~`
-# alias only expands for USER/ADMIN roles and is rejected with 400 under dev/ROOT,
-# so the user space is resolved client-side from /api/v1/system/status.
+# Explicit-uid URIs (viking://user/<uid>/...) work under every auth mode and
+# supported OpenViking version. The `~` alias requires OpenViking 0.4.16+ for
+# USER/ADMIN roles and 0.4.17+ for ROOT, so internal paths remain explicit.
 _SESSION_START_SUFFIXES = ("memories/profile.md", "memories/preferences", "memories/entities")
 _SESSION_START_LIST_PARAMS = {"output": "agent", "recursive": True, "abs_limit": 512, "node_limit": 512}
 # Built-in memory tool `target` -> mirror subdir (user facts -> preferences, agent notes -> patterns).
@@ -130,7 +136,7 @@ _FIX_ENDPOINT = "OpenViking memory is temporarily unavailable; correct the endpo
 _HTTPX_MISSING = "httpx not installed — OpenViking plugin disabled"
 _LEGACY_OPENVIKING_IDENTITY_DETAIL = (
     "returned OpenViking's legacy health response, but its anonymous OpenAPI metadata did not identify OpenViking. "
-    "If this is OpenViking 0.2.6 or earlier, upgrade to OpenViking 0.2.10 or newer."
+    "If this is OpenViking 0.2.6 or earlier, upgrade to OpenViking 0.2.14 or newer."
 )
 _PENDING_SESSIONS_RELATIVE_DIR = Path("openviking") / "pending_sessions"
 _RUN_LOCKS_RELATIVE_DIR = Path("openviking") / "runs"
@@ -244,6 +250,8 @@ class _VikingClient:
         self._account = account or get_secret("OPENVIKING_ACCOUNT", "") or "default"
         self._user = user or get_secret("OPENVIKING_USER", "") or "default"
         self._agent = agent if agent is not None else (get_secret("OPENVIKING_AGENT", "") or _DEFAULT_AGENT)
+        # Every client owns its resolved identity, including clients retained across reloads.
+        self._conn_snapshot = (self._endpoint, self._api_key, self._account, self._user, self._agent)
         self._httpx = _get_httpx()
         if self._httpx is None:
             raise ImportError("httpx is required for OpenViking: pip install httpx")
@@ -494,7 +502,7 @@ def _is_windows_absolute_path(value: str) -> bool:
     return len(value) >= 3 and value[0].isalpha() and value[1] == ":" and value[2] in {"/", "\\"}
 
 
-def _validate_forget_memory_uri(raw_uri: Any) -> tuple[Optional[str], Optional[str]]:
+def _validate_forget_memory_uri(raw_uri: Any, *, user_space: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     uri = raw_uri.strip() if isinstance(raw_uri, str) else ""
     if not uri:
         return None, "uri is required"
@@ -506,11 +514,23 @@ def _validate_forget_memory_uri(raw_uri: Any) -> tuple[Optional[str], Optional[s
     if uri.endswith("/") or not uri.endswith(".md"):
         return None, "viking_forget only deletes concrete .md memory files"
     parts = [part for part in uri[len("viking://") :].split("/") if part]
-    # ``memories`` segment index for the user / user-uid / peer / uid-peer layouts.
-    memories_idx = next((idx for idx, peer_at in ((1, None), (2, None), (3, 1), (4, 2))
-                         if parts[:1] == ["user"] and len(parts) > idx and parts[idx] == "memories" and (peer_at is None or parts[peer_at] == "peers")), None)
+    if any(unquote(part) in {".", ".."} for part in parts):
+        return None, "viking_forget does not accept dot path segments"
+    # ``memories`` index for ``<scope>/[peers/<agent>/]memories/``; under ``user`` the uid is
+    # required, since the uid-less shorthands are deprecated upstream.
+    offsets = ((1, None), (3, 1)) if parts[:1] == ["~"] else ((2, None), (4, 2)) if parts[:1] == ["user"] else ()
+    memories_idx = next((idx for idx, peer_at in offsets
+                         if len(parts) > idx and parts[idx] == "memories" and (peer_at is None or parts[peer_at] == "peers")), None)
     if memories_idx is None or len(parts) < memories_idx + 2:
         return None, "viking_forget only deletes user memory file URIs"
+    # An explicit uid can name someone else's space. Do not send a destructive
+    # request unless the server has confirmed that this uid belongs to the caller.
+    if parts[0] == "user":
+        if not user_space:
+            return None, "viking_forget could not verify the current OpenViking user identity; retry or use viking://~/..."
+        if parts[1] != user_space:
+            return None, (f"viking_forget only deletes your own memories; use viking://user/{user_space}/... "
+                          "or viking://~/... instead")
     if uri.rsplit("/", 1)[-1] in _GENERATED_MEMORY_SUMMARY_FILENAMES:
         return None, "viking_forget cannot delete generated memory summary files"
     return uri, None
@@ -1272,13 +1292,21 @@ class OpenVikingMemoryProvider(MemoryProvider):
             normalized["endpoint"] = _normalize_openviking_url(endpoint)
 
         from hermes_cli.config import load_config, save_config
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
-        config = load_config()
-        if not isinstance(config.get("memory"), dict):
-            config["memory"] = {}
-        provider_config = config["memory"].get("openviking")
-        config["memory"]["openviking"] = {**(provider_config if isinstance(provider_config, dict) else {}), **normalized}
-        save_config(config)
+        token = set_hermes_home_override(hermes_home)
+        try:
+            config = load_config()
+            if not isinstance(config.get("memory"), dict):
+                config["memory"] = {}
+            provider_config = config["memory"].get("openviking")
+            config["memory"]["openviking"] = {
+                **(provider_config if isinstance(provider_config, dict) else {}),
+                **normalized,
+            }
+            save_config(config)
+        finally:
+            reset_hermes_home_override(token)
 
     def get_status_config(self, provider_config: dict) -> dict:
         provider_config = dict(provider_config or {})
@@ -1595,11 +1623,53 @@ class OpenVikingMemoryProvider(MemoryProvider):
         try:
             cfg = self._recall_config()
             deadline = time.monotonic() + cfg["timeout_seconds"]
-            result = self._unwrap_result(self._post_prefetch_search(
-                client, query_text, session_id, limit=max(cfg["limit"] * 4, 20),
-                context_type=["memory", "resource"] if cfg["resources"] else "memory",
-                deadline=deadline, request_timeout=cfg["request_timeout_seconds"],
-            ))
+            if cfg["compress"] in ("server", "auto"):
+                payload = {
+                    "query": query_text,
+                    "mode": "context",
+                    "purpose": "coding",
+                    "rewrite": True if cfg["compress"] == "server" else "auto",
+                    "score_threshold": cfg["score_threshold"],
+                    "max_tokens": max(64, min(32000, cfg["max_injected_chars"] // 4)),
+                    "context_type": ["memory", "resource"] if cfg["resources"] else "memory",
+                }
+                if session_id:
+                    payload["session_id"] = session_id
+                try:
+                    assembled = self._unwrap_result(
+                        client.post(
+                            "/api/v1/search/search",
+                            payload,
+                            timeout=self._remaining_recall_timeout(
+                                deadline, cfg["request_timeout_seconds"]
+                            ),
+                        )
+                    )
+                    if isinstance(assembled, dict) and any(
+                        k in assembled for k in ("rendered", "digest", "entries")
+                    ):
+                        if (assembled.get("stats") or {}).get("rewrite") == "no_relevant":
+                            return ""
+                        return str(
+                            assembled.get("digest") or assembled.get("rendered") or ""
+                        ).strip()
+                except TimeoutError:
+                    raise
+                except Exception as e:
+                    logger.debug(
+                        "OpenViking context rewrite unavailable, falling back to search: %s", e
+                    )
+            result = self._unwrap_result(
+                self._post_prefetch_search(
+                    client,
+                    query_text,
+                    session_id,
+                    limit=max(cfg["limit"] * 4, 20),
+                    context_type=["memory", "resource"] if cfg["resources"] else "memory",
+                    deadline=deadline,
+                    request_timeout=cfg["request_timeout_seconds"],
+                )
+            )
             if not isinstance(result, dict):
                 return ""
             candidates = [item for ctx_type in ("memories", "resources") for item in (result.get(ctx_type, []) or []) if isinstance(item, dict)]
@@ -1615,8 +1685,15 @@ class OpenVikingMemoryProvider(MemoryProvider):
     # -- typed settings ------------------------------------------------------
 
     @staticmethod
-    def _parse_setting_value(value: Any, kind: str) -> Optional[bool | int | float]:
+    def _parse_setting_value(value: Any, kind: str) -> Optional[bool | int | float | str]:
         """Parse per schema ``kind`` (boolean / integer / number); None when invalid."""
+        if kind == "string":
+            normalized = str(value).strip().lower()
+            if normalized in {"1", "true", "yes"}:
+                return "auto"
+            if normalized in {"0", "false", "no"}:
+                return "off"
+            return normalized if normalized in {"off", "server", "auto"} else None
         if kind == "boolean":
             if isinstance(value, bool):
                 return value
@@ -1656,7 +1733,16 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _recall_config(self) -> Dict[str, Any]:
         cfg = _load_hermes_openviking_config()
-        return {key.removeprefix("recall_"): self._setting(key, cfg) for key in _RECALL_SETTING_KEYS}
+        resolved = {
+            key.removeprefix("recall_"): self._setting(key, cfg) for key in _RECALL_SETTING_KEYS
+        }
+        if resolved["compress"] in ("server", "auto"):
+            # Retrieval plus server rewrite has a longer fuse. Keep explicit
+            # user deadlines authoritative and the default off path unchanged.
+            for key in ("recall_timeout_seconds", "recall_request_timeout_seconds"):
+                if key not in cfg and not os.environ.get(_SETTING_SPECS[key]["env_var"]):
+                    resolved[key.removeprefix("recall_")] = 55.0
+        return resolved
 
     def _profile_token_budget(self) -> int:
         return self._setting("profile_token_budget", _load_hermes_openviking_config())
@@ -1737,17 +1823,16 @@ class OpenVikingMemoryProvider(MemoryProvider):
     def _user_space(self, client=None, *, timeout: Optional[float] = None) -> str:
         """Resolve the user space, caching only a confirmed connection identity.
 
-        Cache is keyed on the connection snapshot, not the client object:
-        _new_client() builds fresh clients from the same snapshot on every write.
-        getattr() throughout: hand-wired providers (``__new__``) may lack these fields.
+        Use the client's snapshot even when a reload has replaced the active connection.
+        Clients with the same resolved settings share the cache; unbound clients do not.
         """
         active = client if client is not None else getattr(self, "_client", None)
-        snapshot = getattr(self, "_conn_snapshot", None)
+        snapshot = getattr(active, "_conn_snapshot", None)
         cached = getattr(self, "_user_space_cache", None)
-        if active is not None and cached is not None and cached[0] == snapshot:
+        if snapshot is not None and cached is not None and cached[0] == snapshot:
             return cached[1]
         if active is not None and (resolved := _resolve_user_space(active, timeout=timeout)):
-            if snapshot is not None and snapshot is getattr(self, "_conn_snapshot", None):  # unchanged under us
+            if snapshot is not None:
                 self._user_space_cache = (snapshot, resolved)
             return resolved
         return str(getattr(active, "_user", "") or getattr(self, "_user", "") or "default").strip() or "default"
@@ -2420,9 +2505,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         reload mid-write can't borrow a later peer; an empty peer there is intentional.
         getattr(): hand-wired providers (``__new__``) may lack ``_client`` / ``_agent``.
         """
-        # Explicit-uid URIs are canonical under every auth mode; the uid-less `viking://user/peers/...`
-        # shorthand was removed upstream (#4196) and `viking://~/...` only expands for USER/ADMIN roles, not
-        # dev/ROOT.
+        # Explicit-uid URIs are canonical across supported OpenViking versions. The
+        # uid-less shorthand was removed upstream, and `viking://~` is newer.
         active_client = client if client is not None else getattr(self, "_client", None)
         agent = str(getattr(active_client, "_agent", getattr(self, "_agent", "")) or "").strip()
         peer_prefix = f"peers/{agent}/" if agent else ""
@@ -2632,10 +2716,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
         })
 
     def _tool_forget(self, args: dict) -> str:
-        uri, error = _validate_forget_memory_uri(args.get("uri"))
+        # _resolve_user_space, not _user_space: its "default" fallback is a guess, not an identity.
+        client = self._client
+        uri, error = _validate_forget_memory_uri(args.get("uri"), user_space=_resolve_user_space(client))
         if error:
             return tool_error(error)
-        result = self._unwrap_result(self._client.delete("/api/v1/fs", params={"uri": uri, "recursive": False}))
+        result = self._unwrap_result(client.delete("/api/v1/fs", params={"uri": uri, "recursive": False}))
         result = result if isinstance(result, dict) else {}
         payload = {"status": "deleted", "uri": result.get("uri") or uri,
                    **{key: result[key] for key in ("estimated_deleted_count", "memory_cleanup", "semantic_root_uri", "semantic_status", "queue_status") if key in result}}

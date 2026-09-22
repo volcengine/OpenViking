@@ -26,11 +26,34 @@ In regions where GitHub is hard to reach, run the same installer from the Volcen
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
-No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks. After installing:
+No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks. After installing, launch Codex (`trae-cli` for TraeCode CLI 2.0):
 
 ```bash
-codex              # First run: approve hooks once when prompted via /hooks
+codex
 ```
+
+### First launch: trust the hooks
+
+The plugin's hooks are new to Codex, so startup stops on a trust prompt. Pick **Trust all and continue**, or Review hooks first if you want to read the commands:
+
+```text
+Hooks need review
+6 hooks are new or changed.
+Hooks can run outside the sandbox after you trust them.
+
+  1. Review hooks
+> 2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+```
+
+A fresh install lists all 6 hooks the plugin registers. After that, any plugin update that touches a hook stops startup again, with the count of what changed this time (`1 hook is new or changed`, say) — pick Trust all and continue there too.
+
+Pick the third option, or skip past the prompt, and the hooks never run: MCP tools still work, but automatic recall and capture are both dead. Recovering means switching on two independent things:
+
+- `/hooks` — hook trust and on/off state. Trust and enable the entries marked *New hook - review required* or *Modified since last trusted*.
+- `/plugins` — the plugin's own enabled state. Confirm `openviking-memory` is enabled.
+
+If either side is off, nothing is recalled or captured.
 
 <details>
 <summary><b>Manual setup</b></summary>
@@ -103,7 +126,7 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 |---------|-------|-----|
 | MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Fix `~/.openviking/ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`) and restart Codex; the stdio proxy re-reads it on launch and after auth failures. |
 | MCP tool calls fail with a connection error | Server unreachable or the URL is wrong | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| `6 hooks need review` | Security review on first launch; after an upgrade that adds a hook, Codex asks again for the new one | Run `/hooks` within Codex and approve the hooks. |
+| `6 hooks need review`, or the plugin is installed but no hook fires | A fresh install trusts all 6 hooks at once, and every later update that touches a hook asks again; choosing *Continue without trusting* or skipping it leaves the hooks off for good | Trust and enable the entries in `/hooks`, and confirm `openviking-memory` is enabled in `/plugins` — two independent switches, both have to be on. |
 | Plugin still targets an old server after `ov config switch` | Codex keeps the proxy process from the previous session | Restart Codex; the proxy resolves credentials at startup. |
 | Hooks use one server, MCP another | Stale `OPENVIKING_*` credential env vars in one context (env vars override ovcli.conf by default) | Unset the stale env vars (ovcli.conf then drives both), set `OPENVIKING_CREDENTIAL_SOURCE=cli`, or make the env vars consistent. |
 
@@ -115,3 +138,9 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — Commit decision tree.
 - [MCP Clients](./06-mcp-clients.md) — MCP protocol, tools, and other clients.
 - [Deployment Guide → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` setup instructions.
+
+### Recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to compress recalled context on the OpenViking server without launching a local Codex compressor. `client` uses local compression only; `auto` (the default) uses the server when the local compressor is unavailable; `off` disables compression. Existing server digests are used directly, and an explicit no-relevant result injects nothing.
+
+Codex calls the shared `buildRecallBlockDetailed()` pipeline for retrieval, ranking, budgets and old-server fallback. Only session mapping, model execution and hook output remain host-specific. Local compression failures preserve bounded retrieved context. Without local compression, raw fallback now honors `recallPreferAbstract` instead of always reading every leaf in full. Budgets include body text, URIs and wrapper text. See the [shared plugin configuration](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression).

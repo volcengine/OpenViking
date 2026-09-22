@@ -57,7 +57,7 @@ class MemorySection(BaseModel):
 
 
 class SwitchSection(BaseModel):
-    enabled: bool
+    enabled: bool = RuntimeField()
     model_config = {"extra": "forbid"}
 
 
@@ -116,6 +116,30 @@ def _make_manager(source) -> tuple[RuntimeConfigManager, dict]:
 # -- RuntimeField / path collection -------------------------------------------
 
 
+def test_account_selector_captures_fallback_pair_and_rejects_async():
+    async def run():
+        manager, _ = _make_manager(MemoryConfigSource())
+        await manager.initialize()
+        await manager.patch_cluster({"vlm": {"model": "cluster"}})
+        await manager.patch_account("a", {"memory": {"extraction_enabled": False}})
+        selected = await manager.resolve_account(
+            "a", lambda view: (view.get("vlm"), view.get("memory"), view.get("switch"))
+        )
+        await manager.patch_cluster({"vlm": {"model": "new"}})
+        assert selected[0].model == "cluster"
+        assert selected[1].extraction_enabled is False
+        assert selected[2] is None
+        assert (await manager.get_account("a", "vlm")).model == "new"
+
+        async def invalid(view):
+            return view.get("vlm")
+
+        with pytest.raises(TypeError, match="synchronous"):
+            await manager.resolve_account("a", invalid)
+
+    asyncio.run(run())
+
+
 def test_runtime_field_paths_scope_by_model():
     all_paths = collect_runtime_field_paths(ClusterConfig)
     assert ("vlm", "model") in all_paths
@@ -135,10 +159,12 @@ def test_real_openviking_config_exposes_no_mutable_path():
     # Agent Evolution is the current cluster runtime surface. Other existing
     # cluster fields remain startup-only and use plain Field.
     surface = collect_runtime_field_paths(OpenVikingConfig)
-    assert surface == {("agent_evolution",)}
+    assert ("agent_evolution",) in surface
+    assert not any(p[0] == "feishu" for p in surface)
     assert ("vlm",) not in surface
     assert not any(p[0] == "rerank" for p in surface)
     assert is_dynamic(OpenVikingConfig.model_fields["agent_evolution"])
+    assert not is_runtime_field(OpenVikingConfig.model_fields["feishu"])
     assert not is_runtime_field(OpenVikingConfig.model_fields["memory"])
     assert not is_runtime_field(OpenVikingConfig.model_fields["vlm"])
     assert not is_runtime_field(OpenVikingConfig.model_fields["rerank"])
@@ -206,7 +232,10 @@ def test_collect_frozen_paths_includes_nested_create_only_fields():
     assert collect_frozen_paths(NestedFrozenRoot) == {("child", "frozen")}
     with pytest.raises(ConfigPatchError, match="child.frozen"):
         validate_patch(NestedFrozenRoot, {"child": {"frozen": "changed"}})
+    with pytest.raises(ConfigPatchError, match="child.frozen"):
+        validate_patch(NestedFrozenRoot, {"child": None})
     validate_patch(NestedFrozenRoot, {"child": {"frozen": "initial"}}, creating=True)
+    validate_patch(NestedFrozenRoot, {"child": None}, creating=True)
 
 
 # -- PATCH request validation -------------------------------------------------
@@ -216,6 +245,12 @@ def test_validate_patch_accepts_mutable_paths_and_none_delete():
     validate_patch(ClusterConfig, {"vlm": {"model": "m"}})
     validate_patch(ClusterConfig, {"vlm": {"model": None}})
     validate_patch(ClusterConfig, {"memory": {"extraction_enabled": False}})
+    validate_patch(ClusterConfig, {"memory": None})
+
+
+def test_validate_patch_rejects_section_delete_with_locked_descendant():
+    with pytest.raises(ConfigPatchError, match="vlm.temperature"):
+        validate_patch(ClusterConfig, {"vlm": None})
 
 
 def test_validate_patch_rejects_locked_field_and_section():
@@ -309,12 +344,12 @@ def test_cluster_patch_reset_rebuilds_from_startup_baseline():
         source = MemoryConfigSource()
         manager, holder = _make_manager(source)
 
-        await manager.patch_cluster({"vlm": {"model": "temporary"}})
-        assert holder["config"].vlm.model == "temporary"
+        await manager.patch_cluster({"memory": {"extraction_enabled": False}})
+        assert not holder["config"].memory.extraction_enabled
 
-        await manager.patch_cluster({"vlm": None})
+        await manager.patch_cluster({"memory": None})
         assert await source.load(ConfigScope.cluster()) == {}
-        assert holder["config"].vlm.model is None
+        assert holder["config"].memory.extraction_enabled
 
     asyncio.run(run())
 
@@ -627,7 +662,24 @@ def test_refresh_does_not_resurrect_evicted_account():
 
 def test_account_config_field_attributes():
     fields = AccountConfig.model_fields
-    assert set(fields) == {"acl", "agent_evolution", "github"}
+    assert set(fields) == {"acl", "agent_evolution", "feishu", "github"}
+    assert collect_runtime_field_paths(AccountConfig) == {
+        ("acl",),
+        ("acl", "enabled"),
+        ("agent_evolution",),
+        ("agent_evolution", "enabled"),
+        ("feishu",),
+        ("feishu", "app_id"),
+        ("feishu", "app_secret"),
+        ("feishu", "download_images"),
+        ("feishu", "max_records_per_table"),
+        ("feishu", "max_rows_per_sheet"),
+        ("feishu", "request_timeout"),
+        ("github",),
+        ("github", "token"),
+    }
+    assert is_dynamic(fields["feishu"])
+    assert fallback_of(fields["feishu"]) is None
     assert is_dynamic(fields["github"])
     assert fallback_of(fields["github"]) is None
     assert is_dynamic(fields["agent_evolution"])
@@ -668,12 +720,40 @@ def test_account_config_ignores_inactive_sections_during_known_patch():
 
 def test_account_patch_rejects_inactive_fields_and_allows_active_fields():
     validate_patch(AccountConfig, {"github": {"token": "t"}})
+    validate_patch(AccountConfig, {"github": None})
+    validate_patch(AccountConfig, {"agent_evolution": None})
+    validate_patch(AccountConfig, {"acl": None})
     with pytest.raises(ConfigPatchError, match="github.tokne"):
         validate_patch(AccountConfig, {"github": {"tokne": "t"}})
+    validate_patch(AccountConfig, {"feishu": {"app_id": "app"}})
+    with pytest.raises(ConfigPatchError, match="app_secert"):
+        validate_patch(AccountConfig, {"feishu": {"app_secert": "app"}})
+    with pytest.raises(ConfigPatchError, match="domain"):
+        validate_patch(AccountConfig, {"feishu": {"domain": "https://custom.example"}})
+    validate_patch(AccountConfig, {"feishu": {"request_timeout": 60}})
+    validate_patch(AccountConfig, {"feishu": None})
     with pytest.raises(ConfigPatchError):
         validate_patch(AccountConfig, {"vlm": {"model": "m"}})
     with pytest.raises(ConfigPatchError):
         validate_patch(AccountConfig, {"embedding": {"dense": {"model": "m"}}}, creating=True)
+
+
+def test_feishu_cluster_patch_rejects_unknown_fields():
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+    with pytest.raises(ConfigPatchError, match="feishu"):
+        validate_patch(OpenVikingConfig, {"feishu": {"app_secert": "app"}})
+    with pytest.raises(ConfigPatchError, match="feishu"):
+        validate_patch(OpenVikingConfig, {"feishu": {"domain": "https://custom.example"}})
+
+
+def test_feishu_config_validates_constructor_values():
+    from openviking_cli.utils.config.parser_config import FeishuConfig
+
+    with pytest.raises(ValueError, match="request_timeout"):
+        FeishuConfig(request_timeout=0)
+    with pytest.raises(ValueError, match="domain"):
+        FeishuConfig(domain="   ")
 
 
 def test_manager_resolves_account_override_fallback_and_no_fallback():
@@ -803,6 +883,96 @@ def test_real_agent_evolution_precedence_and_fallback():
 
             await manager.patch_account("ov-a", {"agent_evolution": None})
             assert (await manager.get_account("ov-a", "agent_evolution")).enabled
+        finally:
+            OpenVikingConfigSingleton.reset_instance()
+
+    asyncio.run(run())
+
+
+def test_real_feishu_account_override_and_cluster_fallback():
+    async def run():
+        from openviking.config.binding import manager_over_source
+        from openviking.config.feishu import get_effective_feishu_config
+        from openviking_cli.utils.config import set_openviking_config
+        from openviking_cli.utils.config.open_viking_config import (
+            OpenVikingConfig,
+            OpenVikingConfigSingleton,
+        )
+
+        base = OpenVikingConfig.from_dict(
+            {"feishu": {"app_id": "cluster-v1", "app_secret": "cluster-secret"}}
+        )
+        set_openviking_config(base)
+        manager = manager_over_source(MemoryConfigSource(), base_config=base)
+        await manager.initialize()
+        try:
+            assert (
+                await get_effective_feishu_config(manager, "ov-a")
+            ).app_id == "cluster-v1"
+
+            await manager.patch_account(
+                "ov-a", {"feishu": {"app_id": "account-a", "app_secret": "a-secret"}}
+            )
+            effective_a = await get_effective_feishu_config(manager, "ov-a")
+            assert effective_a.app_id == "account-a"
+            assert effective_a.domain == base.feishu.domain
+            assert (
+                await get_effective_feishu_config(manager, "ov-b")
+            ).app_id == "cluster-v1"
+
+            await manager.patch_account("ov-a", {"feishu": None})
+            assert (
+                await get_effective_feishu_config(manager, "ov-a")
+            ).app_id == "cluster-v1"
+        finally:
+            OpenVikingConfigSingleton.reset_instance()
+
+    asyncio.run(run())
+
+
+def test_real_feishu_account_section_only_inherits_cluster_domain():
+    async def run():
+        from openviking.config.binding import manager_over_source
+        from openviking.config.feishu import get_effective_feishu_config
+        from openviking_cli.utils.config import set_openviking_config
+        from openviking_cli.utils.config.open_viking_config import (
+            OpenVikingConfig,
+            OpenVikingConfigSingleton,
+        )
+        from openviking_cli.utils.config.parser_config import FeishuConfig
+
+        base = OpenVikingConfig.from_dict(
+            {
+                "feishu": {
+                    "app_id": "cluster-app",
+                    "app_secret": "cluster-secret",
+                    "domain": "https://open.larksuite.com",
+                    "max_rows_per_sheet": 17,
+                    "max_records_per_table": 23,
+                    "download_images": False,
+                    "request_timeout": 45,
+                }
+            }
+        )
+        set_openviking_config(base)
+        manager = manager_over_source(MemoryConfigSource(), base_config=base)
+        await manager.initialize()
+        try:
+            await manager.patch_account(
+                "ov-a",
+                {"feishu": {"app_id": "account-app", "app_secret": "account-secret"}},
+            )
+
+            effective = await get_effective_feishu_config(manager, "ov-a")
+
+            defaults = FeishuConfig()
+            assert effective.app_id == "account-app"
+            assert effective.app_secret == "account-secret"
+            assert effective.domain == "https://open.larksuite.com"
+            assert effective.max_rows_per_sheet == defaults.max_rows_per_sheet
+            assert effective.max_records_per_table == defaults.max_records_per_table
+            assert effective.download_images is defaults.download_images
+            assert effective.request_timeout == defaults.request_timeout
         finally:
             OpenVikingConfigSingleton.reset_instance()
 

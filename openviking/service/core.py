@@ -478,6 +478,7 @@ class OpenVikingService:
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
             uri_mutation_coordinator=self._uri_mutation_coordinator,
+            runtime_config_manager=self._runtime_config_manager,
         )
 
         # Wire up sub-services
@@ -501,6 +502,7 @@ class OpenVikingService:
             skill_processor=self._skill_processor,
             watch_scheduler=self._watch_scheduler,
             resource_memory_link_service=self._resource_memory_link_service,
+            runtime_config_manager=self._runtime_config_manager,
         )
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,

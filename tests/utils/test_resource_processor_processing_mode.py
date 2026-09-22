@@ -18,6 +18,7 @@ from openviking.storage.index_action import FieldPatch
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.parser_config import FeishuConfig
 
 
 class _FakeVikingDB:
@@ -114,6 +115,42 @@ async def test_github_token_is_not_injected_into_ssh_sources(monkeypatch, ctx, s
     assert await processor.github_token_for(source, ctx) is None
     assert await processor._source_config_kwargs(source, ctx, kwargs) is kwargs
     manager.get_account.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_feishu_source_config_uses_cluster_domain(ctx):
+    async def resolve_account(account_id, resolver):
+        assert account_id == "account-1"
+        return resolver(
+            SimpleNamespace(
+                account=SimpleNamespace(feishu=None),
+                cluster=SimpleNamespace(
+                    feishu=FeishuConfig(
+                        app_id="current-app",
+                        app_secret="current-secret",
+                        domain="https://open.feishu.cn",
+                        download_images=False,
+                    )
+                ),
+            )
+        )
+
+    manager = SimpleNamespace(resolve_account=resolve_account)
+    processor = ResourceProcessor(
+        _FakeVikingDB(),
+        runtime_config_manager=manager,
+    )
+
+    kwargs = await processor._source_config_kwargs(
+        "https://example.feishu.cn/docx/doc",
+        ctx,
+        {},
+    )
+
+    assert kwargs["feishu_config"].app_id == "current-app"
+    assert kwargs["feishu_config"].app_secret == "current-secret"
+    assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
+    assert kwargs["feishu_config"].download_images is False
 
 
 @pytest.mark.asyncio

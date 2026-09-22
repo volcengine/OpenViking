@@ -1820,7 +1820,7 @@ class ReindexExecutor:
         file_name = uri.rsplit("/", 1)[-1]
         overviews = await self._safe_read_text(f"{parent_uri}/.overview.md", ctx=ctx)
         if overviews:
-            parsed = self._parse_overview_md(body_for_preview(overviews))
+            parsed = SemanticProcessor._parse_overview_md(overviews)
             if file_name in parsed:
                 return parsed[file_name]
         existing = await self._fetch_existing_record(
@@ -2036,21 +2036,3 @@ class ReindexExecutor:
             if value:
                 return value
         return ""
-
-    @staticmethod
-    def _parse_overview_md(content: str) -> dict[str, str]:
-        parsed: dict[str, str] = {}
-        current_name: Optional[str] = None
-        current_lines: list[str] = []
-        for line in (content or "").splitlines():
-            if line.startswith("## "):
-                if current_name is not None:
-                    parsed[current_name] = "\n".join(current_lines).strip()
-                current_name = line[3:].strip()
-                current_lines = []
-                continue
-            if current_name is not None:
-                current_lines.append(line)
-        if current_name is not None:
-            parsed[current_name] = "\n".join(current_lines).strip()
-        return parsed

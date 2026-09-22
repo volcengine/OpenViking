@@ -29,7 +29,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import { HARNESS_KEYS, KNOBS, harnessKey, resolveKnobs } from "./config-schema.mjs";
+import { HARNESS_KEYS, KNOBS, harnessKey, knobDefault, resolveKnobs } from "./config-schema.mjs";
 import {
   buildUserAgent,
   loadCredentialFiles,
@@ -224,9 +224,15 @@ export function buildPluginConfig(harness, {
     env,
   });
 
+  const recallRewrite = normalizeRewriteMode(
+    env.OPENVIKING_RECALL_COMPRESS ?? env.OPENVIKING_RECALL_REWRITE ?? settings.recallCompress,
+    knobDefault(KNOBS.find((knob) => knob.name === "recallCompress"), harnessKey(name)),
+  );
   const config = {
     ...settings,
     harness: name,
+    recallCompress: recallRewrite,
+    recallRewrite,
     clientVersion,
     userAgent: buildUserAgent(name, clientVersion),
 

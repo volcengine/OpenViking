@@ -376,7 +376,7 @@ class UnderstandingAPI(BaseParser):
         try:
             from openviking.resource.feishu_watch_auth import load_feishu_app_credentials
 
-            load_feishu_app_credentials()
+            load_feishu_app_credentials(config=kwargs.get("feishu_config"))
             return True
         except (FileNotFoundError, ValueError):
             return False
@@ -593,7 +593,9 @@ class UnderstandingAPI(BaseParser):
         try:
             from openviking.resource.feishu_watch_auth import FeishuOAuthClient
 
-            token = await FeishuOAuthClient.from_config().get_tenant_access_token()
+            token = await FeishuOAuthClient.from_config(
+                config=kwargs.get("feishu_config")
+            ).get_tenant_access_token()
         except (FileNotFoundError, ValueError) as exc:
             raise ValueError(
                 "exactly one Feishu user or tenant access token is required for parser API imports"

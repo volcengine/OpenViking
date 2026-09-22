@@ -787,7 +787,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 **处理流程**：
 1. 从指定 URI 开始遍历文件系统
 2. 对每个文件内容进行正则表达式匹配
-3. 收集匹配的行和位置信息
+3. 收集匹配行、位置信息及可选的前后文
 4. 返回匹配结果列表
 
 **代码入口**：
@@ -809,6 +809,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 | tags | string[] | 否 | 未设置 | 仅搜索同时匹配全部 `k=v` 检索标签的文件 |
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
+| before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |
+| after_context | int | 否 | 0 | 每条匹配行之后返回的上下文行数；仅 HTTP API 和 CLI 支持 |
 
 `tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
 
@@ -830,6 +832,8 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
         "uri": "viking://resources",
         "pattern": "authentication",
         "case_insensitive": true,
+        "before_context": 1,
+        "after_context": 1,
         "tags": ["team=search", "env=prod"]
     }'
 ```
@@ -891,6 +895,9 @@ openviking grep "authentication" --uri viking://resources --ignore-case
 # 指定深度限制
 openviking grep "TODO" --uri viking://resources --level-limit 3
 
+# 返回匹配行前后各 2 行上下文
+openviking grep "authentication" --uri viking://resources -b 2 -a 2
+
 # 只搜索同时匹配所有 tags 的文件
 openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
 
@@ -911,6 +918,12 @@ HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` �
                 "uri": "viking://resources/docs/auth.md",
                 "line": 15,
                 "content": "User authentication is handled by...",
+                "before_context": [
+                    {"line": 14, "content": "## Authentication"}
+                ],
+                "after_context": [
+                    {"line": 16, "content": "Configure an API key before sending requests."}
+                ],
                 "tags": ["team=search", "env=prod"]
             }
         ],

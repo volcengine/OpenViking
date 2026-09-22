@@ -790,6 +790,8 @@ impl HttpClient {
         exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
+        after_context: i32,
+        before_context: i32,
         node_limit: i32,
         level_limit: i32,
         tags: &[String],
@@ -800,6 +802,8 @@ impl HttpClient {
             "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
+            "after_context": (after_context > 0).then_some(after_context),
+            "before_context": (before_context > 0).then_some(before_context),
             "node_limit": node_limit,
             "level_limit": level_limit,
             "tags": (!tags.is_empty()).then(|| tags),
@@ -2523,6 +2527,8 @@ mod tests {
                 None,
                 "needle",
                 false,
+                0,
+                0,
                 10,
                 3,
                 &[],
@@ -2535,6 +2541,8 @@ mod tests {
         assert!(request.starts_with("POST /api/v1/search/grep "));
         assert!(!request.contains(r#""tags""#));
         assert!(!request.contains(r#""include_tags""#));
+        assert!(!request.contains(r#""after_context""#));
+        assert!(!request.contains(r#""before_context""#));
     }
 
     #[tokio::test]
@@ -2548,6 +2556,8 @@ mod tests {
                 None,
                 "needle",
                 false,
+                2,
+                3,
                 10,
                 3,
                 &[],
@@ -2558,6 +2568,8 @@ mod tests {
 
         let request = request_rx.await.expect("request should be captured");
         assert!(request.contains(r#""include_tags":true"#));
+        assert!(request.contains(r#""after_context":2"#));
+        assert!(request.contains(r#""before_context":3"#));
     }
 
     #[tokio::test]

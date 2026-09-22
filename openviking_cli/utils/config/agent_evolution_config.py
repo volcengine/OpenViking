@@ -4,8 +4,10 @@
 
 from pydantic import BaseModel
 
+from .runtime_field import RuntimeField
+
 
 class AgentEvolutionConfig(BaseModel):
     """Agent Evolution switch shared by cluster and account configuration."""
 
-    enabled: bool = False
+    enabled: bool = RuntimeField(default=False)

@@ -273,7 +273,8 @@ test("the client-ranked fallback degrades past the budget to URI hints", async (
   assert.equal(state.count, 2);
   assert.equal(state.content_items, 1);
   assert.equal(state.hint_items, 1);
-  assert.equal(state.tokens_used, Math.ceil(`- [memory 90%] ${first}`.length / 4));
+  assert.equal(state.tokens_used, Math.ceil(block.length / 4));
+  assert.ok(state.tokens_used <= state.tokens_budget);
   assert.equal(state.tokens_budget, 200);
 });
 

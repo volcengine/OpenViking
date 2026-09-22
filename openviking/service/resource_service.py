@@ -206,6 +206,7 @@ class ResourceService:
         skill_processor: Optional[SkillProcessor] = None,
         watch_scheduler: Optional["WatchScheduler"] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
+        runtime_config_manager: Optional[Any] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
@@ -213,6 +214,7 @@ class ResourceService:
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
         self._resource_memory_link_service = resource_memory_link_service
+        self._runtime_config_manager = runtime_config_manager
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connector_delegate: Optional["ConnectorDelegate"] = None
 
@@ -224,6 +226,7 @@ class ResourceService:
         skill_processor: SkillProcessor,
         watch_scheduler: Optional["WatchScheduler"] = None,
         resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
+        runtime_config_manager: Optional[Any] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
@@ -232,6 +235,7 @@ class ResourceService:
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
         self._resource_memory_link_service = resource_memory_link_service
+        self._runtime_config_manager = runtime_config_manager
 
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         if not self._watch_scheduler:
@@ -313,7 +317,7 @@ class ResourceService:
         tags: Optional[List[str]],
         tag_mode: str,
     ) -> Dict[str, Any]:
-        watch_kwargs = {key: value for key, value in processor_kwargs.items() if key != "attrs"}
+        watch_kwargs = self._sanitize_watch_processor_kwargs(processor_kwargs)
         if tags is not None:
             watch_kwargs["tags"] = tags
             watch_kwargs["tag_mode"] = tag_mode
@@ -446,11 +450,12 @@ class ResourceService:
                 except Exception as e:
                     logger.warning(f"[ResourceService] Failed to cancel watch task for {to}: {e}")
 
-    def _normalize_add_resource_args(
+    async def _normalize_add_resource_args(
         self,
         args: Optional[Dict[str, Any]],
         *,
         watch_interval: float,
+        ctx: RequestContext,
         allowed_reserved_fields: Optional[set[str]] = None,
     ) -> _NormalizedAddResourceArgs:
         if args is None:
@@ -490,11 +495,20 @@ class ResourceService:
                         "args.feishu_refresh_token must be a non-empty string when "
                         "args.feishu_access_token is used with watch_interval > 0."
                     )
-                app_credentials = self._load_feishu_credentials_for_watch(app_id, app_secret)
+                if self._runtime_config_manager is None:
+                    raise RuntimeError("Runtime config manager is not initialized")
+                from openviking.config.feishu import get_effective_feishu_config
+
+                feishu_config = await get_effective_feishu_config(
+                    self._runtime_config_manager,
+                    ctx.account_id,
+                )
+                app_credentials = self._load_feishu_credentials_for_watch(app_id, app_secret, feishu_config)
                 watch_auth_state = create_feishu_auth_state(
                     token,
                     refresh_token.strip(),
                     app_credentials,
+                    persist_app_secret=app_id is not None or app_secret is not None,
                 )
             elif refresh_token is not None:
                 raise InvalidArgumentError(
@@ -522,7 +536,8 @@ class ResourceService:
         self,
         app_id: Any,
         app_secret: Any,
-    ) -> Optional[FeishuAppCredentials]:
+        config,
+    ) -> FeishuAppCredentials:
         supplied = app_id is not None or app_secret is not None
         if supplied and (
             not isinstance(app_id, str)
@@ -536,6 +551,7 @@ class ResourceService:
             )
         try:
             credentials = load_feishu_app_credentials(
+                config=config,
                 app_id=app_id.strip() if supplied else None,
                 app_secret=app_secret.strip() if supplied else None,
             )
@@ -544,7 +560,11 @@ class ResourceService:
                 "Feishu user-token watch requires FEISHU_APP_ID and "
                 "FEISHU_APP_SECRET, or feishu.app_id and feishu.app_secret in ov.conf."
             ) from exc
-        return credentials if supplied else None
+        # A user refresh token is bound to the Feishu application that issued
+        # it. Persist the effective app identity even when the caller used the
+        # account default, so a later account-config change cannot pair an old
+        # refresh token with a different app.
+        return credentials
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -730,8 +750,9 @@ class ResourceService:
             internal_kwargs: Dict[str, Any] = {"parser_backend": parser_backend}
             if "resolved_extension" in queued_args:
                 internal_kwargs["resolved_extension"] = queued_args.pop("resolved_extension")
-            normalized_args = self._normalize_add_resource_args(
+            normalized_args = await self._normalize_add_resource_args(
                 queued_args,
+                ctx=ctx,
                 watch_interval=msg.watch_interval,
             )
             internal_kwargs.update(normalized_args.processor_kwargs)
@@ -883,21 +904,24 @@ class ResourceService:
         """Restore provider-specific request inputs from task-owned auth state."""
         if not task_auth:
             return {}, None
+        creating_watch = msg.watch_interval > 0 and not msg.skip_watch_management
         if is_git_http_auth_state(task_auth):
             auth_config = git_http_auth_config_from_state(task_auth, msg.path)
-            watch_auth_state = dict(task_auth) if msg.watch_interval > 0 else None
+            watch_auth_state = dict(task_auth) if creating_watch else None
             return {"auth_config": auth_config}, watch_auth_state
         if is_feishu_auth_state(task_auth):
             token = task_auth.get("access_token")
             if not isinstance(token, str) or not token.strip():
                 raise InvalidArgumentError("Stored Feishu task credentials are invalid.")
-            if msg.watch_interval > 0:
+            if creating_watch:
                 refresh_token = task_auth.get("refresh_token")
                 if not isinstance(refresh_token, str) or not refresh_token.strip():
                     raise InvalidArgumentError(
                         "Stored Feishu watch credentials are missing a refresh token."
                     )
                 watch_auth_state = dict(task_auth)
+                watch_auth_state.pop("domain", None)
+                watch_auth_state.pop("request_timeout", None)
             else:
                 watch_auth_state = None
             auth_kwargs = (
@@ -1026,9 +1050,22 @@ class ResourceService:
                         "access_token": token.strip(),
                     }
                 )
+                task_auth.pop("domain", None)
+                task_auth.pop("request_timeout", None)
+            if self._runtime_config_manager is None:
+                raise RuntimeError("Runtime config manager is not initialized")
+            from openviking.config.feishu import get_effective_feishu_config
+
+            feishu_config = await get_effective_feishu_config(
+                self._runtime_config_manager,
+                ctx.account_id,
+            )
+            feishu_kwargs = dict(processor_kwargs)
+            feishu_kwargs["feishu_config"] = feishu_config
             preflight = await FeishuAccessor().preflight_source(
                 path,
                 feishu_access_token=token.strip() if isinstance(token, str) else None,
+                feishu_config=feishu_config,
                 **({"feishu_recursive": True} if recursive else {}),
             )
             source_name = source_name or preflight.source_name
@@ -1042,13 +1079,13 @@ class ResourceService:
                 mode is ParseMode.DEFAULT
                 and self._resource_processor.should_use_understanding_directly(
                     path,
-                    **processor_kwargs,
+                    **feishu_kwargs,
                 )
             )
             if direct_understanding:
                 understanding_response_id = await self._resource_processor.submit_understanding(
                     path,
-                    **processor_kwargs,
+                    **feishu_kwargs,
                 )
                 if watch_auth_state is None:
                     task_auth = {}
@@ -1664,8 +1701,9 @@ class ResourceService:
         allowed_reserved_fields = ConnectorDelegate.supported_args(path, add_type).intersection(
             _ADD_RESOURCE_ARGS_RESERVED_FIELDS
         )
-        normalized_args = self._normalize_add_resource_args(
+        normalized_args = await self._normalize_add_resource_args(
             args,
+            ctx=ctx,
             watch_interval=watch_interval,
             allowed_reserved_fields=allowed_reserved_fields,
         )

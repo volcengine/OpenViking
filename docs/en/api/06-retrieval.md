@@ -786,7 +786,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 **Processing Pipeline**:
 1. Traverse file system starting from specified URI
 2. Perform regex matching on each file content
-3. Collect matching lines and position information
+3. Collect matching lines, position information, and optional surrounding context
 4. Return matching results list
 
 **Code Entry Points**:
@@ -808,6 +808,8 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 | tags | string[] | No | Unset | Search only files matching every supplied `k=v` retrieval tag |
 | include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
+| before_context | int | No | 0 | Number of context lines returned before each match; supported by the HTTP API and CLI |
+| after_context | int | No | 0 | Number of context lines returned after each match; supported by the HTTP API and CLI |
 
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 
@@ -829,6 +831,8 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
         "uri": "viking://resources",
         "pattern": "authentication",
         "case_insensitive": true,
+        "before_context": 1,
+        "after_context": 1,
         "tags": ["team=search", "env=prod"]
     }'
 ```
@@ -890,6 +894,9 @@ openviking grep "authentication" --uri viking://resources --ignore-case
 # Specify depth limit
 openviking grep "TODO" --uri viking://resources --level-limit 3
 
+# Return two context lines before and after each match
+openviking grep "authentication" --uri viking://resources -b 2 -a 2
+
 # Search only files carrying every tag
 openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
 
@@ -910,6 +917,12 @@ For HTTP `POST /api/v1/search/grep`, set `include_tags: true` to include tags wi
                 "uri": "viking://resources/docs/auth.md",
                 "line": 15,
                 "content": "User authentication is handled by...",
+                "before_context": [
+                    {"line": 14, "content": "## Authentication"}
+                ],
+                "after_context": [
+                    {"line": 16, "content": "Configure an API key before sending requests."}
+                ],
                 "tags": ["team=search", "env=prod"]
             }
         ],

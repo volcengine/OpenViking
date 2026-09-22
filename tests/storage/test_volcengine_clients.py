@@ -1119,3 +1119,34 @@ def test_http_adapter_strict_count_propagates_http_failure(monkeypatch):
 
     with pytest.raises(requests.HTTPError, match="503 unavailable"):
         adapter.strict_count()
+
+
+def test_http_collection_update_index_preserves_explicit_empty_scalar_index(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status_code = 200
+        text = '{"data": {}}'
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        return _Response()
+
+    monkeypatch.setattr(
+        "openviking.storage.vectordb.collection.http_collection.requests.post",
+        _fake_post,
+    )
+
+    from openviking.storage.vectordb.collection.http_collection import HttpCollection
+
+    collection = HttpCollection(
+        ip="127.0.0.1",
+        port=1933,
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+
+    collection.update_index("default", [])
+
+    assert captured["url"].endswith("UpdateVikingdbIndex")
+    assert captured["json"]["ScalarIndex"] == "[]"

@@ -60,11 +60,10 @@ OpenViking 的配置分为两个层级：
 | 范围 | 配置 | 生命周期 | 生效说明 |
 | --- | --- | --- | --- |
 | Cluster | `agent_evolution` | 动态配置 | ROOT 可通过 Admin API 修改，作为集群默认值使用。 |
-| Account | `vlm`、`memory`、`feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；这些配置段声明了 Cluster fallback。目前只有 Agent Evolution 已通过运行时管理器接入业务读取。 |
+| Account | `feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。Agent Evolution 整段回落到 Cluster 配置。Account 未设置 Feishu 时也整段使用 Cluster 配置；一旦设置，则仅 `domain` 来自 Cluster，省略的 Account 字段使用 Feishu 默认值。两者都已通过运行时管理器接入业务读取。 |
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；没有 Cluster fallback。 |
-| Account | `embedding`、`vectordb` | 仅创建时配置 | 创建 Account 时可以设置，后续不能通过配置 PATCH 修改；显式设置时必须成对配置。 |
 
-Cluster 的 `embedding`、Cluster 的 `vlm`、`query_planner`、Cluster 的 `memory`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `vlm`、`memory`、`feishu`、`embedding` 和 `vectordb` 当前可以完成校验和持久化，但业务消费方尚未全部接入；配置成功保存不代表所有组件都已经切换。
+Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `vlm`、`memory`、`embedding` 和 `vectordb` 不在当前 Account 配置 API 范围内，包含这些字段的请求会被拒绝。
 
 修改运行时配置使用以下接口：
 
@@ -913,7 +912,8 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 
 ### rerank
 
-用于搜索结果精排的 Rerank 模型。支持 VikingDB (火山引擎)、Cohere 和 OpenAI 兼容接口。
+用于搜索结果精排的 Rerank 模型。支持 VikingDB（火山引擎）、Cohere、OpenAI
+兼容接口、LiteLLM 和 Jev。
 
 **火山引擎 (VikingDB):**
 
@@ -945,19 +945,65 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 }
 ```
 
+**Jev (TypeSafe System One) 提供方:**
+
+```json
+{
+  "rerank": {
+    "provider": "jev",
+    "api_key": "your-typesafe-api-key",
+    "model": "jev-latest",
+    "timeout": 120,
+    "log_payloads": false,
+    "threshold": 0.1
+  }
+}
+```
+
+通过 Vercel AI Gateway 使用 Jev 时，把 `api_base` 指向 Vercel 的
+[TypeSafe 兼容端点](https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe)，
+`model` 使用 Vercel 模型 ID。请求和响应格式与 TypeSafe 直连完全相同，适配器
+不做任何区分：
+
+```json
+{
+  "rerank": {
+    "provider": "jev",
+    "api_key": "your-vercel-ai-gateway-api-key",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "model": "typesafe-ai/jev",
+    "threshold": 0.1
+  }
+}
+```
+
+走 Vercel 时注意：
+
+- `api_key` 用 `vercel ai-gateway api-keys create` 生成的长期 AI Gateway API
+  key，不要用 `vercel env pull` 拉取的 OIDC token，后者 12 小时过期。
+- Vercel 团队须先在 AI Gateway 页面绑定信用卡，否则请求返回 403
+  `customer_verification_required`。
+- `api_base` 必须带 `/typesafe` 后缀；`https://ai-gateway.vercel.sh/v1` 是
+  Vercel 自有的 evaluate 协议，适配器不支持。
+
+Jev 适配器将 query 和候选文档作为结构化 System One `state`，并为每个候选
+提出一个独立的 Noul 相关性问题。每个问题返回的 yes 概率就是该文档的 rerank
+分数。所有问题在一次请求中并行计算，各文档分数互不竞争，也不要求总和为 1。
+
 **参数**
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `provider` | str | `"vikingdb"`、`"cohere"` 或 `"openai"`。省略时基于字段自动识别。 |
+| `provider` | str | `"vikingdb"`、`"cohere"`、`"openai"`、`"litellm"` 或 `"jev"`。省略时基于字段自动识别。 |
 | `ak` | str | VikingDB Access Key（仅 `vikingdb` 提供方使用） |
 | `sk` | str | VikingDB Secret Key（仅 `vikingdb` 提供方使用） |
 | `model_name` | str | 模型名称（仅 `vikingdb` 提供方使用，默认：`doubao-seed-rerank`） |
-| `api_key` | str | API Key（用于 `openai` 或 `cohere` 提供方） |
-| `api_base` | str | 接口地址（用于 `openai` 提供方） |
-| `model` | str | 模型名称（用于 `openai` 提供方） |
-| `timeout` | float | OpenAI 兼容 provider 的 HTTP 请求超时时间，单位为秒。对于较慢或冷启动的本地 rerank 服务可适当增大。默认：`30.0` |
+| `api_key` | str | API Key（用于 `openai`、`cohere` 或 `jev` 提供方） |
+| `api_base` | str | 接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai`，Vercel 使用 `https://ai-gateway.vercel.sh/typesafe`） |
+| `model` | str | 模型名称（用于 OpenAI 兼容、LiteLLM 或 `jev` 提供方） |
+| `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
+| `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
 | `threshold` | float | 分数阈值，范围为 `0.0` 到 `1.0`。低于此值的结果会被过滤。默认：`0.1` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
 
@@ -965,6 +1011,8 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 - `vikingdb`: 火山引擎 VikingDB Rerank API (使用 AK/SK)
 - `cohere`: Cohere Rerank API
 - `openai`: OpenAI 兼容的 Rerank 接口
+- `litellm`: LiteLLM Rerank 接口
+- `jev`: Jev (TypeSafe System One) 结构化判定接口，为每篇文档独立计算 Noul 相关性分数
 
 如果未配置 Rerank，搜索仅使用向量相似度。
 
@@ -1936,7 +1984,7 @@ Task 记录文件位于所属账号的系统目录：
     "extra_request_body": {}
   },
   "rerank": {
-    "provider": "vikingdb|cohere|openai|litellm",
+    "provider": "vikingdb|cohere|openai|litellm|jev",
     "api_key": "string",
     "model": "string",
     "api_base": "string",

@@ -42,6 +42,39 @@ logger = get_logger(__name__)
 # C = cluster config type; A = per-account config type.
 C = TypeVar("C")
 A = TypeVar("A")
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class AccountConfigView(Generic[C, A]):
+    """Resolve fields against a captured account/cluster publication pair.
+
+    Used only by synchronous selectors, never as a request context. Returned
+    models are shared, read-only configuration values.
+    """
+
+    _account: A
+    _cluster: C
+
+    @property
+    def account(self) -> A:
+        """Return the captured sparse account configuration."""
+        return self._account
+
+    @property
+    def cluster(self) -> C:
+        """Return the captured cluster configuration."""
+        return self._cluster
+
+    def get(self, field: str) -> Any:
+        fields = getattr(type(self._account), "model_fields", {})
+        if field not in fields:
+            raise AttributeError(field)
+        value = getattr(self._account, field)
+        if value is not None:
+            return value
+        target = fallback_of(fields[field])
+        return resolve_fallback(self._cluster, target) if target is not None else None
 
 REFRESH_INTERVAL_SECS = 30.0
 # Accounts unused for this long are evicted and stop being polled.
@@ -219,23 +252,34 @@ class RuntimeConfigManager(Generic[C, A]):
 
     async def get_account(self, account_id: str, field: str) -> Any:
         """Load an account on demand and return one effective config field."""
+        return await self.resolve_account(account_id, lambda view: view.get(field))
+
+    async def resolve_account(
+        self, account_id: str, resolver: Callable[[AccountConfigView[C, A]], T]
+    ) -> T:
+        """Select a domain value from one publication pair.
+
+        Selectors must be synchronous and perform no I/O or configuration
+        mutations. Loading and cancellation have the same contract as get_account.
+        """
         return await self._dispatcher.run(
-            lambda: run_to_completion(lambda: self._get_account(account_id, field))
+            lambda: run_to_completion(lambda: self._resolve_account(account_id, resolver))
         )
 
-    async def _get_account(self, account_id: str, field: str) -> Any:
+    async def _resolve_account(
+        self, account_id: str, resolver: Callable[[AccountConfigView[C, A]], T]
+    ) -> T:
         await self._ensure_loaded(account_id)
-        entry = self._accounts[account_id]
-        model_fields = getattr(type(entry.config), "model_fields", {})
-        if field not in model_fields:
-            raise AttributeError(field)
-        value = getattr(entry.config, field)
-        if value is not None:
-            return value
-        target = fallback_of(model_fields[field])
-        if target is None:
-            return None
-        return resolve_fallback(self._get_config(), target)
+        # No await between capturing the publications and running the selector.
+        view = AccountConfigView(self._accounts[account_id].config, self._get_config())
+        result = resolver(view)
+        import inspect
+
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()
+            raise TypeError("account configuration resolver must be synchronous")
+        return result
 
     async def get_settings(self, scope: ConfigScope) -> dict:
         """Read explicit overrides, never the merged configuration."""
