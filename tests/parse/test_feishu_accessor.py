@@ -1183,7 +1183,7 @@ def test_access_mindnote_preserves_user_token_for_media(monkeypatch):
     )
     accessor = FeishuAccessor()
     accessor._config = SimpleNamespace(download_images=True)
-    accessor._user_token_client = SimpleNamespace(request=request)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request))
 
     resource = asyncio.run(
         accessor.access(
