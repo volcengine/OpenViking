@@ -95,7 +95,7 @@ Step 5: 转换为 MatchedContext
 |--------------|--------|
 | MEMORY | `viking://~/memories` |
 | RESOURCE | `viking://resources` |
-| SKILL | `viking://~/skills` |
+| SKILL | `viking://~/skills` 与 `viking://agent/skills` |
 
 ### 递归搜索算法
 

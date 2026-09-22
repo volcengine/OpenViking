@@ -341,6 +341,7 @@ async function buildSessionProfileBlock(
       (path, init, options) => client.fetchJSON(path, init, options),
       config.profileTokenBudget,
       config.peerId,
+      config,
     );
     if (!profile?.block) return "";
     return [

@@ -29,7 +29,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
     _ABSTRACT_WORKER_COUNT,
@@ -1542,9 +1542,9 @@ class _OpsMixin:
         relative_parts = entry_parts[len(root_parts) :]
         if not is_dir and name.startswith("."):
             return False
-        if name in STORAGE_INTERNAL_ENTRY_NAMES:
+        if is_storage_internal_name(name):
             return False
-        return all(part not in STORAGE_INTERNAL_ENTRY_NAMES for part in relative_parts)
+        return not any(is_storage_internal_name(part) for part in relative_parts)
 
     async def _fill_remote_glob_entry_fields(
         self,
@@ -2566,7 +2566,7 @@ class _OpsMixin:
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
-        return [e for e in entries if e.get("name") not in STORAGE_INTERNAL_ENTRY_NAMES]
+        return [e for e in entries if not is_storage_internal_name(str(e.get("name", "")))]
 
     async def _ls_entries(
         self,

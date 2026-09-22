@@ -95,7 +95,7 @@ Step 5: Convert to MatchedContext
 |--------------|------------------|
 | MEMORY | `viking://~/memories` |
 | RESOURCE | `viking://resources` |
-| SKILL | `viking://~/skills` |
+| SKILL | `viking://~/skills` and `viking://agent/skills` |
 
 ### Recursive Search Algorithm
 

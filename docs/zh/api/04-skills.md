@@ -174,6 +174,8 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
 - `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_skill` - Python SDK 入口
 - `openviking_cli/client/http.py` - 兼容导入入口，转发到 Python SDK
 - `openviking/server/routers/resources.py:add_skill` - HTTP 路由
+- `openviking/server/mcp_endpoint.py:add_skill` - MCP 工具
+- `openviking/server/skill_ingest.py:install_skills` - HTTP 路由、MCP 工具与 skill 签名上传共用的安装实现
 - `openviking/service/resource_service.py:ResourceService.add_skill` - 核心服务实现
 - `openviking/server/routers/skills.py` - 列表、检索、读取、校验、更新和删除
 - `crates/ov_cli/src/commands/skills.rs` - CLI Skill 命令处理
@@ -207,6 +209,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
     4. 先调用 `POST /api/v1/resources/temp_upload` 上传本地 `SKILL.md` 或目录 ZIP，再调用 `POST /api/v1/skills` 并传入 `temp_file_id`
   - `temp_upload` 默认使用本地临时存储；只有在明确需要分布式共享临时上传时，才传 `upload_mode=shared`。Python HTTP client 可以在 `ovcli.conf` 中设置 `upload.mode = "shared"`；Rust `ov` CLI 则使用 `OPENVIKING_UPLOAD_MODE=shared`。
   - `POST /api/v1/skills` 不接受在 `data` 中直接传宿主机本地路径。
+  - MCP 客户端使用 `add_skill` 工具：`data` 传 SKILL.md 文本，`path` 传 Git URL 或本地路径。传本地路径时工具返回一次性的签名 `temp_upload` URL；客户端把 SKILL.md 或 ZIP POST 上去后，服务端按 token 绑定的 `target_uri`、`skills`、`list_only` 完成安装，上传响应里就是安装结果。
 
 - **目标规则**：
   - 新增使用 `target_uri` 指定 skills 根，不接受 `to`、`parent` 或 `root_uri` 作为 HTTP 请求字段。CLI 的 `-p/--parent-auto-create` 映射到 `target_uri`。
@@ -605,7 +608,7 @@ HTTP 对应查询为 `GET /api/v1/skills/search-web?include_content=true&include
 
 清单包含 `SKILL.md`、摘要和辅助文件/目录，不包含 `.source.json`。完整性 API 上限为 **512 个条目（包含目录）、单文件 16 MiB、总文件字节数 64 MiB**，读取并发为 8；超限返回 `RESOURCE_EXHAUSTED`。正文、清单和 revision 在同一次树锁保护的读取中取得，但后续下载仍可能遇到更新，消费方应校验文件哈希并复查 revision。
 
-检索与 `get_skill` 只返回内容和清单，不会执行脚本或把文件安装到 Agent 沙箱。Harness 可按需远程读文本，在工具需要本地路径时下载资源。VikingBot 的完整流程见 [Skills](../../../bot/docs/zh/concepts/06-skills.md)。
+检索与 `get_skill` 只返回内容和清单，不会执行脚本或把文件安装到 Agent 沙箱。Harness 可按需远程读文本，在工具需要本地路径时下载资源。VikingBot 的完整流程见 [Skills](../../../bot/docs/zh/concepts/06-skills.md)。MCP 客户端通过 `find` 工具传 `context_type="skill"` 得到同样的包级行为，见 [MCP 集成](../guides/06-mcp-integration.md)。
 
 ### 搜索技能
 
@@ -622,7 +625,7 @@ HTTP 对应查询为 `GET /api/v1/skills/search-web?include_content=true&include
 
 包内命中按完整 Skill 根 URI 合并，使用最高最终得分排序，再截取 `limit` 个 Skill。不同空间的同名 Skill 分别保留。`total` 是本次返回数组长度，不是所有匹配项的总数。
 
-每个 Skill 返回包内最终得分最高的一条命中。`uri`、`level`、`score`、`abstract` 直接使用该命中的原有字段，不增加额外返回字段。按 Skill 合并和补页仅用于专用 `skills/find`；通用 `find/search` 保持按命中内容返回。
+每个 Skill 返回包内最终得分最高的一条命中。`uri`、`level`、`score`、`abstract` 直接使用该命中的原有字段，不增加额外返回字段。按 Skill 合并和补页用于专用 `skills/find`，以及只传 `context_type="skill"` 的 MCP `find` 工具；REST `find` / `search` 仍按命中内容返回。MCP `search` 同样按命中内容检索，只在渲染答案时把同一个包合成一条。
 
 | 返回字段 | 含义 |
 | --- | --- |
@@ -632,11 +635,11 @@ HTTP 对应查询为 `GET /api/v1/skills/search-web?include_content=true&include
 | `name` / `description` / `tags` / `allowed_tools` | 专用 `skills/find` 从 Skill 主目录单独读取的元数据 |
 | `root_uri` / `skill_md_uri` | 专用 `skills/find` 返回的 Skill 根目录和主 `SKILL.md` 地址 |
 
-专用 `skills/find` 的 `uri` 从原先的包根地址调整为实际命中地址，列表和按名称读取接口保持原样。`level=[2]` 只让文件参与匹配，返回的 `level` 为 `2`、`uri` 指向包内得分最高的文件。
+专用 `skills/find` 的 `uri` 从原先的包根地址调整为实际命中地址；MCP `find` 工具的行为不同，它把每条 Skill 命中改写成 `<包根>/SKILL.md`。列表和按名称读取接口保持原样。`level=[2]` 只让文件参与匹配，返回的 `level` 为 `2`、`uri` 指向包内得分最高的文件。
 
-通用检索中 `read_content=true` 继续读取实际返回的 `uri`。专用 `skills/find` 不支持该参数。
+通用检索中 `read_content=true` 继续读取实际返回的 `uri`——对只传 `context_type="skill"` 的 MCP `find` 来说，这个 URI 是包的 `SKILL.md`，不是实际命中的文件。专用 `skills/find` 不支持该参数。
 
-上表的 URI 规则适用于语义检索。通用 `find` 仅按 `filter` 筛选时，仍保留索引记录的 URI、返回 `score=0`，不为 L0、L1 补摘要文件后缀。
+上表的 URI 规则适用于语义检索。通用 `find` 仅按 `filter` 筛选时，仍保留索引记录的 URI、返回 `score=0`，不为 L0、L1 补摘要文件后缀；MCP `find` 遇到这种调用也留在通用路径上，因为包级检索必须带检索文本，但仍会把每条 skill 命中改写成它的 `SKILL.md`。
 
 搜索范围、层级和权限限制先作用于包内命中，再合并 Skill；根目录也必须可访问。
 

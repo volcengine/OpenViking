@@ -59,6 +59,7 @@ const CLIENTS = {
     extras: () => [
       join(homedir(), ".cursor", "rules", "openviking-memory.mdc"),
       join(homedir(), ".cursor", "skills", "openviking-memory", "SKILL.md"),
+      join(homedir(), ".cursor", "skills", "openviking-skills", "SKILL.md"),
     ],
     timeoutBudgets: { beforeSubmitPrompt: "recallTimeoutMs", stop: "captureTimeoutMs" },
   },

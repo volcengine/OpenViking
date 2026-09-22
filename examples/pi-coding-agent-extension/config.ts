@@ -32,6 +32,8 @@ export interface OVConfig {
   scoreThreshold: number;
   minQueryLength: number;
   profileTokenBudget: number;
+  skillCatalog: boolean;
+  skillCatalogTokenBudget: number;
   resumeContextBudget: number;
   commitTokenThreshold: number;
   commitKeepRecentCount: number;

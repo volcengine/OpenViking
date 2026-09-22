@@ -113,6 +113,8 @@ Example configuration:
       "commitTokenThreshold": 20000,
       "commitKeepRecentCount": 10,
       "profileTokenBudget": 10000,
+      "skillCatalog": true,
+      "skillCatalogTokenBudget": 1200,
       "resumeContextBudget": 32000
     }
   }
@@ -124,6 +126,8 @@ Keys in `plugin` apply to every harness; keys in `plugin.opencode` apply to this
 `recallLimit` is a legacy quota-scaling input, not a final result cap.
 Explicit values from 1 through 5 produce an effective total quota of 6 because
 each coding category keeps one retrieval slot.
+
+The first message of each session carries a hidden `<openviking-context source="session-start">` block with your `profile.md`, the `preferences/` and `entities/` memory indexes, and an `<available-skills>` catalog: your own skills first, then the account-shared ones under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours. `profileTokenBudget` covers the profile and memory indexes; the catalog has its own budget, `skillCatalogTokenBudget` (default `1200`, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`). When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. `skillCatalog: false` (`OPENVIKING_SKILL_CATALOG=0`) or a budget of `0` turns the catalog off; with no skills, or on a server without `GET /api/v1/skills`, it is left out.
 
 It is recommended to provide the API key through an environment variable instead of writing it into the configuration file:
 
@@ -161,9 +165,8 @@ In a new OpenCode session, ask the agent to browse OpenViking memory or search f
 
 - `openviking_search`, `openviking_find`
 - `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
-- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`
+- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
-- `openviking_list_watches`, `openviking_cancel_watch`
 
 If anything looks wrong, check the runtime files:
 
@@ -193,6 +196,7 @@ The plugin registers OpenViking's stdio MCP proxy through OpenCode config. The s
 - `openviking_write`: create, overwrite, or append to a `viking://` file.
 - `openviking_edit`: exact string replacement in a `viking://` file.
 - `openviking_add_resource`: add a URL, local file, sitemap, or feed.
+- `openviking_add_skill`: create or replace a skill from its full `SKILL.md` text (`data`), or install one from a Git URL or a local `SKILL.md`, skill directory, or `.zip` (`path`); `target_uri="viking://agent/skills"` shares it with the account.
 - `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
 - `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
 - `openviking_health`: check OpenViking server health.
@@ -204,6 +208,7 @@ Usage guidance:
 - Use `openviking_glob` to enumerate files.
 - Use `openviking_read` to read content.
 - Use `openviking_list` to explore directory structure.
+- Before following a skill from `<available-skills>`, read its `SKILL.md` with `openviking_read`; create, install, or share a skill with `openviking_add_skill`.
 - Before deleting anything, obtain explicit user confirmation first; then call `openviking_forget`.
 - If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to the MCP tools.
 - A `bash` command that contains a `viking://` URI still runs; the plugin appends a notice pointing to the MCP tools to its output, which the agent can ignore when the URI is intentional.

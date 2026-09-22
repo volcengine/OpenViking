@@ -31,6 +31,7 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "servers/mcp-proxy.mjs",
     "hosts/cursor/rules/openviking-memory.mdc",
     "hosts/cursor/skills/openviking-memory/SKILL.md",
+    "hosts/cursor/skills/openviking-skills/SKILL.md",
   ]) {
     assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
   }

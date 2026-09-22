@@ -151,6 +151,21 @@ export const KNOBS = [
   { name: "resumeArchiveMaxChars", type: "int", default: 6000, min: 1000, max: 200000, env: "OPENVIKING_RESUME_ARCHIVE_MAX_CHARS", capability: "session" },
   { name: "skillExperience", type: "bool", default: false, env: "OPENVIKING_SKILL_EXPERIENCE", capability: "session" },
   { name: "skillExperienceLimit", type: "int", default: 3, min: 1, max: 50, env: "OPENVIKING_SKILL_EXPERIENCE_LIMIT", capability: "session" },
+  { name: "skillCatalog", type: "bool", default: true, env: "OPENVIKING_SKILL_CATALOG", capability: "session" },
+  { name: "skillCatalogTokenBudget", type: "int", default: 1200, min: 0, max: 20000, env: "OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET", capability: "session" },
+  // Claude Code saves hook context over 10,000 chars to a file and shows the
+  // model a 2 KB preview; Codex spills past ~10,000 bytes; ZCode drops stdout
+  // over 32 KB. 0 means no cap.
+  {
+    name: "sessionStartMaxBytes",
+    type: "int",
+    default: 0,
+    harness: { claude_code: 9500, codex: 9500, zcode: 20000 },
+    min: 0,
+    max: 1000000,
+    env: "OPENVIKING_SESSION_START_MAX_BYTES",
+    capability: "session",
+  },
   { name: "skipSubagentSessions", type: "bool", default: false, env: "OPENVIKING_SKIP_SUBAGENT_SESSIONS", capability: "session" },
   { name: "repoContext", type: "bool", default: true, capability: "session" },
   { name: "repoContextCacheTtlMs", type: "int", default: 60000, min: 1000, max: 3600000, capability: "session" },

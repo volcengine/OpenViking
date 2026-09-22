@@ -1,6 +1,6 @@
 # Codex 记忆插件
 
-本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在会话开始时加载 OpenViking profile 与记忆索引，在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`read`、`remember` 等工具来主动管理记忆。
+本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在会话开始时加载 OpenViking profile、记忆索引和 skill 清单，在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`read`、`remember` 等工具来主动管理记忆。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -79,9 +79,11 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 
 ## 工作原理
 
-本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`，以及 `preferences/`、`entities/` 的 URI 和摘要索引；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`）；在线程正常退出时提交整段会话（触发 `SessionEnd`），以确保记忆抽取器能够在完整的上下文环境中运行。shell 命令执行前（`Bash` 上的 `PreToolUse`），插件会检查命令里是否带 `viking://` URI：命令照常执行，模型会收到一条提示，建议改用 OpenViking MCP 工具；如果该 URI 是有意传入的数据（例如 `ov` 命令参数），模型可以忽略这条提示。此外，在启动新会话时，插件还会清扫前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
+本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`、`preferences/` 与 `entities/` 的 URI 和摘要索引，以及列出你的 OpenViking skill 的 `<available-skills>` 清单；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`）；在线程正常退出时提交整段会话（触发 `SessionEnd`），以确保记忆抽取器能够在完整的上下文环境中运行。shell 命令执行前（`Bash` 上的 `PreToolUse`），插件会检查命令里是否带 `viking://` URI：命令照常执行，模型会收到一条提示，建议改用 OpenViking MCP 工具；如果该 URI 是有意传入的数据（例如 `ov` 命令参数），模型可以忽略这条提示。此外，在启动新会话时，插件还会清扫前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
 
 > **已知局限**：`SessionEnd` 需要 Codex 0.145 及以上版本，且只在正常退出时触发（`/quit`、`/exit`、连按两次 `Ctrl-C`、EOF、`codex exec` 运行结束）。`SIGTERM`、直接关闭终端、`kill -9` 或崩溃都不会触发；当 TUI 挂在 `codex app-server` 守护进程上时，该事件会被延后。这些会话——以及 Codex 低于 0.145 的所有会话（以及没有该事件的 TraeCode CLI 版本）——由下一次 `SessionStart` 的闲置 TTL（生存时间，默认为 30 分钟）清扫回收。
+
+`<available-skills>` 清单先列你自己的 skill，再列 `viking://agent/skills` 下共享给整个账号的 skill；共享 skill 与你自己的某个 skill 同名时不再列出。清单有独立的 token 预算，不占 profile 预算：放不下描述时只列名称，连一个名称都放不下时缩成一行总数。清单第一行提示模型：按某个 skill 操作前，先用 OpenViking `read` 工具读取它的 `SKILL.md`。插件在 `openviking-memory`、`ov-experience-memory` 之外还自带 `openviking-skills` skill，告诉模型如何查找 skill、用 MCP `add_skill` 工具新建或替换 skill、从 Git 或本地文件夹安装 skill、把 skill 共享给整个账号，以及在你要求时把本地 skill 迁移到 OpenViking。
 
 工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
 
@@ -96,8 +98,11 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 | `OPENVIKING_API_KEY` | — | API 密钥（将通过 `Authorization: Bearer` 标头发送） |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | hook、MCP 和 Codex 内部 `ov` 命令共同使用的当前 CLI 配置 |
 | `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` 下已设置的凭据环境变量优先；设为 `cli` 强制使用激活的 ovcli 配置；设为 `env` 只读环境变量，两个配置文件都不读 |
-| `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入，但不关闭逐 prompt 语义召回 |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入（包括 skill 清单），但不关闭逐 prompt 语义召回 |
 | `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | `profile.md` 及 `preferences/`、`entities/` 索引共用的 CJK-aware token 预算 |
+| `OPENVIKING_SKILL_CATALOG` | `true` | 在会话启动注入中加入 `<available-skills>` 清单；设为 `false` 则不加 |
+| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | `<available-skills>` 清单的 CJK-aware token 预算，独立于 `OPENVIKING_PROFILE_TOKEN_BUDGET`；设为 `0` 同样不加清单 |
+| `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | SessionStart 注入的总字节上限，保证低于 Codex 默认的 hook 输出上限（约 10,000 字节），模型拿到的是全文而不是截断预览；resume 时会话归档最多占一半。设为 `0` 取消上限 |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | `SessionStart` 闲置 TTL 清理阈值（毫秒） |
 | `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000`（SessionEnd）、`40000`（PreCompact） | 捕获类 hook 等待单会话状态锁的时长（毫秒） |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | 已提交会话的转录游标保留时长（毫秒），过期后删除状态文件 |

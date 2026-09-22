@@ -39,6 +39,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -1084,6 +1085,10 @@ class ContentWriteCoordinator:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
+        if any(is_storage_internal_name(part) for part in uri_parts(uri)):
+            # Ancestors must also be checked: creating parents could otherwise
+            # create hidden directories using storage metadata names.
+            raise InvalidArgumentError(f"cannot write storage internal file directly: {uri}")
         if is_watch_task_control_uri(uri):
             raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
 

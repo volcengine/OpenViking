@@ -115,6 +115,8 @@ Behavior knobs live in the `plugin` section of `~/.openviking/ovcli.conf`, besid
     "commitTokenThreshold": 20000,
     "commitKeepRecentCount": 10,
     "profileTokenBudget": 10000,
+    "skillCatalog": true,
+    "skillCatalogTokenBudget": 1200,
     "resumeContextBudget": 32000,
     "opencode": {
       "timeoutMs": 30000,
@@ -126,6 +128,8 @@ Behavior knobs live in the `plugin` section of `~/.openviking/ovcli.conf`, besid
 ```
 
 Settings resolve highest priority first: `OPENVIKING_*` environment variables, the workspace's `.openviking/config.json` and `config.local.json`, `plugin.opencode`, `plugin`, then the built-in defaults. `autoRecall: false` turns automatic recall off, and `autoCapture: false` stops the plugin sending turns back.
+
+The first message of each session carries a hidden `<openviking-context source="session-start">` block with your `profile.md`, the `preferences/` and `entities/` memory indexes, and an `<available-skills>` catalog: your own skills first, then the account-shared ones under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours. The agent reads a skill's `SKILL.md` with `openviking_read` before following it, and creates or shares skills with `openviking_add_skill`. `profileTokenBudget` covers the profile and memory indexes; the catalog has its own budget, `skillCatalogTokenBudget` (default `1200`, env `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`). When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. `skillCatalog: false` (`OPENVIKING_SKILL_CATALOG=0`) or a budget of `0` turns the catalog off; with no skills, or on a server without `GET /api/v1/skills`, it is left out.
 
 Environment variables override `ovcli.conf`:
 
@@ -140,11 +144,11 @@ API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy
 
 ## Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (15 tools). OpenCode namespaces MCP tools as `openviking_*`:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (16 tools). OpenCode namespaces MCP tools as `openviking_*`:
 
 - `openviking_find`, `openviking_search` (`openviking_search` with `mode="context"` replaces the former recall tool)
 - `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
-- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`
+- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
 Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are written to:

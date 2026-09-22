@@ -148,11 +148,31 @@ class TestReadFormalTreeSnapshot:
                     "isDir": False,
                     "uri": "viking://resources/x/.abstract.md",
                 },
-                {"rel_path": "_system", "isDir": True, "uri": "viking://resources/x/_system"},
+                {
+                    "rel_path": ".path.ovlock",
+                    "isDir": False,
+                    "uri": "viking://resources/x/.path.ovlock",
+                },
+                {
+                    "rel_path": "tasks/.exact.ovlock.t.md.0123abcd",
+                    "isDir": False,
+                    "uri": "viking://resources/x/tasks/.exact.ovlock.t.md.0123abcd",
+                },
+                # A user directory named tasks or _system is ordinary business content.
+                {
+                    "rel_path": "tasks/t.md",
+                    "isDir": False,
+                    "uri": "viking://resources/x/tasks/t.md",
+                },
+                {
+                    "rel_path": "_system/s.md",
+                    "isDir": False,
+                    "uri": "viking://resources/x/_system/s.md",
+                },
             ]
         )
         files, complete = await read_target_file_snapshot(vfs, "viking://resources/x", ctx=_Ctx())
-        assert set(files) == {"a.py"}
+        assert set(files) == {"a.py", "tasks/t.md", "_system/s.md"}
         assert complete is True
 
 

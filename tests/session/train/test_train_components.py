@@ -1121,17 +1121,6 @@ async def test_patch_merge_policy_optimizer_uses_session_skill_registry(monkeypa
         async def sanitize_skill_privacy(self, skill, ctx):
             return skill
 
-    class FakeWriter:
-        def __init__(self, viking_fs):
-            assert viking_fs is fs
-
-        async def write(self, *, uri, content, **kwargs):
-            await fs.write_file(uri, content)
-            return {}
-
-    monkeypatch.setattr(
-        "openviking.session.skill.skill_operation_updater.ContentWriteCoordinator", FakeWriter
-    )
     policy_set = ExperienceSet(
         root_uri="viking://user/u/skills",
         policies=[

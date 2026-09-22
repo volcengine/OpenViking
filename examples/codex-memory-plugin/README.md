@@ -9,7 +9,7 @@ TraeCode CLI 2.0 supports the same plugin format; use the shared installer's ded
 
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
-- **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder.
+- **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder, followed by an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
 - **`viking://` notice on `PreToolUse` (`Bash`)**: a shell command that carries a `viking://` URI still runs, and the model is told that the URI is an OpenViking virtual path and which MCP tool reads it.
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit while keeping a recent live tail.
@@ -17,7 +17,7 @@ This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-me
 - **Commit on `SessionEnd`** (Codex ≥ 0.145): when a thread shuts down gracefully, catch up any turns `Stop` never sent and commit the OV session, so the extractor runs on the whole conversation the moment you leave.
 - **Fallback sweep on `SessionStart` (source=startup|clear)**: commit state files that carry an end marker whose commit did not go through, or that have been idle past `OPENVIKING_CODEX_IDLE_TTL_MS`. `source=resume` never commits or sweeps; if the live OV session was already committed, it combines the profile block with the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
 
-It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the server's retrieval, memory, resource, watch, filesystem, and code-navigation tools.
+It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the server's retrieval, memory, resource, skill (`add_skill`), watch, filesystem, and code-navigation tools.
 
 ## Quick Start
 
@@ -159,6 +159,9 @@ export OPENVIKING_RECALL_TIMEOUT_MS=120000
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_PROFILE_TOKEN_BUDGET=10000
+export OPENVIKING_SKILL_CATALOG=1
+export OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET=1200
+export OPENVIKING_SESSION_START_MAX_BYTES=9500
 export OPENVIKING_DEBUG=1
 ```
 
@@ -251,8 +254,8 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
                     └─────────────────┬───────────────────────────────────┘
                                       │
    Codex ◄── stdio MCP proxy ──► /mcp (find, search, read,
-              (env/ovcli.conf)      remember, resources, watches,
-                                  filesystem)
+              (env/ovcli.conf)      remember, resources, add_skill,
+                                  watches, filesystem)
 ```
 
 The checked-in `.mcp.json` starts `servers/mcp-proxy.mjs` with `node`. The proxy keeps stdout protocol-clean, reads the same credential sources as the hooks, sends auth and identity headers to `/mcp`, caches the server `mcp-session-id`, and transparently reinitializes once if the server restarts.
@@ -269,7 +272,25 @@ Codex fires `SessionStart` with one of three `source` values: `startup` (fresh p
 
 `hooks.json` registers `SessionStart` with `matcher: "clear|startup|resume"` so codex's dispatcher invokes the script on all three relevant sources. `session-start-commit.mjs` gates internally so only `startup` and `clear` sweep.
 
-On all three sources, the hook uses the same shared `buildProfileBlock()` implementation as the Claude Code, OpenCode, and pi integrations. It reads the user's `profile.md` and adds URI plus abstract indexes for `preferences/` and `entities/`, with a CJK-aware token budget. The default budget is `10000`; set `OPENVIKING_PROFILE_TOKEN_BUDGET` or `plugin.codex.profileTokenBudget` to change it. Set `OPENVIKING_NO_AUTO_INJECT=1` or `plugin.codex.noAutoInject=true` to disable only this fixed profile/background injection; per-prompt semantic recall remains controlled separately by `OPENVIKING_AUTO_RECALL`.
+On all three sources, the hook uses the same shared `buildProfileBlock()` implementation as the Claude Code, OpenCode, and pi integrations. It reads the user's `profile.md` and adds URI plus abstract indexes for `preferences/` and `entities/`, with a CJK-aware token budget. The default budget is `10000`; set `OPENVIKING_PROFILE_TOKEN_BUDGET` or `plugin.codex.profileTokenBudget` to change it. Set `OPENVIKING_NO_AUTO_INJECT=1` or `plugin.codex.noAutoInject=true` to disable only this fixed profile/background injection, skill catalog included; per-prompt semantic recall remains controlled separately by `OPENVIKING_AUTO_RECALL`.
+
+The same builder appends an `<available-skills>` block after `<user-profile>` and `<available-memories>`, inside the same `<openviking-context source="session-start">` envelope. One `GET /api/v1/skills?node_limit=200` call returns your own skills and the ones shared with the account under `viking://agent/skills`. Your own skills are listed first, and a shared skill with the same name as one of yours is left out. Each description is cut to about 40 tokens (CJK-aware), and envelope tags inside a description are escaped.
+
+```text
+<openviking-context source="session-start">
+<user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
+<available-memories>...</available-memories>
+<available-skills>
+  OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.
+  viking://user/default/skills/
+    - pr-review — Review a pull request against the team checklist.
+  viking://agent/skills/
+    - deploy-runbook — Shared deployment runbook for the payments service.
+</available-skills>
+</openviking-context>
+```
+
+The catalog has its own budget, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` or `plugin.codex.skillCatalogTokenBudget` (default `1200`, range `0`–`20000`), and never draws on the profile budget. Every entry keeps its description when that fits; otherwise the catalog lists names only, ending with `... +N more, search OpenViking skills to find the rest` if even the names do not all fit; when not even one name fits, the block shrinks to the single line `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`. Set `OPENVIKING_SKILL_CATALOG=0`, `plugin.codex.skillCatalog=false`, or the budget to `0` to leave the catalog out. With no skills, or against a server without `GET /api/v1/skills`, the block is omitted. The bundled `$openviking-skills` skill tells the model how to find a skill, create or replace one with MCP `add_skill`, install one from Git or a local folder, share one to `viking://agent/skills`, and run a one-time migration of local skills that the user asks for and approves skill by skill.
 
 On `startup` or `clear`, the script walks every state file except the new session_id and, for each one that still holds a live `ovSessionId` or carries an end marker:
 
@@ -346,6 +367,8 @@ is converted to per-category coding quotas, not a final result cap. Values
 from 1 through 5 therefore produce an effective total quota of 6, one retrieval
 slot for each coding domain. Eligible cache misses still use local `codex exec`
 compression on top of whichever path answered.
+
+The `mode="context"` request covers skills as well as memories, from both your own `skills/` and the account-shared `viking://agent/skills`, so a skill that fits the prompt can show up in the digest with its `viking://` URI.
 
 Client-side knobs can also live in `~/.openviking/ovcli.conf` under
 `plugin` (shared) or `plugin.codex` (this harness only), or in the workspace
@@ -461,6 +484,7 @@ codex-memory-plugin/
 │                                  ${PLUGIN_ROOT} token; no rendering needed on modern Codex)
 ├── skills/
 │   ├── openviking-memory/       # How to use the memory tools
+│   ├── openviking-skills/       # Find, use, create (add_skill), share, and migrate OpenViking skills
 │   ├── ov-experience-memory/
 │   └── ov-memory-doctor/        # Install / config / connection / local-server troubleshooting
 ├── scripts/

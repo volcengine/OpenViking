@@ -275,7 +275,7 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
 
 export async function buildAgentProfile(fetchJSON, cfg, cwd) {
   const peer = resolveEffectivePeerId({ cfg, cwd });
-  const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId);
+  const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId, cfg);
   return profile?.block || null;
 }
 

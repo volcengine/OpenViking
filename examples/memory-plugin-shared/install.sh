@@ -2036,7 +2036,7 @@ uninstall_agent_integrations() {
   if contains_harness cursor; then
     agent_remove_json_configs "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)"
     rm -f "$HOME/.cursor/rules/openviking-memory.mdc"
-    rm -rf "$HOME/.cursor/skills/openviking-memory"
+    rm -rf "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills"
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
@@ -2142,18 +2142,20 @@ trae_mcp_path() { # trae_mcp_path <client-id>
 
 install_cursor() {
   heading "$(t '4. Cursor integration' '4. Cursor 集成')"
-  local root hooks_path mcp_path skill_tmp legacy_plugins
+  local root hooks_path mcp_path skill skill_tmp legacy_plugins
   root="$(assemble_agent_integration cursor cursor)" || return 1
   hooks_path="$HOME/.cursor/hooks.json"
   mcp_path="$(cursor_mcp_path)"
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
   mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
   cp "$root/hosts/cursor/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
-  skill_tmp="$HOME/.cursor/skills/openviking-memory.tmp"
-  rm -rf "$skill_tmp"
-  cp -R "$root/hosts/cursor/skills/openviking-memory" "$skill_tmp"
-  rm -rf "$HOME/.cursor/skills/openviking-memory"
-  mv "$skill_tmp" "$HOME/.cursor/skills/openviking-memory"
+  for skill in openviking-memory openviking-skills; do
+    skill_tmp="$HOME/.cursor/skills/$skill.tmp"
+    rm -rf "$skill_tmp"
+    cp -R "$root/hosts/cursor/skills/$skill" "$skill_tmp"
+    rm -rf "$HOME/.cursor/skills/$skill"
+    mv "$skill_tmp" "$HOME/.cursor/skills/$skill"
+  done
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
   info "$(t 'Cursor Rule and Skill installed under ~/.cursor.' 'Cursor Rule 与 Skill 已安装到 ~/.cursor。')"
@@ -2409,7 +2411,8 @@ EOF
       && [ -f "$OV_HOME/agent-integrations/cursor/plugin.json" ] \
       && [ -f "$OV_HOME/agent-integrations/cursor/integration.json" ] \
       && [ -f "$HOME/.cursor/rules/openviking-memory.mdc" ] \
-      && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ]; then
+      && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ] \
+      && [ -f "$HOME/.cursor/skills/openviking-skills/SKILL.md" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/hook.mjs" \
         || { ok=0; agent_fatal=1; }
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/uri-guard.mjs" \

@@ -142,6 +142,54 @@ async def test_content_write_rejects_watch_task_control_files(user_ctx, uri):
 @pytest.mark.parametrize(
     "uri",
     [
+        "viking://resources/project/.path.ovlock",
+        "viking://resources/project/.exact.ovlock.",
+        "viking://resources/project/.exact.ovlock.probe.md",
+        "viking://resources/project/.exact.ovlock.notes.md.0123abcd",
+        "viking://resources/project/.redirect.json",
+        "viking://resources/project/.sync_log.json",
+    ],
+)
+@pytest.mark.parametrize("suffix", ["", "/child.md", "/nested/child.md"])
+@pytest.mark.parametrize("mode", ["create", "replace", "append"])
+async def test_content_write_rejects_storage_internal_files(user_ctx, uri, suffix, mode):
+    coordinator = ContentWriteCoordinator(_NoWriteVikingFS())
+
+    with pytest.raises(InvalidArgumentError, match="storage internal file"):
+        await coordinator.write(uri=uri + suffix, content="x", mode=mode, ctx=user_ctx)
+
+
+async def test_batch_write_rejects_storage_internal_parent_before_writing(user_ctx):
+    from unittest.mock import AsyncMock
+
+    coordinator = ContentWriteCoordinator(_NoWriteVikingFS())
+    coordinator._validate_batch_root = AsyncMock()
+    with pytest.raises(InvalidArgumentError, match="storage internal file"):
+        await coordinator.batch_write(
+            root_uri="viking://resources/project",
+            operations=[
+                {
+                    "uri": "viking://resources/project/.exact.ovlock.probe.md/child.md",
+                    "content": "x",
+                    "mode": "create",
+                }
+            ],
+            ctx=user_ctx,
+        )
+
+
+@pytest.mark.parametrize("name", ["tasks", "_system", ".exact.ovlock", "x.exact.ovlock.foo"])
+def test_storage_name_policy_allows_user_directories(name):
+    from openviking.service.fs_service import FSService
+
+    uri = f"viking://resources/project/{name}/notes.md"
+    FSService._reject_storage_internal_target(uri)
+    ContentWriteCoordinator(_NoWriteVikingFS())._ensure_content_write_policy(uri)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
         "viking://resources//.watch_tasks.json",
         "viking://resources//.watch_tasks.json.bak",
         "viking://resources///.watch_tasks.json.tmp/",

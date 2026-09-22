@@ -484,3 +484,415 @@ def test_save_config_preserves_profiles_and_scope_when_target_is_invalid(externa
         assert (target / "config.yaml").read_text() == invalid
     finally:
         reset_hermes_home_override(token)
+
+
+def _live_provider(external_provider, monkeypatch, name="live-commit"):
+    from unittest.mock import Mock
+
+    home, provider, module, _ = external_provider(name)
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    provider._hermes_home = str(home)
+    provider._session_id = "live-sid"
+    provider._client = Mock()
+    provider._client.get.return_value = {"pending_tokens": 20000}
+    provider._ensure_client = lambda: True
+    provider._new_client = lambda: provider._client
+    provider._acquire_run_lock()
+    return home, provider, module
+
+
+def _finish_turn(provider, user="one", sid="live-sid"):
+    provider.sync_turn(user, "reply", session_id=sid)
+    assert provider._drain_writers(sid, timeout=5)
+    assert provider._drain_finalizers(timeout=5)
+
+
+def test_live_session_commits_at_token_threshold_and_rearms(external_provider, monkeypatch):
+    """Small turns do not trigger a commit; crossing the token limit does, repeatedly."""
+    home, provider, _ = _live_provider(external_provider, monkeypatch)
+    client = provider._client
+    client.get.return_value = {"pending_tokens": 19999}
+    for _ in range(7):
+        _finish_turn(provider)
+    assert not [c for c in client.post.call_args_list if c.args[0].endswith("/commit")]
+    marker = provider._state_path("pending", "live-sid")
+    assert marker.exists()
+    client.get.return_value = {"result": {"pending_tokens": 20000}}
+    _finish_turn(provider)
+    assert provider._turn_count == 0
+    assert provider._has_committed_session("live-sid")
+    assert not marker.exists()
+    client.get.return_value = {"pending_tokens": 100}
+    _finish_turn(provider, "new turn")
+    assert not provider._has_committed_session("live-sid")
+    assert marker.exists()
+    client.get.return_value = {"pending_tokens": 25000}
+    _finish_turn(provider)
+    commits = [c for c in client.post.call_args_list if c.args[0].endswith("/commit")]
+    assert len(commits) == 2
+    assert commits[0].args == ("/api/v1/sessions/live-sid/commit", {"keep_recent_count": 0})
+    provider.on_session_end([])
+    assert len([c for c in client.post.call_args_list if c.args[0].endswith("/commit")]) == 2
+
+
+def test_live_commit_waits_for_registered_writer_before_committing(external_provider, monkeypatch):
+    """A live threshold commit must not cross an upload that is still running."""
+    _, provider, _ = _live_provider(external_provider, monkeypatch)
+    upload_started = threading.Event()
+    release_upload = threading.Event()
+    commit_paths = []
+
+    def post(path, payload=None, **kwargs):
+        if path.endswith("/messages/batch"):
+            upload_started.set()
+            assert release_upload.wait(timeout=5)
+        elif path.endswith("/commit"):
+            commit_paths.append(path)
+        return {}
+
+    provider._client.post.side_effect = post
+    provider.sync_turn("one", "reply", session_id="live-sid")
+    try:
+        assert upload_started.wait(timeout=5)
+        assert commit_paths == []
+    finally:
+        release_upload.set()
+    assert provider._drain_writers("live-sid", timeout=5)
+    assert provider._drain_finalizers(timeout=5)
+    assert commit_paths == ["/api/v1/sessions/live-sid/commit"]
+
+
+def test_failed_live_commit_stays_pending_and_retries_on_next_turn(external_provider, monkeypatch):
+    _, provider, _ = _live_provider(external_provider, monkeypatch)
+    commit_attempts = []
+
+    def post(path, payload=None, **kwargs):
+        if path.endswith("/commit"):
+            commit_attempts.append(path)
+            if len(commit_attempts) == 1:
+                raise RuntimeError("temporary failure")
+        return {}
+
+    provider._client.post.side_effect = post
+    _finish_turn(provider)
+    assert provider._turn_count == 1
+    assert not provider._has_committed_session("live-sid")
+    assert provider._state_path("pending", "live-sid").exists()
+    _finish_turn(provider, "two")
+    assert len(commit_attempts) == 2
+    assert provider._turn_count == 0
+    assert not provider._state_path("pending", "live-sid").exists()
+
+
+@pytest.mark.parametrize("metadata", [{}, {"pending_tokens": "invalid"}, RuntimeError("unavailable")])
+def test_live_metadata_failure_does_not_replay_uploaded_turn(external_provider, monkeypatch, metadata):
+    _, provider, _ = _live_provider(external_provider, monkeypatch)
+    if isinstance(metadata, Exception):
+        provider._client.get.side_effect = metadata
+    else:
+        provider._client.get.return_value = metadata
+    _finish_turn(provider)
+    assert provider._client.post.call_count == 1
+    assert provider._state_path("pending", "live-sid").exists()
+    provider._client.get.side_effect = None
+    provider._client.get.return_value = {"pending_tokens": 20000}
+    _finish_turn(provider)
+    assert provider._has_committed_session("live-sid")
+
+
+def test_live_failed_upload_does_not_commit_partial_turn(external_provider, monkeypatch):
+    _, provider, _ = _live_provider(external_provider, monkeypatch)
+    provider._client.post.side_effect = RuntimeError("upload unavailable")
+    _finish_turn(provider)
+    assert not provider._client.get.called
+    assert provider._state_path("pending", "live-sid").exists()
+    provider._client.post.side_effect = None
+    _finish_turn(provider)
+    assert provider._has_committed_session("live-sid")
+
+
+def test_live_config_schema_save_and_profile_overrides(external_provider, monkeypatch):
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home_a, provider, module, _ = external_provider("threshold-a")
+    home_b, _, _, _ = external_provider("threshold-b")
+    provider.save_config({"commit_token_threshold": 8000}, str(home_a))
+    provider.save_config({"commit_token_threshold": 12000}, str(home_b))
+    (home_b / ".env").write_text("OPENVIKING_COMMIT_TOKEN_THRESHOLD=4000\n")
+    monkeypatch.setenv("OPENVIKING_COMMIT_TOKEN_THRESHOLD", "99000")
+    schema = next(f for f in provider.get_config_schema() if f["key"] == "commit_token_threshold")
+    assert schema["default"] == 20000
+    assert schema["env_var"] == "OPENVIKING_COMMIT_TOKEN_THRESHOLD"
+    monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", True)
+    for home, expected in [(home_a, 8000), (home_b, 4000), (home_a, 8000)]:
+        token = set_hermes_home_override(home)
+        scope = set_secret_scope(build_profile_secret_scope(home))
+        try:
+            cfg = module._load_hermes_openviking_config()
+            assert provider._setting("commit_token_threshold", cfg) == expected
+        finally:
+            reset_secret_scope(scope)
+            reset_hermes_home_override(token)
+
+
+@pytest.mark.parametrize("value,expected", [("bad", 20000), (True, 20000), ("nan", 20000), (999, 1000), (1000001, 1000000)])
+def test_live_threshold_validation(external_provider, value, expected):
+    _, provider, _, _ = external_provider("threshold-validation")
+    assert provider._setting("commit_token_threshold", {"commit_token_threshold": value}) == expected
+
+
+def test_live_commit_uses_upload_client_after_connection_change(external_provider, monkeypatch):
+    from unittest.mock import Mock
+
+    _, provider, _ = _live_provider(external_provider, monkeypatch)
+    original = provider._client
+    replacement = Mock()
+
+    def get(*_args, **_kwargs):
+        provider._client = replacement
+        return {"pending_tokens": 20000}
+
+    original.get.side_effect = get
+    _finish_turn(provider)
+    assert original.post.call_args.args[0].endswith("/commit")
+    replacement.post.assert_not_called()
+
+
+def test_session_switch_commits_below_live_threshold(external_provider, monkeypatch):
+    _, provider, _ = _live_provider(external_provider, monkeypatch)
+    provider._client.get.return_value = {"pending_tokens": 1}
+    _finish_turn(provider)
+    provider.on_session_switch("new-sid")
+    assert provider._drain_finalizers(timeout=5)
+    assert provider._client.post.call_args.args[0] == "/api/v1/sessions/live-sid/commit"
+    assert provider._session_id == "new-sid"
+
+
+def test_live_commit_does_not_block_next_turn_or_lose_its_pending_marker(external_provider, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    _, provider, _ = _live_provider(external_provider, monkeypatch)
+    started = threading.Event()
+    release = threading.Event()
+    commits = []
+
+    def post(path, payload=None, **kwargs):
+        if path.endswith('/commit'):
+            commits.append(path)
+            started.set()
+            assert release.wait(timeout=5)
+        return {}
+
+    provider._client.post.side_effect = post
+    provider.sync_turn('first', 'reply', session_id='live-sid')
+    assert started.wait(timeout=5)
+    provider._client.get.return_value = {'pending_tokens': 100}
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            submitted = executor.submit(provider.sync_turn, 'second', 'reply', session_id='live-sid')
+            submitted.result(timeout=2)
+        finally:
+            release.set()
+    assert provider._drain_writers('live-sid', timeout=5)
+    assert provider._drain_finalizers(timeout=5)
+    assert not provider._has_committed_session('live-sid')
+    assert provider._state_path('pending', 'live-sid').exists()
+    provider.on_session_end([])
+    assert len(commits) == 2
+
+
+@pytest.fixture
+def reload_provider(external_provider, monkeypatch):
+    from unittest.mock import Mock
+
+    home, provider, module, _ = external_provider("connection-reload")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    backends = {name: Mock() for name in ("alice", "bob")}
+    for backend in backends.values():
+        backend.get.return_value = {"result": {"pending_tokens": 20}}
+        backend.post.return_value = {"result": {}}
+
+    class Client:
+        def __init__(self, endpoint, api_key="", *, account="", user="", agent=""):
+            self._conn_snapshot = (endpoint, api_key, account, user, agent)
+            self.get = backends[user].get
+            self.post = backends[user].post
+
+    monkeypatch.setattr(module, "_VikingClient", Client)
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+
+    def reload(user, endpoint="http://127.0.0.1:19531"):
+        monkeypatch.setenv("OPENVIKING_USER", user)
+        monkeypatch.setenv("OPENVIKING_ENDPOINT", endpoint)
+        monkeypatch.setenv("OPENVIKING_API_KEY", "private-test-key")
+        if not provider._env_refresh_enabled:
+            provider.initialize("same-sid", hermes_home=str(home))
+        else:
+            assert provider._ensure_client() is not None
+
+    reload("alice")
+    return home, provider, module, backends, reload
+
+
+def test_upload_client_keeps_published_defaults_until_reload(external_provider, monkeypatch):
+    _, provider, module, _ = external_provider("published-defaults")
+    monkeypatch.setenv("OPENVIKING_USER", "alice")
+    provider._endpoint = "http://127.0.0.1:19531"
+    provider._client = module._VikingClient(provider._endpoint)
+    provider._conn_snapshot = provider._settings_tuple()
+    # /reload can update the environment before the provider sees the change.
+    monkeypatch.setenv("OPENVIKING_USER", "bob")
+    upload_client = provider._new_client()
+    assert upload_client._headers()["X-OpenViking-User"] == "alice"
+
+
+@pytest.mark.parametrize("bob_tokens", [20, 20000])
+@pytest.mark.parametrize("endpoint", ["http://127.0.0.1:19531", "http://127.0.0.1:19532"])
+def test_reload_keeps_new_connection_pending_after_old_commit(reload_provider, monkeypatch, bob_tokens, endpoint):
+    """A's finalizer must neither clear B's work nor suppress B's finalizer."""
+    _, provider, _, backends, reload = reload_provider
+    sid = "same-sid"
+    alice_get = threading.Event()
+    bob_get = threading.Event()
+    release_alice = threading.Event()
+    release_bob = threading.Event()
+    alice_claimed = threading.Event()
+    claim = provider._claim_deferred_sid
+
+    def observe_claim(*args, **kwargs):
+        claimed = claim(*args, **kwargs)
+        if claimed and not kwargs.get("release"):
+            alice_claimed.set()
+        return claimed
+
+    def metadata(started, release, tokens):
+        started.set()
+        assert release.wait(timeout=10)
+        return {"result": {"pending_tokens": tokens}}
+
+    monkeypatch.setattr(provider, "_claim_deferred_sid", observe_claim)
+    backends["alice"].get.side_effect = lambda *_: metadata(alice_get, release_alice, 20000)
+    backends["bob"].get.side_effect = lambda *_: metadata(bob_get, release_bob, bob_tokens)
+    provider.sync_turn("Alice's pending turn", "reply", session_id=sid)
+    try:
+        assert alice_get.wait(timeout=5)
+        alice_marker = provider._state_path("pending", sid)
+        reload("bob", endpoint)
+        provider.sync_turn("Bob's pending turn", "reply", session_id=sid)
+        assert bob_get.wait(timeout=5)
+        bob_marker = provider._state_path("pending", sid)
+        assert bob_marker.exists()
+        # A claims the finalizer while B's metadata request is still pending.
+        release_alice.set()
+        assert alice_claimed.wait(timeout=5)
+    finally:
+        release_alice.set()
+        release_bob.set()
+    assert provider._drain_writers(sid, timeout=5)
+    assert provider._drain_finalizers(timeout=5)
+    assert not alice_marker.exists()
+    if bob_tokens < 20000:
+        assert bob_marker.exists()
+        assert not provider._has_committed_session(sid)
+        assert provider._turn_count == 1
+    else:
+        # B must get its own threshold finalizer while A already owns one.
+        assert provider._has_committed_session(sid)
+        assert not bob_marker.exists()
+    provider.on_session_end([])
+    assert not bob_marker.exists()
+    for backend in backends.values():
+        commits = [c for c in backend.post.call_args_list if c.args[0].endswith("/commit")]
+        assert len(commits) == 1
+        assert commits[0].args == (f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
+
+
+def test_reload_recovery_preserves_markers_for_other_connections(reload_provider, monkeypatch):
+    """Failed commits survive restart and recover only with matching credentials."""
+    home, provider, module, backends, reload = reload_provider
+    sid = "same-sid"
+    markers = {}
+
+    def fail_commit(path, *_args, **_kwargs):
+        if path.endswith("/commit"):
+            raise RuntimeError("temporary failure")
+        return {}
+
+    for user in ("alice", "bob"):
+        reload(user)
+        backends[user].post.side_effect = fail_commit
+        _finish_turn(provider, user, sid=sid)
+        markers[user] = provider._state_path("pending", sid)
+        provider.on_session_end([])
+        assert markers[user].exists()
+        assert not provider._has_committed_session(sid)
+        assert "private-test-key" not in markers[user].read_text()
+    assert markers["alice"] != markers["bob"]
+    provider.shutdown()
+
+    for backend in backends.values():
+        backend.post.side_effect = None
+        backend.post.reset_mock()
+    for user in ("bob", "alice"):
+        monkeypatch.setenv("OPENVIKING_USER", user)
+        recovered = module.OpenVikingMemoryProvider()
+        try:
+            recovered.initialize("new-sid", hermes_home=str(home))
+            assert recovered._drain_finalizers(timeout=5)
+            assert not markers[user].exists()
+            backends[user].post.assert_called_once_with(f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
+            if user == "bob":
+                assert markers["alice"].exists()
+                backends["alice"].post.assert_not_called()
+        finally:
+            recovered.shutdown()
+
+
+def test_reload_back_to_original_identity_keeps_new_generation_pending(reload_provider):
+    _, provider, _, backends, reload = reload_provider
+    sid = "same-sid"
+    first_get = threading.Event()
+    release_first = threading.Event()
+    later_get = threading.Event()
+    bob_get = threading.Event()
+
+    def alice_metadata(*_args):
+        if not first_get.is_set():
+            first_get.set()
+            assert release_first.wait(timeout=10)
+            return {"pending_tokens": 20000}
+        later_get.set()
+        return {"pending_tokens": 20}
+
+    def bob_metadata(*_args):
+        bob_get.set()
+        return {"pending_tokens": 20}
+
+    backends["alice"].get.side_effect = alice_metadata
+    backends["bob"].get.side_effect = bob_metadata
+    provider.sync_turn("old Alice turn", "reply", session_id=sid)
+    try:
+        assert first_get.wait(timeout=5)
+        old_marker = provider._state_path("pending", sid)
+        reload("bob")
+        provider.sync_turn("Bob turn", "reply", session_id=sid)
+        assert bob_get.wait(timeout=5)
+        bob_marker = provider._state_path("pending", sid)
+        reload("alice")
+        provider.sync_turn("new Alice turn", "reply", session_id=sid)
+        assert later_get.wait(timeout=5)
+        new_marker = provider._state_path("pending", sid)
+    finally:
+        release_first.set()
+    assert provider._drain_writers(sid, timeout=5)
+    assert provider._drain_finalizers(timeout=5)
+    assert not old_marker.exists()
+    assert new_marker.exists() and bob_marker.exists()
+    assert not provider._has_committed_session(sid)
+    assert provider._turn_count == 1
+    provider.on_session_end([])
+    assert not new_marker.exists()
+    assert bob_marker.exists()
+    commits = [c for c in backends["alice"].post.call_args_list if c.args[0].endswith("/commit")]
+    assert len(commits) == 2

@@ -245,3 +245,31 @@ The Hermes config equivalent is `memory.openviking.recall_compress: server`.
 When enabled, the default request and total recall deadlines become 55 seconds;
 explicit recall timeout settings still take precedence. Older servers fall back
 to the existing search path within that deadline.
+
+### Active-session commits
+
+The standalone provider checks OpenViking's `pending_tokens` after each successful
+turn upload. At **20,000 tokens** by default, it requests a background commit
+without ending the Hermes session. Memory extraction then runs on the server.
+Session-end and session-switch commits still flush messages below this threshold.
+
+Set a different threshold in the active Hermes profile's `config.yaml`:
+
+```yaml
+memory:
+  openviking:
+    commit_token_threshold: 8000
+```
+
+`OPENVIKING_COMMIT_TOKEN_THRESHOLD` overrides the YAML value. The setting accepts
+integers from 1,000 to 1,000,000; values outside this range are clamped. Invalid
+values use the 20,000-token default. The provider also exposes this setting through
+its configuration schema.
+
+This is a client-side commit trigger. It does not set or replace the server's
+`auto_commit_policy`. If a server policy is enabled, both triggers operate
+independently. Server locking serializes their archive operations, but explicit
+client commits do not use the server scheduler's interval or retention settings.
+The plugin retains the existing `keep_recent_count: 0` commit behavior.
+The threshold is not a hard limit on extraction input: one turn can
+exceed it, and the server may include other context during extraction.

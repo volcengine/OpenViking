@@ -128,6 +128,18 @@ test("vendored skills are byte-identical to examples/skills", async () => {
   }
 });
 
+// copySkill copies a flat file list; a subdirectory would crash the sync.
+test("synced skills keep a flat file layout", async () => {
+  for (const skill of new Set(SKILL_TARGETS.map((target) => target.skill))) {
+    const entries = await readdir(join(SKILLS_DIR, skill), { withFileTypes: true });
+    assert.deepEqual(
+      entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+      [],
+      `examples/skills/${skill} must not contain subdirectories`,
+    );
+  }
+});
+
 // Skill loaders reject a description longer than this, and the skill then
 // silently fails to load. Guard every SKILL.md we ship, synced or not.
 const MAX_DESCRIPTION_LENGTH = 1024;

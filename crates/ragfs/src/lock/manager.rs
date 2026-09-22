@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::core::internal_names::{EXACT_LOCK_FILE_PREFIX, PATH_LOCK_FILE};
@@ -528,15 +528,15 @@ impl PathLockManager {
                             .await
                         {
                             Ok(true) => {
-                                info!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatically refreshed");
+                                debug!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatically refreshed");
                             }
                             Ok(false) => {
                                 all_ok = false;
-                                info!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatic refresh failed");
+                                warn!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, "pathlock lease automatic refresh failed");
                             }
                             Err(error) => {
                                 all_ok = false;
-                                info!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, error = %error, "pathlock lease automatic refresh failed");
+                                warn!(lease_ref = %lease_ref, owner_id = %owner.owner_id, lock_path = %lp, error = %error, "pathlock lease automatic refresh failed");
                             }
                         }
                     }
@@ -563,7 +563,7 @@ impl PathLockManager {
                         Ok(true) => removed += 1,
                         Ok(false) => {}
                         Err(error) => {
-                            info!(lease_ref = %lease_ref, error = %error, "failed to release stale pathlock lease");
+                            warn!(lease_ref = %lease_ref, error = %error, "failed to release stale pathlock lease");
                         }
                     }
                 }
@@ -830,7 +830,7 @@ impl PathLockManager {
                 Ok(owner_registry) => (owner_registry, true),
                 Err(_) => {
                     if waiting.0.is_none() {
-                        info!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch waiting for owner state");
+                        debug!(owner_id = %owner_id, requests = ?sorted, timeout_ms = timeout.as_millis() as u64, "pathlock acquire batch waiting for owner state");
                         waiting.0 = Some(&self.waiting_lock_count);
                         self.waiting_lock_count
                             .fetch_add(1, AtomicOrdering::Relaxed);
@@ -960,7 +960,7 @@ impl PathLockManager {
                     |total| Some(total.saturating_add(elapsed_ns)),
                 );
                 if waiting.0.is_some() {
-                    info!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, covered_paths = ?owned.lease.covered_paths, wait_ms = start.elapsed().as_millis() as u64, "pathlock acquire batch succeeded after waiting");
+                    debug!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, covered_paths = ?owned.lease.covered_paths, wait_ms = start.elapsed().as_millis() as u64, "pathlock acquire batch succeeded after waiting");
                 }
                 Ok(owned)
             }
@@ -1379,7 +1379,11 @@ impl PathLockManager {
         } else {
             "failed"
         };
-        info!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, result = %result, "pathlock refresh completed");
+        if result == "refreshed" {
+            debug!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, result = %result, "pathlock refresh completed");
+        } else {
+            warn!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, result = %result, "pathlock refresh completed");
+        }
         Ok(result.to_string())
     }
 
@@ -1688,7 +1692,7 @@ impl PathLockManager {
             .await
             .mark_pending_handoff(&lease.lease.lease_ref, &lease.ownership_ref)?;
         let active_count = self.lease_registry.active_count();
-        info!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, active_count = active_count, "parked pathlock lease for handoff");
+        debug!(lease_ref = %lease.lease.lease_ref, owner_id = %lease.lease.owner_id, lock_paths = ?lease.lease.lock_paths, active_count = active_count, "parked pathlock lease for handoff");
         Ok(())
     }
 
@@ -1752,7 +1756,7 @@ impl PathLockManager {
                             .insert(lease_ref.to_string());
                         let active_count = self.lease_registry.active_count();
                         drop(owner_registry);
-                        info!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, active_count = active_count, "adopted pathlock lease (local fast path)");
+                        debug!(lease_ref = %owned.lease.lease_ref, owner_id = %owned.lease.owner_id, lock_paths = ?owned.lease.lock_paths, active_count = active_count, "adopted pathlock lease (local fast path)");
                         return Ok(owned);
                     }
                     None => {}
@@ -1905,7 +1909,7 @@ impl PathLockManager {
         }
         drop(owner_registry);
         let active_count = self.lease_registry.active_count();
-        info!(lease_ref = %lease.lease_ref, owner_id = %lease.owner_id, lock_paths = ?lease.lock_paths, legacy_handoff = legacy_handoff, active_count = active_count, "adopted pathlock lease");
+        debug!(lease_ref = %lease.lease_ref, owner_id = %lease.owner_id, lock_paths = ?lease.lock_paths, legacy_handoff = legacy_handoff, active_count = active_count, "adopted pathlock lease");
 
         Ok(OwnedPathLockLease {
             lease,

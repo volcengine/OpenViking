@@ -66,11 +66,14 @@ The plugin hooks into the Claude Code lifecycle:
 
 - **Before every prompt** — searches OpenViking and injects relevant memories
 - **After each response** — captures new conversation turns
-- **On session start** — injects your profile and memory index
+- **On session start** — injects your profile, memory index, and skill catalog
 - **Before compaction and on session end** — commits pending messages
 - **For each subagent** — assigns an isolated memory session
+- **Before a native file tool touches a `viking://` path** — blocks the call and names the OpenViking MCP tool to use instead; a `Write` or `Edit` on a skill path is pointed to `add_skill`
 
 All write operations run asynchronously, ensuring they never block your conversation.
+
+The skill catalog is an `<available-skills>` block that lists the skills stored in OpenViking: your own under `viking://~/skills` first, then the ones shared with your account under `viking://agent/skills`, each with a short description. Before following a listed skill, Claude reads its `SKILL.md` with the OpenViking `read` tool. The catalog has its own token budget: when the descriptions do not fit, it lists names only, and when not even one name fits, it shrinks to a one-line count. The bundled `openviking-skills` skill tells Claude how to find and use OpenViking skills, create, install, and share them with the `add_skill` MCP tool, delete them, and move local skills such as `~/.claude/skills` into OpenViking when you ask.
 
 Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
 
@@ -85,6 +88,9 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | `OPENVIKING_RECALL_LIMIT` | `10` | Legacy width override converted to per-category coding quotas |
 | `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Inline token budget for the final raw-find fallback |
 | `OPENVIKING_AUTO_CAPTURE` | `true` | Auto-capture after each turn |
+| `OPENVIKING_SKILL_CATALOG` | `true` | Inject the `<available-skills>` catalog at session start |
+| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | Token budget for `<available-skills>`, separate from the profile budget; `0` turns the catalog off |
+| `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | Byte cap on the whole SessionStart context, kept under Claude Code's 10,000-character limit so the block stays inline instead of being saved to a file; on resume or compact the session archive takes up to half. `0` removes the cap |
 | `OPENVIKING_BYPASS_SESSION` | `false` | Skip all hooks for this session |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | CSV glob patterns to auto-bypass |
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV of sed-style regex rules applied to the prompt before it becomes a query ([grammar and examples](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#input-filters)) |
