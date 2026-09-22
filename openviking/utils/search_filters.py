@@ -110,6 +110,9 @@ def stats_context_type_label(
     classification (intent analysis, image RESOURCE default) and finally to
     "unknown". Values are normalized by :func:`resolve_context_types` — the same
     helper the scope filter uses — so the label cannot disagree with the filter.
+
+    Caller intent is the retriever's fallback, not its override: a query that
+    already carries a retrieval-side type keeps that finer per-query label.
     """
     return "+".join(resolve_context_types(context_type)) or None
 

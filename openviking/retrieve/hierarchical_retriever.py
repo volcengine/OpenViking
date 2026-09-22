@@ -122,7 +122,9 @@ class HierarchicalRetriever:
                 "Context Type" breakdown. Never influences retrieval: it is
                 never written to TypedQuery.context_type and never reaches the
                 vector filter or directory selection. May carry more than one
-                requested type joined with "+" (e.g. "memory+resource").
+                requested type joined with "+" (e.g. "memory+resource"). It is
+                used only when the query carries no retrieval-side type of its
+                own, so a fan-out request keeps its per-query classification.
         """
         t0 = time.monotonic()
         telemetry = get_current_telemetry()
@@ -319,11 +321,18 @@ class HierarchicalRetriever:
         # Observer classification is a statistics-only signal. The caller's
         # requested type arrives on `stats_context_type` (carried alongside the
         # query, never onto TypedQuery) so labelling a request cannot change what
-        # is retrieved. When the caller named nothing, fall back to the
-        # retrieval-side type — the intent analyzer's assignment or the
-        # image->RESOURCE default — so that classification keeps working.
+        # is retrieved.
+        #
+        # Precedence: the retrieval-side type wins. With intent analysis on, one
+        # request fans out into several queries that each carry their own
+        # analyzer-assigned type, and this call reports one label per query —
+        # caller-first precedence would overwrite those finer labels with the
+        # coarser request-level join. The caller's label is the fallback, which
+        # is exactly the case this fix exists for: intent off or unavailable
+        # leaves `query.context_type` None and only the caller can name the
+        # type. "unknown" is the last resort when nothing claims the query.
         get_stats_collector().record_query(
-            context_type=stats_context_type or context_type or "unknown",
+            context_type=context_type or stats_context_type or "unknown",
             result_count=len(final),
             scores=[m.score for m in final],
             latency_ms=elapsed_ms,

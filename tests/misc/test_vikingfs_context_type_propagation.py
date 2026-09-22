@@ -282,6 +282,96 @@ async def test_observer_falls_back_to_query_type_when_no_label(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_observer_prefers_query_type_over_the_request_label(monkeypatch):
+    """A finer retrieval-side type is not overwritten by the caller's label.
+
+    This is the fan-out contract from the #4090 review: with intent analysis on,
+    one request becomes several TypedQueries that each carry their own
+    analyzer-assigned type, so the caller's coarser request-level join must not
+    absorb classifications the observer already had.
+    """
+    from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+    from openviking.retrieve.retrieval_stats import get_stats_collector
+
+    harness = _ObserverHarness(monkeypatch)
+    collector = get_stats_collector()
+    collector.reset()
+    try:
+        retriever = HierarchicalRetriever(storage=object(), embedder=harness.embedder)
+        await retriever.retrieve(
+            TypedQuery(
+                query="remember this",
+                context_type=ContextType.MEMORY,
+                intent="",
+                target_directories=[V + "user/acc1/user1"],
+            ),
+            ctx=_ctx(),
+            limit=5,
+            stats_context_type="memory+resource",
+        )
+
+        snapshot = collector.snapshot()
+        assert snapshot.queries_by_type.get("memory") == 1
+        # The request-level join did not absorb the per-query classification.
+        assert snapshot.queries_by_type.get("memory+resource", 0) == 0
+        assert snapshot.queries_by_type.get("unknown", 0) == 0
+    finally:
+        collector.reset()
+
+
+@pytest.mark.asyncio
+async def test_observer_fan_out_records_a_label_per_query(monkeypatch):
+    """A request that fans out to memory + resource + resource keeps all three.
+
+    Caller-first precedence recorded this as three ``memory+resource`` rows:
+    the counts stayed right while the classification got coarser than before the
+    label existed, on the only path that already classified correctly.
+    """
+    from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+    from openviking.retrieve.retrieval_stats import get_stats_collector
+
+    harness = _ObserverHarness(monkeypatch)
+    collector = get_stats_collector()
+    collector.reset()
+    try:
+        retriever = HierarchicalRetriever(storage=object(), embedder=harness.embedder)
+        typed_queries = [
+            TypedQuery(
+                query="what do I remember",
+                context_type=ContextType.MEMORY,
+                intent="",
+                target_directories=[V + "user/acc1/user1"],
+            ),
+            TypedQuery(
+                query="the design doc",
+                context_type=ContextType.RESOURCE,
+                intent="",
+                target_directories=[V + "user/acc1/user1"],
+            ),
+            TypedQuery(
+                query="the migration notes",
+                context_type=ContextType.RESOURCE,
+                intent="",
+                target_directories=[V + "user/acc1/user1"],
+            ),
+        ]
+        for typed_query in typed_queries:
+            await retriever.retrieve(
+                typed_query,
+                ctx=_ctx(),
+                limit=5,
+                stats_context_type="memory+resource",
+            )
+
+        snapshot = collector.snapshot()
+        assert snapshot.queries_by_type.get("memory") == 1
+        assert snapshot.queries_by_type.get("resource") == 2
+        assert snapshot.queries_by_type.get("memory+resource", 0) == 0
+    finally:
+        collector.reset()
+
+
+@pytest.mark.asyncio
 async def test_observer_records_unknown_when_nothing_claims_the_query(monkeypatch):
     from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
     from openviking.retrieve.retrieval_stats import get_stats_collector
