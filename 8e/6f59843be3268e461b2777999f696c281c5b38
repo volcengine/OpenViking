@@ -1,0 +1,22 @@
+bot/tests/test_compile_routing_batches.py
+  h_b34c679d17e2ac 165,167-168,170,172-173
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 45
+docs/en/guides/01-configuration.md
+  h_b34c679d17e2ac 801
+docs/zh/guides/01-configuration.md
+  h_b34c679d17e2ac 769
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "8e6f59843be3268e461b2777999f696c281c5b38",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
