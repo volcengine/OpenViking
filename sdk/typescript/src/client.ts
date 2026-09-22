@@ -181,7 +181,9 @@ export class OpenVikingClient {
       target_uri: options.targetUri,
     });
     const local =
-      typeof source === "string" ? await nodePathToBlob(source) : undefined;
+      typeof source === "string"
+        ? await nodePathToBlob(source, { allowInlineContent: true })
+        : undefined;
     if (local)
       body.temp_file_id = await this.upload(local.blob, local.filename);
     else body.data = source;
@@ -272,7 +274,9 @@ export class OpenVikingClient {
       telemetry: options.telemetry,
     });
     const local =
-      typeof source === "string" ? await nodePathToBlob(source) : undefined;
+      typeof source === "string"
+        ? await nodePathToBlob(source, { allowInlineContent: true })
+        : undefined;
     if (local)
       body.temp_file_id = await this.upload(local.blob, local.filename);
     else body.data = source;

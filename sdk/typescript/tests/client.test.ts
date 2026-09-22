@@ -878,6 +878,25 @@ describe("OpenVikingClient", () => {
     },
   );
 
+  it.each(["addResource", "importOVPack", "restoreOVPack"] as const)(
+    "%s preserves local path errors before sending a request",
+    async (method) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+      const source = join(tmpdir(), "x".repeat(300));
+
+      await expect(
+        method === "importOVPack"
+          ? client.importOVPack(source, "resources")
+          : client[method](source),
+      ).rejects.toMatchObject({ code: "ENAMETOOLONG" });
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps non-JSON upload failures to OpenVikingError", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-error-"));
     const path = join(directory, "resource.md");
