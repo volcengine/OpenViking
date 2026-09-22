@@ -151,6 +151,7 @@ _ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
     {
+        "ingest_options",
         "manage_watch",
         "parser_args",
         "resource_lock",
@@ -465,7 +466,9 @@ class ResourceService:
         if not args:
             return _NormalizedAddResourceArgs({})
 
-        reserved_fields = _ADD_RESOURCE_ARGS_RESERVED_FIELDS - (allowed_reserved_fields or set())
+        reserved_fields = (
+            _ADD_RESOURCE_ARGS_RESERVED_FIELDS - (allowed_reserved_fields or set())
+        ) | _INTERNAL_INGESTION_FIELDS
         reserved = sorted(set(args).intersection(reserved_fields))
         if reserved:
             raise InvalidArgumentError(
@@ -1770,7 +1773,6 @@ class ResourceService:
         if kwargs.get("acl") is not None:
             acl = AclSpec.model_validate(kwargs["acl"])
             kwargs["acl"] = acl.model_dump(mode="json", exclude_none=True)
-            await self._viking_fs._ensure_acl_manage(target_to or target_parent, ctx)
 
         connector = self._connector
         delegate_to_connector = connector.should_delegate(
