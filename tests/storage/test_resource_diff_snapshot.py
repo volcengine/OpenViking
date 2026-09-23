@@ -314,6 +314,63 @@ async def test_build_rnfv_snapshot_skips_vector_inventory_when_vectorize_disable
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tags", "tag_mode", "expects_search_tags"),
+    [
+        (None, "clear", True),
+        ([], "replace", False),
+    ],
+)
+async def test_build_rnfv_snapshot_projects_tags_only_for_effective_request_intent(
+    tmp_path, tags, tag_mode, expects_search_tags
+):
+    from openviking.parse.output import LocalParseOutputStore
+    from openviking.storage.resource_rnfv import RequestIntent
+    from openviking.utils.ingest_options import IngestOptions
+
+    root = "viking://resources/x"
+    store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
+    ref = await store.create_artifact(root_type="dir")
+    await store.write_bytes(ref, "repository/a.py", b"same")
+    inventory = await prepare_artifact_inventory(store, ref, doc_rel="repository")
+    vikingdb = _FakeVikingDB(
+        {
+            f"{root}/a.py": {
+                "id": "a-l2",
+                "level": 2,
+                "md5": inventory.entries["a.py"].md5,
+                "search_tags": ["scope=old"],
+            }
+        }
+    )
+    request = RequestIntent.from_ingest_options(
+        target_uri=root,
+        processing_mode="vectors_only",
+        ingest_options=IngestOptions.from_search_tags(tags, mode=tag_mode),
+    )
+
+    snapshot = await build_rnfv_snapshot(
+        viking_fs=_FakeVikingFS(
+            [{"rel_path": "a.py", "isDir": False, "uri": f"{root}/a.py"}]
+        ),
+        vikingdb=vikingdb,
+        store=store,
+        artifact_ref=ref,
+        target_uri=root,
+        ctx=_Ctx(),
+        doc_rel="repository",
+        request_intent=request,
+        artifact_inventory=inventory,
+        target_preexisting=True,
+    )
+
+    assert ("search_tags" in vikingdb.inventory_output_fields) is expects_search_tags
+    assert ("search_tags" in snapshot.vectors.projected_fields) is expects_search_tags
+    record = snapshot.vectors.records_by_id["a-l2"]
+    assert ("search_tags" in record.fields) is expects_search_tags
+
+
+@pytest.mark.asyncio
 async def test_build_rnfv_snapshot_starts_new_formal_and_vector_reads_concurrently(
     tmp_path, monkeypatch
 ):

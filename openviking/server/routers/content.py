@@ -49,7 +49,7 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: list[str] | None = None
-    tag_mode: Literal["replace", "append"] = "replace"
+    tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
 
 
@@ -338,7 +338,7 @@ async def reindex(
     }
     if not body.recursive:
         reindex_kwargs["recursive"] = False
-    if body.tags is not None:
+    if body.tags is not None or body.tag_mode == "clear":
         reindex_kwargs["tags"] = body.tags
         reindex_kwargs["tag_mode"] = body.tag_mode
     result = await service.reindex(

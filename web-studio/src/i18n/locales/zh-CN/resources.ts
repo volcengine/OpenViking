@@ -296,6 +296,7 @@ const resources = {
     tagMode: '标签写入方式',
     'tagMode.replace': '替换',
     'tagMode.append': '追加',
+    'tagMode.clear': '清空',
     reason: '添加原因',
     'reason.placeholder': '为什么要添加这个资源？',
     instruction: '处理指令',

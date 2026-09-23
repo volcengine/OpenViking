@@ -103,7 +103,10 @@ the stock `web` profile, not a subcommand to append after `--profile`.
 ### Why injection uses pre-step user messages, not the system prompt
 
 Recall and profile context enter through the `agent/pre-step` waterfall as
-durable, source-attributed user messages (`source: { kind: 'plugin', … }`).
+durable, source-attributed user messages
+(`source: { kind: 'plugin:openviking-memory', … }`). The producer-owned kind is
+required by DSH session format v4; the plugin still recognizes legacy
+`kind: 'plugin'` messages while older sessions are replayed.
 They are deliberately **not** added to the system prompt: a DSH preset whose
 persona declares `complete: true` (the stock `minimal` preset does) restores
 that persona as the sole prompt section after assembly, silently discarding

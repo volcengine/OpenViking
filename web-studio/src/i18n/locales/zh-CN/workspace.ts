@@ -6,7 +6,7 @@ const workspace = {
       docs: '文档站',
       github: 'GitHub',
       sdkApi: 'SDK 与 API',
-      users: '用户管理',
+      users: '用户与权限',
     },
     header: {
       currentUser: {
@@ -746,12 +746,172 @@ const workspace = {
     },
   },
   settings: {
+    acl: {
+      page: {
+        advanced: '高级设置',
+        aboutLevels: '权限级别说明',
+        title: '资源权限',
+        description: '逐级浏览共享资源目录，查看和设置每个目录的访问权限。',
+        path: '当前目录',
+        back: '返回上一级目录',
+        listFailed: '无法读取目录',
+        parentAclFailed:
+          '无法读取当前目录权限，暂时无法修改子目录权限，请重试。',
+        emptyDirectory: '当前目录下没有子目录。',
+        nameColumn: '名称',
+        ruleColumn: '权限规则',
+        granteesColumn: '本目录授权对象',
+        actionsColumn: '操作',
+        unreadable: '无法读取',
+        noGrantees: '未单独授权',
+        editAction: '编辑权限',
+        manageAction: '管理权限',
+        limitFor: '限制访问：{{directory}}',
+        restoreInheritanceTitle: '恢复继承上级权限？',
+        restoreInheritanceWarning:
+          '上级目录的授权将重新生效，本目录已添加的授权会保留。',
+        disableLimitTitle: '关闭此目录的限制访问？',
+        disableLimitWarning:
+          '本目录的授权将被清除，目录恢复默认共享；下级目录的独立权限设置会保留。',
+        editDirectory: '谁可以访问 {{directory}}',
+        whoCanAccess: '授权给以下用户或用户组',
+        grantScope:
+          '这里设置的权限默认适用于此目录及其下级目录和文件。下级目录单独设置后可能不同。',
+        advancedRules: '上级目录权限与其他设置',
+        parentAccess: '上级目录授权',
+        parentGrantsActive:
+          '此外，还有 {{count}} 条上级目录授权在此生效。展开“上级目录权限与其他设置”可查看。',
+        parentGrantsInactive:
+          '上级目录有 {{count}} 条授权，但当前目录已停止继承。',
+        unavailable: '此页面需要账号管理员或 Root 管理凭证，请检查连接设置。',
+      },
+      title: '访问权限',
+      accountTitle: '资源访问控制 · {{account}}',
+      accountHint:
+        '作用于当前 Account 的所有共享资源。已有且未配置 ACL 的资源仍按原规则共享。',
+      enableAction: '启用访问控制',
+      disableAction: '关闭访问控制',
+      enabled: '已启用',
+      disabled: '已关闭 — 资源 ACL 授权不参与鉴权',
+      enableTitle: '启用资源访问控制？',
+      disableTitle: '关闭资源访问控制？',
+      enableWarning:
+        '为 Account {{account}} 启用 ACL？新建共享资源会给创建者管理权，并继承父目录权限。已有未配置 ACL 的资源仍按原规则共享；此前配置的 ACL 会重新生效。',
+      disableWarning:
+        '关闭 Account {{account}} 的 ACL 后，所有资源授权将停止参与鉴权，资源恢复原有共享规则，可能扩大访问范围。已保存的授权不会被删除。',
+      saved: '权限已更新',
+      failed: '权限更新失败',
+      confirm: '确认',
+      parentGrantsLabel: '上级目录授权',
+      parentIncluded: '包含上级目录授权',
+      parentExcluded: '不含上级目录授权',
+      includeParent: '使用上级授权',
+      excludeParent: '排除上级授权',
+      limitAccess: '限制访问',
+      limitTitle: '限制这个目录的访问？',
+      limitWarning:
+        '此目录将停止继承上级授权。已有的直接授权（包括所有人授权）仍然生效，请在切换后检查这些授权。账号管理员仍可访问。',
+      peopleWithAccess: '有权限的用户和用户组',
+      defaultRule: '默认共享',
+      onlyAdmins: '暂无授权对象，仅账号管理员可访问',
+      directSource: '本目录授权',
+      inheritedSource: '上级目录授权',
+      adminCredentialIdentity:
+        '权限管理使用 {{account}} 的账号管理员凭证；资源浏览仍使用当前用户。',
+      identity: '资源操作使用当前数据身份：{{account}} / {{user}}。',
+      loadFailed: '无法读取资源权限',
+      accessHint:
+        '当前数据身份需要对资源拥有管理权。API Key 模式下请使用 Account Admin 用户密钥，Root 密钥不能访问资源接口。',
+      retryHint: '请求失败，请重试；若仍然失败，可展开错误详情排查。',
+      recovery: {
+        loadFailed: '加载账户管理员失败。',
+        switchFailed: '切换用户失败。',
+        title: '先切换到有权限的用户',
+        description:
+          '这里就是当前资源的权限管理面板。当前用户没有管理权，因此无法读取授权列表。切换到账号管理员后，可添加用户或用户组，并设置查看、编辑或管理权限。',
+        scope: '切换会同时更改 Web Studio 浏览和操作资源所用的用户身份。',
+        unsupported: '当前连接模式不支持在此切换用户，请先检查连接设置。',
+        noAdmins:
+          '当前账号没有可选的管理员。请前往“用户与权限”检查用户角色，或联系已有资源管理权的用户授权。',
+        admin: '账号管理员',
+        selectAdmin: '选择账号管理员',
+        key: '管理员用户 API Key',
+        keyHint:
+          '服务端未返回该用户的密钥，请填写该用户已有的 API Key。Root 密钥不能用于此处。',
+        switch: '切换身份并加载权限',
+        switching: '正在切换…',
+        switched: '已切换用户，请选择目录继续配置权限。',
+        retryAccess: '重新检查当前权限',
+        details: '错误详情',
+        scopeTitle: '身份切换说明',
+        users: '前往用户与权限',
+      },
+      modes: {
+        none: '默认共享',
+        inherit: '继承上级权限',
+        restricted: '自定义权限',
+      },
+      modeDescriptions: {
+        none: '当前目录沿用默认共享规则。在这里添加的授权默认适用于下级目录和文件。',
+        inherit:
+          '上级授权和本目录授权共同生效，并默认适用于下级目录和文件；下级节点可以单独关闭继承。',
+        restricted:
+          '当前目录不使用上级授权；本目录授权仍默认适用于下级目录和文件，除非下级节点关闭继承。',
+      },
+      levels: {
+        read: '查看',
+        write: '编辑',
+        manage: '管理',
+      },
+      levelHint:
+        '查看：读取、浏览、检索。编辑：创建、修改、删除或移动文件。管理：调整授权、删除或移动目录；目录操作还会检查整个子树。',
+      direct: '本目录添加的授权',
+      inherited: '来自上级目录的授权',
+      noDirect:
+        '还没有为本目录单独授权。用户仍可能通过上级目录或默认共享规则访问。',
+      noInherited: '没有继承授权。',
+      inheritedHint:
+        '这些授权在当前目录生效，并默认适用于下级目录和文件；如需修改，请到上级目录操作。',
+      inheritedInactive:
+        '这些上级授权仍会保存，但不会在当前目录及其下级目录和文件生效。',
+      inactive: '未生效',
+      adminHint: 'Account 管理员始终拥有管理权限，即使授权列表为空。',
+      indexHint: '修改权限需要资源已有索引记录；新建资源请等待索引完成后配置。',
+      levelFor: '{{principal}} 的权限',
+      remove: '移除授权',
+      restoreInheritance: '恢复继承上级权限',
+      restrict: '停止继承上级权限',
+      restrictTitle: '停止继承上级目录的权限？',
+      restoreTitle: '恢复继承上级目录的权限？',
+      restrictWarning:
+        '当前目录及下级内容将不再使用上级授权。只有本目录授权对象和账号管理员可以访问。',
+      restoreWarning: '上级目录的授权将重新作用于当前目录及下级内容。',
+      removeWarning:
+        '移除 {{principal}} 的直接授权？该用户或组仍可能通过继承、组成员关系或全体用户授权访问。若继承已开启且上级未受控，移除最后一条授权可能恢复默认共享。',
+      subjectType: '授权对象类型',
+      subjects: {
+        user: '用户',
+        group: '用户组',
+        everyoneShort: '所有用户',
+        everyone: '当前 Account 全体用户',
+      },
+      everyone: '当前 Account 全体用户',
+      search: '搜索用户或用户组',
+      subject: '用户或用户组',
+      selectSubject: '请选择用户或用户组',
+      noCandidates: '没有匹配的用户或用户组。',
+      candidatesFailed: '授权对象加载失败',
+      level: '权限级别',
+      addGrant: '添加授权',
+      backToGrants: '返回授权列表',
+      confirmGrant: '确认授予 {{count}} 个对象{{level}}权限',
+      confirmEveryoneGrant: '确认授予所有用户{{level}}权限',
+    },
     groups: {
-      navigation: '用户管理',
+      navigation: '用户与权限',
       usersTab: '用户',
       title: '用户组',
-      description:
-        '管理 Account {{account}} 内的用户组。资源访问权限需要单独授予。',
+      description: '管理当前账号的用户组及成员。',
       id: '用户组 ID',
       count: '成员数',
       actions: '操作',
@@ -763,6 +923,7 @@ const workspace = {
       deleteDescription:
         '确定删除 {{group}}？资源中的 ACL 引用不会被清理，重新创建相同 ID 可能恢复原有授权。',
       empty: '暂无用户组。',
+      notJoined: '未加入用户组',
       search: '搜索用户组',
       members: '{{group}} 的成员',
       memberHint:
@@ -820,13 +981,13 @@ const workspace = {
           primary:
             'Root 或管理员 API 密钥主要用于管理操作；工作台和租户数据 API 需要绑定用户身份的用户 API 密钥。',
           secondary:
-            '请在“用户管理”中选择或创建用户，或者重新生成用户密钥，然后将其用作用户 API 密钥。',
+            '请在“用户与权限”中选择或创建用户，或者重新生成用户密钥，然后将其用作用户 API 密钥。',
           title: '还缺少用户 API 密钥',
         },
         empty: {
           primary: '普通用户：请向当前账号管理员索取用户 API 密钥。',
           secondary:
-            '部署管理员：Root API 密钥位于服务端 ov.conf 的 server.root_api_key；填入后可在“用户管理”中创建或重新生成用户密钥。',
+            '部署管理员：Root API 密钥位于服务端 ov.conf 的 server.root_api_key；填入后可在“用户与权限”中创建或重新生成用户密钥。',
           title: '还没有 OpenViking API 密钥？',
         },
         learnMore: '查看 API 密钥获取方式',
@@ -950,7 +1111,7 @@ const workspace = {
       accessDeniedDescription:
         '只有配置并通过校验的 Root 或账号管理员 API 密钥才能管理用户。',
       accessDeniedTitle: '无用户管理权限',
-      currentAccountDescription: '管理 {{account}} 空间下的用户和访问凭证。',
+      currentAccountDescription: '管理当前账号的用户和访问凭证。',
       description: '查看选中账号下的用户和凭证，并在网页端新增用户或轮换密钥。',
       memberListDescription:
         '“切换身份”会将该用户设为工作台、检索等数据页面的访问身份，不会改变当前 Root 或管理员凭证。',
@@ -961,7 +1122,7 @@ const workspace = {
       cannotRemoveLastManager: '不能删除空间内最后一个管理员。',
       noUsableKey: '该用户没有可用于数据访问的明文 API 密钥。',
       openConnection: '打开连接设置',
-      title: '用户管理',
+      title: '用户',
     },
     page: {
       adminDescription:
@@ -1003,6 +1164,7 @@ const workspace = {
       actions: '操作',
       apiKey: 'API 密钥',
       role: '角色',
+      groups: '所属用户组',
       user: '用户',
     },
     toast: {

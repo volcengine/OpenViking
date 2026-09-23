@@ -230,8 +230,10 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	if opts.ACL != nil {
 		payload["acl"] = opts.ACL
 	}
-	if opts.Tags != nil {
-		payload["tags"] = opts.Tags
+	if opts.Tags != nil || opts.TagMode == "clear" {
+		if opts.Tags != nil {
+			payload["tags"] = opts.Tags
+		}
 		tagMode := opts.TagMode
 		if tagMode == "" {
 			tagMode = "replace"
@@ -323,8 +325,10 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		"dry_run":   opts.DryRun,
 		"recursive": boolValue(opts.Recursive, true),
 	}
-	if opts.Tags != nil {
-		payload["tags"] = opts.Tags
+	if opts.Tags != nil || opts.TagMode == "clear" {
+		if opts.Tags != nil {
+			payload["tags"] = opts.Tags
+		}
 		tagMode := opts.TagMode
 		if tagMode == "" {
 			tagMode = "replace"

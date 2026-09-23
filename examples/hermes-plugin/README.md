@@ -89,6 +89,24 @@ The setup can link to an existing `~/.openviking/ovcli.conf`, copy its current
 connection values into Hermes, or create a minimal `ovcli.conf` when one does
 not exist.
 
+Setup first asks how the Hermes instance is used:
+
+| Preset | Hermes conversation history | OpenViking long-term recall |
+|--------|-----------------------------|-----------------------------|
+| **Personal Agent** | Keeps existing group/thread session settings | Common memory and the current sender's memory (`peer`) |
+| **Shared Agent** | Shares each group or thread session between its participants | Common memory and all sender memories under the same OpenViking user (`shared`) |
+
+Shared Agent requires confirmation before it sets `group_sessions_per_user` and
+`thread_sessions_per_user` to `false`. Different groups still have separate
+conversation histories. Restart the gateway to apply changed session settings.
+Personal Agent does not make an already shared conversation private.
+
+Both presets retain sender attribution during capture. After commit and
+extraction, OpenViking can recall those memories across chats according to the
+chosen scope. Upgrading the plugin alone does not apply a preset or change
+session settings. Rerunning setup preselects the saved recall choice; a new
+setup starts on Personal Agent.
+
 Or manually:
 
 ```bash
@@ -167,6 +185,55 @@ Set `agent: hermes` to restore peer-scoped writes. Memories written at user
 scope before this change stay there and remain searchable. This setting
 changes future writes, not the location of existing memories.
 
+### Gateway senders and automatic recall
+
+The external provider attaches the current gateway sender to captured user
+messages as a peer, for example `telegram.123456`. The OpenViking account and
+user stay unchanged. Assistant messages keep the configured `agent` peer.
+CLI messages without a gateway sender keep their existing user-level attribution.
+Existing memories are not moved.
+
+The setup presets save the automatic recall scope. You can also set it in the
+active profile's `config.yaml`:
+
+```yaml
+memory:
+  openviking:
+    recall_scope: peer
+```
+
+| Value | Automatic recall |
+|-------|------------------|
+| `shared` | Common memory and all peer memories under the same OpenViking user. |
+| `peer` | Common memory and the current gateway sender's memory. With no sender, only common memory is recalled. |
+
+With no scope set, the provider preserves the previous requests: normally
+shared recall, but an explicitly configured assistant peer can narrow list
+recall. Existing compression behavior is also retained. This is compatibility
+handling for existing installations, not a third setup mode. Invalid values
+warn and preserve that behavior.
+
+`OPENVIKING_RECALL_SCOPE` overrides YAML. On successful setup, the wizard removes
+this override from the profile's `.env` so the selected preset takes effect.
+An override supplied again by a service or shell still takes precedence.
+The configuration schema exposes only `shared` and `peer`. A stable
+alternate sender ID is used when Hermes supplies one; unsafe IDs are encoded
+to valid peer IDs. Queued captures retain their own sender when another
+participant sends a turn.
+
+The scope applies to automatic query recall, including compression and search
+fallbacks. If an older server cannot confirm sender-scoped compression, the
+provider uses scoped list recall. Enabled resource recall includes common
+resources and, in `peer` mode, the sender's resources.
+
+This is a retrieval setting, not an access-control boundary. It does not filter
+shared conversation history or change explicit `viking_*` tools, native memory
+mirroring, or credentials. Setting `recall_scope` alone does not change gateway
+sessions; the confirmed Shared Agent setup preset applies those settings.
+Explicit tools retain
+the configured assistant view. Use separate OpenViking users and credentials
+when participants require separate access rights.
+
 ## Tools
 
 | Tool | Description |
@@ -208,17 +275,55 @@ OpenViking server auto-commit is disabled by default, so an accepted message
 whose explicit commit fails normally remains live and unextracted until it is
 manually committed.
 
-Hermes built-in `memory` tool additions are mirrored to OpenViking after the
-local memory operation succeeds:
+Successful Hermes built-in `memory` mutations are mirrored to OpenViking in
+order. The active profile records each mirrored entry's exact URI in
+`$HERMES_HOME/openviking/memory_mirror_registry.json`:
 
 | Hermes action | OpenViking operation |
 |---------------|----------------------|
-| `add` | `content/write` with `mode=create` under user memory, or the configured peer memory directory |
+| `add` | Create a file under user memory or the configured peer, then record its URI |
+| `replace` | Match the committed event's full previous content and target, update the same URI, and wait for semantic/vector refresh |
+| `remove` | Match the committed event's full previous content and target, delete that exact URI, and wait for semantic cleanup |
 
-Built-in `replace` and `remove` operations are not mirrored because Hermes
-native memory entries do not yet carry stable OpenViking file URIs. Use
-`viking_forget` when the user explicitly asks to delete a specific OpenViking
-memory URI.
+Replacing a mapped entry recreates its file if it was deleted directly in
+OpenViking, for example with `viking_forget`.
+
+The registry stores the current entry text and a connection fingerprint, not
+the raw API key. Endpoint, credentials, user, account, and peer changes isolate
+the new connection from earlier mappings. New files require a server-confirmed
+user identity. Missing or ambiguous mappings block replacement and deletion
+with a warning; the plugin never selects a target by semantic similarity.
+
+Replacement and deletion require Hermes to provide authoritative
+`previous_content` metadata from the native-store commit. Older Hermes versions
+without this event contract skip those mirror operations with a warning; native
+local memory still changes. The plugin never falls back to matching the caller's
+`old_text` against its partial registry.
+The required event contract was merged in
+[Hermes PR #120003](https://github.com/NousResearch/hermes-agent/pull/120003)
+(commit `5908e1aaa83e82aaf12541d7a9d90762d0b46a64`), which landed
+[#118903](https://github.com/NousResearch/hermes-agent/pull/118903).
+
+Only entries created by this mirror have mappings. Session-extracted memories,
+explicit `viking_remember` results, and copies created before this registry are
+outside its scope. Use `viking_forget` with an exact URI to remove those copies.
+
+The mirror is asynchronous. Hermes saves its local memory first. Rejected remote
+writes leave the registry unchanged and produce a warning. Additions do not wait
+for indexing, so the mirror does not report later indexing failures. For `replace`,
+if the server reports that the file changed but indexing failed, the registry
+retains the new content and exact URI; a warning reports the indexing failure
+because search results may be stale. There is no durable replay. A remote mutation
+followed by a failed registry save can also cause drift. Operations are ordered
+per provider; registry updates are serialized across instances sharing a profile
+in one process, not across processes.
+
+Registry files use mode `0600` on POSIX. Protect the profile with normal account
+and filesystem permissions on Windows. An unreadable, invalid, or unsupported
+registry blocks all mirror writes. Stop Hermes before restoring a valid backup.
+For an unsupported version, use a plugin version that supports it. Renaming a
+damaged registry starts a new registry but leaves earlier remote copies without
+mappings; those copies need manual cleanup by exact URI.
 
 `viking_forget` is intentionally narrow. It only accepts concrete user memory
 file URIs, such as

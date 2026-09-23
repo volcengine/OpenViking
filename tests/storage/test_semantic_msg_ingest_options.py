@@ -131,3 +131,22 @@ def test_semantic_msg_roundtrip_preserves_local_artifact_snapshot():
     assert restored.artifact_ref["resource_rel"] == "repository"
     assert restored.artifact_files == ["a.py", "src/b.py"]
     assert restored.file_abstracts == {"viking://resources/x/a.py": "summary a"}
+
+
+def test_clear_ingest_options_survive_semantic_message_round_trip():
+    update = AclUpdate(
+        uri="viking://resources/demo", acl=AclSpec(acl_mode="restricted", entries=[])
+    )
+    msg = SemanticMsg(
+        uri="viking://resources/demo",
+        context_type="resource",
+        ingest_options=IngestOptions(search_tag_mode="clear", acl_update=update),
+    )
+
+    restored = SemanticMsg.from_dict(msg.to_dict())
+
+    assert restored.ingest_options == IngestOptions(
+        search_tags=[],
+        search_tag_mode="clear",
+        acl_update=update,
+    )

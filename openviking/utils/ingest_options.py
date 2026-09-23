@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping, Optional
 
 from openviking.storage.acl import AclUpdate
@@ -25,6 +25,11 @@ class IngestOptions:
     search_tag_mode: str = "replace"
     acl_update: AclUpdate | None = None
 
+    @staticmethod
+    def vector_search_tag_mode(mode: str) -> str:
+        """Map request intent to the modes understood by vector backends."""
+        return "replace" if mode == "clear" else mode
+
     @classmethod
     def from_search_tags(
         cls,
@@ -32,10 +37,15 @@ class IngestOptions:
         *,
         mode: str = "replace",
     ) -> "IngestOptions":
+        if mode == "clear":
+            return cls(search_tags=[], search_tag_mode="clear")
         if tags is None:
             return cls()
+        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        if mode == "replace" and not normalized_tags:
+            return cls()
         return cls(
-            search_tags=normalize_search_tags(tags, discard_invalid=True),
+            search_tags=normalized_tags,
             search_tag_mode=mode,
         )
 
@@ -44,14 +54,15 @@ class IngestOptions:
         if value is None:
             return cls()
         if isinstance(value, IngestOptions):
-            return value
-        return cls(
-            search_tags=(
-                list(value.get("search_tags") or [])
-                if value.get("search_tags") is not None
-                else None
+            return replace(
+                cls.from_search_tags(value.search_tags, mode=value.search_tag_mode),
+                acl_update=value.acl_update,
+            )
+        return replace(
+            cls.from_search_tags(
+                value.get("search_tags"),
+                mode=str(value.get("search_tag_mode", "replace")),
             ),
-            search_tag_mode=str(value.get("search_tag_mode", "replace")),
             acl_update=(
                 AclUpdate.model_validate(value["acl_update"])
                 if value.get("acl_update") is not None
