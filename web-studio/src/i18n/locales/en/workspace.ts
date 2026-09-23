@@ -859,6 +859,8 @@ const workspace = {
       retryHint:
         'The request failed. Retry, or inspect the error details if it persists.',
       recovery: {
+        loadFailed: 'Failed to load account administrators.',
+        switchFailed: 'Failed to switch user.',
         title: 'Switch to a user with permission',
         description:
           'This panel manages access to the current resource. Your user cannot read its grants. Switch to an account administrator to add users or groups with read, write, or manage access.',

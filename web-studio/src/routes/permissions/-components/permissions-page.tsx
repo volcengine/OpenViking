@@ -80,6 +80,7 @@ export function PermissionsPage() {
 }
 
 function DirectoryPermissions() {
+  const client = useQueryClient()
   const state = useAclManagement()
   const { t } = useTranslation('settings')
   const [currentUri, setCurrentUri] = useState(root)
@@ -163,7 +164,13 @@ function DirectoryPermissions() {
           variant="ghost"
           size="icon-sm"
           aria-label={t('actions.refresh')}
-          onClick={() => void directories.refetch()}
+          onClick={() => {
+            void directories.refetch()
+            void client.invalidateQueries({
+              queryKey: ['resource-acl', state.aclIdentityScopeKey],
+            })
+            void client.invalidateQueries({ queryKey: state.settingsKey })
+          }}
         >
           <RotateCwIcon />
         </Button>

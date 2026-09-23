@@ -418,6 +418,7 @@ function GrantForm({
                 }`}
                 onClick={() => {
                   setKind(value)
+                  if (value !== kind) setSelectedPrincipals([])
                   setSearch('')
                   setPage(1)
                 }}

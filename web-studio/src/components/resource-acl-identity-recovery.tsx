@@ -55,7 +55,9 @@ export function ResourceAclIdentityRecovery({
       setApiKey('')
       toast.success(t('acl.recovery.switched'))
     } catch (switchError) {
-      toast.error(getErrorMessage(switchError))
+      toast.error(t('acl.recovery.switchFailed'), {
+        description: getErrorMessage(switchError),
+      })
     } finally {
       setSwitching(false)
     }
@@ -79,7 +81,11 @@ export function ResourceAclIdentityRecovery({
         <p role="status">{t('loading')}</p>
       ) : users.isError ? (
         <>
-          <p role="alert">{getErrorMessage(users.error)}</p>
+          <p role="alert">{t('acl.recovery.loadFailed')}</p>
+          <details className="text-sm text-muted-foreground">
+            <summary>{t('acl.recovery.details')}</summary>
+            <p className="mt-2 break-all">{getErrorMessage(users.error)}</p>
+          </details>
           <Button variant="outline" onClick={() => void users.refetch()}>
             {t('actions.refresh')}
           </Button>

@@ -32,6 +32,7 @@ vi.mock('#/hooks/use-acl-management', () => ({
   useAclManagement: () => ({
     allowed: mocks.allowed,
     settings: { data: mocks.enabled },
+    settingsKey: ['account-acl', mocks.accountId],
     connection: { baseUrl: 'http://localhost', accountId: mocks.accountId },
     identityScopeKey: mocks.accountId,
     aclIdentityScopeKey: mocks.accountId,
@@ -294,4 +295,40 @@ it('keeps advanced account settings in the header and shows inline controls when
   refresh()
   expect(screen.getByTestId('account-settings')).toBeTruthy()
   expect(screen.queryByTestId('advanced-settings')).toBeNull()
+})
+
+it('refreshes parent and child ACL reports even when directory entries are unchanged', async () => {
+  const { user } = mount()
+  await user.click(await screen.findByRole('button', { name: 'im' }))
+  await screen.findByRole('button', { name: 'feishu' })
+  await waitFor(() =>
+    expect(screen.getByRole('switch').hasAttribute('disabled')).toBe(false),
+  )
+  mocks.get.mockClear()
+  mocks.modes[`${root}im/`] = 'none'
+  mocks.get.mockImplementation(async (uri: string) => ({
+    uri,
+    acl_mode: mocks.modes[uri] ?? 'restricted',
+    direct_entries: [{ principal: 'user:bob', level: 'manage' }],
+    inherited_entries: [],
+    effective_entries: [],
+  }))
+  await user.click(screen.getByRole('button', { name: 'actions.refresh' }))
+  await waitFor(() => {
+    expect(mocks.get).toHaveBeenCalledWith(`${root}im/`)
+    expect(mocks.get).toHaveBeenCalledWith(`${root}im/feishu/`)
+    expect(screen.getByText('bob')).toBeTruthy()
+    expect(screen.getByText('acl.modes.restricted')).toBeTruthy()
+  })
+  await user.click(screen.getByRole('switch'))
+  await user.click(
+    within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'acl.confirm',
+    }),
+  )
+  await waitFor(() =>
+    expect(mocks.change).toHaveBeenCalledWith(`${root}im/feishu/`, {
+      kind: 'reset',
+    }),
+  )
 })

@@ -822,6 +822,8 @@ const workspace = {
         '当前数据身份需要对资源拥有管理权。API Key 模式下请使用 Account Admin 用户密钥，Root 密钥不能访问资源接口。',
       retryHint: '请求失败，请重试；若仍然失败，可展开错误详情排查。',
       recovery: {
+        loadFailed: '加载账户管理员失败。',
+        switchFailed: '切换用户失败。',
         title: '先切换到有权限的用户',
         description:
           '这里就是当前资源的权限管理面板。当前用户没有管理权，因此无法读取授权列表。切换到账号管理员后，可添加用户或用户组，并设置查看、编辑或管理权限。',

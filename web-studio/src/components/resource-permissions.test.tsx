@@ -201,7 +201,7 @@ it('grants edit permission to a selected account group', async () => {
     }),
   )
 })
-it('selects multiple users and groups and grants the same level to each', async () => {
+it('selects multiple users and grants the same level to each', async () => {
   mocks.users.mockResolvedValue({
     users: [{ userId: 'bob' }, { userId: 'carol' }],
     total: 2,
@@ -211,26 +211,16 @@ it('selects multiple users and groups and grants the same level to each', async 
   await user.click(screen.getByRole('button', { name: 'acl.addGrant' }))
   await user.click(await screen.findByRole('button', { name: 'carol' }))
   await user.click(screen.getByRole('button', { name: 'bob' }))
-  await user.click(screen.getByRole('button', { name: 'acl.subjects.group' }))
-  await user.click(await screen.findByRole('button', { name: 'engineering' }))
-  await user.click(screen.getByRole('button', { name: 'acl.subjects.user' }))
-  expect(
-    screen.getByRole('button', { name: 'bob' }).getAttribute('aria-pressed'),
-  ).toBe('true')
-  expect(
-    screen.getByRole('button', { name: 'carol' }).getAttribute('aria-pressed'),
-  ).toBe('true')
   await user.click(screen.getByRole('button', { name: 'acl.levels.write' }))
   await user.click(
     screen.getByRole('button', {
-      name: 'acl.confirmGrant:3:acl.levels.write',
+      name: 'acl.confirmGrant:2:acl.levels.write',
     }),
   )
-  await waitFor(() => expect(mocks.change).toHaveBeenCalledTimes(3))
+  await waitFor(() => expect(mocks.change).toHaveBeenCalledTimes(2))
   expect(mocks.change.mock.calls.map(([, change]) => change)).toEqual([
     { kind: 'grant', principal: 'user:carol', level: 'write' },
     { kind: 'grant', principal: 'user:bob', level: 'write' },
-    { kind: 'grant', principal: 'group:engineering', level: 'write' },
   ])
 })
 it('adds permissions within the same panel and returns to the grant list', async () => {
@@ -329,4 +319,30 @@ it('does not suggest switching identities for a network error', async () => {
   await screen.findByText('Network unavailable')
   expect(screen.queryByText('acl.recovery.title')).toBeNull()
   expect(mocks.admins).not.toHaveBeenCalled()
+})
+
+it('clears hidden selections when switching from users to groups', async () => {
+  const { user } = mount()
+  await screen.findByText('bob')
+  await user.click(screen.getByRole('button', { name: 'acl.addGrant' }))
+  await user.click(await screen.findByRole('button', { name: 'bob' }))
+  await user.click(screen.getByRole('button', { name: 'acl.subjects.group' }))
+  expect(
+    screen
+      .getByRole('button', { name: 'acl.confirmGrant:0:acl.levels.read' })
+      .hasAttribute('disabled'),
+  ).toBe(true)
+  await user.click(await screen.findByRole('button', { name: 'engineering' }))
+  await user.click(screen.getByRole('button', { name: 'acl.levels.manage' }))
+  await user.click(
+    screen.getByRole('button', {
+      name: 'acl.confirmGrant:1:acl.levels.manage',
+    }),
+  )
+  await waitFor(() => expect(mocks.change).toHaveBeenCalledTimes(1))
+  expect(mocks.change).toHaveBeenCalledWith(uri, {
+    kind: 'grant',
+    principal: 'group:engineering',
+    level: 'manage',
+  })
 })
