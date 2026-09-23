@@ -6,6 +6,8 @@ from typing import Optional
 
 _LINE_NUMBER_PREFIX_RE = re.compile(r"^(\d+)\t")
 _LINE_NUMBER_PREFIX_WITH_LEADING_SPACE_RE = re.compile(r"^\s*(\d+)\t")
+_LINE_NUMBER_PREFIXES_RE = re.compile(r"^(?:\d+\t)+")
+_LINE_NUMBER_PREFIXES_WITH_LEADING_SPACE_RE = re.compile(r"^(?:\s*\d+\t)+")
 _LINE_SPLIT_RE = re.compile(r"\r?\n")
 
 
@@ -44,7 +46,11 @@ def extract_start_line_number(content: str) -> Optional[int]:
 
 
 def strip_line_numbers(content: str, aggressive: bool = False) -> str:
-    pattern = _LINE_NUMBER_PREFIX_WITH_LEADING_SPACE_RE if aggressive else _LINE_NUMBER_PREFIX_RE
+    pattern = (
+        _LINE_NUMBER_PREFIXES_WITH_LEADING_SPACE_RE
+        if aggressive
+        else _LINE_NUMBER_PREFIXES_RE
+    )
     return "\n".join(pattern.sub("", line) for line in split_content_lines(content))
 
 
