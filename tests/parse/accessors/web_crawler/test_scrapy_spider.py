@@ -40,6 +40,31 @@ class TestAcceptChildUrl:
         spider = _make_spider()
         assert spider._accept_child_url("http://example.com/foo") is True
 
+    @pytest.mark.parametrize(
+        ("root_url", "child_url"),
+        [
+            ("https://example.com:443/", "https://example.com/docs"),
+            ("https://example.com/", "https://example.com:443/docs"),
+            ("http://example.com:80/", "http://example.com/docs"),
+            ("http://example.com/", "http://example.com:80/docs"),
+            ("https://example.com./", "http://EXAMPLE.com/docs"),
+        ],
+    )
+    def test_accepts_equivalent_same_host_urls(self, root_url, child_url):
+        spider = _make_spider(root_url=root_url)
+        assert spider._accept_child_url(child_url) is True
+
+    @pytest.mark.parametrize(
+        ("root_url", "child_url"),
+        [
+            ("https://example.com:8443/", "https://example.com/docs"),
+            ("https://example.com/", "https://example.com:8443/docs"),
+        ],
+    )
+    def test_rejects_non_default_port_as_external(self, root_url, child_url):
+        spider = _make_spider(root_url=root_url)
+        assert spider._accept_child_url(child_url) is False
+
     def test_rejects_external_when_disallowed(self):
         spider = _make_spider()
         assert spider._accept_child_url("http://other.com/x") is False
