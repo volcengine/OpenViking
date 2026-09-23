@@ -139,23 +139,19 @@ async def test_external_endpoint_does_not_disable_local_refresh(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("local_output", [False, True])
-async def test_partial_directory_auth_failure_never_reaches_finalization(
-    monkeypatch, tmp_path, local_output
+@pytest.mark.parametrize("source_kind", ["folder", "image"])
+async def test_partial_download_auth_failure_is_cleaned_before_parsing(
+    monkeypatch, tmp_path, source_kind
 ):
-    from contextlib import nullcontext
     from unittest.mock import AsyncMock
 
+    from openviking.parse.accessors.base import LocalResource, SourceType
     from openviking.parse.feishu_import import FeishuImportPlan
-    from openviking.utils.resource_processor import ResourceProcessor
     from openviking_cli.utils.config.parser_config import FeishuConfig
 
-    artifact_ref = SimpleNamespace(backend="local") if local_output else None
-    output_store = SimpleNamespace(backend="local", cleanup=AsyncMock()) if local_output else None
-
-    accessor = FeishuAccessor()._new_operation(
-        "https://example.feishu.cn/drive/folder/test", config=FeishuConfig()
-    )
+    url = "https://example.feishu.cn/drive/folder/test"
+    accessor = FeishuAccessor()._new_operation(url, config=FeishuConfig())
+    monkeypatch.setattr(accessor, "_new_operation", lambda *_args, **_kwargs: accessor)
     monkeypatch.setattr(
         accessor,
         "_list_drive_folder_children",
@@ -176,41 +172,32 @@ async def test_partial_directory_auth_failure_never_reaches_finalization(
 
     monkeypatch.setattr(accessor, "_download_drive_file", download)
 
-    async def parse(**_kwargs):
-        skipped = []
-        await accessor._materialize_drive_folder(
-            "folder",
-            tmp_path,
-            feishu_access_token="snapshot",
-            skipped_items=skipped,
-            plan=FeishuImportPlan(tmp_path),
-        )
-        assert [p.name for p in tmp_path.iterdir()] == ["A.txt"]
-        assert len(skipped) == 1
-        return SimpleNamespace(temp_dir_path="viking://temp/partial", artifact_ref=artifact_ref)
+    async def access(*_args, **_kwargs):
+        if source_kind == "folder":
+            skipped = []
+            await accessor._materialize_drive_folder(
+                "folder",
+                tmp_path,
+                feishu_access_token="snapshot",
+                skipped_items=skipped,
+                plan=FeishuImportPlan(tmp_path),
+            )
+            assert [p.name for p in tmp_path.iterdir()] == ["A.txt"]
+            assert len(skipped) == 1
+        else:
+            assert provider.get_token() == "valid"
+            provider._valid_until = 0
+            monkeypatch.setattr(accessor, "_get_client", Mock(return_value=Mock()))
+            # Image download normally swallows errors and returns incomplete content.
+            assert accessor._download_image("image", feishu_access_token="snapshot") is None
+            (tmp_path / "document.md").write_text("partial content")
+        return LocalResource(tmp_path, SourceType.FEISHU, url)
 
-    fs = SimpleNamespace(bind_request_context=lambda _: nullcontext(), delete_temp=AsyncMock())
-    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fs)
-    processor = ResourceProcessor(
-        Mock(),
-        runtime_config_manager=SimpleNamespace(
-            resolve_account=AsyncMock(return_value=FeishuConfig())
-        ),
-    )
-    monkeypatch.setattr(processor, "_build_parse_output_store", lambda: output_store)
-    processor._media_processor = SimpleNamespace(process=parse)
-    processor.tree_builder.finalize_from_temp = AsyncMock()
-    ctx = Mock()
+    monkeypatch.setattr(accessor, "_access", AsyncMock(side_effect=access))
     with auth.feishu_token_scope(provider), pytest.raises(InternalError, match="auth unavailable"):
-        await processor.process_resource(
-            path="https://example.feishu.cn/drive/folder/test", ctx=ctx
-        )
-    processor.tree_builder.finalize_from_temp.assert_not_awaited()
-    if local_output:
-        output_store.cleanup.assert_awaited_once_with(artifact_ref)
-        fs.delete_temp.assert_not_awaited()
-    else:
-        fs.delete_temp.assert_awaited_once_with("viking://temp/partial", ctx=ctx)
+        await accessor.access(url, feishu_access_token="snapshot")
+    assert not tmp_path.exists()
+    assert auth.current_feishu_token.get() is None
 
 
 @pytest.mark.asyncio

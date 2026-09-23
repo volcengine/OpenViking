@@ -5,14 +5,17 @@
 import asyncio
 import math
 import time
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.connector.client import ConnectorClient
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import InternalError, InvalidArgumentError
+
+if TYPE_CHECKING:
+    from openviking.parse.accessors.base import LocalResource
 
 OAUTH_REF_ARG = "openviking_oauth_ref"
 EXTERNAL_FEISHU_PROVIDER = "feishu_external"
@@ -43,50 +46,58 @@ def validate_feishu_auth_args(args: Dict[str, Any]) -> None:
         )
 
 
-async def prepare_feishu_auth(
-    connector, *, path: str, ctx: RequestContext, args: Dict[str, Any]
-) -> tuple[Optional[Dict[str, Any]], Optional["ExternalFeishuToken"]]:
-    """Consume the reference before native source preparation and persist no token copies."""
+@asynccontextmanager
+async def feishu_auth_scope(
+    connector,
+    *,
+    path: str,
+    ctx: RequestContext,
+    args: Dict[str, Any],
+    state: Optional[Dict[str, Any]] = None,
+    prepared: bool = False,
+):
+    """Bind external auth for source preparation or a restored task; leave local auth alone."""
     validate_feishu_auth_args(args)
-    if OAUTH_REF_ARG not in args:
-        return None, None
-    from openviking.parse.accessors.feishu_accessor import FeishuAccessor
+    provider = None
+    if is_external_feishu_auth(state):
+        if not prepared:
+            api_key, restored_args = await restore_feishu_request(
+                connector, state, path=path, ctx=ctx
+            )
+            provider = ExternalFeishuToken(restored_args[OAUTH_REF_ARG], api_key)
+    elif OAUTH_REF_ARG in args:
+        from openviking.parse.accessors.feishu_accessor import FeishuAccessor
 
-    if not FeishuAccessor._is_feishu_url(path):
-        raise InvalidArgumentError("OAuth references require a Feishu document URL.")
-    reference = validate_oauth_ref(args.pop(OAUTH_REF_ARG), ctx.user.user_id)
-    provider = ExternalFeishuToken(reference, ctx.api_key or "")
-    args["feishu_access_token"] = await asyncio.to_thread(provider.get_token)
-    state = {
-        "provider": EXTERNAL_FEISHU_PROVIDER,
-        "credentials": await connector.create_watch_auth_state(
-            api_key=ctx.api_key,
-            account_id=ctx.account_id,
-            add_type="feishu_doc",
-            path=path,
-            connector_args={OAUTH_REF_ARG: reference},
-        ),
-    }
-    return state, provider
+        if not FeishuAccessor._is_feishu_url(path):
+            raise InvalidArgumentError("OAuth references require a Feishu document URL.")
+        reference = validate_oauth_ref(args.pop(OAUTH_REF_ARG), ctx.user.user_id)
+        provider = ExternalFeishuToken(reference, ctx.api_key or "")
+        state = {
+            "provider": EXTERNAL_FEISHU_PROVIDER,
+            "credentials": await connector.create_watch_auth_state(
+                api_key=ctx.api_key,
+                account_id=ctx.account_id,
+                add_type="feishu_doc",
+                path=path,
+                connector_args={OAUTH_REF_ARG: reference},
+            ),
+        }
+    if provider is not None:
+        args["feishu_access_token"] = await asyncio.to_thread(provider.get_token)
+    with feishu_token_scope(provider):
+        yield state
 
 
 async def restore_feishu_request(
     connector, state: Dict[str, Any], *, path: str, ctx: RequestContext
-) -> tuple[str, Dict[str, str]]:
+) -> tuple[str, Dict[str, Any]]:
     api_key, add_type, args = await connector.restore_watch_request(
         state.get("credentials", {}), account_id=ctx.account_id, path=path
     )
     if add_type != "feishu_doc":
         raise InvalidArgumentError("Stored external Feishu credentials are invalid.")
-    return api_key, validate_oauth_ref(args.get(OAUTH_REF_ARG), ctx.user.user_id)
-
-
-async def restore_feishu_token(
-    connector, state: Dict[str, Any], *, path: str, ctx: RequestContext
-) -> tuple["ExternalFeishuToken", str]:
-    api_key, reference = await restore_feishu_request(connector, state, path=path, ctx=ctx)
-    provider = ExternalFeishuToken(reference, api_key)
-    return provider, await asyncio.to_thread(provider.get_token)
+    reference = validate_oauth_ref(args.get(OAUTH_REF_ARG), ctx.user.user_id)
+    return api_key, {OAUTH_REF_ARG: reference}
 
 
 def validate_oauth_ref(value: Any, ov_user_id: str) -> Dict[str, str]:
@@ -163,11 +174,13 @@ class ExternalFeishuToken:
             return self._token
 
 
-def check_feishu_auth() -> None:
-    """Reject partial parse results after an execution-scoped auth failure."""
+def check_feishu_auth(resource: "LocalResource") -> "LocalResource":
+    """Reject and clean partial downloads before parsing, including missing embedded media."""
     provider = current_feishu_token.get()
     if provider is not None and provider._error is not None:
+        resource.cleanup()
         raise provider._error
+    return resource
 
 
 @contextmanager

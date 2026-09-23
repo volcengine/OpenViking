@@ -22,10 +22,8 @@ from uuid import uuid4
 
 from openviking.connector.auth import (
     OAUTH_REF_ARG,
-    feishu_token_scope,
+    feishu_auth_scope,
     is_external_feishu_auth,
-    prepare_feishu_auth,
-    restore_feishu_token,
     validate_feishu_auth_args,
 )
 from openviking.core.namespace import is_content_root_uri
@@ -828,22 +826,21 @@ class ResourceService:
 
                 internal_kwargs[PREPARED_FILE_ID_ARG] = msg.understanding_file_id
             try:
-                token_provider = None
-                if is_external_feishu_auth(task_auth):
-                    auth_kwargs = {}
-                    if msg.understanding_response_id is None and msg.understanding_file_id is None:
-                        token_provider, token = await restore_feishu_token(
-                            self._connector, task_auth, path=msg.path, ctx=ctx
-                        )
-                        auth_kwargs = {FEISHU_ACCESS_TOKEN_ARG: token}
-                    watch_auth_state = task_auth if msg.watch_interval > 0 else None
-                else:
+                async with feishu_auth_scope(
+                    self._connector,
+                    path=msg.path,
+                    ctx=ctx,
+                    args=internal_kwargs,
+                    state=task_auth,
+                    prepared=(
+                        msg.understanding_response_id is not None
+                        or msg.understanding_file_id is not None
+                    ),
+                ) as auth_state:
                     auth_kwargs, watch_auth_state = self._restore_source_task_auth(
-                        msg,
-                        task_auth or {},
+                        msg, auth_state or {}
                     )
-                internal_kwargs.update(auth_kwargs)
-                with feishu_token_scope(token_provider):
+                    internal_kwargs.update(auth_kwargs)
                     result = await self._execute_resource_ingestion(
                         path=msg.path,
                         ctx=ctx,
@@ -923,6 +920,8 @@ class ResourceService:
         if not task_auth:
             return {}, None
         creating_watch = msg.watch_interval > 0 and not msg.skip_watch_management
+        if is_external_feishu_auth(task_auth):
+            return {}, task_auth if msg.watch_interval > 0 else None
         if is_git_http_auth_state(task_auth):
             auth_config = git_http_auth_config_from_state(task_auth, msg.path)
             watch_auth_state = dict(task_auth) if creating_watch else None
@@ -1936,13 +1935,10 @@ class ResourceService:
             path = require_remote_resource_source(path)
             kwargs.setdefault("request_validator", ensure_public_remote_target)
 
-        external_auth_state, token_provider = await prepare_feishu_auth(
-            connector, path=path, ctx=ctx, args=kwargs
-        )
-        if external_auth_state is not None:
-            normalized_args.watch_auth_state = external_auth_state
-
-        with feishu_token_scope(token_provider):
+        async with feishu_auth_scope(
+            connector, path=path, ctx=ctx, args=kwargs, state=normalized_args.watch_auth_state
+        ) as watch_auth_state:
+            normalized_args.watch_auth_state = watch_auth_state
             source_plan = await self._prepare_standard_source_plan(
                 path=path,
                 ctx=ctx,

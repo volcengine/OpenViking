@@ -14,7 +14,6 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.connector.auth import check_feishu_auth
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
 from openviking.parse.image_rewrite import rewrite_image_uris
@@ -719,13 +718,6 @@ class ResourceProcessor:
                         _metrics_account_id=metrics_account_id,
                         **kwargs,
                     )
-                try:
-                    check_feishu_auth()
-                except OpenVikingError:
-                    await self._cleanup_parse_result_artifact(
-                        parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
-                    )
-                    raise
                 result["source_path"] = parse_result.source_path or path
                 result["meta"] = parse_result.meta
 

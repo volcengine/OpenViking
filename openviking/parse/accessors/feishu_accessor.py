@@ -452,7 +452,9 @@ class FeishuAccessor(DataAccessor):
             source,
             config=kwargs.get("feishu_config"),
         )
-        return await worker._access(source, **kwargs)
+        from openviking.connector.auth import check_feishu_auth
+
+        return check_feishu_auth(await worker._access(source, **kwargs))
 
     async def _access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
