@@ -303,10 +303,8 @@ class TestWatchTaskCreation:
         )
 
         assert "tags_result" not in result
-        assert resource_service._resource_processor.calls[-1]["ingest_options"] == IngestOptions(
-            search_tags=["team=search"],
-            search_tag_mode="append",
-        )
+        assert resource_service._resource_processor.calls[-1]["tags"] == ["team=search"]
+        assert resource_service._resource_processor.calls[-1]["tag_mode"] == "append"
 
     @pytest.mark.asyncio
     async def test_add_resource_rejects_invalid_tag_mode_before_processing(

@@ -27,7 +27,7 @@ from openviking.resource.processing_mode import (
     normalize_processing_mode,
 )
 from openviking.server.identity import RequestContext
-from openviking.storage.acl import AclAction, AclUpdate
+from openviking.storage.acl import AclAction, AclSpec, AclUpdate
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
@@ -656,6 +656,9 @@ class ResourceProcessor:
         summarize: bool = False,
         stage_callback: Optional[Callable[[str], Any]] = None,
         prepared_resource: Optional["LocalResource"] = None,
+        tags: Optional[List[str]] = None,
+        tag_mode: str = "replace",
+        acl: AclSpec | Dict[str, Any] | None = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -675,8 +678,7 @@ class ResourceProcessor:
         }
         defer_post_processing = bool(kwargs.pop("defer_post_processing", False))
         preacquired_lock = kwargs.pop("resource_lock", None)
-        ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
-        acl = kwargs.pop("acl", None)
+        ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         to_is_directory = bool(kwargs.pop("to_is_directory", False))
         telemetry = get_current_telemetry()
         metrics_account_id = getattr(ctx, "account_id", None)
@@ -1031,7 +1033,8 @@ class ResourceProcessor:
                     resource_lock=resource_lock,
                     summarize=summarize,
                     ingest_options=ingest_options,
-                    **kwargs,
+                    build_index=bool(kwargs.get("build_index", True)),
+                    processing_mode=normalize_processing_mode(kwargs.get("processing_mode")),
                 )
                 if post_result.get("warnings"):
                     result.setdefault("warnings", []).extend(post_result["warnings"])
@@ -1050,7 +1053,8 @@ class ResourceProcessor:
         resource_lock: Optional[Dict[str, Any]] = None,
         summarize: bool = False,
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
-        **kwargs: Any,
+        build_index: bool = True,
+        ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
         """Run the queue-producing phase for a resource already stored in VikingFS."""
         from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
@@ -1073,11 +1077,10 @@ class ResourceProcessor:
         source_committed = bool(prepared.get("source_committed"))
         metrics_account_id = getattr(ctx, "account_id", None)
         target_preexisting = bool(prepared.get("target_preexisting"))
-        build_index = bool(kwargs.get("build_index", True))
         processing_mode = normalize_processing_mode(processing_mode)
         vectors_only = processing_mode == VECTORS_ONLY
         root_is_file = bool(prepared.get("root_is_file"))
-        ingest_options = IngestOptions.from_value(kwargs.pop("ingest_options", None))
+        ingest_options = ingest_options or IngestOptions()
         if prepared.get("acl_update") is not None:
             ingest_options = replace(
                 ingest_options, acl_update=AclUpdate.model_validate(prepared["acl_update"])
@@ -1169,7 +1172,6 @@ class ResourceProcessor:
                             semantic_source=semantic_source,
                             generation_trigger="resource_ingest",
                             semantic_plan=semantic_plan,
-                            **kwargs,
                         )
                         if semantic_plan is not None and summary_result.get("status") != "success":
                             raise RuntimeError(

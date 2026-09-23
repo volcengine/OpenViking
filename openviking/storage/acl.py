@@ -381,22 +381,26 @@ class AclManager:
         self, uris: Iterable[str], ctx: RequestContext, *, update: AclUpdate | None = None
     ) -> dict[str, EffectiveAcl]:
         unique_uris = list(dict.fromkeys(uris))
-        paths = {uri: acl_ancestors(uri) for uri in unique_uris}
+        ancestors_by_uri = {uri: acl_ancestors(uri) for uri in unique_uris}
         exact_records = await self._records_for_uris(unique_uris, ctx)
         exact_groups = self._group_by_uri(exact_records)
-        result = {
-            uri: effective
-            for uri, records in exact_groups.items()
-            if (effective := self._effective_from_records(records)).enabled
-            and not (update and update.uri in paths[uri])
-        }
-        if "viking://resources" in paths:
+        result: dict[str, EffectiveAcl] = {}
+        for uri, records in exact_groups.items():
+            effective = self._effective_from_records(records)
+            if not effective.enabled:
+                continue
+            # An update to this node or an ancestor requires recalculating inheritance.
+            if update is not None and update.uri in ancestors_by_uri[uri]:
+                continue
+            result[uri] = effective
+
+        if "viking://resources" in ancestors_by_uri:
             result["viking://resources"] = _RESOURCES_ROOT_ACL
 
-        missing = [uri for uri in unique_uris if uri not in result]
-        if missing:
+        unresolved_uris = [uri for uri in unique_uris if uri not in result]
+        if unresolved_uris:
             ancestor_records = await self._records_for_uris(
-                (ancestor for uri in missing for ancestor in paths[uri]), ctx
+                (ancestor for uri in unresolved_uris for ancestor in ancestors_by_uri[uri]), ctx
             )
             ancestor_groups = self._group_by_uri(ancestor_records)
             acl_map = {
@@ -404,13 +408,13 @@ class AclManager:
                 for uri, records in ancestor_groups.items()
             }
             acl_map["viking://resources"] = _RESOURCES_ROOT_ACL
-            for uri in missing:
+            for uri in unresolved_uris:
                 effective = EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
-                for ancestor in paths[uri]:
+                for ancestor in ancestors_by_uri[uri]:
                     stored = acl_map.get(ancestor)
                     direct = stored.direct if stored is not None else DirectAcl()
                     mode = stored.mode if stored is not None else AclMode.NONE
-                    if update and ancestor == update.uri:
+                    if update is not None and ancestor == update.uri:
                         if update.acl.entries is not None:
                             direct = DirectAcl.from_entries(update.acl.entries)
                         if update.acl.acl_mode is not None:

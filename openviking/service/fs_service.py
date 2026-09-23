@@ -348,15 +348,6 @@ class FSService:
 
         abstract = self._normalize_directory_description(description)
         if not abstract:
-            if await viking_fs.exists(abstract_uri, ctx=ctx):
-                if acl_update:
-                    await viking_fs.set_acl(
-                        directory_uri,
-                        acl_update.acl.entries,
-                        ctx=ctx,
-                        acl_mode=acl_update.acl.acl_mode,
-                    )
-                return
             abstract = f"# {uri_leaf_name(directory_uri)}"
 
         await viking_fs.write_file(
