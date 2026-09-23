@@ -362,6 +362,88 @@ def parse_value_with_tolerance(value, annotation):
         raise e
 
 
+# Conventional values for required identity fields that models routinely omit.
+# Only applied when the field is absent or empty - never overwrites real data.
+_REQUIRED_FIELD_DEFAULTS = {
+    "user": "default",
+    "category": "general",
+}
+
+# New memory items must carry a page_id; the extraction prompt reserves
+# values >= 100 for newly created pages.
+_MIN_GENERATED_PAGE_ID = 100
+
+
+def _fill_required_identity_defaults(parsed_data: Any, model_class: Any) -> None:
+    """Fill well-known missing REQUIRED fields on memory items, in place.
+
+    Models routinely omit boilerplate identity fields (``user`` on preferences,
+    ``category`` on entities, ``page_id`` on newly created items) while getting
+    the actual memory content right.  Pydantic then rejects the item, and the
+    per-field tolerance fallback silently drops the whole list while still
+    reporting ``error=None`` - the extraction reports success and stores nothing.
+
+    Supplying the conventional defaults keeps the model's real content instead
+    of discarding it.  Fields that already carry a value are never touched.
+    """
+    if not isinstance(parsed_data, dict) or model_class is None:
+        return
+    try:
+        schema = model_class.model_json_schema()
+    except Exception:
+        return
+    defs = schema.get("$defs") or {}
+    props = schema.get("properties") or {}
+
+    # First pass: collect all existing page_id values across all operation lists.
+    # This ensures generated IDs never collide with valid IDs already in the response.
+    used_page_ids: set[int] = set()
+    for field, spec in props.items():
+        value = parsed_data.get(field)
+        if not isinstance(value, list):
+            continue
+        ref = ((spec.get("items") or {}).get("$ref") or "").rsplit("/", 1)[-1]
+        item_required = set((defs.get(ref) or {}).get("required") or [])
+        if "page_id" not in item_required:
+            continue
+        for item in value:
+            if isinstance(item, dict) and item.get("page_id") not in (None, ""):
+                try:
+                    used_page_ids.add(int(item["page_id"]))
+                except (ValueError, TypeError):
+                    pass
+
+    # Second pass: fill missing identity fields.
+    # Start next_page_id from _MIN_GENERATED_PAGE_ID, skipping any already used.
+    next_page_id = _MIN_GENERATED_PAGE_ID
+    while next_page_id in used_page_ids:
+        next_page_id += 1
+
+    for field, spec in props.items():
+        value = parsed_data.get(field)
+        if not isinstance(value, list):
+            continue
+        ref = ((spec.get("items") or {}).get("$ref") or "").rsplit("/", 1)[-1]
+        required = set((defs.get(ref) or {}).get("required") or [])
+        if not required:
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            for name in required:
+                if item.get(name) not in (None, ""):
+                    continue
+                if name == "page_id":
+                    # Find the next unused page_id to avoid collisions
+                    while next_page_id in used_page_ids:
+                        next_page_id += 1
+                    item[name] = next_page_id
+                    used_page_ids.add(next_page_id)
+                    next_page_id += 1
+                elif name in _REQUIRED_FIELD_DEFAULTS:
+                    item[name] = _REQUIRED_FIELD_DEFAULTS[name]
+
+
 def parse_json_with_stability(
     content: str,
     model_class: Optional[Type] = None,
@@ -439,6 +521,11 @@ def parse_json_with_stability(
     # If no model class, return the raw dict
     if model_class is None:
         return parsed_data, None
+
+    # Supply conventional values for required identity fields the model omitted;
+    # otherwise a single absent boilerplate field makes pydantic reject the item
+    # and the per-field tolerance below silently empties the whole list.
+    _fill_required_identity_defaults(parsed_data, model_class)
 
     # Layer 4 & 5: Validate with model
     try:
