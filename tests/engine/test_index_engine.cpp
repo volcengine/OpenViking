@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 #include "index/index_engine.h"
+#include "store/bytes_row.h"
 #include "store/persist_store.h"
 #include "store/volatile_store.h"
 #include <iostream>
@@ -33,6 +34,27 @@ void expect_filter_projection(IndexEngine& engine, const std::string& dsl,
         first_word, expected_first_word);
     exit(1);
   }
+}
+
+void test_list_string_deserialize_rejects_truncated_payload() {
+  SPDLOG_INFO("[Running] test_list_string_deserialize_rejects_truncated_payload...");
+
+  auto schema = std::make_shared<Schema>(std::vector<FieldDef>{{"tags", FieldType::LIST_STRING, 0, std::vector<std::string>{}}});
+  BytesRow row(schema);
+
+  std::vector<Value> data;
+  data.emplace_back(std::vector<std::string>{"alpha", "beta"});
+  const std::string serialized = row.serialize(data);
+  const std::string truncated = serialized.substr(0, serialized.size() - 1);
+
+  try {
+    (void)row.deserialize(truncated);
+    SPDLOG_ERROR("Truncated LIST_STRING payload was accepted");
+    exit(1);
+  } catch (const std::exception&) {
+  }
+
+  SPDLOG_INFO("[Passed] test_list_string_deserialize_rejects_truncated_payload");
 }
 
 void test_basic_workflow() {
@@ -585,6 +607,7 @@ void test_paged_store_scan() {
 
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  test_list_string_deserialize_rejects_truncated_payload();
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
