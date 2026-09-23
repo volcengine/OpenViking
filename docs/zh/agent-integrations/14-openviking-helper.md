@@ -56,6 +56,19 @@ Helper 会按 Agent 和项目展示本地 memory、rule 文件及 `SKILL.md` 技
 
 为展示接入状态、会话和记忆，Helper 会读取本机对应 Agent 的配置与本地数据。只有执行同步或使用 OpenViking 服务能力时，相关内容才会发送到当前激活的服务配置。同步前请确认服务地址，并检查待同步内容是否包含敏感信息。
 
+## 故障排查
+
+### Memory / Sessions 内容为空，提示 "Access denied for viking://user/..."
+
+在 account ID 与 user ID 不一致的自部署服务上，服务端会正确拒绝访问其他主体的用户命名空间。如果 Helper 版本用 account ID 构造这类 URI，Memory 页签会整页为空（每个分类都显示"暂无 memory 条目"），状态栏报 `Access denied for viking://user/default/memories` 之类的错误；Sessions 页签也可能因同一原因退化为未知的同步状态。
+
+排查方法：
+
+1. 打开 Helper 的连接配置文件（macOS 为 `~/Library/Application Support/openviking-helper/openviking-helper.json`），对比 `accountId` 与 `userId`。两者相同时不会出现该症状。
+2. 确认同一服务、同一 API key、同一台机器上 `ov` CLI 与 Web Studio 均可正常访问。这类客户端在服务端解析登录身份，不受影响。
+
+用户命名空间按 user ID 寻址，与 account ID 无关。显式用户路径应使用 `viking://user/{user_id}/...`；不知道 user ID 的客户端应使用家目录别名 `viking://~/...`，服务端会基于认证身份展开为 canonical 路径（参见[资源 URI](../api/02-resources.md)）。若你的 Helper 配置中两个 ID 不同且页签持续为空，请携带两个身份值到项目 issue 跟踪器上报，以便修正对应 Helper 版本。
+
 ## 参见
 
 - [集成能力参考](./16-capability-reference.md)
