@@ -36,6 +36,7 @@ from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.storage.viking_fs import LS_ALL_NODES
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
 
@@ -308,7 +309,7 @@ class DirectoryParser(BaseParser):
 
             viking_fs = self._get_viking_fs()
             temp_uri = self._create_temp_uri()
-            target_uri = f"{temp_uri}/{dir_name}"
+            target_uri = normalize_storage_target_uri(f"{temp_uri}/{dir_name}")
             await viking_fs.mkdir(temp_uri, exist_ok=True)
             await viking_fs.mkdir(target_uri, exist_ok=True)
 
@@ -835,7 +836,11 @@ class DirectoryParser(BaseParser):
 
         if preserve_structure:
             parent = str(PurePosixPath(classified_file.rel_path).parent)
-            dest = f"{target_uri}/{parent}" if parent != "." else target_uri
+            dest = (
+                normalize_storage_target_uri(f"{target_uri}/{parent}")
+                if parent != "."
+                else target_uri
+            )
         else:
             dest = target_uri
         try:
@@ -921,9 +926,11 @@ class DirectoryParser(BaseParser):
             try:
                 content = src_file.read_bytes()
                 if preserve_structure:
-                    dst_uri = f"{target_uri}/{rel_path}"
+                    dst_uri = normalize_storage_target_uri(f"{target_uri}/{rel_path}")
                 else:
-                    dst_uri = f"{target_uri}/{PurePosixPath(rel_path).name}"
+                    dst_uri = normalize_storage_target_uri(
+                        f"{target_uri}/{PurePosixPath(rel_path).name}"
+                    )
                 await viking_fs.write_file(dst_uri, content)
                 return {"ok": True, "meta": {}, "error": None}
             except Exception as exc:
@@ -956,9 +963,11 @@ class DirectoryParser(BaseParser):
         try:
             content = src_file.read_bytes()
             if preserve_structure:
-                dst_uri = f"{target_uri}/{rel_path}"
+                dst_uri = normalize_storage_target_uri(f"{target_uri}/{rel_path}")
             else:
-                dst_uri = f"{target_uri}/{PurePosixPath(rel_path).name}"
+                dst_uri = normalize_storage_target_uri(
+                    f"{target_uri}/{PurePosixPath(rel_path).name}"
+                )
             await viking_fs.write_file(dst_uri, content)
             return {"ok": True, "meta": {}, "error": None}
         except Exception as exc:
@@ -1062,15 +1071,16 @@ class DirectoryParser(BaseParser):
                         for entry in destination_entries
                         if entry.get("name") not in ("", ".", "..")
                     }
-                    if payload.get("name") not in destination_names:
+                    destination_uri = normalize_storage_target_uri(
+                        f"{dest_uri.rstrip('/')}/{payload['name']}"
+                    )
+                    destination_name = destination_uri.rsplit("/", 1)[-1]
+                    if destination_name not in destination_names:
                         src = payload.get(
                             "uri",
                             f"{wrapper_uri.rstrip('/')}/{payload['name']}",
                         )
-                        await viking_fs.move_file(
-                            src,
-                            f"{dest_uri.rstrip('/')}/{payload['name']}",
-                        )
+                        await viking_fs.move_file(src, destination_uri)
                         try:
                             await viking_fs.delete_temp(src_temp_uri)
                         except Exception:
@@ -1087,7 +1097,7 @@ class DirectoryParser(BaseParser):
             ):
                 continue
             src = entry.get("uri", f"{src_temp_uri.rstrip('/')}/{name}")
-            dst = f"{dest_uri.rstrip('/')}/{name}"
+            dst = normalize_storage_target_uri(f"{dest_uri.rstrip('/')}/{name}")
             if DirectoryParser._is_dir_entry(entry):
                 await DirectoryParser._recursive_move(viking_fs, src, dst)
             else:
@@ -1164,7 +1174,7 @@ class DirectoryParser(BaseParser):
             ):
                 continue
             s = f"{src_uri.rstrip('/')}/{name}"
-            d = f"{dst_uri.rstrip('/')}/{name}"
+            d = normalize_storage_target_uri(f"{dst_uri.rstrip('/')}/{name}")
             if DirectoryParser._is_dir_entry(entry):
                 await DirectoryParser._recursive_move(viking_fs, s, d)
             else:

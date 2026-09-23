@@ -112,6 +112,20 @@ async def test_read_content(client_with_resource):
     assert body["result"] is not None
 
 
+async def test_read_content_falls_back_to_legacy_space_uri(client, service):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    legacy_uri = "viking://resources/legacy folder/report final.md"
+    await service.viking_fs.write_file(legacy_uri, "legacy content", ctx=ctx)
+
+    resp = await client.get(
+        "/api/v1/content/read",
+        params={"uri": "viking://resources/legacy%20folder/report%20final.md"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "legacy content"
+
+
 async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(monkeypatch):
     ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
     uri = "viking://user/test_user/memories/notes/private.md"

@@ -48,7 +48,10 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
 from openviking.utils.ingest_options import IngestOptions
-from openviking.utils.path_safety import validate_safe_viking_uri_path
+from openviking.utils.path_safety import (
+    normalize_storage_target_uri,
+    validate_safe_viking_uri_path,
+)
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -133,7 +136,9 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
-        normalized_uri = self._validate_uri_path(uri, field_name="uri")
+        normalized_uri = normalize_storage_target_uri(
+            self._validate_uri_path(uri, field_name="uri")
+        )
         self._ensure_content_write_policy(normalized_uri)
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)

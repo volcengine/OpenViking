@@ -40,8 +40,9 @@ from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
 from openviking.utils.embedding_utils import vectorize_directory_meta
+from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
-from openviking_cli.exceptions import DeadlineExceededError, NotInitializedError
+from openviking_cli.exceptions import DeadlineExceededError, NotFoundError, NotInitializedError
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -966,7 +967,14 @@ class FSService:
         # always see a real viking:// URI. VikingFS.read_file also resolves, which
         # is harmless defense-in-depth when the input was already a URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
-        content = await viking_fs.read_file(resolved_uri, ctx=ctx)
+        try:
+            content = await viking_fs.read_file(resolved_uri, ctx=ctx)
+        except NotFoundError:
+            if "%20" not in resolved_uri:
+                raise
+            legacy_uri = validate_safe_viking_uri_path(resolved_uri.replace("%20", " "))
+            content = await viking_fs.read_file(legacy_uri, ctx=ctx)
+            resolved_uri = legacy_uri
         skill_name = get_skill_name_from_uri(resolved_uri)
         if skill_name and self._privacy_config_service:
             current = await self._privacy_config_service.get_current(

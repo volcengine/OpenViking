@@ -1012,6 +1012,32 @@ async def test_replace_and_append_create_missing_file(monkeypatch, mode):
 
 
 @pytest.mark.asyncio
+async def test_write_normalizes_whitespace_before_storage_checks(monkeypatch):
+    requested_uri = "viking://resources/team notes/final draft.md"
+    canonical_uri = "viking://resources/team_notes/final_draft.md"
+    root_uri = "viking://resources/team_notes"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(
+        file_uri=canonical_uri,
+        root_uri=root_uri,
+        file_exists=False,
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", AsyncMock(return_value=None))
+
+    result = await coordinator.write(
+        uri=requested_uri,
+        content="content",
+        mode="create",
+        ctx=ctx,
+    )
+
+    assert result["uri"] == canonical_uri
+    assert viking_fs.content == {canonical_uri: "content"}
+
+
+@pytest.mark.asyncio
 async def test_create_mode_new_file_success(monkeypatch):
     file_uri = "viking://user/default/memories/new_file.md"
     root_uri = "viking://user/default/memories"

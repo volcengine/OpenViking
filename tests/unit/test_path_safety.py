@@ -3,7 +3,11 @@
 
 import pytest
 
-from openviking.utils.path_safety import safe_join_viking_uri, sanitize_relative_viking_path
+from openviking.utils.path_safety import (
+    normalize_storage_target_uri,
+    safe_join_viking_uri,
+    sanitize_relative_viking_path,
+)
 
 
 def test_sanitize_relative_viking_path_normalizes_windows_separators():
@@ -22,6 +26,17 @@ def test_sanitize_relative_viking_path_preserves_posix_separators():
 
 def test_sanitize_relative_viking_path_preserves_literal_current_directory_segment():
     assert sanitize_relative_viking_path("./scripts/check.py") == "./scripts/check.py"
+
+
+def test_normalize_storage_target_uri_preserves_other_valid_characters():
+    assert (
+        normalize_storage_target_uri("viking://resources/reports #1/final draft.md")
+        == "viking://resources/reports_1/final_draft.md"
+    )
+    assert (
+        normalize_storage_target_uri("viking://resources/reports#1/final.md")
+        == "viking://resources/reports#1/final.md"
+    )
 
 
 @pytest.mark.parametrize(
