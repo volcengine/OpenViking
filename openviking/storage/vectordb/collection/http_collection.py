@@ -8,6 +8,7 @@ import requests
 
 import openviking
 from openviking.storage.vectordb.collection.collection import Collection, ICollection
+from openviking.storage.vectordb.collection.diversity import VectorDiversityOptions
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
@@ -393,29 +394,40 @@ class HttpCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        diversity: Optional[VectorDiversityOptions] = None,
     ) -> SearchResult:
         url = self.url_prefix + "api/vikingdb/data/search/vector"
+        payload = {
+            "project": self.project_name,
+            "collection_name": self.collection_name,
+            "index_name": index_name,
+            "dense_vector": json.dumps(dense_vector) if dense_vector else None,
+            "sparse_vector": json.dumps(sparse_vector) if sparse_vector else None,
+            "filter": json.dumps(filters) if filters else None,
+            "output_fields": json.dumps(output_fields) if output_fields else None,
+            "limit": limit,
+            "offset": offset,
+        }
+        if diversity is not None:
+            payload["diversity"] = diversity.model_dump()
         response = requests.post(
             url,
             headers=headers,
-            json={
-                "project": self.project_name,
-                "collection_name": self.collection_name,
-                "index_name": index_name,
-                "dense_vector": json.dumps(dense_vector) if dense_vector else None,
-                "sparse_vector": json.dumps(sparse_vector) if sparse_vector else None,
-                "filter": json.dumps(filters) if filters else None,
-                "output_fields": json.dumps(output_fields) if output_fields else None,
-                "limit": limit,
-                "offset": offset,
-            },
+            json=payload,
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"SearchByVector response: {response.text}")
         if response.status_code != 200:
+            if diversity is not None:
+                raise RuntimeError(
+                    f"Failed to search by vector: HTTP {response.status_code}: {response.text}"
+                )
             return SearchResult()
 
-        data = json.loads(response.text).get("data", {})
+        if diversity is not None:
+            data = _parse_success_response(response, "search by vector").get("data", {})
+        else:
+            data = json.loads(response.text).get("data", {})
         result = SearchResult()
         if isinstance(data, dict) and "data" in data:
             result.data = [
