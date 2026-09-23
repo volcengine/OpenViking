@@ -455,11 +455,11 @@ enum Commands {
         /// Comma-separated k=v retrieval tags to apply after import
         #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tags is provided
+        /// Tag update mode; clear does not require --tags
         #[arg(
             long = "tag-mode",
             default_value = "replace",
-            value_parser = ["replace", "append"],
+            value_parser = ["replace", "append", "clear"],
             help_heading = "Common options"
         )]
         tag_mode: String,
@@ -746,8 +746,8 @@ enum Commands {
         /// Comma-separated k=v retrieval tags to write with the content
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
-        /// Tag update mode when --tags is provided
-        #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append"])]
+        /// Tag update mode; clear does not require --tags
+        #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append", "clear"])]
         tag_mode: String,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
@@ -1260,11 +1260,11 @@ enum Commands {
         /// Comma-separated k=v retrieval tags for rebuilt vector records
         #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tags is provided
+        /// Tag update mode; clear does not require --tags
         #[arg(
             long = "tag-mode",
             default_value = "replace",
-            value_parser = ["replace", "append"],
+            value_parser = ["replace", "append", "clear"],
             help_heading = "Common options"
         )]
         tag_mode: String,
@@ -4744,6 +4744,53 @@ mod tests {
             }
             _ => panic!("expected add-resource command"),
         }
+    }
+
+    #[test]
+    fn cli_parses_clear_tag_mode_without_tags() {
+        let add = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("add-resource clear mode should parse");
+        match add.command {
+            Commands::AddResource { tags, tag_mode, .. } => {
+                assert!(tags.is_empty());
+                assert_eq!(tag_mode, "clear");
+            }
+            _ => panic!("expected add-resource command"),
+        }
+
+        let write = Cli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/demo.md",
+            "--content",
+            "content",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("write clear mode should parse");
+        assert!(matches!(
+            write.command,
+            Commands::Write { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+        ));
+
+        let reindex = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("reindex clear mode should parse");
+        assert!(matches!(
+            reindex.command,
+            Commands::Reindex { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+        ));
     }
 
     #[test]

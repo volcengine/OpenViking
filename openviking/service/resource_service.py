@@ -152,7 +152,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
     }
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
-_ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append"})
+_ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append", "clear"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
     {
@@ -323,8 +323,9 @@ class ResourceService:
         tag_mode: str,
     ) -> Dict[str, Any]:
         watch_kwargs = self._sanitize_watch_processor_kwargs(processor_kwargs)
-        if tags is not None:
-            watch_kwargs["tags"] = tags
+        if tags is not None or tag_mode == "clear":
+            if tags is not None:
+                watch_kwargs["tags"] = tags
             watch_kwargs["tag_mode"] = tag_mode
         return watch_kwargs
 
@@ -348,7 +349,7 @@ class ResourceService:
         tags: Optional[List[str]],
         tag_mode: str,
     ) -> None:
-        if tags is not None and tag_mode not in _ADD_RESOURCE_TAG_MODES:
+        if (tags is not None or tag_mode == "clear") and tag_mode not in _ADD_RESOURCE_TAG_MODES:
             raise InvalidArgumentError(f"unsupported tag mode: {tag_mode}")
 
     def _add_resource_ingest_tag_kwargs(
@@ -357,7 +358,7 @@ class ResourceService:
         tags: Optional[List[str]],
         tag_mode: str,
     ) -> Dict[str, Any]:
-        if tags is None:
+        if tags is None and tag_mode != "clear":
             return {}
         return {"ingest_options": IngestOptions.from_search_tags(tags, mode=tag_mode)}
 

@@ -578,7 +578,11 @@ def _field_patch(request: RequestIntent, record: VectorRecordSnapshot | None) ->
             continue
         candidate = FieldPatch({intent.field: intent.value}, {intent.field: intent.mode})
         desired = candidate.resolve(existing).get(intent.field)
-        if record is None or existing.get(intent.field) != desired:
+        current = FieldPatch(
+            {intent.field: existing.get(intent.field)},
+            {intent.field: "replace"},
+        ).resolve({})[intent.field]
+        if record is None or current != desired:
             values[intent.field] = intent.value
             modes[intent.field] = intent.mode
     return FieldPatch(values, modes) if values else None

@@ -405,6 +405,40 @@ class TestWatchTaskCreation:
             search_tag_mode="append",
         )
 
+    def test_clear_without_tags_builds_clear_ingest_options(
+        self, resource_service: ResourceService
+    ):
+        assert resource_service._add_resource_ingest_tag_kwargs(
+            tags=None,
+            tag_mode="clear",
+        ) == {
+            "ingest_options": IngestOptions(
+                search_tags=[],
+                search_tag_mode="clear",
+            )
+        }
+
+    def test_watch_persists_clear_without_tags(self, resource_service: ResourceService):
+        assert resource_service._watch_processor_kwargs({}, None, "clear") == {
+            "tag_mode": "clear"
+        }
+
+    def test_add_resource_message_round_trip_preserves_clear_without_tags(self):
+        message = AddResourceMsg(
+            task_id="task-clear",
+            path="https://example.com/demo.md",
+            root_uri="viking://resources/demo",
+            account_id="acct",
+            user_id="user",
+            role="user",
+            tag_mode="clear",
+        )
+
+        restored = AddResourceMsg.from_dict(message.to_dict())
+
+        assert restored.tags is None
+        assert restored.tag_mode == "clear"
+
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(
         self, resource_service: ResourceService, request_context: RequestContext

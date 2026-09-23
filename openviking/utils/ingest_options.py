@@ -23,6 +23,11 @@ class IngestOptions:
     search_tags: Optional[list[str]] = None
     search_tag_mode: str = "replace"
 
+    @staticmethod
+    def vector_search_tag_mode(mode: str) -> str:
+        """Map request intent to the modes understood by vector backends."""
+        return "replace" if mode == "clear" else mode
+
     @classmethod
     def from_search_tags(
         cls,
@@ -30,10 +35,15 @@ class IngestOptions:
         *,
         mode: str = "replace",
     ) -> "IngestOptions":
+        if mode == "clear":
+            return cls(search_tags=[], search_tag_mode="clear")
         if tags is None:
             return cls()
+        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        if mode == "replace" and not normalized_tags:
+            return cls()
         return cls(
-            search_tags=normalize_search_tags(tags, discard_invalid=True),
+            search_tags=normalized_tags,
             search_tag_mode=mode,
         )
 
@@ -42,14 +52,13 @@ class IngestOptions:
         if value is None:
             return cls()
         if isinstance(value, IngestOptions):
-            return value
-        return cls(
-            search_tags=(
-                list(value.get("search_tags") or [])
-                if value.get("search_tags") is not None
-                else None
-            ),
-            search_tag_mode=str(value.get("search_tag_mode", "replace")),
+            return cls.from_search_tags(
+                value.search_tags,
+                mode=value.search_tag_mode,
+            )
+        return cls.from_search_tags(
+            value.get("search_tags"),
+            mode=str(value.get("search_tag_mode", "replace")),
         )
 
     def to_dict(self) -> dict[str, Any]:

@@ -2292,6 +2292,80 @@ async def test_tos_connector_forwards_tags_and_mode(
 
 
 @pytest.mark.asyncio
+async def test_tos_connector_forwards_clear_without_tags(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket/prefix",
+        ctx=ctx,
+        to="viking://resources/imports",
+        tag_mode="clear",
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["extra_params"] == {"tag_mode": "clear"}
+
+
+@pytest.mark.asyncio
+async def test_tos_connector_clear_ignores_invalid_tags(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket/prefix",
+        ctx=ctx,
+        to="viking://resources/imports",
+        tags=["invalid"],
+        tag_mode="clear",
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["extra_params"] == {"tag_mode": "clear"}
+
+
+@pytest.mark.asyncio
+async def test_tos_connector_ignores_empty_replace_tags(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket/prefix",
+        ctx=ctx,
+        to="viking://resources/imports",
+        tags=[],
+        tag_mode="replace",
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["extra_params"] is None
+
+
+@pytest.mark.asyncio
 async def test_monitor_links_reason_memory_on_success(
     monkeypatch,
     connector_config,

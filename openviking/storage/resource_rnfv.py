@@ -113,7 +113,7 @@ class RequestIntent:
             scalar_intents = (
                 ScalarIntent(
                     field="search_tags",
-                    mode=options.search_tag_mode,
+                    mode=IngestOptions.vector_search_tag_mode(options.search_tag_mode),
                     value=tuple(options.search_tags),
                     target_levels=(
                         frozenset({2}) if str(mode) == "vectors_only" else frozenset({0, 1, 2})

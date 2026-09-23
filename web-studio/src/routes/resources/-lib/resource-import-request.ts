@@ -76,7 +76,11 @@ export function buildResourceImportCommonBody({
     processing_mode: sourceCapabilities.nativeOptions
       ? additionalOptions.processingMode
       : 'semantic_and_vectors',
-    ...(tags.length ? { tags, tag_mode: additionalOptions.tagMode } : {}),
+    ...(tags.length
+      ? { tags, tag_mode: additionalOptions.tagMode }
+      : additionalOptions.tagMode === 'clear'
+        ? { tag_mode: 'clear' as const }
+        : {}),
     ...(mode === 'remote' &&
     sourceCapabilities.nativeOptions &&
     additionalOptions.sourceName.trim()

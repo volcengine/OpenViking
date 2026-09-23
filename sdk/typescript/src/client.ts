@@ -157,7 +157,10 @@ export class OpenVikingClient {
           ? options.args
           : undefined,
       tags: options.tags,
-      tag_mode: options.tags ? options.tagMode : undefined,
+      tag_mode:
+        options.tags !== undefined || options.tagMode === "clear"
+          ? (options.tagMode ?? "replace")
+          : undefined,
       telemetry: options.telemetry,
     });
     const local = await nodePathToBlob(source);
@@ -602,7 +605,9 @@ export class OpenVikingClient {
       processing_mode: options.processingMode,
       tags: options.tags,
       tag_mode:
-        options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
+        options.tags !== undefined || options.tagMode === "clear"
+          ? (options.tagMode ?? "replace")
+          : undefined,
       wait: options.wait,
       timeout: options.timeout,
       telemetry: options.telemetry,
@@ -668,7 +673,9 @@ export class OpenVikingClient {
       recursive: options.recursive ?? true,
       tags: options.tags,
       tag_mode:
-        options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
+        options.tags !== undefined || options.tagMode === "clear"
+          ? (options.tagMode ?? "replace")
+          : undefined,
     });
     return this.request("POST", "/api/v1/content/reindex", {
       body: mergeExtra(body, options.extra, ["tags", "tag_mode"]),

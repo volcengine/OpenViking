@@ -91,7 +91,7 @@ export interface AddResourceOptions extends WaitOptions {
   processingMode?: ProcessingMode;
   args?: JsonObject;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** Content write options. */
@@ -99,7 +99,7 @@ export interface WriteOptions extends WaitOptions {
   mode?: string;
   processingMode?: ProcessingMode;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -133,7 +133,7 @@ export interface ReindexOptions {
   dryRun?: boolean;
   recursive?: boolean;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** Semantic retrieval options shared by find and search. */

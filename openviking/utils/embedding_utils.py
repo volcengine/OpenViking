@@ -111,8 +111,9 @@ def _apply_ingest_options(
     ingest_options = IngestOptions.from_value(ingest_options)
     if not embedding_msg or ingest_options.search_tags is None:
         return
+    tag_mode = IngestOptions.vector_search_tag_mode(ingest_options.search_tag_mode)
     incoming_tags = list(ingest_options.search_tags or [])
-    if ingest_options.search_tag_mode == "append" and (
+    if tag_mode == "append" and (
         embedding_msg.action is IndexAction.MERGE
         or embedding_msg.context_data.get("_upsert_options", {}).get("partial_update") is False
     ):
@@ -123,7 +124,7 @@ def _apply_ingest_options(
         )
     embedding_msg.context_data["search_tags"] = incoming_tags
     embedding_msg.context_data.setdefault("_upsert_options", {})["search_tag_mode"] = (
-        ingest_options.search_tag_mode
+        tag_mode
     )
 
 

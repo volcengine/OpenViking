@@ -452,6 +452,28 @@ describe("OpenVikingClient", () => {
     expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toMatchObject({ tags: ["env=prod"], include_tags: true });
   });
 
+  it("sends clear tag mode without tags", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.addResource("https://example.com/demo.md", {
+      tagMode: "clear",
+    });
+    await client.write("resources/demo.md", "updated", { tagMode: "clear" });
+    await client.reindex("resources/demo.md", { tagMode: "clear" });
+
+    for (const call of fetcher.mock.calls) {
+      const body = JSON.parse(String(call[1]?.body));
+      expect(body).not.toHaveProperty("tags");
+      expect(body.tag_mode).toBe("clear");
+    }
+  });
+
   it("supports batch write, byte download, and resource extra", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
