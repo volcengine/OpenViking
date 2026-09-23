@@ -565,10 +565,32 @@ void expect_paged_store_scan(KVStore& store) {
   }
 }
 
+void expect_clear_data_works(KVStore& store) {
+  const std::vector<std::string> keys = {"clear:1", "clear:2"};
+  const std::vector<std::string> values = {"one", "two"};
+  if (store.put_data(keys, values) != 0) {
+    SPDLOG_ERROR("Clear-data test setup failed");
+    exit(1);
+  }
+  if (store.clear_data() != 0) {
+    SPDLOG_ERROR("Clear-data call failed");
+    exit(1);
+  }
+  if (!store.seek_range("clear:", "clear;").empty()) {
+    SPDLOG_ERROR("Clear-data left records behind");
+    exit(1);
+  }
+  if (store.clear_data() != 0) {
+    SPDLOG_ERROR("Clear-data was not idempotent");
+    exit(1);
+  }
+}
+
 void test_paged_store_scan() {
   SPDLOG_INFO("[Running] test_paged_store_scan...");
   VolatileStore volatile_store;
   expect_paged_store_scan(volatile_store);
+  expect_clear_data_works(volatile_store);
 
   const std::string db_path = "test_data_cpp/paged_persist_store";
   if (std::filesystem::exists(db_path)) {
@@ -578,6 +600,7 @@ void test_paged_store_scan() {
   {
     PersistStore persist_store(db_path);
     expect_paged_store_scan(persist_store);
+    expect_clear_data_works(persist_store);
   }
   std::filesystem::remove_all(db_path);
   SPDLOG_INFO("[Passed] test_paged_store_scan");
