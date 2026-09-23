@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Resource endpoints for OpenViking HTTP Server."""
 
-import asyncio
-from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -18,9 +16,9 @@ from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.responses import response_from_result
+from openviking.server.skill_ingest import ingest_temp_upload_skill, install_skills
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
-from openviking.service.skill_sources import describe_skill_sources, resolve_skill_source
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -181,7 +179,8 @@ async def temp_upload(
     signed ``?token=`` — minted by the MCP ``add_resource`` tool for local-file paths — the
     server additionally finishes ingestion in-request: it resolves the upload, calls
     ``add_resource`` with the token-bound ``to``/``reason``, and returns the final result, so
-    the agent never needs a second call. The ``?token=`` query param is consumed by the auth
+    the agent never needs a second call. Tokens minted by the MCP ``add_skill`` tool install
+    the upload as skills instead. The ``?token=`` query param is consumed by the auth
     dependency.
     """
     signed = getattr(request.state, "signed_upload", None)
@@ -192,6 +191,16 @@ async def temp_upload(
         temp_file_id = await store.save_upload(file, effective_upload_mode, _ctx)
         if signed is None:
             return {"temp_file_id": temp_file_id}
+        if signed.kind == "skill":
+            return await ingest_temp_upload_skill(
+                store,
+                temp_file_id,
+                _ctx,
+                target_uri=signed.skill_target_uri,
+                names=signed.skill_names,
+                list_only=signed.list_only,
+                source_type="mcp",
+            )
         return await ingest_temp_upload(
             store,
             temp_file_id,
@@ -256,6 +265,7 @@ async def add_resource(
     allow_local_path_resolution = False
     original_filename = None
     resolved = None
+    shared_source_ref = None
     if request.temp_file_id:
         if request.watch_interval > 0:
             raise InvalidArgumentError(
@@ -265,12 +275,20 @@ async def add_resource(
                 "sitemap / RSS source instead, or re-add the resource when the "
                 "source changes."
             )
-        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
-            request.temp_file_id, _ctx
-        )
-        path = resolved.local_path
-        original_filename = resolved.original_filename
-        allow_local_path_resolution = True
+        store = TempUploadStore.build(http_request.app.state.config)
+        # A shared upload already lives in durable storage: the API only validates
+        # a reference and the SOURCE worker downloads it once, avoiding a second
+        # API-side download + task re-stage. Local uploads keep the copy path.
+        shared_source_ref = await store.resolve_shared_reference(request.temp_file_id, _ctx)
+        if shared_source_ref is not None:
+            path = shared_source_ref.original_filename or request.temp_file_id
+            original_filename = shared_source_ref.original_filename or None
+            allow_local_path_resolution = True
+        else:
+            resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+            path = resolved.local_path
+            original_filename = resolved.original_filename
+            allow_local_path_resolution = True
     elif path is not None:
         path = require_remote_resource_source(path, declared_connector_add_type=request.add_type)
     if path is None:
@@ -320,6 +338,7 @@ async def add_resource(
                 internal_task=request.internal_task,
                 is_active=request.is_active,
                 args=request.args,
+                shared_source=shared_source_ref,
                 **kwargs,
             )
         except Exception:
@@ -345,7 +364,6 @@ async def add_skill(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add skill to OpenViking."""
-    service = get_service()
     target_uri = resolve_path_variables(request.target_uri).strip() if request.target_uri else ""
     if target_uri:
         target_uri = validate_content_target_uri(
@@ -381,43 +399,19 @@ async def add_skill(
 
     async def _add() -> dict[str, Any]:
         try:
-            async with resolve_skill_source(
+            return await install_skills(
                 data,
+                _ctx,
                 names=request.skills,
-                allow_local_path_resolution=allow_local_path_resolution,
+                list_only=request.list_only,
+                wait=request.wait,
+                timeout=request.timeout,
+                target_uri=target_uri,
                 source_metadata=source_metadata,
-            ) as targets:
-                if request.list_only:
-                    return await asyncio.to_thread(describe_skill_sources, targets)
-                installed = []
-                for skill_data, skill_source in targets:
-
-                    async def _install(skill_data=skill_data, skill_source=skill_source):
-                        result = await service.resources.add_skill(
-                            data=skill_data,
-                            ctx=_ctx,
-                            wait=request.wait,
-                            timeout=request.timeout,
-                            allow_local_path_resolution=isinstance(skill_data, Path),
-                            source_path_hint=source_path_hint,
-                            target_uri=target_uri,
-                            source_metadata=skill_source,
-                        )
-                        return result
-
-                    # Each skill owns its own queue wait tracker and task ID.
-                    if len(targets) == 1:
-                        installed.append(await _install())
-                    else:
-                        execution = await run_operation(
-                            operation="resources.add_skill",
-                            telemetry=request.telemetry,
-                            fn=_install,
-                        )
-                        installed.append(execution.result)
-                if len(installed) == 1:
-                    return installed[0]
-                return {"installed": installed, "total": len(installed)}
+                allow_local_path_resolution=allow_local_path_resolution,
+                source_path_hint=source_path_hint,
+                telemetry=request.telemetry,
+            )
         finally:
             if resolved:
                 await resolved.cleanup()

@@ -9,6 +9,7 @@ import {
   evaluateUriNotice,
   findVikingUri,
   findVikingUriInValue,
+  isSkillUri,
   noticeHookSpecificOutput,
   normalizeToolName,
   preToolUseOutput,
@@ -100,12 +101,13 @@ test("buildGuardNotice names the plugin, the URI, the replacement and the way ou
 })
 
 test("evaluateUriGuard takes the host's own replacement tools and examples", () => {
+  // The shape pi's adapter passes in.
   const hints = {
-    read: { tool: "viking_read", example: (uri) => `viking_read(uri="${uri}", level="overview")` },
+    read: { tool: "openviking_read", example: (uri) => `openviking_read(uris=["${uri}"])` },
   }
   const decision = evaluateUriGuard("read", { path: "viking://resources/a.md" }, { hints })
-  assert.match(decision?.reason ?? "", /Use viking_read instead/)
-  assert.match(decision?.reason ?? "", /level="overview"/)
+  assert.match(decision?.reason ?? "", /Use openviking_read instead/)
+  assert.match(decision?.reason ?? "", /uris=\["viking:\/\/resources\/a\.md"\]/)
   assert.equal(evaluateUriGuard("glob", { pattern: "viking://resources/**" }, { hints }), null)
 })
 
@@ -154,4 +156,27 @@ test("readToolEvent accepts each host's spelling", () => {
 
 test("normalizeToolName trims and lowercases", () => {
   assert.equal(normalizeToolName(" Read "), "read")
+})
+
+test("a write or edit aimed at a skill points at add_skill, not the refused write tool", () => {
+  const cases = [
+    ["viking://~/skills/pr-review/SKILL.md", 'add_skill(data="<the full SKILL.md text>")'],
+    ["viking://user/alice/skills/pr-review", 'add_skill(data="<the full SKILL.md text>")'],
+    // Back to the shared root: without target_uri add_skill makes a private copy.
+    ["viking://agent/skills/pr-review/SKILL.md", 'add_skill(data="<the full SKILL.md text>", target_uri="viking://agent/skills")'],
+    // A helper file changes through a folder upload, not SKILL.md text.
+    ["viking://agent/skills/pr-review/scripts/run.sh", 'add_skill(path="<local skill folder or .zip with the changed files>", target_uri="viking://agent/skills")'],
+  ]
+  for (const [uri, example] of cases) {
+    assert.equal(isSkillUri(uri), true, uri)
+    const { reason } = evaluateUriGuard("Write", { file_path: uri })
+    assert.match(reason, /Use OpenViking MCP add_skill instead\./, uri)
+    assert.ok(reason.includes(`Example: ${example}`), `${uri}: ${reason}`)
+  }
+  const { reason: edit } = evaluateUriGuard("Edit", { file_path: "viking://agent/skills/pr-review/SKILL.md" })
+  assert.ok(edit.includes('add_skill(data="<the full edited SKILL.md text>", target_uri="viking://agent/skills")'), edit)
+
+  assert.equal(isSkillUri("viking://resources/skills/notes.md"), false)
+  const { reason } = evaluateUriGuard("Write", { file_path: "viking://~/notes/todo.md" })
+  assert.match(reason, /Use OpenViking MCP write instead\./)
 })

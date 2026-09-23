@@ -1,4 +1,5 @@
 import { readManifestVersion } from "./shared/credentials.mjs";
+import { toMcpProxyConfig } from "./shared/mcp-proxy-config.mjs";
 import { buildPluginConfig } from "./shared/plugin-config.mjs";
 
 /** The version the User-Agent reports, read from the manifest the gate checks. */
@@ -32,6 +33,8 @@ export interface OVConfig {
   scoreThreshold: number;
   minQueryLength: number;
   profileTokenBudget: number;
+  skillCatalog: boolean;
+  skillCatalogTokenBudget: number;
   resumeContextBudget: number;
   commitTokenThreshold: number;
   commitKeepRecentCount: number;
@@ -81,4 +84,9 @@ export function loadConfig(cwd: string = process.cwd()): OVConfig {
     // peer replaced the path-derived one.
     peerId: config.effectivePeer.peerId,
   } as OVConfig;
+}
+
+/** Tools use the same resolved identity and actor peer as REST recall. */
+export function buildBridgeProxyConfig(cfg: OVConfig) {
+  return toMcpProxyConfig(cfg, { peerId: cfg.peerId, debug: Boolean((cfg as any).debug || cfg.debugLogPath) });
 }

@@ -113,11 +113,10 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 }
 ```
 
-`enabled` 优先读取
-`/local/{account_id}/_system/setting.json` 中的 account 级覆盖值；未配置时使用
-`server.agent_evolution.enabled`。Session commit 会实时读取生效值，无需重启。
+`enabled` 依次解析 Account 运行时覆盖、Cluster 运行时覆盖，以及
+`server.agent_evolution.enabled` 提供的启动值。
 
-现有更新接口名保持不变：
+现有接口作为 deprecated 兼容适配器保留：
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -128,9 +127,8 @@ Content-Type: application/json
 
 ### account_settings
 
-ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
-显式列入白名单的字段；当前允许修改 `agent_evolution.enabled` 和
-`acl.enabled`。
+该接口已 deprecated。ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。
+接口保留原有 ACL 与 Agent Evolution 请求和响应语义：
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
@@ -142,6 +140,9 @@ Content-Type: application/json
   "acl": {"enabled": true}
 }
 ```
+
+字段缺失或为 `null` 都表示不修改；传入对象则整体设置对应存量配置段，
+空 ACL 对象表示 `enabled=false`。新接入方应使用下述 configuration 接口。
 
 `acl.enabled` 默认为 `false`。关闭时，共享资源按原有规则完全共享，不执行 ACL
 鉴权。开启后，账号内新增共享资源会写入 ACL，并对带 ACL 的共享资源执行鉴权；
@@ -352,6 +353,45 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 {% endfor %}
 ```
 
+### Runtime Configuration
+
+ROOT 可管理 Cluster 配置和任意 Account 配置；ADMIN 只能管理所属账号的 Account 层。
+
+```http
+GET /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+Content-Type: application/json
+
+{"settings": {"agent_evolution": {"enabled": true}}}
+```
+
+`settings` 始终表示目标层的显式设置值。PATCH 为三态语义：字段缺失表示不修改，
+`null` 表示删除当前层配置，具体值表示更新。
+
+当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
+`feishu`、`agent_evolution`、`github` 和 `acl`，且均为动态字段。Account 的
+`vlm`、`memory`、`embedding` 和 `vectordb` 不在当前 API 范围内，即使创建
+Account 时提交也会被拒绝。Cluster 的 `embedding`、`vlm`、`query_planner`、
+`memory`、`feishu`、存储、解析器和检索配置没有声明为运行时字段，因此仍然只能
+在启动配置中修改。
+
+Account Agent Evolution 未设置时整段回落到 Cluster 配置。Account 未设置
+Feishu 时也整段使用 Cluster 配置；一旦设置，`app_id`、`app_secret`、
+`max_rows_per_sheet`、`max_records_per_table`、`download_images` 和
+`request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
+Cluster 管理。GitHub 和 ACL 没有 Cluster fallback。
+
+PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
+对象递归合并，数组整体替换；嵌套 null 只删除对应叶子。删除整个对象覆盖需要在父路径
+传 null，传空对象仍表示显式空对象。
+
+两个 GET 接口只返回目标层持久化的显式值，不展开 fallback。配置持久化后会发布新配置并等待
+匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的覆盖，因此接口成功只表示
+配置层更新成功，不保证所有派生客户端都已完成切换。当前业务接入状态见[运行时配置设计](../../design/runtime-configuration-design.md)。
+
 ### user_settings
 
 ROOT 可管理任意 User，ADMIN 仅可管理所属 account 内的 User。User 配置接口当前
@@ -478,7 +518,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -583,6 +623,7 @@ ov --sudo admin create-account acme-private --admin alice \
 | name | str | 否 | null | 按账户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
+| query | str | 否 | null | 对账户 ID 做不区分大小写的子串匹配 |
 
 结果按创建顺序返回。
 
@@ -603,6 +644,10 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
   -H "X-API-Key: <root-key>"
 
+# 不区分大小写的子串搜索
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?query=acme" \
+  -H "X-API-Key: <root-key>"
+
 # 分页（每页 50，取第 2 页）
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
   -H "X-API-Key: <root-key>"
@@ -611,7 +656,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -717,7 +762,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -827,7 +872,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -973,7 +1018,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&pag
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1076,7 +1121,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1176,7 +1221,7 @@ curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -1274,7 +1319,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()

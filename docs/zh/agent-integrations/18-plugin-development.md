@@ -74,6 +74,7 @@ Task: <describe the plugin addition, fix, or maintenance change>
 | 通过配置文件安装 hook 和 MCP；公共调度足够表达生命周期 | 在 `agent-hook-plugin/hosts/` 增加适配器及宿主配置 | [agent-hook-plugin](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/README.md) |
 | 原生插件要求独立 manifest、目录和生命周期入口 | 独立插件目录，入口调用共享运行时 | [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md)、[Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) |
 | 以宿主 SDK 回调运行，需要常驻状态或 dispose/idle 回调 | 使用宿主扩展包，复用共享能力，明确自己的会话调度 | [OpenCode](https://github.com/volcengine/OpenViking/blob/main/examples/opencode-plugin/README.md)、[DSH](https://github.com/volcengine/OpenViking/blob/main/examples/dsh-memory-plugin/README.md) |
+| 宿主能注册原生工具，但自身没有 MCP 支持 | 使用官方 MCP 客户端，把服务端的 `tools/list` 注册成加 `openviking_` 前缀的宿主原生工具；不得自行维护工具目录 | [pi](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md) |
 | 只有 MCP，没有自动注入或完整会话记录 | 交付 MCP-only 集成，明确能力范围 | [Agent Plugins](https://github.com/volcengine/OpenViking/blob/main/agent-plugins/README.md) |
 
 只因新增宿主名称，不应复制 Claude Code 或 Codex 的整个目录。反过来，如果宿主有独立的会话状态机，也不应不断往公共 dispatcher 加 `isFoo`、`specialStop` 一类开关来容纳它。
@@ -208,6 +209,8 @@ stdout 只承载宿主约定的结果，日志写 stderr 或共享日志文件�
 
 profile 与逐轮召回分别使用 `buildProfileBlock()` 和 `buildRecallBlock()` / `buildRecallBlockDetailed()`。宿主可提供压缩器、显示结果和统计信息，不能重写检索目标、排序、token 预算和服务端兼容回退。状态栏需要计数时，应消费共享结果和最终注入内容，不能再跑一次召回推算。
 
+会话启动时的 skill 清单（`<available-skills>`）也由 `buildProfileBlock()` 生成：调用方把解析好的插件配置作为第四个参数传入，由其中的 `skillCatalog` 和 `skillCatalogTokenBudget` 旋钮决定开关和预算。适配器不能自己请求 `GET /api/v1/skills`，也不能自己拼装 skill 列表。不传这个参数的宿主，得到的 profile 块里没有 skill 清单。
+
 自动召回必须携带正确会话身份和 peer，并遵守 input filter、bypass 和开关。空结果应保持为空，不把服务端的“无相关记忆”占位文本当成记忆注入。压缩失败可退回已有的未压缩结果；不得凭空补写摘要。压缩后的 `viking://` URI 必须仍可读取，原始用户问题、召回块与宿主包装也必须能在 capture 时区分，避免重复写入注入的旧记忆。
 
 如果使用宿主 CLI 压缩内容，必须隔离这次辅助调用的自动记忆 hook，限制执行时间，并复用已有压缩接口。不得启动一个再次触发自身 recall/capture 的递归 Agent。模型选择和调用方式属于宿主适配，通用压缩结果处理属于共享层。
@@ -279,6 +282,8 @@ proxy 入口不得拥有自己的工具 schema、副本 API client、SSE parser 
 `viking://` 是虚拟 URI。本地文件工具的路径参数是 `viking://` URI 时必然失败，所以宿主支持工具执行前检查时，用 `evaluateUriGuard()` 拒绝这次调用。shell 命令里的 `viking://` URI 可能只是数据（`ov` 命令参数、HTTP 请求体、搜索模式），所以命令照常执行，再通过宿主的模型可见上下文通道附上 `evaluateUriNotice()` 生成的提示；`PreToolUse` 类宿主直接用 `preToolUseOutput()`，它返回拒绝或提示 envelope。适配器中只定义替代工具提示和 envelope。检查器不能扩展成一般命令拦截器；普通文件路径应保持原有行为。宿主不支持该事件时，明确限制并通过 Skill 指引模型使用 MCP，不得宣称具备等效拦截。
 
 共享 Skill 的源文件放在 [`examples/skills/`](https://github.com/volcengine/OpenViking/tree/main/examples/skills/)，通过 `SKILL_TARGETS` 交付，禁止在多个插件副本里分别修改同一段指导。Skill 只描述真实可调用工具和实际能力；自动 hook 已处理的捕获、提交不应再要求模型每轮手动重复执行。不同工具集确有不同操作语义时，可以保留独立 Skill，并说明理由。生成 Skill 时不能在 YAML frontmatter 前插入生成标记。
+
+存放在 OpenViking 里的 skill 只通过服务端的 `add_skill` MCP 工具新建、安装、共享和替换，它和 REST `POST /api/v1/skills` 共用同一套安装代码。宿主不得自己实现安装：适配器不能把 `SKILL.md` 写进 skills 子树，也不能自行解包或上传 skill 目录。服务端的 `write`、`edit` 拒绝写用户根下的 skills 子树；本地 write/edit 指向 skill URI 而被拒绝时，URI guard 通过 `isSkillUri()` 把模型引导到 `add_skill`。`openviking-skills` 这个 Skill 负责教模型走这套流程，所以 `SKILL_TARGETS` 只把它交付给自带 Skill、且 `add_skill` 确实可用的 MCP 宿主。
 
 doctor 使用 `runDoctor(hostSpec)`，宿主只补充安装位置、manifest、hook 注册、状态文件等检查。公共配置、凭据、网络和输出格式由 `doctor-core.mjs` 负责。必须能够检查安装版本、配置来源、生效值、peer、MCP 入口、hook 时间限制和 pending/会话状态。优先提供离线模式和 JSON 输出，离线检查不应偷偷发起网络请求。
 

@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unified resource processor with strategy-based routing."""
 
+import time
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 from urllib.parse import urlparse
 
+from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
@@ -25,6 +28,7 @@ from openviking.server.local_input_guard import (
     is_remote_resource_source,
     looks_like_local_path,
 )
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
@@ -287,6 +291,25 @@ class UnifiedResourceProcessor:
         - Directories needed for TreeBuilder are preserved via ParseResult.temp_dir_path
         """
 
+        metrics_account_id = kwargs.pop("_metrics_account_id", None)
+
+        async def run_stage(stage: str, operation: Awaitable[ParseResult | LocalResource]):
+            started_at = time.perf_counter()
+            status = "ok"
+            try:
+                with get_current_telemetry().measure(f"resource.{stage}"):
+                    return await operation
+            except Exception:
+                status = "error"
+                raise
+            finally:
+                ResourceIngestionEventDataSource.record_stage(
+                    stage=stage,
+                    status=status,
+                    duration_seconds=time.perf_counter() - started_at,
+                    account_id=metrics_account_id,
+                )
+
         mode = normalize_parse_mode(parse_mode)
 
         # First check if source is raw content (not URL/path)
@@ -295,10 +318,13 @@ class UnifiedResourceProcessor:
         )
         if not is_potential_path and not self._is_url(source):
             # Treat as raw content
-            return await parse(
-                source,
-                instruction=instruction,
-                split_content=mode is ParseMode.DEFAULT,
+            return await run_stage(
+                "parse_artifact",
+                parse(
+                    source,
+                    instruction=instruction,
+                    split_content=mode is ParseMode.DEFAULT,
+                ),
             )
 
         if (
@@ -323,7 +349,9 @@ class UnifiedResourceProcessor:
             explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
             if explicit_name:
                 parse_kwargs["resource_name"] = _smart_stem(explicit_name)
-            return await self._get_parser_router().parse(source, **parse_kwargs)
+            return await run_stage(
+                "parse_artifact", self._get_parser_router().parse(source, **parse_kwargs)
+            )
 
         if (
             mode is ParseMode.DEFAULT
@@ -345,16 +373,24 @@ class UnifiedResourceProcessor:
             explicit_name = kwargs.get("resource_name") or kwargs.get("source_name")
             if explicit_name:
                 parse_kwargs["resource_name"] = _smart_stem(explicit_name)
-            return await self._get_parser_router().parse(source, **parse_kwargs)
+            return await run_stage(
+                "parse_artifact", self._get_parser_router().parse(source, **parse_kwargs)
+            )
 
         # Phase 1: Accessor - get local resource. A caller may prepare a remote
         # resource first so async routing uses the same detected file type.
-        local_resource = prepared_resource or await self.prepare(
-            source,
-            allow_local_path_resolution=allow_local_path_resolution,
-            **({"parse_mode": mode} if mode is ParseMode.NO_SPLIT else {}),
-            **kwargs,
-        )
+        if prepared_resource is not None:
+            local_resource = prepared_resource
+        else:
+            local_resource = await run_stage(
+                "source_prepare",
+                self.prepare(
+                    source,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    **({"parse_mode": mode} if mode is ParseMode.NO_SPLIT else {}),
+                    **kwargs,
+                ),
+            )
 
         # Use context manager for automatic cleanup, but preserve directories for TreeBuilder
         try:
@@ -363,6 +399,7 @@ class UnifiedResourceProcessor:
             # Source credentials are consumed by the accessor. Never forward
             # them into parser kwargs, parse results, or later queue payloads.
             parse_kwargs.pop("auth_config", None)
+            parse_kwargs.pop("github_token", None)
             parse_kwargs.pop("tos_signature", None)
             parse_kwargs.pop("tos_access", None)
             parse_kwargs["instruction"] = instruction
@@ -409,7 +446,9 @@ class UnifiedResourceProcessor:
                 parser = DirectoryParser()
                 parse_kwargs["_feishu_import_plan"] = local_resource.feishu_plan
 
-                result = await parser.parse(str(local_resource.path), **parse_kwargs)
+                result = await run_stage(
+                    "parse_artifact", parser.parse(str(local_resource.path), **parse_kwargs)
+                )
                 # Preserve temporary directory for TreeBuilder
                 if local_resource.is_temporary and not result.temp_dir_path:
                     result.temp_dir_path = str(local_resource.path)
@@ -437,7 +476,9 @@ class UnifiedResourceProcessor:
                     await save("file", response_id)
 
                 parse_kwargs["_response_checkpoint"] = record
-            return await parser_router.parse(local_resource, **parse_kwargs)
+            return await run_stage(
+                "parse_artifact", parser_router.parse(local_resource, **parse_kwargs)
+            )
         finally:
             # Clean up temporary resources unless they need to be preserved
             local_resource.cleanup()

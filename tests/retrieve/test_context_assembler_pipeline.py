@@ -27,6 +27,10 @@ from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
 USER_ROOT = "viking://user/test_user"
+SKILLS_ROOT = f"{USER_ROOT}/skills"
+DEPLOY = f"{SKILLS_ROOT}/deploy"
+REVIEW = f"{SKILLS_ROOT}/review"
+NOT_READY = "# {uri} [Directory abstract is not ready]"
 
 
 def _ctx():
@@ -44,7 +48,9 @@ class _FakeFindResult:
         self.skills = skills or []
 
 
-def _service(*, hits, bodies, session=None):
+def _service(*, hits, bodies, session=None, abstracts=None):
+    abstracts = abstracts or {}
+
     async def fake_find(**kwargs):
         del kwargs
         return _FakeFindResult(list(hits))
@@ -55,6 +61,10 @@ def _service(*, hits, bodies, session=None):
             raise FileNotFoundError(uri)
         return bodies[uri]
 
+    async def fake_abstract(uri, **kwargs):
+        del kwargs
+        return abstracts.get(uri, NOT_READY.format(uri=uri))
+
     async def fake_get(session_id, ctx, *, auto_create=False):
         del session_id, ctx
         assert auto_create is True
@@ -62,7 +72,7 @@ def _service(*, hits, bodies, session=None):
 
     return SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
         sessions=SimpleNamespace(get=fake_get),
         viking_fs=None,
     )
@@ -286,27 +296,33 @@ async def test_purpose_quotas_are_not_truncated_by_global_limit():
                     }
                 ]
             )
-        if target_uri.endswith("/skills"):
-            scope = "agent" if target_uri.startswith("viking://agent/") else "user"
-            return _FakeFindResult(
-                skills=[
-                    {
-                        "uri": f"{target_uri}/{scope}.md",
-                        "score": 0.86,
-                        "abstract": f"{scope} skill",
-                        "level": 2,
-                    }
-                ]
-            )
         return _FakeFindResult()
+
+    async def fake_find_skills(**kwargs):
+        skills = []
+        for root in kwargs["target_uri"]:
+            scope = "agent" if root.startswith("viking://agent/") else "user"
+            skills.append(
+                {
+                    "uri": f"{root}/{scope}-skill/scripts/run.py",
+                    "score": 0.86,
+                    "abstract": f"{scope} script",
+                    "level": 2,
+                }
+            )
+        return _FakeFindResult(skills=skills)
 
     async def fake_read(uri, **kwargs):
         del kwargs
         return f"# Summary\n{uri}"
 
+    async def fake_abstract(uri, **kwargs):
+        del kwargs
+        return f"name: {uri.rsplit('/', 1)[-1]}"
+
     service = SimpleNamespace(
-        search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read),
+        search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -323,6 +339,10 @@ async def test_purpose_quotas_are_not_truncated_by_global_limit():
     )
 
     assert len(result.entries) == 10
+    assert [entry.uri for entry in result.entries if entry.category == "skills"] == [
+        f"{USER_ROOT}/skills/user-skill/SKILL.md",
+        "viking://agent/skills/agent-skill/SKILL.md",
+    ]
     assert result.stats["quotas"] == {
         "events": 1,
         "entities": 2,
@@ -597,3 +617,292 @@ async def test_no_relevant_digest_keeps_uris_out_of_the_dedup_ledger(monkeypatch
     assert result.rendered == ""
     assert len(result.entries) == 1
     assert recorded == []
+
+
+def _skill_hit(uri, score, abstract="hit abstract", level=2):
+    return {"uri": uri, "score": score, "abstract": abstract, "level": level}
+
+
+def _skill_service(hits, abstracts=None, *, finds=None, reads=None, bodies=None):
+    """A service whose every package search answers with the same skill hits."""
+    abstracts = abstracts or {}
+
+    async def fake_find_skills(**kwargs):
+        if finds is not None:
+            finds.append(kwargs)
+        return _FakeFindResult(skills=list(hits))
+
+    async def fake_abstract(uri, **kwargs):
+        del kwargs
+        if reads is not None:
+            reads.append(uri)
+        return abstracts.get(uri, NOT_READY.format(uri=uri))
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        if bodies is None or uri not in bodies:
+            raise AssertionError(f"a skill entry must not read a body: {uri}")
+        return bodies[uri]
+
+    return SimpleNamespace(
+        search=SimpleNamespace(find_skills=fake_find_skills),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+
+
+async def _assemble_skills(service, **overrides):
+    params = {"query": "how do I deploy", "quotas": {"skills": 2}, "peer_scope": "actor"}
+    params.update(overrides)
+    return await assemble_context(service=service, ctx=_ctx(), params=AssembleParams(**params))
+
+
+async def test_every_hit_in_a_package_collapses_into_one_skill_entry():
+    reads = []
+    service = _skill_service(
+        [
+            _skill_hit(f"{DEPLOY}/.abstract.md", 0.6, "stale package abstract", level=0),
+            _skill_hit(f"{DEPLOY}/SKILL.md", 0.7, "skill file abstract"),
+            _skill_hit(f"{DEPLOY}/scripts/run.py", 0.8, "run script"),
+            _skill_hit(f"{REVIEW}/SKILL.md", 0.5, "review file abstract"),
+        ],
+        {
+            DEPLOY: "name: deploy\ndescription: ship the service",
+            REVIEW: "name: review\ndescription: read diffs",
+        },
+        reads=reads,
+    )
+
+    result = await _assemble_skills(service)
+
+    assert [(entry.uri, entry.score, entry.detail, entry.text) for entry in result.entries] == [
+        (f"{DEPLOY}/SKILL.md", 0.8, "abstract", "name: deploy\ndescription: ship the service"),
+        (f"{REVIEW}/SKILL.md", 0.5, "abstract", "name: review\ndescription: read diffs"),
+    ]
+    assert sorted(reads) == [DEPLOY, REVIEW]
+
+
+async def test_a_hit_on_the_package_abstract_needs_no_extra_read():
+    reads = []
+    service = _skill_service(
+        [_skill_hit(f"{DEPLOY}/.abstract.md", 0.6, "name: deploy", level=0)],
+        reads=reads,
+    )
+
+    result = await _assemble_skills(service)
+
+    assert [(entry.uri, entry.detail, entry.text) for entry in result.entries] == [
+        (f"{DEPLOY}/SKILL.md", "abstract", "name: deploy")
+    ]
+    assert reads == []
+
+
+async def test_package_without_a_generated_abstract_degrades_to_a_bare_uri():
+    """The matched file's own summary never stands in for the package's."""
+    service = _skill_service([_skill_hit(f"{DEPLOY}/scripts/run.py", 0.8, "run script")])
+
+    result = await _assemble_skills(service)
+
+    assert [(entry.uri, entry.detail, entry.text) for entry in result.entries] == [
+        (f"{DEPLOY}/SKILL.md", "uri", "")
+    ]
+
+
+async def test_skills_root_and_backup_hits_produce_no_entry():
+    service = _skill_service(
+        [
+            _skill_hit(f"{SKILLS_ROOT}/.abstract.md", 0.9, "every skill", level=0),
+            _skill_hit(f"{SKILLS_ROOT}/.backup-20260101/SKILL.md", 0.8, "replaced copy"),
+        ]
+    )
+
+    result = await _assemble_skills(service)
+
+    assert result.entries == []
+
+
+async def test_excluding_a_package_drops_a_hit_on_any_file_inside_it():
+    service = _skill_service([_skill_hit(f"{DEPLOY}/references/a.md", 0.8, "reference")])
+
+    result = await _assemble_skills(service, exclude_uris=[f"{DEPLOY}/SKILL.md"])
+
+    assert result.entries == []
+    assert result.stats["excluded"] == 1
+
+
+async def test_a_pinned_detail_reads_the_package_skill_md():
+    """A package entry is a file, not a directory: `detail` reaches its SKILL.md."""
+    service = _skill_service(
+        # The package's own overview record, the one hit shape that would
+        # otherwise stay a directory and pin every skill entry to overview.
+        [_skill_hit(f"{DEPLOY}/.overview.md", 0.8, "package overview", level=1)],
+        {DEPLOY: "name: deploy"},
+        bodies={f"{DEPLOY}/SKILL.md": "# Deploy\n\nRun the pipeline, then verify."},
+    )
+
+    result = await _assemble_skills(service, detail={"skills": "full"})
+
+    assert [(entry.uri, entry.detail, entry.text) for entry in result.entries] == [
+        (f"{DEPLOY}/SKILL.md", "full", "# Deploy\n\nRun the pipeline, then verify."),
+    ]
+
+
+async def test_skills_bucket_searches_both_roots_once_per_query():
+    """One package search spans both roots and stops at `limit` distinct packages."""
+    finds = []
+    service = _skill_service([], finds=finds)
+
+    await _assemble_skills(service)
+
+    assert len(finds) == 1
+    assert finds[0]["target_uri"] == [SKILLS_ROOT, "viking://agent/skills"]
+    assert finds[0]["limit"] == 2
+
+
+async def test_skills_bucket_forwards_the_caller_filter():
+    finds = []
+    service = _skill_service([], finds=finds)
+
+    await _assemble_skills(service, filter={"op": "must", "field": "tags", "conds": ["ops"]})
+
+    assert {"op": "must", "field": "tags", "conds": ["ops"]} in finds[0]["filter"]["conds"]
+
+
+async def test_a_filter_only_query_stays_on_the_generic_path():
+    """Package retrieval embeds its query; a filter-only lookup has none to embed."""
+    calls = []
+
+    async def fake_find(**kwargs):
+        calls.append(("find", kwargs["target_uri"]))
+        return _FakeFindResult(skills=[_skill_hit(f"{DEPLOY}/scripts/run.py", 0.8, "run script")])
+
+    async def fake_find_skills(**kwargs):
+        calls.append(("find_skills", kwargs["target_uri"]))
+        return _FakeFindResult()
+
+    async def fake_abstract(uri, **kwargs):
+        del kwargs
+        return "name: deploy" if uri == DEPLOY else NOT_READY.format(uri=uri)
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
+        fs=SimpleNamespace(read=None, abstract=fake_abstract),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+
+    result = await _assemble_skills(
+        service, query="", filter={"op": "must", "field": "tags", "conds": ["ops"]}
+    )
+
+    assert [name for name, _ in calls] == ["find", "find"]
+    assert [target for _, target in calls] == [f"{USER_ROOT}/skills", "viking://agent/skills"]
+    assert [(entry.uri, entry.text) for entry in result.entries] == [
+        (f"{DEPLOY}/SKILL.md", "name: deploy"),
+    ]
+
+
+async def test_a_failed_skills_search_leaves_the_request_standing():
+    async def fake_find_skills(**kwargs):
+        del kwargs
+        raise RuntimeError("embedder unavailable")
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find_skills=fake_find_skills),
+        fs=SimpleNamespace(read=None, abstract=None),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+
+    result = await _assemble_skills(service)
+
+    assert result.entries == []
+    assert result.stats["retrieval_errors"] == ["RuntimeError: embedder unavailable"]
+
+
+async def test_an_image_only_query_skips_the_skills_bucket():
+    """find_skills rejects a query with nothing to search on; the bucket stays empty instead."""
+    finds = []
+    service = _skill_service([_skill_hit(f"{DEPLOY}/SKILL.md", 0.8, "name: deploy")], finds=finds)
+
+    result = await _assemble_skills(
+        service, query="", image_url="https://example.com/screenshot.png"
+    )
+
+    assert finds == []
+    assert result.entries == []
+
+
+async def test_skills_and_memories_share_one_score_threshold():
+    calls = []
+
+    async def fake_find(**kwargs):
+        calls.append(("find", kwargs))
+        return _FakeFindResult()
+
+    async def fake_find_skills(**kwargs):
+        calls.append(("find_skills", kwargs))
+        return _FakeFindResult()
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
+        fs=SimpleNamespace(),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="how do I deploy",
+            quotas={"skills": 1, "events": 1},
+            peer_scope="actor",
+        ),
+    )
+
+    thresholds = {name: kwargs["score_threshold"] for name, kwargs in calls}
+    assert thresholds == {"find": None, "find_skills": None}
+
+
+async def test_flat_retrieval_collapses_skills_and_leaves_other_hits_alone():
+    events_dir = f"{USER_ROOT}/memories/events/2026-09"
+    memories = [
+        {"uri": f"{events_dir}/.abstract.md", "score": 0.55, "abstract": "month abstract"},
+        {"uri": f"{events_dir}/.overview.md", "score": 0.5, "abstract": "month overview"},
+    ]
+    skills = [
+        _skill_hit(f"{DEPLOY}/.abstract.md", 0.6, "name: deploy", level=0),
+        _skill_hit(f"{DEPLOY}/SKILL.md", 0.7, "skill file abstract"),
+        _skill_hit(f"{DEPLOY}/scripts/run.py", 0.8, "run script"),
+    ]
+
+    async def fake_find(**kwargs):
+        del kwargs
+        return _FakeFindResult(memories=list(memories), skills=list(skills))
+
+    async def fake_read(uri, **kwargs):
+        del kwargs
+        return "September, in outline."
+
+    async def fake_abstract(uri, **kwargs):
+        del kwargs
+        return "name: deploy\ndescription: ship the service" if uri == DEPLOY else ""
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(query="what happened", limit=10, peer_scope="actor"),
+    )
+
+    # Three skill records became one candidate; the two memory sidecars still
+    # take a candidate slot each and only meet the existing body-level dedup.
+    assert result.stats["candidates"] == 3
+    assert [entry.uri for entry in result.entries] == [f"{DEPLOY}/SKILL.md", events_dir]
+    assert result.stats["deduped"] == 1

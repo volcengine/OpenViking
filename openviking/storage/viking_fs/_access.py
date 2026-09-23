@@ -31,7 +31,7 @@ from openviking.storage.acl import (
     normalize_acl_level,
     normalize_acl_principal,
 )
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     NotFoundError,
@@ -53,7 +53,7 @@ class _AccessMixin:
 
     # First path segments that the Rust git enumerate.rs prunes from snapshots,
     # plus the runtime lock name. Mirrors INTERNAL_FIRST_SEGMENTS in
-    # crates/ragfs/src/git/enumerate.rs and VikingFS._INTERNAL_NAMES so that
+    # crates/ragfs/src/git/enumerate.rs so that
     # callers fail fast in Python with a clear error rather than passing a
     # path that the Rust side will silently drop.
     _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
@@ -176,7 +176,7 @@ class _AccessMixin:
                 valid.append(uri)
 
         acl_manager = self.acl_manager
-        if acl_manager is None or not acl_manager.is_enabled(real_ctx.account_id):
+        if acl_manager is None or not await acl_manager.is_enabled(real_ctx.account_id):
             result.update({uri: self._is_accessible(uri, real_ctx) for uri in valid})
             return result
 
@@ -260,13 +260,15 @@ class _AccessMixin:
 
     async def _ensure_retrieval_scope(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._safe_uri_parts(uri)
-        if self._acl_enabled(ctx) and is_acl_uri(uri):
+        if await self._acl_enabled(ctx) and is_acl_uri(uri):
             return
         await self._ensure_access(uri, ctx)
 
-    def _acl_enabled(self, ctx: Optional[RequestContext]) -> bool:
+    async def _acl_enabled(self, ctx: Optional[RequestContext]) -> bool:
         real_ctx = self._ctx_or_default(ctx)
-        return self.acl_manager is not None and self.acl_manager.is_enabled(real_ctx.account_id)
+        return self.acl_manager is not None and await self.acl_manager.is_enabled(
+            real_ctx.account_id
+        )
 
     async def _ensure_acl_manage(self, uri: str, ctx: Optional[RequestContext]) -> RequestContext:
         if self.acl_manager is None:
@@ -443,7 +445,7 @@ class _AccessMixin:
         parts = [p for p in parent_path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return name in VikingURI.LISTABLE_SCOPES
-        return name not in STORAGE_INTERNAL_ENTRY_NAMES
+        return not is_storage_internal_name(name)
 
     def _ancestor_is_filtered(self, entry_path: str, base_path: str) -> bool:
         """Check if any ancestor directory of entry_path would be filtered by _ls_entries.
@@ -463,7 +465,13 @@ class _AccessMixin:
         return False
 
     def _is_path_entry_visible(
-        self, entry_path: str, name: str, base_path: str, ctx: RequestContext
+        self,
+        entry_path: str,
+        name: str,
+        base_path: str,
+        ctx: RequestContext,
+        *,
+        acl_enabled: bool,
     ) -> bool:
         """Check visibility for one flattened path entry returned by Rust."""
         if self._ancestor_is_filtered(entry_path, base_path):
@@ -476,7 +484,7 @@ class _AccessMixin:
             if not self._is_name_visible_at_path(name, parent_path):
                 return False
 
-        if not self._acl_enabled(ctx):
+        if not acl_enabled:
             uri = self._path_to_uri(entry_path, ctx=ctx)
             if not self._is_accessible(uri, ctx):
                 return False
@@ -484,13 +492,24 @@ class _AccessMixin:
         return True
 
     def _is_tree_entry_visible(
-        self, entry: Dict[str, Any], base_path: str, ctx: RequestContext
+        self,
+        entry: Dict[str, Any],
+        base_path: str,
+        ctx: RequestContext,
+        *,
+        acl_enabled: bool,
     ) -> bool:
         """Check visibility for a single TreeEntry returned by Rust tree_directory."""
         entry_path = entry["path"]
         entry_info = entry.get("info", {})
         name = entry_info.get("name") or entry_path.rstrip("/").rsplit("/", 1)[-1]
-        return self._is_path_entry_visible(entry_path, name, base_path, ctx)
+        return self._is_path_entry_visible(
+            entry_path,
+            name,
+            base_path,
+            ctx,
+            acl_enabled=acl_enabled,
+        )
 
     def _glob_page_size(self, node_limit: Optional[int]) -> int:
         """Return the backend page size used by glob_directory."""
@@ -530,7 +549,7 @@ class _AccessMixin:
         raw_limit = None if node_limit is None else max(node_limit, 256)
         remaining_offset = offset
         yielded = 0
-        acl_enabled = self._acl_enabled(real_ctx)
+        acl_enabled = await self._acl_enabled(real_ctx)
         expose_resource_names = acl_enabled and is_acl_uri(uri)
         denied_directories: set[str] = set()
 
@@ -549,7 +568,12 @@ class _AccessMixin:
 
             candidates: List[tuple] = []
             for entry in raw_entries:
-                if not self._is_tree_entry_visible(entry, path, real_ctx):
+                if not self._is_tree_entry_visible(
+                    entry,
+                    path,
+                    real_ctx,
+                    acl_enabled=acl_enabled,
+                ):
                     continue
                 if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
                     continue

@@ -263,3 +263,19 @@ def test_git_concurrent_commit_maps_to_conflict():
     assert mapped is not None
     assert mapped.code == "CONFLICT"
     assert ERROR_CODE_TO_HTTP_STATUS.get(mapped.code) == 409
+
+
+def test_git_auth_failure_remains_a_client_error():
+    from openviking.server.responses import error_response, response_from_result
+    from openviking.utils.git_auth import GIT_AUTH_FAILED, raise_git_auth_error
+    from openviking_cli.exceptions import OpenVikingError
+
+    with pytest.raises(OpenVikingError) as caught:
+        raise_git_auth_error(b"fatal: Authentication failed")
+    error = map_exception(caught.value)
+    assert error.code == GIT_AUTH_FAILED
+    assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
+    assert error_response(error.code, error.message).status_code == 400
+    assert response_from_result(
+        {"status": "error", "code": error.code, "errors": [error.message]}
+    ).status_code == 400

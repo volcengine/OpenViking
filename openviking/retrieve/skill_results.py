@@ -11,6 +11,9 @@ from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.retrieve.types import ContextType, MatchedContext
 
 LEVEL_SUFFIXES = ("/.abstract.md", "/.overview.md")
+# Tail of the placeholder VikingFS returns for a directory whose .abstract.md
+# has not been generated yet.
+ABSTRACT_NOT_READY = "[Directory abstract is not ready]"
 
 
 def skill_root_uri(uri: str) -> str:
@@ -34,6 +37,17 @@ def skill_root_uri(uri: str) -> str:
         # installed Skills. Hidden attachments inside a normal package remain valid.
         return ""
     return "viking://" + "/".join(shape.parts[: index + 2])
+
+
+async def package_abstract(fs: Any, ctx: RequestContext, root: str) -> str:
+    """Return a Skill package's own abstract, or "" when it has none yet."""
+    try:
+        text = str(await fs.abstract(root, ctx=ctx) or "").strip()
+    except Exception:
+        return ""
+    if text.endswith(ABSTRACT_NOT_READY):
+        return ""
+    return text
 
 
 def candidate_key(candidate: Dict[str, Any]) -> Any:

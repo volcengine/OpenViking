@@ -17,6 +17,8 @@ from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.skill_processor import SkillProcessor, validate_skill_name
 from openviking_cli.exceptions import InvalidArgumentError
 
+GIT_SKILL_SOURCE_PREFIXES = ("https://", "http://", "git@", "ssh://", "git://")
+
 
 def parse_git_skill_source(source: str) -> dict:
     """Parse a Git URL into repository, revision, and skill subdirectory."""
@@ -95,7 +97,7 @@ async def resolve_skill_source(
     try:
         if (
             isinstance(data, str)
-            and data.startswith(("https://", "http://", "git@", "ssh://", "git://"))
+            and data.startswith(GIT_SKILL_SOURCE_PREFIXES)
             and "\n" not in data
         ):
             git_source = git_source or parse_git_skill_source(data)

@@ -1,6 +1,6 @@
 # Codex 记忆插件
 
-本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在会话开始时加载 OpenViking profile 与记忆索引，在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`read`、`remember` 等工具来主动管理记忆。
+本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在会话开始时加载 OpenViking profile、记忆索引和 skill 清单，在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`read`、`remember` 等工具来主动管理记忆。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -25,11 +25,34 @@ GitHub 访问受限的地区，从火山引擎 TOS 镜像运行同一个安装�
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
-现在不再需要任何 shell wrapper——插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。安装完成后：
+现在不再需要任何 shell wrapper——插件自带的 stdio MCP 代理会在运行时读取 `~/.openviking/ovcli.conf`（或 `OPENVIKING_*` 环境变量），与 hooks 使用同一套配置链。安装完成后启动 Codex（TraeCode CLI 2.0 是 `trae-cli`）：
 
 ```bash
-codex              # 首次启动需进入 /hooks 完成一次审批
+codex
 ```
+
+### 首次启动：信任 hooks
+
+插件的 hooks 对 Codex 是新的，启动时会先停在一次信任确认上，选 **Trust all and continue**；想先看一眼 hook 命令就选 Review hooks：
+
+```text
+Hooks need review
+6 hooks are new or changed.
+Hooks can run outside the sandbox after you trust them.
+
+  1. Review hooks
+> 2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+```
+
+全新安装会一次列出插件注册的全部 6 个 hook。之后每次插件更新只要动了 hook，Codex 都会再拦一次，数字是这次新增或改动的条数（比如只改了一个就是 `1 hook is new or changed`），同样选 Trust all and continue。
+
+选第 3 项或错过这一步，hooks 就不会运行：MCP 工具仍能调用，但自动召回和捕获全部停摆。要恢复，得让两个彼此独立的开关都处于开启状态：
+
+- `/hooks` — hook 的信任与开关，把标着 *New hook - review required* 或 *Modified since last trusted* 的条目信任并打开。
+- `/plugins` — 插件本身的启用状态，确认 `openviking-memory` 是 enabled。
+
+任何一边是关着的，自动召回和捕获都不会发生。
 
 <details>
 <summary><b>手动安装</b></summary>
@@ -56,11 +79,13 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 
 ## 工作原理
 
-本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`，以及 `preferences/`、`entities/` 的 URI 和摘要索引；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`）；在线程正常退出时提交整段会话（触发 `SessionEnd`），以确保记忆抽取器能够在完整的上下文环境中运行。shell 命令执行前（`Bash` 上的 `PreToolUse`），插件会检查命令里是否带 `viking://` URI：命令照常执行，模型会收到一条提示，建议改用 OpenViking MCP 工具；如果该 URI 是有意传入的数据（例如 `ov` 命令参数），模型可以忽略这条提示。此外，在启动新会话时，插件还会清扫前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
+本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`、`preferences/` 与 `entities/` 的 URI 和摘要索引，以及列出你的 OpenViking skill 的 `<available-skills>` 清单；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`）；在线程正常退出时提交整段会话（触发 `SessionEnd`），以确保记忆抽取器能够在完整的上下文环境中运行。shell 命令执行前（`Bash` 上的 `PreToolUse`），插件会检查命令里是否带 `viking://` URI：命令照常执行，模型会收到一条提示，建议改用 OpenViking MCP 工具；如果该 URI 是有意传入的数据（例如 `ov` 命令参数），模型可以忽略这条提示。此外，在启动新会话时，插件还会清扫前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
 
 > **已知局限**：`SessionEnd` 需要 Codex 0.145 及以上版本，且只在正常退出时触发（`/quit`、`/exit`、连按两次 `Ctrl-C`、EOF、`codex exec` 运行结束）。`SIGTERM`、直接关闭终端、`kill -9` 或崩溃都不会触发；当 TUI 挂在 `codex app-server` 守护进程上时，该事件会被延后。这些会话——以及 Codex 低于 0.145 的所有会话（以及没有该事件的 TraeCode CLI 版本）——由下一次 `SessionStart` 的闲置 TTL（生存时间，默认为 30 分钟）清扫回收。
 
-工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result) 读回。
+`<available-skills>` 清单先列你自己的 skill，再列 `viking://agent/skills` 下共享给整个账号的 skill；共享 skill 与你自己的某个 skill 同名时不再列出。清单有独立的 token 预算，不占 profile 预算：放不下描述时只列名称，连一个名称都放不下时缩成一行总数。清单第一行提示模型：按某个 skill 操作前，先用 OpenViking `read` 工具读取它的 `SKILL.md`。插件在 `openviking-memory`、`ov-experience-memory` 之外还自带 `openviking-skills` skill，告诉模型如何查找 skill、用 MCP `add_skill` 工具新建或替换 skill、从 Git 或本地文件夹安装 skill、把 skill 共享给整个账号，以及在你要求时把本地 skill 迁移到 OpenViking。
+
+工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
 
 <details>
 <summary><b>配置</b></summary>
@@ -73,8 +98,11 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 | `OPENVIKING_API_KEY` | — | API 密钥（将通过 `Authorization: Bearer` 标头发送） |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | hook、MCP 和 Codex 内部 `ov` 命令共同使用的当前 CLI 配置 |
 | `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` 下已设置的凭据环境变量优先；设为 `cli` 强制使用激活的 ovcli 配置；设为 `env` 只读环境变量，两个配置文件都不读 |
-| `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入，但不关闭逐 prompt 语义召回 |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | 关闭会话启动阶段的固定 profile/背景注入（包括 skill 清单），但不关闭逐 prompt 语义召回 |
 | `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | `profile.md` 及 `preferences/`、`entities/` 索引共用的 CJK-aware token 预算 |
+| `OPENVIKING_SKILL_CATALOG` | `true` | 在会话启动注入中加入 `<available-skills>` 清单；设为 `false` 则不加 |
+| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | `<available-skills>` 清单的 CJK-aware token 预算，独立于 `OPENVIKING_PROFILE_TOKEN_BUDGET`；设为 `0` 同样不加清单 |
+| `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | SessionStart 注入的总字节上限，保证低于 Codex 默认的 hook 输出上限（约 10,000 字节），模型拿到的是全文而不是截断预览；resume 时会话归档最多占一半。设为 `0` 取消上限 |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | `SessionStart` 闲置 TTL 清理阈值（毫秒） |
 | `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000`（SessionEnd）、`40000`（PreCompact） | 捕获类 hook 等待单会话状态锁的时长（毫秒） |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | 已提交会话的转录游标保留时长（毫秒），过期后删除状态文件 |
@@ -102,7 +130,7 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 |------|------|------|
 | MCP 工具调用报认证错误 | 当前 ovcli 配置没有 authenticated server 所需的有效 `api_key` | 修正 `~/.openviking/ovcli.conf`（或运行 `node <插件目录>/scripts/setup.mjs`）后重启 Codex；stdio 代理会在启动时和认证失败后重新读取配置 |
 | MCP 工具调用报连接错误 | 服务器不可达或 URL 配置错误 | 执行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查服务器状态 |
-| `6 hooks need review` | 首次启动需要进行安全审批；升级新增 hook 后，Codex 会要求再次审批新增的 hook | 在 Codex 终端内输入 `/hooks` 完成审批 |
+| `6 hooks need review`，或插件已装但 hook 不生效 | 全新安装要信任全部 6 个 hook，之后每次插件更新改动到 hook 时还会再问一次；当时选了 *Continue without trusting* 或直接跳过，hooks 就一直不会运行 | `/hooks` 里信任并开启相关条目，`/plugins` 里确认 `openviking-memory` 已启用——两个开关相互独立，都要是开着的 |
 | `ov config switch` 后插件仍指向旧服务器 | 上个会话的代理进程仍在运行 | 重启 Codex；代理在启动时解析凭据 |
 | Hook 与 MCP 指向不同服务器 | 某一侧残留了过期的 `OPENVIKING_*` 凭据环境变量（默认环境变量优先于 ovcli.conf） | 清除过期环境变量（让 ovcli.conf 同时驱动两者）、设置 `OPENVIKING_CREDENTIAL_SOURCE=cli`，或保证环境变量一致 |
 
@@ -114,3 +142,9 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — 提交（commit）决策树
 - [MCP 客户端](./06-mcp-clients.md) — MCP 协议、工具列表及其他客户端
 - [部署指南 → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` 配置说明
+
+### 召回压缩
+
+设置 `OPENVIKING_RECALL_COMPRESS=server` 可让 OpenViking 服务端压缩召回内容，Codex 不启动本地压缩进程。`client` 仅用本地压缩，`auto`（默认）在本地压缩器不可用时走服务端，`off` 关闭压缩。服务端已有摘要时直接使用；明确返回无相关记忆时不注入。
+
+Codex 通过共享 `buildRecallBlockDetailed()` 执行召回、排序、预算和旧服务端回退，仅保留会话映射、模型调用与 hook 输出适配。本地压缩失败保留预算内的检索结果；原始检索回退在不使用本地压缩时遵循 `recallPreferAbstract`，不再固定读取所有叶子全文。预算包含正文、URI 和包装文本。配置详见 [共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)。

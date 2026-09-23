@@ -15,6 +15,8 @@ agent-plugins/
 │   └── shared/                          # 由 examples/memory-plugin-shared/lib 生成
 ├── skills/openviking-memory/SKILL.md    # 教模型完成「召回 + 沉淀」闭环
 ├── skills/ov-experience-memory/SKILL.md # 检索并应用以往任务的 Experience
+├── skills/ov-memory-troubleshoot/SKILL.md # 追溯记忆问题的会话依据
+├── skills/openviking-skills/SKILL.md    # 查找、使用、创建和共享 OpenViking 中的 skill
 └── plugin.test.mjs                      # node --test 规范一致性校验
 ```
 
@@ -25,8 +27,8 @@ agent-plugins/
 1. 准备一个可访问的 OpenViking 服务。还没有的话，先按 [快速开始](../getting-started/02-quickstart.md) 部署；本地默认端点是 `http://127.0.0.1:1933`。
 2. 让你的 Agent Plugins 客户端指向 `agent-plugins/` 目录。各客户端的安装命令或插件目录不同，请查阅其文档。加载时客户端会：
    - 按 `mcp.json` 注册名为 `openviking` 的 MCP server，以 stdio 方式运行 `node <plugin>/servers/mcp-proxy.mjs`；
-   - 从 `skills/` 发现 `openviking-memory` 和 `ov-experience-memory` 技能。
-3. 配置凭据（见下节）后开始会话。模型即可使用 `find` / `search` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`，较新的服务端还提供 `tree` / `write` / `edit`。
+   - 从 `skills/` 发现 `openviking-memory`、`ov-experience-memory`、`ov-memory-troubleshoot` 和 `openviking-skills` 技能。
+3. 配置凭据（见下节）后开始会话。模型即可使用 `find` / `search` / `read` / `list` / `grep` / `glob` / `remember` / `add_resource` / `forget` / `health`，较新的服务端还提供 `tree` / `write` / `edit` / `add_skill`。
 
 ## 为什么用 stdio 代理，而不是 `streamable-http`
 
@@ -46,8 +48,9 @@ OpenViking 服务端本身在 `/mcp` 上就是 streamable HTTP，但 `mcp.json` 
 
 `OPENVIKING_CREDENTIAL_SOURCE`（或 `OPENVIKING_CREDENTIALS_SOURCE`）把整条链钉在某一端：`env` 只认环境变量，`cli`（同义写法还有 `ovcli` / `file` / `config`）只认 ovcli.conf。默认的 `auto` 在 ovcli.conf 带凭据、且上面这些环境变量一个都没设时钉向 ovcli.conf，否则按整条链解析。钉在 ovcli.conf 时，环境变量里的凭据和 `OPENVIKING_MCP_URL` 会被跳过。key 仍依次回落到 `plugin` 键、`agent_plugins` 段，最后是 `server.root_api_key`，所以只写了 `url` 的旧安装仍能用原来的 key；account 和 user 只回落到 `plugin` 键。`env` 模式两个文件都不读。
 
+`~/.openviking/ovcli.conf`:
+
 ```json
-// ~/.openviking/ovcli.conf
 {
   "url": "https://openviking.example.com",
   "api_key": "your-api-key"
@@ -65,6 +68,8 @@ Agent Plugins 1.0 只覆盖 skills 和 MCP servers；hooks、commands、agents �
 作为补偿，内置的 `openviking-memory` 技能直接把这套闭环教给模型 —— 任务开始时用 `find` / `search` + `read` 召回（需要组装上下文时使用 `search` 的 `mode="context"`），过程中和结束后用 `remember` / `write` / `edit` 沉淀，并给出使用召回内容时的优先级与安全规则。
 
 内置的 `ov-experience-memory` 技能让模型在执行类任务前检索 `viking://~/memories/experiences`，并读取适用的 Experience 文件。在这个包里它只做检索：没有会话捕获，这些读取不会关联回所用的 Experience，也不会产生新的轨迹。它检索到的 Experience 来自会捕获会话的 harness。
+
+内置的 `openviking-skills` 技能覆盖存放在 OpenViking 里的 skill 本身：用 `find(context_type="skill")` 查找、读取并按 `SKILL.md` 执行、用 `add_skill` 新建或替换、从 Git 或本地文件夹安装、共享给整个账号，以及把本地 skill 目录迁入 OpenViking。这里没有会话启动 hook，也就没有 `<available-skills>` 清单，所以该技能让模型自己检索 skill，而不是从清单里读。
 
 **如果你的 harness 支持 hooks 机制，推荐使用专属插件。** hook 驱动的召回与捕获不需要模型花费工具调用、也不依赖模型「想起来要记」，比技能驱动的闭环更省 token、也更可靠。本 Agent Plugins 包适用于没有 hooks 的 harness，或你希望用同一个包覆盖多个客户端的场景。
 
@@ -87,7 +92,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | OpenCode | [OpenCode 插件](./10-opencode.md) |
 | Cursor | [Cursor 记忆集成](./12-cursor.md) |
 | TRAE / TRAE CN | [TRAE 记忆集成](./13-trae.md) |
-| pi | [pi Coding Agent 扩展](./11-pi.md) |
+| pi | [pi Coding Agent 扩展](./11-pi.md) — 使用官方 MCP 客户端，把服务端工具注册为原生工具 |
 | OpenClaw | [OpenClaw 插件](./03-openclaw.md) — 独立安装流程 |
 | ZCode | [社区集成](./08-community-plugins.md) |
 

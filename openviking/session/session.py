@@ -453,8 +453,6 @@ class SessionStats:
     total_turns: int = 0
     total_tokens: int = 0
     compression_count: int = 0
-    contexts_used: int = 0
-    skills_used: int = 0
     memories_extracted: int = 0
 
 
@@ -631,19 +629,6 @@ class SessionMeta:
         )
 
 
-@dataclass
-class Usage:
-    """Usage record."""
-
-    uri: str
-    type: str  # "context" | "skill"
-    contribution: float = 0.0
-    input: str = ""
-    output: str = ""
-    success: bool = True
-    timestamp: str = field(default_factory=get_current_timestamp)
-
-
 class Session:
     """Session management class - Message = role + parts."""
 
@@ -676,7 +661,6 @@ class Session:
         self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
 
         self._messages: List[Message] = []
-        self._usage_records: List[Usage] = []
         self._archive_meta_merge_lock = asyncio.Lock()
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
@@ -913,45 +897,6 @@ class Session:
         return self._meta
 
     # ============= Core methods =============
-
-    def used(
-        self,
-        contexts: Optional[List[str]] = None,
-        skill: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Record actually used contexts and skills."""
-        if contexts:
-            for uri in contexts:
-                usage = Usage(uri=uri, type="context")
-                self._usage_records.append(usage)
-                self._stats.contexts_used += 1
-                logger.debug(f"Tracked context usage: {uri}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_contexts_used(
-                    action="context", delta=len(contexts)
-                )
-            except Exception:
-                pass
-
-        if skill:
-            usage = Usage(
-                uri=skill.get("uri", ""),
-                type="skill",
-                input=skill.get("input", ""),
-                output=skill.get("output", ""),
-                success=skill.get("success", True),
-            )
-            self._usage_records.append(usage)
-            self._stats.skills_used += 1
-            logger.debug(f"Tracked skill usage: {skill.get('uri')}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_contexts_used(action="skill", delta=1)
-            except Exception:
-                pass
 
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
@@ -2103,7 +2048,6 @@ class Session:
                 f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
             )
             original_messages = list(self._messages)
-            usage_snapshot = self._usage_records.copy()
             task_id = str(uuid4())
             queue_msg = SessionCommitMsg(
                 task_id=task_id,
@@ -2112,7 +2056,6 @@ class Session:
                 archive_uri=archive_uri,
                 user=self.ctx.user.to_dict(),
                 memory_policy=effective_memory_policy,
-                usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
                 record_auto_commit_success=record_auto_commit_success,
                 event_search_tags=list(effective_event_tags),
                 auto_commit_policy=dict(self._meta.auto_commit_policy or {}),
@@ -2414,7 +2357,6 @@ class Session:
             task_id=msg.task_id,
             archive_uri=msg.archive_uri,
             messages=archive_messages,
-            usage_records=[Usage(uri=uri, type="context") for uri in msg.usage_uris],
             first_message_id=archive_messages[0].id,
             last_message_id=archive_messages[-1].id,
             memory_policy=msg.memory_policy,
@@ -2544,7 +2486,6 @@ class Session:
         task_id: str,
         archive_uri: str,
         messages: List[Message],
-        usage_records: List["Usage"],
         first_message_id: str,
         last_message_id: str,
         memory_policy: Optional[Dict[str, Any]],
@@ -2567,7 +2508,6 @@ class Session:
         usage_events_extracted = 0
         extracted_skill_results: list[dict] = []
         skipped_memory_operations: list[dict[str, Any]] = []
-        active_count_updated = 0
         memory_diff_uri: Optional[str] = None
         completed_memory_steps: Dict[str, set[str]] = {}
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
@@ -2934,20 +2874,6 @@ class Session:
                                     exc,
                                 )
 
-                    # Update active_count (using snapshot, not self._usage_records)
-                    if self._vikingdb_manager:
-                        uris = [u.uri for u in usage_records if u.uri]
-                        try:
-                            active_count_updated = (
-                                await self._vikingdb_manager.increment_active_count(self.ctx, uris)
-                            )
-                        except Exception as e:
-                            logger.debug(f"Could not update active_count for usage URIs: {e}")
-                        if active_count_updated > 0:
-                            logger.info(
-                                f"Updated active_count for {active_count_updated} contexts/skills"
-                            )
-
                 try:
                     await request_wait_tracker.wait_for_request(
                         telemetry.telemetry_id,
@@ -3008,7 +2934,6 @@ class Session:
                     "skipped_operations": skipped_memory_operations,
                 },
                 "usage_events_extracted": usage_events_extracted,
-                "active_count_updated": active_count_updated,
                 "effective_memory_types": sorted(
                     _effective_memory_types(MemoryPolicy.from_dict(memory_policy))
                 ),
@@ -5611,11 +5536,6 @@ class Session:
     def compression(self) -> SessionCompression:
         """Get compression information."""
         return self._compression
-
-    @property
-    def usage_records(self) -> List[Usage]:
-        """Get usage records."""
-        return self._usage_records
 
     @property
     def stats(self) -> SessionStats:

@@ -4,8 +4,8 @@ This directory imports the OpenViking provider from
 [`NousResearch/hermes-plugin-openviking`](https://github.com/NousResearch/hermes-plugin-openviking/tree/5dca75f4d3dcef9467ce2ff32e170d84c679de5f),
 commit `5dca75f4d3dcef9467ce2ff32e170d84c679de5f`.
 
-`__init__.py`, `_setup.py`, and `plugin.yaml` are unchanged from that handoff.
-They also match `plugins/memory/openviking/` in Hermes Agent commit
+At the initial import, `__init__.py`, `_setup.py`, and `plugin.yaml` matched that
+handoff and `plugins/memory/openviking/` in Hermes Agent commit
 `d177b119e9c56c9ddc0b7379ffce52341ec06584`. The original MIT license is retained
 in this directory. Original contributor history is available in
 [Hermes Agent](https://github.com/NousResearch/hermes-agent/commits/d177b119e9c56c9ddc0b7379ffce52341ec06584/plugins/memory/openviking).
@@ -17,6 +17,11 @@ The distribution name is `hermes-plugin-openviking`. The provider, plugin, and
 future Hermes catalog key remain `openviking`. Existing `memory.openviking`
 settings, environment variables, linked `ovcli.conf` files, data paths, and
 `viking_*` tools keep their current behavior.
+
+The active-session commit lifecycle was ported from
+[KoNit-K's Hermes PR #112533](https://github.com/NousResearch/hermes-agent/pull/112533),
+with the original author retained. The OpenViking adaptation uses a configurable
+pending-token threshold instead of the original six-turn trigger.
 
 ## Migration coordination
 

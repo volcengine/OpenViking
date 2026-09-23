@@ -63,11 +63,11 @@ The plugin connects over HTTP. Do not install the OpenViking server into the
 Hermes environment. For local server start from the setup wizard, make the
 `openviking-server` command available on `PATH`.
 
-OpenViking 0.2.10 or newer is recommended. For backward compatibility,
-Hermes can identify older servers that expose the legacy status-only health
-response, but only when anonymous OpenAPI metadata also identifies the service
-as OpenViking. OpenViking 0.2.6 and earlier are deprecated for this integration;
-upgrade them to receive the current health contract and compatibility fixes.
+OpenViking 0.2.14 or newer is required. Hermes can identify older servers that
+expose the legacy status-only health response, but those releases do not provide
+the authenticated-user identity contract required by this integration.
+The `viking://~` home alias requires OpenViking 0.4.16 or newer for user and
+admin credentials, and OpenViking 0.4.17 or newer for root or local development.
 
 ## Setup
 
@@ -222,11 +222,54 @@ memory URI.
 
 `viking_forget` is intentionally narrow. It only accepts concrete user memory
 file URIs, such as
-`viking://user/default/peers/hermes/memories/preferences/mem_abc123.md` (any
-explicit user id works; `viking://~/...` input is passed through untouched for
-deployments where the server expands the home alias). Files
+`viking://user/default/peers/hermes/memories/preferences/mem_abc123.md`, or the
+`viking://~/...` self alias. Under `viking://user/...` the user id is required
+and must match the calling identity; the uid-less `viking://user/memories/...`
+and `viking://user/peers/...` shorthands are deprecated and rejected. Files
 directly under `memories/`, such as `viking://user/default/memories/profile.md`,
 are also allowed because OpenViking supports them. The tool rejects directories,
 resources, skills, sessions, generated summary files, and URIs with query
 strings or fragments. Use OpenViking's MCP, CLI, or admin APIs for broader
 resource and directory cleanup.
+
+
+### Cloud recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to enable cloud recall compression, or
+`auto` to let the server decide whether to rewrite. Both use search
+`mode=context`; `server` sends `rewrite=true`, and `auto` sends `rewrite="auto"`.
+The server digest takes precedence over raw rendered context, and `no_relevant`
+suppresses injection. The default remains `off`; no local compressor is launched.
+
+The Hermes config equivalent is `memory.openviking.recall_compress: server`.
+When enabled, the default request and total recall deadlines become 55 seconds;
+explicit recall timeout settings still take precedence. Older servers fall back
+to the existing search path within that deadline.
+
+### Active-session commits
+
+The standalone provider checks OpenViking's `pending_tokens` after each successful
+turn upload. At **20,000 tokens** by default, it requests a background commit
+without ending the Hermes session. Memory extraction then runs on the server.
+Session-end and session-switch commits still flush messages below this threshold.
+
+Set a different threshold in the active Hermes profile's `config.yaml`:
+
+```yaml
+memory:
+  openviking:
+    commit_token_threshold: 8000
+```
+
+`OPENVIKING_COMMIT_TOKEN_THRESHOLD` overrides the YAML value. The setting accepts
+integers from 1,000 to 1,000,000; values outside this range are clamped. Invalid
+values use the 20,000-token default. The provider also exposes this setting through
+its configuration schema.
+
+This is a client-side commit trigger. It does not set or replace the server's
+`auto_commit_policy`. If a server policy is enabled, both triggers operate
+independently. Server locking serializes their archive operations, but explicit
+client commits do not use the server scheduler's interval or retention settings.
+The plugin retains the existing `keep_recent_count: 0` commit behavior.
+The threshold is not a hard limit on extraction input: one turn can
+exceed it, and the server may include other context during extraction.

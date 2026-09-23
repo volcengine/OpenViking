@@ -29,7 +29,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs._base import (
     _ABSTRACT_WORKER_COUNT,
@@ -310,7 +310,7 @@ class _OpsMixin:
                     path,
                     recursive,
                     ctx=ctx,
-                    strict=is_dir and self._acl_enabled(ctx),
+                    strict=is_dir and await self._acl_enabled(ctx),
                 )
                 if is_dir
                 else []
@@ -695,7 +695,7 @@ class _OpsMixin:
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
         acl_manager = self.acl_manager
-        acl_enabled = self._acl_enabled(ctx)
+        acl_enabled = await self._acl_enabled(ctx)
         guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
@@ -1230,6 +1230,7 @@ class _OpsMixin:
         # Tag filtering happens in FSService on the local fallback path. Fetch
         # all matches so an early filesystem limit cannot discard later tagged
         # entries. The remote path applies the same filter before its limit.
+        acl_enabled = await self._acl_enabled(real_ctx)
         fs_node_limit = None if tag_filter else node_limit
         page_size = self._glob_page_size(fs_node_limit)
         continuation_token: Optional[str] = None
@@ -1253,6 +1254,7 @@ class _OpsMixin:
                     entry.get("name") or entry["path"].rsplit("/", 1)[-1],
                     path,
                     real_ctx,
+                    acl_enabled=acl_enabled,
                 ):
                     continue
                 if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
@@ -1540,9 +1542,9 @@ class _OpsMixin:
         relative_parts = entry_parts[len(root_parts) :]
         if not is_dir and name.startswith("."):
             return False
-        if name in STORAGE_INTERNAL_ENTRY_NAMES:
+        if is_storage_internal_name(name):
             return False
-        return all(part not in STORAGE_INTERNAL_ENTRY_NAMES for part in relative_parts)
+        return not any(is_storage_internal_name(part) for part in relative_parts)
 
     async def _fill_remote_glob_entry_fields(
         self,
@@ -2393,7 +2395,8 @@ class _OpsMixin:
         remaining_offset = offset
         merge_paths = self._legacy_session_alias(uri) is not None
         browsable: List[tuple[Dict[str, Any], str]] = []
-        expose_resource_names = self._acl_enabled(ctx) and is_acl_uri(uri)
+        acl_enabled = await self._acl_enabled(ctx)
+        expose_resource_names = acl_enabled and is_acl_uri(uri)
 
         while True:
             entry_items, consumed, exhausted = await self._list_read_path_items(
@@ -2563,7 +2566,7 @@ class _OpsMixin:
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.LISTABLE_SCOPES]
-        return [e for e in entries if e.get("name") not in STORAGE_INTERNAL_ENTRY_NAMES]
+        return [e for e in entries if not is_storage_internal_name(str(e.get("name", "")))]
 
     async def _ls_entries(
         self,

@@ -2036,7 +2036,7 @@ uninstall_agent_integrations() {
   if contains_harness cursor; then
     agent_remove_json_configs "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)"
     rm -f "$HOME/.cursor/rules/openviking-memory.mdc"
-    rm -rf "$HOME/.cursor/skills/openviking-memory"
+    rm -rf "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills"
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
@@ -2142,18 +2142,20 @@ trae_mcp_path() { # trae_mcp_path <client-id>
 
 install_cursor() {
   heading "$(t '4. Cursor integration' '4. Cursor 集成')"
-  local root hooks_path mcp_path skill_tmp legacy_plugins
+  local root hooks_path mcp_path skill skill_tmp legacy_plugins
   root="$(assemble_agent_integration cursor cursor)" || return 1
   hooks_path="$HOME/.cursor/hooks.json"
   mcp_path="$(cursor_mcp_path)"
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
   mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
   cp "$root/hosts/cursor/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
-  skill_tmp="$HOME/.cursor/skills/openviking-memory.tmp"
-  rm -rf "$skill_tmp"
-  cp -R "$root/hosts/cursor/skills/openviking-memory" "$skill_tmp"
-  rm -rf "$HOME/.cursor/skills/openviking-memory"
-  mv "$skill_tmp" "$HOME/.cursor/skills/openviking-memory"
+  for skill in openviking-memory openviking-skills; do
+    skill_tmp="$HOME/.cursor/skills/$skill.tmp"
+    rm -rf "$skill_tmp"
+    cp -R "$root/hosts/cursor/skills/$skill" "$skill_tmp"
+    rm -rf "$HOME/.cursor/skills/$skill"
+    mv "$skill_tmp" "$HOME/.cursor/skills/$skill"
+  done
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
   info "$(t 'Cursor Rule and Skill installed under ~/.cursor.' 'Cursor Rule 与 Skill 已安装到 ~/.cursor。')"
@@ -2320,13 +2322,20 @@ install_pi() {
     warn "$(t 'pi CLI not found; skipping pi extension install.' '未找到 pi 命令，跳过 pi 扩展安装。')"
     return 0
   fi
+  command -v npm >/dev/null 2>&1 || { err "pi: npm is required to install the MCP client"; return 1; }
+  "$NODE_BIN" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 19) ? 0 : 1)' || {
+    err "pi: Node.js 22.19.0 or newer is required"
+    return 1
+  }
   local plugin_dir dest tmp
   plugin_dir="$(plugin_dir_on_disk pi-coding-agent-extension)" || {
     warn "$(t 'pi extension sources not found; skipping.' '未找到 pi 扩展源码，跳过。')"
     return 0
   }
   sync_shared_runtime
-  if [ ! -f "$plugin_dir/shared/credentials.mjs" ]; then
+  if [ ! -f "$plugin_dir/shared/credentials.mjs" ] \
+    || [ ! -f "$plugin_dir/shared/ov-http.mjs" ] \
+    || [ ! -f "$plugin_dir/shared/mcp-proxy-config.mjs" ]; then
     warn "$(t 'pi extension shared runtime is missing; run node examples/memory-plugin-shared/sync.mjs and retry.' '未找到 pi 扩展的共享运行时；请先运行 node examples/memory-plugin-shared/sync.mjs 再重试。')"
     return 0
   fi
@@ -2335,6 +2344,12 @@ install_pi() {
   rm -rf "$tmp"
   mkdir -p "$tmp"
   (cd "$plugin_dir" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$tmp" && tar -xf -)
+  if ! (cd "$tmp" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+      && "$NODE_BIN" --input-type=module -e 'await import("./lib/mcp-bridge.mjs")'); then
+    err "pi: dependency installation failed; the existing extension was kept"
+    rm -rf "$tmp"
+    return 1
+  fi
   rm -rf "$dest"
   mkdir -p "$(dirname "$dest")"
   mv "$tmp" "$dest"
@@ -2409,7 +2424,8 @@ EOF
       && [ -f "$OV_HOME/agent-integrations/cursor/plugin.json" ] \
       && [ -f "$OV_HOME/agent-integrations/cursor/integration.json" ] \
       && [ -f "$HOME/.cursor/rules/openviking-memory.mdc" ] \
-      && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ]; then
+      && [ -f "$HOME/.cursor/skills/openviking-memory/SKILL.md" ] \
+      && [ -f "$HOME/.cursor/skills/openviking-skills/SKILL.md" ]; then
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/hook.mjs" \
         || { ok=0; agent_fatal=1; }
       "$NODE_BIN" --check "$OV_HOME/agent-integrations/cursor/scripts/uri-guard.mjs" \
@@ -2581,6 +2597,11 @@ EOF
     fi
     if [ -f "$HOME/.pi/agent/extensions/openviking/shared/recall-core.mjs" ]; then
       node --check "$HOME/.pi/agent/extensions/openviking/shared/recall-core.mjs" || ok=0
+    fi
+    (cd "$HOME/.pi/agent/extensions/openviking" && "$NODE_BIN" --input-type=module \
+      -e 'await import("./lib/mcp-bridge.mjs")') || ok=0
+    if [ -f "$HOME/.pi/agent/extensions/openviking/shared/mcp-proxy-config.mjs" ]; then
+      node --check "$HOME/.pi/agent/extensions/openviking/shared/mcp-proxy-config.mjs" || ok=0
     fi
   fi
   if contains_harness dsh && command -v dsh >/dev/null 2>&1; then

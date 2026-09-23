@@ -12,8 +12,8 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 ## What the hooks do
 
-- **Session start** — injects the user profile and preferences into context, and replays anything an offline session queued.
-- **Prompt submit** — searches OpenViking for memories relevant to the prompt and injects them, deduplicated by event id and a 500ms window.
+- **Session start** — injects the user profile and preferences, plus an `<available-skills>` catalog of the user's own and account-shared OpenViking skills, and replays anything an offline session queued. The catalog has its own budget, `skillCatalogTokenBudget` (default 1200 tokens), and falls back to names only when descriptions do not fit; `skillCatalog: false` or a budget of `0` drops it.
+- **Prompt submit** — searches OpenViking for memories and skills relevant to the prompt and injects them, deduplicated by event id and a 500ms window.
 - **Tool use** — denies local file tools a `viking://` virtual path and points the agent back at the OpenViking MCP tools. On TRAE a shell command that carries a `viking://` URI still runs, with a notice pointing at the same tools.
 - **Stop** — captures the finished turn and commits the OpenViking session. Cursor also runs this before a compaction and at session end; ZCode answers first and finishes the writes in a detached worker.
 
@@ -23,7 +23,7 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 The root `plugin.json` is host-neutral package metadata used for version checks and diagnostics. It is not a Claude Code, Cursor, TRAE, or ZCode native plugin manifest.
 
-`hosts/<host>/` holds only what a host reads as configuration — `hooks.json`, `.mcp.json`, `openviking.integration.json`, plus Cursor's rule and skill. Everything executable stays one level up, because `../../memory-plugin-shared/lib` is the path that resolves both in this repository and in an installed `~/.openviking/agent-integrations/<client>/`.
+`hosts/<host>/` holds only what a host reads as configuration — `hooks.json`, `.mcp.json`, `openviking.integration.json`, plus Cursor's rule and its two skills, `openviking-memory` and `openviking-skills`; TRAE and ZCode ship no skill. Everything executable stays one level up, because `../../memory-plugin-shared/lib` is the path that resolves both in this repository and in an installed `~/.openviking/agent-integrations/<client>/`.
 
 The memory logic itself is not here: recall, batching, the pending queue, credential resolution and the MCP proxy all come from `examples/memory-plugin-shared/lib`, which the installer copies to `~/.openviking/agent-integrations/memory-plugin-shared/lib`.
 

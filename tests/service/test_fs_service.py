@@ -13,6 +13,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.errors import LockAcquisitionError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -412,6 +413,31 @@ async def test_grep_projects_memory_content_but_keeps_resource_fast_path(request
     viking_fs.grep.reset_mock()
     await service.grep("viking://resources", "secret", ctx=request_context)
     assert "content_transform" not in viking_fs.grep.await_args.kwargs
+
+    viking_fs.grep.reset_mock()
+    await service.grep(
+        "viking://user/ryoma/sessions/session-1",
+        "secret",
+        ctx=request_context,
+    )
+    assert "content_transform" not in viking_fs.grep.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_grep_forwards_context_to_viking_fs(request_context):
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": []}))
+    service = FSService(viking_fs=viking_fs)
+
+    await service.grep(
+        "viking://resources",
+        "needle",
+        ctx=request_context,
+        before_context=2,
+        after_context=3,
+    )
+
+    assert viking_fs.grep.await_args.kwargs["before_context"] == 2
+    assert viking_fs.grep.await_args.kwargs["after_context"] == 3
 
 
 @pytest.mark.asyncio
@@ -1020,6 +1046,37 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".path.ovlock",
+        ".exact.ovlock.",
+        ".exact.ovlock.probe.md",
+        ".exact.ovlock.notes.md.0123abcd",
+        ".redirect.json",
+        ".sync_log.json",
+    ],
+)
+@pytest.mark.parametrize("suffix", ["", "/", "/child", "/child/notes.md"])
+async def test_mkdir_cp_mv_reject_storage_internal_names(request_context, name, suffix):
+    viking_fs = _FakeVikingFS(events=[])
+    service = FSService(viking_fs=viking_fs)
+    target = f"viking://resources/project/{name}{suffix}"
+    viking_fs.exists = AsyncMock()
+    viking_fs.mkdir = AsyncMock()
+
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.mkdir(target, ctx=request_context)
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.cp("viking://resources/project/a.md", target, False, ctx=request_context)
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.mv("viking://resources/project/a.md", target, ctx=request_context)
+    assert viking_fs.mv_calls == []
+    assert viking_fs.cp_calls == []
+    viking_fs.exists.assert_not_called()
+    viking_fs.mkdir.assert_not_called()
+
+
 async def test_resource_mv_without_watch_scheduler_moves_resource_directly(request_context):
     events = []
     viking_fs = _FakeVikingFS(events=events)

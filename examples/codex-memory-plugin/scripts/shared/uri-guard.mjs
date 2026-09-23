@@ -91,6 +91,33 @@ export function buildGuardNotice(uri, hint = {}) {
   return lines.join("\n");
 }
 
+const SKILL_URI_RE = /^viking:\/\/(?:~|user\/[^/]+|agent)\/skills(?:\/|$)/i;
+const SHARED_SKILL_URI_RE = /^viking:\/\/agent\/skills(?:\/|$)/i;
+// The skills root, a skill directory, or its SKILL.md; anything deeper is a helper file.
+const SKILL_MD_URI_RE = /^viking:\/\/(?:~|user\/[^/]+|agent)\/skills(?:\/[^/]+(?:\/SKILL\.md)?)?\/?$/i;
+
+/**
+ * Skills are installed through the MCP add_skill tool: write and edit refuse
+ * the user's own skills subtree, and under the shared root they would bypass
+ * installation.
+ */
+export function isSkillUri(uri) {
+  return SKILL_URI_RE.test(String(uri || ""));
+}
+
+/**
+ * The add_skill call that replaces a write or edit aimed at `uri`. A shared
+ * skill goes back to the shared root: without target_uri, add_skill makes a
+ * private copy that then shadows it.
+ */
+export function addSkillExample(uri, { call = "add_skill", edited = false } = {}) {
+  const value = String(uri || "");
+  const shared = SHARED_SKILL_URI_RE.test(value) ? ', target_uri="viking://agent/skills"' : "";
+  return SKILL_MD_URI_RE.test(value)
+    ? `${call}(data="<the full ${edited ? "edited " : ""}SKILL.md text>"${shared})`
+    : `${call}(path="<local skill folder or .zip with the changed files>"${shared})`;
+}
+
 /** The hints a host gets when it names no table of its own. */
 export const DEFAULT_TOOL_HINTS = {
   read: {
@@ -110,12 +137,18 @@ export const DEFAULT_TOOL_HINTS = {
     ),
   },
   edit: {
-    tool: "OpenViking MCP edit",
-    example: (uri) => `edit(uri="${uri}", old_string="...", new_string="...")`,
+    tool: (uri) => (isSkillUri(uri) ? "OpenViking MCP add_skill" : "OpenViking MCP edit"),
+    example: (uri) => (
+      isSkillUri(uri)
+        ? addSkillExample(uri, { edited: true })
+        : `edit(uri="${uri}", old_string="...", new_string="...")`
+    ),
   },
   write: {
-    tool: "OpenViking MCP write",
-    example: (uri) => `write(uri="${uri}", content="...")`,
+    tool: (uri) => (isSkillUri(uri) ? "OpenViking MCP add_skill" : "OpenViking MCP write"),
+    example: (uri) => (
+      isSkillUri(uri) ? addSkillExample(uri) : `write(uri="${uri}", content="...")`
+    ),
   },
   bash: {
     tool: "OpenViking MCP read or search",
@@ -152,7 +185,7 @@ function resolveGuardedUri(toolName, input, { hints = DEFAULT_TOOL_HINTS } = {})
     uri,
     shell: SHELL_TOOL_NAMES.has(name),
     hint: {
-      tool: hint.tool,
+      tool: typeof hint.tool === "function" ? hint.tool(uri, input) : hint.tool,
       example: typeof hint.example === "function" ? hint.example(uri, input) : hint.example,
     },
   };

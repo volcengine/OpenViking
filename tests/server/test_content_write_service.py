@@ -8,11 +8,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.server.account_settings import (
-    AccountAclSettings,
-    AccountSettingsPatch,
-    update_account_settings,
-)
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
@@ -136,10 +131,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     auto_protected_dir = "viking://resources/auto_protected"
     uri = "viking://resources/append_plain/journal.md"
 
-    await update_account_settings(
-        service.viking_fs,
-        creator.account_id,
-        AccountSettingsPatch(acl=AccountAclSettings(enabled=True)),
+    await service.runtime_config_manager.patch_account(
+        creator.account_id, {"acl": {"enabled": True}}
     )
     await service.fs.mkdir(auto_protected_dir, ctx=creator)
     await service.resources.wait_processed()
@@ -271,10 +264,8 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     with pytest.raises(PermissionDeniedError):
         await service.viking_fs.read_file(uri, ctx=outsider)
 
-    await update_account_settings(
-        service.viking_fs,
-        creator.account_id,
-        AccountSettingsPatch(acl=AccountAclSettings(enabled=False)),
+    await service.runtime_config_manager.patch_account(
+        creator.account_id, {"acl": {"enabled": False}}
     )
     assert await service.viking_fs.read_file(uri, ctx=outsider) == stored
 
@@ -878,7 +869,7 @@ async def test_memory_write_wait_skips_semantic_queue_and_releases_write_lock(mo
 
     async def _fake_refresh_schema_overview(**kwargs):
         del kwargs
-        return None
+        return True
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
     monkeypatch.setattr(coordinator, "_wait_for_request", _fail_wait_for_request)
@@ -1297,7 +1288,7 @@ async def test_resource_write_anchors_nested_file_to_direct_parent(
 ):
     """A resource content write anchors the semantic refresh at the written file's
     direct parent directory (anchor_to_parent=True), so the changed file is a direct
-    child of the DAG run root: its own L2 vector and the parent's L0/L1 are generated
+    child of the semantic-tree root: its own L2 vector and the parent's L0/L1 are generated
     from a single-directory run instead of a recursive walk of the whole project subtree.
     set_tags keeps the project-root collapse (the default), which the derived
     ``.abstract.md`` sidecar mapping relies on."""

@@ -13,6 +13,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 ## What It Does
 
 - Injects indexed `viking://resources/` repositories into the system prompt.
+- On the first message of each session, injects your profile, memory indexes, and an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - Exposes the same OpenViking MCP tools used by the Claude Code and Codex memory plugins.
 - Maps each OpenCode session to an OpenViking session.
 - Captures user and assistant text messages into OpenViking.
@@ -139,6 +140,8 @@ Behaviour knobs live in `~/.openviking/ovcli.conf` beside the connection fields,
       "commitTokenThreshold": 20000,
       "commitKeepRecentCount": 10,
       "profileTokenBudget": 10000,
+      "skillCatalog": true,
+      "skillCatalogTokenBudget": 1200,
       "resumeContextBudget": 32000
     }
   }
@@ -151,6 +154,8 @@ Keys in `plugin` apply to every harness; keys in `plugin.opencode` apply to this
 Explicit values from 1 through 5 produce an effective total quota of 6 because
 each coding category keeps one retrieval slot. Use Context `quotas` directly
 when exact category ceilings are required.
+
+`profileTokenBudget` covers the profile and memory indexes in the session-start block. The `<available-skills>` catalog comes from one `GET /api/v1/skills` and has its own budget, `skillCatalogTokenBudget` (default `1200`, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`). Your own skills are listed first, then the ones shared under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours; each description is cut to about 40 tokens. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. The agent reads a skill's `SKILL.md` with `openviking_read` before following it. `skillCatalog: false` (`OPENVIKING_SKILL_CATALOG=0`) or a budget of `0` turns the catalog off; with no skills, or on a server without `GET /api/v1/skills`, it is left out.
 
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; an `api_key`
@@ -212,6 +217,7 @@ OpenCode sees the OpenViking MCP server as `openviking`, so tool names are names
 - `openviking_write`: create, overwrite, or append to a `viking://` file.
 - `openviking_edit`: exact string replacement in a `viking://` file.
 - `openviking_add_resource`: add a URL, local file, sitemap, or feed.
+- `openviking_add_skill`: create or replace a skill from its full `SKILL.md` text (`data`), or install one from a Git URL or a local `SKILL.md`, skill directory, or `.zip` (`path`); `target_uri="viking://agent/skills"` shares it with the account.
 - `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
 - `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
 - `openviking_health`: check OpenViking server health.

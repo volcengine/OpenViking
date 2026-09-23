@@ -1,5 +1,8 @@
-import { h } from 'vue'
+import { h, defineAsyncComponent } from 'vue'
 import DefaultTheme from 'vitepress/theme'
+import DocBreadcrumb from './components/DocBreadcrumb.vue'
+import LocaleSwitch from './components/LocaleSwitch.vue'
+import { useData, withBase } from 'vitepress'
 import type { EnhanceAppContext } from 'vitepress'
 import CopyMarkdownButton from './CopyMarkdownButton.vue'
 import LlmsTxtLink from './LlmsTxtLink.vue'
@@ -8,6 +11,7 @@ import ApiExampleTabsEnhancer from './ApiExampleTabsEnhancer.vue'
 import { initVikingBotWidget, syncVikingBotLocale } from './vikingbot-widget'
 import { trackPageView } from './track'
 import './custom.css'
+import './reading.css'
 
 type OpenVikingPreference = {
   lang?: 'zh' | 'en'
@@ -303,16 +307,21 @@ if (typeof window !== 'undefined') {
 export default {
   extends: DefaultTheme,
   Layout() {
+    const { lang } = useData()
+    const zh = lang.value.startsWith('zh')
     return h(DefaultTheme.Layout, null, {
-      'doc-before': () => h('div', { class: 'doc-page-actions' }, [
+      'doc-before': () => [h(DocBreadcrumb), h('div', { class: 'doc-page-actions' }, [
         h(LlmsTxtLink),
         h(CopyMarkdownButton)
-      ]),
+      ])],
+      'sidebar-nav-before': () => h('a', { class: 'sidebar-home-link', href: withBase(zh ? '/zh/' : '/en/') }, zh ? '← 文档首页' : '← Documentation home'),
       'doc-after': () => h(ApiExampleTabsEnhancer),
-      'nav-bar-content-before': () => h(OpenVikingSearch)
+      'nav-bar-content-before': () => h(OpenVikingSearch),
+      'nav-bar-content-after': () => h(LocaleSwitch)
     })
   },
-  enhanceApp({ router }: EnhanceAppContext) {
+  enhanceApp({ app, router }: EnhanceAppContext) {
+    app.component('DocsHome', defineAsyncComponent(() => import('./components/DocsHome.vue')))
     if (import.meta.env.SSR || typeof window === 'undefined') return
 
     trackPageView(window.location.pathname)

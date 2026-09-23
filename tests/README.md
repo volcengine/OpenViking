@@ -146,7 +146,6 @@ Tests for session management (`Session` class).
 |------|-------------|----------------|
 | `test_session_lifecycle.py` | Session creation and persistence | Create new session, create with custom ID, multiple sessions; `load()` existing session, load nonexistent |
 | `test_session_messages.py` | Message management | `add_message()` user/assistant roles, TextPart/ContextPart/ToolPart |
-| `test_session_usage.py` | Usage tracking | `used()` record context URIs, record skill usage, record both; multiple usage records per session |
 | `test_session_commit.py` | Session commit | `commit()` success status, memory extraction trigger, message archiving, empty session handling, multiple commits, usage record persistence |
 | `test_session_context.py` | Context for search | `get_context_for_search()` with `current_messages` + `latest_archive_overview`; latest completed archive only |
 

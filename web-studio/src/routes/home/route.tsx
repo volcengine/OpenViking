@@ -83,15 +83,18 @@ function HomePage() {
   })
 
   const summary = dashboard.data
-  const missingPrivilegedRole =
+  const identityUnavailable =
     !isConnectionRoleLoading && connectionRole === 'unknown'
-  const metricsUnavailable = missingPrivilegedRole || isDisabledPayload(summary)
-  const unavailableMessage = missingPrivilegedRole
+  const metricsUnavailable = identityUnavailable || isDisabledPayload(summary)
+  const unavailableMessage = identityUnavailable
     ? t('usageAccessRequired')
     : t('usageDisabled')
-  const isMetricsLoading = isConnectionRoleLoading || dashboard.isLoading
-  const isSeriesLoading = isConnectionRoleLoading || tokenSeries.isLoading
-  const isCommitsLoading = isConnectionRoleLoading || contextCommits.isLoading
+  const isMetricsLoading =
+    isConnectionRoleLoading || (canQueryMetrics && dashboard.isPending)
+  const isSeriesLoading =
+    isConnectionRoleLoading || (canQueryMetrics && tokenSeries.isPending)
+  const isCommitsLoading =
+    isConnectionRoleLoading || (canQueryMetrics && contextCommits.isPending)
 
   return (
     <div className="flex flex-col gap-5 pb-8">
@@ -124,7 +127,7 @@ function HomePage() {
 
       <TokenTrendPanel
         data={tokenSeries.data}
-        disabled={metricsUnavailable}
+        disabled={identityUnavailable}
         disabledMessage={unavailableMessage}
         isError={tokenSeries.isError}
         isLoading={isSeriesLoading}
@@ -133,7 +136,7 @@ function HomePage() {
 
       <ContextCommitsPanel
         data={contextCommits.data}
-        disabled={metricsUnavailable}
+        disabled={identityUnavailable}
         disabledMessage={unavailableMessage}
         isError={contextCommits.isError}
         isLoading={isCommitsLoading}

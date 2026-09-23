@@ -18,10 +18,37 @@ pub const SYNC_LOG_FILE: &str = ".sync_log.json";
 
 /// Returns `true` when `name` is a runtime path-lock file (`.path.ovlock` or `.exact.ovlock.*`).
 pub fn is_hidden_runtime_lock_name(name: &str) -> bool {
+    // Reserve the whole prefix, including names not produced by the lock resolver.
     name == PATH_LOCK_FILE || name.starts_with(EXACT_LOCK_FILE_PREFIX)
 }
 
 /// Returns `true` when `name` is any hidden internal name (lock files, redirect, sync-log).
 pub fn is_hidden_internal_name(name: &str) -> bool {
     is_hidden_runtime_lock_name(name) || name == REDIRECT_FILE || name == SYNC_LOG_FILE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserves_entire_exact_lock_prefix() {
+        for name in [
+            ".exact.ovlock.",
+            ".exact.ovlock.probe.md",
+            ".exact.ovlock.probe.md.0123456789abcdef",
+        ] {
+            assert!(is_hidden_runtime_lock_name(name));
+            assert!(is_hidden_internal_name(name));
+        }
+        for name in [
+            "probe.md",
+            "tasks",
+            "_system",
+            ".exact.ovlock",
+            "x.exact.ovlock.foo",
+        ] {
+            assert!(!is_hidden_internal_name(name));
+        }
+    }
 }

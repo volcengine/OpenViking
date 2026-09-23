@@ -225,25 +225,34 @@ export function resolveInitialApiKey({
 }
 
 export function resolveConnectionRoleProbeState({
+  accountId = '',
   apiKey,
   baseUrl,
   serverMode,
+  userId = '',
 }: {
+  accountId?: string
   apiKey: string
   baseUrl: string
   serverMode: ServerMode
+  userId?: string
 }): {
   isLoading: boolean
   role: ConnectionRole
   shouldProbe: boolean
 } {
-  if (!baseUrl) {
+  if (!baseUrl || serverMode === 'offline') {
     return { isLoading: false, role: 'unknown', shouldProbe: false }
+  }
+  if (serverMode === 'checking') {
+    return { isLoading: true, role: 'unknown', shouldProbe: false }
   }
   if (serverMode === 'dev') {
     return { isLoading: false, role: 'root', shouldProbe: false }
   }
-  if (!apiKey) {
+  const hasTrustedIdentity =
+    serverMode === 'trusted' && Boolean(accountId.trim() && userId.trim())
+  if (!apiKey && !hasTrustedIdentity) {
     return { isLoading: false, role: 'unknown', shouldProbe: false }
   }
   return { isLoading: true, role: 'unknown', shouldProbe: true }
@@ -563,9 +572,11 @@ export function AppConnectionProvider({
     const isCancelled = () => cancelled
     const apiKey = connection.adminApiKey || connection.apiKey
     const roleProbe = resolveConnectionRoleProbeState({
+      accountId: connection.accountId,
       apiKey,
       baseUrl: connection.baseUrl,
       serverMode,
+      userId: connection.userId,
     })
     const probeKey = createConnectionRoleProbeKey(connection, serverMode)
     const synchronizedProbe = synchronizedRoleProbeRef.current

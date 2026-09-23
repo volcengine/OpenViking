@@ -7,6 +7,7 @@ import pytest
 from openviking.retrieve.skill_package_retriever import SkillPackageRetriever
 from openviking.retrieve.skill_results import (
     SkillResultResolver,
+    package_abstract,
     skill_root_uri,
 )
 from openviking.server.identity import RequestContext, Role
@@ -184,3 +185,36 @@ async def test_scoped_hits_preserve_requested_level_and_do_not_use_outside_score
     assert matched.score == score
     assert matched.abstract == abstract
     assert store.calls[0]["extra_filter"] is filters
+
+
+class _AbstractFs:
+    """Only the accessor `package_abstract` uses, so a stray read is a failure."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.calls = []
+
+    async def abstract(self, uri, ctx=None):
+        self.calls.append((uri, ctx))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("name: demo\ndescription: do things", "name: demo\ndescription: do things"),
+        (f"# {SKILLS}/demo [Directory abstract is not ready]", ""),
+        ("", ""),
+        (NotFoundError(f"{SKILLS}/demo"), ""),
+        (PermissionDeniedError("denied", resource=f"{SKILLS}/demo"), ""),
+    ],
+)
+async def test_package_abstract_reports_only_a_generated_abstract(answer, expected):
+    fs = _AbstractFs(answer)
+    request_ctx = ctx()
+
+    assert await package_abstract(fs, request_ctx, f"{SKILLS}/demo") == expected
+    assert fs.calls == [(f"{SKILLS}/demo", request_ctx)]

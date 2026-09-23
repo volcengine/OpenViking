@@ -135,8 +135,44 @@ class DeletionService:
         # Request cancellation must not interrupt the fence/task/queue handoff.
         return await run_to_completion(lambda: self._submit(account_id, user_id, actor=actor))
 
+    async def delete_now(
+        self,
+        account_id: str,
+        *,
+        actor: RequestContext,
+    ) -> dict[str, str]:
+        """Run the normal account deletion pipeline synchronously.
+
+        Creation rollback needs the same vector, config, filesystem and identity
+        cleanup as DELETE, but must settle it before returning the original
+        creation error. If immediate cleanup fails, enqueue the same deletion
+        message so the existing durable cleanup path can continue later.
+        """
+        result = await run_to_completion(
+            lambda: self._submit(account_id, None, actor=actor, enqueue=False)
+        )
+        message = _deletion_message(
+            task_id=result["task_id"],
+            owner_account_id=SYSTEM_TASK_ACCOUNT_ID,
+            owner_user_id=SYSTEM_TASK_USER_ID,
+            target_account_id=account_id,
+            target_user_id=None,
+        )
+        error = await run_to_completion(lambda: self._process(message))
+        if error is not None:
+            # _process has already marked this task failed. Submit again so
+            # _submit replaces the terminal fence with a fresh queued task.
+            await self.delete(account_id, actor=actor)
+            raise RuntimeError(error)
+        return result
+
     async def _submit(
-        self, account_id: str, user_id: str | None, *, actor: RequestContext
+        self,
+        account_id: str,
+        user_id: str | None,
+        *,
+        actor: RequestContext,
+        enqueue: bool = True,
     ) -> dict[str, str]:
         if (
             user_id is None
@@ -189,13 +225,14 @@ class DeletionService:
                 account_id=owner_account_id,
                 user_id=owner_user_id,
             )
-            await self._enqueue_if_missing(
-                task_id=task_id,
-                owner_account_id=owner_account_id,
-                owner_user_id=owner_user_id,
-                target_account_id=account_id,
-                target_user_id=user_id,
-            )
+            if enqueue:
+                await self._enqueue_if_missing(
+                    task_id=task_id,
+                    owner_account_id=owner_account_id,
+                    owner_user_id=owner_user_id,
+                    target_account_id=account_id,
+                    target_user_id=user_id,
+                )
 
         return {
             "account_id": account_id,
@@ -295,6 +332,9 @@ class DeletionService:
                     )
                 )
             if user_id is None:
+                runtime_config = self._service.runtime_config_manager
+                if runtime_config is not None:
+                    await run_to_completion(lambda: runtime_config.delete_account(account_id))
                 await run_to_completion(lambda: self._delete_account_files(account_id))
             else:
                 await run_to_completion(lambda: self._delete_uploads(ctx))
@@ -321,7 +361,7 @@ class DeletionService:
         agfs = self._service.viking_fs._async_agfs
         path = f"/local/{account_id}"
         try:
-            await agfs.rm(path, recursive=True)
+            await agfs.rm(path, recursive=True, auto_pathlock=False)
         except Exception as exc:
             if not is_not_found_error(exc):
                 raise

@@ -30,7 +30,7 @@ const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-mem
 const PLUGIN_NAME = "openviking-memory";
 const REAL_MCP_TOOLS = [
   "find", "search", "read", "list", "tree", "remember", "write", "edit",
-  "add_resource", "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
+  "add_resource", "add_skill", "list_watches", "cancel_watch", "grep", "glob", "forget", "health",
 ];
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
 
@@ -123,6 +123,7 @@ test("required plugin files are present", () => {
     "hooks/hooks.json",
     "skills/ov-experience-memory/SKILL.md",
     "skills/openviking-memory/SKILL.md",
+    "skills/openviking-skills/SKILL.md",
     "skills/ov-memory-doctor/SKILL.md",
     "skills/ov-memory-doctor/reference.md",
     "scripts/ov-memory-doctor.mjs",
@@ -139,6 +140,14 @@ test("marketplace package ships the canonical Experience skill", () => {
     readFileSync(packagedExperienceSkillPath, "utf-8"),
     readFileSync(canonicalExperienceSkillPath, "utf-8"),
     "packaged Experience skill must stay byte-identical to examples/skills/ov-experience-memory",
+  );
+});
+
+test("marketplace package ships the canonical OpenViking skills skill", () => {
+  assert.equal(
+    readFileSync(join(pluginDir, "skills", "openviking-skills", "SKILL.md"), "utf-8"),
+    readFileSync(join(repoRoot, "examples", "skills", "openviking-skills", "SKILL.md"), "utf-8"),
+    "packaged skill must stay byte-identical to examples/skills/openviking-skills",
   );
 });
 

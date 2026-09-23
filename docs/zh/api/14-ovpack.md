@@ -68,7 +68,7 @@ curl -X POST http://localhost:1933/api/v1/pack/export \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
 client.initialize()
@@ -146,7 +146,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| temp_file_id | string | 是 | - | 临时上传文件 ID（通过 [temp_upload](02-resources.md#temp_upload) 获取） |
+| temp_file_id | string | 是 | - | 临时上传文件 ID（通过 [temp_upload](02-resources.md#temp-upload) 获取） |
 | parent | string | 是 | - | 目标父级 URI（导入到此处） |
 | on_conflict | string | 否 | fail | 冲突策略：`fail`、`overwrite` 或 `skip` |
 | vector_mode | string | 否 | auto | 向量处理方式：`auto`、`recompute` 或 `require` |
@@ -202,7 +202,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
 client.initialize()
@@ -429,4 +429,4 @@ ov restore ./backups/openviking.ovpack --on-conflict overwrite --vector-mode req
 
 - [OVPack 指南](../guides/09-ovpack.md) - 格式、迁移和操作流程
 - [快照](11-snapshot.md) - 工作区版本管理
-- [临时上传](02-resources.md#temp_upload) - 上传待导入的包
+- [临时上传](02-resources.md#temp-upload) - 上传待导入的包

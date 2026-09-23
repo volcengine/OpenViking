@@ -1660,6 +1660,39 @@ async def test_create_account(admin_client: httpx.AsyncClient, admin_service: Op
     assert await admin_service.viking_fs.abstract("viking://user", ctx=ctx)
 
 
+async def test_create_account_rolls_back_when_runtime_config_write_fails(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    admin_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A post-registry initialization failure must not leave a half-created account."""
+    acct = _uid()
+
+    async def fail_patch(*args, **kwargs):
+        raise OSError("runtime config unavailable")
+
+    monkeypatch.setattr(
+        admin_service.runtime_config_manager,
+        "patch_account",
+        fail_patch,
+    )
+
+    response = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "settings": {"github": {"token": "account-token"}},
+        },
+        headers=root_headers(),
+    )
+
+    assert response.status_code == 500
+    assert not any(item["account_id"] == acct for item in admin_app.state.api_key_manager.get_accounts())
+    assert not await _agfs_exists(admin_service, f"/local/{acct}")
+
+
 async def test_create_user_paths_accept_initial_user_config(
     lightweight_admin_client: httpx.AsyncClient,
     lightweight_admin_app: FastAPI,
@@ -1881,6 +1914,18 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     account_ids = {a["account_id"] for a in accounts}
     assert "default" in account_ids
     assert acct in account_ids
+
+    # `query` is a case-insensitive substring match on the account id.
+    fragment = acct[:5].upper()  # "ACME_", proving the match ignores case
+    resp = await admin_client.get(
+        "/api/v1/admin/accounts",
+        params={"query": fragment},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    queried_ids = {a["account_id"] for a in resp.json()["result"]}
+    assert acct in queried_ids
+    assert "default" not in queried_ids
 
 
 async def test_list_accounts_without_watcher_reads_only_accounts_registry(
@@ -2224,6 +2269,57 @@ async def test_delete_account(
         assert await _agfs_exists(admin_service, path) is recreated
         if recreated:
             assert manager.resolve(replacement_key).user_id == "bob"
+
+
+async def test_delete_account_retries_when_runtime_config_cleanup_fails(
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    admin_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Config cleanup failure keeps the deletion fence and can be retried."""
+    acct = _uid()
+    resp = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    user_key = resp.json()["result"]["user_key"]
+    runtime_config = admin_service.runtime_config_manager
+    delete_config = AsyncMock(side_effect=OSError("provider unavailable"))
+    monkeypatch.setattr(runtime_config, "delete_account", delete_config)
+
+    resp = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}",
+        headers=root_headers(),
+    )
+    assert resp.status_code == 202
+    failed = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
+    assert failed["status"] == "failed"
+    assert "provider unavailable" in failed["error"]
+    denied = await admin_client.get(
+        "/api/v1/fs/ls?uri=viking://",
+        headers={"X-API-Key": user_key},
+    )
+    assert denied.status_code == 401
+    assert admin_app.state.api_key_manager.get_deletion(acct) is not None
+
+    conflict = await admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "replacement"},
+        headers=root_headers(),
+    )
+    assert conflict.status_code == 409
+
+    delete_config.side_effect = None
+    retry = await admin_client.delete(
+        f"/api/v1/admin/accounts/{acct}",
+        headers=root_headers(),
+    )
+    completed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
+    assert completed["status"] == "completed"
+    assert admin_app.state.api_key_manager.get_deletion(acct) is None
+    assert delete_config.await_count == 2
 
 
 async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):

@@ -134,6 +134,12 @@ test("buildOverviewMessage is byte-stable for the same inputs", () => {
   assert.match(a.content, /\[OpenViking Session Context\]/);
 });
 
+test("buildOverviewMessage points the model at the openviking_search tool", () => {
+  const message = buildOverviewMessage("summary", 1, 1000);
+  assert.match(message.content, /Use openviking_search for details\./);
+  assert.doesNotMatch(message.content, /viking_archive_expand/);
+});
+
 test("countUndeliveredForSession only counts addMessage for the same session", () => {
   const pending = [
     { entry: { type: "addMessage", sessionId: "a" } },

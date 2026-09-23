@@ -26,6 +26,21 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.parser_config import FeishuConfig
+
+
+def _runtime_config_manager(feishu_config=None):
+    config = feishu_config or FeishuConfig()
+
+    async def resolve_account(_account_id, resolver):
+        return resolver(
+            SimpleNamespace(
+                account=SimpleNamespace(feishu=None),
+                cluster=SimpleNamespace(feishu=config),
+            )
+        )
+
+    return SimpleNamespace(resolve_account=resolve_account)
 
 
 @pytest.mark.asyncio
@@ -114,15 +129,15 @@ async def test_feishu_parser_api_bypasses_accessor():
 @pytest.mark.asyncio
 async def test_feishu_parser_api_uses_app_credentials_for_tenant_token(monkeypatch):
     oauth_client = SimpleNamespace(get_tenant_access_token=AsyncMock(return_value="t-test"))
-    monkeypatch.setattr(
-        "openviking.resource.feishu_watch_auth.FeishuOAuthClient.from_config",
-        Mock(return_value=oauth_client),
-    )
+    from_config = Mock(return_value=oauth_client)
+    monkeypatch.setattr("openviking.resource.feishu_watch_auth.FeishuOAuthClient.from_config", from_config)
     api = _understanding_api_for_parse()
+    feishu_config = FeishuConfig(app_id="app", app_secret="secret")
 
-    auth = await api._resolve_lark_file({})
+    auth = await api._resolve_lark_file({"feishu_config": feishu_config})
 
     assert auth == {"tenant_access_token": "t-test"}
+    from_config.assert_called_once_with(config=feishu_config)
     oauth_client.get_tenant_access_token.assert_awaited_once_with()
 
 
@@ -515,6 +530,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())
+    feishu_config = FeishuConfig(app_id="account-app", app_secret="account-secret")
     monkeypatch.setattr(
         "openviking.service.task_tracker.get_task_tracker",
         Mock(return_value=task_tracker),
@@ -528,6 +544,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         viking_fs=SimpleNamespace(),
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
+        runtime_config_manager=_runtime_config_manager(feishu_config),
     )
     monkeypatch.setattr(
         service,
@@ -538,10 +555,15 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
     )
+    monkeypatch.setattr(
+        "openviking.connector.delegate.ConnectorDelegate.supported_args",
+        Mock(return_value=set()),
+    )
     monkeypatch.setattr("openviking.service.resource_service.uuid4", Mock(return_value="task-1"))
 
-    async def preflight(_self, _source, *, feishu_access_token=None):
+    async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
         assert feishu_access_token == "u-secret"
+        assert kwargs["feishu_config"] is feishu_config
         return SimpleNamespace(source_name=preflight_name, source_format="file")
 
     async def plan_source_job_target(*, source_info, **_kwargs):
@@ -579,6 +601,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     submit_understanding.assert_awaited_once_with(
         source,
         feishu_access_token="u-secret",
+        feishu_config=feishu_config,
         custom_option="forwarded",
     )
     payload = queue_manager.enqueue.await_args.args[1]
@@ -586,6 +609,7 @@ async def test_uat_producer_payload_reaches_worker_without_persisting_token(
     assert "u-secret" not in json.dumps(payload)
     assert payload["understanding_response_id"] == "response-1"
     assert payload["args"] == {"custom_option": "forwarded"}
+    assert "feishu_config" not in str(payload)
 
     queued_msg = AddResourceMsg.from_dict(payload)
     service._execute_resource_ingestion = AsyncMock(
@@ -763,6 +787,7 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         ),
         resource_processor=resource_processor,
         skill_processor=SimpleNamespace(),
+        runtime_config_manager=_runtime_config_manager(),
     )
     monkeypatch.setattr(
         service,
@@ -773,8 +798,12 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         "openviking.service.resource_service.is_git_repo_url",
         Mock(return_value=False),
     )
+    monkeypatch.setattr(
+        "openviking.connector.delegate.ConnectorDelegate.supported_args",
+        Mock(return_value=set()),
+    )
 
-    async def preflight(_self, _source, *, feishu_access_token=None):
+    async def preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
         assert feishu_access_token == "u-secret"
         return SimpleNamespace(source_name=None, source_format="file")
 
@@ -822,13 +851,15 @@ async def test_uat_producer_cancellation_respects_queue_ownership(
         ("resolved_extension", ".pdf"),
     ],
 )
-def test_internal_parser_fields_are_reserved_from_public_args(field, value):
+@pytest.mark.asyncio
+async def test_internal_parser_fields_are_reserved_from_public_args(field, value):
     service = ResourceService()
 
     with pytest.raises(InvalidArgumentError, match=field):
-        service._normalize_add_resource_args(
+        await service._normalize_add_resource_args(
             {field: value},
             watch_interval=0,
+            ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER),
         )
 
 
@@ -1071,28 +1102,30 @@ async def test_add_resource_processor_persists_final_uri_and_cleans_staged_sourc
         "resource_id": final_uri,
     }
     final_complete = task_tracker.complete.await_args_list[-1]
-    assert final_complete.args == (
-        "task-1",
-        {
-            "status": "success",
-            "root_uri": final_uri,
-            "context_count": 9,
-            "queue_status": {
-                "Semantic": {
-                    "processed": 0,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
-                "Embedding": {
-                    "processed": 9,
-                    "requeue_count": 0,
-                    "error_count": 0,
-                    "errors": [],
-                },
+    final_result = dict(final_complete.args[1])
+    telemetry = final_result.pop("telemetry")
+    assert telemetry["id"] == telemetry_id
+    assert telemetry["summary"]["operation"] == "add_resource_job"
+    assert final_complete.args[0] == "task-1"
+    assert final_result == {
+        "status": "success",
+        "root_uri": final_uri,
+        "context_count": 9,
+        "queue_status": {
+            "Semantic": {
+                "processed": 0,
+                "requeue_count": 0,
+                "error_count": 0,
+                "errors": [],
+            },
+            "Embedding": {
+                "processed": 9,
+                "requeue_count": 0,
+                "error_count": 0,
+                "errors": [],
             },
         },
-    )
+    }
     assert final_complete.kwargs == {
         "account_id": "account-1",
         "user_id": "user-1",
@@ -1296,13 +1329,14 @@ def test_feishu_direct_submission_requires_configured_auth(monkeypatch):
     source = "https://example.larkoffice.com/docx/doxcnToken"
 
     assert api.can_submit_url_directly(source, feishu_access_token="u-test")
+    assert not api.can_submit_url_directly(source)
 
     monkeypatch.setattr(
         "openviking.resource.feishu_watch_auth.load_feishu_app_credentials",
         Mock(side_effect=ValueError("missing credentials")),
     )
 
-    assert not api.can_submit_url_directly(source)
+    assert not api.can_submit_url_directly(source, feishu_config=FeishuConfig())
 
 
 def test_normalize_lark_file_accepts_exactly_one_token():

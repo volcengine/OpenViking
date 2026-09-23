@@ -1,8 +1,8 @@
 # Pi OpenViking Extension — Design
 
-The extension gives a [pi](https://github.com/earendil-works/pi) session long-term memory and, when takeover is on, lets OpenViking own the session's committed history. It is a directory of TypeScript modules loaded directly by pi's `jiti` transpiler: no build step, no dependencies beyond what pi already provides, no MCP server. Everything reaches OpenViking over its REST API.
+The extension gives a pi session long-term memory and lets OpenViking own committed history when takeover is enabled. TypeScript loads directly through pi's jiti transpiler. Recall, session capture, commits, context takeover and health checks use REST; model-facing tools use the official MCP client SDK over Streamable HTTP.
 
-README.md is the operator's document — installation, every configuration knob, the tool list. This one is the maintainer's: what each module is responsible for, how the pieces meet at pi's event boundaries, and the reasons behind the choices that the code cannot state for itself.
+README.md is the operator's document — installation, every configuration knob, the tool surface. This one is the maintainer's: what each module is responsible for, how the pieces meet at pi's event boundaries, and the reasons behind the choices that the code cannot state for itself.
 
 ## Design ancestry
 
@@ -27,14 +27,22 @@ pi-coding-agent-extension/
 ├── recall.ts     # per-prompt recall search and injection
 ├── sync.ts       # capture, delivery, pending queue, commit
 ├── takeover.ts   # binds the takeover state machine to pi
-├── tools.ts      # the seven model-facing viking_* tools
+├── tools.ts      # publishes the bridge's tool descriptors as pi tools
 ├── index.ts      # entry point: event handlers and the /viking command
 ├── package.json  # name and version; pi loads index.ts regardless
 ├── lib/          # pi-specific logic kept out of the event handlers
+│   ├── mcp-bridge.mjs        # official SDK connection lifecycle
+│   ├── mcp-result.mjs        # pi content conversion and output limit
+│   ├── takeover-core.mjs     # the context-takeover state machine
+│   ├── recall-ledger.mjs     # injected recall blocks, keyed by pi entry id
+│   ├── capture-adapter.mjs   # a pi branch -> capture payloads
+│   └── uri-guard-adapter.mjs # pi tool events -> the shared URI guard
 ├── shared/       # generated copy of memory-plugin-shared/lib
 ├── scripts/      # live e2e harness
 └── tests/        # node --test suites
 ```
+
+Modules imported by TypeScript have adjacent declarations; the result converter is internal to the JavaScript bridge. The bridge and tool registration can be tested without installing pi.
 
 ## Modules
 
@@ -52,7 +60,7 @@ The transport is built once in the constructor by `createOvHttp` from `shared/ov
 
 Headers are built per request: `Authorization: Bearer` when a key is configured, `X-OpenViking-Actor-Peer` for peer scoping, the shared `User-Agent`, and `X-OpenViking-Account` / `X-OpenViking-User` only when `sendIdentityHeaders` says the deployment is in trusted mode. Timeouts follow the class of call — 5s for health and session metadata, 10s for reads and message writes, 30s for commit and resource ingestion.
 
-Above that sit thin methods for the endpoints this extension and its tools need: health, session metadata, session context, message append, commit, `search/find`, the three content tiers (abstract, overview, read), `fs/ls`, `fs/stat`, delete, and resource ingestion. Commit is exposed twice because two callers need different things from it: `commitSessionResponse` returns the whole envelope so a failure can be logged with its status and trace id, `commitSession` returns just the result.
+Above that sit thin methods for the endpoints the extension itself needs: health, session metadata, session context, and commit through `commitSessionResponse`, which returns the whole envelope so a failure can be logged with its status and trace id. Search, content reads, filesystem operations and resource ingestion used to have wrappers here too; they are the model's business and reach the server over MCP now, so they are gone rather than kept as a second path to the same endpoints that would drift from the first.
 
 ### recall.ts
 
@@ -147,21 +155,21 @@ If any step fails the handler returns nothing and pi's default compaction runs. 
 
 `scripts/e2e-live.sh` drives a real pi binary, a real OpenViking server and a real LLM endpoint (its required and optional environment variables are documented at the top of `scripts/e2e-live.mjs`). It runs three `pi -p` / `pi -c` turns with a tiny takeover threshold and asserts that the third provider payload carries `[OpenViking Session Context]` while the padding from the first turn is gone from the raw conversation history. Nothing in the unit suites covers that end to end, so it stays a manual gate.
 
-### tools.ts
+### MCP tools
 
-Seven tools registered on pi's model, all sharing the one `OVClient`. Each handler answers "OpenViking server is not reachable." when the startup health check never succeeded, so a down server degrades to a message rather than an error.
+The official `@modelcontextprotocol/client` SDK handles Streamable HTTP, initialization, JSON-RPC request pairing and cancellation. The small bridge owns a single connection and its startup promise. It does not run the shared stdio proxy or maintain a protocol implementation.
 
-| Tool | Purpose |
-|---|---|
-| `viking_search` | Semantic search, optionally scoped to a `viking://` prefix |
-| `viking_read` | Read one URI at `abstract`, `overview` or `full` detail |
-| `viking_browse` | List a directory or stat an entry |
-| `viking_remember` | Store a fact for cross-session persistence |
-| `viking_forget` | Delete by URI, or by query when the match is strong |
-| `viking_add_resource` | Ingest a URL into the knowledge base |
-| `viking_archive_expand` | Expand an archived session back into detail |
+`tools/list` supplies the catalogue, descriptions and input schemas. `tools.ts` registers names with the `openviking_` prefix once per session. SDK Ajv validation runs in `prepareArguments` before pi can coerce values or discard optional nulls; valid arguments are passed through unchanged. The original schema, including `additionalProperties`, is preserved. No repair rules or hand-written catalogue are maintained.
 
-Two of them are less direct than they look. `viking_remember` does not write a memory: it appends a `[Remember — <category>]` message to the live OV session, so extraction treats it like any other turn and the fact goes through the same pipeline as everything else. `viking_forget` by query deletes only when the top match scores above 0.8; below that it reports no strong match rather than guessing which memory to destroy. There is no `add_skill` tool — pi has a skill system of its own.
+The bridge reuses shared configuration resolution and `buildOvHeaders`, including the same actor peer as REST recall. It reads configuration before connecting or calling a tool. Changes to the endpoint or request headers replace the connection. A failed transport is discarded for the next call; the failed call is never replayed. Protocol and tool errors do not cause reconnects. Tool registrations remain fixed until the next pi session.
+
+Initialization, the initialized notification and tool discovery share a 5-second deadline. Calls share their configured `timeoutMs` budget with any necessary connection attempt. Cancellation stops local waiting; it does not guarantee that a server-side write was cancelled. Closing the client releases the transport. OpenViking's MCP endpoint is stateless, so no remote session cleanup protocol is needed.
+
+`mcp-result.mjs` maps MCP content to pi's text/image blocks, avoids duplicate structured text and limits all result text together to 50 KiB / 2000 lines. MCP errors are reported as failed tools. No `promptSnippet` or `promptGuidelines` is added: tools discovered during `before_agent_start` would otherwise change pi's cached prompt prefix on the following turn. The existing prompt line names the registered tools immediately.
+
+The extension's coexistence marker is owned by its instance and removed on shutdown, including reload. A pending startup cannot restore the marker or register tools after shutdown. MCP startup failure leaves REST recall, sync and takeover available.
+
+The npm client version is pinned in `package.json` and `package-lock.json`. Installation runs `npm ci` and imports the client in the staging directory before replacing an existing extension. Marketplace archives contain the lockfile, not `node_modules`.
 
 ### index.ts
 
@@ -176,16 +184,16 @@ The entry point. It loads the config, returns immediately when disabled, constru
 | `tool_result` | Append a notice to a `bash` result whose command carried a `viking://` URI |
 | `turn_end` | Sync the branch, feed the token estimate to takeover, update the status line |
 | `session_before_compact` | Takeover compaction, or a commit plus a fresh overview |
-| `session_shutdown` | Persist takeover state, or a final commit |
+| `session_shutdown` | Close the MCP bridge, then persist takeover state or commit one last time |
 | `agent_end` | Invalidate the recall cache |
 
-**Two guards.** The bypass check runs the shared `isBypassed` against the cwd, so a scratch directory never pollutes long-term memory; the pattern syntax is the shared one, identical across harnesses. The health check runs once — if the server is unreachable the extension stays disconnected for the whole session, every handler returns early, and the tools say so. No retries, no repeated warnings.
+**Two guards.** The bypass check runs the shared `isBypassed` against the cwd, so a scratch directory never pollutes long-term memory; the pattern syntax is the shared one, identical across harnesses. The health check runs once — if the server is unreachable the extension stays disconnected for the whole session, every handler returns early and no tools are registered. No retries, no repeated warnings. A bypassed directory never opens the bridge at all: bypass means this directory does not touch OpenViking.
 
-**Startup is memoized, not awaited.** The startup chain — health check, session derivation, pending replay, profile build, takeover restore, tool registration — costs a couple of seconds against a remote server, and `session_start` does not await it, because that delay would land on every pi launch. `before_agent_start` awaits the same in-flight promise, so the first turn still gets its profile and recall. That is also the only startup path a `pi -c` continuation has: pi does not fire `session_start` for one.
+**Startup is memoized, not awaited.** The startup chain — health check, session derivation, pending replay, profile build, takeover restore, tool registration — costs a couple of seconds against a remote server, and `session_start` does not await it, because that delay would land on every pi launch. `before_agent_start` awaits the same in-flight promise, so the first turn still gets its profile and recall. That is also the only startup path a `pi -c` continuation has: pi does not fire `session_start` for one. The MCP handshake is started right after the health check so it runs alongside the pending replay, the profile build and takeover recovery, and is joined at the end of the chain; when it failed, a separate branch in `before_agent_start` retries it once per turn until the session has tools. The list is never refreshed after that: pi has no `unregisterTool`, and adding or removing a tool mid-session rewrites the prompt's tool section and invalidates the provider's cached prefix. With the shared `mcpEnabled` key set to `false` there is no bridge at all, and the status line does not report that as a failure — it is what was asked for.
 
-**System prompt.** `before_agent_start` appends the profile block built by the shared `profile-inject.mjs` and capped at `profileTokenBudget`; outside takeover, the archive overview cached at resume or after a pre-compact commit; and one line naming the seven tools. Under takeover the overview reaches the model through the `context` hook instead, so it is not appended twice.
+**System prompt.** `before_agent_start` appends the profile block built by the shared `profile-inject.mjs` and capped at `profileTokenBudget`; outside takeover, the archive overview cached at resume or after a pre-compact commit; and one line naming the OpenViking tools. That line is generated from the names that actually registered, so it can never promise a tool the server does not have, and it is omitted entirely when the handshake produced none. Under takeover the overview reaches the model through the `context` hook instead, so it is not appended twice.
 
-**Tool guard.** `guardVikingUriToolCall` (`lib/uri-guard-adapter.mjs`) watches for a `viking://` URI handed as a path to a host file tool that cannot read one — `read`, `grep`, `find`, `ls` — and blocks the call with the equivalent `viking_*` invocation spelled out. Without it the model burns turns on a file path that does not exist on disk. A grep `pattern` is search text, not a path, so grepping a local tree for `viking://` is not blocked. `bash` is not blocked either: a URI in a command is as often data (an `ov` argument, an HTTP payload, a search pattern) as a path the model hoped to open. The command runs, and on `tool_result` `noticeVikingUriToolResult` appends a text block to its output that names `viking_read` / `viking_search` and tells the model to ignore the notice when the URI was intentional.
+**Tool guard.** `guardVikingUriToolCall` (`lib/uri-guard-adapter.mjs`) watches for a `viking://` URI handed as a path to a host file tool that cannot read one — `read`, `grep`, `find`, `ls`, `write`, `edit` — and blocks the call with the equivalent `openviking_*` invocation spelled out, written to be valid against the server's own schemas. Without it the model burns turns on a file path that does not exist on disk. A grep `pattern` is search text, not a path, so grepping a local tree for `viking://` is not blocked. `edit` is handed only its `path`: pi carries the replacement text in `edits[].oldText/newText`, which are not in the shared guard's content-key allowlist, so the generic sweep would read them as locations and block any edit whose new text merely mentions a `viking://` URI — which fires the moment somebody edits this repository's own docs. `bash` is not blocked either: a URI in a command is as often data (an `ov` argument, an HTTP payload, a search pattern) as a path the model hoped to open. The command runs, and on `tool_result` `noticeVikingUriToolResult` appends a text block to its output that names `openviking_read` / `openviking_search` and tells the model to ignore the notice when the URI was intentional. A tool absent from the hint table is never guarded, which is why the `openviking_*` tools themselves need no allowlist.
 
 **Surface.** The status line reports connection, entries added on the last turn, and either takeover coverage against its threshold or the plain commit threshold. `/viking` prints that same state; `/viking commit` forces a flush and commit, which under takeover also advances the boundary.
 

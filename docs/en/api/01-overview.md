@@ -17,6 +17,12 @@ Client-Server mode connects to an OpenViking server via HTTP API, supporting mul
 
 #### Python SDK Client
 
+Install the standalone SDK in the Python environment that runs your code:
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
+
 ```python
 from openviking_sdk import SyncHTTPClient
 
@@ -115,32 +121,32 @@ Configuration field description:
 | `api_key` | API Key | `null` (no auth) |
 | `account` | Default account header for tenant-scoped requests | `null` |
 | `user` | Default user header for tenant-scoped requests | `null` |
-| `timeout` | HTTP request timeout in seconds | `600.0` |
+| `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
-See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
+See the [Configuration Guide](../guides/01-configuration.md#ovcli-conf) for details.
 
 #### Using Python SDK Client Without Configuration File
 
-`SyncHTTPClient` and `AsyncHTTPClient` support operating completely without relying on the `ovcli.conf` configuration file, by **explicitly passing all parameters** during initialization:
+`SyncHTTPClient` and `AsyncHTTPClient` work without an `ovcli.conf` file. Install the standalone SDK in the Python environment that runs your code:
+
+```bash
+python -m pip install --upgrade openviking-sdk
+```
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
-    url="http://localhost:1933",          # Explicitly provided
-    api_key="your-key",                    # Explicitly provided (api_key usually identifies user identity)
-    timeout=30.0,                          # Don't use default 600.0
-    extra_headers={}                       # Pass empty dict instead of None, useful for gateway auth in some scenarios
+    url="http://localhost:1933",
+    api_key="your-key",
+    timeout=30.0,
+    extra_headers={},
 )
 client.initialize()
 ```
 
-⚠️ **Note**: The client will attempt to load the configuration file if any of the following conditions are met:
-- `url` is `None`
-- `api_key` is `None`
-- `timeout` equals `600.0` (default value)
-- `extra_headers` is `None`
+The SDK still reads an existing `ovcli.conf` when you pass explicit parameters. Explicit values override the corresponding settings; other settings may come from environment variables or the file. Invalid configuration can therefore fail client construction. The default timeout is 60 seconds. See [client configuration](../configuration/02-client.md) for the file location.
 
 #### HTTP Call Examples
 
@@ -160,12 +166,12 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI Mode
 
-The OpenViking CLI (can be abbreviated as `ov` command) connects to an OpenViking server and exposes all operations as shell commands. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
+The OpenViking CLI command is `ov` (installed with `npm install -g @openviking/cli`). It connects to an OpenViking server and exposes all operations as shell commands. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
 
 Basic usage:
 
 ```bash
-openviking [global options] <command> [arguments] [command options]
+ov [global options] <command> [arguments] [command options]
 ```
 
 Global options (must be placed before the command name):
@@ -178,7 +184,7 @@ Global options (must be placed before the command name):
 Example:
 
 ```bash
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## Lifecycle
@@ -186,7 +192,7 @@ openviking -o json ls viking://resources/
 ### Client-Server Mode
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 client.initialize()
@@ -199,7 +205,7 @@ client.close()
 The CLI is called directly via the command line, requiring the `ovcli.conf` file to be configured first, with no additional client initialization needed:
 
 ```
-openviking -o json ls viking://resources/
+ov -o json ls viking://resources/
 ```
 
 ## Authentication
@@ -253,18 +259,24 @@ Python HTTP SDKs (`SyncHTTPClient` and `AsyncHTTPClient`) raise the correspondin
 List data is rendered as tables; non-list data falls back to formatted JSON:
 
 ```bash
-openviking ls viking://resources/
+ov ls viking://resources/
 # name          size  mode  isDir  uri
 # .abstract.md  100   420   False  viking://resources/.abstract.md
 ```
 
 ### JSON Mode (`--output json`)
 
-All commands output formatted JSON, matching the `result` structure of API responses:
+By default, `-o json` uses compact output with an `{ok, result}` wrapper:
 
 ```bash
-openviking -o json ls viking://resources/
-# [{ "name": "...", "size": 100, ... }, ...]
+ov -o json ls viking://resources/
+# {"ok":true,"result":[{"name":"...","size":100,...},...]}
+```
+
+Use `--compact=false` to return the unwrapped result as formatted JSON:
+
+```bash
+ov -o json --compact=false ls viking://resources/
 ```
 
 The default output format can be set in `ovcli.conf`:
@@ -276,7 +288,7 @@ The default output format can be set in `ovcli.conf`:
 }
 ```
 
-### Compact Mode (`--compact`, `-c`)
+### Compact Mode (`--compact`, `-c`, enabled by default)
 
 - When `--output=json`: Compact JSON format + `{ok, result}` wrapper, suitable for scripts
 - When `--output=table`: Simplified representation for table output (e.g., removing empty columns)
@@ -302,12 +314,13 @@ JSON output - error:
 
 **Note**: Exit codes are return codes from the CLI (command line tool), not HTTP API status codes.
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error |
-| 2 | Configuration error |
-| 3 | Connection error |
+| Code | Meaning | Trigger |
+|------|---------|---------|
+| 0 | Success | Command completed successfully |
+| 1 | Runtime error | Command execution failed, including API or connection errors |
+| 2 | Arguments or configuration error | Invalid command-line arguments, configuration loading failed, missing required credentials, or `--sudo` used with an unsupported command |
+
+The current Rust CLI reports connection failures with exit code `1`; it does not use a separate connection-error exit code `3`.
 
 ## Error Codes
 
@@ -424,7 +437,6 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/sessions/{session_id}/extract` | Extract memory |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
-| POST | `/api/v1/sessions/{session_id}/used` | Record context or skills actually used |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
@@ -486,10 +498,14 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/admin/agent-evolution` | Get the caller account's Agent Evolution status |
-| PUT | `/api/v1/admin/agent-evolution` | Update the caller account's Agent Evolution status |
-| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get effective account settings |
-| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update allowlisted account settings |
+| GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
+| PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
+| PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
+| GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |
+| PUT | `/api/v1/admin/agent-evolution` | Update Agent Evolution status (deprecated) |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get legacy account settings (deprecated) |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update legacy account settings (deprecated) |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List editable memory templates, defaults and effective values |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one memory template |
 | PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one memory template |

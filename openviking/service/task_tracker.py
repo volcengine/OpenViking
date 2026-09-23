@@ -30,6 +30,7 @@ from openviking.service.task_events import (
     TaskEventHistory,
     append_task_event,
 )
+from openviking.service.task_processing_time import pause_task_processing
 from openviking.service.task_store import TaskStore
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
@@ -88,6 +89,7 @@ class TaskRecord:
     error: Optional[str] = None
     auth: Dict[str, Any] = field(default_factory=dict, repr=False)
     execution_events: Optional[TaskEventHistory] = None
+    processing_seconds: Optional[float] = None
     _extra_fields: Dict[str, Any] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -104,6 +106,7 @@ class TaskRecord:
             "status": self.status.value,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "processing_seconds": self.processing_seconds,
             "resource_id": self.resource_id,
             "meta": _sanitize_task_result(public_meta),
             "stage": self.stage,
@@ -287,12 +290,17 @@ class TaskTracker:
         for task_id in expired_ids:
             evicted_count += await self._delete_expired_task(task_id, now)
 
+        capacity_evicted = []
         with self._lock:
             if len(self._tasks) > self.MAX_TASKS:
                 sorted_tasks = sorted(self._tasks.items(), key=lambda x: x[1].created_at)
                 excess = len(self._tasks) - self.MAX_TASKS
                 for tid, _ in sorted_tasks[:excess]:
                     self._tasks.pop(tid, None)
+                    capacity_evicted.append(tid)
+
+        for tid in capacity_evicted:
+            self._work_index.forget_processing(tid)
 
         if evicted_count:
             logger.debug("[TaskTracker] Evicted %d expired tasks", evicted_count)
@@ -337,6 +345,7 @@ class TaskTracker:
 
             with self._lock:
                 self._tasks.pop(task_id, None)
+            self._work_index.forget_processing(task_id)
             return True
 
     @staticmethod
@@ -811,6 +820,7 @@ class TaskTracker:
                 del self._tasks[task_id]
         for task_id in task_ids:
             self._work_index.clear_failure(task_id)
+            self._work_index.forget_processing(task_id)
 
     async def delete_user_tasks(self, account_id: str, user_id: str) -> int:
         """Delete terminal task records for one user from storage and cache."""
@@ -850,6 +860,7 @@ class TaskTracker:
                 )
                 with self._lock:
                     self._tasks.pop(task.task_id, None)
+                self._work_index.forget_processing(task.task_id)
                 self._work_index.clear_failure(task.task_id)
                 deleted += 1
         return deleted
@@ -866,8 +877,9 @@ class TaskTracker:
                     account_id=task.account_id,
                     user_id=task.user_id,
                 )
-        while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
-            await asyncio.sleep(0.05)
+        with pause_task_processing():
+            while self._work_index.has_work(task_id, exclude_work_id=current_work_id):
+                await asyncio.sleep(0.05)
 
     async def record_event(
         self,
@@ -975,6 +987,7 @@ class TaskTracker:
             )
             with self._lock:
                 self._tasks.pop(task.task_id, None)
+            self._work_index.forget_processing(task.task_id)
             return True
 
     async def list_page(
@@ -1004,7 +1017,7 @@ class TaskTracker:
                 io_limiter=self._store_io,
                 **filters,
             )
-            records.extend(self._record_from_payload(record) for record in page)
+            records.extend(self._copy(self._record_from_payload(record)) for record in page)
         if include_cached:
             records.extend(self._copy(t) for t in self._cache_snapshot())
         visible = {
@@ -1119,6 +1132,9 @@ class TaskTracker:
         # Build history before the same physical write as the state transition.
         if operation == "update" and previous is None:
             raise ValueError("Task updates require the previous snapshot")
+        # Persist the final measured union; restored active tasks have no complete clock.
+        if previous is None or previous.status in _ACTIVE_STATUSES:
+            task.processing_seconds = self._work_index.processing_seconds(task.task_id)
         kinds = []
         if previous is None:
             kinds.append("created")
@@ -1151,6 +1167,10 @@ class TaskTracker:
             else:
                 await self._store.update(task)
             self._publish_task(task)
+            if operation == "create":
+                self._work_index.init_processing(task.task_id)
+            elif task.status in _TERMINAL_STATUSES:
+                self._work_index.forget_processing(task.task_id)
             committed = True
 
         # Semaphore/lock waits remain cancellable. Once the store operation is
@@ -1194,10 +1214,11 @@ class TaskTracker:
     def _next_updated_at(task: TaskRecord) -> float:
         return max(time.time(), math.nextafter(task.updated_at, math.inf))
 
-    @staticmethod
-    def _copy(task: TaskRecord) -> TaskRecord:
+    def _copy(self, task: TaskRecord) -> TaskRecord:
         """Return a defensive copy of a TaskRecord."""
         copied = deepcopy(task)
+        if task.status in _ACTIVE_STATUSES:
+            copied.processing_seconds = self._work_index.processing_seconds(task.task_id)
         copied.meta = _sanitize_task_result(copied.meta)
         copied.result = _sanitize_task_result(copied.result)
         copied.auth = {}

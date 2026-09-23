@@ -503,6 +503,7 @@ export function serverErrorMessage(probe) {
  * Run the standard probe ladder against an OpenViking server.
  *
  *   health        GET /health without credentials  — reachability, version, auth_mode
+ *                 (401/403 where a gateway authenticates ahead of OpenViking)
  *   healthAuth    GET /health with credentials     — identity echo (account/user/role)
  *   systemStatus  GET /api/v1/system/status        — first authenticated call the hooks make; real 401/403
  *   fsLs          GET /api/v1/fs/ls?uri=viking://~/memories — tenant-data authorization + resolved user space
@@ -538,12 +539,27 @@ export async function probeOpenViking(conn, { timeoutMs = 5000, mcp = true } = {
 }
 
 /**
+ * The /health answer the rest of the report should read. A gateway that
+ * authenticates ahead of OpenViking (Cloud behind the Volcengine gateway)
+ * answers the credential-less probe with 401/403 before the request reaches
+ * the server, so version, auth_mode and identity all come from the
+ * authenticated probe instead.
+ */
+export function effectiveHealthProbe(probes) {
+  const health = probes?.health;
+  const authed = probes?.healthAuth;
+  if (health && !health.error && (health.status === 401 || health.status === 403)
+    && authed?.ok && isObject(authed.json)) return authed;
+  return health;
+}
+
+/**
  * Turn probe results into findings. `keyInfo` is describeApiKey(conn.apiKey).
  * Returns { authMode, version, identity } for callers that want to cross-check.
  */
 export function assessProbes(report, probes, conn, keyInfo) {
   const summary = { authMode: "", version: "", identity: null, reachable: false, authOk: false };
-  const health = probes.health;
+  let health = probes.health;
   if (!health) return summary;
 
   if (health.error) {
@@ -552,6 +568,24 @@ export function assessProbes(report, probes, conn, keyInfo) {
     return summary;
   }
   summary.reachable = true;
+  if (health.status === 401 || health.status === 403) {
+    // The url is fine: something in front of OpenViking demands credentials on
+    // /health itself. Read it with the key and carry on down the ladder.
+    const authed = probes.healthAuth;
+    if (authed?.ok && isObject(authed.json)) {
+      report.info(`/health is authenticated at this deployment — without a key it answers ${health.status}, so the report reads it with the api key`);
+      health = authed;
+    } else if (!conn.apiKey && !conn.account && !conn.user) {
+      report.fail(`GET /health → ${health.status} and no credentials are configured`, serverErrorMessage(health),
+        "this deployment authenticates /health itself (OpenViking Cloud does); set api_key in ~/.openviking/ovcli.conf or OPENVIKING_API_KEY");
+      return summary;
+    } else {
+      report.fail(`api key rejected on /health → ${authed?.status || health.status}`,
+        `${serverErrorMessage(authed) || serverErrorMessage(health) || "(no message)"} — key ${keyInfo?.display || "?"}`,
+        "this deployment authenticates /health itself and rejected this key; check it against the key issued for this deployment (OpenViking Cloud keys come from the Volcengine console)");
+      return summary;
+    }
+  }
   if (health.status === 404) {
     report.fail(`GET /health → 404 at ${conn.baseUrl}`, "the url points at a web server, but not at an OpenViking API root",
       "check for a missing path prefix (OpenViking Cloud needs /openviking) or a reverse proxy that does not forward /health");
@@ -976,9 +1010,14 @@ export function findPortListener(port) {
   return out;
 }
 
-export async function probeReady(baseUrl, { timeoutMs = 15000 } = {}) {
+/**
+ * `GET /ready`. `conn` is sent when there is one: deployments that gate
+ * /health gate /ready the same way, and a self-hosted server ignores the
+ * header.
+ */
+export async function probeReady(baseUrl, { timeoutMs = 15000, conn = null } = {}) {
   const base = String(baseUrl || "").replace(/\/+$/, "");
-  return httpProbe({ url: `${base}/ready`, timeoutMs: Math.max(timeoutMs, 15000) });
+  return httpProbe({ url: `${base}/ready`, timeoutMs: Math.max(timeoutMs, 15000), headers: conn ? authHeaders(conn) : {} });
 }
 
 /** Flatten one `/ready` check (string or {status, checks}) into { ok, text }. */
@@ -1048,9 +1087,11 @@ function urlHostPort(baseUrl) {
 
 /**
  * The "Server health" section. `health` is the /health probe already taken
- * for the Connection section; `ovConf` is inspectJsonFile(<ov.conf path>).
+ * for the Connection section (effectiveHealthProbe, so a gateway that gates
+ * /health does not read as "the server never answered"); `conn` carries the
+ * credentials /ready may also need; `ovConf` is inspectJsonFile(<ov.conf path>).
  */
-export async function checkServerHealth(report, { baseUrl, ovConf, health, offline = false, timeoutMs = 5000 } = {}) {
+export async function checkServerHealth(report, { baseUrl, ovConf, health, conn = null, offline = false, timeoutMs = 5000 } = {}) {
   report.section("Server health");
   const answered = Boolean(health && !health.error && health.ok && isObject(health.json));
   const summary = { local: isLoopbackUrl(baseUrl), reachable: answered, ready: null, listener: null };
@@ -1078,7 +1119,7 @@ export async function checkServerHealth(report, { baseUrl, ovConf, health, offli
   if (offline) report.info("skipped /ready (--offline)");
   else if (health?.json?.status === "pending_initialization") report.info("skipped /ready — the container has no config yet");
   else if (!answered) report.info("skipped /ready — the server did not answer /health");
-  else summary.ready = assessReady(report, await probeReady(baseUrl, { timeoutMs })).ready;
+  else summary.ready = assessReady(report, await probeReady(baseUrl, { timeoutMs, conn })).ready;
   return summary;
 }
 
@@ -1398,7 +1439,7 @@ export async function checkConnection(report, cfg, { keyInfo, peer, account = ""
   const probes = await probeOpenViking(conn, { timeoutMs: opts.timeoutMs });
   const summary = assessProbes(report, probes, { ...conn, account, user }, keyInfo);
   if (onSummary) onSummary(report, summary, cfg);
-  return { probes, summary };
+  return { probes, summary, conn };
 }
 
 /**
@@ -1419,7 +1460,7 @@ export async function runDoctor(host) {
   const workspace = checkWorkspace(report, { clientVersion: cfg.clientVersion });
   const identity = host.resolveIdentity(cfg);
   const connection = await checkConnection(report, cfg, { ...configInfo, ...identity }, opts, host);
-  const serverHealth = await checkServerHealth(report, { baseUrl: cfg.baseUrl, ovConf: configInfo.ovConf, health: connection?.probes?.health, offline: opts.offline, timeoutMs: opts.timeoutMs });
+  const serverHealth = await checkServerHealth(report, { baseUrl: cfg.baseUrl, ovConf: configInfo.ovConf, health: effectiveHealthProbe(connection?.probes), conn: connection?.conn, offline: opts.offline, timeoutMs: opts.timeoutMs });
   host.checkActivity(report, cfg, connection);
 
   if (opts.json) {

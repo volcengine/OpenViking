@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from openviking.metrics.core.base import ReadEnvelope
+from openviking.metrics.core.runtime import empty_executor_metrics, get_executor_monitor
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import run_async
@@ -136,3 +137,19 @@ class AsyncSystemProbeDataSource(ProbeMetricDataSource):
     def read_probe_state(self) -> ReadEnvelope[dict[str, bool]]:
         """Check whether the shared async queue subsystem can be resolved successfully."""
         return self.safe_bool_probe("queue", lambda: bool(get_queue_manager()))
+
+    def read_async_system_state(self) -> ReadEnvelope[dict[str, Any]]:
+        """Read readiness and executor state in one async-system scrape input."""
+        probe_state = self.read_probe_state()
+        monitor = get_executor_monitor()
+        executor_metrics = (
+            monitor.read_metrics() if monitor is not None else empty_executor_metrics()
+        )
+        return ReadEnvelope(
+            ok=True,
+            value={
+                "probes": probe_state.value,
+                "probes_valid": probe_state.ok,
+                "executor": executor_metrics,
+            },
+        )

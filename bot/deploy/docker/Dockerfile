@@ -5,7 +5,7 @@ FROM python:3.13-slim-bookworm
 
 # Install system dependencies + Node.js 20 via NodeSource (npm/npx 自带，无需多阶段复制)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates git ripgrep bubblewrap socat libfuse2 build-essential gnupg && \
+    apt-get install -y --no-install-recommends curl ca-certificates git bubblewrap socat libfuse2 build-essential gnupg && \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     curl -LsSf https://astral.sh/uv/install.sh | sh && \
@@ -26,9 +26,6 @@ RUN mkdir -p vikingbot
 
 # Pre-install openviking from pip (linux/amd64 has pre-built wheel)
 RUN uv pip install --system --no-cache "openviking>=0.3.9"
-
-# Install npm sandbox runtime
-RUN npm install -g @anthropic-ai/sandbox-runtime
 
 # ============================================
 # Layer 2: Install bridge npm deps (cached)

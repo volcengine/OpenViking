@@ -15,7 +15,6 @@ from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
-from openviking.utils.time_utils import get_current_timestamp
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -74,39 +73,6 @@ async def client(
     yield partial(service.sessions.session, request_context)
     if commit_tasks:
         await asyncio.gather(*commit_tasks, return_exceptions=True)
-
-
-@pytest_asyncio.fixture(scope="function")
-async def client_with_resource_sync(
-    client,
-    service: OpenVikingService,
-    request_context: RequestContext,
-):
-    uri = "viking://resources/session-active-count.md"
-    timestamp = get_current_timestamp()
-    vector = service.vikingdb_manager.get_embedder().embed("active count test").dense_vector
-    await service.vikingdb_manager.upsert(
-        {
-            "uri": uri,
-            "parent_uri": "viking://resources",
-            "is_leaf": True,
-            "abstract": "Session active count test resource",
-            "context_type": "resource",
-            "category": "",
-            "created_at": timestamp,
-            "updated_at": timestamp,
-            "active_count": 0,
-            "vector": vector,
-            "meta": {},
-            "related_uri": [],
-            "account_id": request_context.account_id,
-            "owner_space": "",
-            "level": 2,
-        },
-        ctx=request_context,
-    )
-    return service, request_context, uri
-
 
 @pytest_asyncio.fixture(scope="function")
 async def session(

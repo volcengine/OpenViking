@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import atexit
 import errno
+import hashlib
 import json
 import logging
 import math
@@ -27,7 +28,7 @@ import time
 import uuid
 import zipfile
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -88,6 +89,14 @@ _CONFIG_SCHEMA = [
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
+    _cfg_field(
+        "recall_compress",
+        "Cloud recall compression: off, server or auto (no local compressor)",
+        type="string",
+        default="off",
+    ),
+    _cfg_field("commit_token_threshold", "Pending session tokens that trigger a background memory commit",
+               type="integer", minimum=1000, maximum=1000000, default=20000),
     _cfg_field("recall_limit", "Maximum memories injected by automatic recall", type="integer", minimum=1, maximum=100, default=6),
     _cfg_field("recall_score_threshold", "Minimum relevance score for automatic recall", type="number", minimum=0.0, maximum=1.0, step=0.01, default=0.15),
     _cfg_field("recall_max_injected_chars", "Maximum total characters injected by recall", type="integer", minimum=100, maximum=50000, default=4000),
@@ -101,9 +110,9 @@ _CONFIG_SCHEMA = [
 # Typed settings (config.yaml primary, env override) keyed by config key.
 _SETTING_SPECS = {f["key"]: f for f in _CONFIG_SCHEMA if "type" in f}
 _RECALL_SETTING_KEYS = tuple(k for k in _SETTING_SPECS if k.startswith("recall_"))
-# Explicit-uid URIs (viking://user/<uid>/...) work under every auth mode; the `~`
-# alias only expands for USER/ADMIN roles and is rejected with 400 under dev/ROOT,
-# so the user space is resolved client-side from /api/v1/system/status.
+# Explicit-uid URIs (viking://user/<uid>/...) work under every auth mode and
+# supported OpenViking version. The `~` alias requires OpenViking 0.4.16+ for
+# USER/ADMIN roles and 0.4.17+ for ROOT, so internal paths remain explicit.
 _SESSION_START_SUFFIXES = ("memories/profile.md", "memories/preferences", "memories/entities")
 _SESSION_START_LIST_PARAMS = {"output": "agent", "recursive": True, "abs_limit": 512, "node_limit": 512}
 # Built-in memory tool `target` -> mirror subdir (user facts -> preferences, agent notes -> patterns).
@@ -130,7 +139,7 @@ _FIX_ENDPOINT = "OpenViking memory is temporarily unavailable; correct the endpo
 _HTTPX_MISSING = "httpx not installed — OpenViking plugin disabled"
 _LEGACY_OPENVIKING_IDENTITY_DETAIL = (
     "returned OpenViking's legacy health response, but its anonymous OpenAPI metadata did not identify OpenViking. "
-    "If this is OpenViking 0.2.6 or earlier, upgrade to OpenViking 0.2.10 or newer."
+    "If this is OpenViking 0.2.6 or earlier, upgrade to OpenViking 0.2.14 or newer."
 )
 _PENDING_SESSIONS_RELATIVE_DIR = Path("openviking") / "pending_sessions"
 _RUN_LOCKS_RELATIVE_DIR = Path("openviking") / "runs"
@@ -244,6 +253,8 @@ class _VikingClient:
         self._account = account or get_secret("OPENVIKING_ACCOUNT", "") or "default"
         self._user = user or get_secret("OPENVIKING_USER", "") or "default"
         self._agent = agent if agent is not None else (get_secret("OPENVIKING_AGENT", "") or _DEFAULT_AGENT)
+        # Every client owns its resolved identity, including clients retained across reloads.
+        self._conn_snapshot = (self._endpoint, self._api_key, self._account, self._user, self._agent)
         self._httpx = _get_httpx()
         if self._httpx is None:
             raise ImportError("httpx is required for OpenViking: pip install httpx")
@@ -494,7 +505,7 @@ def _is_windows_absolute_path(value: str) -> bool:
     return len(value) >= 3 and value[0].isalpha() and value[1] == ":" and value[2] in {"/", "\\"}
 
 
-def _validate_forget_memory_uri(raw_uri: Any) -> tuple[Optional[str], Optional[str]]:
+def _validate_forget_memory_uri(raw_uri: Any, *, user_space: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     uri = raw_uri.strip() if isinstance(raw_uri, str) else ""
     if not uri:
         return None, "uri is required"
@@ -506,11 +517,23 @@ def _validate_forget_memory_uri(raw_uri: Any) -> tuple[Optional[str], Optional[s
     if uri.endswith("/") or not uri.endswith(".md"):
         return None, "viking_forget only deletes concrete .md memory files"
     parts = [part for part in uri[len("viking://") :].split("/") if part]
-    # ``memories`` segment index for the user / user-uid / peer / uid-peer layouts.
-    memories_idx = next((idx for idx, peer_at in ((1, None), (2, None), (3, 1), (4, 2))
-                         if parts[:1] == ["user"] and len(parts) > idx and parts[idx] == "memories" and (peer_at is None or parts[peer_at] == "peers")), None)
+    if any(unquote(part) in {".", ".."} for part in parts):
+        return None, "viking_forget does not accept dot path segments"
+    # ``memories`` index for ``<scope>/[peers/<agent>/]memories/``; under ``user`` the uid is
+    # required, since the uid-less shorthands are deprecated upstream.
+    offsets = ((1, None), (3, 1)) if parts[:1] == ["~"] else ((2, None), (4, 2)) if parts[:1] == ["user"] else ()
+    memories_idx = next((idx for idx, peer_at in offsets
+                         if len(parts) > idx and parts[idx] == "memories" and (peer_at is None or parts[peer_at] == "peers")), None)
     if memories_idx is None or len(parts) < memories_idx + 2:
         return None, "viking_forget only deletes user memory file URIs"
+    # An explicit uid can name someone else's space. Do not send a destructive
+    # request unless the server has confirmed that this uid belongs to the caller.
+    if parts[0] == "user":
+        if not user_space:
+            return None, "viking_forget could not verify the current OpenViking user identity; retry or use viking://~/..."
+        if parts[1] != user_space:
+            return None, (f"viking_forget only deletes your own memories; use viking://user/{user_space}/... "
+                          "or viking://~/... instead")
     if uri.rsplit("/", 1)[-1] in _GENERATED_MEMORY_SUMMARY_FILENAMES:
         return None, "viking_forget cannot delete generated memory summary files"
     return uri, None
@@ -1126,15 +1149,28 @@ def _index_tool_calls(messages: List[Dict[str, Any]]) -> tuple[Dict[str, Dict[st
 
 
 @dataclass
+class _CommitScope:
+    """One connection generation. Workers retain it across a config reload."""
+
+    client: Any
+    connection_key: str
+    marker_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    committed: Set[str] = field(default_factory=set)
+    pending: Set[str] = field(default_factory=set)
+    finalizing: Set[str] = field(default_factory=set)
+
+
+@dataclass
 class _TurnUpload:
     """One turn's OpenViking upload: structured batches first, falling back to plain text
     on a first-batch failure, and to individual messages after a failed retry."""
 
-    provider: "OpenVikingMemoryProvider"
+    client: _VikingClient
     sid: str
     batch_messages: List[Dict[str, Any]]
     user_content: str
     assistant_content: str
+    assistant_peer_id: str
     next_index: int = 0
 
     def _trace(self, fmt: str, *args) -> None:
@@ -1159,22 +1195,25 @@ class _TurnUpload:
             return
         # Plain-text fallback: one user + one assistant message.
         assistant_message: Dict[str, Any] = {"role": "assistant", "parts": [{"type": "text", "text": _message_text(self.assistant_content)[:4000]}]}
-        if self.provider._agent:
-            assistant_message["peer_id"] = self.provider._agent
+        if self.assistant_peer_id:
+            assistant_message["peer_id"] = self.assistant_peer_id
         client.post(f"/api/v1/sessions/{self.sid}/messages/batch",
                     {"messages": [{"role": "user", "parts": [{"type": "text", "text": self.user_content[:4000]}]}, assistant_message]})
 
-    def run(self) -> None:
+    def run(self) -> Optional[_VikingClient]:
         try:
-            self.post(self.provider._new_client())
-            return
+            client = self.client
+            self.post(client)
+            return client
         except Exception as e:
-            logger.debug("OpenViking sync_turn failed, reconnecting: %s", e)
+            logger.debug("OpenViking sync_turn failed, retrying: %s", e)
         retry_client = None
         try:
-            retry_client = self.provider._new_client()
+            # The HTTP wrapper opens a new connection for every request. Keep
+            # the original identity even if /reload happens during the retry.
+            retry_client = self.client
             self.post(retry_client)
-            return
+            return retry_client
         except Exception as retry_error:
             if retry_client is None or self.next_index >= len(self.batch_messages):
                 logger.warning("OpenViking sync_turn failed: %s", retry_error)
@@ -1187,6 +1226,7 @@ class _TurnUpload:
                 self._trace("POST %s message_index=%d payload=%s", path, self.next_index, json.dumps(payload, ensure_ascii=False))
                 retry_client.post(path, payload)
                 self.next_index += 1
+            return retry_client
         except Exception as fallback_error:
             logger.warning("OpenViking sync_turn failed during individual-message fallback: %s", fallback_error)
 
@@ -1225,18 +1265,18 @@ class OpenVikingMemoryProvider(MemoryProvider):
         # serialized. _conn_snapshot is the last identity that passed health, published as ONE
         # tuple so lock-free background writers never see torn fields or a failed endpoint;
         # _failed_refresh = (settings key, monotonic ts) of the last failure -> cooldown gate.
-        (self._session_state_lock, self._inflight_lock, self._deferred_commit_lock, self._committed_session_lock,
-         self._client_refresh_lock, self._runtime_start_lock, self._memory_write_lock) = (threading.Lock() for _ in range(7))
+        self._session_state_lock = threading.RLock()
+        (self._inflight_lock, self._deferred_commit_lock, self._committed_session_lock,
+         self._client_refresh_lock, self._runtime_start_lock, self._memory_write_lock,
+         self._writer_commit_lock) = (threading.Lock() for _ in range(7))
         # Writers keyed by the sid they POST under so a commit can drain all of them.
         # Guards the (_session_id, _turn_count) pair. sync_turn runs on the MemoryManager's background sync
         # executor while on_session_end / on_session_switch run on the caller's thread, so the
         # snapshot+reset of the turn counter and the session-id rotation must be atomic against a concurrent
         # increment. See hermes-agent#28296 review.
         self._inflight_writers: Dict[str, Set[threading.Thread]] = {}
-        self._deferred_commit_sids: Set[str] = set()
         self._deferred_commit_threads: Set[threading.Thread] = set()
-        self._committed_session_ids: Set[str] = set()
-        self._pending_marked_sids: Set[str] = set()
+        self._commit_scope: Optional[_CommitScope] = None
         self._memory_write_threads: Set[threading.Thread] = set()
         self._profile_prefetched_sessions: Set[str] = set()
         self._conn_snapshot: Optional[tuple] = None
@@ -1272,13 +1312,21 @@ class OpenVikingMemoryProvider(MemoryProvider):
             normalized["endpoint"] = _normalize_openviking_url(endpoint)
 
         from hermes_cli.config import load_config, save_config
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
-        config = load_config()
-        if not isinstance(config.get("memory"), dict):
-            config["memory"] = {}
-        provider_config = config["memory"].get("openviking")
-        config["memory"]["openviking"] = {**(provider_config if isinstance(provider_config, dict) else {}), **normalized}
-        save_config(config)
+        token = set_hermes_home_override(hermes_home)
+        try:
+            config = load_config()
+            if not isinstance(config.get("memory"), dict):
+                config["memory"] = {}
+            provider_config = config["memory"].get("openviking")
+            config["memory"]["openviking"] = {
+                **(provider_config if isinstance(provider_config, dict) else {}),
+                **normalized,
+            }
+            save_config(config)
+        finally:
+            reset_hermes_home_override(token)
 
     def get_status_config(self, provider_config: dict) -> dict:
         provider_config = dict(provider_config or {})
@@ -1321,9 +1369,24 @@ class OpenVikingMemoryProvider(MemoryProvider):
         return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
 
     def _publish_client(self, client: _VikingClient, endpoint: str) -> None:
-        self._client = client
-        self._conn_snapshot = self._settings_tuple(endpoint)
-        self._failed_refresh = None
+        with self._session_state_lock:
+            self._client = client
+            self._conn_snapshot = self._settings_tuple(endpoint)
+            self._failed_refresh = None
+
+    def _capture_commit_scope(self) -> _CommitScope:
+        with self._session_state_lock:
+            if self._commit_scope is None or self._commit_scope.client is not self._client:
+                snapshot = getattr(self._client, "_conn_snapshot", None)
+                if not isinstance(snapshot, tuple):
+                    snapshot = self._conn_snapshot or self._settings_tuple()
+                # Recovery may use only the matching endpoint and identity. Do
+                # not persist credentials, or use the same marker after A -> B -> A.
+                key = hashlib.sha256(json.dumps(snapshot).encode()).hexdigest()
+                if self._commit_scope is not None:
+                    self._turn_count = 0
+                self._commit_scope = _CommitScope(self._client, key)
+            return self._commit_scope
 
     def _finish_runtime_openviking_start(self, *, endpoint: Optional[str] = None, status_callback=None, warning_callback=None) -> None:
         endpoint = endpoint or self._endpoint
@@ -1500,10 +1563,15 @@ class OpenVikingMemoryProvider(MemoryProvider):
         return None
 
     def _new_client(self) -> _VikingClient:
-        """Client from the published snapshot (one tuple load: background writers run
-        without _client_refresh_lock and must not see torn fields); falls back to the
-        raw fields for legacy/hand-wired paths with no snapshot."""
-        endpoint, api_key, account, user, agent = self._conn_snapshot or self._settings_tuple()
+        """Clone the published identity, including defaults resolved by the client.
+
+        Re-reading empty account/user defaults from the environment could borrow
+        the next connection's identity before that connection is published.
+        """
+        snapshot = getattr(self._client, "_conn_snapshot", None)
+        if not isinstance(snapshot, tuple):
+            snapshot = self._conn_snapshot or self._settings_tuple()
+        endpoint, api_key, account, user, agent = snapshot
         return _VikingClient(endpoint, api_key, account=account, user=user, agent=agent)
 
     # -- prompt / prefetch ---------------------------------------------------
@@ -1595,11 +1663,53 @@ class OpenVikingMemoryProvider(MemoryProvider):
         try:
             cfg = self._recall_config()
             deadline = time.monotonic() + cfg["timeout_seconds"]
-            result = self._unwrap_result(self._post_prefetch_search(
-                client, query_text, session_id, limit=max(cfg["limit"] * 4, 20),
-                context_type=["memory", "resource"] if cfg["resources"] else "memory",
-                deadline=deadline, request_timeout=cfg["request_timeout_seconds"],
-            ))
+            if cfg["compress"] in ("server", "auto"):
+                payload = {
+                    "query": query_text,
+                    "mode": "context",
+                    "purpose": "coding",
+                    "rewrite": True if cfg["compress"] == "server" else "auto",
+                    "score_threshold": cfg["score_threshold"],
+                    "max_tokens": max(64, min(32000, cfg["max_injected_chars"] // 4)),
+                    "context_type": ["memory", "resource"] if cfg["resources"] else "memory",
+                }
+                if session_id:
+                    payload["session_id"] = session_id
+                try:
+                    assembled = self._unwrap_result(
+                        client.post(
+                            "/api/v1/search/search",
+                            payload,
+                            timeout=self._remaining_recall_timeout(
+                                deadline, cfg["request_timeout_seconds"]
+                            ),
+                        )
+                    )
+                    if isinstance(assembled, dict) and any(
+                        k in assembled for k in ("rendered", "digest", "entries")
+                    ):
+                        if (assembled.get("stats") or {}).get("rewrite") == "no_relevant":
+                            return ""
+                        return str(
+                            assembled.get("digest") or assembled.get("rendered") or ""
+                        ).strip()
+                except TimeoutError:
+                    raise
+                except Exception as e:
+                    logger.debug(
+                        "OpenViking context rewrite unavailable, falling back to search: %s", e
+                    )
+            result = self._unwrap_result(
+                self._post_prefetch_search(
+                    client,
+                    query_text,
+                    session_id,
+                    limit=max(cfg["limit"] * 4, 20),
+                    context_type=["memory", "resource"] if cfg["resources"] else "memory",
+                    deadline=deadline,
+                    request_timeout=cfg["request_timeout_seconds"],
+                )
+            )
             if not isinstance(result, dict):
                 return ""
             candidates = [item for ctx_type in ("memories", "resources") for item in (result.get(ctx_type, []) or []) if isinstance(item, dict)]
@@ -1615,8 +1725,15 @@ class OpenVikingMemoryProvider(MemoryProvider):
     # -- typed settings ------------------------------------------------------
 
     @staticmethod
-    def _parse_setting_value(value: Any, kind: str) -> Optional[bool | int | float]:
+    def _parse_setting_value(value: Any, kind: str) -> Optional[bool | int | float | str]:
         """Parse per schema ``kind`` (boolean / integer / number); None when invalid."""
+        if kind == "string":
+            normalized = str(value).strip().lower()
+            if normalized in {"1", "true", "yes"}:
+                return "auto"
+            if normalized in {"0", "false", "no"}:
+                return "off"
+            return normalized if normalized in {"off", "server", "auto"} else None
         if kind == "boolean":
             if isinstance(value, bool):
                 return value
@@ -1638,7 +1755,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         an invalid value falls back to the default with one warning per (source, value)."""
         spec = _SETTING_SPECS[key]
         default = spec["default"]
-        env_value = os.environ.get(spec["env_var"])
+        env_value = get_secret(spec["env_var"])
         if env_value is not None and env_value.strip():
             value, source = env_value, spec["env_var"]
         else:
@@ -1656,7 +1773,16 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _recall_config(self) -> Dict[str, Any]:
         cfg = _load_hermes_openviking_config()
-        return {key.removeprefix("recall_"): self._setting(key, cfg) for key in _RECALL_SETTING_KEYS}
+        resolved = {
+            key.removeprefix("recall_"): self._setting(key, cfg) for key in _RECALL_SETTING_KEYS
+        }
+        if resolved["compress"] in ("server", "auto"):
+            # Retrieval plus server rewrite has a longer fuse. Keep explicit
+            # user deadlines authoritative and the default off path unchanged.
+            for key in ("recall_timeout_seconds", "recall_request_timeout_seconds"):
+                if key not in cfg and not os.environ.get(_SETTING_SPECS[key]["env_var"]):
+                    resolved[key.removeprefix("recall_")] = 55.0
+        return resolved
 
     def _profile_token_budget(self) -> int:
         return self._setting("profile_token_budget", _load_hermes_openviking_config())
@@ -1737,17 +1863,16 @@ class OpenVikingMemoryProvider(MemoryProvider):
     def _user_space(self, client=None, *, timeout: Optional[float] = None) -> str:
         """Resolve the user space, caching only a confirmed connection identity.
 
-        Cache is keyed on the connection snapshot, not the client object:
-        _new_client() builds fresh clients from the same snapshot on every write.
-        getattr() throughout: hand-wired providers (``__new__``) may lack these fields.
+        Use the client's snapshot even when a reload has replaced the active connection.
+        Clients with the same resolved settings share the cache; unbound clients do not.
         """
         active = client if client is not None else getattr(self, "_client", None)
-        snapshot = getattr(self, "_conn_snapshot", None)
+        snapshot = getattr(active, "_conn_snapshot", None)
         cached = getattr(self, "_user_space_cache", None)
-        if active is not None and cached is not None and cached[0] == snapshot:
+        if snapshot is not None and cached is not None and cached[0] == snapshot:
             return cached[1]
         if active is not None and (resolved := _resolve_user_space(active, timeout=timeout)):
-            if snapshot is not None and snapshot is getattr(self, "_conn_snapshot", None):  # unchanged under us
+            if snapshot is not None:
                 self._user_space_cache = (snapshot, resolved)
             return resolved
         return str(getattr(active, "_user", "") or getattr(self, "_user", "") or "default").strip() or "default"
@@ -2020,12 +2145,21 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not user_content:
             return
 
+        # Capture the client, commit generation and peer together. Neither a
+        # queued upload nor its retry may borrow a later connection's identity.
+        with self._client_refresh_lock:
+            scope = self._capture_commit_scope()
+            if scope.client is None:
+                return
+            client = self._new_client()
+            assistant_peer_id = self._agent
+
         turn_messages = [dict(m) for m in (self._extract_current_turn_messages(messages, user_content, assistant_content) if messages is not None else [])]
         for message in turn_messages:
             if message.get("role") == "user":
                 message["content"] = user_content  # first user message carries the skill-stripped text
                 break
-        batch_messages = self._messages_to_openviking_batch(turn_messages, assistant_peer_id=self._agent)
+        batch_messages = self._messages_to_openviking_batch(turn_messages, assistant_peer_id=assistant_peer_id)
         if env_var_enabled(_SYNC_TRACE_ENV):
             logger.info(
                 "OpenViking sync_turn trace: session_arg=%r cached_session=%r messages_param_supported=true messages_present=%s "
@@ -2036,22 +2170,34 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 _preview(user_content), _preview(assistant_content),
             )
 
-        # Snapshot sid + bump the counter atomically so a concurrent switch/end can't
-        # interleave its snapshot+reset (lost turn / misattributed session).
-        with self._session_state_lock:
-            sid = str(session_id or self._session_id).strip()
-            if not sid:
-                return
-            self._turn_count += 1
-        self._mark_session_pending(sid)
-        upload = _TurnUpload(self, sid, batch_messages, user_content, assistant_content)
-
         def drop_empty() -> None:
             if not self._inflight_writers.get(sid):
                 self._inflight_writers.pop(sid, None)
 
-        # Tracked in _inflight_writers[sid] so commits can drain every writer for that sid.
-        self._spawn_tracked("openviking-sync", upload.run, self._inflight_lock, lambda: self._inflight_writers.setdefault(sid, set()),
+        threshold = self._setting("commit_token_threshold", _load_hermes_openviking_config())
+
+        def upload_and_check() -> None:
+            # Serialize writes with commits on the workers, so a slow commit never
+            # blocks sync_turn. A write after a commit re-arms its recovery marker.
+            with self._writer_commit_lock:
+                with self._session_state_lock:
+                    if self._session_id == sid and self._commit_scope is scope and self._client is scope.client:
+                        self._turn_count += 1
+                        turn_count = self._turn_count
+                    else:
+                        turn_count = 1
+                self._mark_session_committed(sid, committed=False, scope=scope)
+                self._mark_session_pending(sid, scope=scope)
+                client = upload.run()
+            if client is not None:
+                self._maybe_commit_live_session(sid, turn_count, threshold, client, scope)
+
+        with self._session_state_lock:
+            sid = str(session_id or self._session_id).strip()
+        if not sid:
+            return
+        upload = _TurnUpload(client, sid, batch_messages, user_content, assistant_content, assistant_peer_id)
+        self._spawn_tracked("openviking-sync", upload_and_check, self._inflight_lock, lambda: self._inflight_writers.setdefault(sid, set()),
                             after_discard=drop_empty)
 
     # -- tracked worker threads ---------------------------------------------
@@ -2117,24 +2263,27 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     # -- session commit / pending-session recovery --------------------------
 
-    def _has_committed_session(self, sid: str) -> bool:
+    def _has_committed_session(self, sid: str, *, scope: Optional[_CommitScope] = None) -> bool:
+        scope = scope or self._capture_commit_scope()
         with self._committed_session_lock:
-            return sid in self._committed_session_ids
+            return sid in scope.committed
 
-    def _mark_session_committed(self, sid: str, committed: bool = True) -> None:
+    def _mark_session_committed(self, sid: str, committed: bool = True, *, scope: Optional[_CommitScope] = None) -> None:
         """Latch (or, with ``committed=False``, re-arm) the per-sid commit guard. Re-arming is
         for in-place compression: it keeps the same live id, which would otherwise reject every later commit."""
+        scope = scope or self._capture_commit_scope()
         with self._committed_session_lock:
-            (self._committed_session_ids.add if committed else self._committed_session_ids.discard)(sid)
+            (scope.committed.add if committed else scope.committed.discard)(sid)
 
-    def _state_path(self, kind: str, name: str) -> Optional[Path]:
-        """Marker/lock file under HERMES_HOME: ``pending`` -> pending_sessions/<sid>.json,
+    def _state_path(self, kind: str, name: str, *, scope: Optional[_CommitScope] = None) -> Optional[Path]:
+        """Marker/lock file under HERMES_HOME: ``pending`` -> pending_sessions/<sid>.<generation>.json,
         ``lock`` -> runs/<run_id>.lock; an empty run id maps to the legacy recovery lock."""
         name = str(name or "").strip()
         if not self._hermes_home or (not name and kind != "lock"):
             return None
         if kind == "pending":
-            return Path(self._hermes_home) / _PENDING_SESSIONS_RELATIVE_DIR / f"{quote(name, safe='')}.json"
+            scope = scope or self._capture_commit_scope()
+            return Path(self._hermes_home) / _PENDING_SESSIONS_RELATIVE_DIR / f"{quote(name, safe='')}.{scope.marker_id}.json"
         return Path(self._hermes_home) / _RUN_LOCKS_RELATIVE_DIR / (f"{quote(name, safe='')}.lock" if name else _LEGACY_RECOVERY_LOCK_FILENAME)
 
     @staticmethod
@@ -2206,10 +2355,11 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 logger.debug("Skipping OpenViking pending-session recovery for owner %s; could not check run lock %s: %s", owner_run_id, path, e)
             return False, None
 
-    def _mark_session_pending(self, sid: str) -> None:
-        if not sid or self._has_committed_session(sid) or sid in self._pending_marked_sids:
+    def _mark_session_pending(self, sid: str, *, scope: Optional[_CommitScope] = None) -> None:
+        scope = scope or self._capture_commit_scope()
+        if not sid or self._has_committed_session(sid, scope=scope) or sid in scope.pending:
             return
-        path = self._state_path("pending", sid)
+        path = self._state_path("pending", sid, scope=scope)
         if path is None:
             return
         if self._run_lock_path is None:
@@ -2218,26 +2368,29 @@ class OpenVikingMemoryProvider(MemoryProvider):
         try:
             from hermes_constants import mkdir_under_hermes_home
             mkdir_under_hermes_home(path.parent)
-            atomic_json_write(path, {"session_id": sid, "owner_run_id": self._run_id}, mode=0o600)
-            self._pending_marked_sids.add(sid)
+            atomic_json_write(path, {"session_id": sid, "owner_run_id": self._run_id,
+                                    "connection_key": scope.connection_key}, mode=0o600)
+            scope.pending.add(sid)
         except Exception as e:
             logger.debug("Could not mark OpenViking session %s pending: %s", sid, e)
 
-    def _clear_pending_session(self, sid: str) -> None:
-        self._pending_marked_sids.discard(sid)
-        path = self._state_path("pending", sid)
+    def _clear_pending_session(self, sid: str, *, scope: Optional[_CommitScope] = None,
+                               pending_path: Optional[Path] = None) -> None:
+        scope = scope or self._capture_commit_scope()
+        scope.pending.discard(sid)
+        path = pending_path or self._state_path("pending", sid, scope=scope)
         try:
             if path is not None:
                 path.unlink(missing_ok=True)
         except Exception as e:
             logger.debug("Could not clear OpenViking pending session %s: %s", sid, e)
 
-    def _pending_sessions(self) -> List[tuple[str, str]]:
-        """(sid, owner_run_id) for every marker file; sid falls back to the file name."""
+    def _pending_sessions(self) -> List[tuple[str, str, Path, str]]:
+        """Read both scoped markers and legacy <sid>.json recovery markers."""
         directory = Path(self._hermes_home) / _PENDING_SESSIONS_RELATIVE_DIR if self._hermes_home else None
         if directory is None or not directory.is_dir():
             return []
-        sessions: List[tuple[str, str]] = []
+        sessions: List[tuple[str, str, Path, str]] = []
         for path in sorted(directory.glob("*.json")):
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
@@ -2246,27 +2399,32 @@ class OpenVikingMemoryProvider(MemoryProvider):
             raw = raw if isinstance(raw, dict) else {}
             sid = str(raw.get("session_id") or "").strip() or unquote(path.stem).strip()
             if sid:
-                sessions.append((sid, str(raw.get("owner_run_id") or "").strip()))
+                sessions.append((sid, str(raw.get("owner_run_id") or "").strip(), path,
+                                 str(raw.get("connection_key") or "")))
         return sessions
 
-    def _claim_deferred_sid(self, sid: str, *, release: bool = False) -> bool:
-        """Dedupe: one finalizer per sid at a time; never claim after shutdown began."""
+    def _claim_deferred_sid(self, sid: str, *, release: bool = False, scope: Optional[_CommitScope] = None) -> bool:
+        """One finalizer per sid and connection generation; none after shutdown."""
+        scope = scope or self._capture_commit_scope()
         with self._deferred_commit_lock:
             if release:
-                self._deferred_commit_sids.discard(sid)
+                scope.finalizing.discard(sid)
                 return True
-            if self._shutting_down or sid in self._deferred_commit_sids:
+            if self._shutting_down or sid in scope.finalizing:
                 return False
-            self._deferred_commit_sids.add(sid)
+            scope.finalizing.add(sid)
             return True
 
     def _recover_pending_sessions(self) -> None:
         """Commit sessions left pending by dead runs, one thread per former owner."""
-        if not self._client:
+        scope = self._capture_commit_scope()
+        if not scope.client:
             return
-        pending_by_owner: Dict[str, List[str]] = {}
-        for sid, owner_run_id in self._pending_sessions():
-            pending_by_owner.setdefault(owner_run_id, []).append(sid)
+        pending_by_owner: Dict[str, List[tuple[str, Path]]] = {}
+        for sid, owner_run_id, path, connection_key in self._pending_sessions():
+            if connection_key and connection_key != scope.connection_key:
+                continue
+            pending_by_owner.setdefault(owner_run_id, []).append((sid, path))
 
         for owner_run_id, sids in pending_by_owner.items():
             recoverable, owner_lock_file = self._claim_owner_run_for_recovery(owner_run_id)
@@ -2275,67 +2433,93 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
             def _recover_owner(pending_sids=tuple(sids), owner=owner_run_id, lock_file=owner_lock_file) -> None:
                 try:
-                    for pending_sid in pending_sids:
-                        if not self._claim_deferred_sid(pending_sid):
+                    for pending_sid, pending_path in pending_sids:
+                        if not self._claim_deferred_sid(pending_sid, scope=scope):
                             continue
                         try:
-                            if self._has_committed_session(pending_sid):
-                                self._clear_pending_session(pending_sid)
-                            elif not self._shutting_down:
-                                self._commit_session(pending_sid, 0, context="during startup recovery", clear_missing=True)
+                            with self._writer_commit_lock:
+                                if self._has_committed_session(pending_sid, scope=scope):
+                                    self._clear_pending_session(pending_sid, scope=scope, pending_path=pending_path)
+                                elif not self._shutting_down:
+                                    self._commit_session(pending_sid, 0, context="during startup recovery", clear_missing=True,
+                                                         scope=scope, pending_path=pending_path)
                         finally:
-                            self._claim_deferred_sid(pending_sid, release=True)
+                            self._claim_deferred_sid(pending_sid, release=True, scope=scope)
                 finally:
                     self._flock_close(lock_file, None if owner == self._run_id else self._state_path("lock", owner), "owner run lock")
 
             self._spawn_tracked(f"openviking-recover-owner-{owner_run_id or 'legacy'}", _recover_owner, self._deferred_commit_lock, lambda: self._deferred_commit_threads)
 
-    def _session_needs_commit(self, sid: str, turn_count: int) -> bool:
+    def _maybe_commit_live_session(self, sid: str, turn_count: int, threshold: int, client: _VikingClient,
+                                   scope: _CommitScope) -> None:
+        """Check after a successful upload; metadata failures must not replay the turn."""
+        if self._shutting_down:
+            return
+        try:
+            session = self._unwrap_result(client.get(f"/api/v1/sessions/{sid}"))
+            if int(session.get("pending_tokens") or 0) >= threshold:
+                self._finalize_session_async(sid, turn_count, context="after live token threshold", client=client, scope=scope)
+        except Exception as e:
+            logger.warning("OpenViking live commit check failed for %s: %s", sid, e)
+
+    def _session_needs_commit(self, sid: str, turn_count: int, *, scope: Optional[_CommitScope] = None) -> bool:
         # The committed-guard wins over turn_count: a racing sync_turn can re-increment
         # _turn_count after a commit+reset.
-        if self._has_committed_session(sid):
+        scope = scope or self._capture_commit_scope()
+        if self._has_committed_session(sid, scope=scope):
             return False
         if turn_count > 0:
             return True
         try:
-            session = self._unwrap_result(self._client.get(f"/api/v1/sessions/{sid}"))
+            session = self._unwrap_result(scope.client.get(f"/api/v1/sessions/{sid}"))
             return isinstance(session, dict) and int(session.get("pending_tokens") or 0) > 0
         except Exception:
             return False
 
-    def _commit_session(self, sid: str, turn_count: int, *, context: str, clear_missing: bool = False) -> bool:
+    def _commit_session(self, sid: str, turn_count: int, *, context: str, clear_missing: bool = False,
+                        client: Optional[_VikingClient] = None, scope: Optional[_CommitScope] = None,
+                        pending_path: Optional[Path] = None) -> bool:
+        scope = scope or self._capture_commit_scope()
         try:
-            self._client.post(f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
-            self._mark_session_committed(sid)
-            self._clear_pending_session(sid)
+            (client or scope.client).post(f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
+            self._mark_session_committed(sid, scope=scope)
+            self._clear_pending_session(sid, scope=scope, pending_path=pending_path)
+            with self._session_state_lock:
+                if self._session_id == sid and self._commit_scope is scope and self._client is scope.client:
+                    self._turn_count = 0
             logger.info("OpenViking session %s committed %s (%d turns)", sid, context, turn_count)
             return True
         except Exception as e:
             if clear_missing and _status_code_from_error(e) == 404:
-                self._clear_pending_session(sid)
+                self._clear_pending_session(sid, scope=scope, pending_path=pending_path)
                 logger.debug("OpenViking pending session %s no longer exists; dropped marker", sid)
             else:
                 logger.warning("OpenViking session commit failed for %s: %s", sid, e)
             return False
 
-    def _finalize_session_async(self, sid: str, turn_count: int, *, context: str) -> None:
+    def _finalize_session_async(self, sid: str, turn_count: int, *, context: str,
+                                client: Optional[_VikingClient] = None, scope: Optional[_CommitScope] = None) -> None:
         """Drain the old session's writers and commit it on a daemon thread, so the
         multi-second drain + pending-token GET + commit POST never runs on the
-        caller's command thread (on_session_switch). Deduped per sid; no-op after shutdown."""
-        if not sid or not self._claim_deferred_sid(sid):
+        caller's command thread (on_session_switch). Deduped per sid and connection; no-op after shutdown."""
+        scope = scope or self._capture_commit_scope()
+        if not sid or not self._claim_deferred_sid(sid, scope=scope):
             return
 
         def _finalize() -> None:
             try:
                 if self._shutting_down:
                     return
+                # Drain before taking the write lock: queued uploads need that
+                # lock to finish. A later writer re-arms the guard after this commit.
                 if not self._drain_writers(sid, timeout=_DEFERRED_COMMIT_TIMEOUT):
                     logger.warning("OpenViking writer for %s still alive after drain — leaving session uncommitted", sid)
                     return
-                if not self._shutting_down and self._session_needs_commit(sid, turn_count):
-                    self._commit_session(sid, turn_count, context=context)
+                with self._writer_commit_lock:
+                    if not self._shutting_down and self._session_needs_commit(sid, turn_count, scope=scope):
+                        self._commit_session(sid, turn_count, context=context, client=client, scope=scope)
             finally:
-                self._claim_deferred_sid(sid, release=True)
+                self._claim_deferred_sid(sid, release=True, scope=scope)
 
         self._spawn_tracked(f"openviking-finalize-{sid}", _finalize, self._deferred_commit_lock, lambda: self._deferred_commit_threads)
 
@@ -2345,18 +2529,17 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not self._ensure_client():
             return
         with self._session_state_lock:
+            scope = self._capture_commit_scope()
             sid = self._session_id
-            turn_count = self._turn_count
         if not self._drain_writers(sid, timeout=_SESSION_DRAIN_TIMEOUT):
             logger.warning("OpenViking writer for %s still alive after drain — skipping commit", sid)
             return
-        if not self._session_needs_commit(sid, turn_count):
-            return
-        if self._commit_session(sid, turn_count, context="on session end"):
-            # Mark clean so a follow-up on_session_switch skips its own commit.
+        with self._writer_commit_lock:
             with self._session_state_lock:
-                if self._session_id == sid:
-                    self._turn_count = 0
+                turn_count = self._turn_count if self._session_id == sid and self._commit_scope is scope else 0
+            if not self._session_needs_commit(sid, turn_count, scope=scope):
+                return
+            self._commit_session(sid, turn_count, context="on session end", scope=scope)
 
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False, **kwargs) -> None:
         """Commit the old session and rotate cached state to the new session_id.
@@ -2377,6 +2560,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
         # Rotate under the lock so a concurrent sync_turn lands fully under old or new.
         with self._session_state_lock:
+            scope = self._capture_commit_scope()
             # Rotate cached session state synchronously (cheap, in-memory) and snapshot the old session
             # under the lock so a concurrent sync_turn either lands fully before the rotation (counted under
             # old) or fully after (counted under new) — never split. The OLD session's commit (drain +
@@ -2402,13 +2586,13 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 # In-place compression keeps the same (still live) sid, which compress_context()
                 # just committed and latched. Re-arm so later commits aren't rejected. Rotation
                 # mode is untouched: the old id stays latched to dedupe its async finalizer.
-                self._mark_session_committed(old_session_id, committed=False)
+                self._mark_session_committed(old_session_id, committed=False, scope=scope)
 
         if not rotate:
             logger.debug("OpenViking on_session_switch skipped rotation: session=%s rewound=%s", old_session_id, rewound)
             return
         if old_session_id:
-            self._finalize_session_async(old_session_id, old_turn_count, context="on switch")
+            self._finalize_session_async(old_session_id, old_turn_count, context="on switch", scope=scope)
         logger.debug("OpenViking on_session_switch: old=%s new=%s parent=%s reset=%s", old_session_id, new_id, parent_session_id, reset)
 
     # -- memory mirroring -----------------------------------------------------
@@ -2420,9 +2604,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         reload mid-write can't borrow a later peer; an empty peer there is intentional.
         getattr(): hand-wired providers (``__new__``) may lack ``_client`` / ``_agent``.
         """
-        # Explicit-uid URIs are canonical under every auth mode; the uid-less `viking://user/peers/...`
-        # shorthand was removed upstream (#4196) and `viking://~/...` only expands for USER/ADMIN roles, not
-        # dev/ROOT.
+        # Explicit-uid URIs are canonical across supported OpenViking versions. The
+        # uid-less shorthand was removed upstream, and `viking://~` is newer.
         active_client = client if client is not None else getattr(self, "_client", None)
         agent = str(getattr(active_client, "_agent", getattr(self, "_agent", "")) or "").strip()
         peer_prefix = f"peers/{agent}/" if agent else ""
@@ -2632,10 +2815,12 @@ class OpenVikingMemoryProvider(MemoryProvider):
         })
 
     def _tool_forget(self, args: dict) -> str:
-        uri, error = _validate_forget_memory_uri(args.get("uri"))
+        # _resolve_user_space, not _user_space: its "default" fallback is a guess, not an identity.
+        client = self._client
+        uri, error = _validate_forget_memory_uri(args.get("uri"), user_space=_resolve_user_space(client))
         if error:
             return tool_error(error)
-        result = self._unwrap_result(self._client.delete("/api/v1/fs", params={"uri": uri, "recursive": False}))
+        result = self._unwrap_result(client.delete("/api/v1/fs", params={"uri": uri, "recursive": False}))
         result = result if isinstance(result, dict) else {}
         payload = {"status": "deleted", "uri": result.get("uri") or uri,
                    **{key: result[key] for key in ("estimated_deleted_count", "memory_cleanup", "semantic_root_uri", "semantic_status", "queue_status") if key in result}}

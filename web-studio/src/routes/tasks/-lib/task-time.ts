@@ -1,4 +1,7 @@
+import { isActiveTaskStatus } from './task-record'
+
 export type TaskTimestamp = {
+  processing_seconds?: number | null
   created_at?: number | string
   created_at_iso?: string
   status?: string
@@ -30,37 +33,77 @@ export function getTaskDate(task: TaskTimestamp): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date
 }
 
+const terminalStatuses = new Set(['completed', 'failed', 'cancelled'])
+
+/** Wall-clock time since submission, including queue waits between stages. */
+export function getTaskDurationSeconds(
+  task: TaskTimestamp,
+  nowMs = Date.now(),
+): number | undefined {
+  // A missing creation timestamp cannot be replaced with the last update.
+  const start = getTaskDate({
+    created_at: task.created_at,
+    created_at_iso: task.created_at_iso,
+  })
+  if (!start) return undefined
+
+  let endMs: number | undefined
+  if (isActiveTaskStatus(task.status)) {
+    endMs = nowMs
+  } else if (terminalStatuses.has(task.status ?? '')) {
+    endMs = getTaskDate({
+      created_at: task.updated_at,
+      created_at_iso: task.updated_at_iso,
+    })?.getTime()
+  }
+  if (endMs === undefined || !Number.isFinite(endMs)) return undefined
+  if (endMs < start.getTime()) return undefined
+  return (endMs - start.getTime()) / 1000
+}
+
+export function getAverageTaskDurationSeconds(
+  tasks: TaskTimestamp[],
+): number | undefined {
+  const durations = tasks
+    .filter((task) => terminalStatuses.has(task.status ?? ''))
+    .map((task) => getTaskDurationSeconds(task))
+    .filter((duration): duration is number => duration !== undefined)
+  if (durations.length === 0) return undefined
+  return (
+    durations.reduce((sum, duration) => sum + duration, 0) / durations.length
+  )
+}
+
 export function formatTaskDuration(task: TaskTimestamp): string {
-  const status = task.status || 'unknown'
+  const seconds = getTaskDurationSeconds(task)
+  return seconds === undefined ? '-' : formatDurationString(Math.floor(seconds))
+}
 
-  // Pending tasks have not started execution yet
-  if (status === 'pending') {
-    return '-'
-  }
+export function getTaskProcessingSeconds(
+  task: TaskTimestamp,
+): number | undefined {
+  const seconds = task.processing_seconds
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0
+    ? seconds
+    : undefined
+}
 
-  const createdDate = getTaskDate(task)
-  if (!createdDate) return '-'
+export function formatTaskProcessingDuration(
+  task: TaskTimestamp,
+): string | undefined {
+  const seconds = getTaskProcessingSeconds(task)
+  return seconds === undefined
+    ? undefined
+    : formatDurationString(Math.floor(seconds))
+}
 
-  const createdMs = createdDate.getTime()
-  const updatedDate =
-    task.updated_at || task.updated_at_iso
-      ? getTaskDate({
-          created_at: task.updated_at,
-          created_at_iso: task.updated_at_iso,
-        })
-      : undefined
-
-  const startMs = updatedDate ? updatedDate.getTime() : createdMs
-
-  if (status === 'running') {
-    const elapsedSec = Math.max(0, Math.floor((Date.now() - startMs) / 1000))
-    return formatDurationString(elapsedSec)
-  }
-
-  // Completed or Failed tasks
-  const endMs = updatedDate ? updatedDate.getTime() : createdMs
-  const durationSec = Math.max(0, Math.floor((endMs - createdMs) / 1000))
-  return formatDurationString(durationSec)
+export function formatTaskWaitingDuration(
+  task: TaskTimestamp,
+): string | undefined {
+  const processing = getTaskProcessingSeconds(task)
+  const total = getTaskDurationSeconds(task)
+  if (processing === undefined || total === undefined) return undefined
+  return formatDurationString(Math.floor(Math.max(0, total - processing)))
 }
 
 function formatDurationString(diffSec: number): string {

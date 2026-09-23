@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import AGFSInvalidOperationError, AGFSNotSupportedError
-from openviking.server.auth import get_request_context, require_role
+from openviking.server.auth import _configured_root_api_key, get_request_context, require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
@@ -80,12 +80,16 @@ async def health_check(request: Request):
         if config is not None and hasattr(config, "get_effective_auth_mode"):
             effective_auth_mode = config.get_effective_auth_mode()
         result["auth_mode"] = effective_auth_mode
+        if effective_auth_mode == AuthMode.TRUSTED.value:
+            result["root_api_key_required"] = bool(_configured_root_api_key(request))
 
-        # Resolve identity when API key is provided
         x_api_key = request.headers.get("X-API-Key")
         authorization = request.headers.get("Authorization")
+        account = request.headers.get("X-OpenViking-Account")
+        user = request.headers.get("X-OpenViking-User")
+        trusted_identity = effective_auth_mode == AuthMode.TRUSTED.value and account and user
 
-        if x_api_key or authorization:
+        if x_api_key or authorization or trusted_identity:
             try:
                 from openviking.server.auth import resolve_identity
 
@@ -93,8 +97,8 @@ async def health_check(request: Request):
                     request,
                     x_api_key=x_api_key,
                     authorization=authorization,
-                    x_openviking_account=request.headers.get("X-OpenViking-Account"),
-                    x_openviking_user=request.headers.get("X-OpenViking-User"),
+                    x_openviking_account=account,
+                    x_openviking_user=user,
                 )
                 result["account_id"] = str(identity.account_id)
                 result["user_id"] = str(identity.user_id)

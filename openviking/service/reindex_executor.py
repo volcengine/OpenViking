@@ -34,15 +34,17 @@ from openviking.storage.abstract_overview import body_for_preview, embedding_tex
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.content_hash import content_md5
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.embedding_utils import (
     _apply_ingest_options,
+    _decode_text_bytes,
     _truncate_abstract_bytes,
     get_resource_content_type,
     vectorize_directory_meta,
@@ -999,7 +1001,7 @@ class ReindexExecutor:
                     ingest_options=run.ingest_options,
                 )
                 return
-            executor = SemanticDagExecutor(
+            executor = SemanticTreeExecutor(
                 processor=processor,
                 context_type="skill",
                 max_concurrent_llm=processor.max_concurrent_llm,
@@ -1230,8 +1232,16 @@ class ReindexExecutor:
         async def process_file(file_uri: str) -> _ReindexCounters:
             file_counters = _ReindexCounters(scanned_records=1)
             parent_uri = VikingURI(file_uri).parent.uri
+            try:
+                file_bytes = await get_viking_fs().read_file_bytes(file_uri, ctx=ctx)
+            except Exception as exc:
+                file_counters.failed_records += 1
+                file_counters.warnings.append(f"Failed to read {file_uri} for reindex: {exc}")
+                return file_counters
             summary = await self._best_file_summary(file_uri, ctx=ctx)
-            vector_text = await self._best_resource_file_vector_text(file_uri, summary, ctx=ctx)
+            vector_text = await self._best_resource_file_vector_text(
+                file_uri, summary, ctx=ctx, file_content=file_bytes
+            )
             if not vector_text:
                 file_counters.unsupported_records += 1
                 file_counters.warnings.append(f"No vector source found for {file_uri}")
@@ -1248,6 +1258,7 @@ class ReindexExecutor:
                     level=ContextLevel.DETAIL,
                     ctx=ctx,
                     ingest_options=ingest_options,
+                    md5=content_md5(file_bytes),
                 )
                 file_counters.rebuilt_records += 1
             except Exception as exc:
@@ -1570,7 +1581,7 @@ class ReindexExecutor:
 
             if not recursive:
                 continue
-            from openviking.storage.queuefs.semantic_dag import _SKIP_FILENAMES
+            from openviking.storage.queuefs.semantic_executor import _SKIP_FILENAMES
             from openviking.storage.viking_fs import LS_ALL_NODES
 
             entries = await viking_fs.ls(directory_uri, node_limit=LS_ALL_NODES, ctx=ctx)
@@ -1809,7 +1820,7 @@ class ReindexExecutor:
         file_name = uri.rsplit("/", 1)[-1]
         overviews = await self._safe_read_text(f"{parent_uri}/.overview.md", ctx=ctx)
         if overviews:
-            parsed = self._parse_overview_md(body_for_preview(overviews))
+            parsed = SemanticProcessor._parse_overview_md(overviews)
             if file_name in parsed:
                 return parsed[file_name]
         existing = await self._fetch_existing_record(
@@ -1824,6 +1835,7 @@ class ReindexExecutor:
         uri: str,
         summary: str,
         ctx: RequestContext,
+        file_content: bytes | None = None,
     ) -> str:
         existing = await self._fetch_existing_record(
             uri=uri,
@@ -1838,7 +1850,11 @@ class ReindexExecutor:
             text_source = embedding_config.text_source
             if text_source in SUMMARY_TEXT_SOURCES and summary:
                 return summary
-            content = await self._safe_read_text(uri, ctx=ctx)
+            content = (
+                _decode_text_bytes(file_content)
+                if file_content is not None
+                else await self._safe_read_text(uri, ctx=ctx)
+            )
             if content:
                 return truncate_embedding_input(content, embedding_config.max_input_tokens)
             return summary or fallback
@@ -1860,6 +1876,7 @@ class ReindexExecutor:
         ctx: RequestContext,
         meta: Optional[dict[str, Any]] = None,
         ingest_options: IngestOptions | None = None,
+        md5: str | None = None,
     ) -> None:
         service = get_service()
         assert service.vikingdb_manager is not None
@@ -1877,6 +1894,7 @@ class ReindexExecutor:
             account_id=owner_ctx.account_id,
             owner_space=owner_space_for_uri(uri),
             meta=merged_meta,
+            md5=md5,
         )
         context.set_vectorize(Vectorize(text=vector_text))
         msg = EmbeddingMsgConverter.from_context(context)
@@ -2018,21 +2036,3 @@ class ReindexExecutor:
             if value:
                 return value
         return ""
-
-    @staticmethod
-    def _parse_overview_md(content: str) -> dict[str, str]:
-        parsed: dict[str, str] = {}
-        current_name: Optional[str] = None
-        current_lines: list[str] = []
-        for line in (content or "").splitlines():
-            if line.startswith("## "):
-                if current_name is not None:
-                    parsed[current_name] = "\n".join(current_lines).strip()
-                current_name = line[3:].strip()
-                current_lines = []
-                continue
-            if current_name is not None:
-                current_lines.append(line)
-        if current_name is not None:
-            parsed[current_name] = "\n".join(current_lines).strip()
-        return parsed

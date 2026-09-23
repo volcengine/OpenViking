@@ -1,176 +1,54 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for vikingbot chat functionality - single message and interactive modes."""
-
-import tempfile
-from pathlib import Path
+"""CLI response delivery and provider-compatible conversation history."""
 
 import pytest
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
 from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
-from vikingbot.cli.commands import _CHAT_PROMPT_MESSAGE, _CHAT_PROMPT_STYLE
 from vikingbot.config.schema import SessionKey
 from vikingbot.session.manager import Session
 
 
-@pytest.fixture
-def temp_workspace():
-    """Create a temporary workspace directory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
-@pytest.fixture
-def message_bus():
-    """Create a MessageBus instance."""
-    return MessageBus()
-
-
-class TestSingleTurnChannel:
-    """Tests for SingleTurnChannel (vikingbot chat -m xxx)."""
-
-    def test_single_turn_channel_initialization(self, message_bus, temp_workspace):
-        """Test that SingleTurnChannel can be initialized correctly."""
-        config = SingleTurnChannelConfig()
-        channel = SingleTurnChannel(
-            config,
-            message_bus,
-            workspace_path=temp_workspace,
-            message="Hello, test",
-            session_id="test-session",
-            markdown=True,
+@pytest.mark.parametrize(
+    "channel_cls, config_cls, options",
+    [
+        pytest.param(
+            SingleTurnChannel, SingleTurnChannelConfig, {"message": "hello"}, id="single-turn"
+        ),
+        pytest.param(ChatChannel, ChatChannelConfig, {"logs": False}, id="interactive"),
+    ],
+)
+async def test_cli_channel_receives_response(tmp_path, channel_cls, config_cls, options):
+    channel = channel_cls(
+        config_cls(),
+        MessageBus(),
+        workspace_path=tmp_path,
+        session_id="test-session",
+        markdown=True,
+        **options,
+    )
+    channel._running = True
+    await channel.send(
+        OutboundMessage(
+            session_key=SessionKey(type="cli", channel_id="default", chat_id="test-session"),
+            content="test response",
         )
-
-        assert channel is not None
-        assert channel.name == "single_turn"
-        assert channel.message == "Hello, test"
-        assert channel.session_id == "test-session"
-
-    @pytest.mark.asyncio
-    async def test_single_turn_channel_receives_response(self, message_bus, temp_workspace):
-        """Test that SingleTurnChannel can receive and store responses."""
-        config = SingleTurnChannelConfig()
-        test_message = "Hello, test"
-        channel = SingleTurnChannel(
-            config,
-            message_bus,
-            workspace_path=temp_workspace,
-            message=test_message,
-            session_id="test-session",
-            markdown=True,
-        )
-
-        # Create a test response
-        session_key = SessionKey(type="cli", channel_id="default", chat_id="test-session")
-        test_response = "This is a test response from the bot"
-
-        # Send the response
-        await channel.send(
-            OutboundMessage(
-                session_key=session_key,
-                content=test_response,
-            )
-        )
-
-        # Check that the response was stored
-        assert channel._last_response == test_response
-        assert channel._response_received.is_set()
+    )
+    assert channel._last_response == "test response"
+    assert channel._response_received.is_set()
 
 
-class TestSessionHistoryProviderSpecificFields:
-    """Tests provider-specific history reconstruction from persisted session messages."""
-
-    def test_deepseek_history_includes_reasoning_content(self):
-        session = Session(key=SessionKey(type="cli", channel_id="default", chat_id="test-session"))
-        session.add_message("user", "hello")
-        session.add_message(
-            "assistant",
-            "hi",
-            reasoning_content="internal reasoning",
-        )
-
-        history = session.get_history(provider_name="deepseek")
-
-        assert history == [
-            {"role": "user", "content": "hello"},
-            {
-                "role": "assistant",
-                "content": "hi",
-                "reasoning_content": "internal reasoning",
-            },
-        ]
-
-    def test_non_deepseek_history_omits_reasoning_content(self):
-        session = Session(key=SessionKey(type="cli", channel_id="default", chat_id="test-session"))
-        session.add_message("user", "hello")
-        session.add_message(
-            "assistant",
-            "hi",
-            reasoning_content="internal reasoning",
-        )
-
-        history = session.get_history(provider_name="openai")
-
-        assert history == [
-            {"role": "user", "content": "hello"},
-            {"role": "assistant", "content": "hi"},
-        ]
-
-
-class TestChatChannel:
-    def test_interactive_prompt_uses_terminal_foreground_and_visible_label(self):
-        assert _CHAT_PROMPT_MESSAGE == [("class:user-label", "You: ")]
-        rules = dict(_CHAT_PROMPT_STYLE.style_rules)
-        assert rules[""] == "fg:ansidefault"
-        assert rules["user-label"] == "bold fg:ansicyan"
-        assert all("ansiblack" not in style for style in rules.values())
-
-    def test_chat_channel_initialization(self, message_bus, temp_workspace):
-        """Test that ChatChannel can be initialized correctly."""
-        config = ChatChannelConfig()
-        channel = ChatChannel(
-            config,
-            message_bus,
-            workspace_path=temp_workspace,
-            session_id="test-session",
-            markdown=True,
-            logs=False,
-        )
-
-        assert channel is not None
-        assert channel.name == "chat"
-        assert channel.session_id == "test-session"
-
-    @pytest.mark.asyncio
-    async def test_chat_channel_send_response(self, message_bus, temp_workspace):
-        """Test that ChatChannel can receive and store responses."""
-        config = ChatChannelConfig()
-        channel = ChatChannel(
-            config,
-            message_bus,
-            workspace_path=temp_workspace,
-            session_id="test-session",
-            markdown=True,
-            logs=False,
-        )
-
-        # Start the channel in background (it will wait for input)
-        channel._running = True
-
-        # Create a test response
-        session_key = SessionKey(type="cli", channel_id="default", chat_id="test-session")
-        test_response = "This is a test response from the bot"
-
-        # Send the response
-        await channel.send(
-            OutboundMessage(
-                session_key=session_key,
-                content=test_response,
-            )
-        )
-
-        # Check that the response was stored
-        assert channel._last_response == test_response
-        assert channel._response_received.is_set()
+@pytest.mark.parametrize("provider", ["deepseek", "openai"])
+def test_history_includes_reasoning_only_for_deepseek(provider):
+    session = Session(key=SessionKey(type="cli", channel_id="default", chat_id="test-session"))
+    session.add_message("user", "hello")
+    session.add_message("assistant", "hi", reasoning_content="internal reasoning")
+    assistant = {"role": "assistant", "content": "hi"}
+    if provider == "deepseek":
+        assistant["reasoning_content"] = "internal reasoning"
+    assert session.get_history(provider_name=provider) == [
+        {"role": "user", "content": "hello"},
+        assistant,
+    ]

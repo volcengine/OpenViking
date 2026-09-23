@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Full, Queue
 from threading import Lock, Thread
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.server.config import ServerConfig, TempUploadConfig
 from openviking.server.identity import RequestContext, Role
@@ -25,6 +25,9 @@ from openviking.server.local_input_guard import _read_upload_meta
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+if TYPE_CHECKING:
+    from openviking.resource.shared_source import SharedSource
 
 _CHUNK_SIZE = 1024 * 1024
 _SHARED_UPLOAD_ROOT = "viking://upload"
@@ -186,9 +189,7 @@ def _shared_upload_created_at(upload_id: str) -> Optional[float]:
 
 async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) -> tuple[str, int]:
     suffix = Path(upload_file.filename or "upload.tmp").suffix or ".tmp"
-    temp_path = await asyncio.to_thread(
-        _create_temp_file, prefix="ov_http_upload_", suffix=suffix
-    )
+    temp_path = await asyncio.to_thread(_create_temp_file, prefix="ov_http_upload_", suffix=suffix)
     total = 0
     f = None
     try:
@@ -199,9 +200,7 @@ async def _stream_upload_to_local_temp(upload_file: Any, max_size_bytes: int) ->
                 break
             total += len(chunk)
             if total > max_size_bytes:
-                raise InvalidArgumentError(
-                    f"Upload exceeds size limit ({max_size_bytes} bytes)."
-                )
+                raise InvalidArgumentError(f"Upload exceeds size limit ({max_size_bytes} bytes).")
             # UploadFile reads already yield to the event loop.  Local disk writes do
             # not, so run each bounded write in the default executor rather than
             # stalling the Core worker event loop on slow local storage.
@@ -253,6 +252,40 @@ class TempUploadStore:
         if shared_id is None:
             return await asyncio.to_thread(self._resolve_local, temp_file_id)
         return await self._resolve_shared(temp_file_id, shared_id, ctx)
+
+    async def resolve_shared_reference(
+        self,
+        temp_file_id: str,
+        ctx: RequestContext,
+    ) -> Optional["SharedSource"]:
+        """Validate a shared upload and return a download-free SOURCE reference.
+
+        The API only checks ownership and existence; the worker downloads the
+        content once (see :func:`materialize_shared_source`). Returns ``None`` for
+        non-shared ids so callers can fall back to the local-copy path.
+        """
+        from openviking.resource.shared_source import SharedSource
+
+        shared_id = _parse_shared_temp_file_id(temp_file_id)
+        if shared_id is None:
+            return None
+        meta = await self._read_shared_meta(shared_id, ctx)
+        self._validate_shared_meta(meta, temp_file_id, ctx)
+        content_uri = meta["storage_uri"]
+        vfs = get_viking_fs()
+        if not await vfs.exists(content_uri, ctx=self._internal_ctx(ctx)):
+            raise PermissionDeniedError("Temporary upload is invalid: content missing.")
+        original_filename = meta.get("original_filename") or ""
+        return SharedSource.from_dict(
+            {
+                "temp_file_id": temp_file_id,
+                "content_uri": content_uri,
+                "account_id": ctx.account_id,
+                "original_filename": original_filename,
+                "file_ext": meta.get("file_ext") or Path(original_filename).suffix,
+                "meta": {},
+            }
+        )
 
     async def _save_local(self, upload_file: Any) -> str:
         config = get_openviking_config()
@@ -316,9 +349,7 @@ class TempUploadStore:
 
         try:
             content = await asyncio.to_thread(Path(temp_path).read_bytes)
-            await vfs.write_file_bytes(
-                content_uri, content, ctx=internal_ctx, auto_pathlock=False
-            )
+            await vfs.write_file_bytes(content_uri, content, ctx=internal_ctx, auto_pathlock=False)
             await vfs.write_file(
                 meta_uri,
                 json.dumps(meta, ensure_ascii=False),
@@ -357,9 +388,7 @@ class TempUploadStore:
         now = time.time()
         with _SHARED_CLEANUP_STATE_LOCK:
             if account_id in _SHARED_CLEANUP_PENDING:
-                logger.debug(
-                    "[TempUpload] Shared cleanup already pending account=%s", account_id
-                )
+                logger.debug("[TempUpload] Shared cleanup already pending account=%s", account_id)
                 return
             due_at = _SHARED_CLEANUP_DUE_AT.get(account_id)
             if due_at is not None and now < due_at:
@@ -528,9 +557,7 @@ class TempUploadStore:
         try:
             data = json.loads(await vfs.read_file(meta_uri, ctx=internal_ctx))
         except Exception as exc:
-            raise PermissionDeniedError(
-                "Temporary upload metadata is invalid or missing."
-            ) from exc
+            raise PermissionDeniedError("Temporary upload metadata is invalid or missing.") from exc
         if not isinstance(data, dict):
             raise PermissionDeniedError("Temporary upload metadata is invalid or missing.")
         return data
@@ -615,9 +642,9 @@ class TempUploadStore:
 
         # Classify the single listing into independent groups (order preserved,
         # so each group stays name-ascending / oldest-first).
-        buckets: list[tuple[str, float]] = []   # (uri, bucket_expiry)
-        legacy: list[tuple[str, float]] = []    # (uri, upload_expiry)
-        invalid: list[str] = []                 # uri
+        buckets: list[tuple[str, float]] = []  # (uri, bucket_expiry)
+        legacy: list[tuple[str, float]] = []  # (uri, upload_expiry)
+        invalid: list[str] = []  # uri
         for entry in entries:
             if not entry.get("isDir"):
                 continue
@@ -636,12 +663,18 @@ class TempUploadStore:
             invalid.append(uri)
 
         # Process the bucket and legacy groups independently, oldest-first.
-        bucket_scanned, bucket_removed, bucket_due, bucket_failed = (
-            await self._cleanup_expiry_group(vfs, internal_ctx, buckets, now, kind="bucket")
-        )
-        legacy_scanned, legacy_removed, legacy_due, legacy_failed = (
-            await self._cleanup_expiry_group(vfs, internal_ctx, legacy, now, kind="flat")
-        )
+        (
+            bucket_scanned,
+            bucket_removed,
+            bucket_due,
+            bucket_failed,
+        ) = await self._cleanup_expiry_group(vfs, internal_ctx, buckets, now, kind="bucket")
+        (
+            legacy_scanned,
+            legacy_removed,
+            legacy_due,
+            legacy_failed,
+        ) = await self._cleanup_expiry_group(vfs, internal_ctx, legacy, now, kind="flat")
 
         # Invalid/foreign dirs: only when explicitly enabled; never blocks the
         # expiry groups and failures are logged inside the helper.
@@ -729,9 +762,7 @@ class TempUploadStore:
         """
         started_at = time.monotonic()
         try:
-            await vfs.remove_files(
-                uri, recursive=True, ctx=internal_ctx, auto_pathlock=False
-            )
+            await vfs.remove_files(uri, recursive=True, ctx=internal_ctx, auto_pathlock=False)
         except Exception:
             logger.warning(
                 "[TempUpload] cleanup remove failed kind=%s uri=%s elapsed_ms=%.1f",

@@ -11,9 +11,14 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from openviking_cli.session.user_id import UserIdentifier
 
+from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
 from .config_loader import resolve_config_path
-from .config_utils import format_validation_error
+from .config_utils import (
+    format_validation_error,
+    warn_unknown_config_fields,
+    warn_unknown_fields,
+)
 from .consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -49,6 +54,7 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
@@ -152,6 +158,14 @@ class CompileApiConfig(BaseModel):
             raise ValueError("compile_api.poll_interval_ms must be > 0")
         self.base_url = self.base_url.rstrip("/")
         return self
+
+
+class RuntimeConfigSettings(BaseModel):
+    """Startup selection of the runtime config source."""
+
+    source: str = "file"
+    module: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
 
 
 class OpenVikingConfig(BaseModel):
@@ -412,6 +426,11 @@ class OpenVikingConfig(BaseModel):
 
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="Memory configuration")
 
+    agent_evolution: AgentEvolutionConfig = RuntimeField(
+        default_factory=AgentEvolutionConfig,
+        description="Dynamic cluster default for Agent Evolution.",
+    )
+
     oauth: OAuthConfig = Field(
         default_factory=OAuthConfig,
         description="OAuth 2.1 (MCP) configuration",
@@ -428,6 +447,14 @@ class OpenVikingConfig(BaseModel):
     ingest: IngestConfig = Field(
         default_factory=IngestConfig,
         description="Conversation-log ingest (openviking-server ingest) configuration",
+    )
+
+    runtime_config: RuntimeConfigSettings = Field(
+        default_factory=RuntimeConfigSettings,
+        description=(
+            "Boot-level selection of the runtime config source. "
+            "Read once at startup and never mutated by the dynamic config API."
+        ),
     )
 
     model_config = {"arbitrary_types_allowed": True}
@@ -454,6 +481,13 @@ class OpenVikingConfig(BaseModel):
                 "webfeed",
             ]
 
+            warn_unknown_config_fields(
+                data=config_copy,
+                model=cls,
+                extra_valid_fields={"server", "bot", "parsers"},
+                logger=_get_config_logger(),
+            )
+
             # Remove sections managed by other loaders (e.g. server config)
             config_copy.pop("server", None)
             config_copy.pop("bot", None)
@@ -473,6 +507,12 @@ class OpenVikingConfig(BaseModel):
                         "Config field 'parsers.excel' was removed and is ignored; "
                         "spreadsheet parsing now uses 'parsers.anydoc'."
                     )
+                warn_unknown_fields(
+                    data=parser_configs,
+                    valid_fields=set(parser_types),
+                    path_prefix="parsers",
+                    logger=_get_config_logger(),
+                )
             for parser_type in parser_types:
                 if parser_type in config_copy:
                     parser_configs[parser_type] = config_copy.pop(parser_type)
@@ -511,6 +551,13 @@ class OpenVikingConfig(BaseModel):
                 if parser_type in parser_configs:
                     parser_data = parser_configs[parser_type]
                     config_class = getattr(instance, parser_type).__class__
+                    if isinstance(parser_data, dict):
+                        warn_unknown_fields(
+                            data=parser_data,
+                            valid_fields=set(config_class.__dataclass_fields__),
+                            path_prefix=f"parsers.{parser_type}",
+                            logger=_get_config_logger(),
+                        )
                     setattr(instance, parser_type, config_class.from_dict(parser_data))
 
             # Check dimension consistency
@@ -519,6 +566,7 @@ class OpenVikingConfig(BaseModel):
                 and getattr(instance.storage, "vectordb", None)
                 and getattr(instance, "embedding", None)
             ):
+                instance.storage.vectordb.apply_resolved_dimension(instance.embedding.dimension)
                 db_dim = instance.storage.vectordb.dimension
                 emb_dim = instance.embedding.dimension
                 if db_dim > 0 and emb_dim > 0 and db_dim != emb_dim:
@@ -664,6 +712,12 @@ class OpenVikingConfigSingleton:
             raise RuntimeError(f"Failed to load config file: {e}")
 
     @classmethod
+    def set_instance(cls, config: "OpenVikingConfig") -> None:
+        """Atomically publish an already-built validated configuration."""
+        with cls._lock:
+            cls._instance = config
+
+    @classmethod
     def reset_instance(cls) -> None:
         """Reset the singleton instance (mainly for testing)."""
         with cls._lock:
@@ -677,8 +731,8 @@ def get_openviking_config() -> OpenVikingConfig:
 
 
 def set_openviking_config(config: OpenVikingConfig) -> None:
-    """Set the global OpenVikingConfig instance."""
-    OpenVikingConfigSingleton.initialize(config_dict=config.to_dict())
+    """Atomically publish an already-built OpenVikingConfig."""
+    OpenVikingConfigSingleton.set_instance(config)
 
 
 def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
@@ -751,9 +805,7 @@ def initialize_openviking_config(
         config.storage.agfs.path = resolved
         config.storage.vectordb.path = resolved
 
-    # Ensure vector dimension is synced if not set in storage
-    if config.storage.vectordb.dimension == 0:
-        config.storage.vectordb.dimension = config.embedding.dimension
+    config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
 
     # Validate configuration
     if not is_valid_openviking_config(config):

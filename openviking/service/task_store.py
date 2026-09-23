@@ -264,6 +264,7 @@ def _task_to_payload(task: Any) -> Dict[str, Any]:
         "status": status.value if hasattr(status, "value") else status,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
+        "processing_seconds": task.processing_seconds,
         "resource_id": task.resource_id,
         "account_id": task.account_id,
         "user_id": task.user_id,

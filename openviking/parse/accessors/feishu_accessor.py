@@ -10,9 +10,10 @@ Included by default in `openviking[bot]` installation.
 """
 
 import asyncio
+import copy
+import html
 import json
 import mimetypes
-import os
 import re
 import shutil
 import tempfile
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
 from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
+from lark_oapi.core.cache import ICache
+
 from openviking.parse.base import format_table_to_markdown
 from openviking.parse.feishu_import import FeishuImportPlan, recursive_wiki
 from openviking.utils.exceptions import error_code_from_http_status
@@ -28,6 +31,7 @@ from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
+from .feishu_session import FeishuAccessContext, FeishuApiSession
 from .mime_types import get_preferred_extension
 
 logger = get_logger(__name__)
@@ -36,6 +40,7 @@ _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
 _FEISHU_WIKI_NODE_PERMISSION_DENIED = 131006
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
+_FEISHU_SCOPE_PERMISSION_REQUIRED = 99991679
 _FEISHU_LEGACY_DOC_LOGIN_REQUIRED = 91404
 _FEISHU_PERMISSION_DENIED_CODES = {
     _FEISHU_DOCUMENT_FORBIDDEN,
@@ -44,9 +49,18 @@ _FEISHU_PERMISSION_DENIED_CODES = {
     95008,
     95009,
 }
-_FEISHU_NOT_FOUND_CODES = {91402, 95006, 95007}
+_FEISHU_NOT_FOUND_CODES = {91402, 95006, 95007, 3410003}
 _MAX_MEDIA_DOWNLOAD_CONTEXTS = 8
-_FEISHU_DOC_PATH_TYPES = {"doc", "docs", "docx", "wiki", "sheets", "base"}
+_FEISHU_DOC_PATH_TYPES = {
+    "doc",
+    "docs",
+    "docx",
+    "wiki",
+    "sheets",
+    "base",
+    "mindnote",
+    "mindnotes",
+}
 _FEISHU_DRIVE_DOC_TYPES = {
     "doc": "docs",
     "docx": "docx",
@@ -55,11 +69,21 @@ _FEISHU_DRIVE_DOC_TYPES = {
     "bitable": "base",
     "base": "base",
     "wiki": "wiki",
+    "mindnote": "mindnote",
 }
 _MAX_PATH_SEGMENT_CHARS = 120
 _MAX_PATH_SEGMENT_BYTES = 240
 
 _MediaDownloadExtras = Dict[str, List[Optional[str]]]
+
+
+def _redact_feishu_source_url(url: str) -> str:
+    """Keep a useful Feishu route in logs without exposing document tokens."""
+    parsed = urlparse(str(url))
+    path_parts = [part for part in parsed.path.split("/") if part]
+    route_parts = path_parts[:2] if path_parts[:2] == ["drive", "folder"] else path_parts[:1]
+    route = "/".join(route_parts)
+    return f"{parsed.scheme}://{parsed.netloc}/{route}/***" if route else "<feishu-url>"
 
 
 def _title_as_filename(title: str) -> str:
@@ -179,6 +203,7 @@ def _raise_from_lark_response(
     *,
     operation: str,
     resource: str | None = None,
+    required_scope: str | None = None,
 ) -> NoReturn:
     code = getattr(response, "code", None)
     msg = getattr(response, "msg", None) or "Feishu API request failed"
@@ -203,6 +228,12 @@ def _raise_from_lark_response(
         public_code = "FAILED_PRECONDITION"
         message = (
             f"Feishu application is missing required Bitable permissions: code={code}, msg={msg}"
+        )
+    elif code == _FEISHU_SCOPE_PERMISSION_REQUIRED and required_scope:
+        public_code = "FAILED_PRECONDITION"
+        message = (
+            "Feishu user authorization is missing required permission "
+            f"{required_scope}: code={code}, msg={msg}"
         )
     else:
         if code in _FEISHU_PERMISSION_DENIED_CODES:
@@ -261,6 +292,7 @@ class FeishuAccessor(DataAccessor):
     - Wiki pages: https://*.feishu.cn/wiki/{token}
     - Spreadsheets: https://*.feishu.cn/sheets/{token}
     - Bitable: https://*.feishu.cn/base/{app_token}
+    - Mindnotes: https://*.feishu.cn/mindnote/{mindnote_id}
     - Drive files: https://*.feishu.cn/file/{file_token}
     - Drive folders: https://*.feishu.cn/drive/folder/{folder_token}
 
@@ -280,6 +312,7 @@ class FeishuAccessor(DataAccessor):
         "docx": "_parse_docx",
         "sheets": "_parse_sheets",
         "base": "_parse_bitable",
+        "mindnote": "_parse_mindnote",
     }
 
     # Attributes that skip processing (structural containers or metadata)
@@ -363,11 +396,37 @@ class FeishuAccessor(DataAccessor):
         }
     )
 
-    def __init__(self):
-        """Initialize Feishu accessor."""
-        self._client = None
-        self._user_token_client = None
-        self._config = None
+    def __init__(
+        self,
+        session: Optional[FeishuApiSession] = None,
+        *,
+        tenant_token_cache: Optional[ICache] = None,
+    ):
+        """Initialize a shared selector or a request-scoped worker."""
+        self._session = session
+        self._tenant_token_cache = tenant_token_cache
+
+    def _new_operation(
+        self,
+        source: Union[str, Path],
+        *,
+        config: Any = None,
+    ) -> "FeishuAccessor":
+        context = FeishuAccessContext.from_request(
+            str(source),
+            config=config,
+        )
+        worker = copy.copy(self)
+        worker._session = FeishuApiSession(
+            context,
+            tenant_token_cache=self._tenant_token_cache,
+        )
+        return worker
+
+    def _require_session(self) -> FeishuApiSession:
+        if self._session is None:
+            raise RuntimeError("Feishu operation requires a request-scoped API session")
+        return self._session
 
     @property
     def priority(self) -> int:
@@ -388,6 +447,14 @@ class FeishuAccessor(DataAccessor):
         return self._is_feishu_url(source_str)
 
     async def access(self, source: Union[str, Path], **kwargs) -> LocalResource:
+        """Bind request-scoped state, then fetch the source."""
+        worker = self._new_operation(
+            source,
+            config=kwargs.get("feishu_config"),
+        )
+        return await worker._access(source, **kwargs)
+
+    async def _access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
         Fetch a Feishu document and save to a temporary Markdown file.
 
@@ -583,7 +650,12 @@ class FeishuAccessor(DataAccessor):
             )
 
         except Exception as e:
-            logger.error(f"[FeishuAccessor] Failed to access {source}: {e}", exc_info=True)
+            logger.error(
+                "[FeishuAccessor] Failed to access %s: %s",
+                _redact_feishu_source_url(source_str),
+                e,
+                exc_info=True,
+            )
             raise
 
     async def preflight_source(
@@ -591,12 +663,18 @@ class FeishuAccessor(DataAccessor):
         source: Union[str, Path],
         *,
         feishu_access_token: Optional[str] = None,
+        feishu_config: Any = None,
         feishu_recursive: bool = False,
     ) -> FeishuSourcePreflight:
         """Resolve lightweight source identity and root permission before enqueueing."""
+        source_str = str(source)
+        worker = self._new_operation(
+            source_str,
+            config=feishu_config,
+        )
         return await asyncio.to_thread(
-            self._preflight_source_sync,
-            str(source),
+            worker._preflight_source_sync,
+            source_str,
             feishu_access_token,
             feishu_recursive,
         )
@@ -716,6 +794,13 @@ class FeishuAccessor(DataAccessor):
                 feishu_access_token=feishu_access_token,
             )
             return f"Bitable ({len(tables)} tables)"
+        if doc_type == "mindnote":
+            nodes = self._fetch_mindnote_nodes(
+                token,
+                feishu_access_token=feishu_access_token,
+            )
+            title = self._mindnote_title(nodes)
+            return _title_as_filename(title)
         if doc_type == "file":
             return None
         raise ValueError(
@@ -849,7 +934,12 @@ class FeishuAccessor(DataAccessor):
             return "folder", path_parts[2]
         if path_parts[0] == "file":
             return "file", path_parts[1]
-        doc_type = "doc" if path_parts[0] in {"doc", "docs"} else path_parts[0]
+        if path_parts[0] in {"doc", "docs"}:
+            doc_type = "doc"
+        elif path_parts[0] in {"mindnote", "mindnotes"}:
+            doc_type = "mindnote"
+        else:
+            doc_type = path_parts[0]
         token = path_parts[1]
         return doc_type, token
 
@@ -940,10 +1030,9 @@ class FeishuAccessor(DataAccessor):
         finally:
             seen.discard(folder_token)
 
-    @classmethod
-    def _import_doc_url(cls, plan: FeishuImportPlan, doc_type: str, token: str) -> str:
+    def _import_doc_url(self, plan: FeishuImportPlan, doc_type: str, token: str) -> str:
         if not plan.source_url:
-            return cls._build_feishu_doc_url(doc_type, token)
+            return self._build_feishu_doc_url(doc_type, token)
         source = urlparse(plan.source_url)
         path_type = "docs" if doc_type == "doc" else doc_type
         query = source.query if source.path.rstrip("/").endswith(f"/{token}") else ""
@@ -1470,11 +1559,11 @@ class FeishuAccessor(DataAccessor):
             token = str(_getattr_safe(shortcut_info, "target_token", token) or token)
         return item_type, token, name, url
 
-    @staticmethod
-    def _build_feishu_doc_url(doc_type: str, token: str) -> str:
+    def _build_feishu_doc_url(self, doc_type: str, token: str) -> str:
         if doc_type == "doc":
             doc_type = "docs"
-        return f"https://open.feishu.cn/{doc_type}/{token}"
+        domain = self._get_config().domain.rstrip("/")
+        return f"{domain}/{doc_type}/{token}"
 
     @staticmethod
     def _unique_child_path(parent: Path, name: str, reserved: Optional[set[Path]] = None) -> Path:
@@ -1564,42 +1653,12 @@ class FeishuAccessor(DataAccessor):
     # ========== Configuration & Client ==========
 
     def _get_config(self):
-        """Get FeishuConfig from OpenViking config."""
-        if self._config is None:
-            from openviking_cli.utils.config import get_openviking_config
-
-            self._config = get_openviking_config().feishu
-        return self._config
+        """Return the configuration for the current operation."""
+        return self._require_session().context.config
 
     def _get_client(self, *, use_user_token: bool = False):
-        """Lazy-init lark-oapi client."""
-        cache_attr = "_user_token_client" if use_user_token else "_client"
-        client = getattr(self, cache_attr)
-        if client is None:
-            try:
-                import lark_oapi as lark
-            except ImportError:
-                raise ImportError(
-                    "lark-oapi is required for Feishu document parsing. "
-                    "Install it with: pip install lark-oapi>=1.0.0"
-                )
-            config = self._get_config()
-            app_id = config.app_id or os.getenv("FEISHU_APP_ID", "")
-            app_secret = config.app_secret or os.getenv("FEISHU_APP_SECRET", "")
-            if (not app_id or not app_secret) and not use_user_token:
-                raise ValueError(
-                    "Feishu credentials not configured. Set FEISHU_APP_ID and "
-                    "FEISHU_APP_SECRET environment variables, or configure in ov.conf."
-                )
-            domain = config.domain or "https://open.feishu.cn"
-            builder = lark.Client.builder().domain(domain)
-            if app_id and app_secret:
-                builder = builder.app_id(app_id).app_secret(app_secret)
-            if use_user_token:
-                builder = builder.enable_set_token(True)
-            client = builder.build()
-            setattr(self, cache_attr, client)
-        return client
+        """Return the request-scoped lark-oapi client."""
+        return self._require_session().client(use_user_token=use_user_token)
 
     @staticmethod
     def _user_request_option(feishu_access_token: Optional[str]):
@@ -1611,7 +1670,10 @@ class FeishuAccessor(DataAccessor):
 
     def _call_api(self, method, request, feishu_access_token: Optional[str] = None):
         option = self._user_request_option(feishu_access_token)
-        return method(request) if option is None else method(request, option)
+        if option is not None:
+            return method(request, option)
+        with self._require_session().tenant_token_cache_scope():
+            return method(request)
 
     @classmethod
     def _raw_feishu_error(cls, raw_resp: Any) -> Optional[Tuple[int, str]]:
@@ -1654,8 +1716,13 @@ class FeishuAccessor(DataAccessor):
         from lark_oapi.core.token import verify
 
         option = self._user_request_option(feishu_access_token) or RequestOption()
-        verify(client._config, request, option)
-        raw_resp = Transport.execute(client._config, request, option)
+        if feishu_access_token:
+            verify(client._config, request, option)
+            raw_resp = Transport.execute(client._config, request, option)
+        else:
+            with self._require_session().tenant_token_cache_scope():
+                verify(client._config, request, option)
+                raw_resp = Transport.execute(client._config, request, option)
 
         response = BaseResponse()
         feishu_error = self._raw_feishu_error(raw_resp)
@@ -1716,6 +1783,296 @@ class FeishuAccessor(DataAccessor):
         doc_type = self._normalize_wiki_obj_type(obj_type) or ""
 
         return doc_type, obj_token, title
+
+    # ========== Mindnote Parsing ==========
+
+    @staticmethod
+    def _redact_feishu_identifier(value: str) -> str:
+        value = str(value or "")
+        if len(value) <= 8:
+            return "***"
+        return f"{value[:4]}...{value[-4:]}"
+
+    def _fetch_mindnote_nodes(
+        self,
+        mindnote_id: str,
+        *,
+        feishu_access_token: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch a complete Mindnote node list."""
+        import lark_oapi as lark
+
+        access_token = str(feishu_access_token or "").strip() or None
+        client = self._get_client(use_user_token=bool(access_token))
+        token_type = lark.AccessTokenType.USER if access_token else lark.AccessTokenType.TENANT
+        request = (
+            lark.BaseRequest.builder()
+            .http_method(lark.HttpMethod.GET)
+            .uri(f"/open-apis/mindnote/v1/mindnotes/{mindnote_id}/nodes")
+            .token_types({token_type})
+            .build()
+        )
+        response = self._call_api(client.request, request, access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response,
+                operation="fetch Mindnote nodes",
+                resource=self._redact_feishu_identifier(mindnote_id),
+                required_scope="mindnote:node:read",
+            )
+
+        data = self._raw_response_data(response)
+        nodes = _getattr_safe(data, "nodes", None)
+        if not isinstance(nodes, list):
+            raise OpenVikingError(
+                "Feishu Mindnote nodes response is missing a valid data.nodes array",
+                code="UNAVAILABLE",
+                details={
+                    "operation": "fetch Mindnote nodes",
+                    "resource": self._redact_feishu_identifier(mindnote_id),
+                },
+            )
+        if any(not isinstance(node, dict) for node in nodes):
+            raise OpenVikingError(
+                "Feishu Mindnote nodes response contains an invalid node object",
+                code="UNAVAILABLE",
+                details={
+                    "operation": "fetch Mindnote nodes",
+                    "resource": self._redact_feishu_identifier(mindnote_id),
+                },
+            )
+        invalid_fields = {
+            field_name
+            for node in nodes
+            for field_name in ("texts", "notes", "images")
+            if node.get(field_name) is not None and not isinstance(node.get(field_name), list)
+        }
+        if invalid_fields:
+            raise OpenVikingError(
+                "Feishu Mindnote nodes response contains an invalid list field",
+                code="UNAVAILABLE",
+                details={
+                    "operation": "fetch Mindnote nodes",
+                    "resource": self._redact_feishu_identifier(mindnote_id),
+                    "invalid_fields": sorted(invalid_fields),
+                },
+            )
+        return nodes
+
+    @classmethod
+    def _mindnote_value_text(cls, value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if not isinstance(value, dict):
+            return ""
+        for key in ("content", "name", "title"):
+            nested = value.get(key)
+            if isinstance(nested, str) and nested:
+                return nested
+            if isinstance(nested, dict):
+                content = cls._mindnote_value_text(nested)
+                if content:
+                    return content
+        return ""
+
+    @staticmethod
+    def _escape_mindnote_text(text: str) -> str:
+        escaped = html.escape(str(text), quote=False).replace("\\", "\\\\")
+        escaped = re.sub(r"([`*_[\]~])", r"\\\1", escaped)
+        return escaped.replace("\r\n", "<br>").replace("\r", "<br>").replace("\n", "<br>")
+
+    @staticmethod
+    def _mindnote_inline_code(text: str) -> str:
+        text = str(text).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+        longest_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
+        delimiter = "`" * (longest_run + 1)
+        padding = " " if text.startswith(("`", " ")) or text.endswith(("`", " ")) else ""
+        return f"{delimiter}{padding}{text}{padding}{delimiter}"
+
+    @staticmethod
+    def _mindnote_link(label: str, url: str) -> str:
+        safe_url = str(url).replace("\\", "\\\\").replace(">", "\\>")
+        return f"[{label}](<{safe_url}>)"
+
+    @classmethod
+    def _mindnote_element_payload(cls, element: Dict[str, Any], element_type: str) -> Any:
+        payload_key = {"user": "mention_user", "doc": "mention_doc"}.get(
+            element_type, element_type
+        )
+        return element.get(payload_key) if element.get(payload_key) is not None else element
+
+    @staticmethod
+    def _mindnote_element_type(element: Dict[str, Any]) -> str:
+        return str(element.get("element_type") or "text").lower()
+
+    @classmethod
+    def _mindnote_user_label(cls, payload: Any) -> str:
+        label = cls._mindnote_value_text(payload)
+        if label:
+            return label
+        if isinstance(payload, dict):
+            user_id = payload.get("user_id") or payload.get("open_id") or payload.get("id")
+            return cls._redact_feishu_identifier(str(user_id or ""))
+        return "***"
+
+    @classmethod
+    def _mindnote_title(cls, nodes: List[Dict[str, Any]]) -> str:
+        roots = [node for node in nodes if not node.get("parent_id")]
+        children = [node for node in nodes if node.get("parent_id")]
+        for node in roots + children:
+            parts: List[str] = []
+            for element in node.get("texts") or []:
+                if not isinstance(element, dict):
+                    if element is not None:
+                        parts.append(str(element))
+                    continue
+
+                element_type = cls._mindnote_element_type(element)
+                payload = cls._mindnote_element_payload(element, element_type)
+                if element_type == "user":
+                    parts.append(f"@{cls._mindnote_user_label(payload)}")
+                    continue
+
+                parts.append(cls._mindnote_value_text(payload) or cls._mindnote_value_text(element))
+
+            title = " ".join("".join(parts).split())
+            if title:
+                return title
+        return "Mindnote"
+
+    @classmethod
+    def _render_mindnote_elements(
+        cls,
+        elements: List[Any],
+    ) -> str:
+        rendered: List[str] = []
+        for element in elements:
+            if not isinstance(element, dict):
+                text = cls._escape_mindnote_text(str(element)) if element is not None else ""
+                if text:
+                    rendered.append(text)
+                continue
+
+            element_type = cls._mindnote_element_type(element)
+            payload = cls._mindnote_element_payload(element, element_type)
+            raw_text = cls._mindnote_value_text(payload) or cls._mindnote_value_text(element)
+            url = ""
+            style: Any = element.get("style")
+            if isinstance(payload, dict):
+                style = style or payload.get("style")
+
+            if element_type == "user":
+                rendered.append(cls._escape_mindnote_text(f"@{cls._mindnote_user_label(payload)}"))
+                continue
+
+            if element_type == "link":
+                if isinstance(payload, dict):
+                    url = str(payload.get("url") or payload.get("href") or "")
+                elif isinstance(payload, str):
+                    url = payload
+                    raw_text = cls._mindnote_value_text(element.get("text")) or payload
+            elif element_type == "doc" and isinstance(payload, dict):
+                url = str(payload.get("url") or payload.get("href") or "")
+                if not raw_text:
+                    token = str(payload.get("token") or payload.get("obj_token") or "")
+                    raw_text = cls._redact_feishu_identifier(token) if token else "document"
+
+            text = cls._escape_mindnote_text(raw_text)
+            if not text:
+                if element_type == "link" and url:
+                    text = cls._escape_mindnote_text(url)
+                else:
+                    continue
+
+            if isinstance(style, dict):
+                if style.get("inline_code") or style.get("code_inline"):
+                    text = cls._mindnote_inline_code(raw_text)
+                if style.get("bold"):
+                    text = f"**{text}**"
+                if style.get("italic"):
+                    text = f"*{text}*"
+                if style.get("strikethrough"):
+                    text = f"~~{text}~~"
+                style_link = style.get("link")
+                if not url and isinstance(style_link, dict):
+                    url = str(style_link.get("url") or style_link.get("href") or "")
+                elif not url and isinstance(style_link, str):
+                    url = style_link
+            if url:
+                text = cls._mindnote_link(text, url)
+            rendered.append(text)
+        return "".join(rendered)
+
+    @classmethod
+    def _render_mindnote_node(
+        cls,
+        node: Dict[str, Any],
+        depth: int,
+    ) -> List[str]:
+        indent = "  " * depth
+        text = cls._render_mindnote_elements(node.get("texts") or [])
+        text = text or "*(untitled)*"
+        highlight = str(node.get("highlight") or "").strip()
+        if highlight:
+            color = html.escape(highlight, quote=True)
+            text = f'<mark data-color="{color}">{text}</mark>'
+        if node.get("finish") is True:
+            text = f"✅ {text}"
+
+        lines = [f"{indent}- {text}"]
+        note = cls._render_mindnote_elements(node.get("notes") or [])
+        if note:
+            lines.append(f"{indent}  > {note}")
+        for image in node.get("images") or []:
+            token = str(image.get("token") or "") if isinstance(image, dict) else ""
+            if token and re.fullmatch(r"[A-Za-z0-9._-]+", token):
+                lines.append(f"{indent}  ![mindnote image](feishu://image/{token})")
+        return lines
+
+    @classmethod
+    def _render_mindnote(cls, nodes: List[Dict[str, Any]], title: str) -> str:
+        indexed_nodes = list(enumerate(nodes))
+        node_ids = {str(node.get("node_id") or "") for node in nodes}
+        children: Dict[str, List[Tuple[int, Dict[str, Any]]]] = {}
+        roots: List[Tuple[int, Dict[str, Any]]] = []
+        for item in indexed_nodes:
+            _, node = item
+            node_id = str(node.get("node_id") or "")
+            parent_id = str(node.get("parent_id") or "")
+            if parent_id and parent_id in node_ids and parent_id != node_id:
+                children.setdefault(parent_id, []).append(item)
+            else:
+                roots.append(item)
+
+        visited: set[int] = set()
+        lines = [f"# {cls._escape_mindnote_text(title)}", ""]
+
+        def render(starts: List[Tuple[int, Dict[str, Any]]]) -> None:
+            stack = [(item, 0) for item in reversed(starts)]
+            while stack:
+                (index, node), depth = stack.pop()
+                if index in visited:
+                    continue
+                visited.add(index)
+                lines.extend(cls._render_mindnote_node(node, depth))
+                node_id = str(node.get("node_id") or "")
+                stack.extend((child, depth + 1) for child in reversed(children.get(node_id, [])))
+
+        render(roots)
+        render([item for item in indexed_nodes if item[0] not in visited])
+        return "\n".join(lines)
+
+    def _parse_mindnote(
+        self,
+        mindnote_id: str,
+        feishu_access_token: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        nodes = self._fetch_mindnote_nodes(
+            mindnote_id,
+            feishu_access_token=feishu_access_token,
+        )
+        title = self._mindnote_title(nodes)
+        return self._render_mindnote(nodes, title), title
 
     def _resolve_wiki_tree_root(
         self,

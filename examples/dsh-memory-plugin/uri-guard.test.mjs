@@ -187,3 +187,14 @@ test("the notice leaves file tools, plain shell commands, and denied reads alone
 function okResult() {
   return { isError: false, value: "", content: [{ type: "text", text: "" }] };
 }
+
+test("a write or edit aimed at a skill names the bridged add_skill tool", async () => {
+  for (const name of ["write", "edit"]) {
+    const decision = await guardVikingUri({
+      name,
+      arguments: { file_path: "viking://agent/skills/deploy-runbook/SKILL.md" },
+    }, async () => ({ kind: "allow" }));
+    assert.equal(decision.kind, "deny", name);
+    assert.match(decision.reason, /Use mcp__openviking__add_skill instead\./, name);
+  }
+});

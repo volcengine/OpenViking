@@ -36,6 +36,7 @@ jobs:
           node-version: '24'
 
       - run: npm ci --prefix examples/dsh-memory-plugin
+      - run: npm ci --prefix examples/pi-coding-agent-extension --ignore-scripts
 
       # The plugins published as packages keep no shared copies in git; they are
       # built on the way out, and the tests import them like the package would.
@@ -180,7 +181,7 @@ jobs:
             echo "cuvs_changed=false" >> $GITHUB_OUTPUT
           fi
 
-          LANGCHAIN_PATTERN="integrations/langchain/|openviking/integrations/langchain/|tests/(unit/test_langchain|integration/langchain_langgraph/)|examples/langchain-langgraph/|pyproject\.toml|uv\.lock|\.github/workflows/(pr|python-langchain-release)\.yml"
+          LANGCHAIN_PATTERN="examples/langchain/|openviking/integrations/langchain/|tests/(unit/test_langchain|integration/langchain_langgraph/)|examples/langchain-langgraph/|pyproject\.toml|uv\.lock|\.github/workflows/(pr|python-langchain-release)\.yml"
           LANGCHAIN_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$LANGCHAIN_PATTERN" || true)
 
           if [ -n "$LANGCHAIN_CHANGED_FILES" ]; then
@@ -291,19 +292,19 @@ jobs:
       - name: Install standalone integration
         run: |
           uv pip install --system -e sdk/python
-          uv pip install --system -e "integrations/langchain[langgraph,test,dev]"
+          uv pip install --system -e "examples/langchain[langgraph,test,dev]"
 
       - name: Check package formatting and lint
         run: |
           ruff format --check \
-            integrations/langchain/src \
-            integrations/langchain/tests \
+            examples/langchain/src \
+            examples/langchain/tests \
             openviking/integrations/langchain \
             tests/integration/langchain_langgraph \
             tests/unit/test_langchain*.py
           ruff check \
-            integrations/langchain/src \
-            integrations/langchain/tests \
+            examples/langchain/src \
+            examples/langchain/tests \
             openviking/integrations/langchain \
             tests/integration/langchain_langgraph \
             tests/unit/test_langchain*.py
@@ -311,8 +312,8 @@ jobs:
       - name: Type-check package
         run: >-
           mypy
-          --config-file integrations/langchain/pyproject.toml
-          integrations/langchain/src/langchain_openviking
+          --config-file examples/langchain/pyproject.toml
+          examples/langchain/src/langchain_openviking
 
       - name: Run LangChain and LangGraph tests
         run: |
@@ -322,13 +323,13 @@ jobs:
 
       - name: Build and inspect distributions
         run: |
-          python -m build integrations/langchain
-          python -m twine check integrations/langchain/dist/*
+          python -m build examples/langchain
+          python -m twine check examples/langchain/dist/*
 
       - name: Verify the installed wheel
         if: matrix.python-version == '3.12'
         run: |
-          WHEEL_PATH="${GITHUB_WORKSPACE}/$(find integrations/langchain/dist -name '*.whl' -print -quit)"
+          WHEEL_PATH="${GITHUB_WORKSPACE}/$(find examples/langchain/dist -name '*.whl' -print -quit)"
           uv venv .langchain-wheel-venv --python "${{ matrix.python-version }}"
           uv pip install \
             --python .langchain-wheel-venv/bin/python \
@@ -336,10 +337,10 @@ jobs:
             "${WHEEL_PATH}"
           cd /tmp
           "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
-            "${GITHUB_WORKSPACE}/integrations/langchain/tests/installed_base_smoke.py"
+            "${GITHUB_WORKSPACE}/examples/langchain/tests/installed_base_smoke.py"
           uv pip install \
             --python "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
             "${WHEEL_PATH}[langgraph]"
           "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
-            "${GITHUB_WORKSPACE}/integrations/langchain/tests/installed_smoke.py"
+            "${GITHUB_WORKSPACE}/examples/langchain/tests/installed_smoke.py"
           uv pip check --python "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python"

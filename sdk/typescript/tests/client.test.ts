@@ -847,6 +847,56 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it.each(["addSkill", "updateSkill"] as const)(
+    "%s sends long inline Markdown without a local upload",
+    async (method) => {
+      const source =
+        "---\nname: demo\ndescription: An inline skill\n---\n" +
+        "Follow these instructions carefully.\n".repeat(20);
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+
+      await expect(
+        method === "addSkill"
+          ? client.addSkill(source)
+          : client.updateSkill("demo", source),
+      ).resolves.toEqual({});
+
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      const [url, init] = fetcher.mock.calls[0]!;
+      expect(String(url)).toBe(
+        `https://example.com/api/v1/skills${method === "addSkill" ? "" : "/demo"}`,
+      );
+      expect(init?.method).toBe(method === "addSkill" ? "POST" : "PUT");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        wait: false,
+        data: source,
+      });
+    },
+  );
+
+  it.each(["addResource", "importOVPack", "restoreOVPack"] as const)(
+    "%s preserves local path errors before sending a request",
+    async (method) => {
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+      const source = join(tmpdir(), "x".repeat(300));
+
+      await expect(
+        method === "importOVPack"
+          ? client.importOVPack(source, "resources")
+          : client[method](source),
+      ).rejects.toMatchObject({ code: "ENAMETOOLONG" });
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps non-JSON upload failures to OpenVikingError", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-error-"));
     const path = join(directory, "resource.md");

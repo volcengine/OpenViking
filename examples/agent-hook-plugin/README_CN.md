@@ -12,8 +12,8 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 ## Hook 做什么
 
-- **会话开始** — 注入用户画像与偏好，并重放离线会话排队的写入。
-- **提交 prompt** — 搜索与 prompt 相关的记忆并注入，按事件 id 与 500ms 窗口去重。
+- **会话开始** — 注入用户画像与偏好，外加 `<available-skills>` 清单，列出用户自己的和账号内共享的 OpenViking skill；同时重放离线会话排队的写入。清单有独立的预算 `skillCatalogTokenBudget`（默认 1200 token），描述放不下时只列名称；`skillCatalog: false` 或把预算设为 `0` 会去掉它。
+- **提交 prompt** — 搜索与 prompt 相关的记忆和 skill 并注入，按事件 id 与 500ms 窗口去重。
 - **工具调用前** — 拦截本地文件工具对 `viking://` 虚拟路径的访问，引导回 OpenViking MCP 工具。在 TRAE 上，带 `viking://` URI 的 shell 命令照常执行，并附加一条指向同一组工具的提示。
 - **Stop** — 捕获完成的回合并提交 OpenViking 会话。Cursor 另外在压缩前与会话结束时执行；ZCode 先应答，再在 detached worker 里完成写入。
 
@@ -23,7 +23,7 @@ bash examples/memory-plugin-shared/install.sh --harness zcode
 
 根目录的 `plugin.json` 是宿主无关的包元数据，只用于版本检查和诊断，不是 Claude Code、Cursor、TRAE 或 ZCode 的原生插件 manifest。
 
-`hosts/<host>/` 只放宿主当作配置读取的东西——`hooks.json`、`.mcp.json`、`openviking.integration.json`，以及 Cursor 的 rule 与 skill。可执行文件一律放在上一层，因为 `../../memory-plugin-shared/lib` 这条相对路径要在本仓库和安装后的 `~/.openviking/agent-integrations/<client>/` 两处同时成立。
+`hosts/<host>/` 只放宿主当作配置读取的东西——`hooks.json`、`.mcp.json`、`openviking.integration.json`，以及 Cursor 的 rule 和两个 skill（`openviking-memory`、`openviking-skills`）；TRAE 与 ZCode 不带 skill。可执行文件一律放在上一层，因为 `../../memory-plugin-shared/lib` 这条相对路径要在本仓库和安装后的 `~/.openviking/agent-integrations/<client>/` 两处同时成立。
 
 记忆逻辑本身不在这里：召回、批量写入、待处理队列、凭据解析与 MCP 代理都来自 `examples/memory-plugin-shared/lib`，由安装脚本复制到 `~/.openviking/agent-integrations/memory-plugin-shared/lib`。
 

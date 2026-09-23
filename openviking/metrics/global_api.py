@@ -331,7 +331,6 @@ def _build_event_router(registry: MetricRegistry) -> EventCollectorRouter:
         ("rerank.call", rerank_collector),
         ("vlm.call", vlm_collector),
         ("session.lifecycle", session_collector),
-        ("session.contexts_used", session_collector),
         ("session.archive", session_collector),
         ("resource.stage", resource_collector),
         ("resource.wait", resource_collector),

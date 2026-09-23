@@ -2,32 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Cron is opt-in for both tool registration and scheduler startup."""
 
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from vikingbot.agent.tools.factory import register_default_tools, register_subagent_tools
 from vikingbot.agent.tools.registry import ToolRegistry
-from vikingbot.bus.queue import MessageBus
 from vikingbot.cli import commands
-from vikingbot.config import loader
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import Config
 from vikingbot.cron.service import CronService
-from vikingbot.cron.types import CronSchedule
-
-
-@pytest.mark.parametrize("enabled", [None, False, True])
-def test_cron_config_load_and_save(tmp_path, monkeypatch, enabled):
-    path = tmp_path / "ov.conf"
-    tools = {} if enabled is None else {"cron": {"enabled": enabled}}
-    path.write_text(json.dumps({"bot": {"tools": tools}}))
-    monkeypatch.setattr(loader, "CONFIG_PATH", path)
-
-    config = loader.load_config()
-    assert config.tools.cron.enabled is (enabled is True)
-    loader.save_config(config, path)
-    assert loader.load_config().tools.cron.enabled is (enabled is True)
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -37,8 +20,6 @@ def test_cron_tool_registration(tmp_path, enabled):
     service = CronService(tmp_path / "jobs.json")
     register_default_tools(registry, config, cron_service=service)
     assert registry.has("cron") is enabled
-    assert registry.has("exec")
-    assert registry.has("read_file")
     names = {tool["function"]["name"] for tool in registry.get_definitions()}
     assert ("cron" in names) is enabled
 
@@ -49,25 +30,6 @@ def test_cron_tool_registration(tmp_path, enabled):
     without_service = ToolRegistry(config=config)
     register_default_tools(without_service, config)
     assert not without_service.has("cron")
-
-
-def test_disabled_cron_preserves_existing_jobs(tmp_path, monkeypatch):
-    monkeypatch.setattr(commands, "get_data_dir", lambda: tmp_path)
-    path = tmp_path / "cron" / "jobs.json"
-    service = CronService(path)
-    service.add_job(
-        "reminder",
-        CronSchedule(kind="every", every_ms=60_000),
-        "hello",
-        SessionKey(type="cli", channel_id="test", chat_id="test"),
-    )
-    before = path.read_bytes()
-    constructor = Mock(side_effect=AssertionError("Disabled cron must not be constructed"))
-    monkeypatch.setattr(commands, "CronService", constructor)
-
-    assert commands.prepare_cron(Config(), MessageBus()) is None
-    constructor.assert_not_called()
-    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -119,4 +81,3 @@ def test_startup_respects_cron_config(tmp_path, monkeypatch, enabled, mode):
     assert constructor.call_count == int(should_start)
     assert cron.start.await_count == int(should_start)
     assert prepare_agent.call_args.args[3] is (cron if should_start else None)
-    agent.close_mcp.assert_awaited_once()

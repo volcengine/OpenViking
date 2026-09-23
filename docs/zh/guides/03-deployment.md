@@ -1,8 +1,22 @@
 # 服务端部署
 
-OpenViking 可以作为独立的 HTTP 服务器运行，允许多个客户端通过网络连接。
+OpenViking 以 HTTP 服务运行。安装服务端之前，先选择由谁运行服务：
+
+| 服务方式 | 你需要准备什么 |
+| --- | --- |
+| [火山引擎托管 OpenViking](https://www.volcengine.com/product/openviking-service) | 在[控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)获取 API Key，用独立 CLI 连接，无需本地服务端或模型配置。 |
+| 团队已有服务或他人部署 | 向管理员获取服务地址和 user/admin key。 |
+| 自建 OpenViking | 按下文安装、配置和运行服务端。 |
+
+托管及已有服务用户可直接从 [CLI 快速开始](../getting-started/02-quickstart.md)进入。托管服务的可用范围、套餐和额度见[官方服务文档](https://docs.volcengine.com/docs/84313/2374478)。
+
+本页后续内容适用于自建服务。
+
+容量规划应使用有代表性的数据集和预期并发量测量内存、磁盘占用，为原始文件、索引和快照预留空间。扩大工作负载前，通过[可观测性](../guides/05-observability.md)检查容量余量。
 
 ## 快速开始
+
+先按[自建服务快速开始](../getting-started/02-quickstart.md)安装服务端。Python 3.14 下使用火山引擎 Ark 时，上游 Python SDK 可能输出 Pydantic V1 兼容性警告；此场景可使用 Python 3.13 避免该警告。
 
 ```bash
 # 使用初始化向导创建或刷新 ~/.openviking/ov.conf
@@ -19,9 +33,8 @@ openviking-server
 # 配置文件在其他位置时，通过 --config 指定
 openviking-server --config /path/to/ov.conf
 
-# 验证服务器是否运行
-curl http://localhost:1933/health
-# {"status": "ok"}
+# 在另一终端按快速开始配置 ov，连接本服务后验证
+ov health
 ```
 
 ## 命令行选项
@@ -108,7 +121,7 @@ User=your-username
 Group=your-group
 # 替换为工作目录
 WorkingDirectory=/var/lib/openviking
-# 以下两种启动方式二选一
+# 使用实际安装位置中的绝对路径
 ExecStart=/path/to/your/python/bin/openviking-server
 Restart=always
 RestartSec=5
@@ -118,6 +131,8 @@ Environment="OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf"
 [Install]
 WantedBy=multi-user.target
 ```
+
+启动前替换所有占位值。以服务用户运行 `command -v openviking-server` 确认可执行文件路径，创建工作目录，并让该用户能够访问配置、workspace 及本地加密密钥。此 unit 使用 `/etc/openviking/ov.conf`，不会自动使用你个人 home 目录下生成的配置。系统服务省略 `User` 会以 root 运行。
 
 ### 管理服务
 
@@ -144,8 +159,12 @@ sudo journalctl -u openviking.service -f
 
 ### Python SDK
 
+```bash
+python -m pip install --upgrade openviking-sdk
+```
+
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
@@ -276,6 +295,38 @@ docker compose up -d
 - API 服务：`http://localhost:1933`
 - Web Studio：`http://localhost:1933/studio`（与 API 同源）
 - 兼容入口：`http://localhost:1934`（Caddy 反代到 1933，仅为已有部署保留）
+
+### 部署到 Railway
+
+点击下方按钮一键部署到 Railway：
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openviking)
+
+#### 预置资源与环境
+
+- **服务镜像**：拉取官方镜像 `ghcr.io/volcengine/openviking:latest`，监听 1933 端口，Railway 自动分配 HTTPS 域名。
+- **持久化存储**：挂载持久卷至 `/app/.openviking`，`storage.workspace` 位于该卷上，保证重新部署后数据与配置不丢失。
+- **默认配置**：默认采用 OpenAI 预设。部署时仅需填写 `OPENAI_API_KEY`；管理员密钥 `OPENVIKING_ROOT_API_KEY` 自动生成，部署完成后可在 Railway 的 **Variables** 标签页查看。
+
+#### 快速初始化（Web Studio）
+
+部署完成后，在浏览器中即可完成首次初始化：
+
+1. **配置管理员密钥**：从 Railway 服务变量中复制 `OPENVIKING_ROOT_API_KEY`，访问 `https://<你的域名>/studio/settings` 并保存。
+2. **创建用户**：进入 `https://<你的域名>/studio/users` 创建首个账户与用户，系统将展示该用户的 API Key。
+3. **开始使用**：后续访问 Web Studio、`ov` CLI 或 SDK 时，均使用上述用户的 API Key。
+
+#### 配置管理
+
+- **首次生成配置**：模板在 `OPENVIKING_CONF_CONTENT` 中预置了完整配置并引用 `${OPENAI_API_KEY}`。该变量仅在首次启动且 `ov.conf` 尚不存在时生效。
+- **后续修改配置**：首次启动后，请通过 `railway ssh` 或 `railway service files upload --overwrite` 直接修改持久卷上的 `ov.conf`；也可以删除 `ov.conf` 后重新部署，让服务按当前 `OPENVIKING_CONF_CONTENT` 重新生成配置文件。
+
+#### 资源与费用参考
+
+- **推荐配置**：长期运行建议选择 **Hobby** 计划（$5/月，包含 $5 用量抵扣）。以 ~0.5 GB 常驻内存估算，月均成本通常在 $5–$7 左右。
+- **免费额度说明**：Railway Free 计划（$1/月额度）不足以支持服务常驻运行；Trial 赠金适合短期体验评估，额度到期 30 天后持久卷将被清理，请注意按需备份数据。
+
+> **安全提示**：服务部署后默认监听并暴露于公网。请妥善保管 `OPENVIKING_ROOT_API_KEY`，在对外开放前请阅读[公网访问安全指南](12-public-access.md)。
 
 ### 多实例部署注意事项
 

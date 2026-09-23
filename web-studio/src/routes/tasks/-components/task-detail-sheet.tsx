@@ -24,7 +24,7 @@ import {
   SheetTitle,
 } from '#/components/ui/sheet'
 import { getOvResult, getTaskByTaskId } from '#/lib/ov-client'
-import { formatTaskDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
+import { formatTaskDuration, formatTaskProcessingDuration, formatTaskWaitingDuration, getTaskDate } from '#/routes/tasks/-lib/task-time'
 
 import {
   hasTaskResult,
@@ -202,9 +202,21 @@ export function TaskDetailSheet({
                       )}
                     />
                     <DetailField
+                      icon={<TimerResetIcon />}
+                      label={t('labels.processingDuration')}
+                      value={formatTaskProcessingDuration(task) ?? t('labels.timingUnavailable')}
+                      mono
+                    />
+                    <DetailField
+                      icon={<TimerResetIcon />}
+                      label={t('labels.waitingDuration')}
+                      value={formatTaskWaitingDuration(task) ?? t('labels.timingUnavailable')}
+                      mono
+                    />
+                    <DetailField
                       className="col-span-2"
                       icon={<TimerResetIcon />}
-                      label={t('pipeline.duration')}
+                      label={t('labels.duration')}
                       value={formatTaskDuration(task)}
                       mono
                     />

@@ -352,6 +352,9 @@ Workspace 根目录由 `storage.workspace` 决定：
 vikingbot status
 ```
 
+使用托管 OpenSandbox（`backend=opensandbox`、`managed=true`）时，活动 Workspace 根目录
+改为 `<storage.workspace>/bot/runtime/opensandbox/workspaces`，并挂载进容器，详见下方沙箱配置。
+
 Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 | 模式 | 活动 Workspace |
@@ -486,6 +489,90 @@ DirectBackend 默认 `restrict_to_workspace: false`。对不可信用户开放 G
     }
   }
 }
+```
+
+### Gateway 自动管理 Docker 沙箱
+
+默认仍为 `direct`，不会检查 Docker 或启动 OpenSandbox。若希望命令和文件工具在独立
+Linux 容器中执行，先安装并启动 Docker（macOS 使用 Docker Desktop；Windows 推荐
+Docker Desktop + WSL2，并在 WSL2 内运行 Bot），然后在实际使用的 `ov.conf` 中配置：
+
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "mode": "per-session"
+    }
+  }
+}
+```
+
+`vikingbot gateway --config /path/to/ov.conf` 和 OpenViking `--with-bot` 共用启动流程：
+检查 SDK、Server、Docker 服务及 Linux 容器模式 → 准备镜像 → 生成服务配置和管理密钥 →
+启动 OpenSandbox Server → 验证命令执行和文件往返 → Gateway 就绪。初始化失败会退出，
+不会回退到 `direct`。`--with-bot` 等待真实就绪，不再把子进程存活当作启动成功。
+
+用户不需要维护 `~/.sandbox.toml`。生成文件及日志位于
+`{storage.workspace}/bot/runtime/opensandbox/gateway-*/`；生成的配置文件在正常退出时删除，
+日志保留。管理服务默认只监听本机 `127.0.0.1:18792`，密钥不传入工作负载容器。
+Bot 托管的服务进程还会将 Docker 发布的沙箱端口限制为 `127.0.0.1`；这是对
+OpenSandbox Server 0.1.6 默认绑定所有网卡的适配，不会修改外部 Server。
+
+可选参数位于 `bot.sandbox.backends.opensandbox`：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `managed` | `true` | Bot 启停本机 OpenSandbox Server；设为 `false` 连接已有服务 |
+| `server_url` | `http://localhost:18792` | 托管模式只允许本机 HTTP 地址，可调整端口 |
+| `api_key` | 空 | 托管模式自动生成；外部服务填写其管理密钥 |
+| `startup_timeout` | `600` | 初始化总超时（秒），首次拉取镜像较慢时可调大 |
+| `use_server_proxy` | `true` | 经 Server 访问沙箱，避免客户端必须直连容器 IP |
+| `default_image` | `opensandbox/code-interpreter:v1.0.1` | 执行镜像，需包含 shell、Python 3 |
+| `execd_image` | `opensandbox/execd:v1.0.6` | 执行服务镜像 |
+| `egress_image` | `opensandbox/egress:v1.0.1` | 出站网络策略组件镜像 |
+| `pids_limit` | `256` | 托管 Docker 沙箱的进程数限制 |
+| `runtime.cpu` / `runtime.memory` | `500m` / `1Gi` | 每个执行沙箱的资源限制 |
+| `runtime.timeout` | `300` | 沙箱生命周期（秒），再次使用时续期 |
+| `network.allowed_domains` | `[]` | 默认拒绝出站，按需允许依赖下载或业务域名 |
+| `network.denied_domains` | `[]` | 在允许规则之前匹配的拒绝域名 |
+
+托管 Docker 使用 bridge 网络、裁剪 capabilities、禁止新增特权。仅将专用工作目录
+读写挂载到容器 `/workspace`，不会挂载 Bot 配置、服务密钥、Docker socket 或其他会话目录：
+
+执行容器和其中的 execd 服务使用专用工作目录所有者的数值 UID/GID，`HOME` 指向
+`/workspace`。因此在 Linux 上也能读写普通用户拥有的 `0755` 目录和 `0644` 文件，
+无需扩大目录权限或恢复 `CAP_DAC_OVERRIDE`；网络组件和镜像缓存容器不使用这个用户覆盖。
+
+```text
+{storage.workspace}/bot/runtime/opensandbox/
+├── gateway-*/                  # 服务配置和日志，不挂载
+└── workspaces/
+    ├── shared/                 # shared 模式 → 容器 /workspace
+    ├── <session/channel-key>/  # 按会话或渠道隔离 → 各容器 /workspace
+    └── compile/<task-id>/      # Compile 独立任务工作区
+```
+
+Mac 上可在 Finder 直接查看这些工作文件，宿主机和容器的修改立即作用于同一目录。
+聊天沙箱销毁或过期后文件保留，重建时复用；首次创建目录时初始化引导文件和本地 Skill，
+之后不会覆盖用户修改。Compile 仍按原有任务生命周期清理任务目录。
+旧的 `bot/workspace/shared` 不自动迁移；启用后应在上面的新工作目录编辑引导文件。
+
+`shared` 在启动时创建并保留一个共享沙箱；`per-session` / `per-channel` 在启动时使用
+临时探测沙箱，后续按需创建实例。Compile 单独按任务创建和回收。Gateway 退出时先取消
+任务并清理沙箱，再停止自己启动的 Server。SIGKILL 或断电无法保证即时清理；托管 Server
+停止期间不会执行到期清理，重启后需确认遗留容器已回收。
+
+`managed=false` 使用文件 API，不挂载 Bot 本机目录、不检查本机 Docker、不启停外部服务；外部服务需自行配置 Docker、egress
+组件和权限策略。当前自动托管范围是 Gateway / `--with-bot`，独立 `vikingbot chat` 使用
+OpenSandbox 时需要提前启动服务并配置地址。
+
+可显式运行 Docker 权限回归测试（需要 Docker 和上述镜像）。该测试使用 Linux 原生卷，
+覆盖 UID 1000 的 `0755` 目录、`0644` 文件、命令与文件 API 写入及容器重建，避免
+Docker Desktop 的宿主机文件共享权限转换掩盖 Linux 权限问题：
+
+```bash
+VIKINGBOT_TEST_DOCKER=1 PYTHONPATH=bot python -m pytest -q -o addopts='' bot/tests/test_opensandbox_docker_permissions.py
 ```
 
 ## HTTP API

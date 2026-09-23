@@ -58,6 +58,19 @@ async def test_skills_api_list_empty_collection(client):
     assert listed["total"] == 0
 
 
+async def test_skills_api_list_honors_node_limit(client):
+    await _add_skill(client, "limit-skill-a", "First skill")
+    await _add_skill(client, "limit-skill-b", "Second skill")
+
+    limited = await client.get("/api/v1/skills", params={"node_limit": 1})
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["result"]["total"] == 1
+
+    default = await client.get("/api/v1/skills", params={"node_limit": 0})
+    assert default.status_code == 200, default.text
+    assert default.json()["result"]["total"] == 2
+
+
 async def test_skills_api_list_show_find_and_delete(client):
     added = await _add_skill(client, "api-skill", "API skill for list and show")
     assert added["uri"].endswith("/skills/api-skill")

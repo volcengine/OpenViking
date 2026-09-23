@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { fetchServerHealth } from '#/hooks/use-server-mode'
 
 import { createClient } from '#/gen/ov-client/client'
 import {
@@ -75,12 +76,15 @@ export type CapabilityDetailCode =
 export type CapabilityProbeResult = {
   detail?: string
   detailCode?: CapabilityDetailCode
+  errorCode?: string
+  statusCode?: number
   state: ProbeState
 }
 
 export type StudioConnectionProbe = {
   admin: CapabilityProbeResult
   data: CapabilityProbeResult
+  rootApiKeyRequired?: boolean
 }
 
 export type ProbeConnectionInput = {
@@ -167,6 +171,20 @@ function setApiKeyHeader(
   setOptionalHeader(headers, 'X-API-Key', apiKey)
 }
 
+function probeError(error: unknown): CapabilityProbeResult {
+  const response = axios.isAxiosError(error) ? error.response : undefined
+  const payload: unknown = response?.data
+  return {
+    detail: getErrorMessage(error),
+    errorCode:
+      isRecord(payload) && isRecord(payload.error)
+        ? asString(payload.error.code)
+        : undefined,
+    statusCode: response?.status,
+    state: 'error',
+  }
+}
+
 async function probeAdminAccess(
   input: ProbeConnectionInput,
 ): Promise<CapabilityProbeResult> {
@@ -184,7 +202,7 @@ async function probeAdminAccess(
   // never promoted to admin access, so management stays gated behind the root
   // or account-admin key alone.
   const controlKey = input.adminApiKey.trim()
-  if (input.serverMode === 'api_key' && !controlKey) {
+  if (!controlKey) {
     return {
       detailCode: 'controlKeyRequired',
       state: 'skipped',
@@ -207,10 +225,7 @@ async function probeAdminAccess(
       accountsError.response?.status !== 403 ||
       !input.accountId
     ) {
-      return {
-        detail: getErrorMessage(accountsError),
-        state: 'error',
-      }
+      return probeError(accountsError)
     }
 
     try {
@@ -226,10 +241,7 @@ async function probeAdminAccess(
         state: 'ok',
       }
     } catch (usersError) {
-      return {
-        detail: getErrorMessage(usersError),
-        state: 'error',
-      }
+      return probeError(usersError)
     }
   }
 }
@@ -258,7 +270,10 @@ async function probeDataAccess(
 
   const client = createProbeClient(input.baseUrl)
   const headers: Record<string, string> = {}
-  setApiKeyHeader(headers, input.apiKey)
+  setApiKeyHeader(
+    headers,
+    input.apiKey || (input.serverMode === 'trusted' ? input.adminApiKey : ''),
+  )
 
   if (input.serverMode === 'trusted') {
     setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
@@ -279,22 +294,36 @@ async function probeDataAccess(
       state: 'ok',
     }
   } catch (error) {
-    return {
-      detail: getErrorMessage(error),
-      state: 'error',
-    }
+    return probeError(error)
   }
 }
 
 export async function probeStudioConnection(
   input: ProbeConnectionInput,
 ): Promise<StudioConnectionProbe> {
-  const [admin, data] = await Promise.all([
+  const headers: Record<string, string> = {}
+  setApiKeyHeader(headers, input.adminApiKey || input.apiKey)
+  setOptionalHeader(headers, 'X-OpenViking-Account', input.accountId)
+  setOptionalHeader(headers, 'X-OpenViking-User', input.userId)
+  const [admin, data, health] = await Promise.all([
     probeAdminAccess(input),
     probeDataAccess(input),
+    Promise.allSettled(
+      input.serverMode === 'trusted'
+        ? [fetchServerHealth(input.baseUrl, headers)]
+        : [],
+    ),
   ])
-
-  return { admin, data }
+  const metadata =
+    health[0]?.status === 'fulfilled' ? health[0].value : undefined
+  return {
+    admin,
+    data,
+    rootApiKeyRequired:
+      typeof metadata?.root_api_key_required === 'boolean'
+        ? metadata.root_api_key_required
+        : undefined,
+  }
 }
 
 function normalizeAccount(value: unknown): AdminAccount | null {
@@ -554,5 +583,70 @@ export async function updateUserMemorySettings(
       headers: { 'Content-Type': 'application/json' },
       body: { memory_policy: memoryPolicy },
     }),
+  )
+}
+
+export type AdminGroup = { group_id: string; member_count: number }
+
+const groupsUrl = '/api/v1/admin/accounts/{account_id}/groups'
+
+export function fetchAdminGroups(connection: AdminConnection) {
+  return getOvResult<AdminGroup[]>(
+    createAdminClient(connection).get({
+      url: groupsUrl,
+      path: { account_id: connection.accountId },
+    }),
+  )
+}
+
+export function createAdminGroup(connection: AdminConnection, groupId: string) {
+  return getOvResult<AdminGroup>(
+    createAdminClient(connection).post({
+      url: groupsUrl,
+      path: { account_id: connection.accountId },
+      headers: { 'Content-Type': 'application/json' },
+      body: { group_id: groupId },
+    }),
+  )
+}
+
+export function deleteAdminGroup(connection: AdminConnection, groupId: string) {
+  return getOvResult<{ deleted: boolean }>(
+    createAdminClient(connection).delete({
+      url: `${groupsUrl}/{group_id}`,
+      path: { account_id: connection.accountId, group_id: groupId },
+    }),
+  )
+}
+
+export function fetchAdminGroupMembers(
+  connection: AdminConnection,
+  groupId: string,
+) {
+  return getOvResult<{ group_id: string; members: string[] }>(
+    createAdminClient(connection).get({
+      url: `${groupsUrl}/{group_id}/members`,
+      path: { account_id: connection.accountId, group_id: groupId },
+    }),
+  )
+}
+
+export function updateAdminGroupMember(
+  connection: AdminConnection,
+  groupId: string,
+  userId: string,
+  add: boolean,
+) {
+  const client = createAdminClient(connection)
+  const options = {
+    url: `${groupsUrl}/{group_id}/members/{user_id}`,
+    path: {
+      account_id: connection.accountId,
+      group_id: groupId,
+      user_id: userId,
+    },
+  }
+  return getOvResult<unknown>(
+    add ? client.put(options) : client.delete(options),
   )
 }

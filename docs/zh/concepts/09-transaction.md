@@ -132,47 +132,35 @@ Memory 提取是幂等的，从同一个 archive 重新提取会得到相同结�
 | 文件从临时目录移到正式目录后崩溃 -> 文件存在但永远搜不到 | 首次添加与增量更新分离为两条独立路径 |
 | 资源已落盘但语义处理/向量化还在跑时被 rm 删除 -> 处理白跑 | 生命周期 TreeLock，从落盘持续到处理完成 |
 
-**首次添加**（target 不存在）— 在 `ResourceProcessor.process_resource` Phase 3.5 中处理：
+**首次添加和增量更新**使用同一条计划提交路径：
 
 ```
-1. 获取 TreeLock，锁 final_uri
-   - 如果 final_uri 目录不存在，先检查祖先/后代/同路径锁冲突
-   - 无冲突则创建 final_uri 目录，并在 final_uri/.path.ovlock 写 T 锁
-2. 保留 temp 作为源目录，入队 SemanticMsg(uri=temp, target_uri=final_uri, lifecycle_lock_handle_id=...)
-3. DAG 在 temp 上跑，完成后把 temp 内容同步到 final_uri
-   - final_uri 已经用于放锁文件，所以不做裸 agfs.mv(temp -> final_uri)
-4. 清理临时目录
-5. DAG 启动锁刷新循环（每 lock_expire/2 秒刷新锁 token 并更新 handle 活跃时间）
-6. DAG 完成 + 所有 embedding 完成 -> 释放 TreeLock
+1. 获取 final_uri 的资源锁。
+2. 持锁构建 R/N/F/V 快照：
+   - R：归一化后的请求意图
+   - N：解析产物清单
+   - F：当前正式资源树
+   - V：当前向量记录；build_index=false 时跳过
+3. 编译 ContextUpdatePlan。
+4. 同步把计划中的内容动作提交到 final_uri。
+5. 清理 parser artifact。
+6. 入队直接索引动作；需要语义处理时，再入队携带剩余 SemanticPlan 的 SemanticMsg。
+7. 将资源锁交接给语义处理；没有语义任务时直接释放。
 ```
 
-如果本次调用关闭了摘要和索引（没有下游 DAG 接管），则在同一把 TreeLock
-里把 temp 目录内容复制到 `final_uri`，清理 temp，然后释放锁。这里不调用
-`VikingFS.mv(temp, final_uri, lock_handle=handle)`，避免移动逻辑清理目录锁文件。
+因此正式内容树会先于 semantic 和 embedding 工作更新。内容提交成功后，
+派生摘要和向量可能短暂落后，并由队列任务补齐；队列不再负责把 parser
+临时树复制到正式树。
 
 此期间 `rm` 尝试获取同路径 TreeLock 会失败，抛出 `ResourceBusyError`。
-
-**增量更新**（target 已存在）— temp 保持不动：
-
-```
-1. 获取 TreeLock，锁 target_uri（保护已有资源）
-2. 入队 SemanticMsg(uri=temp, target_uri=final, lifecycle_lock_handle_id=...)
-3. DAG 在 temp 上跑，启动锁刷新循环
-4. DAG 完成后触发 sync_diff_callback 或 move_temp_to_target_callback
-5. callback 执行完毕 -> 释放 TreeLock
-```
-
-注意：DAG callback 不在外层加锁。每个 `VikingFS.rm` 和 `VikingFS.mv` 内部各自有独立锁保护。外层锁会与内部锁冲突导致死锁。
-
-首次添加和增量更新都只持有 `TreeLock(resource_dir)`。这里不再做
-`ExactPathLock(resource_dir) -> TreeLock(resource_dir)` 的锁转交，避免两种锁复用
-同一个 `.path.ovlock` 时出现释放顺序错误。
 
 自动命名由资源层处理，不属于锁服务：`ResourceProcessor` 先用 `exists(candidate_uri)`
 判断候选目录是否已占用；已存在则尝试 `_1`、`_2` 后缀。候选目录不存在时才尝试
 获取该目录的 `TreeLock`，且不等待；如果同名正在被并发请求处理，就直接尝试下一个后缀。
 
-**服务重启恢复**：SemanticMsg 持久化在 QueueFS 中。重启后 `SemanticProcessor` 发现 `lifecycle_lock_handle_id` 对应的 handle 不在内存中，会重新获取 TreeLock。
+**服务重启恢复**：`SemanticMsg` 及其中的 `SemanticPlan` 持久化在 QueueFS
+中。重启后 `SemanticProcessor` 发现 `lifecycle_lock_handle_id` 对应的 handle
+不在内存中，会重新获取 TreeLock 后继续派生处理。
 
 ### 派生语义文件（.abstract.md / .overview.md）
 

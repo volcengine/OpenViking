@@ -26,7 +26,9 @@ use super::errors::{Error, Result};
 use super::filesystem::{
     apply_read_dir_options, compile_grep_regex, normalize_prefix_path, paginate_entries, FileSystem,
 };
-use super::types::{FileInfo, GlobPage, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag};
+use super::types::{
+    FileInfo, GlobPage, GrepOptions, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag,
+};
 
 const SYSTEM_ACCOUNT_ID: &str = "_system";
 const TEMP_ROOT_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -444,45 +446,25 @@ impl FileSystem for EncryptionWrappedFS {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         if Self::should_passthrough_content(path) {
-            return self
-                .inner
-                .grep(
-                    path,
-                    pattern,
-                    recursive,
-                    case_insensitive,
-                    node_limit,
-                    exclude_path,
-                    level_limit,
-                )
-                .await;
+            return self.inner.grep(path, pattern, options).await;
         }
 
         // This layer only exists when encryption is on, so always traverse via the trait default
         // grep_internal -> grep_file -> self.read (which decrypts). Never delegate to inner.grep:
         // the plugin override would run the regex against raw ciphertext and miss every file.
-        let re = compile_grep_regex(pattern, case_insensitive)?;
+        let re = compile_grep_regex(pattern, options.case_insensitive)?;
         let base = normalize_prefix_path(path);
-        let excl = exclude_path.map(normalize_prefix_path);
+        let excl = options.exclude_path.map(normalize_prefix_path);
+        let options = GrepOptions {
+            exclude_path: excl.as_deref(),
+            ..options
+        };
         let mut result = GrepResult::new();
-        self.grep_internal(
-            &base,
-            &base,
-            &re,
-            recursive,
-            node_limit,
-            excl.as_deref(),
-            level_limit,
-            &mut result,
-        )
-        .await?;
+        self.grep_internal(&base, &base, &re, options, &mut result)
+            .await?;
         Ok(result)
     }
 
@@ -770,7 +752,14 @@ mod tests {
                 .await
                 .unwrap();
                 let res = enc
-                    .grep("/mem", "NEEDLE", true, false, None, None, None)
+                    .grep(
+                        "/mem",
+                        "NEEDLE",
+                        GrepOptions {
+                            recursive: true,
+                            ..Default::default()
+                        },
+                    )
                     .await
                     .unwrap();
                 assert_eq!(res.count, 1);

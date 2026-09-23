@@ -1,276 +1,104 @@
 # Quick Start
 
-Get started with OpenViking in 5 minutes.
+OpenViking runs as a server. Connect to it with the standalone `ov` CLI, import a small document, and retrieve its content. If you use a managed service or someone else's deployment, you only need the CLI.
 
-## Prerequisites
+## 1. Choose a service
 
-Before using OpenViking, ensure your environment meets the following requirements:
+**Already have an endpoint?** Keep its URL and API key ready and skip to step 2. For a server using API key authentication, use a user/admin key for data access; a root key is for administration. See [Authentication](../guides/04-authentication.md).
 
-- **Python Version**: 3.10 or higher
-- **Operating System**: Linux, macOS, Windows
-- **Network Connection**: Stable network connection required (for downloading dependencies and accessing model services)
+Otherwise, choose one:
 
-## Installation & Startup
+### Managed service on Volcengine
 
-OpenViking can be installed via a Python Package to be used as a local library, or you can quickly launch it as an independent service using Docker.
+Open the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing) and obtain your key from **User Management → API Key**. The service endpoint is:
 
-### Option 1: Install as a Python package (local commands and library)
-
-Choose your preferred Python package manager to install OpenViking:
-
-::: code-group
-
-```bash [uv (recommended)]
-uv tool install openviking --upgrade
+```text
+https://api.vikingdb.cn-beijing.volces.com/openviking
 ```
 
-```bash [pip]
-pip install openviking --upgrade --force-reinstall
-```
+No server installation or local model configuration is needed. See the [product page](https://www.volcengine.com/product/openviking-service) and [service documentation](https://docs.volcengine.com/docs/84313/2374478) for managed-service usage and limits. Continue to step 2.
 
-```bash [pipx]
-# Install
-pipx install openviking
+### Self-host a server
 
-# Update
-pipx upgrade openviking
-```
-
-:::
-
-After installation, use `ov` as the client command (`openviking` is an alias) and `openviking-server` as the server command.
-
-### Option 2: Start via Docker (As an independent service)
-
-If you prefer to run OpenViking as a standalone service, Docker is recommended.
-
-1. **Prepare Configuration Directory**
-   Create the OpenViking directory on your host and prepare the `ov.conf` configuration file (see the "Configuration" section below for details). All persistent state — config and workspace data — lives under this single directory:
-   ```bash
-   mkdir -p ~/.openviking
-   touch ~/.openviking/ov.conf
-   ```
-
-2. **Start with Docker Compose**
-   Create a `docker-compose.yml` file:
-   ```yaml
-   services:
-     openviking:
-       # Prefer ghcr.io. If it is hard to reach, use openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
-       image: ghcr.io/volcengine/openviking:latest
-       container_name: openviking
-       ports:
-         - "1933:1933"
-       volumes:
-         - ~/.openviking:/app/.openviking
-       restart: unless-stopped
-   ```
-   Then run the following command in the same directory:
-   ```bash
-   docker-compose up -d
-   ```
-
-   By default, the container starts the OpenViking API server on `1933` (which also serves the Web Studio UI at `/studio`) and the bundled `vikingbot` gateway. If you need to disable `vikingbot`, add either `command: ["--without-bot"]` or `environment: ["OPENVIKING_WITH_BOT=0"]`.
-
-   On platforms that don't allow bind mounts, set `OPENVIKING_CONF_CONTENT` to the full config JSON to bootstrap on first start, or `docker exec` in and run `openviking-server init` after the container is up. See [Deployment Guide](../guides/03-deployment.md#when-docker--v-is-not-available) for details.
-
-> **💡 Mac Local Network Access Tip (Connection reset error):**
->
-> By default, OpenViking only listens to `127.0.0.1` for security reasons. If you are using Docker on a Mac, your host machine may not be able to access it directly via `localhost:1933`.
-> 
-> **Recommended Solution: Use socat for port forwarding (No config changes needed):**
-> Override the default startup command in your `docker-compose.yml` to use `socat` for internal port forwarding:
-> ```yaml
-> services:
->   openviking:
->     image: ghcr.io/volcengine/openviking:latest
->     ports:
->       - "1933:1934" # Map host 1933 to container 1934
->     volumes:
->       - ~/.openviking:/app/.openviking
->     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
-> ```
-> This perfectly solves the access issue for Mac host machines.
-
-## Model Preparation
-
-OpenViking requires the following model capabilities:
-- **VLM Model**: For image and content understanding
-- **Embedding Model**: For vectorization and semantic retrieval
-
-OpenViking supports multiple model services:
-- **Volcengine (Doubao Models)**: Recommended, cost-effective with good performance, free quota for new users. For purchase and activation, see: [Volcengine Purchase Guide](../guides/02-volcengine-purchase-guide.md)
-- **OpenAI Models**: Supports GPT-4V and other VLM models, plus OpenAI Embedding models
-- **OpenAI Codex**: Supports Codex as the VLM provider through ChatGPT/Codex OAuth
-- **Other Custom Model Services**: Supports model services compatible with OpenAI API format
-
-## Configuration
-
-### Configuration File Template
-
-Recommended first-time setup:
+[Install uv](https://docs.astral.sh/uv/getting-started/installation/) on the server machine, then install OpenViking:
 
 ```bash
+uv tool install openviking --upgrade
 openviking-server init
 openviking-server doctor
-```
-
-If you prefer manual setup, create `~/.openviking/ov.conf`:
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "<api-endpoint>",
-      "api_key"  : "<your-api-key>",
-      "provider" : "<provider-type>",
-      "dimension": 1024,
-      "model"    : "<model-name>"
-    }
-  },
-  "vlm": {
-    "api_base" : "<api-endpoint>",
-    "api_key"  : "<your-api-key>",
-    "provider" : "<provider-type>",
-    "model"    : "<model-name>"
-  }
-}
-```
-
-`provider`, `model`, `api_base`, and `api_key` depend on the VLM service you choose. Some providers may use local OAuth state instead of a manually copied API key.
-
-For complete examples for each model provider, see [Configuration Guide - Examples](../guides/01-configuration.md#configuration-examples).
-
-For first-time setup, `openviking-server init` is the recommended path. It helps you pick a provider and writes a working config template for the selected setup.
-
-### Environment Variables
-
-When the config file is at the default path `~/.openviking/ov.conf`, no additional setup is needed — OpenViking loads it automatically.
-
-If the config file is at a different location, specify it via environment variable:
-
-```bash
-export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
-```
-
-## Start the Local Server
-
-For the first local run, initialize the config and start the server:
-
-```bash
-openviking-server init
 openviking-server
 ```
 
-Keep the server running and open another terminal for the Python SDK example below.
-To use a custom config path, start it with `openviking-server --config /path/to/ov.conf`.
+The setup wizard configures the server's models and writes `~/.openviking/ov.conf`. Prepare access to an embedding model and a VLM — Volcengine (Doubao) models are recommended; see the [Volcengine Purchase Guide](../guides/02-volcengine-purchase-guide.md) for purchase and activation — then check the configuration with `doctor`. Keep the server running and use another terminal for the remaining steps.
 
-The default local setup does not require an API key. For an authenticated server, set
-`OPENVIKING_API_KEY` before running the example.
-
-## Run Your First Example
-
-### Create Python Script
-
-Create `example.py`:
-
-```python
-import time
-
-from openviking_sdk import SyncHTTPClient
-
-# Connect to the local OpenViking Server
-client = SyncHTTPClient(url="http://localhost:1933")
-
-try:
-    # Check the connection
-    client.initialize()
-
-    # Add resource (supports URL, file, or directory)
-    # Local directory scans respect .gitignore by default.
-    add_result = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
-    )
-
-    task_id = add_result["task_id"]
-    print(f"Import task: {task_id}")
-    while True:
-        task = client.get_task(task_id)
-        if task is None:
-            raise RuntimeError(f"Task {task_id} is no longer available")
-        if task["status"] == "completed":
-            break
-        if task["status"] in {"failed", "cancelled"}:
-            raise RuntimeError(f"Import task {task_id}: {task['status']} ({task.get('error')})")
-        time.sleep(2)
-    root_uri = task["result"]["root_uri"]
-
-    # Explore the resource tree structure
-    ls_result = client.ls(uri=root_uri)
-    print(f"Directory structure:\n{ls_result}\n")
-
-    # Use glob to find markdown files
-    glob_result = client.glob(pattern="**/*.md", uri=root_uri)
-    if glob_result['matches']:
-        content = client.read(uri=glob_result["matches"][0])
-        print(f"Content preview: {content[:200]}...\n")
-
-    # Get abstract and overview of the resource
-    abstract = client.abstract(uri=root_uri)
-    overview = client.overview(uri=root_uri)
-    print(f"Abstract:\n{abstract}\n\nOverview:\n{overview}\n")
-
-    # Perform semantic search
-    results = client.find(
-        query="what is openviking",
-        target_uri=root_uri,
-    )
-    print("Search results:")
-    for result in results.get("resources", []):
-        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
-
-    # Close the client
-    client.close()
-
-except Exception as e:
-    print(f"Error: {e}")
-```
-
-### Run the Script
+A single curl confirms the server is up — no client required:
 
 ```bash
-python example.py
+curl http://127.0.0.1:1933/health
+# {"status":"ok","healthy":true,...}
 ```
 
-### Expected Output
+The local endpoint is `http://127.0.0.1:1933`; the default local setup needs no API key. Web Studio is available at `/studio`. For Docker, persistent storage, and remote access, see [Deployment](../guides/03-deployment.md), [Model Configuration](../guides/01-configuration.md), and [Authentication](../guides/04-authentication.md).
 
-```
-Wait for semantic processing...
+## 2. Install and connect the CLI
 
-Directory structure:
-...
+On your client machine, with Node.js and npm installed:
 
-Content preview: ...
-
-Abstract:
-...
-
-Overview:
-...
-
-Search results:
-  viking://resources/... (score: 0.8523)
-  ...
+```bash
+npm install -g @openviking/cli
+ov language en
+ov config
 ```
 
-Congratulations! You have successfully run OpenViking.
+In the interactive configuration, choose **OpenViking Service** for Volcengine or **Custom** for a self-hosted endpoint. Enter the API key and, for a custom service, its URL. Leave the key empty for the default local server. Save and activate the configuration.
 
-## Server Mode
+The CLI stores the active connection in `~/.openviking/ovcli.conf`. This is separate from the server's `ov.conf`. For scripted setup or multiple endpoints, see [CLI Setup](05-cli-setup.md).
 
-Want to run OpenViking as a shared service? See [Quick Start: Server Mode](03-quickstart-server.md).
+Verify the connection:
 
-## Next Steps
+```bash
+ov health
+```
 
-- [Configuration Guide](../guides/01-configuration.md) - Detailed configuration options
-- [API Overview](../api/01-overview.md) - API reference
-- [Resource Management](../api/02-resources.md) - Resource management API
+This checks that the server responds; the import below also exercises model processing and data access.
+
+## 3. Import a document
+
+Save the following as `quickstart.md` in your current directory:
+
+```markdown
+# Project Atlas
+
+Project Atlas backs up its documents every Friday.
+Maya owns the backup process. Keep each backup for 30 days.
+```
+
+Import it into a new resource directory:
+
+```bash
+ov add-resource ./quickstart.md --to viking://resources/quickstart-demo --wait --timeout 120
+```
+
+The CLI uploads the local file automatically. `--wait` waits for processing; continue after the command succeeds. Without it, save the returned `task_id` and use `ov task status <task_id>` until the task is `completed`. See [Background Tasks](../api/17-tasks.md).
+
+Use an unused target URI for this example. If you repeat the example, choose a new target and use that same URI in the commands below.
+
+## 4. Browse and search
+
+```bash
+ov tree viking://resources/quickstart-demo
+ov overview viking://resources/quickstart-demo
+ov find "Who owns the backup process?" --uri viking://resources/quickstart-demo
+```
+
+`tree` lists the imported structure; `overview` reads its generated summary. `find` returns relevant context with URIs and scores. To read a match, pass its returned URI to `ov read`:
+
+```bash
+ov read "<returned-file-uri>"
+```
+
+Replace `<returned-file-uri>` with a file URI from the results, without the angle brackets. For more resource types and retrieval options, see [Resources](../api/02-resources.md) and [Retrieval](../api/06-retrieval.md).
+
+## Use an SDK
+
+OpenViking also provides Python, TypeScript/JavaScript, and Go SDKs that connect to the same server. See the [API Overview](../api/01-overview.md) for client examples.

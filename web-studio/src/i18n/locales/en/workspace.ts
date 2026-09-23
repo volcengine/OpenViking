@@ -389,19 +389,28 @@ const workspace = {
   },
   tasksPage: {
     labels: {
+      timing: 'Duration',
+      totalDuration: 'Total Time',
+      processingNotStarted: 'Not started',
+      processingDurationHelp:
+        'Worker processing time, including model and I/O calls. Excludes queue and downstream waits; overlapping workers count once. Incomplete or legacy records are unavailable.',
+      processingDuration: 'Processing Time',
+      waitingDuration: 'Waiting Time',
+      timingUnavailable: 'Not recorded',
+
       missingResource: 'Missing resource ID for task',
       requeueFailed: 'Re-queue failed',
       requeueSubmitted: 'Re-queue request submitted successfully!',
       successRate: 'Success Rate',
-      avgDuration: 'Avg Duration',
-      avgProcessingTime: 'Avg Processing Time',
+      avgDuration: 'Avg Total Duration',
+      avgProcessingTime: 'Finished tasks only, including queue time',
       totalTasks: 'Total Tasks',
       activePending: 'Active/Pending',
       runningPending: 'Running / Pending Workloads',
       taskQueueStatus: 'Task Queue Status',
       processQueueStatus: 'Process Queue Status',
       queuePipeline: 'Queue Pipeline',
-      duration: 'Duration',
+      duration: 'Total Duration (incl. queue)',
       taskSummary: 'Total {{total}} ({{failed}} failed)',
       taskCount: 'Tasks: {{count}}',
       completedTasks: 'Completed: {{count}}',
@@ -770,6 +779,44 @@ const workspace = {
     },
   },
   settings: {
+    groups: {
+      navigation: 'User management',
+      usersTab: 'Users',
+      title: 'User groups',
+      description:
+        'Manage groups within Account {{account}}. Resource permissions are granted separately.',
+      id: 'Group ID',
+      count: 'Members',
+      actions: 'Actions',
+      create: 'Create group',
+      idHint:
+        'A unique ID within this Account. It cannot be renamed after creation.',
+      manage: 'Manage members',
+      delete: 'Delete group',
+      deleteHint: 'Remove all members before deleting this group.',
+      deleteDescription:
+        'Delete {{group}}? Existing resource ACL references are not removed. Recreating this ID may reactivate those grants.',
+      empty: 'No user groups yet.',
+      search: 'Search groups',
+      members: 'Members of {{group}}',
+      memberHint:
+        'Membership changes affect subsequent requests. Other grants may still allow access after removal.',
+      add: 'Add',
+      remove: 'Remove',
+      searchUsers: 'Search existing users to add',
+      currentMembers: 'Current members',
+      candidates: 'Account users',
+      noMembers: 'This group has no members.',
+      noUsers: 'No matching users.',
+      created: 'User group created',
+      deleted: 'User group deleted',
+      updated: 'Group membership updated',
+      failed: 'Operation failed',
+      loadFailed: 'Could not load data',
+      previous: 'Previous',
+      next: 'Next',
+      page: 'Page {{page}} of {{pages}}',
+    },
     actions: {
       addAccount: 'Add account',
       addUser: 'Add user',
@@ -1089,7 +1136,7 @@ const workspace = {
     usageDisabled:
       'Usage/Audit is not initialized, so live usage stats are unavailable.',
     usageAccessRequired:
-      'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
+      'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
   },
 } as const
 

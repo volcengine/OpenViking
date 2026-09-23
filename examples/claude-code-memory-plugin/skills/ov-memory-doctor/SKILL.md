@@ -26,8 +26,10 @@ three moving parts and each fails silently in its own way:
   and `OPENVIKING_*` environment variables, resolved as env → ovcli.conf →
   ov.conf → defaults. A malformed file reads as "no config", which silently
   disables the plugin; a stray env var silently overrides the file.
-- **Connection** — `/health` answers 200 even with a bad key, so the statusline
-  can be green while every real request 401s.
+- **Connection** — on a self-hosted server `/health` answers 200 even with a
+  bad key, so the statusline can be green while every real request 401s. On
+  OpenViking Cloud the gateway authenticates `/health` and `/ready` too, so
+  the same probe answers 401 without a key and says nothing about the url.
 
 When the resolved url is loopback, the server runs on this machine and the
 doctor adds a **Server health** section: whether anything listens on the
@@ -81,6 +83,7 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 | `node is not on PATH` / node < 18 | Hooks and `.mcp.json` run the bare command `node`; GUI/IDE launches often lack nvm/volta shims | Put node on PATH for the launching environment, or set `PATH` in the `env` block of `~/.claude/settings.json`. |
 | `server unreachable` (refused / dns / timeout / tls) | Wrong url/port, server down, DNS/VPN, private CA | Compare with `curl -sS <url>/health`. curl OK + doctor fails ⇒ proxy or CA issue (see Step 3). |
 | `base URL ends with /api/v1` or `/mcp`, no scheme, `GET /health → 404` | url shape wrong (paths are concatenated bare); Cloud needs the `/openviking` prefix | Fix `url` to the API root. |
+| `/health is authenticated at this deployment` (info) / `api key rejected on /health → 401` | OpenViking Cloud gates `/health` and `/ready` at the gateway, so the probe without a key 401s and says nothing about the url | The info line needs no fix — the report reads /health with the key instead. The ✗ means the gateway rejected this key: use one issued for that deployment (Cloud keys come from the Volcengine console). |
 | `api key rejected` (200 from /health with no identity) then `system/status → 401 Invalid API Key` | Key invalid/revoked/for another deployment. A 3-segment key for a non-existent account looks identical. | Get the key re-issued; check no env var shadows ovcli.conf ("← env" in the Configuration section). |
 | `using the ROOT api key` / `403 ROOT API keys cannot access tenant-scoped data APIs` | `api_key` fell through to `ov.conf server.root_api_key`, or the user pasted the root key | Create a user key (`POST /api/v1/admin/accounts/<account>/users` with the root key) and put it in ovcli.conf. |
 | `server is in trusted mode and needs account + user` / 400 `Trusted mode requests must include…` | Server identity comes from headers | Set `account` and `user` in ovcli.conf. |
@@ -116,7 +119,7 @@ space):
 
 ```bash
 URL=<url>; KEY=<key>
-curl -sS "$URL/health"                                  # reachability, version, auth_mode
+curl -sS "$URL/health"                                  # reachability, version, auth_mode (401 on Cloud: the gateway gates /health)
 curl -sS -H "Authorization: Bearer $KEY" "$URL/health"  # 200 without account_id/user_id/role ⇒ key invalid
 curl -sS -w '\n%{http_code}\n' -H "Authorization: Bearer $KEY" "$URL/api/v1/system/status"  # real 401/403
 ```

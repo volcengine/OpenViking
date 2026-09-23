@@ -296,9 +296,11 @@ def test_session_commit_message_ignores_unknown_fields():
             "archive_uri": "viking://user/default/sessions/session-1/history/archive_001",
             "user": {"account_id": "default", "user_id": "default"},
             "actor_peer_id": "visitor-a",
+            "usage_uris": ["viking://resources/legacy"],
         }
     )
 
     assert message.task_id == "task-1"
     assert message.auto_commit_policy == {}
     assert "actor_peer_id" not in message.to_dict()
+    assert "usage_uris" not in message.to_dict()

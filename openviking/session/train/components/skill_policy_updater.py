@@ -38,10 +38,8 @@ logger = get_logger(__name__)
 class SkillPolicyUpdater:
     """PolicyUpdater that writes skill files to a skills directory.
 
-    For new skills (no existing file) the full ``SkillProcessor.process_skill``
-    pipeline is used (validation, privacy, overview, index).  For existing
-    skills, the merged content is serialized to SKILL.md and written via
-    ``ContentWriteCoordinator``.
+    New and existing skills both go through the full ``SkillProcessor.process_skill``
+    pipeline (validation, privacy, overview, index).
 
     ``delete`` operations remove the entire skill subdirectory.
     """

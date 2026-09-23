@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Service lifecycle coverage for embedding clients."""
+"""Service lifecycle coverage for model clients."""
+
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +33,8 @@ async def test_service_closes_embedder_after_workers_and_storage_stop(monkeypatc
             events.append("embedder")
 
     service = OpenVikingService.__new__(OpenVikingService)
+    service._config = SimpleNamespace(vlm=SimpleNamespace(close=lambda: events.append("vlm")))
+    service._runtime_config_manager = None
     service._resource_service = _ResourceService()
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
@@ -46,6 +50,7 @@ async def test_service_closes_embedder_after_workers_and_storage_stop(monkeypatc
     assert events == [
         "background",
         "queue",
+        "vlm",
         "storage-mark",
         "storage-close",
         "embedder",

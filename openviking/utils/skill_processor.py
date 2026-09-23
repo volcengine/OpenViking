@@ -437,7 +437,7 @@ class SkillProcessor:
             if normalized == user_root.rstrip("/"):
                 return user_root
             raise InvalidArgumentError(
-                f"Unsupported skill root URI: {target_uri}",
+                f"Unsupported skill root URI: {target_uri}; use {user_root} or viking://agent/skills",
                 details={
                     "field": "target_uri",
                     "allowed": [

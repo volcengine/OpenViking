@@ -161,11 +161,10 @@ async fn test_read_dir_redirect_entries_use_target_stat() {
                 .grep(
                     "/local/acct/docs",
                     "GHOST_MARKER",
-                    false,
-                    false,
-                    None,
-                    None,
-                    Some(1),
+                    GrepOptions {
+                        level_limit: Some(1),
+                        ..Default::default()
+                    },
                 )
                 .await?;
             assert_eq!(grep.count, 0);
@@ -270,11 +269,11 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
                 .grep(
                     "/local/acct/resources",
                     "MULTIWRITE_TEST_MARKER",
-                    true,
-                    false,
-                    None,
-                    None,
-                    Some(5),
+                    GrepOptions {
+                        recursive: true,
+                        level_limit: Some(5),
+                        ..Default::default()
+                    },
                 )
                 .await?;
             assert_eq!(result.count, 1);

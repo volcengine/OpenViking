@@ -63,6 +63,10 @@ curl http://127.0.0.1:1933/bot/v1/health
 
 ### 2. Start Web Studio
 
+Use Node.js 22.x for local development, builds, and tests, matching the Studio build workflow.
+
+With the current Vitest/jsdom versions, Node.js 26 can cause `localStorage` errors during tests. If this occurs, switch to Node.js 22.x and run `npm ci && npm test` in `web-studio/`.
+
 ```bash
 cd web-studio
 npm install

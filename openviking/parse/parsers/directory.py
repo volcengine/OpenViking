@@ -32,9 +32,15 @@ from openviking.parse.base import (
 )
 from openviking.parse.gitignore import GitignoreMatcher
 from openviking.parse.image_rewrite import IMAGE_MAPPINGS_FILENAME
+from openviking.parse.output import (
+    ParseArtifactWriter,
+    copy_artifact_tree,
+    create_parse_artifact_writer,
+    store_for_artifact_ref,
+)
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
-from openviking.parse.parsers.upload_utils import is_text_file
+from openviking.parse.parsers.upload_utils import detect_and_convert_encoding, is_text_file
 from openviking.storage.viking_fs import LS_ALL_NODES
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
@@ -146,7 +152,9 @@ class DirectoryParser(BaseParser):
         warnings: List[str] = []
         temp_uri: Optional[str] = None
         keep_temp = False
-        pending_temp_uris: set[str] = set()
+        pending_results: list[ParseResult] = []
+        output_store = kwargs.get("parse_output_store")
+        writer: Optional[ParseArtifactWriter] = None
 
         try:
             # ── Phase 1: scan directory ───────────────────────────────
@@ -216,7 +224,10 @@ class DirectoryParser(BaseParser):
                     processable_files.append(
                         ClassifiedFile(entry_path, relative, CLASS_PROCESSABLE)
                     )
-                if len(processable_files) > directory_config.max_files:
+                if (
+                    directory_config.max_files is not None
+                    and len(processable_files) > directory_config.max_files
+                ):
                     raise InvalidArgumentError("Feishu directory file limit exceeded")
                 processable_files.sort(key=lambda item: item.rel_path)
             warnings.extend(scan_result.warnings)
@@ -287,6 +298,7 @@ class DirectoryParser(BaseParser):
                             _source=entry.url,
                             resource_name=cf.path.name,
                             feishu_access_token=kwargs.get("feishu_access_token"),
+                            feishu_config=kwargs.get("feishu_config"),
                         )
                         if kwargs.get("lark_file"):
                             parse_options["lark_file"] = kwargs["lark_file"]
@@ -306,11 +318,13 @@ class DirectoryParser(BaseParser):
                 if use_understanding:
                     understanding_jobs.append(job)
 
-            viking_fs = self._get_viking_fs()
-            temp_uri = self._create_temp_uri()
+            viking_fs = self._get_viking_fs() if output_store is None else None
+            writer = await create_parse_artifact_writer(output_store, viking_fs=viking_fs)
+            output_store = writer.store
+            temp_uri = writer.ref.root
             target_uri = f"{temp_uri}/{dir_name}"
-            await viking_fs.mkdir(temp_uri, exist_ok=True)
-            await viking_fs.mkdir(target_uri, exist_ok=True)
+            await writer.mkdir()
+            await writer.mkdir(dir_name)
 
             if not processable_files:
                 root = ResourceNode(
@@ -327,6 +341,7 @@ class DirectoryParser(BaseParser):
                     warnings=warnings,
                 )
                 result.temp_dir_path = temp_uri
+                result.artifact_ref = await writer.finalize(resource_rel=dir_name)
                 result.meta["file_count"] = 0
                 result.meta["dir_name"] = dir_name
                 result.meta["total_processable"] = 0
@@ -360,9 +375,10 @@ class DirectoryParser(BaseParser):
                     split_content=split_content,
                     max_concurrent=directory_config.max_concurrent,
                     job_timeout=job_timeout,
+                    output_store=output_store,
                 )
-                pending_temp_uris.update(
-                    parsed["result"].temp_dir_path
+                pending_results.extend(
+                    parsed["result"]
                     for parsed in understanding_results.values()
                     if parsed.get("result") and parsed["result"].temp_dir_path
                 )
@@ -388,12 +404,14 @@ class DirectoryParser(BaseParser):
                     else:
                         try:
                             # The merge helper owns this artifact once merging starts.
-                            pending_temp_uris.discard(sub_result.temp_dir_path)
+                            if sub_result in pending_results:
+                                pending_results.remove(sub_result)
                             await self._merge_parser_result(
                                 cf,
                                 sub_result,
                                 target_uri,
                                 viking_fs,
+                                target_writer=writer,
                                 preserve_structure=preserve_structure,
                                 split_content=split_content,
                             )
@@ -422,6 +440,7 @@ class DirectoryParser(BaseParser):
                         target_uri,
                         viking_fs,
                         warnings,
+                        target_writer=writer,
                         preserve_structure=preserve_structure,
                     )
                     parser_name = "direct_upload"
@@ -432,6 +451,8 @@ class DirectoryParser(BaseParser):
                         target_uri,
                         viking_fs,
                         warnings,
+                        target_writer=writer,
+                        output_store=output_store,
                         preserve_structure=preserve_structure,
                         import_root=str(source_path),
                         split_content=split_content,
@@ -485,6 +506,7 @@ class DirectoryParser(BaseParser):
                 warnings=warnings,
             )
             result.temp_dir_path = temp_uri
+            result.artifact_ref = await writer.finalize(resource_rel=dir_name)
             result.meta["file_count"] = file_count
             result.meta["dir_name"] = dir_name
             result.meta["total_processable"] = len(processable_files)
@@ -512,15 +534,28 @@ class DirectoryParser(BaseParser):
                 warnings=[f"Failed to parse directory: {exc}"],
             )
         finally:
-            if temp_uri and not keep_temp:
-                pending_temp_uris.add(temp_uri)
-            for pending_uri in pending_temp_uris:
+            if writer is not None and not keep_temp:
+                await writer.cleanup()
+            for pending_result in pending_results:
                 try:
-                    await viking_fs.delete_temp(pending_uri)
+                    pending_ref = getattr(pending_result, "artifact_ref", None)
+                    if pending_ref is not None:
+                        pending_store = (
+                            output_store
+                            if output_store is not None
+                            and output_store.backend == pending_ref.backend
+                            else store_for_artifact_ref(
+                                pending_ref,
+                                viking_fs=self._get_viking_fs(),
+                            )
+                        )
+                        await pending_store.cleanup(pending_ref)
+                    elif pending_result.temp_dir_path:
+                        await self._get_viking_fs().delete_temp(pending_result.temp_dir_path)
                 except Exception as exc:
                     logger.warning(
                         "[DirectoryParser] Failed to clean temporary artifact %s: %s",
-                        pending_uri,
+                        pending_result.temp_dir_path,
                         exc,
                     )
 
@@ -742,6 +777,7 @@ class DirectoryParser(BaseParser):
         split_content: bool,
         max_concurrent: int,
         job_timeout: float,
+        output_store: Any = None,
     ) -> Dict[int, Dict[str, Any]]:
         """Parse jobs with a fixed local pool and a shared service-loop limit."""
         limiter = _get_understanding_limiter(max_concurrent)
@@ -767,6 +803,7 @@ class DirectoryParser(BaseParser):
                             import_root=import_root,
                             split_content=split_content,
                             parse_options=job.get("parse_options"),
+                            output_store=output_store,
                         )
                         sub_result = await asyncio.wait_for(parse_coro, timeout=job_timeout)
                     results[job["index"]] = {"result": sub_result, "error": None}
@@ -803,9 +840,12 @@ class DirectoryParser(BaseParser):
         import_root: Optional[str],
         split_content: bool,
         parse_options: Optional[Dict[str, Any]] = None,
+        output_store: Any = None,
     ) -> ParseResult:
         """Run one parser without mutating the directory destination tree."""
         options = dict(parse_options or {})
+        if output_store is not None:
+            options["parse_output_store"] = output_store
         source = options.pop("_source", str(classified_file.path))
         options.update(
             enable_link_rewrite=preserve_structure,
@@ -823,6 +863,7 @@ class DirectoryParser(BaseParser):
         target_uri: str,
         viking_fs: Any,
         *,
+        target_writer: Optional[ParseArtifactWriter] = None,
         preserve_structure: bool,
         split_content: bool,
     ) -> None:
@@ -838,6 +879,30 @@ class DirectoryParser(BaseParser):
             dest = f"{target_uri}/{parent}" if parent != "." else target_uri
         else:
             dest = target_uri
+        source_ref = getattr(sub_result, "artifact_ref", None)
+        if target_writer is not None and source_ref is not None:
+            source_store = (
+                target_writer.store
+                if source_ref.backend == target_writer.store.backend
+                else store_for_artifact_ref(source_ref, viking_fs=viking_fs)
+            )
+            target_rel = target_writer.relative_path(dest)
+            try:
+                merged = await copy_artifact_tree(
+                    source_store=source_store,
+                    source_ref=source_ref,
+                    source_rel="",
+                    target=target_writer,
+                    target_rel=target_rel,
+                    allowed_hidden=_MERGE_SIDECAR_ALLOWLIST,
+                    flatten_single_output=bool(not split_content and preserve_structure),
+                )
+            finally:
+                await source_store.cleanup(source_ref)
+            if not merged:
+                raise ValueError(no_content_error)
+            return
+
         try:
             merged = await DirectoryParser._merge_temp(
                 viking_fs,
@@ -865,6 +930,8 @@ class DirectoryParser(BaseParser):
         target_uri: str,
         viking_fs: Any,
         warnings: List[str],
+        target_writer: Optional[ParseArtifactWriter] = None,
+        output_store: Any = None,
         preserve_structure: bool = True,
         import_root: Optional[str] = None,
         split_content: bool = True,
@@ -895,12 +962,14 @@ class DirectoryParser(BaseParser):
                     preserve_structure=preserve_structure,
                     import_root=import_root,
                     split_content=split_content,
+                    output_store=output_store,
                 )
                 await DirectoryParser._merge_parser_result(
                     classified_file,
                     sub_result,
                     target_uri,
                     viking_fs,
+                    target_writer=target_writer,
                     preserve_structure=preserve_structure,
                     split_content=split_content,
                 )
@@ -919,12 +988,15 @@ class DirectoryParser(BaseParser):
                 }
         else:
             try:
-                content = src_file.read_bytes()
+                content = detect_and_convert_encoding(src_file.read_bytes(), src_file)
                 if preserve_structure:
                     dst_uri = f"{target_uri}/{rel_path}"
                 else:
                     dst_uri = f"{target_uri}/{PurePosixPath(rel_path).name}"
-                await viking_fs.write_file(dst_uri, content)
+                if target_writer is not None:
+                    await target_writer.write_bytes(dst_uri, content)
+                else:
+                    await viking_fs.write_file(dst_uri, content)
                 return {"ok": True, "meta": {}, "error": None}
             except Exception as exc:
                 warnings.append(f"Failed to upload {rel_path}: {exc}")
@@ -936,6 +1008,7 @@ class DirectoryParser(BaseParser):
         target_uri: str,
         viking_fs: Any,
         warnings: List[str],
+        target_writer: Optional[ParseArtifactWriter] = None,
         preserve_structure: bool = True,
     ) -> Dict[str, Any]:
         """Directly upload a file without using its parser.
@@ -954,12 +1027,15 @@ class DirectoryParser(BaseParser):
         src_file = classified_file.path
 
         try:
-            content = src_file.read_bytes()
+            content = detect_and_convert_encoding(src_file.read_bytes(), src_file)
             if preserve_structure:
                 dst_uri = f"{target_uri}/{rel_path}"
             else:
                 dst_uri = f"{target_uri}/{PurePosixPath(rel_path).name}"
-            await viking_fs.write_file(dst_uri, content)
+            if target_writer is not None:
+                await target_writer.write_bytes(dst_uri, content)
+            else:
+                await viking_fs.write_file(dst_uri, content)
             return {"ok": True, "meta": {}, "error": None}
         except Exception as exc:
             warnings.append(f"Failed to upload {rel_path}: {exc}")
