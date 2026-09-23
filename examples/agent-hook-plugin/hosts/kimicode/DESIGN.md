@@ -6,8 +6,8 @@ Verified against Kimi Code CLI 0.43.1 and Node.js 18+.
   assembles that directory; this source directory is not itself a complete
   runnable plugin.
 - Hook stdin is snake-case JSON. The adapter consumes the verified
-  `session_id`, `cwd`, `input`, `tool_name`, and `tool_input` fields only;
-  `UserPromptSubmit.input` may be a string or an array of content parts.
+  `session_id`, `cwd`, `prompt`, `tool_name`, and `tool_input` fields only;
+  `UserPromptSubmit.prompt` may be a string or an array of content parts.
 - `UserPromptSubmit` accepts raw text on stdout. Other lifecycle hooks are
   silent; `PreToolUse` returns Kimi's `permissionDecision` JSON shape.
 - The stable transcript is the session's `agents/main/wire.jsonl`, located via
@@ -25,5 +25,5 @@ event mapping, input/output shape, transcript decoding, and commit policy.
 
 Versioned host references:
 
-- [native plugin manifest and manager](https://github.com/MoonshotAI/kimi-cli/tree/0.43.1/src/kimi_cli/plugin)
-- [hook event models](https://github.com/MoonshotAI/kimi-cli/tree/0.43.1/src/kimi_cli/hooks)
+- [native plugin manifest and manager](https://github.com/MoonshotAI/kimi-code/tree/%40moonshot-ai/kimi-code%400.43.1/packages/agent-core-v2/src/app/plugin)
+- [hook event models](https://github.com/MoonshotAI/kimi-code/tree/%40moonshot-ai/kimi-code%400.43.1/packages/agent-core-v2/src/features/externalHooks)

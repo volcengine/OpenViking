@@ -54,7 +54,7 @@ export const kimicode = {
     };
   },
   prompt(input) {
-    return cleanKimicodeText(promptParts(input.input));
+    return cleanKimicodeText(promptParts(input.prompt));
   },
   async capture(ctx, state, event) {
     const transcript = buildKimicodeTurns(ctx.input, state);

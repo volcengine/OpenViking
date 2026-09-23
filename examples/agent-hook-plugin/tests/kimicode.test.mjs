@@ -68,13 +68,13 @@ test("profile retries until success, emits raw text, then injects only once", as
     OPENVIKING_SKILL_CATALOG: "0",
   };
   const first = await runHook(["user-prompt-submit", "kimicode"], {
-    session_id: "session-1", request_id: "1", cwd: home, input: [{ type: "text", text: "hello" }],
+    session_id: "session-1", request_id: "1", cwd: home, prompt: [{ type: "text", text: "hello" }],
   }, env);
   assert.equal(first.status, 0, first.stderr);
   assert.equal(first.stdout, "");
 
   const second = await runHook(["user-prompt-submit", "kimicode"], {
-    session_id: "session-1", request_id: "2", cwd: home, input: [{ type: "text", text: "retry" }],
+    session_id: "session-1", request_id: "2", cwd: home, prompt: [{ type: "text", text: "retry" }],
   }, env);
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /^<openviking-context source="session-start">/);
@@ -82,7 +82,7 @@ test("profile retries until success, emits raw text, then injects only once", as
   assert.doesNotMatch(second.stdout, /\\n/);
 
   const third = await runHook(["user-prompt-submit", "kimicode"], {
-    session_id: "session-1", request_id: "3", cwd: home, input: [{ type: "text", text: "later" }],
+    session_id: "session-1", request_id: "3", cwd: home, prompt: [{ type: "text", text: "later" }],
   }, env);
   assert.equal(third.status, 0, third.stderr);
   assert.equal(third.stdout, "");
