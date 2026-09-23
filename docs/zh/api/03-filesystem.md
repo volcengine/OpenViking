@@ -155,6 +155,7 @@ openviking ls viking://resources/ --simple --fields uri,tags
 
 CLI 会按所选列请求 `extra_fields`（`locked`、`id`、`count`）；选择 `tags` 列时会请求 `include_tags=true`。这些列选择不改变 `tags` 的 AND 过滤语义。
 
+HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应用可见性、tags、offset 和 limit 后仍有后续匹配节点；Python、TypeScript 和 Go SDK 继续返回 `result` 数组。CLI 检测到后续节点时会在输出末尾显示翻页提示。
 
 **响应**
 
@@ -172,6 +173,7 @@ CLI 会按所选列请求 `extra_fields`（`locked`、`id`、`count`）；选择
       "tags": ["team=search"]
     }
   ],
+  "has_more": true,
   "time": 0.1
 }
 ```
@@ -265,6 +267,7 @@ openviking tree viking://resources/my-project/ --fields path,type,tags
 openviking tree viking://resources/my-project/ --simple --fields path,tags
 ```
 
+与 `ls` 一致，HTTP 响应中的 `result` 保持为节点数组，`has_more` 位于响应顶层。CLI 检测到 `has_more=true` 时会在树输出末尾显示后续节点提示。
 
 **响应**
 
@@ -289,6 +292,7 @@ openviking tree viking://resources/my-project/ --simple --fields path,tags
       "tags": ["team=search", "env=prod"]
     }
   ],
+  "has_more": true,
   "time": 0.1
 }
 ```
