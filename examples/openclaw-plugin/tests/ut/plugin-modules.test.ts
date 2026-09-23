@@ -25,10 +25,32 @@ import { registerOpenVikingLifecycleHooks } from "../../plugin/openviking-lifecy
 import { registerOpenVikingMemoryTools } from "../../plugin/openviking-memory-tools.js";
 import { registerOpenVikingMemoryRecallTools } from "../../plugin/openviking-memory-recall-tools.js";
 import { registerOpenVikingQueryTools } from "../../plugin/openviking-query-tools.js";
+import { createOpenVikingSessionRoutingRuntime } from "../../plugin/openviking-session-routing-runtime.js";
 import { registerOpenVikingRecallTraceTools } from "../../plugin/openviking-recall-trace-tools.js";
 import { registerOpenVikingToolResultTools } from "../../plugin/openviking-tool-result-tools.js";
 
 describe("plugin module seams", () => {
+  it("routes tools without a sender-scoped peer under peer_role=sender when the sender is missing", () => {
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const { resolvePluginSessionRouting } = createOpenVikingSessionRoutingRuntime({
+      peerRole: "sender",
+      peerPrefix: "default",
+      logFindRequests: false,
+      logger,
+    });
+
+    const unscoped = resolvePluginSessionRouting({ sessionId: "session-1" });
+    expect(unscoped.actorPeerId).toBeUndefined();
+    expect(unscoped.actorPeerUnscoped).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("no sender identity"));
+
+    logger.warn.mockClear();
+    const scoped = resolvePluginSessionRouting({ sessionId: "session-1", requesterSenderId: "ou_01:abc" });
+    expect(scoped.actorPeerId).toBe("ou_01_abc");
+    expect(scoped.actorPeerUnscoped).toBeUndefined();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("registers only enabled OpenViking tools through the tool-registration seam", () => {
     const api = { registerTool: vi.fn() };
     const logger = { debug: vi.fn() };
@@ -858,6 +880,34 @@ describe("plugin module seams", () => {
     expect(deleteUri).toHaveBeenCalledWith(memoryUri, "ou_01_abc");
     expect(deleted.content[0].text).toBe(`Forgotten: ${memoryUri}`);
     expect(deleted.details).toMatchObject({ action: "deleted", uri: memoryUri });
+  });
+
+  it("memory_forget refuses to delete when peer_role=sender has no sender", async () => {
+    const registerTool = vi.fn();
+    const deleteUri = vi.fn().mockResolvedValue(undefined);
+    const find = vi.fn().mockResolvedValue({ memories: [], total: 0 });
+    registerOpenVikingMemoryTools({
+      registerTool,
+      getClient: async () => ({ addSessionMessage: vi.fn(), commitSession: vi.fn(), deleteUri, find }),
+      normalizeSessionId: (sessionId: string) => sessionId,
+      createTempSessionId: () => "memory-store-temp",
+      peerRole: "sender" as const,
+      resolvePluginSessionRouting: () => ({ agentId: "agent-main", actorPeerUnscoped: true }),
+      isBypassedSession: () => false,
+      makeBypassedToolResult: (toolName: string) => ({ content: [{ type: "text" as const, text: `bypassed ${toolName}` }], details: { toolName } }),
+      defaultTargetUri: "viking://user/default",
+      defaultRecallScoreThreshold: 0.25,
+      logFindRequests: false,
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    const forgetTool = registerTool.mock.calls[1]?.[0]({ sessionId: "session-1" });
+    for (const params of [{ uri: "viking://user/default/peers/other/memories/m1" }, { query: "delete my notes" }]) {
+      const result = await forgetTool.execute("call", params);
+      expect(result.details).toMatchObject({ action: "rejected", reason: "sender_missing" });
+    }
+    expect(deleteUri).not.toHaveBeenCalled();
+    expect(find).not.toHaveBeenCalled();
   });
 
   it("registers recall trace tool through a dedicated plugin module", async () => {

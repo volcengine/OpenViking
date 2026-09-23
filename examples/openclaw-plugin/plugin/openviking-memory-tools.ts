@@ -22,6 +22,7 @@ export type OpenVikingMemorySession = {
   ovSessionId?: string;
   agentId: string;
   actorPeerId?: string;
+  actorPeerUnscoped?: boolean;
 };
 
 export type OpenVikingMemoryClient = {
@@ -234,6 +235,16 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
           return deps.makeBypassedToolResult("memory_forget");
         }
         const session = deps.resolvePluginSessionRouting(ctx);
+        // An unscoped request can see and delete other senders' memories.
+        if (session.actorPeerUnscoped) {
+          return {
+            content: [{
+              type: "text",
+              text: "Refusing to forget: peer_role=sender but no sender identity is available, so the memory's owner cannot be checked.",
+            }],
+            details: { action: "rejected", reason: "sender_missing" },
+          };
+        }
         const client = await deps.getClient();
         const uri = (params as { uri?: string }).uri;
         if (uri) {
