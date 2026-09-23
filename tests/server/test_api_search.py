@@ -58,6 +58,21 @@ async def test_find_basic(client_with_resource):
     assert "telemetry" not in body
 
 
+@pytest.mark.parametrize("endpoint,method", [("/api/v1/search/find", "find"), ("/api/v1/search/search", "search")])
+async def test_skill_context_type_is_forwarded_for_implicit_targets(client, service, monkeypatch, endpoint, method):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+        return FindResult(memories=[], resources=[], skills=[])
+
+    monkeypatch.setattr(service.search, method, fake_search)
+    response = await client.post(endpoint, json={"query": "skill", "context_type": "skill"})
+
+    assert response.status_code == 200
+    assert captured["context_type"] == ContextType.SKILL
+
+
 @pytest.mark.parametrize("endpoint", ["/api/v1/search/find", "/api/v1/search/search"])
 async def test_search_endpoints_inline_visible_content_when_requested(
     client: httpx.AsyncClient, service, monkeypatch, endpoint: str
