@@ -1912,8 +1912,14 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
         batch_size: int = 100,
         output_fields: Optional[List[str]] = None,
+        depth: int = -1,
     ) -> Dict[str, Dict[str, Any]]:
-        """Strictly load lightweight L0/L1/L2 metadata below a resource root."""
+        """Strictly load lightweight L0/L1/L2 metadata for a URI scope.
+
+        ``depth=-1`` (default) scans the whole subtree below the root; ``depth=0``
+        restricts the scan to the URI itself (all levels), which the single-file
+        write path uses so an incremental update never reads sibling records.
+        """
         projection = list(
             dict.fromkeys(
                 [
@@ -1922,11 +1928,12 @@ class VikingVectorIndexBackend:
                 ]
             )
         )
+        recursive_scope = depth != 0
         canonical_uri = resolve_uri(uri).uri.rstrip("/")
         scope = And(
             [
                 Eq("account_id", ctx.account_id),
-                PathScope("uri", canonical_uri, depth=-1),
+                PathScope("uri", canonical_uri, depth=depth),
                 In("level", [0, 1, 2]),
             ]
         )
@@ -1954,7 +1961,9 @@ class VikingVectorIndexBackend:
                     if (
                         not record_id
                         or level not in {0, 1, 2}
-                        or not uri_in_transfer_scope(record_uri, canonical_uri, recursive=True)
+                        or not uri_in_transfer_scope(
+                            record_uri, canonical_uri, recursive=recursive_scope
+                        )
                     ):
                         raise RuntimeError(
                             f"{what} returned an invalid record: id={record_id or '<missing>'} "

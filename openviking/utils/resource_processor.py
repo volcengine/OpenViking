@@ -1321,76 +1321,9 @@ class ResourceProcessor:
         return {"kind": kind, "uri": str(path)}
 
     async def _enqueue_index_actions(self, actions: Any, *, ctx: RequestContext) -> None:
-        from collections import Counter
+        from openviking.storage.context_update_execution import enqueue_direct_index_actions
 
-        from openviking.storage.index_action import IndexAction
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
-        from openviking.telemetry import get_current_telemetry
-        from openviking.utils.embedding_utils import _enqueue_embedding_message
-
-        queue_manager = get_queue_manager()
-        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
-        telemetry_id = get_current_telemetry().telemetry_id
-        action_counts = Counter(action.action.value for action in actions)
-        delete_ids = [action.record_id for action in actions if action.action == IndexAction.DELETE]
-        if delete_ids:
-            message = EmbeddingMsg.for_delete(
-                record_ids=delete_ids,
-                context_data={
-                    "uri": actions[0].uri,
-                    "account_id": ctx.account_id,
-                    "owner_user_id": ctx.user.user_id,
-                },
-                telemetry_id=telemetry_id,
-            )
-            await _enqueue_embedding_message(
-                embedding_queue,
-                message,
-                failure_message="Failed to enqueue planned vector deletes",
-            )
-        for action in actions:
-            if action.action in {IndexAction.UPSERT, IndexAction.MERGE}:
-                if action.level != int(ContextLevel.DETAIL):
-                    raise ValueError("Direct index upsert only supports file detail records")
-                await self._vectorize_resource_file(
-                    action.uri,
-                    ctx=ctx,
-                    file_md5=action.md5,
-                    scalar_override={
-                        **dict(action.upsert_fields),
-                        "_record_id": action.record_id,
-                    },
-                    action=action.action.value,
-                    field_patch=action.field_patch,
-                )
-                continue
-            if action.action != IndexAction.UPDATE_FIELDS:
-                continue
-            assert action.field_patch is not None
-            message = EmbeddingMsg.for_update_fields(
-                record_id=action.record_id,
-                field_patch=action.field_patch,
-                context_data={
-                    "uri": action.uri,
-                    "level": action.level,
-                    "account_id": ctx.account_id,
-                    "owner_user_id": ctx.user.user_id,
-                },
-                telemetry_id=telemetry_id,
-            )
-            await _enqueue_embedding_message(
-                embedding_queue,
-                message,
-                failure_message=f"Failed to enqueue scalar update for {action.uri}",
-            )
-        logger.debug(
-            "[DirectIndexActions] %s root=%s action_counts=%s action_count=%d",
-            log_correlation(),
-            actions[0].uri if actions else "",
-            dict(action_counts),
-            len(actions),
-        )
+        await enqueue_direct_index_actions(actions, ctx=ctx)
 
     async def _delete_removed_resource_vectors(
         self,

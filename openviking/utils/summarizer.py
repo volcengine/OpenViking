@@ -42,19 +42,58 @@ class Summarizer:
         created: bool = False,
         file_md5: str | None = None,
         file_abstract: str = "",
+        generation_trigger: str = "semantic_refresh",
+        force_refresh: bool | None = None,
     ) -> Dict[str, Any]:
-        """Summarize one flat file and refresh its parent directory semantics."""
+        """Summarize one flat file and refresh its parent directory semantics.
+
+        ``force_refresh`` controls parent-directory aggregation. ``None`` (the
+        default used by resource ingest) always aggregates immediately. A boolean
+        opts into the freshness gate: the changed file is still summarized and
+        vectorized, but parent L0/L1 aggregation is deferred by the freshness
+        policy unless ``force_refresh`` is ``True``. The returned
+        ``semantic_action`` reports the gate decision so callers can surface a
+        ``deferred``/``skipped`` status.
+        """
+        from openviking.storage.abstract_overview import plan_abstract_overview_refresh
+        from openviking.storage.errors import LockAcquisitionError
+        from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+        from openviking_cli.utils.config import get_openviking_config
+
         parent = VikingURI(file_uri).parent
         if parent is None:
             return {"status": "error", "message": f"file has no parent URI: {file_uri}"}
 
+        parent_uri = parent.uri.rstrip("/")
+        context_type = context_type_for_uri(file_uri)
+
+        aggregate_directory = True
+        semantic_action = FreshnessAction.REFRESH_NOW
+        if force_refresh is not None:
+            semantic_config = get_openviking_config().semantic
+            try:
+                decision = await plan_abstract_overview_refresh(
+                    viking_fs=get_viking_fs(),
+                    dir_uri=parent_uri,
+                    changed_entries=1,
+                    ctx=ctx,
+                    overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                    refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                    force_refresh=force_refresh,
+                )
+                semantic_action = decision.action
+            except LockAcquisitionError:
+                # Parent aggregation is best-effort; changed-file work still runs.
+                logger.info("Skipping busy parent semantic refresh: %s", parent_uri)
+                semantic_action = FreshnessAction.NOOP
+            aggregate_directory = semantic_action is FreshnessAction.REFRESH_NOW
+
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
-        parent_uri = parent.uri.rstrip("/")
         msg = SemanticMsg(
             uri=parent_uri,
-            context_type=context_type_for_uri(file_uri),
+            context_type=context_type,
             recursive=False,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
@@ -63,13 +102,19 @@ class Summarizer:
             skip_vectorization=skip_vectorization,
             telemetry_id=telemetry_id,
             changes={"added" if created else "modified": [file_uri]},
-            coalesce_key=build_semantic_coalesce_key(
-                context_type=context_type_for_uri(file_uri),
-                uri=parent_uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                peer_id=ctx.user.user_id,
+            coalesce_key=(
+                build_semantic_coalesce_key(
+                    context_type=context_type,
+                    uri=parent_uri,
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    peer_id=ctx.user.user_id,
+                )
+                if aggregate_directory
+                else ""
             ),
+            generation_trigger=generation_trigger,
+            aggregate_directory=aggregate_directory,
             ingest_options=ingest_options,
             file_md5s={file_uri: file_md5} if file_md5 else None,
             file_abstracts={file_uri: file_abstract} if file_abstract else None,
@@ -93,8 +138,16 @@ class Summarizer:
                     msg.id,
                     processed_delta=0,
                 )
-            return {"status": "success", "enqueued_count": 0}
-        return {"status": "success", "enqueued_count": 1}
+            return {
+                "status": "success",
+                "enqueued_count": 0,
+                "semantic_action": semantic_action.value,
+            }
+        return {
+            "status": "success",
+            "enqueued_count": 1,
+            "semantic_action": semantic_action.value,
+        }
 
     async def summarize(
         self,
