@@ -97,7 +97,9 @@ async def restore_feishu_request(
     return api_key, {OAUTH_REF_ARG: reference}
 
 
-def validate_oauth_ref(value: Any, ov_user_id: str) -> Dict[str, str]:
+def validate_oauth_ref(
+    value: Any, ov_user_id: str, *, platform: str = "feishu_doc"
+) -> Dict[str, str]:
     keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
     if (
         not isinstance(value, dict)
@@ -106,8 +108,8 @@ def validate_oauth_ref(value: Any, ov_user_id: str) -> Dict[str, str]:
     ):
         raise InvalidArgumentError("args.openviking_oauth_ref contains an invalid OAuth reference.")
     ref = {key: value[key].strip() for key in keys}
-    if ref["type"] != "oauth" or ref["platform"] != "feishu_doc":
-        raise InvalidArgumentError("Native Feishu imports require a feishu_doc OAuth reference.")
+    if ref["type"] != "oauth" or ref["platform"] != platform:
+        raise InvalidArgumentError(f"This import requires a {platform} OAuth reference.")
     if ref["ov_user_id"] != ov_user_id:
         raise InvalidArgumentError(
             "OAuth reference does not belong to the current OpenViking user."
@@ -115,12 +117,31 @@ def validate_oauth_ref(value: Any, ov_user_id: str) -> Dict[str, str]:
     return ref
 
 
+async def project_auth_config(args: Dict[str, Any], ctx: RequestContext) -> Dict[str, str]:
+    """Resolve one credential snapshot without changing the stored watch request."""
+    validate_feishu_auth_args(args)
+    if args.get("auth_config") or any(
+        key in args for key in ("user_access_token", "user_key", "plugin_id", "plugin_secret")
+    ):
+        raise InvalidArgumentError(
+            "OAuth references cannot be combined with explicit project credentials."
+        )
+    reference = validate_oauth_ref(args[OAUTH_REF_ARG], ctx.user.user_id, platform="feishu_project")
+    provider = ExternalFeishuToken(reference, ctx.api_key or "")
+    credentials = await asyncio.to_thread(provider.get_credentials)
+    account = credentials.get("account")
+    user_key = account.get("id") if isinstance(account, dict) else None
+    if not isinstance(user_key, str) or not user_key.strip():
+        raise InternalError("External OAuth returned no project user key.")
+    return {"user_access_token": credentials["access_token"], "user_key": user_key.strip()}
+
+
 def is_external_feishu_auth(state: Optional[Dict[str, Any]]) -> bool:
     return isinstance(state, dict) and state.get("provider") == EXTERNAL_FEISHU_PROVIDER
 
 
 class ExternalFeishuToken:
-    """Cache only access tokens, within one execution; never refresh OAuth locally."""
+    """Cache access credentials within one execution; never refresh OAuth locally."""
 
     def __init__(self, reference: Dict[str, str], api_key: str):
         self._url = external_auth_url()
@@ -134,16 +155,19 @@ class ExternalFeishuToken:
         self._api_key = api_key
         self._client = ConnectorClient("", "", account_id=reference["account_id"])
         self._lock = Lock()
-        self._token = ""
+        self._credentials: Dict[str, Any] = {}
         self._valid_until = 0.0
         self._error: Optional[InternalError] = None
 
     def get_token(self) -> str:
+        return self.get_credentials()["access_token"]
+
+    def get_credentials(self) -> Dict[str, Any]:
         with self._lock:
             if self._error is not None:
                 raise self._error
-            if self._token and time.time() < self._valid_until:
-                return self._token
+            if self._credentials and time.time() < self._valid_until:
+                return self._credentials
             try:
                 data = self._client.get_oauth_access_token(
                     self._url, self._api_key, self._reference
@@ -166,9 +190,9 @@ class ExternalFeishuToken:
                     "External OAuth returned an invalid or expired access token."
                 )
                 raise self._error
-            self._token = token.strip()
+            self._credentials = {**data, "access_token": token.strip()}
             self._valid_until = min(now + 60, expires_at - 30) if expires_at else now + 60
-            return self._token
+            return self._credentials
 
 
 def check_feishu_auth() -> None:
