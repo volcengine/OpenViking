@@ -585,3 +585,68 @@ export async function updateUserMemorySettings(
     }),
   )
 }
+
+export type AdminGroup = { group_id: string; member_count: number }
+
+const groupsUrl = '/api/v1/admin/accounts/{account_id}/groups'
+
+export function fetchAdminGroups(connection: AdminConnection) {
+  return getOvResult<AdminGroup[]>(
+    createAdminClient(connection).get({
+      url: groupsUrl,
+      path: { account_id: connection.accountId },
+    }),
+  )
+}
+
+export function createAdminGroup(connection: AdminConnection, groupId: string) {
+  return getOvResult<AdminGroup>(
+    createAdminClient(connection).post({
+      url: groupsUrl,
+      path: { account_id: connection.accountId },
+      headers: { 'Content-Type': 'application/json' },
+      body: { group_id: groupId },
+    }),
+  )
+}
+
+export function deleteAdminGroup(connection: AdminConnection, groupId: string) {
+  return getOvResult<{ deleted: boolean }>(
+    createAdminClient(connection).delete({
+      url: `${groupsUrl}/{group_id}`,
+      path: { account_id: connection.accountId, group_id: groupId },
+    }),
+  )
+}
+
+export function fetchAdminGroupMembers(
+  connection: AdminConnection,
+  groupId: string,
+) {
+  return getOvResult<{ group_id: string; members: string[] }>(
+    createAdminClient(connection).get({
+      url: `${groupsUrl}/{group_id}/members`,
+      path: { account_id: connection.accountId, group_id: groupId },
+    }),
+  )
+}
+
+export function updateAdminGroupMember(
+  connection: AdminConnection,
+  groupId: string,
+  userId: string,
+  add: boolean,
+) {
+  const client = createAdminClient(connection)
+  const options = {
+    url: `${groupsUrl}/{group_id}/members/{user_id}`,
+    path: {
+      account_id: connection.accountId,
+      group_id: groupId,
+      user_id: userId,
+    },
+  }
+  return getOvResult<unknown>(
+    add ? client.put(options) : client.delete(options),
+  )
+}

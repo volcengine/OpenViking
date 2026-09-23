@@ -1171,6 +1171,12 @@ async def add_resource(
     For an agent skill, use add_skill instead: a skill added here is stored as an ordinary
     resource and never becomes an installed skill.
 
+    Where it goes: ``viking://resources/`` is shared with the whole account and is the
+    default when ``to`` and ``parent`` are empty (unless a default add target is
+    configured). ``viking://~/resources/`` is the caller's own resources, visible only to
+    them; pass ``parent="viking://~/resources"`` to store it there. If the user has not
+    said, ask whether the resource is personal or shared with the account.
+
     Remote URL: pass ``path`` as an http(s)://, git@, ssh://, or git:// URL. A sitemap /
     RSS / Atom URL ingests the WHOLE site as one resource tree; pass ``args={"site": true}``
     to force whole-site ingestion from a bare domain.
@@ -1195,11 +1201,13 @@ async def add_resource(
         processing_mode: "semantic_and_vectors" for normal semantic processing, or
             "vectors_only" to skip semantic understanding and only build vector indexes.
         to: Exact final URI including the leaf name (e.g.
-            "viking://resources/volcengine/OpenViking"). Written verbatim; an existing
+            "viking://resources/volcengine/OpenViking", or
+            "viking://~/resources/OpenViking" for a personal copy). Written verbatim; an existing
             target is synced to match the new source, so visible entries it does not
             contain are deleted. Required when ``add_type`` is set.
         parent: Existing directory to store the resource under, for remote or
-            local-file imports; the leaf name comes from the source. Never overwrites
+            local-file imports (e.g. "viking://~/resources" or "viking://resources");
+            the leaf name comes from the source. Never overwrites
             — a collision reserves the next free name ("name_1", "name_2", ...) and
             returns a warning. Mutually exclusive with ``to``; not supported when
             ``add_type`` is set. Leaving both empty derives the directory and the name

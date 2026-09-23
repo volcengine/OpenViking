@@ -20,6 +20,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from openviking.connector.auth import (
+    OAUTH_REF_ARG,
+    feishu_auth_scope,
+    is_external_feishu_auth,
+    validate_feishu_auth_args,
+)
 from openviking.core.namespace import is_content_root_uri
 from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
@@ -296,6 +302,7 @@ class ResourceService:
                 "lark_file",
                 FEISHU_ACCESS_TOKEN_ARG,
                 FEISHU_REFRESH_TOKEN_ARG,
+                OAUTH_REF_ARG,
                 "parser_backend",
                 "resolved_extension",
                 "understanding_response_id",
@@ -462,6 +469,7 @@ class ResourceService:
             )
 
         normalized = dict(args)
+        validate_feishu_auth_args(normalized)
         raw_parse_mode = normalized.pop("parse_mode", ParseMode.DEFAULT)
         try:
             parse_mode = normalize_parse_mode(raw_parse_mode)
@@ -761,11 +769,6 @@ class ResourceService:
                 internal_kwargs["create_parent"] = True
             if msg.source_name is not None:
                 internal_kwargs["source_name"] = msg.source_name
-            auth_kwargs, watch_auth_state = self._restore_source_task_auth(
-                msg,
-                task_auth or {},
-            )
-            internal_kwargs.update(auth_kwargs)
             if feishu_prepared:
                 from openviking.service.task_tracker import get_task_tracker
 
@@ -814,36 +817,51 @@ class ResourceService:
 
                 internal_kwargs[PREPARED_FILE_ID_ARG] = msg.understanding_file_id
             try:
-                result = await self._execute_resource_ingestion(
+                async with feishu_auth_scope(
+                    self._connector,
                     path=msg.path,
                     ctx=ctx,
-                    to=target_uri,
-                    parent=parent_uri,
-                    to_is_directory=msg.to_is_directory,
-                    reason=msg.reason,
-                    instruction=msg.instruction,
-                    defer_post_processing=False,
-                    timeout=msg.timeout,
-                    build_index=msg.build_index,
-                    summarize=msg.summarize,
-                    processing_mode=msg.processing_mode,
-                    parse_mode=msg.parse_mode,
-                    watch_interval=msg.watch_interval,
-                    is_active=msg.is_active,
-                    manage_watch=not msg.skip_watch_management,
-                    acl=msg.acl,
-                    tags=msg.tags,
-                    tag_mode=msg.tag_mode,
-                    allow_local_path_resolution=msg.allow_local_path_resolution,
-                    enforce_public_remote_targets=msg.enforce_public_remote_targets,
-                    resource_lock=resource_lock,
-                    stage_callback=stage_callback,
-                    watch_auth_state=watch_auth_state,
-                    prepared_resource=prepared_resource,
-                    internal_task=msg.internal_task,
-                    on_watch_ready=lambda task_id: setattr(msg, "watch_task_id", task_id),
-                    **internal_kwargs,
-                )
+                    args=internal_kwargs,
+                    state=task_auth,
+                    prepared=(
+                        msg.understanding_response_id is not None
+                        or msg.understanding_file_id is not None
+                    ),
+                ) as auth_state:
+                    auth_kwargs, watch_auth_state = self._restore_source_task_auth(
+                        msg, auth_state or {}
+                    )
+                    internal_kwargs.update(auth_kwargs)
+                    result = await self._execute_resource_ingestion(
+                        path=msg.path,
+                        ctx=ctx,
+                        to=target_uri,
+                        parent=parent_uri,
+                        to_is_directory=msg.to_is_directory,
+                        reason=msg.reason,
+                        instruction=msg.instruction,
+                        defer_post_processing=False,
+                        timeout=msg.timeout,
+                        build_index=msg.build_index,
+                        summarize=msg.summarize,
+                        processing_mode=msg.processing_mode,
+                        parse_mode=msg.parse_mode,
+                        watch_interval=msg.watch_interval,
+                        is_active=msg.is_active,
+                        manage_watch=not msg.skip_watch_management,
+                        acl=msg.acl,
+                        tags=msg.tags,
+                        tag_mode=msg.tag_mode,
+                        allow_local_path_resolution=msg.allow_local_path_resolution,
+                        enforce_public_remote_targets=msg.enforce_public_remote_targets,
+                        resource_lock=resource_lock,
+                        stage_callback=stage_callback,
+                        watch_auth_state=watch_auth_state,
+                        prepared_resource=prepared_resource,
+                        internal_task=msg.internal_task,
+                        on_watch_ready=lambda task_id: setattr(msg, "watch_task_id", task_id),
+                        **internal_kwargs,
+                    )
             except BaseException:
                 if msg.cleanup_empty_target_on_failure and resource_lock is not None:
                     await self._cleanup_reserved_target_if_empty(
@@ -891,6 +909,8 @@ class ResourceService:
         if not task_auth:
             return {}, None
         creating_watch = msg.watch_interval > 0 and not msg.skip_watch_management
+        if is_external_feishu_auth(task_auth):
+            return {}, task_auth if msg.watch_interval > 0 else None
         if is_git_http_auth_state(task_auth):
             auth_config = git_http_auth_config_from_state(task_auth, msg.path)
             watch_auth_state = dict(task_auth) if creating_watch else None
@@ -1926,15 +1946,19 @@ class ResourceService:
             path = require_remote_resource_source(path)
             kwargs.setdefault("request_validator", ensure_public_remote_target)
 
-        source_plan = await self._prepare_standard_source_plan(
-            path=path,
-            ctx=ctx,
-            mode=mode,
-            allow_local_path_resolution=allow_local_path_resolution,
-            processor_kwargs=kwargs,
-            watch_auth_state=normalized_args.watch_auth_state,
-            shared_source=shared_source,
-        )
+        async with feishu_auth_scope(
+            connector, path=path, ctx=ctx, args=kwargs, state=normalized_args.watch_auth_state
+        ) as watch_auth_state:
+            normalized_args.watch_auth_state = watch_auth_state
+            source_plan = await self._prepare_standard_source_plan(
+                path=path,
+                ctx=ctx,
+                mode=mode,
+                allow_local_path_resolution=allow_local_path_resolution,
+                processor_kwargs=kwargs,
+                watch_auth_state=normalized_args.watch_auth_state,
+                shared_source=shared_source,
+            )
         if source_plan is not None:
             result = await self._enqueue_source_plan(
                 source_plan,

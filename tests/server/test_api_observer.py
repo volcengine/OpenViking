@@ -19,6 +19,21 @@ async def test_observer_queue(client: httpx.AsyncClient):
     assert "status" in result
 
 
+async def test_observer_queue_structured(client: httpx.AsyncClient):
+    """GET /api/v1/observer/queue?format=json should return structured status."""
+    resp = await client.get("/api/v1/observer/queue", params={"format": "json"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert "status" in result
+    assert isinstance(result["status"], dict)
+    assert "queues" in result["status"]
+    assert isinstance(result["status"]["queues"], list)
+    assert "summary" in result["status"]
+    assert isinstance(result["status"]["summary"], dict)
+
+
 async def test_observer_vikingdb(client: httpx.AsyncClient):
     """GET /api/v1/observer/vikingdb should return VikingDB status."""
     resp = await client.get("/api/v1/observer/vikingdb")
@@ -52,3 +67,16 @@ async def test_observer_system(client: httpx.AsyncClient):
     assert "errors" in result
     assert "components" in result
     assert isinstance(result["components"], dict)
+
+
+async def test_observer_system_structured(client: httpx.AsyncClient):
+    """GET /api/v1/observer/system?format=json should include structured component payloads."""
+    resp = await client.get("/api/v1/observer/system", params={"format": "json"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert "components" in result
+    queue = result["components"]["queue"]
+    assert "status" in queue
+    assert isinstance(queue["status"], dict)

@@ -1915,6 +1915,18 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     assert "default" in account_ids
     assert acct in account_ids
 
+    # `query` is a case-insensitive substring match on the account id.
+    fragment = acct[:5].upper()  # "ACME_", proving the match ignores case
+    resp = await admin_client.get(
+        "/api/v1/admin/accounts",
+        params={"query": fragment},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200
+    queried_ids = {a["account_id"] for a in resp.json()["result"]}
+    assert acct in queried_ids
+    assert "default" not in queried_ids
+
 
 async def test_list_accounts_without_watcher_reads_only_accounts_registry(
     lightweight_admin_client: httpx.AsyncClient,

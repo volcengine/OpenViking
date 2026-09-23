@@ -11,10 +11,16 @@
  * newest user message.
  *
  * Do not load this together with the openviking extension — they would both
- * register `viking_*` tools and both sync the same OV session. As a backstop
- * this one stands down as soon as it sees a `viking_search` registered from
- * another extension's directory, which is re-checked on every event boundary
- * because that extension registers its tools only after a network round trip.
+ * register overlapping tools and both sync the same OV session. As a backstop
+ * this one stands down as soon as it sees the peer, by either of two signals:
+ * a search tool registered from another extension's directory (`viking_search`
+ * before 0.4, `openviking_search` from 0.4 on), or the
+ * `globalThis.__OPENVIKING_PI_EXTENSION__` marker the peer sets once it is
+ * connected and not bypassed. The marker is what covers the dangerous case:
+ * when `/mcp` answers 401/403 or the handshake times out the peer registers no
+ * tool at all and still writes the OV session, so no tool name is there to see.
+ * Both signals are re-checked on every event boundary because the peer arrives
+ * only after a network round trip.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { dirname } from "node:path";
@@ -36,8 +42,18 @@ import {
   STATUS_CUSTOM_TYPE,
 } from "./lib/context-window-core.mjs";
 
-/** The tool whose presence means the non-experimental extension is loaded. */
-const COEXISTENCE_PROBE_TOOL = "viking_search";
+/**
+ * Tools whose presence may mean the non-experimental extension is loaded.
+ * It registers `openviking_search` from 0.4 on and `viking_search` before that,
+ * and a pre-0.4 build may still be installed, so both names count.
+ */
+const COEXISTENCE_PROBE_TOOLS = new Set(["viking_search", "openviking_search"]);
+
+/** The probe name this extension registers itself (see `tools.ts`). */
+const OWN_PROBE_TOOL = "viking_search";
+
+/** Set by the non-experimental extension once it is connected and not bypassed. */
+const PEER_GLOBAL_MARKER = "__OPENVIKING_PI_EXTENSION__";
 
 /**
  * Static system-prompt guidance (plan §5). Identical for the whole session, so
@@ -146,25 +162,39 @@ export default async function (pi: ExtensionAPI) {
   const ownDir = dirname(fileURLToPath(import.meta.url));
 
   /**
-   * True when a *different* extension owns `viking_search`.
+   * True when the non-experimental extension is present.
    *
-   * A one-shot probe at startup cannot work: the other extension registers its
-   * tools only after an awaited health check, so at the moment our own start()
-   * begins the tool is provably not there yet. So the probe compares the
-   * registering extension's `sourceInfo.path` with ours and is re-run on every
-   * event boundary — pi's tool registry is keyed by name, so once the peer
-   * registers, `viking_search` carries its path and not ours.
+   * A one-shot probe at startup cannot work: the other extension arrives only
+   * after an awaited health check, so at the moment our own start() begins
+   * there is provably nothing to see. Hence this is re-run on every event
+   * boundary, and it looks at two independent signals.
+   *
+   * The global marker comes first because it is the only one that survives a
+   * failed handshake: with `/mcp` answering 401/403 the peer registers no tool
+   * and still syncs the OV session, which is precisely when double-writing
+   * hurts. This extension never sets the marker, so seeing it means the peer.
+   *
+   * Otherwise compare the registering extension's `sourceInfo.path` with ours.
+   * pi's tool registry is keyed by name, so once the peer registers, its search
+   * tool carries its path and not ours.
    */
   const peerOwnsToolSurface = (): boolean => {
     try {
+      if ((globalThis as any)[PEER_GLOBAL_MARKER]) return true;
       const tools = (pi as any).getAllTools?.();
       if (!Array.isArray(tools)) return false;
       for (const tool of tools) {
-        if (tool?.name !== COEXISTENCE_PROBE_TOOL) continue;
+        const name = String(tool?.name ?? "");
+        if (!COEXISTENCE_PROBE_TOOLS.has(name)) continue;
         const path = String(tool?.sourceInfo?.path ?? tool?.sourceInfo?.baseDir ?? "");
-        // No sourceInfo (an older pi, or a synthetic tool): fall back to "any
-        // viking_search we did not register ourselves is a peer's".
-        if (!path) return !toolsRegistered;
+        if (!path) {
+          // No sourceInfo (an older pi, or a synthetic tool). A name this
+          // extension never registers can only be the peer's; for our own name
+          // fall back to "one we did not register ourselves is a peer's".
+          if (name !== OWN_PROBE_TOOL || !toolsRegistered) return true;
+          // Ours, so keep scanning — a peer's tool may come later in the list.
+          continue;
+        }
         if (path !== ownDir && !path.startsWith(ownDir + "/")) return true;
       }
       return false;

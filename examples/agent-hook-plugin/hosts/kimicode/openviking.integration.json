@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "openviking-memory",
+  "version": "0.5.0",
+  "clients": [
+    "kimicode"
+  ],
+  "capabilities": [
+    "hooks",
+    "mcp"
+  ]
+}

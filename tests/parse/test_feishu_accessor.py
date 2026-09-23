@@ -1129,6 +1129,168 @@ def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
     assert not resource.path.parent.exists()
 
 
+@pytest.mark.parametrize("path_type", ["mindnote", "mindnotes"])
+def test_mindnote_url_is_supported(path_type):
+    accessor = FeishuAccessor()
+    url = f"https://example.feishu.cn/{path_type}/mindnote_token"
+
+    assert accessor.can_handle(url)
+    assert accessor._parse_feishu_url(url) == ("mindnote", "mindnote_token")
+
+
+def _mindnote_node(node_id, text, parent_id=None, **extra):
+    node = {
+        "node_id": node_id,
+        "texts": [{"text": {"content": text}}],
+        **extra,
+    }
+    if parent_id is not None:
+        node["parent_id"] = parent_id
+    return node
+
+
+@pytest.mark.parametrize(
+    ("nodes", "expected"),
+    [
+        (
+            [
+                _mindnote_node("root", "Root"),
+                _mindnote_node("child", "Child", parent_id="root"),
+                _mindnote_node("orphan", "Orphan", parent_id="missing"),
+            ],
+            "# Title\n\n- Root\n  - Child\n- Orphan",
+        ),
+        (
+            [
+                _mindnote_node("self", "Self", parent_id="self"),
+                _mindnote_node("child", "Child", parent_id="self"),
+            ],
+            "# Title\n\n- Self\n  - Child",
+        ),
+        (
+            [
+                _mindnote_node("a", "A", parent_id="b"),
+                _mindnote_node("b", "B", parent_id="a"),
+            ],
+            "# Title\n\n- A\n  - B",
+        ),
+        (
+            [
+                _mindnote_node("dup", "First"),
+                _mindnote_node("dup", "Second"),
+                _mindnote_node("child", "Child", parent_id="dup"),
+            ],
+            "# Title\n\n- First\n  - Child\n- Second",
+        ),
+    ],
+)
+def test_render_mindnote_handles_noncanonical_tree_shapes(nodes, expected):
+    assert FeishuAccessor._render_mindnote(nodes, "Title") == expected
+
+
+def test_mindnote_preflight_uses_tenant_token_without_user_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    nodes = {
+        "data": {
+            "nodes": [
+                _mindnote_node("root", "Tenant Mindnote")
+            ]
+        }
+    }
+    request = MagicMock(return_value=_FakeMediaResponse(json.dumps(nodes).encode()))
+    accessor = FeishuAccessor()
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request))
+
+    identity = asyncio.run(
+        accessor.preflight_source("https://example.feishu.cn/mindnote/mindnote_token")
+    )
+
+    assert identity.source_name == "Tenant Mindnote"
+    node_request = request.call_args.args[0]
+    assert node_request.uri == "/open-apis/mindnote/v1/mindnotes/mindnote_token/nodes"
+    assert node_request.token_types == {"tenant"}
+    assert len(request.call_args.args) == 1
+
+
+def test_access_mindnote_preserves_user_token_for_media(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    nodes = {
+        "data": {
+            "nodes": [
+                _mindnote_node("root", "Launch Plan"),
+                {
+                    "node_id": "child",
+                    "parent_id": "root",
+                    "texts": [
+                        {
+                            "element_type": "link",
+                            "link": {"content": "Spec", "url": "https://example.com/spec"},
+                        }
+                    ],
+                    "highlight": "yellow",
+                    "images": [{"token": "image_token"}],
+                },
+            ]
+        }
+    }
+    request = MagicMock(
+        side_effect=[
+            _FakeMediaResponse(json.dumps(nodes).encode()),
+            _FakeMediaResponse(b"\x89PNG\r\n\x1a\nimage"),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=True)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request))
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/mindnote/mindnote_token",
+            feishu_access_token="u-test",
+        )
+    )
+
+    try:
+        assert resource.path.read_text(encoding="utf-8") == (
+            "# Launch Plan\n\n"
+            "- Launch Plan\n"
+            '  - <mark data-color="yellow">[Spec](<https://example.com/spec>)</mark>\n'
+            "    ![mindnote image](images/image_token.png)"
+        )
+        assert (resource.path.parent / "images" / "image_token.png").read_bytes() == (
+            b"\x89PNG\r\n\x1a\nimage"
+        )
+        node_request, media_request = [call.args[0] for call in request.call_args_list]
+        assert node_request.uri == "/open-apis/mindnote/v1/mindnotes/mindnote_token/nodes"
+        assert media_request.uri == "/open-apis/drive/v1/medias/image_token/download"
+        assert node_request.token_types == media_request.token_types == {"user"}
+        assert all(call.args[1].user_access_token == "u-test" for call in request.call_args_list)
+    finally:
+        resource.cleanup()
+
+
+def test_wiki_mindnote_uses_resolved_object_token(monkeypatch):
+    accessor = FeishuAccessor()
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_wiki_node",
+        MagicMock(return_value=("mindnote", "mindnote_token", "Wiki Mindnote")),
+    )
+    parse = MagicMock(return_value=("# Mindnote\n\n- Root", "Root"))
+    monkeypatch.setattr(accessor, "_parse_mindnote", parse)
+
+    document = asyncio.run(
+        accessor._fetch_document(
+            "https://example.feishu.cn/wiki/wiki_token",
+            feishu_access_token="u-test",
+        )
+    )
+
+    parse.assert_called_once_with("mindnote_token", "u-test")
+    assert document.doc_type == "mindnote"
+    assert document.title == "Wiki Mindnote"
+
+
 def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     accessor = FeishuAccessor()
@@ -1136,6 +1298,7 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         "_parse_docx": MagicMock(return_value=("docx body", "Doc")),
         "_parse_sheets": MagicMock(return_value=("sheet body", "Sheet")),
         "_parse_bitable": MagicMock(return_value=("base body", "Base")),
+        "_parse_mindnote": MagicMock(return_value=("mindnote body", "Mindnote")),
     }
     for name, handler in handlers.items():
         monkeypatch.setattr(accessor, name, handler)
@@ -1191,6 +1354,12 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     )
     sheets = asyncio.run(accessor._fetch_document("https://example.feishu.cn/sheets/sht_token"))
     base = asyncio.run(accessor._fetch_document("https://example.feishu.cn/base/app_token"))
+    mindnote = asyncio.run(
+        accessor._fetch_document(
+            "https://example.feishu.cn/mindnote/mindnote_token",
+            feishu_access_token="u-test",
+        )
+    )
     monkeypatch.setattr(
         accessor,
         "_resolve_wiki_node",
@@ -1203,12 +1372,14 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         docx.doc_type,
         sheets.doc_type,
         base.doc_type,
+        mindnote.doc_type,
         wiki.doc_type,
     ) == (
         "doc",
         "docx",
         "sheets",
         "base",
+        "mindnote",
         "base",
     )
     assert legacy_doc.title == "Legacy Doc"
@@ -1219,6 +1390,7 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     assert handlers["_parse_sheets"].call_args.kwargs["media_download_extras"] is (
         sheets.media_download_extras
     )
+    handlers["_parse_mindnote"].assert_called_once_with("mindnote_token", "u-test")
     assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
 
     monkeypatch.setattr(accessor, "_probe_docx_document", MagicMock())

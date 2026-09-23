@@ -145,7 +145,7 @@ export function buildOverviewMessage(overview, firstKeptTs = 0, budget = DEFAULT
     role: "user",
     content:
       `${OVERVIEW_MARKER} Earlier conversation was archived to OpenViking and summarized below. ` +
-      `Use viking_search / viking_archive_expand for details.\n\n${body}`,
+      `Use openviking_search for details.\n\n${body}`,
     timestamp,
   };
 }

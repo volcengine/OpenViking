@@ -536,9 +536,15 @@ class NewAPIKeyManager:
         name_filter: str | None = None,
         limit: int | None = None,
         page: int = 1,
+        query_filter: str | None = None,
     ) -> list:
         """List all accounts."""
-        return self._legacy.get_accounts(name_filter=name_filter, limit=limit, page=page)
+        return self._legacy.get_accounts(
+            name_filter=name_filter,
+            limit=limit,
+            page=page,
+            query_filter=query_filter,
+        )
 
     def get_users(
         self,

@@ -623,6 +623,7 @@ ov --sudo admin create-account acme-private --admin alice \
 | name | str | 否 | null | 按账户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
+| query | str | 否 | null | 对账户 ID 做不区分大小写的子串匹配 |
 
 结果按创建顺序返回。
 
@@ -641,6 +642,10 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
 
 # 带过滤条件（通配符 name 匹配）
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
+  -H "X-API-Key: <root-key>"
+
+# 不区分大小写的子串搜索
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?query=acme" \
   -H "X-API-Key: <root-key>"
 
 # 分页（每页 50，取第 2 页）

@@ -11,6 +11,10 @@ import threading
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
+from openviking.connector.auth import (
+    is_external_feishu_auth,
+    restore_feishu_request,
+)
 from openviking.connector.delegate import ConnectorDelegate
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
@@ -371,7 +375,11 @@ class WatchScheduler:
                     processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
                     processor_kwargs.pop("build_index", None)
                     processor_kwargs.pop("summarize", None)
-                    if is_feishu_auth_state(auth_state):
+                    if is_external_feishu_auth(auth_state):
+                        ctx.api_key, processor_kwargs["args"] = await restore_feishu_request(
+                            self._resource_service._connector, auth_state, path=task.path, ctx=ctx
+                        )
+                    elif is_feishu_auth_state(auth_state):
                         try:
                             auth_state = await self._prepare_feishu_auth_state(task, auth_state)
                             processor_kwargs["feishu_access_token"] = auth_state["access_token"]

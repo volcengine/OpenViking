@@ -74,6 +74,7 @@ Task: <describe the plugin addition, fix, or maintenance change>
 | 通过配置文件安装 hook 和 MCP；公共调度足够表达生命周期 | 在 `agent-hook-plugin/hosts/` 增加适配器及宿主配置 | [agent-hook-plugin](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/README.md) |
 | 原生插件要求独立 manifest、目录和生命周期入口 | 独立插件目录，入口调用共享运行时 | [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md)、[Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) |
 | 以宿主 SDK 回调运行，需要常驻状态或 dispose/idle 回调 | 使用宿主扩展包，复用共享能力，明确自己的会话调度 | [OpenCode](https://github.com/volcengine/OpenViking/blob/main/examples/opencode-plugin/README.md)、[DSH](https://github.com/volcengine/OpenViking/blob/main/examples/dsh-memory-plugin/README.md) |
+| 宿主能注册原生工具，但自身没有 MCP 支持 | 使用官方 MCP 客户端，把服务端的 `tools/list` 注册成加 `openviking_` 前缀的宿主原生工具；不得自行维护工具目录 | [pi](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md) |
 | 只有 MCP，没有自动注入或完整会话记录 | 交付 MCP-only 集成，明确能力范围 | [Agent Plugins](https://github.com/volcengine/OpenViking/blob/main/agent-plugins/README.md) |
 
 只因新增宿主名称，不应复制 Claude Code 或 Codex 的整个目录。反过来，如果宿主有独立的会话状态机，也不应不断往公共 dispatcher 加 `isFoo`、`specialStop` 一类开关来容纳它。

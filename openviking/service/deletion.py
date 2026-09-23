@@ -361,7 +361,7 @@ class DeletionService:
         agfs = self._service.viking_fs._async_agfs
         path = f"/local/{account_id}"
         try:
-            await agfs.rm(path, recursive=True)
+            await agfs.rm(path, recursive=True, auto_pathlock=False)
         except Exception as exc:
             if not is_not_found_error(exc):
                 raise

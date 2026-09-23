@@ -14,5 +14,8 @@
   },
   "devDependencies": {
     "vitepress": "1.6.4"
+  },
+  "dependencies": {
+    "ogl": "^1.0.11"
   }
 }

@@ -155,6 +155,11 @@ type WaitProcessedOptions struct {
 	Timeout *float64 `json:"timeout,omitempty"`
 }
 
+// ObserverStatusOptions controls observer status formatting.
+type ObserverStatusOptions struct {
+	Format string
+}
+
 // ListWatchesOptions controls ListWatches.
 type ListWatchesOptions struct {
 	ActiveOnly bool

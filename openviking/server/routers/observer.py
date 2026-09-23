@@ -10,7 +10,9 @@ Mirrors SDK's client.observer API:
 - /api/v1/observer/system - System overall status
 """
 
-from fastapi import APIRouter, Depends
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -45,68 +47,89 @@ def _system_to_dict(status: SystemStatus) -> dict:
 @router.get("/queue")
 async def observer_queue(
     _ctx: RequestContext = Depends(get_request_context),
+    format: Literal["table", "json"] = Query(
+        "table", description="Observer status representation format"
+    ),
 ):
     """Get queue system status."""
     service = get_service()
-    component = service.debug.observer.queue
+    component = service.debug.observer.get_queue_status(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/vikingdb")
 async def observer_vikingdb(
     ctx: RequestContext = Depends(get_request_context),
+    format: Literal["table", "json"] = Query(
+        "table", description="Observer status representation format"
+    ),
 ):
     """Get VikingDB status."""
     service = get_service()
-    component = service.debug.observer.vikingdb(ctx=ctx)
+    component = service.debug.observer.get_vikingdb_status(ctx=ctx, format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/models")
 async def observer_models(
     _ctx: RequestContext = Depends(get_request_context),
+    format: Literal["table", "json"] = Query(
+        "table", description="Observer status representation format"
+    ),
 ):
     """Get models status (VLM, Embedding, Rerank)."""
     service = get_service()
-    component = service.debug.observer.models
+    component = service.debug.observer.get_models_status(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/lock")
 async def observer_lock(
     _ctx: RequestContext = Depends(get_request_context),
+    format: Literal["table", "json"] = Query(
+        "table", description="Observer status representation format"
+    ),
 ):
     """Get lock system status."""
     service = get_service()
-    component = service.debug.observer.lock
+    component = service.debug.observer.get_lock_status(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/retrieval")
 async def observer_retrieval(
     _ctx: RequestContext = Depends(get_request_context),
+    format: Literal["table", "json"] = Query(
+        "table", description="Observer status representation format"
+    ),
 ):
     """Get retrieval quality metrics."""
     service = get_service()
-    component = service.debug.observer.retrieval
+    component = service.debug.observer.get_retrieval_status(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/filesystem")
 async def observer_filesystem(
     _ctx: RequestContext = Depends(get_request_context),
+    format: Literal["table", "json"] = Query(
+        "table", description="Observer status representation format"
+    ),
 ):
     """Get filesystem operation metrics."""
     service = get_service()
-    component = service.debug.observer.filesystem
+    component = service.debug.observer.get_filesystem_status(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/system")
 async def observer_system(
     ctx: RequestContext = Depends(get_request_context),
+    format: Literal["table", "json"] = Query(
+        "table", description="Observer status representation format"
+    ),
 ):
     """Get system overall status (includes all components)."""
     service = get_service()
-    status = service.debug.observer.system(ctx=ctx)
+    status = service.debug.observer.system(ctx=ctx, format=format)
     return Response(status="ok", result=_system_to_dict(status))

@@ -375,6 +375,46 @@ class TestObserverService:
         assert status.has_errors is True
         assert status.status == "Not initialized"
 
+    def test_queue_json_status_without_dependency_is_structured(self):
+        """Test queue json format returns a structured payload when uninitialized."""
+        service = ObserverService()
+        with patch("openviking.service.debug_service.get_queue_manager", side_effect=RuntimeError()):
+            status = service.get_queue_status(format="json")
+        assert isinstance(status, ComponentStatus)
+        assert status.name == "queue"
+        assert status.is_healthy is False
+        assert status.has_errors is True
+        assert status.status == {
+            "queues": [],
+            "summary": {
+                "pending": 0,
+                "in_progress": 0,
+                "processed": 0,
+                "requeued": 0,
+                "errors": 0,
+                "total": 0,
+            },
+            "error": "Not initialized",
+        }
+
+    def test_vikingdb_json_status_without_dependency_is_structured(self):
+        """Test vikingdb json format returns a structured payload when uninitialized."""
+        service = ObserverService()
+        status = service.get_vikingdb_status(format="json")
+        assert isinstance(status, ComponentStatus)
+        assert status.name == "vikingdb"
+        assert status.is_healthy is False
+        assert status.has_errors is True
+        assert status.status == {
+            "collections": [],
+            "summary": {
+                "index_count": 0,
+                "vector_count": 0,
+                "collection_count": 0,
+            },
+            "error": "Not initialized",
+        }
+
     def test_models_property_without_dependency(self):
         """Test models property returns unhealthy ComponentStatus when config is None."""
         service = ObserverService()
@@ -384,6 +424,53 @@ class TestObserverService:
         assert status.is_healthy is False
         assert status.has_errors is True
         assert status.status == "Not initialized"
+
+    def test_models_json_status_without_dependency_is_structured(self):
+        """Test models json format returns a structured payload when uninitialized."""
+        service = ObserverService()
+        status = service.get_models_status(format="json")
+        assert isinstance(status, ComponentStatus)
+        assert status.name == "models"
+        assert status.is_healthy is False
+        assert status.has_errors is True
+        assert status.status == {
+            "vlm": [],
+            "embedding": [],
+            "rerank": [],
+            "error": "Not initialized",
+        }
+
+    def test_models_property_delegates_to_get_models_status(self):
+        """Test models property reuses the explicit status collection path."""
+        service = ObserverService()
+        expected = ComponentStatus(
+            name="models",
+            is_healthy=True,
+            has_errors=False,
+            status="table-status",
+        )
+
+        with patch.object(service, "get_models_status", return_value=expected) as mock_get_status:
+            status = service.models
+
+        assert status is expected
+        mock_get_status.assert_called_once_with()
+
+    def test_lock_json_status_without_dependency_is_structured(self):
+        """Test lock json format returns a structured payload when uninitialized."""
+        service = ObserverService()
+        status = service.get_lock_status(format="json")
+        assert isinstance(status, ComponentStatus)
+        assert status.name == "lock"
+        assert status.is_healthy is False
+        assert status.has_errors is True
+        assert status.status == {
+            "active_locks": 0,
+            "waiting_locks": 0,
+            "stale_locks_removed": 0,
+            "conflict_count": 0,
+            "error": "Not initialized",
+        }
 
     def test_system_property_without_dependencies(self):
         """Test system property returns unhealthy SystemStatus when dependencies not set."""

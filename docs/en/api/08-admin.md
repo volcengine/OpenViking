@@ -707,6 +707,7 @@ List all workspaces (ROOT only).
 | name | str | No | null | Filter by account ID (wildcard `*` and `?` matching) |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
+| query | str | No | null | Case-insensitive substring match on the account ID |
 
 Results are returned in creation order.
 
@@ -725,6 +726,10 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
 
 # With filter (wildcard name matching)
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
+  -H "X-API-Key: <root-key>"
+
+# With case-insensitive substring search
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?query=acme" \
   -H "X-API-Key: <root-key>"
 
 # Paginated (second page of 50)

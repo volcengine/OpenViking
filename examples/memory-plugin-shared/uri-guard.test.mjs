@@ -101,12 +101,13 @@ test("buildGuardNotice names the plugin, the URI, the replacement and the way ou
 })
 
 test("evaluateUriGuard takes the host's own replacement tools and examples", () => {
+  // The shape pi's adapter passes in.
   const hints = {
-    read: { tool: "viking_read", example: (uri) => `viking_read(uri="${uri}", level="overview")` },
+    read: { tool: "openviking_read", example: (uri) => `openviking_read(uris=["${uri}"])` },
   }
   const decision = evaluateUriGuard("read", { path: "viking://resources/a.md" }, { hints })
-  assert.match(decision?.reason ?? "", /Use viking_read instead/)
-  assert.match(decision?.reason ?? "", /level="overview"/)
+  assert.match(decision?.reason ?? "", /Use openviking_read instead/)
+  assert.match(decision?.reason ?? "", /uris=\["viking:\/\/resources\/a\.md"\]/)
   assert.equal(evaluateUriGuard("glob", { pattern: "viking://resources/**" }, { hints }), null)
 })
 

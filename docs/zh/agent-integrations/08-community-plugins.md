@@ -47,6 +47,41 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md)。
 
+## Kimi Code 记忆集成
+
+源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+Kimi Code 集成是原生 managed plugin。它复用 OpenViking 的共享 Hook 运行时，只在适配层保留 Kimi 特有的事件映射、wire transcript 解码、输出格式和 commit 策略：
+
+- **UserPromptSubmit** 召回记忆，并输出 Kimi 可直接注入的原始文本。
+- **PreToolUse** 拒绝 Read/Glob/Grep 直接访问 `viking://` URI。
+- **Stop**、**PreCompact** 和 **SessionEnd** 增量捕获 `wire.jsonl` 回合；**Interrupt** 同步执行同一捕获流程，全部 OpenViking 请求共用 2 秒总预算。
+- 原生插件 manifest 提供 OpenViking MCP server，不修改 Kimi 的旧式配置文件。
+
+### 安装
+
+前置条件：Node.js 18+、正在运行的 OpenViking 服务，以及 Kimi Code CLI。
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness kimicode
+```
+
+GitHub 不可用的地区可使用 TOS 镜像：
+
+```bash
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
+  --harness kimicode --dist tos
+```
+
+安装器会在 `$KIMI_CODE_HOME/plugins/managed/openviking-memory/`
+下组装自包含运行时（Kimi home 默认为 `~/.kimi-code/`），并且只更新
+`plugins/installed.json` 中的 `openviking-memory` 记录，不动其他插件。
+重跑同一命令可升级；加上 `--uninstall` 只卸载该插件。
+
+已验证的宿主契约和版本见
+[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md)。
+
 ## AstrBot 插件
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 是一个多平台 IM Bot 框架，支持 QQ、Telegram、Discord、飞书等 20+ 平台。

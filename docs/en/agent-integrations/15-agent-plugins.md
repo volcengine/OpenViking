@@ -92,7 +92,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 | OpenCode | [OpenCode Plugin](./10-opencode.md) |
 | Cursor | [Cursor Memory Integration](./12-cursor.md) |
 | TRAE / TRAE CN | [TRAE Memory Integration](./13-trae.md) |
-| pi | [pi Coding Agent Extension](./11-pi.md) |
+| pi | [pi Coding Agent Extension](./11-pi.md) — uses the official MCP client and registers the server's tools natively |
 | OpenClaw | [OpenClaw Plugin](./03-openclaw.md) — separate install flow |
 | ZCode | [Community Integrations](./08-community-plugins.md) |
 
