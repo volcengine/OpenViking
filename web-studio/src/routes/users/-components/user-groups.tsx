@@ -111,12 +111,9 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
     <div className="flex flex-col gap-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold">
-            {t('groups.title')}{' '}
-            <Badge variant="secondary">{connection.accountId}</Badge>
-          </h1>
+          <h1 className="text-2xl font-semibold">{t('groups.title')}</h1>
           <p className="text-sm text-muted-foreground">
-            {t('groups.description', { account: connection.accountId })}
+            {t('groups.description')}
           </p>
         </div>
         <div className="flex gap-2">
@@ -225,9 +222,7 @@ export function UserGroups({ connection }: { connection: AdminConnection }) {
           >
             <DialogHeader>
               <DialogTitle>{t('groups.create')}</DialogTitle>
-              <DialogDescription>
-                {t('groups.description', { account: connection.accountId })}
-              </DialogDescription>
+              <DialogDescription>{t('groups.description')}</DialogDescription>
             </DialogHeader>
             <FieldGroup>
               <Field>
