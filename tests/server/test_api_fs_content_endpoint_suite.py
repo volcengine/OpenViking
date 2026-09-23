@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import httpx
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
-from openviking_cli.exceptions import ConflictError, FailedPreconditionError, NotFoundError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError, NotFoundError
 
 
 def _assert_error(
@@ -231,13 +231,13 @@ async def test_cp_existing_target_returns_conflict(app, service, monkeypatch):
     _assert_error(response, status_code=409, error_code="CONFLICT")
 
 
-async def test_cp_directory_without_recursive_returns_precondition(
+async def test_cp_directory_without_recursive_returns_invalid_argument(
     app,
     service,
     monkeypatch,
 ):
     async def fake_cp(*args, **kwargs):
-        raise FailedPreconditionError("directory copy requires recursive")
+        raise InvalidArgumentError("directory copy requires recursive")
 
     monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
     response = await _request_with_handler(
@@ -249,7 +249,7 @@ async def test_cp_directory_without_recursive_returns_precondition(
             "to_uri": "viking://resources/target",
         },
     )
-    _assert_error(response, status_code=412, error_code="FAILED_PRECONDITION")
+    _assert_error(response, status_code=400, error_code="INVALID_ARGUMENT")
 
 
 async def test_cp_internal_rollback_error_is_redacted(app, service, monkeypatch):

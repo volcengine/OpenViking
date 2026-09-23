@@ -113,12 +113,10 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 }
 ```
 
-`enabled` is the account override from
-`/local/{account_id}/_system/setting.json`, or
-`server.agent_evolution.enabled` when no override exists. Session commits read
-this effective value without restarting the server.
+`enabled` resolves the Account runtime override, Cluster runtime override, then
+the startup value from `server.agent_evolution.enabled`.
 
-The existing update endpoint name is unchanged:
+The existing endpoint remains as a deprecated compatibility adapter:
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -129,9 +127,9 @@ Content-Type: application/json
 
 ### account_settings
 
-ROOT can manage any account and ADMIN can manage only its own account. The
-generic settings endpoint accepts only explicitly allowlisted fields. It currently
-allows `agent_evolution.enabled` and `acl.enabled`.
+This endpoint is deprecated. ROOT can manage any account and ADMIN can manage
+only its own account. It preserves the original ACL and Agent Evolution request
+and response semantics:
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
@@ -143,6 +141,10 @@ Content-Type: application/json
   "acl": {"enabled": true}
 }
 ```
+
+Missing and `null` sections are no-ops. A present object replaces that legacy
+section; an empty ACL object means `enabled=false`. New integrations should use
+the configuration endpoints below.
 
 `acl.enabled` defaults to `false`. While disabled, shared resources use the
 original public behavior and ACL authorization is skipped. When enabled, newly
@@ -156,6 +158,317 @@ ov --sudo admin set-account-settings acme --acl-enabled true
 
 Before an existing setting is replaced, it is backed up to
 `/local/{account_id}/_system/setting.backup.json`.
+
+### account_memory_templates
+
+ROOT can manage any Account; ADMIN can manage only its own Account. Ordinary
+Users cannot use these endpoints. Authorization is role-based, not based on
+whether the User is named `default`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List the six editable templates, full defaults and effective values |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one template |
+| PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one template |
+| DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove that override and restore deployment defaults |
+
+The kernel accepts the existing memory YAML structure as a JSON object and enforces
+the following editing allowlist at the API boundary. Only these six types are
+exposed. Experience, Cases, Trajectories and other types are not exposed for reading
+or editing. These APIs cannot create, delete or rename Memory Types; DELETE removes
+only the Account override.
+
+| Type | Editable configuration |
+|------|------------------------|
+| `profile` | `description`; `fields.content.description` |
+| `events` | `description`; `fields.event_name.description`, `fields.summary.description`; `content_template` |
+| `preferences` | `description`; `fields.topic.description`, `fields.content.description` |
+| `entities` | `description`; `fields.category.description`, `fields.name.description`, `fields.content.description` |
+| `soul` | `description`; `fields.core_truths.description`, `fields.boundaries.description`, `fields.vibe.description`, `fields.continuity.description`; `content_template` |
+| `identity` | `description`; `fields.creature.description`, `fields.name.description`, `fields.vibe.description`, `fields.avatar.description`, `fields.emoji.description`, `fields.introduction.description`; `content_template` |
+
+Here `fields.<name>.description` selects an existing entry in the `fields` array
+by `name`; it does not replace that field. JSON keys are case-sensitive: use
+`description`, not `Description`. Profile's `content` field permits only its
+description to change.
+
+All other configuration stays locked to deployment defaults: `memory_type`,
+`enabled`, `operation_mode`, `stage`, `peer_enabled`, `directory`,
+`filename_template`, field names/types/merge operations/initial values,
+`embedding_template`, `overview_template`, and unlisted field descriptions.
+Profile keeps `profile.md` and content's `merge_op=patch`; Events keeps
+`add_only` and the descriptions of `goal` and `ranges`; Identity keeps Name's
+immutable merge rule. Profile, Preferences and Entities cannot edit
+`content_template`. Changing topic/category/name/event_name instructions can
+still indirectly affect future paths/names, without changing their templates.
+
+Example: change only the type description:
+
+```bash
+curl -X PUT "$OV_ENDPOINT/api/v1/admin/accounts/acme/memory-templates/profile" \
+  -H "X-API-Key: $OV_ADMIN_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"description":"Remember business facts in concise English."}'
+```
+
+PUT completes omitted values from **deployment defaults**, not the previous
+Account override, and persists a **complete YAML template**. `fields` updates
+existing entries by name, replacing only permitted descriptions; all omitted
+fields and attributes retain default values. Fields cannot be added, removed or
+renamed, and an empty list does not remove any fields. Full GET `effective`
+objects can be submitted unchanged: locked values matching defaults are accepted.
+Changed locked values, unknown keys/fields and duplicate field names return
+`INVALID_ARGUMENT` without modifying the active file. To edit one description while
+preserving all other customizations, GET `effective`, modify that object, then
+PUT it. If the completed, validated configuration exactly matches deployment
+defaults (before publication metadata is added), PUT removes that type's override
+and returns `status=system_default`, `updated_at=null`. This includes an empty
+object, an unchanged default form, or saving after restoring all edited fields
+to their defaults. Any remaining difference keeps the template `custom`;
+whitespace and newline differences in descriptions or bodies are not ignored.
+Once the override is removed, subsequent extractions follow deployment defaults;
+previously captured extraction snapshots are unchanged. DELETE always removes
+the type's override. Repeated default PUTs and DELETEs are idempotent.
+
+Results contain `memory_type`, `status` (`system_default` or `custom`),
+`updated_at` (UTC publication time or null), and full `defaults` / `effective`
+objects using YAML field names such as `fields[].type`. List returns
+`result.account_id` and `result.templates`; single-template operations return
+`result.account_id` plus the template result.
+
+Storage is per Account and per type:
+
+```text
+/local/{account_id}/_system/memory_templates/
+  profile.yaml
+  preferences.yaml
+  events.yaml
+  ...
+```
+
+Only published overrides create files. Each file contains the complete schema
+and an internal `_updated_at` timestamp; no `memory_templates.json` is used.
+The previous content is backed up to `{type}.yaml.backup`. Access goes through
+AGFS, preserving the deployment's encryption/storage configuration. Do not edit
+encrypted backing files directly. `setting.json` and User `user_config.json`
+are unchanged. Personal deployments use the default Account; enterprise
+deployments use the target Account, with no separate kernel storage layout.
+
+Template reads do not acquire locks. Publication writes a unique staging file in
+the same directory, then switches the active path through AGFS: LocalFS uses a
+file rename; S3 copies the complete object over the destination before deleting
+the staging object, without deleting the destination first. Readers may see the
+complete old or new version, or deployment defaults before the first publication
+and after DELETE. This is per-file publication, not a transaction across an
+entire template listing or registry snapshot.
+Writers/DELETE still use cross-process locks; publication locks cover both the
+active and staging paths. Contention uses zero-wait attempts with asynchronous
+backoff for up to 10 seconds, leaving executor threads available for I/O/release.
+A failed staging write leaves the active file unchanged. Post-publication cleanup
+errors only produce warnings, never an in-place rollback. If the move reports an
+error, the destination is checked: a verified publication is retained; an
+unverifiable outcome returns an error without blindly restoring the old version.
+Use GET to confirm its state. Cancellation stops lock retries, but already
+submitted native I/O is drained and locks released before cancellation propagates;
+cancelling an in-progress publication does not guarantee that it is undone.
+Process crashes or cleanup failures can leave `.tmp` files, which readers ignore.
+
+The ordinary Session memory extraction pipeline loads Account templates before
+schema filtering and initial-file generation. The resulting registry snapshot is
+used for extraction, patch merging, and memory-file updates. A later publication
+does not change an in-flight extraction's snapshot. Streaming updates compare the
+current memory type's schema values (including the rendering mode), not the whole
+registry: changes to unrelated types do not split a batch. Different schemas are
+merged/rendered separately. If those groups target the same file, before or after
+patch merging, the updater raises a conflict before applying any memory operations
+in that merge batch. Re-extract with current templates and file contents before
+retrying; replaying the old patches is not a fix. This is fail-fast conflict
+handling, not automatic rebasing or an atomic transaction across a whole Commit;
+other memory-type groups or append-only writes may already have completed.
+Work queued before publication
+uses the configuration at **extraction start**, not at HTTP Commit acceptance.
+All eligible Users/Peers in that Account share the templates; no shared deployment
+registry is mutated. Publishing/resetting does not proactively rewrite existing
+memories; subsequent commits can update them according to the effective rules.
+
+Editable descriptions and content templates must be nonempty strings;
+each serialized file is limited to 1 MiB. Descriptions (both type-level and
+`fields[].description`) share one restricted Jinja contract, whether they come
+from deployment defaults or an Account override. Editing a description does not
+disable rendering, and no description provenance flag is stored or checked.
+Only the existing `language` context variable is available; body fields,
+`extract_context`, and arbitrary objects are not exposed. The syntax subset is
+the same as the restricted bodies below: conditionals, local variables, bounded
+literal loops, safe string methods, approved string filters and tests, but no arbitrary calls.
+For example, <code v-pre>Use {{ language.upper() }}.</code> renders as `Use EN.` when the existing
+schema-rendering context supplies `language=en`. No new language propagation is
+introduced; the Python protocol's existing static field-description path remains
+unchanged. Missing language retains the previous undefined/empty-output behavior;
+use `language or 'English'` for a fallback. Context values are not recursively
+evaluated as Jinja. Invalid custom expressions are rejected before publication,
+and persisted overrides are revalidated before extraction. Deployment descriptions
+also use the restricted renderer, so deployment-specific unsupported syntax must
+be migrated rather than receiving a trust exemption. Descriptions are limited to
+2048 AST nodes and 1 MiB rendered output. `content_template` keeps its separate
+variable/source-size contract and inherited-body compatibility below.
+Each editable `description`
+(type-level or `fields[].description`) is limited to 50,000 Unicode code points,
+including whitespace and template-like text. This is a per-field source-character limit,
+not a UTF-8 byte, rendered-output or combined-description limit. Oversized updates
+return 400 without modifying the active configuration. Publication does not invoke
+an LLM. Storage failures/corrupt files
+are reported, not silently treated as defaults. This change adds no public
+file-browser directory, SDK/CLI commands, drafts or version-history UI.
+
+#### Managed content-template contract
+
+The restricted contract below applies only when the Account body differs from the
+current deployment default. At publication and extraction load, the server compares
+the complete `content_template` string against its own deployment registry. An exact
+match uses the existing deployment renderer, including its filters and helpers;
+there is no client-supplied trust flag. This includes description-only PUT, empty
+PUT, and GET `effective` → PUT when the body is unchanged. The override can still
+have `status=custom` even though its body is inherited. The bundled Events YAML and
+its existing date expression are unchanged.
+
+Equality is exact, including whitespace. A modified body must pass the restricted
+contract even if it was based on a deployment template. If deployment defaults
+later change, the stored body is compared again on the next extraction load; a
+previous match does not grant permanent trust. A nonmatching body outside the
+allowlist must be replaced/reset before extraction can use it. Already-started
+extractions retain their resolved snapshot.
+
+`content_template` formats extracted/merged fields into Markdown. Administrators
+may change headings, order, fixed text and conditional visibility, including
+omitting fields or the Events ChatLog/resource-event branch. Omission does not
+disable extraction, remove stored field metadata or delete Session messages.
+Events' default embedding template consumes the body, so these edits can affect
+retrieval input. Paths, field definitions and merge rules remain locked.
+
+| Type | Content variables |
+| --- | --- |
+| events | event_name, goal, summary, ranges |
+| soul | core_truths, boundaries, vibe, continuity |
+| identity | name, creature, vibe, emoji, avatar, introduction |
+
+`language` is a description variable, not a content variable. Only Events
+may call these read-only `extract_context` helpers with positional arguments:
+`get_resource_event_content(ranges, summary)`,
+`get_first_message_time_from_ranges(ranges)`,
+`get_first_message_time_with_weekday_from_ranges(ranges)`,
+`get_event_content(ranges, summary[, ratio_threshold])`,
+`get_year(ranges)`, `get_month(ranges)`, `get_day(ranges)`.
+The first argument may use any expression allowed by the same syntax sandbox,
+including local aliases, conditionals and approved filter chains. Immediately
+before each helper call, its evaluated value must be a plain string exactly equal
+to the current memory's original `ranges`, or an empty string (no source messages).
+For example, `ranges | default('') | trim` works when it leaves the value unchanged;
+`{% set selected = ranges %}` can be followed by `get_year(selected)`.
+No normalization is performed when comparing ranges. Missing field values are
+already supplied as empty strings. Publication checks syntax without executing
+helpers; a changed or non-string range value fails at rendering with
+`content_template: invalid_ranges`, before the helper reads any messages, and stops
+that memory file write. An explicit ratio must be a numeric
+literal from 0 to 1 (omitted: 0.2; built-in: 0).
+
+Supported Jinja: `if/elif/else`, comparisons/boolean expressions, local `set`, and
+non-nested/non-recursive `for` over an explicit list/tuple of at most 32 items
+(including title/value pairs). `loop.index/index0/first/last/length` are available.
+String methods: `.upper()`, `.lower()`, `.strip()`, with no positional or keyword
+arguments. These use the same method-call syntax as deployment templates; Account
+templates allow only these methods on plain strings. The receiver type is checked
+before attribute lookup, so same-named methods/properties on other objects (including
+string subclasses) are not allowed. Methods can be chained or used on string fields,
+locals, literals, and string results of approved Events helpers. Method references
+cannot be stored or accessed without calling them.
+
+String filters: `| upper`, `| lower`, and `| trim`, equivalent to `.upper()`,
+`.lower()`, and `.strip()`. Like the methods, they accept only plain strings and
+no positional or keyword arguments. They can be chained or mixed with methods,
+for example `summary | trim | upper` or `summary.strip() | upper`.
+The `default` filter accepts no argument or one literal string, for example
+`| default` / `| default()` / `| default('N/A')`. It replaces only undefined values;
+empty strings and `None` remain unchanged, matching the built-in Events template.
+It accepts only plain strings, `None` or undefined values without object coercion.
+The boolean argument, keyword arguments and expanded/dynamic arguments are not
+supported. Use `summary or 'pending'` or an explicit conditional for empty-value
+fallbacks. Other filters, including `| length`, `| d(...)` and `| attr(...)`, remain
+unsupported.
+Tests: `defined`, `undefined`, `none`, `string` remain supported.
+Built-in field/context names cannot be overwritten. Imports,
+inheritance, macros, arbitrary calls/attributes, subscripts, arithmetic/string
+multiplication/concatenation and reserved `MEMORY_FIELDS` comments are not allowed.
+
+Limits: 64 KiB UTF-8 source, 2048 AST nodes, 1 MiB rendered body excluding system
+metadata. Nonmatching Account bodies are checked at publication and extraction load,
+then rendered with a restricted Jinja environment and only approved fields/helpers.
+The built-in Events, Soul and Identity bodies also pass this restricted syntax,
+including after edits to headings, trailing newlines or CRLF line endings. These
+edits do not bypass validation or mark the edited body as deployment-owned.
+Runtime failures on this restricted path stop that file write instead of falling
+back to an empty body. Exact inherited bodies keep the deployment renderer's
+existing behavior, including its error/fallback semantics; they are not subject to
+the restricted renderer's source/AST/output limits. The complete Account YAML file
+is still limited to 1 MiB.
+These guards do not replace Worker resource quotas, evaluate extraction quality or sanitize
+Markdown/HTML for UI display. Descriptions and restricted content templates share
+the syntax sandbox, but expose different variables and use different source limits.
+
+Publication validation failures return `INVALID_ARGUMENT` with `error.details`:
+`field=description`, `fields.<name>.description`, or `content_template`, a controlled
+`reason`, and `line` when available. The
+active configuration remains unchanged. Structurally valid older overrides using
+unsupported Jinja can still be read, replaced or reset, but extraction refuses to
+execute them unchecked. Corrupt YAML remains an explicit error.
+
+### Runtime Configuration
+
+ROOT can manage Cluster configuration and any Account configuration. ADMIN can
+manage only its own Account layer.
+
+```http
+GET /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+Content-Type: application/json
+
+{"settings": {"agent_evolution": {"enabled": true}}}
+```
+
+`settings` always means explicit values at the addressed layer. PATCH is
+three-state: an absent key is unchanged, `null` deletes that layer's value, and
+a concrete value updates it.
+
+The Cluster runtime surface currently contains `agent_evolution`. The Account
+surface contains `feishu`, `agent_evolution`, `github`, and `acl`, all of which
+are dynamic. Account `vlm`, `memory`, `embedding`, and `vectordb` are not on the
+current API surface and are rejected even during Account creation. Cluster
+`embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, and
+retrieval fields are startup-only because they are not declared as runtime
+fields.
+
+Account Agent Evolution uses whole-section Cluster fallback when unset. Account
+Feishu also uses the complete Cluster section when unset. Once an Account Feishu
+section is set, `app_id`, `app_secret`, `max_rows_per_sheet`,
+`max_records_per_table`, `download_images`, and `request_timeout` come from the
+Account section or their Feishu defaults; only `domain` remains Cluster-owned.
+GitHub and ACL have no Cluster fallback.
+
+The PATCH is validated structurally before the merged configuration is built:
+unknown paths and fields outside the runtime surface are rejected. Objects merge
+recursively; arrays replace wholesale. A nested null removes only that leaf. To
+remove a whole object override, send null at the parent path; an empty object
+remains an explicit empty object.
+
+Both GET endpoints return only the explicit values persisted at the addressed
+layer. They do not expand fallback values. After persistence, the new
+configuration is published and matching in-process consumers are awaited.
+Consumer failures are logged without rolling back the persisted override, so
+a successful response confirms the configuration update but does not certify
+that every derived client has applied it. The current business integrations
+are documented in the [runtime configuration design](../../design/runtime-configuration-design.md).
 
 ### user_settings
 
@@ -287,7 +600,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -394,6 +707,7 @@ List all workspaces (ROOT only).
 | name | str | No | null | Filter by account ID (wildcard `*` and `?` matching) |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
+| query | str | No | null | Case-insensitive substring match on the account ID |
 
 Results are returned in creation order.
 
@@ -414,6 +728,10 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
   -H "X-API-Key: <root-key>"
 
+# With case-insensitive substring search
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?query=acme" \
+  -H "X-API-Key: <root-key>"
+
 # Paginated (second page of 50)
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
   -H "X-API-Key: <root-key>"
@@ -422,7 +740,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -480,17 +798,18 @@ ov --sudo admin list-accounts --limit 50 --page 2
 
 #### 1. API Implementation Overview
 
-Delete a workspace and all associated users and data (ROOT only).
+Asynchronously delete a workspace and all associated users and data (ROOT only). The endpoint returns HTTP `202` and a `task_id` without waiting for data cleanup.
 
 **Processing Flow:**
-1. Verify requester has ROOT privileges
-2. Cascade delete all AGFS data for the account (`user/` and `resources/`; sessions live under `user/`)
-3. Cascade delete all vector DB records for the account
-4. Finally delete account metadata and all user keys
+1. Verify ROOT privileges and persist the account deletion fence, immediately rejecting its keys and ordinary requests; persist a system-owned `account_delete` Task and queued work, then return `status=deleting` and `task_id`
+2. Stop account watches and business tasks, then remove vectors, OAuth grants, usage/audit data, and the entire account AGFS directory, including account-owned task records
+3. Remove the account registry entry and complete the Task only after cleanup succeeds
+
+Account and user cleanup share one queue with a single consumer. Account tasks clean the entire account directly. Later user cleanup tasks complete without further cleanup if their target was deleted. Old tasks also skip accounts or users recreated with the same IDs. Account-owned task records are deleted with the account and are not recreated by late deliveries; system-owned cleanup Tasks remain queryable.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:delete_account` - HTTP route
-- `openviking/server/api_keys/new.py:APIKeyManager.delete_account` - Core implementation
+- `openviking/service/deletion.py:DeletionService.delete` - Core implementation
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_delete_account` - Python SDK
 
 #### 2. Interface and Parameters
@@ -503,7 +822,13 @@ Delete a workspace and all associated users and data (ROOT only).
 
 **Notes:**
 - Delete operation is irreversible and cascades to all account data
-- If some data fails to delete, warnings are logged and deletion continues
+- Cleanup failure marks the Task as `failed` and records the error; the account remains `deleting`
+- Repeated requests during cleanup return the same Task; requesting deletion after failure creates a retry Task for remaining data
+- Unfinished work is recovered on restart; the account cannot be recreated or re-enabled during cleanup
+- Vector IDs are enumerated by account before deletion is submitted in batches of at most 100 records, without the former 100,000-record total ceiling
+- Vector deletion succeeds when the delete requests succeed; it does not require an immediate zero count or empty read-back. Remote indexes may briefly return stale data even after the Task completes
+- Account listings expose `status=active|deleting` and the cleanup `task_id` when deleting
+- Query `GET /api/v1/tasks/{task_id}` as ROOT for status and errors; cleanup uses only `pending`, `running`, `completed`, and `failed`, without separate cleanup stages. Only `completed` confirms cleanup finished
 
 #### 3. Usage Examples
 
@@ -521,13 +846,13 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
 
 result = client.admin_delete_account(account_id="acme")
-print(f"Account deleted: {result['deleted']}")
+print(f"Cleanup task: {result['task_id']}")
 ```
 
 **TypeScript SDK**
@@ -543,7 +868,7 @@ result, err := client.AdminDeleteAccount(ctx, "acme")
 if err != nil {
     return err
 }
-fmt.Println(result["deleted"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -551,6 +876,7 @@ fmt.Println(result["deleted"])
 ```bash
 # Requires ROOT privileges, use --sudo
 ov --sudo admin delete-account acme
+ov --sudo task status <task_id>
 ```
 
 **Response Example**
@@ -559,7 +885,9 @@ ov --sudo admin delete-account acme
 {
   "status": "ok",
   "result": {
-    "deleted": true
+    "account_id": "acme",
+    "status": "deleting",
+    "task_id": "550e8400-e29b-41d4-a716-446655440000"
   },
   "time": 0.1
 }
@@ -628,7 +956,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -731,6 +1059,7 @@ List active users in a workspace. Users with deletion in progress are omitted.
 | account_id | str | Yes | - | Workspace ID |
 | name | str | No | null | Filter by user ID (wildcard `*` and `?` matching) |
 | role | str | No | null | Filter by role |
+| include_credentials | bool | No | true | HTTP-only. Set false to return `user_id`, `role`, and `api_key_available` without credentials or key prefixes. The default preserves the existing mode-dependent response. |
 | limit | int | No | null | Page size (≥1). Omit to return all matches |
 | page | int | No | 1 | 1-based page number; only applies when `limit` is set |
 
@@ -739,6 +1068,14 @@ List active users in a workspace. Users with deletion in progress are omitted.
 - ADMIN can only list users in their own account
 - In `trusted` mode, `user_key` is omitted from the response
 - Users whose deletion has started are no longer returned
+
+**Summary responses (HTTP):** Set `include_summary=true` to return an object in `result` with `users` (the current page), `total` (matching users), `account_total`, `manager_count` (admin/root), and `key_count` (users with a visible key or prefix). Account statistics ignore search/role filters and exclude deleting users; `key_count` is zero when key exposure is disabled. The default remains a user array for existing callers.
+
+`query` performs a trimmed, case-insensitive literal substring match on user IDs. It combines with the existing `name` wildcard and `role` filters. For example:
+
+```text
+GET /api/v1/admin/accounts/acme/users?limit=20&page=1&query=alice&include_summary=true
+```
 
 #### 3. Usage Examples
 
@@ -765,7 +1102,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&pag
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -835,7 +1172,7 @@ Remove a user from a workspace. The user's API key is revoked immediately, and o
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:remove_user` - HTTP route
-- `openviking/service/user_deletion.py:UserDeletionService.delete_user` - Core implementation
+- `openviking/service/deletion.py:DeletionService.delete` - Core implementation
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.admin_remove_user` - Python SDK
 
 #### 2. Interface and Parameters
@@ -851,6 +1188,7 @@ Remove a user from a workspace. The user's API key is revoked immediately, and o
 - ADMIN can only remove users in their own account
 - Cannot delete the last admin user of an account
 - After deletion starts, the user key is invalid and list_users omits the user
+- Vector deletion succeeds when the delete requests succeed, without waiting for remote index synchronization; counts and queries may briefly lag after the Task completes
 
 #### 3. Usage Examples
 
@@ -868,7 +1206,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -968,7 +1306,7 @@ curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -1066,7 +1404,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1129,15 +1467,15 @@ ov --sudo admin regenerate-key acme bob
 
 #### 1. API Implementation Overview
 
-Migrate 0.3.x legacy `viking://agent/...` / `viking://session/...` data into the 0.4.0 user / peer namespace, or clean up old namespaces after migration has been verified. This endpoint is ROOT-only and runs as a background task.
+Migrate legacy `viking://session/...` data into `viking://user/<user_id>/sessions/...`, or clean up old session directories after verifying migration. This endpoint is ROOT-only and runs as a background task. The account-shared `agent` directory is excluded from migration and cleanup.
 
 **Processing Flow:**
 1. Verify requester has ROOT privileges
 2. For `action=migrate`, run preflight checks for account registry, session owner metadata, and other prerequisites
 3. Create a root-level background task
-4. During migration, copy files and existing vector records; during cleanup, delete old vector records before deleting old AGFS directories
+4. During migration, copy session files; during cleanup, delete old session vector records before deleting old session AGFS directories
 
-Migration does not automatically call `reindex`. If retrieval after migration is not as expected, users should manually reindex the new paths.
+Migration preserves files that already exist at the destination. Cleanup leaves shared `agent` directories and migrated user data intact.
 
 **Code Entry Points:**
 - `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP route
@@ -1162,10 +1500,8 @@ POST /api/v1/admin/migrate
 | Field | Description |
 |-------|-------------|
 | migrated.files / migrated.directories | Number of files and directories copied |
-| migrated.vector_records | Number of existing vector records copied |
-| migrated.skipped_vector_records | Number of old records skipped because they had no vector payload |
-| migrated.operations | Operation counts grouped by migration category |
-| skipped / warnings / created_users | Skipped items, warnings, and users created automatically |
+| migrated.operations | Session migration operation count (`sessions`) |
+| skipped / created_users | Skipped files and users created automatically |
 
 **Cleanup result fields**
 

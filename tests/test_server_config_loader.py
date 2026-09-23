@@ -14,34 +14,30 @@ from openviking.server.config import (
 )
 
 
-def test_load_server_config_rejects_unknown_field(tmp_path):
-    config_path = tmp_path / "ov.conf"
-    config_path.write_text(json.dumps({"server": {"host": "0.0.0.0", "prt": 9999}}))
-
-    with pytest.raises(
-        ValueError,
-        match=r"server\.prt'.*server\.port",
-    ):
-        load_server_config(str(config_path))
-
-
-def test_load_server_config_rejects_unknown_nested_field(tmp_path):
+def test_load_server_config_ignores_unknown_fields(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(
         json.dumps(
             {
                 "server": {
-                    "observability": {"metrics": {"exporters": {"prometheus": {"enabld": True}}}}
+                    "host": "0.0.0.0",
+                    "prt": 9999,
+                    "queuefs_scope": "process",
+                    "observability": {
+                        "metrics": {"exporters": {"prometheus": {"enabld": True, "enabled": False}}}
+                    },
                 }
             }
         )
     )
 
-    with pytest.raises(
-        ValueError,
-        match=r"server\.observability\.metrics\.exporters\.prometheus\.enabld'.*server\.observability\.metrics\.exporters\.prometheus\.enabled",
-    ):
-        load_server_config(str(config_path))
+    config = load_server_config(str(config_path))
+
+    assert config.host == "0.0.0.0"
+    assert config.port == 1933
+    assert config.observability.metrics.exporters.prometheus.enabled is False
+    assert "prt" not in config.model_dump()
+    assert "queuefs_scope" not in config.model_dump()
 
 
 def test_load_server_config_reports_invalid_value_path(tmp_path):
@@ -106,14 +102,6 @@ def test_load_server_config_rejects_negative_default_executor_size(tmp_path):
         ValueError,
         match=r"server\.executor_threads",
     ):
-        load_server_config(str(config_path))
-
-
-def test_load_server_config_rejects_legacy_queuefs_scope(tmp_path):
-    config_path = tmp_path / "ov.conf"
-    config_path.write_text(json.dumps({"server": {"queuefs_scope": "process"}}))
-
-    with pytest.raises(ValueError, match=r"server\.queuefs_scope"):
         load_server_config(str(config_path))
 
 

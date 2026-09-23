@@ -117,7 +117,11 @@ load the shared OpenViking profile block unless
 `buildProfileBlock()` used by the other coding-agent integrations: full
 `profile.md` plus abstract-annotated URI indexes for `preferences/` and
 `entities/`, bounded by `OPENVIKING_PROFILE_TOKEN_BUDGET` with the shared
-CJK-aware estimator. Profile loading does not alter the commit decision tree.
+CJK-aware estimator, followed by an `<available-skills>` catalog from
+`GET /api/v1/skills` (the user's own skills, then `viking://agent/skills`)
+under its own `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` (default 1200; off
+with `OPENVIKING_SKILL_CATALOG=0`). Profile loading does not alter the
+commit decision tree.
 
 Resume may still need continuity after `PreCompact` or idle sweep already
 committed the live OV session. If local state has `ovSessionId = null`
@@ -209,7 +213,13 @@ and appends each new user/assistant turn to the OV session for this codex
 State is updated:
 `{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`.
 
-After a successful append, Stop reads session meta and commits when
+The transcript and persisted cursor own retries. Failed messages are not also
+put in the shared pending queue: replaying both sources would duplicate them.
+A partial append advances only past confirmed messages; subsequent hooks or
+the SessionStart sweep retry the remaining tail. The transcript must remain
+available until that catch-up succeeds.
+
+After a complete append, Stop reads session meta and commits when
 `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 20000).
 The threshold commit passes
 `keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default 10) so

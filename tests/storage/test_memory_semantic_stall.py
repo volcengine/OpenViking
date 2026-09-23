@@ -7,14 +7,18 @@ Ensures that _process_memory_directory() error paths propagate exceptions
 so that on_dequeue() returns an explicit processing outcome.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+from openviking.utils.circuit_breaker import CircuitBreakerOpen
 
 
 def _make_msg(uri="viking://user/usr1/memories", context_type="memory", **kwargs):
@@ -42,6 +46,46 @@ def _build_data(msg: SemanticMsg) -> dict:
     return msg.to_dict()
 
 
+@pytest.mark.parametrize("context_type", ["resource", "memory", "skill"])
+async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context_type):
+    processor = SemanticProcessor()
+    processor._circuit_breaker = SimpleNamespace(
+        check=MagicMock(side_effect=CircuitBreakerOpen), retry_after=0
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    written = []
+
+    async def enqueue(msg):
+        entered.set()
+        await release.wait()
+        written.append(msg.id)
+
+    queue = SimpleNamespace(enqueue=enqueue)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda _: queue),
+    )
+    msg = _make_msg(context_type=context_type, telemetry_id=str(uuid4()))
+    worker = asyncio.create_task(processor.on_dequeue(msg.to_dict()))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        worker.cancel()
+        if context_type == "skill":
+            await asyncio.sleep(0)
+            assert not worker.done()
+            assert not written
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(worker, 1)
+        assert written == ([msg.id] if context_type == "skill" else [])
+    finally:
+        release.set()
+        if not worker.done():
+            worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        get_request_wait_tracker().cleanup(msg.telemetry_id)
+
+
 @pytest.mark.asyncio
 async def test_root_semantic_message_is_acknowledged_without_processing():
     processor = SemanticProcessor()
@@ -61,6 +105,7 @@ async def test_memory_empty_dir_still_returns_success():
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
+    fake_fs.exists = AsyncMock(return_value=True)
     fake_fs.ls = AsyncMock(return_value=[])
 
     msg = _make_msg()
@@ -72,7 +117,7 @@ async def test_memory_empty_dir_still_returns_success():
             return_value=fake_fs,
         ),
         patch(
-            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
             return_value=None,
         ),
     ):
@@ -93,6 +138,7 @@ async def test_memory_ls_error_returns_failed():
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
+    fake_fs.exists = AsyncMock(return_value=True)
     fake_fs.ls = AsyncMock(side_effect=FileNotFoundError("/memories not found"))
 
     msg = _make_msg()
@@ -104,7 +150,7 @@ async def test_memory_ls_error_returns_failed():
             return_value=fake_fs,
         ),
         patch(
-            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
             return_value=None,
         ),
     ):
@@ -127,6 +173,7 @@ async def test_memory_ls_transient_error_requeues():
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
+    fake_fs.exists = AsyncMock(return_value=True)
     fake_fs.ls = AsyncMock(side_effect=RuntimeError("500 Internal Server Error"))
 
     msg = _make_msg(telemetry_id="tel-1")
@@ -140,7 +187,7 @@ async def test_memory_ls_transient_error_requeues():
             return_value=fake_fs,
         ),
         patch(
-            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
             return_value=None,
         ),
         patch.object(processor, "_reenqueue_semantic_msg", new=reenqueue_mock),
@@ -163,6 +210,7 @@ async def test_memory_write_error_returns_failed():
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
+    fake_fs.exists = AsyncMock(return_value=True)
     fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
     fake_fs.read_file = AsyncMock(return_value="some content")
     fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
@@ -181,7 +229,7 @@ async def test_memory_write_error_returns_failed():
             return_value=fake_fs,
         ),
         patch(
-            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
             return_value=None,
         ),
         patch(

@@ -28,4 +28,4 @@
 ## Reference
 
 - Docs on Manual Settings: [Cursor](https://docs.openviking.net/en/agent-integrations/12-cursor)
-- Code: [examples/cursor-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/cursor-memory-plugin)
+- Code: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)

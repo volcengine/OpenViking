@@ -18,7 +18,7 @@ export function createSessionInject({ config, sessionManager }) {
       fetchJSON(config, endpoint, init, { ...options, actorPeerId, timeoutMs: 10000 })
 
     const parts = []
-    const profile = await buildProfileBlock(clientFetch, config.profileTokenBudget, actorPeerId)
+    const profile = await buildProfileBlock(clientFetch, config.profileTokenBudget, actorPeerId, config)
     if (profile?.block) parts.push(profile.block)
 
     const archive = await fetchArchiveBlock(clientFetch, ovSessionId, config.resumeContextBudget)

@@ -87,8 +87,6 @@ class S3Config(BaseModel):
         "during uploads. Disabled by default for backward compatibility.",
     )
 
-    model_config = {"extra": "forbid"}
-
     def validate_config(self):
         """Validate S3 configuration completeness"""
         missing = []
@@ -141,8 +139,6 @@ class QueueFSConfig(BaseModel):
         default="default",
         description="Queue key namespace when backend is 'cache'.",
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -197,8 +193,6 @@ class AGFSCacheFSConfig(BaseModel):
         description="Path prefixes that bypass cache",
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="after")
     def validate_config(self):
         if not self.namespace.strip():
@@ -241,8 +235,6 @@ class RedisCacheConfig(BaseModel):
     tls_insecure_skip_verify: bool = Field(
         default=False, description="Skip Redis TLS certificate verification"
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -332,8 +324,6 @@ class AGFSPathLockConfig(BaseModel):
         default=30.0,
         description="Seconds before an unrefreshed lock token becomes stale.",
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -458,8 +448,6 @@ class AGFSConfig(BaseModel):
     redirects: Optional[List[dict[str, Any]]] = Field(
         default=None, description="Primary redirect policies."
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):

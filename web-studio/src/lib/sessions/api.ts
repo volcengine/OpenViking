@@ -10,7 +10,6 @@ import {
   postSessionIdCommit,
   postSessionIdExtract,
   postSessionIdMessages,
-  postSessionIdUsed,
 } from '#/gen/ov-client/sdk.gen'
 import {
   getOvResult,
@@ -34,7 +33,6 @@ import type {
   SessionListItem,
   SessionMeta,
 } from '@ov-server/api/v1/sessions'
-import type { UsedRequest } from '#/gen/ov-client/types.gen'
 
 // ---------------------------------------------------------------------------
 // Session CRUD
@@ -204,6 +202,57 @@ export async function fetchSessionMessages(
   ])
 }
 
+// Share four slots across title backfills from both conversation entry points.
+let activeTitleRequests = 0
+const titleWaiters: Array<() => void> = []
+
+export async function fetchSessionFirstTitle(
+  sessionId: string,
+): Promise<string> {
+  if (activeTitleRequests >= 4) {
+    await new Promise<void>((resolve) => titleWaiters.push(resolve))
+  } else {
+    activeTitleRequests += 1
+  }
+  try {
+    const session = await fetchSession(sessionId)
+    const count = Math.max(0, Math.floor(session.commit_count || 0))
+    for (let index = 1; index <= count; index += 1) {
+      try {
+        const archive = await fetchSessionArchive(
+          sessionId,
+          `archive_${String(index).padStart(3, '0')}`,
+        )
+        const title = firstUserTitle(archive.messages)
+        if (title) return title
+      } catch (error) {
+        if (!isMissingArchive(error)) throw error
+      }
+    }
+    return firstUserTitle((await fetchSessionContext(sessionId)).messages)
+  } finally {
+    const next = titleWaiters.shift()
+    if (next) next()
+    else activeTitleRequests -= 1
+  }
+}
+
+function firstUserTitle(value: unknown): string {
+  const first = getMessages(value).find(
+    (message) =>
+      message.role === 'user' &&
+      message.parts.some((part) => part.type === 'text' && part.text.trim()),
+  )
+  return (
+    first?.parts
+      .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60) || ''
+  )
+}
+
 export async function fetchSessionMemoryDiffs(
   session: SessionMeta,
 ): Promise<SessionMemoryDiff[]> {
@@ -283,18 +332,6 @@ export async function commitSession(
 export async function extractSession(sessionId: string): Promise<unknown> {
   return getOvResult<unknown>(
     postSessionIdExtract({
-      path: { session_id: sessionId },
-    }),
-  )
-}
-
-export async function recordSessionUsed(
-  sessionId: string,
-  body: UsedRequest,
-): Promise<unknown> {
-  return getOvResult<unknown>(
-    postSessionIdUsed({
-      body,
       path: { session_id: sessionId },
     }),
   )

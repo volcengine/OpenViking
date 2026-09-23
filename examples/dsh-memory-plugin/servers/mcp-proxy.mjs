@@ -4,40 +4,30 @@
  * stdio -> streamable-HTTP MCP proxy for the OpenViking DSH bundle.
  *
  * DSH's MCP bridge starts this process as a local stdio MCP server. The proxy
- * reads the same OpenViking credential sources as the in-process runtime; the
- * bundle also forwards its resolved config through the child environment, so
- * values that came from the Cordis patch survive the process boundary.
+ * resolves its connection through the same `resolveConfig()` as the in-process
+ * runtime, from the child environment the bundle builds in `mcp.mjs`: DSH
+ * scrubs credential-shaped names out of what it inherits, and values that came
+ * from the Cordis patch are invisible to a subprocess otherwise.
  */
 
 import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveConfig } from "../config.mjs";
-import { resolveOpenVikingCredentials } from "../shared/credentials.mjs";
 import { createLogger } from "../shared/debug-log.mjs";
-import { buildMcpProxyConfig } from "../shared/mcp-proxy-config.mjs";
+import { toMcpProxyConfig } from "../shared/mcp-proxy-config.mjs";
 import { createOpenVikingMcpProxy } from "../shared/mcp-proxy-core.mjs";
 
 export function readProxyConfig(env = process.env, cwd = process.cwd()) {
   const cfg = resolveConfig({}, env, cwd);
-  const creds = resolveOpenVikingCredentials(env);
-  return buildMcpProxyConfig({
-    baseUrl: cfg.endpoint,
-    apiKey: cfg.apiKey,
-    account: cfg.account,
-    user: cfg.user,
+  return toMcpProxyConfig(cfg, {
+    env,
     // Not gated through `resolveMcpActorPeerId` like the other proxies: DSH's
     // parent process resolves the peer per session and hands it over in the
-    // child env (`mcp.mjs` `buildMcpConfig`), so this one is not a guess at the
-    // launch directory.
-    peerId: cfg.peerId,
-    userAgent: cfg.userAgent,
-    timeoutMs: cfg.requestTimeoutMs,
+    // child env. Empty means it has none, and deriving one from wherever DSH
+    // launched this process would send a peer the runtime does not.
+    peerId: String(env.OPENVIKING_PEER_ID || "").trim(),
     debug: Boolean(env.OV_DEBUG_LOG),
-    debugLogPath: env.OV_DEBUG_LOG,
-    credentialSource: creds.credentialSource,
-    credentialPath: creds.cliPath || creds.ovPath,
-    watchedPaths: [creds.cliPath, creds.ovPath, creds.cliPathCandidate],
-    env,
+    debugLogPath: env.OV_DEBUG_LOG || "",
   });
 }
 

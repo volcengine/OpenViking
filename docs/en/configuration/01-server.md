@@ -36,7 +36,7 @@ The server reads the file at startup. Restart the server after changing models, 
 }
 ```
 
-Optional sections use their defaults when omitted. Unknown fields are rejected.
+Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility. Known fields still validate types and values. Misspelled field names are also ignored, but the server logs a warning listing every field it did not apply.
 
 ## Top-Level Settings
 
@@ -142,14 +142,15 @@ Changing the model or `dimension` can make existing vector collections incompati
 
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
-| `provider` | `vikingdb`, `cohere`, `openai`, `litellm` / `null` | `null` | Rerank service; inferred from credentials when omitted |
-| `model` | string / `null` | `null` | OpenAI-compatible or LiteLLM rerank model |
+| `provider` | `vikingdb`, `cohere`, `openai`, `litellm`, `jev` / `null` | `null` | Rerank service; inferred from credentials when omitted |
+| `model` | string / `null` | `null` | OpenAI-compatible, LiteLLM, or Jev rerank model |
 | `threshold` | number | `0.1` | Minimum score considered relevant |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
+| `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
-Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+`jev` supports direct TypeSafe access (`https://api.typesafe.ai`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. It sends the query and candidate documents as structured `state`, asks one independent relevance question per candidate, and uses each yes probability as its rerank score. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
 
@@ -185,6 +186,9 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
     },
     "vectordb": {
       "backend": "local"
+    },
+    "parse_output": {
+      "mode": "agfs"
     }
   }
 }
@@ -198,9 +202,16 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
+| `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
+| `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
+
+`parse_output.mode=local` avoids writing parser intermediates to shared AGFS.
+The same worker must commit the required bytes to the formal resource tree before
+enqueueing downstream work. Artifacts are temporary and are removed after the
+content commit; provision `local_root` with enough space for concurrent imports.
 
 ## Queue Worker Settings
 
@@ -217,9 +228,10 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+| `file_operation_concurrency` | integer | `16` | Maximum concurrent file-level commit and fallback comparison operations within one AddResource job; must be greater than `0`; requires a server restart after changes |
 | `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
-`max_concurrent` controls independent AddResource jobs, while `file_vectorization_concurrency` controls files within one vectors-only directory job. It does not affect single-file resources or `semantic_and_vectors` processing.
+`max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
 
 ### `queue_workers.session_commit`
 
@@ -331,9 +343,7 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false,
-    "v2_lock_retry_interval_seconds": 0.2,
-    "v2_lock_max_retries": 0
+    "link_enabled": false
   }
 }
 ```
@@ -349,8 +359,6 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
-| `v2_lock_retry_interval_seconds` | number, `>= 0` | `0.2` | Memory-lock retry interval |
-| `v2_lock_max_retries` | integer, `>= 0` | `0` | Retry limit; `0` means unlimited |
 
 ## Parser Settings
 
@@ -377,7 +385,7 @@ Parsers live under `parsers`:
     "text": {},
     "directory": {
       "preserve_structure": true,
-      "max_files": 1000,
+      "max_files": null,
       "max_depth": 10,
       "max_concurrent": 4
     },
@@ -391,6 +399,9 @@ Parsers live under `parsers`:
   }
 }
 ```
+
+`parsers.directory.max_files` defaults to `null`, meaning no file-count limit.
+Set it to a positive integer to limit the number of files per directory import.
 
 `parsers.directory.max_concurrent` is shared by all directory imports in the
 server event loop. With the default value `4`, one directory can run four

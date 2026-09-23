@@ -166,13 +166,6 @@ class BatchAddMessageRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
-class UsedRequest(BaseModel):
-    """Request model for recording usage."""
-
-    contexts: Optional[List[str]] = None
-    skill: Optional[Dict[str, Any]] = None
-
-
 class CreateSessionRequest(BaseModel):
     """Request model for creating a session."""
 
@@ -839,40 +832,3 @@ async def batch_add_messages(
         fn=_batch_add,
     )
     return Response(status="ok", result=execution.result, telemetry=execution.telemetry)
-
-
-@router.post("/{session_id}/used")
-async def record_used(
-    request: UsedRequest,
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_session_request_context),
-):
-    """Record actually used contexts and skills in a session."""
-    service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
-
-    # Resolve path variables in contexts
-    resolved_contexts = None
-    if request.contexts is not None:
-        resolved_contexts = [
-            validate_request_viking_uri(resolve_path_variables(uri), _ctx)
-            for uri in request.contexts
-        ]
-
-    # Resolve path variables in skill URI if present
-    resolved_skill = request.skill
-    if resolved_skill is not None and "uri" in resolved_skill:
-        resolved_skill = dict(resolved_skill)
-        resolved_skill["uri"] = validate_request_viking_uri(
-            resolve_path_variables(resolved_skill["uri"]), _ctx
-        )
-
-    session.used(contexts=resolved_contexts, skill=resolved_skill)
-    return Response(
-        status="ok",
-        result={
-            "session_id": session_id,
-            "contexts_used": session.stats.contexts_used,
-            "skills_used": session.stats.skills_used,
-        },
-    )

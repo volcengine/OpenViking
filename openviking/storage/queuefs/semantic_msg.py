@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
+from openviking.storage.context_update_plan import SemanticPlan
 from openviking.utils.ingest_options import IngestOptions
 
 
@@ -37,7 +38,7 @@ class SemanticMsg:
                    enqueue them for processing (bottom-up order).
                    When False, only the specified directory will be processed.
         use_hierarchical_aggregation: Route memory directories through the
-                   shared directory DAG instead of the specialized flat memory
+                   shared semantic tree instead of the specialized flat memory
                    update path.
         propagate_to_parent: Whether a completed directory refresh may enqueue
                    a freshness refresh for its parent.
@@ -48,6 +49,7 @@ class SemanticMsg:
     context_type: str  # resource, memory, skill, session
     status: str = "pending"  # pending/processing/completed
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
+    queue_enqueued_at: float = 0.0
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
@@ -73,6 +75,14 @@ class SemanticMsg:
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
     copy_source_uri: str = ""
+    # Per-file md5 of final stored bytes, keyed by target URI. Supplied by the
+    # local incremental apply so the tree executor's re-vectorization writes a fresh
+    # fingerprint; empty for all other flows.
+    file_md5s: Dict[str, str] = field(default_factory=dict)
+    artifact_ref: Optional[Dict[str, Any]] = None
+    artifact_files: List[str] = field(default_factory=list)
+    file_abstracts: Dict[str, str] = field(default_factory=dict)
+    plan: Optional[SemanticPlan] = None
 
     def __init__(
         self,
@@ -100,9 +110,16 @@ class SemanticMsg:
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
         copy_source_uri: str = "",
+        file_md5s: Optional[Dict[str, str]] = None,
+        artifact_ref: Optional[Dict[str, Any]] = None,
+        artifact_files: Optional[List[str]] = None,
+        file_abstracts: Optional[Dict[str, str]] = None,
+        plan: SemanticPlan | Dict[str, Any] | None = None,
+        queue_enqueued_at: float = 0.0,
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
+        self.queue_enqueued_at = max(float(queue_enqueued_at or 0.0), 0.0)
         self.uri = uri
         self.context_type = context_type
         self.recursive = recursive
@@ -127,6 +144,17 @@ class SemanticMsg:
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
         self.copy_source_uri = copy_source_uri
+        self.file_md5s = dict(file_md5s or {})
+        self.artifact_ref = dict(artifact_ref) if artifact_ref else None
+        self.artifact_files = list(artifact_files or [])
+        self.file_abstracts = dict(file_abstracts or {})
+        self.plan = (
+            plan
+            if isinstance(plan, SemanticPlan)
+            else SemanticPlan.from_dict(plan)
+            if isinstance(plan, dict)
+            else None
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -186,6 +214,18 @@ class SemanticMsg:
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
             copy_source_uri=data.get("copy_source_uri", ""),
+            file_md5s=(data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None),
+            artifact_ref=(
+                data.get("artifact_ref") if isinstance(data.get("artifact_ref"), dict) else None
+            ),
+            artifact_files=(
+                data.get("artifact_files") if isinstance(data.get("artifact_files"), list) else None
+            ),
+            file_abstracts=(
+                data.get("file_abstracts") if isinstance(data.get("file_abstracts"), dict) else None
+            ),
+            plan=data.get("plan") if isinstance(data.get("plan"), dict) else None,
+            queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

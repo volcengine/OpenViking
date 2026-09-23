@@ -35,9 +35,7 @@ async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
         lambda: SimpleNamespace(),
     )
     get_queue_manager = AsyncMock(side_effect=AssertionError("parent must not be enqueued"))
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager", get_queue_manager
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", get_queue_manager)
 
     msg = SemanticMsg(
         uri="viking://resources/root/child",
@@ -45,9 +43,7 @@ async def test_unchanged_l0_does_not_mark_or_enqueue_parent(monkeypatch):
         role=str(Role.USER),
         generation_trigger="resource_ingest",
     )
-    await SemanticProcessor()._enqueue_parent_refresh(
-        msg, msg.uri, l0_body_changed=False
-    )
+    await SemanticProcessor()._enqueue_parent_refresh(msg, msg.uri, l0_body_changed=False)
 
     assert plan.await_args.kwargs["l0_body_changed"] is False
     assert plan.await_args.kwargs["force_refresh"] is False
@@ -70,23 +66,23 @@ async def test_non_recursive_reindex_does_not_bubble_to_parent(monkeypatch):
         generation_trigger="reindex",
         propagate_to_parent=False,
     )
-    await SemanticProcessor()._enqueue_parent_refresh(
-        msg, msg.uri, l0_body_changed=True
-    )
+    await SemanticProcessor()._enqueue_parent_refresh(msg, msg.uri, l0_body_changed=True)
 
     plan.assert_not_awaited()
+
 
 @pytest.mark.parametrize(
     ("uri", "context_type"),
     [
         ("viking://user/alice", "resource"),
         ("viking://agent/skills", "skill"),
+        ("viking://agent/skills/demo", "skill"),
+        ("viking://agent/skills/demo/reference", "skill"),
+        ("viking://user/alice/skills/demo/reference", "skill"),
     ],
 )
 @pytest.mark.asyncio
-async def test_parent_refresh_stops_at_nonsemantic_namespace_root(
-    monkeypatch, uri, context_type
-):
+async def test_parent_refresh_stops_at_nonsemantic_namespace_root(monkeypatch, uri, context_type):
     plan = AsyncMock(
         side_effect=AssertionError("non-semantic namespace root must not be refreshed")
     )
@@ -123,7 +119,11 @@ async def test_parent_refresh_stops_at_nonsemantic_namespace_root(
     [
         ("viking://resources/project", "resource", "viking://resources"),
         ("viking://user/alice/resources", "resource", "viking://user/alice"),
-        ("viking://agent/skills/demo", "skill", "viking://agent/skills"),
+        (
+            "viking://agent/skills/demo/reference/nested",
+            "skill",
+            "viking://agent/skills/demo/reference",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -151,9 +151,7 @@ async def test_parent_refresh_preserves_semantic_roots(
     get_queue_manager = AsyncMock(
         side_effect=AssertionError("best-effort lock miss must not enqueue parent work")
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager", get_queue_manager
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", get_queue_manager)
 
     msg = SemanticMsg(uri=uri, context_type=context_type)
     await SemanticProcessor()._enqueue_parent_refresh(

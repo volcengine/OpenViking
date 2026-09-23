@@ -70,8 +70,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `url` | HTTP(S) URL | `http://127.0.0.1:1933` | OpenViking 服务端地址 |
 | `api_key` | string / `null` | `null` | 普通数据操作使用的 user/admin key |
 | `root_api_key` | string / `null` | `null` | `ov --sudo` 管理操作使用的 root key |
-| `account` | string / `null` | `null` | trusted 模式或 root-key-only 配置使用的账号身份 |
-| `user` | string / `null` | `null` | trusted 模式或 root-key-only 配置使用的用户身份 |
+| `account` | string / `null` | `null` | trusted 部署使用的账号身份 |
+| `user` | string / `null` | `null` | trusted 部署使用的用户身份 |
 | `actor_peer_id` | string / `null` | `null` | 默认 Actor Peer 标识 |
 | `agent_id` | string / `null` | `null` | 兼容字段；新配置使用 `actor_peer_id`，两者不能同时设置 |
 | `extra_headers` | object / `null` | `null` | 每个 HTTP 请求附加的自定义请求头；`extra_header` 是兼容别名 |
@@ -82,7 +82,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | 配置方式 | 普通命令 | `ov --sudo` |
 |---|---|---|
 | 仅 `api_key` | 使用 user/admin key | 不可用 |
-| 仅 `root_api_key`，并配置 `account`、`user` | 使用 root key 和显式身份 | 使用 root key |
+| 仅 `root_api_key`，并配置 `account`、`user` | trusted 模式使用 root key 和显式身份；api_key 模式禁止访问租户数据 | 使用 root key |
 | 同时配置两种 key | 使用 `api_key` | 使用 `root_api_key` |
 | 两种 key 都不配置 | 仅适用于未开启鉴权的本地服务 | 不可用 |
 
@@ -107,7 +107,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `show_progress` | boolean | `false` | 上传时是否默认显示进度 |
 | `verbose` | boolean | `false` | 上传时是否默认输出诊断信息 |
 | `profile` | boolean | `false` | 是否请求性能 profile；服务端还需启用 `server.profile_enabled` |
-| `output` | `"table"` / `"json"` | `"table"` | 兼容字段；当前命令使用 `-o table` 或 `-o json` 选择输出格式 |
+| `output` | `"table"` / `"json"` | `"table"` | 默认输出格式；当前命令的 `-o table` 或 `-o json` 会覆盖它 |
 
 `--profile`、`--progress`、`--no-progress`、`--verbose` 等命令行参数会覆盖本次命令的配置。
 

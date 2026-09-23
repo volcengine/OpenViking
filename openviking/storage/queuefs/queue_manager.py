@@ -91,7 +91,9 @@ class QueueManager:
     ADD_RESOURCE = "AddResource"
     SESSION_COMMIT = "SessionCommit"
     EXTERNAL_TASK = "ExternalTask"
-    USER_DELETION = "UserDeletion"
+    # Account and user cleanup share one consumer. Retain the persisted name
+    # so user cleanup messages queued before this change resume in place.
+    DATA_CLEANUP = "UserDeletion"
     # Deferred work re-enqueues itself; throttle the next scheduling round.
     _REQUEUE_POLL_INTERVAL = 1.0
 
@@ -123,6 +125,7 @@ class QueueManager:
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
         self._queue_stop_events: Dict[str, threading.Event] = {}
+        self._embedding_worker_stopped = threading.Event()
         self._poll_interval = 0.2
         self._task_work_index = TaskWorkIndex()
         # Import at composition time to avoid a service <-> queue package cycle.
@@ -183,7 +186,10 @@ class QueueManager:
         logger.info("Embedding queue initialized with TextEmbeddingHandler")
 
         # Semantic Queue
-        semantic_processor = SemanticProcessor(max_concurrent_llm=self._max_concurrent_semantic)
+        semantic_processor = SemanticProcessor(
+            max_concurrent_llm=self._max_concurrent_semantic,
+            embedding_worker_stopped=self._embedding_worker_stopped.is_set,
+        )
         self.get_queue(
             self.SEMANTIC,
             dequeue_handler=semantic_processor,
@@ -204,6 +210,8 @@ class QueueManager:
         max_concurrent = self._max_concurrent_for_queue(queue.name)
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
+        if queue.name == self.EMBEDDING:
+            self._embedding_worker_stopped.clear()
         thread = threading.Thread(
             target=self._queue_worker_loop,
             args=(queue, stop_event, max_concurrent),
@@ -214,7 +222,7 @@ class QueueManager:
 
     def _max_concurrent_for_queue(self, queue_name: str) -> int:
         """Return the worker concurrency limit for a named queue."""
-        if queue_name == self.USER_DELETION:
+        if queue_name == self.DATA_CLEANUP:
             return 1
         if queue_name == self.EMBEDDING:
             return self._max_concurrent_embedding
@@ -260,12 +268,29 @@ class QueueManager:
                                 stop_event.wait(poll_interval)
                         else:
                             stop_event.wait(poll_interval)
+                    except asyncio.CancelledError:
+                        if not stop_event.is_set():
+                            raise
+                        break
                     except Exception as e:
                         logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
                         traceback.print_exc()
                         stop_event.wait(poll_interval)
         finally:
+            # Consumers may own timers and async generators in addition to
+            # their active queue deliveries. Finish them on the worker loop.
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
+            if queue.name == self.EMBEDDING:
+                # No more deliveries can start and active handlers have exited,
+                # including protected writes. Pending messages remain durable.
+                self._embedding_worker_stopped.set()
 
     async def _worker_async_concurrent(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int
@@ -338,6 +363,8 @@ class QueueManager:
         # Stop queue workers
         for stop_event in self._queue_stop_events.values():
             stop_event.set()
+        if self.EMBEDDING not in self._queue_threads:
+            self._embedding_worker_stopped.set()
         for name, thread in self._queue_threads.items():
             thread.join(timeout=10.0)
             if thread.is_alive():

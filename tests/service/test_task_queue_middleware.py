@@ -4,6 +4,7 @@
 
 import asyncio
 import json
+import threading
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,6 +22,8 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase, NamedQueu
 from openviking.storage.queuefs.process_result import ProcessOutcome, ProcessResult
 from openviking.storage.queuefs.queue_middleware import QueueMiddleware
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
+from openviking.telemetry import OperationTelemetry, bind_telemetry
+from openviking.utils.log_correlation import log_correlation
 
 
 @pytest.fixture
@@ -56,6 +59,25 @@ async def enqueue_task(queue, transport, task_id="task-1"):
     with bind_task_context(task_id, "account", "user"):
         await queue.enqueue({"value": 1})
     return {"id": "message-1", "data": transport.write.await_args.args[1].decode()}
+
+
+def test_log_correlation_uses_bound_task_and_telemetry() -> None:
+    telemetry = OperationTelemetry(operation="add_resource_job", enabled=True)
+
+    with (
+        bind_task_context("task-123", "account", "user"),
+        bind_telemetry(telemetry),
+    ):
+        assert log_correlation(message_id="semantic-456") == (
+            f"task_id=task-123 telemetry_id={telemetry.telemetry_id} message_id=semantic-456"
+        )
+
+
+def test_log_correlation_accepts_explicit_queue_ids_without_context() -> None:
+    assert (
+        log_correlation(task_id="task-1", telemetry_id="tm-1", message_id="embedding-2")
+        == "task_id=task-1 telemetry_id=tm-1 message_id=embedding-2"
+    )
 
 
 async def test_enqueue_registers_before_write_and_ack_finalizes_before_delete(tracked_queue):
@@ -226,16 +248,19 @@ async def test_process_result_tracks_children_and_errors(tracked_queue):
     queue, index, transport, _, _ = tracked_queue
     message = await enqueue_task(queue, transport)
     contexts = []
+    correlations = []
 
     class Handler(DequeueHandlerBase):
         async def on_dequeue(self, data):
             contexts.append(get_task_context())
+            correlations.append(log_correlation(telemetry_id="tm-1", message_id="semantic-1"))
             await queue.enqueue({"child": True})
             return ProcessResult.failed("failed work")
 
     queue.set_dequeue_handler(Handler())
     assert (await queue.process_dequeued(message)).outcome is ProcessOutcome.FAILED
     assert contexts[0].task_id == "task-1"
+    assert correlations == ["task_id=task-1 telemetry_id=tm-1 message_id=semantic-1"]
     assert get_task_context() is None
     assert index.failure("task-1") == "failed work"
     child_payload = next(
@@ -425,9 +450,10 @@ async def test_cancel_cleanup_interruption_does_not_ack(tracked_queue):
 
 async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
     queue, index, transport, _, cancelled = tracked_queue
-    started = asyncio.Event()
-    cleanup_started = asyncio.Event()
-    cleanup_release = asyncio.Event()
+    started = threading.Event()
+    cleanup_started = threading.Event()
+    cleanup_release = threading.Event()
+    request_loop = asyncio.get_running_loop()
 
     class Session:
         async def exists(self):
@@ -437,12 +463,13 @@ async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
             pass
 
         async def resume_queued_commit(self, msg):
+            assert asyncio.get_running_loop() is not request_loop
             started.set()
             try:
                 await asyncio.Event().wait()
             finally:
                 cleanup_started.set()
-                await cleanup_release.wait()
+                await asyncio.to_thread(cleanup_release.wait)
 
     class Service:
         def session(self, ctx, session_id, session_uri=None):
@@ -462,17 +489,17 @@ async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
         await queue.enqueue(msg.to_dict())
     message = {"id": "m", "data": transport.write.await_args.args[1].decode()}
     transport.write.reset_mock()
-    queue.set_dequeue_handler(SessionCommitProcessor(Service(), asyncio.get_running_loop()))
+    queue.set_dequeue_handler(SessionCommitProcessor(Service()))
 
     def consume():
         return asyncio.run(queue.process_dequeued(message))
 
     worker = asyncio.create_task(asyncio.to_thread(consume))
     try:
-        await asyncio.wait_for(started.wait(), timeout=3)
+        assert await asyncio.to_thread(started.wait, 3)
         cancelled.add("task-1")
         index.cancel_active("task-1")
-        await asyncio.wait_for(cleanup_started.wait(), timeout=3)
+        assert await asyncio.to_thread(cleanup_started.wait, 3)
         assert not worker.done()
         transport.write.assert_not_awaited()
     finally:

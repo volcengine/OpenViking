@@ -376,7 +376,7 @@ class VolcengineCollection(ICollection):
             "CollectionName": self.collection_name,
             "IndexName": index_name,
         }
-        if scalar_index:
+        if scalar_index is not None:
             data["ScalarIndex"] = scalar_index
         if description is not None:
             data["Description"] = description

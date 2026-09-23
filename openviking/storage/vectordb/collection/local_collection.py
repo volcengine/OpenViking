@@ -753,9 +753,9 @@ class LocalCollection(ICollection):
             new_filters["filter"] = filters
 
         # Copy output_fields to avoid modifying the original list
-        if output_fields is None:
-            output_fields_copy = [field]
-            remove_field = True
+        if not output_fields:
+            output_fields_copy = None
+            remove_field = False
         else:
             output_fields_copy = list(output_fields)
             if field not in output_fields_copy:
@@ -1349,17 +1349,18 @@ class PersistCollection(LocalCollection):
             newest_version = index.get_newest_version()
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
-            delta_list = self.store_mgr.get_delta_data_after_ts(newest_version)
+            delta_records = self.store_mgr.get_delta_data_after_ts(newest_version)
             logger.info(
-                "Index '%s': replaying %d delta records to recover from last persistent snapshot",
+                "Index '%s': replaying delta records lazily to recover from last persistent snapshot",
                 index_name,
-                len(delta_list),
             )
             upsert_list: List[DeltaRecord] = []
             delete_list: List[DeltaRecord] = []
             _processed = 0
+            _seen = 0
             _last_log = 0.0
-            for data in delta_list:
+            for data in delta_records:
+                _seen += 1
                 if data.type == OpType.PUT.value:
                     if delete_list:
                         _processed += self._replay_recovery_records(
@@ -1381,11 +1382,11 @@ class PersistCollection(LocalCollection):
                         upsert_list = []
                     delete_list.append(data)
                 now = time.time()
-                if now - _last_log >= 5.0 and _processed > 0:
+                if now - _last_log >= 5.0 and _seen > 0:
                     logger.info(
                         "Delta replay progress: %d/%d records for index '%s'",
                         _processed,
-                        len(delta_list),
+                        _seen,
                         index_name,
                     )
                     _last_log = now

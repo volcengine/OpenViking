@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from . import embedding_config
+from .agent_evolution_config import AgentEvolutionConfig
 from .agfs_config import AGFSConfig
 from .cache_config import CacheConfig
 from .config_loader import (
@@ -86,11 +87,12 @@ from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig, TracerConfig
-from .vectordb_config import VectorDBBackendConfig
+from .vectordb_config import OpenGaussConfig, VectorDBBackendConfig
 from .vlm_config import VLMConfig
 
 __all__ = [
     "AGFSConfig",
+    "AgentEvolutionConfig",
     "CacheConfig",
     "SYSTEM_CONFIG_DIR",
     "DEFAULT_OV_CONF",
@@ -145,6 +147,7 @@ __all__ = [
     "RerankConfig",
     "RetrievalConfig",
     "StorageConfig",
+    "OpenGaussConfig",
     "VectorDBBackendConfig",
     "VLMConfig",
     "ParserConfig",

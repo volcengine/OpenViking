@@ -14,11 +14,15 @@ class QueueWorkerConfig(BaseModel):
         description="Maximum number of jobs processed concurrently",
     )
 
-    model_config = {"extra": "forbid"}
-
 
 class AddResourceQueueWorkerConfig(QueueWorkerConfig):
     """Runtime limits for add-resource queue workers."""
+
+    file_operation_concurrency: int = Field(
+        default=16,
+        gt=0,
+        description="Maximum concurrent file-level commit and comparison operations within one add-resource job",
+    )
 
     file_vectorization_concurrency: int = Field(
         default=8,
@@ -38,5 +42,3 @@ class QueueWorkersConfig(BaseModel):
     external_task: QueueWorkerConfig = Field(
         default_factory=lambda: QueueWorkerConfig(max_concurrent=10)
     )
-
-    model_config = {"extra": "forbid"}

@@ -34,5 +34,3 @@ class TransactionConfig(BaseModel):
             "persistent session_commit queue."
         ),
     )
-
-    model_config = {"extra": "forbid"}

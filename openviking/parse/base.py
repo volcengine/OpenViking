@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    pass
+    from openviking.parse.output import ParseArtifactRef
 
 # ============================================================================
 # Common utility functions
@@ -291,6 +291,10 @@ class ParseResult:
     # Temporary directory path (for v4.0 architecture)
     temp_dir_path: Optional[str] = None  # e.g., "/tmp/openviking_parse_a1b2c3d4"
 
+    # Serializable handle to the artifact backing ``temp_dir_path``. New parsers
+    # set it explicitly; legacy AGFS-only results may derive it from their temp URI.
+    artifact_ref: Optional["ParseArtifactRef"] = None
+
     # Core metadata fields
     source_format: Optional[str] = None  # File format (e.g., "pdf", "markdown")
     parser_name: Optional[str] = None  # Parser name (e.g., "PDFParser")
@@ -305,6 +309,27 @@ class ParseResult:
     def success(self) -> bool:
         """Check if parsing was successful."""
         return len(self.warnings) == 0
+
+    def ensure_artifact_ref(self) -> Optional["ParseArtifactRef"]:
+        """Return the artifact ref, deriving an AGFS one from ``temp_dir_path``.
+
+        Legacy parsers may still record an AGFS temp URI without a ref. A local
+        filesystem path is ambiguous and must always carry an explicit ref.
+        """
+        if self.artifact_ref is not None:
+            return self.artifact_ref
+        if not self.temp_dir_path:
+            return None
+        if not self.temp_dir_path.startswith("viking://temp/"):
+            raise ValueError("parse result with a non-AGFS temp path must provide artifact_ref")
+        from openviking.parse.output import ParseArtifactRef
+
+        self.artifact_ref = ParseArtifactRef(
+            backend="agfs",
+            root=self.temp_dir_path,
+            root_type="dir",
+        )
+        return self.artifact_ref
 
     def get_all_nodes(self) -> List[ResourceNode]:
         """Get all nodes in the tree (flattened)."""

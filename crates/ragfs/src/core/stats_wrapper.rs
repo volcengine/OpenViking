@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use super::{
-    FileInfo, FileSystem, FsOperation, GlobPage, GrepResult, OperationTimer, Result,
+    FileInfo, FileSystem, FsOperation, GlobPage, GrepOptions, GrepResult, OperationTimer, Result,
     StatsCollector, TreeEntry, WriteFlag,
 };
 
@@ -67,42 +67,42 @@ impl FileSystem for StatsWrappedFS {
     async fn create(&self, path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Create, Arc::clone(&self.stats));
         let result = self.inner.create(path).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn mkdir(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Mkdir, Arc::clone(&self.stats));
         let result = self.inner.mkdir(path, mode).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn remove(&self, path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Remove, Arc::clone(&self.stats));
         let result = self.inner.remove(path).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn remove_all(&self, path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::RemoveAll, Arc::clone(&self.stats));
         let result = self.inner.remove_all(path).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn read(&self, path: &str, offset: u64, size: u64) -> Result<Vec<u8>> {
         let timer = OperationTimer::start(FsOperation::Read, Arc::clone(&self.stats));
         let result = self.inner.read(path, offset, size).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn write(&self, path: &str, data: &[u8], offset: u64, flags: WriteFlag) -> Result<u64> {
         let timer = OperationTimer::start(FsOperation::Write, Arc::clone(&self.stats));
         let result = self.inner.write(path, data, offset, flags).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
@@ -119,56 +119,56 @@ impl FileSystem for StatsWrappedFS {
             .inner
             .read_dir(path, offset, limit, sort_by, sort_order)
             .await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn stat(&self, path: &str) -> Result<FileInfo> {
         let timer = OperationTimer::start(FsOperation::Stat, Arc::clone(&self.stats));
         let result = self.inner.stat(path).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn rename(&self, old_path: &str, new_path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Rename, Arc::clone(&self.stats));
         let result = self.inner.rename(old_path, new_path).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Rename, Arc::clone(&self.stats));
         let result = self.inner.replace(src_path, dst_path).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Chmod, Arc::clone(&self.stats));
         let result = self.inner.chmod(path, mode).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn truncate(&self, path: &str, size: u64) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::Truncate, Arc::clone(&self.stats));
         let result = self.inner.truncate(path, size).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn ensure_parent_dirs(&self, path: &str, mode: u32) -> Result<()> {
         let timer = OperationTimer::start(FsOperation::EnsureParentDirs, Arc::clone(&self.stats));
         let result = self.inner.ensure_parent_dirs(path, mode).await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
     async fn exists(&self, path: &str) -> bool {
         let timer = OperationTimer::start(FsOperation::Exists, Arc::clone(&self.stats));
         let result = self.inner.exists(path).await;
-        timer.finish().await;
+        timer.finish(true).await;
         result
     }
 
@@ -176,26 +176,11 @@ impl FileSystem for StatsWrappedFS {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         let timer = OperationTimer::start(FsOperation::Grep, Arc::clone(&self.stats));
-        let result = self
-            .inner
-            .grep(
-                path,
-                pattern,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_path,
-                level_limit,
-            )
-            .await;
-        timer.finish().await;
+        let result = self.inner.grep(path, pattern, options).await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
@@ -222,7 +207,7 @@ impl FileSystem for StatsWrappedFS {
                 sort_order,
             )
             .await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 
@@ -247,7 +232,7 @@ impl FileSystem for StatsWrappedFS {
                 continuation_token,
             )
             .await;
-        timer.finish().await;
+        timer.finish(result.is_ok()).await;
         result
     }
 }

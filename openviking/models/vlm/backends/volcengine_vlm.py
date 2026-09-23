@@ -10,6 +10,10 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
 from openviking.utils.multimodal import redact_image_data_urls
@@ -113,12 +117,19 @@ class VolcEngineVLM(OpenAIVLM):
                 raise ImportError(
                     "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
                 )
-            self._sync_client = volcenginesdkarkruntime.Ark(
+            kwargs = dict(
                 api_key=self.api_key,
                 base_url=self.api_base,
                 timeout=self.timeout,
                 max_retries=0,
             )
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                timeout=self.timeout,
+            )
+            if http_client is not None:
+                kwargs["http_client"] = http_client
+            self._sync_client = volcenginesdkarkruntime.Ark(**kwargs)
         return self._sync_client
 
     def _build_async_client(self):
@@ -129,12 +140,19 @@ class VolcEngineVLM(OpenAIVLM):
             raise ImportError(
                 "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
             )
-        return volcenginesdkarkruntime.AsyncArk(
+        kwargs = dict(
             api_key=self.api_key,
             base_url=self.api_base,
             timeout=self.timeout,
             max_retries=0,
         )
+        http_client = create_optional_async_httpx_client(
+            self.api_base,
+            timeout=self.timeout,
+        )
+        if http_client is not None:
+            kwargs["http_client"] = http_client
+        return volcenginesdkarkruntime.AsyncArk(**kwargs)
 
     def supports_media(
         self,

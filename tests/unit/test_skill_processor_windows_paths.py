@@ -88,6 +88,7 @@ async def test_write_auxiliary_files_normalizes_windows_separators(tmp_path):
         "viking://user/default/skills/pdf/scripts/check_bounding_boxes.py",
         "print('ok')",
         ctx=None,
+        lease_ref=None,
     )
     viking_fs.write_file_bytes.assert_not_awaited()
 
@@ -118,5 +119,6 @@ async def test_write_auxiliary_files_preserves_posix_separators(tmp_path):
         "viking://user/default/skills/pdf/scripts/check_bounding_boxes.py",
         "print('ok')",
         ctx=None,
+        lease_ref=None,
     )
     viking_fs.write_file_bytes.assert_not_awaited()

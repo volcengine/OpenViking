@@ -546,6 +546,3 @@ class VikingDBManagerProxy:
             target_uri=target_uri,
             recursive=recursive,
         )
-
-    async def increment_active_count(self, uris: List[str]) -> int:
-        return await self._manager.increment_active_count(self._ctx, uris)

@@ -40,14 +40,16 @@ OpenViking supports various resource types, categorized by functionality:
 | Type | Resource Name | Description |
 |------|---------------|-------------|
 | Images | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | Various image formats, descriptions generated via VLM (Experimental) |
-| Video | `*.mp4`, `*.avi`, `*.mov` ... | Extracts keyframes and analyzes with VLM (Planning) |
-| Audio | `*.mp3`, `*.wav`, `*.m4a` ... | Performs speech transcription (Planning) |
+| Video | `*.mp4`, `*.avi`, `*.mov` ... | Stores the original file; optional VLM understanding requires compatible media configuration |
+| Audio | `*.mp3`, `*.wav`, `*.m4a` ... | Stores the original file; optional VLM understanding requires compatible media configuration |
+
+Audio/video parsers validate and store the original files. Content understanding runs later during semantic processing and is disabled by default (`vlm.media.enabled=false`). Enable it with a compatible provider/model; understanding formats and size limits differ from import formats. This is not a built-in Whisper transcription or local keyframe-extraction pipeline. See [audio/video configuration](../guides/01-configuration.md).
 
 **Cloud Documents**
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair |
+| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable, and mindnote/mindnotes. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair. Mindnote and wiki-wrapped Mindnote require `mindnote:node:read` on the token used for import |
 
 **Web Pages (recursive web crawler)**
 
@@ -112,7 +114,7 @@ Resource incremental updates are implemented via the **Watch Task** mechanism:
 
 #### Watch Task Creation
 - Set `watch_interval > 0` (in minutes) when calling `add_resource` with a re-readable source, such as a URL, sitemap, or RSS feed, to create a watch task
-- Uploaded content referenced by `temp_file_id` is a static snapshot and cannot be watched; re-add it when the local source changes
+- Uploaded content referenced by `temp_file_id` is a static snapshot and cannot be watched. The Python HTTP SDK also uploads local files/directories as snapshots, so do not combine a local path with `watch_interval > 0`; re-add it when the local source changes
 - You may specify `to` to define the target URI; if omitted, the task binds to the `root_uri` returned by this import
 - Pointing a watch at a sitemap/RSS/Atom URL keeps the **whole site** in sync: each refresh re-reads the feed and rebuilds the tree, so newly published pages are added and removed pages drop automatically
 - `WatchManager` handles task persistence
@@ -185,7 +187,7 @@ This endpoint is the core entry point for resource management. It supports vario
 | preserve_structure | bool | No | None | Whether to preserve directory structure |
 | args | object | No | `{}` | Parser-specific import options forwarded to the source parser/accessor. Native HTTPS Git imports and watches accept HTTP Basic credentials over TLS as `args.auth_config={"username":"oauth2","token":"..."}`; `username` defaults to `oauth2`. Git `branch` or `commit` remains at the top level of `args`. To import a private TOS object through its HTTP(S) URL, pass exactly one non-empty string: `args.tos_signature` (sent as `X-Tos-Signature`) or `args.tos_access` (sent as `X-Tos-Access`). TOS credentials are used only for the current HEAD/GET fetch, which is staged as a snapshot; they are not persisted to resource metadata or queue jobs. `args.parse_mode` accepts `default` (existing splitting behavior) or `no_split` (parse and convert each source document to one Markdown body). E.g. `args.site=true/false` forces/opts out of whole-site (sitemap/RSS) ingestion, `args.max_pages` etc. override the `webfeed` config; the recursive web crawler accepts `args.depth`, `args.max_pages`, `args.include_paths`, `args.exclude_paths`, `args.allow_external_links`, `args.skip_download_links`; Feishu user-token imports pass `args.feishu_access_token`. Core `add_resource` fields such as `path`, `to`, `watch_interval`, `include`, and `exclude` are not allowed inside `args` |
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a new Watch for a re-readable source, subject to target ownership rules; uploaded `temp_file_id` snapshots cannot be watched. <=0 creates no Watch: native imports with explicit `to` pause a single accessible task (409 if ambiguous), while Connector imports leave Watches untouched. Explicit `to` wins, otherwise the Watch binds to the imported `root_uri`. |
-| is_active | bool | No | True | Initial Watch scheduling state. `false` requires `watch_interval > 0` and either `to` or `parent`. `parent` is supported for native Feishu URL imports; Connector imports still require an exact `to`. The initial import still runs once and the Watch remains paused afterward |
+| is_active | bool | No | True | Initial Watch scheduling state. `false` requires `watch_interval > 0` and either `to` or `parent`. `parent` is supported for native Feishu URL and Git imports; Connector imports still require an exact `to`. The initial import still runs once and the Watch remains paused afterward |
 | processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
@@ -197,7 +199,7 @@ This endpoint is the core entry point for resource management. It supports vario
 - Resource targets may use public `viking://resources/...`, the home alias `viking://~/resources/...`, explicit user `viking://user/{user_id}/resources/...`, or peer `viking://user/{user_id}/peers/{peer_id}/resources/...` paths. The home alias is expanded to the canonical path using the authenticated request identity; the uid-less spelling `viking://user/resources/...` is rejected with an error pointing at `viking://~/resources/...`.
 - `user_id` and `peer_id` path segments must be safe single-segment identifiers, for example `alice` or `web-visitor-alice`. Values with path separators, `.`, `..`, `:`, or `+` are rejected.
 - `path` and `temp_file_id` cannot be specified together
-- Raw HTTP calls for local files require first uploading via [temp_upload](#temp_upload) to obtain `temp_file_id`
+- Raw HTTP calls for local files require first uploading via [temp_upload](#temp-upload) to obtain `temp_file_id`
 - Only Git repository sources use full background import when `wait=false`; OpenViking performs repository preflight and target planning before returning the `task_id`.
 - Native HTTPS Git credentials in `args.auth_config` remain request-local when `watch_interval <= 0`. When `watch_interval > 0`, OpenViking stores the repository-bound username/token in private watch state and restores it only for later Git fetches. The credentials are excluded from ordinary queue payloads and watch API/MCP/CLI responses. Git PATs have no generic refresh flow; rotate an expired or revoked token by recreating the watch. Legacy URL-embedded credentials such as `https://user:token@host/repo.git` remain accepted and are passed through unchanged; because that URL is also the source identifier, it may be recorded in process arguments, logs, queues, resource metadata, and watch state. Prefer `args.auth_config` for new integrations. Plaintext HTTP authentication and authenticated redirects for `args.auth_config` remain rejected.
 - The token travels in the HTTPS request body. Keep diagnostic request-body dumping disabled in production because explicitly enabling it can record secrets.
@@ -207,8 +209,10 @@ This endpoint is the core entry point for resource management. It supports vario
 - `processing_mode=vectors_only` does not call the VLM semantic-understanding stage and does not generate or refresh `.abstract.md` / `.overview.md`. For existing targets, it preserves existing semantic artifacts and existing semantic vectors. It still updates the resource tree, vectorizes current non-hidden files when `build_index=true`, and removes detail vectors for files deleted during refresh.
 - `processing_mode` belongs to `add_resource`. The admin `reindex` API/CLI continues to use `mode` (`vectors_only`, `semantic_and_vectors`, `prune_orphans`) for maintenance operations on already-ingested data.
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
-- For Connector imports, `is_active=false` creates the paused Watch before submission. Native Feishu imports carry `is_active` through the resource queue and create the Watch after resolving the imported resource URI. In both cases, the initial import still runs once and periodic scheduling remains disabled.
+- For Connector imports, `is_active=false` creates the paused Watch before submission. Native Feishu and Git imports carry `is_active` through the resource queue and create the Watch after resolving the imported resource URI. In both cases, the initial import still runs once and periodic scheduling remains disabled.
 - Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
+- Feishu/Lark Mindnote URLs may use `/mindnote/{token}` or `/mindnotes/{token}`. Wiki URLs that resolve to `obj_type=mindnote` use the same reader. Mindnote uses the same authentication selection as other Feishu imports: `args.feishu_access_token` selects a user token, otherwise OpenViking falls back to the configured app/tenant token. The selected token must have `mindnote:node:read`.
+- Mindnote node images use Feishu's Drive media API and the same token type as the Mindnote import. User-token imports forward the user token to media download; app-token imports use the configured app credentials. The selected token must allow `docs:document.media:download`. If media download is unavailable, the text import still succeeds and keeps the original image reference.
 - Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
 - Feishu/Lark user-token watches pass `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` with `watch_interval > 0`. They may also pass `feishu_app_id` and `feishu_app_secret` together; OpenViking stores the pair in the private watch task state and uses it to refresh that watch's user token.
 - If the request omits the app pair, user-token watches use `FEISHU_APP_ID` and `FEISHU_APP_SECRET`, or `feishu.app_id` and `feishu.app_secret` in `ov.conf`. Feishu refresh tokens are bound to their issuing app, so whichever app credentials are used must match the supplied user token.
@@ -316,6 +320,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
     }
   }'
 
+# Add a Feishu Mindnote (a wiki URL backed by Mindnote is also supported)
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/mindnote/mindnote_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
 # Add a Feishu document with scheduled user-token refresh
 curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
@@ -395,9 +410,9 @@ result = client.add_resource(
 # Check the latest import task; use its results after it reaches completed
 print(client.get_task(result["task_id"]))
 
-# Enable scheduled updates
+# Enable scheduled updates for a re-readable URL
 client.add_resource(
-    path="./documents/guide.md",
+    path="https://example.com/guide.md",
     to="viking://resources/guide.md",
     options={
         "watch_interval": 60,  # Update every 60 minutes
@@ -407,6 +422,12 @@ client.add_resource(
 # Add a Feishu document with a one-time user access token
 client.add_resource(
     path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
+)
+
+# Add a Feishu Mindnote with an explicit user token
+client.add_resource(
+    path="https://example.feishu.cn/mindnote/mindnote_token",
     options={"args": {"feishu_access_token": "u-..."}},
 )
 
@@ -605,7 +626,7 @@ For Git repository sources with `wait=false`, the background task has `task_type
 
 ### temp_upload
 
-Upload a temporary file for subsequent importing of local files via [add_resource](#add_resource) or [add_skill](#add_skill).
+Upload a temporary file for subsequent importing of local files via [add_resource](#add-resource) or [add_skill](04-skills.md#add-skill).
 
 #### 1. API Implementation Overview
 

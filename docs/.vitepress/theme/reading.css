@@ -1,0 +1,80 @@
+:root { --vp-c-divider: #20272320; --vp-sidebar-width: 280px; }
+.dark { --vp-c-divider: #e9ece71c; }
+.VPHome { margin-bottom: 0 !important; }
+.VPNavBarTitle .title { font-size: 16px; letter-spacing: -.035em; }
+.VPNavBarTitle .logo { width: 27px; height: 27px; object-fit: contain; }
+.VPNavBarTitle .title::after { content: ' / docs'; font-family: var(--vp-font-family-mono); font-size: 11px; color: var(--vp-c-text-2); margin-left: 10px; letter-spacing: 0; font-weight: 400; }
+.VPNavBarMenuLink { font-size: 12px !important; }
+.ov-docs-search-trigger { border-radius: 5px; height: 34px; min-width: 155px; background: transparent; font-size: 12px; }
+.ov-docs-search-trigger kbd { font-size: 10px; min-width: 38px; border: 0; background: var(--vp-c-bg-alt); }
+.doc-breadcrumb { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; margin-bottom: 22px; font-size: 11px; line-height: 1.6; color: var(--vp-c-text-2); }
+.doc-breadcrumb a:hover { color: var(--vp-c-brand-1); }
+.doc-breadcrumb [aria-current] { color: var(--vp-c-text-1); }
+.doc-breadcrumb > span:not([aria-current]) { opacity: .4; }
+.sidebar-home-link { display: block; padding: 8px 0 22px; margin-bottom: 5px; font-size: 12px; color: var(--vp-c-text-2); border-bottom: 1px solid var(--vp-c-divider); }
+.sidebar-home-link:hover { color: var(--vp-c-brand-1); }
+.VPSidebarItem.level-0 > .item .text { font-size: 12px; letter-spacing: .01em; }
+.VPSidebarItem.level-1 > .item .text { font-size: 12px; }
+.VPSidebarItem.is-active > .item > .link { background: var(--vp-c-brand-soft); border-radius: 4px; padding-inline: 8px; margin-inline: -8px; }
+.vp-doc h1 { font-size: 36px; line-height: 1.2; letter-spacing: -.045em; font-weight: 600; }
+.vp-doc h2 { font-weight: 500; letter-spacing: -.025em; padding-top: 28px; margin-top: 44px; }
+.vp-doc p, .vp-doc li { line-height: 1.85; }
+.vp-doc p { color: var(--vp-c-text-2); }
+.vp-doc p strong { color: var(--vp-c-text-1); }
+.vp-doc div[class*='language-'] { border: 1px solid var(--vp-c-divider); border-radius: 6px; }
+.vp-doc :not(pre) > code { border-radius: 3px; }
+.VPDocFooter .pager-link { border-radius: 6px; }
+.VPFooter { background: var(--vp-c-bg-alt); }
+.VPFooter .message, .VPFooter .copyright { font-size: 11px; }
+@media (min-width: 960px) { .VPDoc .content-container { max-width: 800px !important; } }
+@media (max-width: 767px) { .VPNavBarTitle .title::after { display: none; } .ov-docs-search-trigger { min-width: 58px; width: 58px; } .vp-doc h1 { font-size: 29px; } .doc-breadcrumb { font-size: 10px; } }
+
+/* Use identical geometry before hydration and on every route. VitePress adds
+   .has-sidebar after rendering; it must not reposition the header children. */
+.VPNav { background: transparent; border: 0; }
+.VPNav .VPNavBar {
+  background: color-mix(in srgb, var(--vp-c-bg) 72%, transparent) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(145%);
+  backdrop-filter: blur(20px) saturate(145%);
+  border-bottom: 1px solid var(--vp-c-divider);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--vp-c-bg-elv) 45%, transparent);
+  transition: none;
+}
+.VPNav .VPNavBar .wrapper { padding: 0; }
+.VPNav .VPNavBar > .wrapper > .container { width: min(1200px, calc(100% - 96px)); max-width: none; margin-inline: auto; }
+.VPNav .VPNavBar > .wrapper > .container > .title { position: static; inset: auto; width: auto; padding: 0; height: var(--vp-nav-height); background: transparent; transition: none; }
+.VPNav .VPNavBar > .wrapper > .container > .content { position: static; padding: 0 0 0 24px; min-width: 0; }
+.VPNav .VPNavBar .content-body { background: transparent !important; transition: none; }
+.VPNav .VPNavBar .VPNavBarTitle .title { border-bottom: 0; }
+.VPNav .VPNavBar .divider { display: none; }
+.VPNav .VPNavBarTranslations,
+.VPNav .VPNavScreenTranslations,
+.VPNav .VPNavBarExtra .translations { display: none !important; }
+.VPNav .ov-docs-search { order: 0; }
+.VPNav .VPNavBarMenu { order: 1; }
+.VPNav .ov-locale-switch { order: 2; margin-left: 16px; }
+.VPNav .VPNavBarAppearance { order: 3; }
+.VPNav .VPNavBarSocialLinks { order: 4; }
+.VPNav .VPNavBarExtra { order: 5; }
+.VPNav .VPNavBarHamburger { order: 6; }
+@media (max-width: 1279px) and (min-width: 768px) {
+  .VPNav .ov-docs-search-trigger { min-width: 72px; width: 72px; padding-inline: 10px; }
+  .VPNav .ov-docs-search-trigger-label, .VPNav .ov-docs-search-trigger kbd { display: none; }
+  .VPNav .ov-docs-search-trigger-compact { display: inline; }
+}
+@media (max-width: 800px) {
+  .VPNav .VPNavBar > .wrapper > .container { width: calc(100% - 48px); }
+}
+@media (max-width: 767px) {
+  .VPNav .VPNavBar .content-body { gap: 8px; }
+  .VPNav .VPNavBar > .wrapper > .container > .content { padding-left: 12px; }
+  .VPNav .ov-docs-search { margin-right: 0; }
+  .VPNav .ov-locale-switch { margin-left: 0; }
+  .VPNav .VPNavBarHamburger { width: 24px; }
+}
+@media (max-width: 374px) {
+  .VPNav .VPNavBarTitle .title { font-size: 13px; }
+  .VPNav .VPNavBarTitle .logo { width: 21px; height: 21px; margin-right: 5px; }
+  .VPNav .VPNavBar .content-body { gap: 5px; }
+  .VPNav .ov-docs-search-trigger { width: 43px; min-width: 43px; padding: 0 4px; }
+}

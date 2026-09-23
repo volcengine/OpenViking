@@ -679,8 +679,24 @@ test("the fork ships no takeover module", () => {
 // not fire off a stale usage reading.
 // ---------------------------------------------------------------------------
 
-/** A `viking_search` some other extension registered. */
+/** A `viking_search` some other extension registered — the peer before 0.4. */
 const PEER_TOOL = { name: "viking_search", sourceInfo: { path: "/somewhere/else/openviking" } };
+
+/** The same peer from 0.4 on, where the tools are named `openviking_*`. */
+const PEER_TOOL_RENAMED = {
+  name: "openviking_search",
+  sourceInfo: { path: "/somewhere/else/openviking" },
+};
+
+/** The marker the peer sets on `globalThis` once it is connected. */
+const PEER_MARKER = "__OPENVIKING_PI_EXTENSION__";
+
+/** Drop the peer marker again, whatever the test did with it. */
+function withoutPeerMarker(t) {
+  t.after(() => {
+    delete globalThis[PEER_MARKER];
+  });
+}
 
 test("a peer that registers viking_search later still makes this extension stand down", { skip: !JITI_PATH }, async (t) => {
   withDeadServer(t);
@@ -712,6 +728,65 @@ test("a peer that registers viking_search later still makes this extension stand
   assert.equal(await calls.handlers.get("context")({ type: "context", messages }, fakeCtx()), undefined);
 });
 
+test("a peer that registers the renamed openviking_search stands this extension down too", { skip: !JITI_PATH }, async (t) => {
+  withDeadServer(t);
+  // From 0.4 on the peer's search tool is `openviking_search`, so probing for
+  // the old name alone would leave both extensions writing one OV session.
+  let peerLoaded = false;
+  const calls = await loadExtension({ getAllTools: () => (peerLoaded ? [PEER_TOOL_RENAMED] : []) });
+
+  const notified = [];
+  await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "hello", systemPrompt: "BASE" },
+    fakeCtx({ notified }),
+  );
+  assert.ok(calls.tools.includes("viking_search"), "the early probe found nothing, so we registered");
+
+  peerLoaded = true;
+  const result = await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "again", systemPrompt: "BASE" },
+    fakeCtx({ notified }),
+  );
+  assert.equal(result, undefined, "the second writer stands down instead of syncing the same session");
+  assert.ok(
+    notified.some(([message]) => /another OpenViking extension is already active/.test(message)),
+    JSON.stringify(notified),
+  );
+
+  const messages = [{ role: "user", content: "hi", timestamp: 1 }];
+  assert.equal(await calls.handlers.get("context")({ type: "context", messages }, fakeCtx()), undefined);
+});
+
+test("the peer marker alone stands this extension down, with no tool registered", { skip: !JITI_PATH }, async (t) => {
+  withDeadServer(t);
+  withoutPeerMarker(t);
+  // When `/mcp` answers 401/403 or the handshake times out, the peer registers
+  // no tool at all and still writes the OV session. The marker is the only
+  // signal left, and this extension never sets it itself.
+  const calls = await loadExtension({ getAllTools: () => [] });
+
+  const notified = [];
+  await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "hello", systemPrompt: "BASE" },
+    fakeCtx({ notified }),
+  );
+  assert.ok(calls.tools.includes("viking_search"), "no peer signal yet, so we registered");
+
+  globalThis[PEER_MARKER] = { version: "0.4.0" };
+  const result = await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "again", systemPrompt: "BASE" },
+    fakeCtx({ notified }),
+  );
+  assert.equal(result, undefined, "a tool-less peer is still a second writer");
+  assert.ok(
+    notified.some(([message]) => /another OpenViking extension is already active/.test(message)),
+    JSON.stringify(notified),
+  );
+
+  const messages = [{ role: "user", content: "hi", timestamp: 1 }];
+  assert.equal(await calls.handlers.get("context")({ type: "context", messages }, fakeCtx()), undefined);
+});
+
 test("our own viking_search is not mistaken for a peer's", { skip: !JITI_PATH }, async (t) => {
   withDeadServer(t);
   const calls = await loadExtension({
@@ -723,6 +798,60 @@ test("our own viking_search is not mistaken for a peer's", { skip: !JITI_PATH },
   );
   assert.ok(result?.systemPrompt, "the extension keeps working");
   assert.ok(calls.tools.includes("new_context"));
+});
+
+test("an openviking_search from our own directory is not mistaken for a peer's", { skip: !JITI_PATH }, async (t) => {
+  withDeadServer(t);
+  // `sourceInfo.path` has the final say over the name: a probe name carrying
+  // our own directory is ours, whichever generation of the naming it belongs to.
+  const calls = await loadExtension({
+    getAllTools: () => [{ name: "openviking_search", sourceInfo: { path: EXTENSION_DIR } }],
+  });
+  const result = await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "hello", systemPrompt: "BASE" },
+    fakeCtx(),
+  );
+  assert.ok(result?.systemPrompt, "the extension keeps working");
+  assert.ok(calls.tools.includes("new_context"));
+});
+
+test("without sourceInfo, only a name we never register counts as a peer's", { skip: !JITI_PATH }, async (t) => {
+  withDeadServer(t);
+  // An older pi reports no `sourceInfo`. Our own `viking_search` then has to be
+  // recognised by the fact that we registered it, while `openviking_search` is
+  // a name this extension never registers and so can only be the peer's.
+  let stage = "empty";
+  const registries = {
+    empty: [],
+    ours: [{ name: "viking_search" }],
+    peer: [{ name: "viking_search" }, { name: "openviking_search" }],
+  };
+  const calls = await loadExtension({ getAllTools: () => registries[stage] });
+
+  const notified = [];
+  await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "hello", systemPrompt: "BASE" },
+    fakeCtx({ notified }),
+  );
+  assert.ok(calls.tools.includes("viking_search"), "nothing registered yet, so we registered");
+
+  stage = "ours";
+  const kept = await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "still us", systemPrompt: "BASE" },
+    fakeCtx({ notified }),
+  );
+  assert.ok(kept?.systemPrompt, "our own sourceInfo-less viking_search is not a peer");
+
+  stage = "peer";
+  const result = await calls.handlers.get("before_agent_start")(
+    { type: "before_agent_start", prompt: "again", systemPrompt: "BASE" },
+    fakeCtx({ notified }),
+  );
+  assert.equal(result, undefined, "the peer's openviking_search wins over our own entry in the list");
+  assert.ok(
+    notified.some(([message]) => /another OpenViking extension is already active/.test(message)),
+    JSON.stringify(notified),
+  );
 });
 
 test("a turn that ended in a provider error does not re-arm the reminders", { skip: !JITI_PATH }, async (t) => {

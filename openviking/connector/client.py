@@ -54,6 +54,19 @@ class ConnectorClient:
         headers["Authorization"] = token
         return headers
 
+    def get_oauth_access_token(
+        self, auth_url: str, api_key: str, reference: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Read a centrally managed token from synchronous Feishu worker threads."""
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                rsp = client.post(auth_url, json=reference, headers={"X-API-Key": api_key})
+            rsp.raise_for_status()
+            return _unwrap_connector_response(rsp.json())
+        except (httpx.HTTPError, ValueError, InternalError):
+            # Neither remote business messages nor response bodies may expose credentials.
+            raise InternalError("External OAuth access token request failed.") from None
+
     async def submit_doc_add(
         self,
         add_type: str,

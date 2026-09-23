@@ -93,7 +93,7 @@ All filesystem APIs use the same permission mapping:
 
 | Operation | Required capability |
 |-----------|---------------------|
-| read, stat, list, tree, find, search, grep, glob, relations | read |
+| read, stat, list, tree, find, search, grep, glob | read |
 | write, create, mkdir, set tags | write |
 | delete or move a file | write |
 | delete or move a directory | manage on the directory and complete subtree |

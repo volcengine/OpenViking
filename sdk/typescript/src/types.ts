@@ -9,6 +9,8 @@ export type ClientHeaders =
 export type UploadMode = "local" | "shared";
 /** Resource post-ingest processing modes accepted by addResource. */
 export type ProcessingMode = "semantic_and_vectors" | "vectors_only";
+/** Observer response format supported by HTTP observer APIs. */
+export type ObserverFormat = "table" | "json";
 /** Conflict policy accepted when importing an OVPack. */
 export type PackConflictPolicy = "fail" | "overwrite" | "skip";
 /** Vector handling strategy accepted when importing an OVPack. */

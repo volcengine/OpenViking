@@ -5,6 +5,7 @@
 import asyncio
 import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
@@ -16,7 +17,9 @@ from openviking.parse.accessors.feishu_accessor import (
     FeishuAccessor,
     _FeishuWikiTreeNode,
 )
+from openviking.parse.accessors.feishu_session import FeishuApiSession
 from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.utils.config.parser_config import FeishuConfig
 
 
 class _SuccessResponse:
@@ -30,9 +33,21 @@ class _SuccessResponse:
         return True
 
 
+def test_generated_doc_url_uses_account_feishu_domain():
+    accessor = FeishuAccessor()._new_operation(
+        "https://example.larksuite.com/docx/token",
+        config=FeishuConfig(domain="https://open.larksuite.com"),
+    )
+
+    assert accessor._build_feishu_doc_url("doc", "token") == (
+        "https://open.larksuite.com/docs/token"
+    )
+
+
 class _FakeRequestOption:
     def __init__(self):
         self.user_access_token = None
+        self.tenant_access_token = None
 
     @staticmethod
     def builder():
@@ -47,8 +62,62 @@ class _FakeRequestOptionBuilder:
         self._option.user_access_token = token
         return self
 
+    def tenant_access_token(self, token):
+        self._option.tenant_access_token = token
+        return self
+
     def build(self):
         return self._option
+
+
+class _FakeClientBuilder:
+    def __init__(self):
+        self.domain_value = None
+        self.timeout_value = None
+        self.app_id_value = None
+        self.app_secret_value = None
+        self.enable_set_token_value = False
+        self.cache_value = None
+
+    def domain(self, value):
+        self.domain_value = value
+        return self
+
+    def timeout(self, value):
+        self.timeout_value = value
+        return self
+
+    def app_id(self, value):
+        self.app_id_value = value
+        return self
+
+    def app_secret(self, value):
+        self.app_secret_value = value
+        return self
+
+    def enable_set_token(self, value):
+        self.enable_set_token_value = value
+        return self
+
+    def cache(self, value):
+        self.cache_value = value
+        return self
+
+    def build(self):
+        return SimpleNamespace(
+            domain=self.domain_value,
+            timeout=self.timeout_value,
+            app_id=self.app_id_value,
+            app_secret=self.app_secret_value,
+            enable_set_token=self.enable_set_token_value,
+            cache=self.cache_value,
+        )
+
+
+class _FakeClient:
+    @staticmethod
+    def builder():
+        return _FakeClientBuilder()
 
 
 class _FakeBaseResponse:
@@ -179,6 +248,7 @@ def _install_fake_lark_modules(monkeypatch):
     _FakeTransport.calls = []
     lark = ModuleType("lark_oapi")
     lark.BaseRequest = _FakeBaseRequest
+    lark.Client = _FakeClient
     lark.HttpMethod = SimpleNamespace(GET="GET")
     lark.AccessTokenType = SimpleNamespace(TENANT="tenant", USER="user")
     docx_v1 = ModuleType("lark_oapi.api.docx.v1")
@@ -203,6 +273,136 @@ def _install_fake_lark_modules(monkeypatch):
     monkeypatch.setitem(sys.modules, "lark_oapi.core.model", core_model)
     monkeypatch.setitem(sys.modules, "lark_oapi.core.http", core_http)
     monkeypatch.setitem(sys.modules, "lark_oapi.core.token", core_token)
+
+
+def _use_fake_client(monkeypatch, accessor: FeishuAccessor, client):
+    monkeypatch.setattr(accessor, "_get_client", lambda **_kwargs: client)
+    accessor._session = SimpleNamespace(
+        tenant_token_cache_scope=lambda: nullcontext(),
+    )
+    monkeypatch.setattr(
+        FeishuApiSession,
+        "tenant_token_cache_scope",
+        lambda _self: nullcontext(),
+    )
+    monkeypatch.setattr(
+        accessor,
+        "_user_request_option",
+        lambda token: _FakeRequestOption.builder().user_access_token(token).build()
+        if token
+        else None,
+    )
+
+
+def _feishu_config(**kwargs) -> FeishuConfig:
+    return FeishuConfig(**kwargs)
+
+
+def _operation(
+    accessor: FeishuAccessor,
+    *,
+    config: FeishuConfig | None = None,
+) -> FeishuAccessor:
+    return accessor._new_operation(
+        "https://example.feishu.cn/docx/doc",
+        config=config,
+    )
+
+
+def test_user_token_client_uses_configured_domain_without_app_credentials(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    accessor = _operation(
+        FeishuAccessor(),
+        config=_feishu_config(domain="https://open.larksuite.com"),
+    )
+
+    client = accessor._get_client(use_user_token=True)
+
+    assert client.domain == "https://open.larksuite.com"
+    assert client.app_id is None
+    assert client.app_secret is None
+    assert client.enable_set_token is True
+
+
+def test_tenant_token_client_requires_credentials(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+    accessor = _operation(FeishuAccessor())
+
+    with pytest.raises(ValueError, match="credentials not configured"):
+        accessor._get_client()
+
+
+def test_tenant_token_client_uses_environment_credentials(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    monkeypatch.setenv("FEISHU_APP_ID", "env-app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "env-secret")
+    accessor = _operation(FeishuAccessor())
+
+    client = accessor._get_client()
+
+    assert client.app_id == "env-app"
+    assert client.app_secret == "env-secret"
+
+
+def test_tenant_clients_install_account_scoped_sdk_cache(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    accessor = _operation(
+        FeishuAccessor(),
+        config=_feishu_config(app_id="account-app", app_secret="account-secret"),
+    )
+    client = accessor._get_client(use_user_token=False)
+
+    assert client.cache is not None
+    assert client.enable_set_token is False
+
+
+def test_shared_accessor_keeps_concurrent_operation_contexts_isolated(monkeypatch):
+    accessor = FeishuAccessor()
+
+    async def return_domain(worker, _source, **_kwargs):
+        await asyncio.sleep(0)
+        return worker._get_config().domain
+
+    monkeypatch.setattr(FeishuAccessor, "_access", return_domain)
+
+    async def run_concurrently():
+        return await asyncio.gather(
+            accessor.access(
+                "https://one.feishu.cn/docx/one",
+                feishu_config=_feishu_config(domain="https://open.one.example"),
+            ),
+            accessor.access(
+                "https://two.feishu.cn/docx/two",
+                feishu_config=_feishu_config(domain="https://open.two.example"),
+            ),
+        )
+
+    assert asyncio.run(run_concurrently()) == [
+        "https://open.one.example",
+        "https://open.two.example",
+    ]
+    assert accessor._session is None
+
+
+def test_client_cache_is_scoped_to_one_operation(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    first = _operation(
+        FeishuAccessor(),
+        config=_feishu_config(app_id="first", app_secret="secret"),
+    )
+    second = _operation(
+        FeishuAccessor(),
+        config=_feishu_config(app_id="second", app_secret="secret"),
+    )
+
+    first_client = first._get_client()
+
+    assert first._get_client() is first_client
+    assert second._get_client() is not first_client
+    assert first_client.app_id == "first"
+    assert second._get_client().app_id == "second"
 
 
 def test_feishu_api_lists_paginated_content_with_user_token(monkeypatch):
@@ -231,10 +431,10 @@ def test_feishu_api_lists_paginated_content_with_user_token(monkeypatch):
         ]
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(
         docx=SimpleNamespace(v1=SimpleNamespace(document_block=SimpleNamespace(list=list_blocks))),
         request=list_drive,
-    )
+    ))
 
     blocks = accessor._fetch_all_blocks("doc_token", feishu_access_token="u-test")
     children = accessor._list_drive_folder_children(
@@ -288,7 +488,7 @@ def test_feishu_api_lists_paginated_wiki_children_with_user_token(monkeypatch):
         ]
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(request=list_wiki_children)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=list_wiki_children))
 
     children = accessor._list_wiki_node_children(
         "space",
@@ -310,8 +510,10 @@ def test_feishu_api_lists_paginated_wiki_children_with_user_token(monkeypatch):
 
 
 def test_resolve_image_refs_respects_download_images_disabled():
-    accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
+    accessor = _operation(
+        FeishuAccessor(),
+        config=_feishu_config(download_images=False),
+    )
     markdown = "![screenshot](feishu://image/img_token_123)"
 
     updated, images = accessor._resolve_image_refs(markdown)
@@ -324,11 +526,11 @@ def test_resolve_image_refs_downloads_media_and_rewrites_markdown(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     request_media = MagicMock(return_value=_FakeMediaResponse(b"\x89PNG\r\n"))
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
+    accessor = _operation(accessor, config=_feishu_config(download_images=True))
 
     updated, images = accessor._resolve_image_refs(
-        "before ![screenshot](feishu://image/img_token_123) after"
+        "before ![screenshot](feishu://image/img_token_123) after",
     )
 
     assert updated == "before ![screenshot](images/img_token_123.png) after"
@@ -347,8 +549,8 @@ def test_resolve_image_refs_uses_content_type_extension(monkeypatch):
         )
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
+    accessor = _operation(accessor, config=_feishu_config(download_images=True))
 
     updated, images = accessor._resolve_image_refs("![j](feishu://image/img_token_jpeg)")
 
@@ -362,8 +564,8 @@ def test_resolve_image_refs_falls_back_to_byte_magic_extension(monkeypatch):
     webp_bytes = b"RIFF\x00\x00\x00\x00WEBPfake"
     request_media = MagicMock(return_value=_FakeMediaResponse(webp_bytes, headers={}))
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
+    accessor = _operation(accessor, config=_feishu_config(download_images=True))
 
     updated, images = accessor._resolve_image_refs("![w](feishu://image/img_token_webp)")
 
@@ -380,8 +582,8 @@ def test_resolve_image_refs_tries_distinct_permission_contexts(monkeypatch):
         ]
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
+    accessor = _operation(accessor, config=_feishu_config(download_images=True))
 
     updated, images = accessor._resolve_image_refs(
         "![s](feishu://image/shared-token)",
@@ -414,9 +616,8 @@ def test_resolve_image_refs_falls_back_to_token_only(
         ]
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._client = SimpleNamespace(request=request_media)
-    accessor._user_token_client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
+    accessor = _operation(accessor, config=_feishu_config(download_images=True))
 
     updated, images = accessor._resolve_image_refs(
         "![s](feishu://image/shared-token)",
@@ -447,8 +648,8 @@ def test_resolve_image_refs_bounds_permission_context_attempts(monkeypatch):
         return_value=_FakeMediaResponse(success=False, code=400, status_code=400)
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
+    accessor = _operation(accessor, config=_feishu_config(download_images=True))
     contexts = [f"context-{index}" for index in range(_MAX_MEDIA_DOWNLOAD_CONTEXTS + 2)]
 
     updated, images = accessor._resolve_image_refs(
@@ -469,8 +670,7 @@ def test_download_image_uses_tenant_token_without_user_token(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     request_media = MagicMock(return_value=_FakeMediaResponse(b"\x89PNG\r\n"))
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
 
     accessor._download_image("img_token_123")
 
@@ -484,10 +684,12 @@ def test_download_image_advertises_user_token_when_provided(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     request_media = MagicMock(return_value=_FakeMediaResponse(b"\x89PNG\r\n"))
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
-    accessor._user_token_client = SimpleNamespace(request=request_media)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request_media))
 
-    accessor._download_image("img_token_123", feishu_access_token="u-test")
+    accessor._download_image(
+        "img_token_123",
+        feishu_access_token="u-test",
+    )
 
     args = request_media.call_args.args
     request = args[0]
@@ -504,7 +706,7 @@ def test_access_downloads_drive_file_with_user_token(monkeypatch):
         headers={"content-type": "application/pdf"},
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(_config=SimpleNamespace()))
     url = "https://bytedance.larkoffice.com/file/file_token"
 
     assert accessor.can_handle(url)
@@ -528,7 +730,7 @@ def test_access_downloads_json_drive_file_as_raw_bytes(monkeypatch):
         headers={"content-type": "application/json"},
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(_config=SimpleNamespace()))
 
     resource = asyncio.run(
         accessor.access(
@@ -558,7 +760,7 @@ def test_access_downloads_json_attachment_with_business_error_fields(monkeypatch
         headers={"content-type": "application/json", "content-disposition": disposition},
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(_config=SimpleNamespace()))
     resource = asyncio.run(
         accessor.access("https://example.feishu.cn/file/json_file", feishu_access_token="u-test")
     )
@@ -589,7 +791,7 @@ def test_access_rejects_raw_feishu_error_envelope(monkeypatch, status_code, disp
         },
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(_config=SimpleNamespace())
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(_config=SimpleNamespace()))
 
     with pytest.raises(OpenVikingError) as exc_info:
         asyncio.run(
@@ -608,7 +810,6 @@ def test_access_materializes_drive_folder_contract(monkeypatch):
     from openviking.parse.accessors.feishu_accessor import FeishuDocument
 
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
     long_name = "文" * 100
     children = {
         "root_folder": [
@@ -652,7 +853,13 @@ def test_access_materializes_drive_folder_contract(monkeypatch):
     url = "https://bytedance.larkoffice.com/drive/folder/root_folder"
 
     assert accessor.can_handle(url)
-    resource = asyncio.run(accessor.access(url, feishu_access_token="u-test"))
+    resource = asyncio.run(
+        accessor.access(
+            url,
+            feishu_access_token="u-test",
+            feishu_config=_feishu_config(download_images=False),
+        )
+    )
     try:
         markdown_files = sorted(resource.path.glob("*.md"))
         assert {path.read_text(encoding="utf-8") for path in markdown_files} == {
@@ -794,7 +1001,11 @@ def test_access_wiki_keeps_existing_single_document_behavior(monkeypatch):
     from openviking.parse.accessors.feishu_accessor import FeishuDocument
 
     accessor = FeishuAccessor()
-    monkeypatch.setattr(accessor, "_resolve_wiki_node", lambda *_args: ("docx", "doc", "Wiki"))
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_wiki_node",
+        lambda *_args, **_kwargs: ("docx", "doc", "Wiki"),
+    )
 
     async def fake_fetch_document(*_args, **_kwargs):
         return FeishuDocument(
@@ -827,7 +1038,6 @@ def test_access_offloads_synchronous_download_to_thread(monkeypatch):
 
     _install_fake_lark_modules(monkeypatch)
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
 
     async def fake_fetch_document(*_args, **_kwargs):
         from openviking.parse.accessors.feishu_accessor import FeishuDocument
@@ -856,7 +1066,12 @@ def test_access_offloads_synchronous_download_to_thread(monkeypatch):
 
     monkeypatch.setattr(accessor, "_resolve_image_refs", fake_resolve)
 
-    resource = asyncio.run(accessor.access("https://example.feishu.cn/docx/doc_token"))
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/docx/doc_token",
+            feishu_config=_feishu_config(download_images=True),
+        )
+    )
     try:
         assert "thread" in ran_on, "_resolve_image_refs was never called"
         assert ran_on["thread"] != main_thread, (
@@ -871,7 +1086,6 @@ def test_access_offloads_synchronous_download_to_thread(monkeypatch):
 
 def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=True)
 
     async def fake_fetch_document(*_args, **_kwargs):
         from openviking.parse.accessors.feishu_accessor import FeishuDocument
@@ -894,7 +1108,12 @@ def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
         ),
     )
 
-    resource = asyncio.run(accessor.access("https://example.feishu.cn/docx/doc_token"))
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/docx/doc_token",
+            feishu_config=_feishu_config(download_images=True),
+        )
+    )
 
     try:
         assert resource.path.name == "document.md"
@@ -910,6 +1129,168 @@ def test_access_writes_downloaded_images_next_to_markdown(monkeypatch):
     assert not resource.path.parent.exists()
 
 
+@pytest.mark.parametrize("path_type", ["mindnote", "mindnotes"])
+def test_mindnote_url_is_supported(path_type):
+    accessor = FeishuAccessor()
+    url = f"https://example.feishu.cn/{path_type}/mindnote_token"
+
+    assert accessor.can_handle(url)
+    assert accessor._parse_feishu_url(url) == ("mindnote", "mindnote_token")
+
+
+def _mindnote_node(node_id, text, parent_id=None, **extra):
+    node = {
+        "node_id": node_id,
+        "texts": [{"text": {"content": text}}],
+        **extra,
+    }
+    if parent_id is not None:
+        node["parent_id"] = parent_id
+    return node
+
+
+@pytest.mark.parametrize(
+    ("nodes", "expected"),
+    [
+        (
+            [
+                _mindnote_node("root", "Root"),
+                _mindnote_node("child", "Child", parent_id="root"),
+                _mindnote_node("orphan", "Orphan", parent_id="missing"),
+            ],
+            "# Title\n\n- Root\n  - Child\n- Orphan",
+        ),
+        (
+            [
+                _mindnote_node("self", "Self", parent_id="self"),
+                _mindnote_node("child", "Child", parent_id="self"),
+            ],
+            "# Title\n\n- Self\n  - Child",
+        ),
+        (
+            [
+                _mindnote_node("a", "A", parent_id="b"),
+                _mindnote_node("b", "B", parent_id="a"),
+            ],
+            "# Title\n\n- A\n  - B",
+        ),
+        (
+            [
+                _mindnote_node("dup", "First"),
+                _mindnote_node("dup", "Second"),
+                _mindnote_node("child", "Child", parent_id="dup"),
+            ],
+            "# Title\n\n- First\n  - Child\n- Second",
+        ),
+    ],
+)
+def test_render_mindnote_handles_noncanonical_tree_shapes(nodes, expected):
+    assert FeishuAccessor._render_mindnote(nodes, "Title") == expected
+
+
+def test_mindnote_preflight_uses_tenant_token_without_user_token(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    nodes = {
+        "data": {
+            "nodes": [
+                _mindnote_node("root", "Tenant Mindnote")
+            ]
+        }
+    }
+    request = MagicMock(return_value=_FakeMediaResponse(json.dumps(nodes).encode()))
+    accessor = FeishuAccessor()
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request))
+
+    identity = asyncio.run(
+        accessor.preflight_source("https://example.feishu.cn/mindnote/mindnote_token")
+    )
+
+    assert identity.source_name == "Tenant Mindnote"
+    node_request = request.call_args.args[0]
+    assert node_request.uri == "/open-apis/mindnote/v1/mindnotes/mindnote_token/nodes"
+    assert node_request.token_types == {"tenant"}
+    assert len(request.call_args.args) == 1
+
+
+def test_access_mindnote_preserves_user_token_for_media(monkeypatch):
+    _install_fake_lark_modules(monkeypatch)
+    nodes = {
+        "data": {
+            "nodes": [
+                _mindnote_node("root", "Launch Plan"),
+                {
+                    "node_id": "child",
+                    "parent_id": "root",
+                    "texts": [
+                        {
+                            "element_type": "link",
+                            "link": {"content": "Spec", "url": "https://example.com/spec"},
+                        }
+                    ],
+                    "highlight": "yellow",
+                    "images": [{"token": "image_token"}],
+                },
+            ]
+        }
+    }
+    request = MagicMock(
+        side_effect=[
+            _FakeMediaResponse(json.dumps(nodes).encode()),
+            _FakeMediaResponse(b"\x89PNG\r\n\x1a\nimage"),
+        ]
+    )
+    accessor = FeishuAccessor()
+    accessor._config = SimpleNamespace(download_images=True)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=request))
+
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/mindnote/mindnote_token",
+            feishu_access_token="u-test",
+        )
+    )
+
+    try:
+        assert resource.path.read_text(encoding="utf-8") == (
+            "# Launch Plan\n\n"
+            "- Launch Plan\n"
+            '  - <mark data-color="yellow">[Spec](<https://example.com/spec>)</mark>\n'
+            "    ![mindnote image](images/image_token.png)"
+        )
+        assert (resource.path.parent / "images" / "image_token.png").read_bytes() == (
+            b"\x89PNG\r\n\x1a\nimage"
+        )
+        node_request, media_request = [call.args[0] for call in request.call_args_list]
+        assert node_request.uri == "/open-apis/mindnote/v1/mindnotes/mindnote_token/nodes"
+        assert media_request.uri == "/open-apis/drive/v1/medias/image_token/download"
+        assert node_request.token_types == media_request.token_types == {"user"}
+        assert all(call.args[1].user_access_token == "u-test" for call in request.call_args_list)
+    finally:
+        resource.cleanup()
+
+
+def test_wiki_mindnote_uses_resolved_object_token(monkeypatch):
+    accessor = FeishuAccessor()
+    monkeypatch.setattr(
+        accessor,
+        "_resolve_wiki_node",
+        MagicMock(return_value=("mindnote", "mindnote_token", "Wiki Mindnote")),
+    )
+    parse = MagicMock(return_value=("# Mindnote\n\n- Root", "Root"))
+    monkeypatch.setattr(accessor, "_parse_mindnote", parse)
+
+    document = asyncio.run(
+        accessor._fetch_document(
+            "https://example.feishu.cn/wiki/wiki_token",
+            feishu_access_token="u-test",
+        )
+    )
+
+    parse.assert_called_once_with("mindnote_token", "u-test")
+    assert document.doc_type == "mindnote"
+    assert document.title == "Wiki Mindnote"
+
+
 def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     _install_fake_lark_modules(monkeypatch)
     accessor = FeishuAccessor()
@@ -917,6 +1298,7 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         "_parse_docx": MagicMock(return_value=("docx body", "Doc")),
         "_parse_sheets": MagicMock(return_value=("sheet body", "Sheet")),
         "_parse_bitable": MagicMock(return_value=("base body", "Base")),
+        "_parse_mindnote": MagicMock(return_value=("mindnote body", "Mindnote")),
     }
     for name, handler in handlers.items():
         monkeypatch.setattr(accessor, name, handler)
@@ -940,10 +1322,10 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
             )
         )
     )
-    accessor._user_token_client = SimpleNamespace(
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(
         request=raw_request,
         wiki=SimpleNamespace(v2=SimpleNamespace(space=SimpleNamespace(get_node=get_wiki_node))),
-    )
+    ))
 
     assert accessor._resolve_wiki_node("wiki_token", "u-test") == (
         "doc",
@@ -972,6 +1354,12 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
     )
     sheets = asyncio.run(accessor._fetch_document("https://example.feishu.cn/sheets/sht_token"))
     base = asyncio.run(accessor._fetch_document("https://example.feishu.cn/base/app_token"))
+    mindnote = asyncio.run(
+        accessor._fetch_document(
+            "https://example.feishu.cn/mindnote/mindnote_token",
+            feishu_access_token="u-test",
+        )
+    )
     monkeypatch.setattr(
         accessor,
         "_resolve_wiki_node",
@@ -984,23 +1372,25 @@ def test_fetch_document_dispatches_all_supported_types(monkeypatch):
         docx.doc_type,
         sheets.doc_type,
         base.doc_type,
+        mindnote.doc_type,
         wiki.doc_type,
     ) == (
         "doc",
         "docx",
         "sheets",
         "base",
+        "mindnote",
         "base",
     )
     assert legacy_doc.title == "Legacy Doc"
     assert legacy_doc.markdown_content == "# Legacy Doc\n\ndoc body"
     assert wiki.title == "Wiki Base"
-    handlers["_parse_docx"].assert_called_once_with("doc_token", "u-test")
-    handlers["_parse_sheets"].assert_called_once_with(
-        "sht_token",
-        None,
-        media_download_extras=sheets.media_download_extras,
+    assert handlers["_parse_docx"].call_args.args == ("doc_token", "u-test")
+    assert handlers["_parse_sheets"].call_args.args == ("sht_token", None)
+    assert handlers["_parse_sheets"].call_args.kwargs["media_download_extras"] is (
+        sheets.media_download_extras
     )
+    handlers["_parse_mindnote"].assert_called_once_with("mindnote_token", "u-test")
     assert handlers["_parse_bitable"].call_args_list[-1].args == ("wiki_app_token", None)
 
     monkeypatch.setattr(accessor, "_probe_docx_document", MagicMock())
@@ -1077,20 +1467,24 @@ def test_fetch_document_honors_bitable_table_and_view(monkeypatch):
         )
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(max_records_per_table=10)
-    accessor._client = SimpleNamespace(
-        bitable=SimpleNamespace(
-            v1=SimpleNamespace(
-                app_table=SimpleNamespace(list=list_tables),
-                app_table_field=SimpleNamespace(list=list_fields),
-                app_table_record=SimpleNamespace(list=list_records),
+    _use_fake_client(
+        monkeypatch,
+        accessor,
+        SimpleNamespace(
+            bitable=SimpleNamespace(
+                v1=SimpleNamespace(
+                    app_table=SimpleNamespace(list=list_tables),
+                    app_table_field=SimpleNamespace(list=list_fields),
+                    app_table_record=SimpleNamespace(list=list_records),
+                )
             )
-        )
+        ),
     )
+    accessor = _operation(accessor, config=_feishu_config(max_records_per_table=10))
 
     document = asyncio.run(
         accessor._fetch_document(
-            "https://example.feishu.cn/base/app_token?table=tblSales&view=vewPublic"
+            "https://example.feishu.cn/base/app_token?table=tblSales&view=vewPublic",
         )
     )
 
@@ -1105,7 +1499,8 @@ def test_fetch_document_honors_bitable_table_and_view(monkeypatch):
     list_records.reset_mock()
     identity = asyncio.run(
         accessor.preflight_source(
-            "https://example.feishu.cn/base/app_token?table=tblSales&view=vewPublic"
+            "https://example.feishu.cn/base/app_token?table=tblSales&view=vewPublic",
+            feishu_config=_feishu_config(max_records_per_table=10),
         )
     )
 
@@ -1186,21 +1581,22 @@ def test_parse_sheets_handles_grid_and_embedded_bitable(monkeypatch):
         )
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(
+    feishu_config = _feishu_config(
         max_rows_per_sheet=2,
         max_records_per_table=10,
         download_images=True,
     )
-    accessor._user_token_client = SimpleNamespace(
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(
         request=request,
         bitable=SimpleNamespace(
             v1=SimpleNamespace(
                 app_table=SimpleNamespace(list=list_tables),
                 app_table_field=SimpleNamespace(list=list_fields),
                 app_table_record=SimpleNamespace(list=list_records),
-            )
+            ))
         ),
     )
+    accessor = _operation(accessor, config=feishu_config)
 
     media_download_extras = {}
     markdown, title = accessor._parse_sheets(
@@ -1349,16 +1745,20 @@ def test_parse_bitable_uses_user_token_and_formats_records(monkeypatch):
         ]
     )
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(max_records_per_table=10)
-    accessor._user_token_client = SimpleNamespace(
-        bitable=SimpleNamespace(
-            v1=SimpleNamespace(
-                app_table=SimpleNamespace(list=list_tables),
-                app_table_field=SimpleNamespace(list=list_fields),
-                app_table_record=SimpleNamespace(list=list_records),
+    _use_fake_client(
+        monkeypatch,
+        accessor,
+        SimpleNamespace(
+            bitable=SimpleNamespace(
+                v1=SimpleNamespace(
+                    app_table=SimpleNamespace(list=list_tables),
+                    app_table_field=SimpleNamespace(list=list_fields),
+                    app_table_record=SimpleNamespace(list=list_records),
+                )
             )
-        )
+        ),
     )
+    accessor = _operation(accessor, config=_feishu_config(max_records_per_table=10))
 
     markdown, title = accessor._parse_bitable("app_token", "u-test")
 
@@ -1381,7 +1781,7 @@ def test_embedded_sheet_uses_same_user_token(monkeypatch):
         )
     )
     accessor = FeishuAccessor()
-    accessor._user_token_client = SimpleNamespace(request=inspect_block)
+    _use_fake_client(monkeypatch, accessor, SimpleNamespace(request=inspect_block))
     read_range = MagicMock(return_value=[["name", "amount"], ["A", "1"]])
     monkeypatch.setattr(accessor, "_read_sheet_range", read_range)
     block = SimpleNamespace(
@@ -1407,7 +1807,6 @@ def test_embedded_sheet_uses_same_user_token(monkeypatch):
 
 def test_access_keeps_raw_title_but_exposes_safe_original_filename(monkeypatch):
     accessor = FeishuAccessor()
-    accessor._config = SimpleNamespace(download_images=False)
 
     async def fake_fetch_document(*_args, **_kwargs):
         from openviking.parse.accessors.feishu_accessor import FeishuDocument
@@ -1422,7 +1821,12 @@ def test_access_keeps_raw_title_but_exposes_safe_original_filename(monkeypatch):
 
     monkeypatch.setattr(accessor, "_fetch_document", fake_fetch_document)
 
-    resource = asyncio.run(accessor.access("https://example.feishu.cn/docx/doc_token"))
+    resource = asyncio.run(
+        accessor.access(
+            "https://example.feishu.cn/docx/doc_token",
+            feishu_config=_feishu_config(download_images=False),
+        )
+    )
     try:
         assert resource.meta["feishu_title"] == "API Docs/Overview"
         assert resource.meta["original_filename"] == "API Docs_Overview"

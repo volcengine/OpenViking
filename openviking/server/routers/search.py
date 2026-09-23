@@ -6,7 +6,7 @@ import asyncio
 import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -172,6 +172,28 @@ CONTEXT_ONLY_FIELDS = (
 )
 
 
+def context_only_fields_error(supplied_fields, as_named_by_caller=None) -> Optional[str]:
+    """The refusal for context-only arguments in list mode, or None if there is nothing to refuse.
+
+    Both faces of search have to answer the same way here, and both used to carry their
+    own copy of the field list and the wording. The MCP tool never builds a
+    ``SearchRequest`` -- it calls ``SearchService.search`` directly -- so it cannot inherit
+    the validator; it can inherit this.
+
+    ``as_named_by_caller`` maps a field in ``CONTEXT_ONLY_FIELDS`` to the spellings the
+    caller actually used, for a face that exposes one of them under more than one name --
+    and a caller can set more than one of those at once. Telling somebody who passed
+    ``detail_by_category`` that ``detail`` is the problem is not an improvement on having
+    no error at all.
+    """
+    used = sorted(set(CONTEXT_ONLY_FIELDS) & set(supplied_fields))
+    if not used:
+        return None
+    names = sorted({name for field in used for name in ((as_named_by_caller or {}).get(field) or {field})})
+    return (f"{', '.join(names)} require mode='context'; "
+            "set mode='context' or drop these fields")
+
+
 class SearchRequest(BaseModel):
     """Request model for search with session.
 
@@ -218,12 +240,9 @@ class SearchRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
         if self.mode == "list":
-            used = sorted(set(CONTEXT_ONLY_FIELDS) & self.model_fields_set)
-            if used:
-                raise ValueError(
-                    f"{', '.join(used)} require mode='context'; "
-                    "set mode='context' or drop these fields"
-                )
+            error = context_only_fields_error(self.model_fields_set)
+            if error:
+                raise ValueError(error)
             return self
 
         if self.read_content:
@@ -310,6 +329,8 @@ class GrepRequest(BaseModel):
     level_limit: int = 10
     tags: Optional[List[str]] = None
     include_tags: bool = False
+    before_context: int = Field(default=0, ge=0)
+    after_context: int = Field(default=0, ge=0)
 
 
 class GlobRequest(BaseModel):
@@ -326,6 +347,7 @@ class GlobRequest(BaseModel):
 @router.post("/find")
 async def find(
     request: FindRequest,
+    http_request: Request,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Semantic search without session context."""
@@ -361,6 +383,7 @@ async def find(
     if request.read_content:
         result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
+    http_request.state.retrieval_result_count = result.get("total", 0)
     return Response(
         status="ok",
         result=result,
@@ -385,6 +408,7 @@ async def _search_context(
     service: Any,
     ctx: RequestContext,
     request: SearchRequest,
+    http_request: Request,
     effective_filter: Optional[Dict[str, Any]],
     actual_limit: int,
 ):
@@ -417,6 +441,7 @@ async def _search_context(
     ignored = _context_ignored_fields(request)
     if ignored:
         result.stats["ignored"] = ignored
+    http_request.state.retrieval_result_count = len(result.entries)
     return Response(
         status="ok",
         result=_sanitize_floats(result.to_dict()),
@@ -427,6 +452,7 @@ async def _search_context(
 @router.post("/search")
 async def search(
     request: SearchRequest,
+    http_request: Request,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Semantic search with optional session context."""
@@ -445,6 +471,7 @@ async def search(
             service=service,
             ctx=_ctx,
             request=request,
+            http_request=http_request,
             effective_filter=effective_filter,
             actual_limit=actual_limit,
         )
@@ -480,6 +507,7 @@ async def search(
     if request.read_content:
         result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
+    http_request.state.retrieval_result_count = result.get("total", 0)
     return Response(
         status="ok",
         result=result,
@@ -538,6 +566,8 @@ async def grep(
             level_limit=request.level_limit,
             tags=request.tags,
             include_tags=request.include_tags,
+            before_context=request.before_context,
+            after_context=request.after_context,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")

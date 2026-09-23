@@ -186,7 +186,7 @@ const activity = {
       botDisabledFooter: 'Enable bot mode to chat with the Agent',
       historyTitle: 'Agent session history',
       historyDescription:
-        'Only sessions used by the Agent panel are shown here; a new session opens a blank Agent context.',
+        'Conversations are shared with VikingBot, including legacy Agent sessions saved in this browser.',
       loadingSessions: 'Loading sessions...',
       noSessions: 'No session history yet',
       createTimeout:
@@ -241,7 +241,7 @@ const activity = {
         'Opened the add-resource dialog. After submitting, the left tree refreshes; use /ls or /search to keep locating new content.',
       addResourceTitle: 'Add resource',
       sessionUsage:
-        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|extract|message|used|tool-results|tool-result|tool-search|delete] ...',
+        'Usage: /session [current|list|create|switch|get|context|messages|archive|commit|extract|message|tool-results|tool-result|tool-search|delete] ...',
       sessionDeleteUsage: 'Usage: /session delete <session_id>',
       sessionMissing:
         'No active session. Open the Agent panel to create one, or pass a session_id.',
@@ -297,7 +297,7 @@ const activity = {
         sessionAction: {
           name: 'subcommand',
           description:
-            'current, list, create, switch, get, context, messages, archive, commit, extract, message, used, tool-results, tool-result, tool-search, delete.',
+            'current, list, create, switch, get, context, messages, archive, commit, extract, message, tool-results, tool-result, tool-search, delete.',
         },
         sessionId: {
           name: 'session_id',
@@ -316,15 +316,6 @@ const activity = {
           name: 'content',
           description:
             'For the message subcommand. Text to append to the session.',
-        },
-        contexts: {
-          name: '--context uri',
-          description:
-            'Repeatable for the used subcommand. Records context actually used.',
-        },
-        skillJson: {
-          name: '--skill-json JSON',
-          description: 'For the used subcommand. Records skill usage details.',
         },
         keepRecent: {
           name: '--keep-recent count',
@@ -469,10 +460,6 @@ const activity = {
           message: {
             code: '/session message [session_id] user hello',
             description: 'Append a message to a session',
-          },
-          used: {
-            code: '/session used [session_id] --context viking://resources/...',
-            description: 'Record actually used context or skill',
           },
           toolResults: {
             code: '/session tool-results [session_id] --limit 20',

@@ -478,9 +478,8 @@ class TestExtractLoopFinalJsonRetry:
             "openviking.session.memory.extract_loop.get_openviking_config",
             return_value=config,
         ):
-            result, _ = await extract_loop.run()
-        assert result.errors
-        assert "Final response could not be parsed" in result.errors[0]
+            with pytest.raises(RuntimeError, match="Final response could not be parsed"):
+                await extract_loop.run()
 
         final_prompts = [
             message["content"]
@@ -507,7 +506,7 @@ class TestExtractLoopFinalJsonRetry:
         assert "not inferring scope from the file name/topic" in initial_system_prompt
 
     @pytest.mark.asyncio
-    async def test_python_protocol_retries_then_degrades_on_invalid_program(self):
+    async def test_python_protocol_retries_then_raises_on_empty_response(self):
         class FakeVLM:
             model = "test-model"
 
@@ -516,7 +515,7 @@ class TestExtractLoopFinalJsonRetry:
 
             async def get_completion_async(self, **kwargs):
                 self.seen_messages.append(list(kwargs["messages"]))
-                return "this is not a valid SDK program"
+                return ""
 
         class FakeContextProvider:
             read_file_contents = {}
@@ -574,12 +573,10 @@ class TestExtractLoopFinalJsonRetry:
             extract_loop._validate_patch_operations = AsyncMock(return_value=[])
             extract_loop.finalize_operations = AsyncMock()
 
-            result, _ = await extract_loop.run()
+            with pytest.raises(RuntimeError, match="failure_kind=empty_response"):
+                await extract_loop.run()
 
-        assert result.upsert_operations == []
-        assert result.delete_file_contents == []
-        assert result.errors
-        assert "Final response could not be parsed" in result.errors[0]
+        extract_loop.finalize_operations.assert_not_awaited()
 
         assert len(vlm.seen_messages) == 2
         system_prompt = vlm.seen_messages[0][0]["content"]

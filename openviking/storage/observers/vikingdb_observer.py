@@ -39,8 +39,60 @@ class VikingDBObserver(BaseObserver):
         )
         return self._format_status_as_table(statuses)
 
+    async def get_status_json_async(self, ctx: Optional[RequestContext] = None) -> dict:
+        if not self._vikingdb_manager:
+            return {
+                "collections": [],
+                "summary": {
+                    "index_count": 0,
+                    "vector_count": 0,
+                    "collection_count": 0,
+                },
+            }
+
+        if not await self._vikingdb_manager.collection_exists():
+            return {
+                "collections": [],
+                "summary": {
+                    "index_count": 0,
+                    "vector_count": 0,
+                    "collection_count": 0,
+                },
+            }
+
+        statuses = await self._get_collection_statuses(
+            [self._vikingdb_manager.collection_name], ctx=ctx
+        )
+        collections = []
+        total_indexes = 0
+        total_vectors = 0
+        for name, status in statuses.items():
+            item = {
+                "collection": name,
+                "index_count": status.get("index_count", 0),
+                "vector_count": status.get("vector_count", 0),
+                "ok": not bool(status.get("error")),
+            }
+            if status.get("error"):
+                item["error"] = status["error"]
+            collections.append(item)
+            total_indexes += item["index_count"]
+            total_vectors += item["vector_count"]
+
+        return {
+            "collections": collections,
+            "summary": {
+                "index_count": total_indexes,
+                "vector_count": total_vectors,
+                "collection_count": len(collections),
+            },
+        }
+
     def get_status_table(self, ctx: Optional[RequestContext] = None) -> str:
         return run_async(self.get_status_table_async(ctx=ctx))
+
+    def get_status_json(self, ctx: Optional[RequestContext] = None) -> dict:
+        return run_async(self.get_status_json_async(ctx=ctx))
 
     def __str__(self) -> str:
         return self.get_status_table()

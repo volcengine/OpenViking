@@ -21,10 +21,12 @@ from openviking.session.memory.extraction_output_protocol.base import (
 from openviking.session.memory.merge_op import (
     DeleteBlock,
     FieldType,
+    ImmutableOp,
     MergeOp,
     SearchReplaceBlock,
     StrPatch,
 )
+from openviking.session.memory.utils.description_template import render_description_template
 from openviking.session.memory.utils.line_numbers import (
     every_line_has_line_numbers,
     strip_line_numbers,
@@ -91,7 +93,7 @@ _CONTRACT_PREAMBLE = (
     'single- or double-quoted literals. Inside triple quotes, escape any literal """ and '
     "backslash; never put a real newline inside a single- or double-quoted string.",
     "Only keyword arguments are accepted by create, set, and obj.update(); a field's update() takes one positional string. Unknown business fields are ignored.",
-    "You may end the program with sdk.commit(); when present it must be the final call. Return an empty program when there are no changes.",
+    "You may end the program with sdk.commit(); when present it must be the final call. If there are no changes, return only sdk.commit().",
     "Use the system-provided existing-object variable names exactly as shown. When a newly "
     "created memory must be referenced by delete(replacement=...) or link(...), assign the "
     "create call to a variable first, for example: canonical = sdk.create_<type>(...); "
@@ -214,6 +216,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             for field in schema.fields
         }
         for name, _type_name, description in fields:
+            if name in merge_ops:
+                # Render only YAML field descriptions, using the same context and
+                # restricted renderer as JSON. Keep the DSL's own edit instructions
+                # instead of copying the JSON model's merge-operation wrappers.
+                description = render_description_template(description, context.template_context)
             normalized_description = " ".join(str(description or "").split())
             qualifier = f" [{merge_ops[name]}]" if name in merge_ops else ""
             lines.append(f"  - {_identifier_alias(name)}{qualifier}: {normalized_description}")
@@ -282,7 +289,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         return (
             "You have reached the maximum number of tool call iterations. Do not call any more "
             "tools. Return the complete restricted Python memory SDK program now. Output only "
-            "Python code. If there are no changes, return an empty program."
+            "Python code. If there are no changes, return only sdk.commit()."
         )
 
     def render_format_retry(self, error: str | None = None) -> str:
@@ -1097,8 +1104,9 @@ class _PythonProgramCompiler:
             field_schema is not None
             and field_schema.merge_op == MergeOp.IMMUTABLE
             and owner.existing
+            and ImmutableOp.is_set(owner.fields.get(name))
         ):
-            # Immutable identity fields cannot change on an existing memory; ignore silently.
+            # Preserve established values, but allow filling a blank template field.
             return
         if handle.full_value is not _UNSET:
             owner.fields[name] = handle.full_value
@@ -1165,9 +1173,13 @@ class _PythonProgramCompiler:
                 continue
             if field_schema is None:
                 continue
-            if field_schema.merge_op == MergeOp.IMMUTABLE and owner.existing:
-                continue
             current = owner.fields.get(name)
+            if (
+                field_schema.merge_op == MergeOp.IMMUTABLE
+                and owner.existing
+                and ImmutableOp.is_set(current)
+            ):
+                continue
             if field_schema.merge_op == MergeOp.SUM:
                 value = (current or 0) + value
                 previous_delta = owner.changed_fields.get(name, 0)

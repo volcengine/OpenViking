@@ -225,7 +225,7 @@ class HttpCollection(ICollection):
             "CollectionName": self.collection_name,
             "IndexName": index_name,
         }
-        if scalar_index:
+        if scalar_index is not None:
             data["ScalarIndex"] = json.dumps(scalar_index)
         if description is not None:
             data["Description"] = description
@@ -635,8 +635,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"SearchByScalar response: {response.text}")
-        if response.status_code != 200:
-            return SearchResult()
+        response.raise_for_status()
 
         data = json.loads(response.text).get("data", {})
         result = SearchResult()
@@ -675,8 +674,7 @@ class HttpCollection(ICollection):
             },
             timeout=DEFAULT_TIMEOUT,
         )
-        if response.status_code != 200:
-            return AggregateResult(agg={}, op=op, field=field)
+        response.raise_for_status()
         result = json.loads(response.text)
         data = result.get("data", {})
         return self._parse_aggregate_result(data, op, field)

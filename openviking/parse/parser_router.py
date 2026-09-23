@@ -136,9 +136,11 @@ class ParserRouter:
 
         if use_understanding:
             if isinstance(source, LocalResource):
-                kwargs["source_name"] = source.meta["resolved_name"]
+                kwargs["source_name"] = source.meta.get("resolved_name") or Path(source_path).name
                 kwargs["resolved_extension"] = (
-                    kwargs.get("resolved_extension") or source.meta["resolved_extension"]
+                    kwargs.get("resolved_extension")
+                    or source.meta.get("resolved_extension")
+                    or Path(source_path).suffix
                 )
             display = source_path
             if isinstance(source_path, str) and source_path.startswith(("http://", "https://")):

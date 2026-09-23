@@ -30,6 +30,7 @@ const workspace = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
+      compile: { title: '编译' },
       home: {
         title: '首页',
       },
@@ -207,6 +208,7 @@ const workspace = {
     },
   },
   agentExperiencePage: {
+    pageCount: '本页 {{count}} 条经验',
     setup: {
       expand: '展开步骤',
       collapse: '收起',
@@ -375,6 +377,42 @@ const workspace = {
     },
   },
   tasksPage: {
+    labels: {
+      timing: '耗时',
+      totalDuration: '总耗时',
+      processingNotStarted: '未开始',
+      processingDurationHelp:
+        '仅累计工序实际处理区间，含模型与 I/O 调用；排除排队和等待下游，并行重叠只计一次。旧任务或重启后记录不完整时显示未记录。',
+      processingDuration: '处理耗时',
+      waitingDuration: '等待耗时',
+      timingUnavailable: '未记录',
+
+      missingResource: '任务缺少关联资源 ID，无法重新入队',
+      requeueFailed: '重新入队失败',
+      requeueSubmitted: '重新入队请求已发送，后端正在处理新任务！',
+      successRate: '任务成功率',
+      avgDuration: '平均总耗时',
+      avgProcessingTime: '仅统计已结束任务，含排队时间',
+      totalTasks: '任务总数',
+      activePending: '并发与排队',
+      runningPending: '进行中 / 等待中任务',
+      taskQueueStatus: '任务队列状态',
+      processQueueStatus: '工序队列状态',
+      queuePipeline: '工序队列流转',
+      duration: '总耗时（含排队）',
+      taskSummary: '共 {{total}} 条任务（{{failed}} 异常）',
+      taskCount: '{{count}} 条',
+      completedTasks: '已完成 {{count}} 条',
+      serialFlow: '串行工序流转',
+      parallelBatch: '并发执行工序批次',
+      serialBatch: '串行工序批次',
+      latestPerResource: '按资源收敛（最新）',
+      individualTasks: '逐条任务',
+    },
+    retry: {
+      noPendingMessages: '未创建新任务：该会话没有待提交消息',
+      commitSkipped: '未创建新任务：本次会话提交已跳过',
+    },
     title: '任务中心',
     description: '集中查看资源处理、会话提交和重建索引等后台任务。',
     refresh: '刷新',
@@ -400,6 +438,14 @@ const workspace = {
       },
       error: '失败原因',
       result: '执行结果',
+      noResultRunning: '任务进行中',
+      noResultRunningDescription:
+        '尚未返回最终结果。可查看上方已上报的阶段和执行日志。',
+      noResultPending: '任务排队中',
+      noResultPendingDescription:
+        '任务尚未开始执行，开始后会显示已上报的阶段和执行日志。',
+      noResultCompleted: '任务已完成',
+      noResultCompletedDescription: '该任务未返回可展示的执行结果。',
       noResult: '暂无执行结果',
       noResultDescription: '任务完成后，接口返回的结果会显示在这里。',
       noResultFailedDescription: '该任务未返回结果，请查看上方失败原因。',
@@ -432,6 +478,29 @@ const workspace = {
       allStatuses: '全部状态',
       clear: '清除筛选',
     },
+    actions: {
+      retrigger: '重新发起任务',
+    },
+    pipeline: {
+      steps: '工序进度',
+      duration: '执行耗时 / 已用时长',
+      count: '{{count}} 项',
+      status: {
+        completed: '已完成',
+        running: '进行中',
+        failed: '失败',
+        pending: '等待中',
+      },
+      step: {
+        sessionPersistence: '会话状态持久化',
+        sessionCommit: '会话提交',
+        connectorAuth: '连接器鉴权',
+        resourceFetching: '资源拉取',
+        externalParse: '外部解析',
+        semantic: '语义处理',
+        embedding: '嵌入向量',
+      },
+    },
     pagination: {
       next: '下一页',
       page: '第 {{page}} 页',
@@ -457,6 +526,7 @@ const workspace = {
       unknown: '未知',
     },
     types: {
+      compile: '编译',
       session_commit: '会话提交',
       add_resource: '资源处理',
       add_skill: '技能导入',
@@ -594,6 +664,19 @@ const workspace = {
     unset: '未选择账号',
   },
   common: {
+    ui: {
+      close: '关闭',
+      loading: '加载中',
+      pagination: '分页',
+      previous: '上一页',
+      next: '下一页',
+      previousPage: '前往上一页',
+      nextPage: '前往下一页',
+      morePages: '更多页',
+      sidebar: '侧栏',
+      mobileSidebar: '移动端导航侧栏',
+      toggleSidebar: '展开或收起侧栏',
+    },
     action: {
       cancel: '取消',
       saveConnection: '保存连接',
@@ -663,6 +746,43 @@ const workspace = {
     },
   },
   settings: {
+    groups: {
+      navigation: '用户管理',
+      usersTab: '用户',
+      title: '用户组',
+      description:
+        '管理 Account {{account}} 内的用户组。资源访问权限需要单独授予。',
+      id: '用户组 ID',
+      count: '成员数',
+      actions: '操作',
+      create: '新建用户组',
+      idHint: '当前 Account 内唯一的标识，创建后不可修改。',
+      manage: '管理成员',
+      delete: '删除用户组',
+      deleteHint: '请先移除组内所有成员，再删除用户组。',
+      deleteDescription:
+        '确定删除 {{group}}？资源中的 ACL 引用不会被清理，重新创建相同 ID 可能恢复原有授权。',
+      empty: '暂无用户组。',
+      search: '搜索用户组',
+      members: '{{group}} 的成员',
+      memberHint:
+        '成员变更在后续请求中生效。移除成员后，其他授权仍可能允许其访问资源。',
+      add: '添加',
+      remove: '移除',
+      searchUsers: '搜索要添加的已有用户',
+      currentMembers: '当前成员',
+      candidates: 'Account 用户',
+      noMembers: '该用户组暂无成员。',
+      noUsers: '没有匹配的用户。',
+      created: '用户组已创建',
+      deleted: '用户组已删除',
+      updated: '用户组成员已更新',
+      failed: '操作失败',
+      loadFailed: '数据加载失败',
+      previous: '上一页',
+      next: '下一页',
+      page: '第 {{page}} / {{pages}} 页',
+    },
     actions: {
       addAccount: '新增账号',
       addUser: '新增用户',
@@ -812,6 +932,19 @@ const workspace = {
       title: '新的 API 密钥',
     },
     loading: '正在加载身份...',
+    userList: {
+      search: '按用户名搜索全部用户',
+      noResults: '没有匹配的用户',
+      noResultsDescription: '试试其他用户名，或清空搜索。',
+      pagination: '用户列表分页',
+      summary: '共 {{total}} 个用户 · 第 {{page}} / {{pageCount}} 页',
+      pageSize: '每页用户数',
+      pageSizeValue: '每页 {{count}} 个',
+      first: '首页',
+      previous: '上一页',
+      next: '下一页',
+      last: '末页',
+    },
     management: {
       accountFilter: '账号',
       accessDeniedDescription:
@@ -874,9 +1007,9 @@ const workspace = {
     },
     toast: {
       accountCreated: '账号已创建',
-      accountDeleted: '{{account}} 已删除',
-      accountDeletedRecoveryFailed:
-        '账号已删除，但无法加载剩余账号列表：{{error}}',
+      accountDeletionStarted: '{{account}} 已停用，后台清理任务：{{taskId}}',
+      accountDeletionRecoveryFailed:
+        '账号清理已提交，但无法加载剩余账号列表：{{error}}',
       connectionSaved: '连接已保存',
       copyFailed: '复制失败',
       copied: '已复制',
@@ -957,7 +1090,7 @@ const workspace = {
     },
     usageDisabled: '用量和审计功能尚未初始化，暂无实时统计。',
     usageAccessRequired:
-      '当前连接没有管理员或 Root 权限，无法显示用量和审计数据。请在“连接设置”中配置具备控制台用量和审计权限的 API 密钥。',
+      '当前连接身份尚未确认。请在“连接设置”中检查服务地址、身份和认证配置。',
   },
 } as const
 

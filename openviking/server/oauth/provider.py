@@ -330,7 +330,7 @@ class OpenVikingOAuthProvider(
                     refresh_token.account_id,
                     refresh_token.user_id,
                 )
-                await self._store.revoke_user_tokens(
+                await self._store.revoke_tokens(
                     account_id=refresh_token.account_id,
                     user_id=refresh_token.user_id,
                 )

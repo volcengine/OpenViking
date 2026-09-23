@@ -9,14 +9,15 @@ TraeCode CLI 2.0 supports the same plugin format; use the shared installer's ded
 
 This is the Codex counterpart to [`claude-code-memory-plugin`](../claude-code-memory-plugin). It hooks Codex's lifecycle to:
 
-- **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder.
+- **Session-start profile injection** on `startup`, `clear`, and `resume`: load `profile.md` plus abstract-annotated indexes of `preferences/` and `entities/` through the shared CJK-aware profile builder, followed by an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - **Auto-recall** relevant memories on every `UserPromptSubmit` and inject them via `hookSpecificOutput.additionalContext`
+- **`viking://` notice on `PreToolUse` (`Bash`)**: a shell command that carries a `viking://` URI still runs, and the model is told that the URI is an OpenViking virtual path and which MCP tool reads it.
 - **Incremental capture on `Stop`** (turn end): append the new user/assistant turns to a deterministic OpenViking session id `cx-<codex_session_id>`. When `pending_tokens` reaches `OPENVIKING_COMMIT_TOKEN_THRESHOLD`, commit while keeping a recent live tail.
 - **Commit on `PreCompact`**: trigger OpenViking's memory extractor on the full pre-compact transcript before Codex summarizes it.
 - **Commit on `SessionEnd`** (Codex ≥ 0.145): when a thread shuts down gracefully, catch up any turns `Stop` never sent and commit the OV session, so the extractor runs on the whole conversation the moment you leave.
 - **Fallback sweep on `SessionStart` (source=startup|clear)**: commit state files that carry an end marker whose commit did not go through, or that have been idle past `OPENVIKING_CODEX_IDLE_TTL_MS`. `source=resume` never commits or sweeps; if the live OV session was already committed, it combines the profile block with the latest archive summary for continuity. See `DESIGN.md` for the full decision tree.
 
-It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the server's retrieval, memory, resource, watch, filesystem, and code-navigation tools.
+It also starts a local stdio MCP proxy that forwards to OpenViking's native `/mcp` endpoint with credentials resolved from env / `ovcli.conf`, so the model has direct access to the server's retrieval, memory, resource, skill (`add_skill`), watch, filesystem, and code-navigation tools.
 
 ## Quick Start
 
@@ -40,14 +41,15 @@ Claude Code and Codex share this installer (drop `--harness codex` to pick inter
 2. Sets up `~/.openviking/ovcli.conf` interactively
 3. Registers the `openviking` marketplace — remote git by default (`codex plugin marketplace add https://github.com/volcengine/OpenViking.git`), or this checkout / a TOS archive in dev/archive mode — and enables `openviking-memory@openviking` with `features.plugin_hooks = true`
 4. Keeps the checked-in stdio `.mcp.json` intact; `servers/mcp-proxy.mjs` reads your active `ovcli.conf` at runtime
-5. Removes old OpenViking rc wrapper blocks and the pre-unification `openviking-plugins-local` marketplace when found
-6. Runs plugin-list and stdio MCP validation
+5. Runs plugin-list and stdio MCP validation
 
 After install:
 
 ```bash
-codex             # first run: review /hooks once
+codex             # first run: pick "Trust all and continue" at the hook review prompt
 ```
+
+Startup stops on `6 hooks need review` — pick **Trust all and continue**. Every later update that touches a hook asks again, for however many changed. Choosing *Continue without trusting*, or skipping the prompt, leaves the hooks off: MCP tools still work, but recall and capture never fire. Two independent switches have to be on to get them back: `/hooks` (hook trust and on/off) and `/plugins` (the plugin's own enabled state). The same applies to TraeCode CLI 2.0, which runs this plugin under `trae-cli`.
 
 ### B. Codex marketplace install
 
@@ -76,7 +78,7 @@ hooks = true
 Finally start Codex and trust the plugin hooks once:
 
 ```bash
-codex            # then run /hooks inside Codex to review & approve the hooks
+codex            # then trust the hooks at the startup prompt, or via /hooks
 ```
 
 > **Requirements & notes**
@@ -110,12 +112,12 @@ If you don't want the installer touching your rc, do these things yourself:
 Connection / identity source (applies to hooks, MCP, and `ov` commands run inside Codex):
 
 1. **Default (auto)**: env-var credentials (`OPENVIKING_URL` / `OPENVIKING_BASE_URL`, `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`) win when any is set; otherwise the active `ovcli.conf` is used: `OPENVIKING_CLI_CONFIG_FILE` or `~/.openviking/ovcli.conf`. With no credential env vars set, `ov config switch <name>` changes the active credentials for the CLI, hooks, MCP, and child `ov` commands together.
-2. **Forced**: set `OPENVIKING_CREDENTIAL_SOURCE=cli` to force `ovcli.conf`, or `OPENVIKING_CREDENTIAL_SOURCE=env` to force env-var credentials.
+2. **Forced**: set `OPENVIKING_CREDENTIAL_SOURCE=cli` to force `ovcli.conf`, or `OPENVIKING_CREDENTIAL_SOURCE=env` to read env vars only, with neither config file.
 3. **Fallback**: without credential env vars or an ovcli config, `ov.conf` is used (`server.url` / `server.root_api_key` plus legacy `codex.*` tuning); then `http://127.0.0.1:1933` unauthenticated.
 
-Hooks and the MCP proxy call the same resolver directly, so the model tools and lifecycle hooks follow the same target.
+The MCP proxy loads its connection through the same `loadConfig()` as the hooks, so the model tools and lifecycle hooks use the same target and key, including one set only in ovcli.conf's `plugin.codex` section. Codex passes the proxy only the variables `.mcp.json` lists, and that list covers every variable the connection reads.
 
-Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model); the hooks also send the same key as `X-API-Key` for compatibility with older servers.
+Auth is sent as `Authorization: Bearer <api_key>` to both the REST API (used by hooks) and the `/mcp` endpoint (used by the model), and as nothing else — the hooks used to repeat the key as `X-API-Key`, which a gateway of your own can still add if it needs one. `account` and `user` go out as `X-OpenViking-Account` / `X-OpenViking-User` only in trusted mode; an `api_key` server reads both out of the key and ignores the headers.
 
 By default the hooks derive the peer from git rather than from where the repository happens to sit: the normalized `origin` URL, else the repository root path. Outside a repository nothing is sent, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with origin `git@github.com:volcengine/OpenViking.git` the peer is `github.com-volcengine-openviking`, and it stays that from any subdirectory, worktree, machine or clone. Every clone of one repository therefore shares one project memory; a fork has a different origin and stays separate, and `gh pr checkout` of an external PR leaves `origin` alone, so reviewing one does not move the identity. Derivation is pure filesystem work — no `git` subprocess — so it also holds where `git` is missing from `PATH` or would refuse the repository over dubious ownership. Hooks pass the effective peer as `peer_id` for captured session messages and as `X-OpenViking-Actor-Peer` for retrieval and filesystem calls.
 
@@ -157,10 +159,23 @@ export OPENVIKING_RECALL_TIMEOUT_MS=120000
 export OPENVIKING_CAPTURE_ASSISTANT_TURNS=1
 export OPENVIKING_AUTO_COMMIT_ON_COMPACT=1
 export OPENVIKING_PROFILE_TOKEN_BUDGET=10000
+export OPENVIKING_SKILL_CATALOG=1
+export OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET=1200
+export OPENVIKING_SESSION_START_MAX_BYTES=9500
 export OPENVIKING_DEBUG=1
 ```
 
 Full list: see the `Misc env vars` block in `scripts/config.mjs`. Tuning fields have `OPENVIKING_*` counterparts and env vars win for those tuning fields.
+
+#### Private-gateway extra headers
+
+Some private OpenViking deployments sit behind a gateway that requires custom headers on every request. The stdio MCP proxy reads those from `OPENVIKING_EXTRA_HEADERS`, a JSON object of scalar values (header name → header value) — see your deployment's gateway docs for the exact header names it expects.
+
+```sh
+export OPENVIKING_EXTRA_HEADERS='{"<header-name>":"<header-value>"}'
+```
+
+Reserved headers (`Content-Type`, `Accept`, `MCP-Protocol-Version`, `Mcp-Session-Id`, `Authorization`) are dropped with a stderr warning: the proxy owns those and letting an env var override them would break session negotiation or expose the wrong credential. Bad JSON is ignored with a warning rather than crashing the proxy. This env var is scoped to the stdio MCP proxy; hooks read credentials through the ovcli chain and do not consult it.
 
 #### Input filters
 
@@ -239,8 +254,8 @@ Earlier plugin versions configured tuning fields under a `codex` block in `~/.op
                     └─────────────────┬───────────────────────────────────┘
                                       │
    Codex ◄── stdio MCP proxy ──► /mcp (find, search, read,
-              (env/ovcli.conf)      remember, resources, watches,
-                                  filesystem)
+              (env/ovcli.conf)      remember, resources, add_skill,
+                                  watches, filesystem)
 ```
 
 The checked-in `.mcp.json` starts `servers/mcp-proxy.mjs` with `node`. The proxy keeps stdout protocol-clean, reads the same credential sources as the hooks, sends auth and identity headers to `/mcp`, caches the server `mcp-session-id`, and transparently reinitializes once if the server restarts.
@@ -257,7 +272,25 @@ Codex fires `SessionStart` with one of three `source` values: `startup` (fresh p
 
 `hooks.json` registers `SessionStart` with `matcher: "clear|startup|resume"` so codex's dispatcher invokes the script on all three relevant sources. `session-start-commit.mjs` gates internally so only `startup` and `clear` sweep.
 
-On all three sources, the hook uses the same shared `buildProfileBlock()` implementation as the Claude Code, OpenCode, and pi integrations. It reads the user's `profile.md` and adds URI plus abstract indexes for `preferences/` and `entities/`, with a CJK-aware token budget. The default budget is `10000`; set `OPENVIKING_PROFILE_TOKEN_BUDGET` or `plugin.codex.profileTokenBudget` to change it. Set `OPENVIKING_NO_AUTO_INJECT=1` or `plugin.codex.noAutoInject=true` to disable only this fixed profile/background injection; per-prompt semantic recall remains controlled separately by `OPENVIKING_AUTO_RECALL`.
+On all three sources, the hook uses the same shared `buildProfileBlock()` implementation as the Claude Code, OpenCode, and pi integrations. It reads the user's `profile.md` and adds URI plus abstract indexes for `preferences/` and `entities/`, with a CJK-aware token budget. The default budget is `10000`; set `OPENVIKING_PROFILE_TOKEN_BUDGET` or `plugin.codex.profileTokenBudget` to change it. Set `OPENVIKING_NO_AUTO_INJECT=1` or `plugin.codex.noAutoInject=true` to disable only this fixed profile/background injection, skill catalog included; per-prompt semantic recall remains controlled separately by `OPENVIKING_AUTO_RECALL`.
+
+The same builder appends an `<available-skills>` block after `<user-profile>` and `<available-memories>`, inside the same `<openviking-context source="session-start">` envelope. One `GET /api/v1/skills?node_limit=200` call returns your own skills and the ones shared with the account under `viking://agent/skills`. Your own skills are listed first, and a shared skill with the same name as one of yours is left out. Each description is cut to about 40 tokens (CJK-aware), and envelope tags inside a description are escaped.
+
+```text
+<openviking-context source="session-start">
+<user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
+<available-memories>...</available-memories>
+<available-skills>
+  OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.
+  viking://user/default/skills/
+    - pr-review — Review a pull request against the team checklist.
+  viking://agent/skills/
+    - deploy-runbook — Shared deployment runbook for the payments service.
+</available-skills>
+</openviking-context>
+```
+
+The catalog has its own budget, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` or `plugin.codex.skillCatalogTokenBudget` (default `1200`, range `0`–`20000`), and never draws on the profile budget. Every entry keeps its description when that fits; otherwise the catalog lists names only, ending with `... +N more, search OpenViking skills to find the rest` if even the names do not all fit; when not even one name fits, the block shrinks to the single line `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`. Set `OPENVIKING_SKILL_CATALOG=0`, `plugin.codex.skillCatalog=false`, or the budget to `0` to leave the catalog out. With no skills, or against a server without `GET /api/v1/skills`, the block is omitted. The bundled `$openviking-skills` skill tells the model how to find a skill, create or replace one with MCP `add_skill`, install one from Git or a local folder, share one to `viking://agent/skills`, and run a one-time migration of local skills that the user asks for and approves skill by skill.
 
 On `startup` or `clear`, the script walks every state file except the new session_id and, for each one that still holds a live `ovSessionId` or carries an end marker:
 
@@ -273,13 +306,30 @@ On `resume`, the script skips commit/sweep. It still injects the profile block. 
 
 ### Auto-recall (every UserPromptSubmit)
 
-`auto-recall.mjs` reads `prompt` and `session_id` from stdin. It first asks `/api/v1/search/recall` for bounded, type-quota candidates and passes those entries through the same relevance compressor used by the fallback path. If that endpoint is unavailable, the hook derives the long-lived OpenViking session id (`cx-<safe-session-id>`) directly from the Codex session id (no plugin state read, so a corrupt state file can't crash recall), calls `/api/v1/search/search` with that `session_id`, ranks results, and reads full content for top-ranked leaves before compression.
+`auto-recall.mjs` adapts the Codex prompt/session payload and calls the shared
+`buildRecallBlockDetailed()` pipeline. The shared core owns context search,
+legacy `/recall`, raw-search fallback, ranking, injection budgets, digest selection,
+compression caching and URI repair. Codex owns the `cx-<safe-session-id>` mapping,
+model/profile selection, CLI execution and the hook deadline.
 
 ```json
-{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context source=\"auto-recall\" format=\"digest\">\nOpenViking memory digest:\n- ...\n</openviking-context>" } }
+{ "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": "<openviking-context>\n...\n</openviking-context>" } }
 ```
 
-Codex injects `additionalContext` into the model turn, so memories arrive without an extra tool call. By default, recalled context below `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` is injected directly; larger blocks pass through the shared relevance compressor, and an identical query/context pair reuses its cached digest. If the compressor returns `NO_RELEVANT_MEMORY`, empty text, or non-digest chatter, the hook emits `{}` and injects nothing. The whole hook has its own `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled `hooks.json` gives Codex 130s so the script can return `{}` before Codex kills it. Digests keep validated `viking://` source URIs and point the model at the OpenViking MCP `read`/`search` tools for details when the inline bullet is intentionally short. The outer `<openviking-context ...>` wrapper is deterministic, not compressor-generated; capture strips it to distinguish recalled context from the user's prompt. Set `OPENVIKING_RECALL_COMPRESS=0` to fall back to deterministic short formatting.
+The shared core prefers a server digest and suppresses injection for
+`no_relevant` / `NO_RELEVANT_MEMORY`. Local compressor failures retain bounded
+retrieved context. Raw fallback uses session-aware search when a session exists,
+then retries without the session if all targets are empty; unavailable search
+can fall back to `find`. Explicit user targets retain the home-alias fallback.
+Local compression receives bounded full leaf content before injection truncation.
+Without local compression, `recallPreferAbstract` and the shared token budget
+control the fallback (including URI and wrapper overhead).
+
+The hook has an `OPENVIKING_RECALL_TIMEOUT_MS` deadline (default 120s); the bundled
+hook allows 130s. Nested compressor calls disable automatic memory hooks and are
+killed on timeout. A failed compressor is not restarted for a legacy-peer pass
+within the same turn. Capture recognizes the shared `<openviking-context>` wrapper
+and removes injected context from newly captured messages.
 
 The compressor profile is recreated on every `SessionStart` and cached under `OPENVIKING_CODEX_STATE_DIR` so cross-session config changes are picked up but each `UserPromptSubmit` does not probe models. Default fallback order:
 
@@ -293,8 +343,8 @@ Config knobs:
 | Env var | Default | Meaning |
 |---|---|---|
 | `OPENVIKING_RECALL_LIMIT` | `10` | Legacy quota-scaling input; explicit values are converted to six coding quotas, not enforced as a final result cap. |
-| `OPENVIKING_RECALL_COMPRESS` | `1` | Set `0` / `off` to disable `codex exec` compression. |
-| `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable compression. |
+| `OPENVIKING_RECALL_COMPRESS` | `auto` | `server`: cloud rewrite, never launches `codex exec`; `client`: local only; `auto`: local when available, otherwise cloud; `off` / `0`: uncompressed. `1` aliases `auto`. |
+| `OPENVIKING_RECALL_COMPRESS_MODEL` | unset | Custom first-choice compressor model. Set `off` to disable the local compressor (`auto` then uses cloud compression). |
 | `OPENVIKING_RECALL_COMPRESS_THINKING` | unset | Custom `model_reasoning_effort`; `default` omits the Codex config override. Alias: `OPENVIKING_RECALL_COMPRESS_REASONING_EFFORT`. |
 | `OPENVIKING_RECALL_COMPRESS_BASE_URL` | unset | Base URL for the nested compressor's provider. Use this when `--ignore-user-config` prevents the compressor from reading the main Codex provider configuration. |
 | `OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS` | `1500` | Skip the nested compressor below this recalled-context size. Set `0` to compress every non-empty result. |
@@ -318,10 +368,20 @@ from 1 through 5 therefore produce an effective total quota of 6, one retrieval
 slot for each coding domain. Eligible cache misses still use local `codex exec`
 compression on top of whichever path answered.
 
+The `mode="context"` request covers skills as well as memories, from both your own `skills/` and the account-shared `viking://agent/skills`, so a skill that fits the prompt can show up in the digest with its `viking://` URI.
+
 Client-side knobs can also live in `~/.openviking/ovcli.conf` under
 `plugin` (shared) or `plugin.codex` (this harness only), or in the workspace
 layers; resolution order is env vars → the workspace layers → `plugin.codex` →
 `plugin` → the legacy `codex` block in `ov.conf` → defaults.
+
+### viking:// URI notice (PreToolUse on Bash)
+
+`viking://` URIs are OpenViking virtual paths, so `cat viking://…` or `ls viking://…` cannot open them. `uri-guard.mjs` runs before every `Bash` call. When the command contains a `viking://` URI, it returns `hookSpecificOutput.additionalContext` without a `permissionDecision`: the command runs unchanged, and the model is told which OpenViking MCP tool reads the URI and to ignore the notice when the URI is intentional data (an `ov` CLI argument, an HTTP payload, a search pattern). A command without a `viking://` URI gets no output.
+
+Nothing is denied: Codex edits files through `apply_patch`, whose input is a patch body rather than a path (Codex's `Edit` / `Write` matchers are aliases for it), so there is no path argument to guard.
+
+> **Upgrading to 0.9.1**: `PreToolUse` is a newly registered hook event. Run `/hooks` in Codex after updating and approve it; until then shell commands run without the notice.
 
 ### Stop (turn end → `add_message`, threshold commit)
 
@@ -359,6 +419,7 @@ Codex's hook output schema differs from Claude Code's. Notably:
 |------|------------------------|--------------------------------------|
 | `SessionStart`   | `source` (`startup`/`resume`/`clear`), `session_id`, `cwd` | `hookSpecificOutput.additionalContext`; may also include `systemMessage` when an orphaned session was committed |
 | `UserPromptSubmit` | `prompt`, `session_id`                     | `hookSpecificOutput.additionalContext` |
+| `PreToolUse` (`Bash`) | `tool_name`, `tool_input.command`       | `hookSpecificOutput.additionalContext` with no `permissionDecision`, so the command still runs; no output when the command has no `viking://` URI |
 | `Stop`           | `last_assistant_message`, `transcript_path`, `session_id` | `systemMessage` (only) |
 | `PreCompact`     | `trigger` (`manual`/`auto`), `transcript_path`, `session_id` | `systemMessage` (only) |
 | `SessionEnd`     | `session_id`, `transcript_path`, `cwd`, `reason` (constant `other`) | none — Codex ignores the output; the script prints `{}` for symmetry |
@@ -375,6 +436,42 @@ node "$(ls -d ~/.codex/plugins/cache/openviking/openviking-memory/*/ | sort -V |
 
 Or invoke the `$ov-memory-doctor` skill in Codex, which runs the same script and walks the report. When the server runs on the same machine (loopback url) the report adds a Server health section — whether anything listens on the port, plugin-only keys in ov.conf that stop the server from starting, and `GET /ready`; everything else server-side (config validation, live embedding probe, native engine, disk) stays with `openviking-server doctor`.
 
+## Testing
+
+There is no `package.json` and no build step, so the suite runs straight through Node's own test runner:
+
+```bash
+cd examples/codex-memory-plugin
+node --test scripts/*.test.mjs
+```
+
+CI runs the same files (`.github/workflows/pr.yml`), so a green local run is the same signal. They cover every hook end to end against a stubbed server — the deterministic `cx-<codex_session_id>` derivation, incremental append and idempotent re-runs, the PreCompact and SessionEnd commit paths with their `.ended.<ts>` markers and locks, the SessionStart sweep (idle TTL, cursor retention, `source=resume`), and recall assembly. The MCP proxy is shared code and its contract is tested once, in `examples/memory-plugin-shared/mcp-proxy-core.test.mjs`.
+
+### Live checks
+
+Two legs need a real server and real Codex auth, so they stay manual. Prerequisites: the `ov` CLI installed and reachable, Node.js 22+, and `~/.openviking/ovcli.conf` (or a per-tenant variant like `ovcli.conf.bob`) pointing at the OpenViking server you want to write to. The plugin sends `Authorization: Bearer <api_key>` from this file, and `X-OpenViking-Account` / `X-OpenViking-User` only in trusted mode.
+
+**Memory extraction landed in the user namespace.** After a session commits, wait ~60 s for OV's extractor, then:
+
+```bash
+export OV_CONF=$HOME/.openviking/ovcli.conf.bob   # or whichever tenant
+OPENVIKING_CONFIG_FILE=$OV_CONF ov ls viking://user/<your-user>/memories/
+OPENVIKING_CONFIG_FILE=$OV_CONF ov read viking://user/<your-user>/memories/profile.md
+```
+
+Expect new entries describing the preferences the conversation stated, with timestamps from this run.
+
+**Codex CLI smoke test** (requires codex auth):
+
+```bash
+codex plugin marketplace add /path/to/OpenViking-codex-marketplace   # if not already
+codex                                                                 # interactive
+# Have a brief conversation that mentions a clear preference,
+# then /compact (manual PreCompact) to force a commit, then exit.
+```
+
+Then re-run the extraction check above.
+
 ## Plugin Structure
 
 ```
@@ -382,11 +479,12 @@ codex-memory-plugin/
 ├── .codex-plugin/
 │   └── plugin.json              # Plugin manifest (hooks + mcp wiring)
 ├── hooks/
-│   └── hooks.json               # SessionStart + UserPromptSubmit + Stop + SessionEnd
-│                                  + PreCompact (uses Codex's native ${PLUGIN_ROOT}
-│                                   token; no rendering needed on modern Codex)
+│   └── hooks.json               # SessionStart + UserPromptSubmit + PreToolUse + Stop
+│                                  + SessionEnd + PreCompact (uses Codex's native
+│                                  ${PLUGIN_ROOT} token; no rendering needed on modern Codex)
 ├── skills/
 │   ├── openviking-memory/       # How to use the memory tools
+│   ├── openviking-skills/       # Find, use, create (add_skill), share, and migrate OpenViking skills
 │   ├── ov-experience-memory/
 │   └── ov-memory-doctor/        # Install / config / connection / local-server troubleshooting
 ├── scripts/
@@ -402,15 +500,14 @@ codex-memory-plugin/
 │   ├── session-start-commit.mjs # SessionStart hook (profile + fallback sweep + resume archive)
 │   ├── session-end.mjs          # SessionEnd hook (mark + detached catch-up + commit)
 │   ├── pre-compact-capture.mjs  # PreCompact hook
+│   ├── uri-guard.mjs            # PreToolUse hook (viking:// notice on Bash)
 │   └── *.test.mjs               # node --test suites (session-end, pre-compact, ...)
 ├── servers/
-│   ├── mcp-proxy.mjs            # stdio -> OpenViking /mcp bridge
-│   └── mcp-proxy.test.mjs       # proxy contract tests
+│   └── mcp-proxy.mjs            # stdio -> OpenViking /mcp bridge
 ├── setup-helper/
 │   └── install.sh               # One-line installer
 ├── .mcp.json                    # stdio MCP wiring
 ├── DESIGN.md
-├── VERIFICATION.md
 └── README.md
 ```
 
@@ -433,3 +530,16 @@ The Codex marketplace catalog that exposes this plugin for `codex plugin marketp
 ## License
 
 Apache-2.0 — same as [OpenViking](https://github.com/volcengine/OpenViking).
+
+
+### Cloud recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to request `POST /api/v1/search/search`
+with `mode: "context", rewrite: true`. This also disables local startup compressor
+probes. A returned server digest is injected without a second local compression
+pass; a server `no_relevant` result injects nothing. If rewrite is unavailable,
+the hook preserves the existing raw-context / legacy retrieval fallback.
+
+`auto` uses `rewrite: "auto"` when the Codex executable or its compressor profile
+is unavailable (including a cached runtime failure). A first local failure still
+uses the deterministic fallback for that turn; later turns use the server.

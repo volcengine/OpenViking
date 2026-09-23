@@ -307,6 +307,12 @@ class FeishuChannel(BaseChannel):
 
         return "group"  # 失败默认普通群
 
+    def _is_bot_mention(self, mention) -> bool:
+        bot_id = getattr(self, "bot_open_id", None)
+        if bot_id:
+            return getattr(getattr(mention, "id", None), "open_id", None) == bot_id
+        return bool(self.config.bot_name and getattr(mention, "name", "") == self.config.bot_name)
+
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
@@ -531,19 +537,19 @@ class FeishuChannel(BaseChannel):
 
         return elements or [{"tag": "markdown", "content": content}]
 
-    async def send(self, msg: OutboundMessage) -> None:
+    async def send(self, msg: OutboundMessage) -> bool:
         """Send a message through Feishu."""
         # 先调用基类处理通用动作
         if await super().send(msg):
-            return
+            return False
 
         if not self._client:
             logger.warning("Feishu client not initialized")
-            return
+            return False
 
         # Only send normal response messages, skip thinking/tool_call/etc.
         if not msg.is_normal_message:
-            return
+            return False
 
         try:
             # logger.info(f"Sending message {msg}")
@@ -554,7 +560,7 @@ class FeishuChannel(BaseChannel):
                 logger.warning(
                     f"Skipping Feishu message without reply_to metadata: session={msg.session_key}"
                 )
-                return
+                return False
             if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
@@ -659,8 +665,11 @@ class FeishuChannel(BaseChannel):
                         f"msg={response.msg}, log_id={response.get_log_id()}"
                     )
 
+            return response.success()
+
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
+            return False
 
     @staticmethod
     def _reply_to_message_id_from_metadata(metadata: dict[str, Any] | None) -> str | None:
@@ -997,10 +1006,9 @@ class FeishuChannel(BaseChannel):
 
             # 5. 检查是否被@
             is_mentioned = False
-            bot_name = self.config.bot_name
-            if hasattr(message, "mentions") and message.mentions and bot_name:
+            if hasattr(message, "mentions") and message.mentions:
                 for mention in message.mentions:
-                    if hasattr(mention, "name") and mention.name == bot_name:
+                    if self._is_bot_mention(mention):
                         is_mentioned = True
                         break
 
@@ -1023,7 +1031,7 @@ class FeishuChannel(BaseChannel):
                     if placeholder not in content:
                         continue
                     mention_name = getattr(mention, "name", "")
-                    if bot_name and mention_name == bot_name:
+                    if self._is_bot_mention(mention):
                         content = content.replace(placeholder, "")
                         continue
                     if hasattr(mention, "id") and mention.id:
@@ -1059,6 +1067,13 @@ class FeishuChannel(BaseChannel):
                         message.root_id = message.message_id
                     final_chat_id = f"{reply_to}#{message.root_id}"
 
+            topic_title = ""
+            if chat_mode == "thread" and message.root_id == message_id and msg_type == "post":
+                try:
+                    topic_title = json.loads(message.content).get("title", "")
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
             # 10. 转发到消息总线
             logger.info(f"Received message from Feishu: {content}")
             await self._handle_message(
@@ -1075,6 +1090,7 @@ class FeishuChannel(BaseChannel):
                     "msg_type": msg_type,
                     "root_id": message.root_id,
                     "chat_mode": chat_mode,
+                    "topic_title": topic_title if isinstance(topic_title, str) else "",
                     "sender_id": sender_id,
                 },
             )

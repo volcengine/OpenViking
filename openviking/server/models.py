@@ -29,6 +29,7 @@ class Response(BaseModel):
 ERROR_CODE_TO_HTTP_STATUS = {
     "OK": 200,
     "INVALID_ARGUMENT": 400,
+    "GIT_AUTH_FAILED": 400,
     "INVALID_URI": 400,
     "NOT_FOUND": 404,
     "ALREADY_EXISTS": 409,

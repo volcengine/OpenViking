@@ -1,6 +1,6 @@
 ---
 name: knowledge-graph
-description: Compile documents, notes, web content, transcripts, research materials, or code repositories into an evidence-grounded, visualization-ready knowledge graph with semantically typed entity nodes, statement-level provenance, and typed relationship edges. Use with ov compile to create or incrementally refresh `entities/*.md` node artifacts and a root `relations.jsonl` edge file for people, organizations, groups, animals, places, products, projects, systems, services, documents, events, and other identifiable things.
+description: Compile documents, notes, web content, transcripts, research materials, or code repositories into an evidence-grounded, visualization-ready knowledge graph with semantically typed entity nodes, statement-level provenance, and typed relationship edges. Use with ov compile to create or incrementally refresh `entities/*.md` node artifacts and a root `relations.jsonl` edge file for people, organizations, groups, animals, places, products, projects, systems, services, modules, datasets, standards, documents, events, and other identifiable things.
 ---
 
 # Knowledge Graph

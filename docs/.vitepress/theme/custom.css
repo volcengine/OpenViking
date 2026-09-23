@@ -1,17 +1,20 @@
+@import "./fonts.css";
+
 :root {
   --vp-layout-max-width: 100vw;
-  --vp-c-brand-1: #0f766e;
-  --vp-c-brand-2: #115e59;
-  --vp-c-brand-3: #14b8a6;
-  --vp-c-brand-soft: rgba(20, 184, 166, 0.16);
-  --vp-c-bg: #fbf8ef;
-  --vp-c-bg-alt: #f3efe2;
-  --vp-c-bg-elv: #fffdf7;
-  --vp-c-bg-soft: #f1eadb;
-  --vp-c-text-1: #17211f;
-  --vp-c-text-2: #47534f;
-  --vp-font-family-base: "Avenir Next", "Gill Sans", "Trebuchet MS", sans-serif;
-  --vp-font-family-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --vp-c-brand-1: #285e52;
+  --vp-c-brand-2: #1d4d42;
+  --vp-c-brand-3: #347361;
+  --vp-c-brand-soft: rgba(52, 115, 97, 0.07);
+  --vp-c-bg: #fafaf7;
+  --vp-c-bg-alt: #f2f3ef;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-bg-soft: #eeefeb;
+  --vp-c-text-1: #202723;
+  --vp-c-text-2: #5c665f;
+  --vp-font-family-base: "Space Grotesk", sans-serif;
+  --vp-font-family-display: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --vp-font-family-mono: "JetBrains Mono", monospace;
 
   /* Embed-widget theming. The widget renders in a shadow root whose :host does
      `all: initial` — that resets inherited properties but NOT custom
@@ -49,7 +52,7 @@
 
   .VPContent .VPDoc.has-aside > .container > .content > .content-container {
     width: 100%;
-    max-width: 1200px;
+    max-width: 800px;
   }
 }
 
@@ -60,78 +63,21 @@
 }
 
 .dark {
-  --vp-c-brand-1: #5eead4;
-  --vp-c-brand-2: #2dd4bf;
-  --vp-c-brand-3: #0f766e;
-  --vp-c-brand-soft: rgba(45, 212, 191, 0.18);
-  --vp-c-bg: #0f0f0f;
-  --vp-c-bg-alt: #080808;
-  --vp-c-bg-elv: #1a1a1a;
-  --vp-c-bg-soft: #1e1e1e;
-  --vp-c-text-1: #edf7f3;
-  --vp-c-text-2: #bbcac5;
+  --vp-c-brand-1: #b3d5bb;
+  --vp-c-brand-2: #c3e6cb;
+  --vp-c-brand-3: #527b61;
+  --vp-c-brand-soft: rgba(179, 213, 187, 0.07);
+  --vp-c-bg: #101312;
+  --vp-c-bg-alt: #141816;
+  --vp-c-bg-elv: #1b201d;
+  --vp-c-bg-soft: #1d231f;
+  --vp-c-text-1: #e9ece7;
+  --vp-c-text-2: #a0aaa2;
 
   /* The rest of the --ovw-* map inherits from --vp-* and flips with this
      block; only the two literals need restating. */
   --ovw-accent-fg: #0f0f0f;
   --ovw-accent-border: rgba(94, 234, 212, 0.34);
-}
-
-.VPHome {
-  background:
-    radial-gradient(circle at 12% 18%, rgba(20, 184, 166, 0.22), transparent 28rem),
-    radial-gradient(circle at 88% 12%, rgba(234, 179, 8, 0.16), transparent 24rem),
-    linear-gradient(135deg, rgba(15, 118, 110, 0.08), transparent 36%);
-}
-
-.VPHero .name,
-.VPHero .text {
-  letter-spacing: -0.045em;
-}
-
-.VPHero .image-bg {
-  background-image: linear-gradient(135deg, rgba(20, 184, 166, 0.28), rgba(234, 179, 8, 0.18));
-  filter: blur(44px);
-}
-
-.VPFeature {
-  border-color: rgba(15, 118, 110, 0.18);
-  background: linear-gradient(180deg, rgba(255, 253, 247, 0.88), rgba(241, 234, 219, 0.72));
-}
-
-.dark .VPFeature {
-  border-color: rgba(94, 234, 212, 0.16);
-  background: linear-gradient(180deg, rgba(22, 33, 30, 0.9), rgba(16, 24, 22, 0.82));
-}
-
-@media (min-width: 960px) {
-  .VPNav {
-    box-sizing: border-box;
-    background-color: var(--vp-c-bg);
-    border-bottom: 1px solid var(--vp-c-divider);
-  }
-
-  .VPNavBar,
-  .VPNavBar.has-sidebar {
-    background-color: var(--vp-c-bg);
-  }
-
-  .VPNavBar .divider {
-    display: none;
-  }
-
-  .VPNav .VPNavBarTitle.has-sidebar .title {
-    border-bottom: 0 !important;
-  }
-
-  .VPNavBarTranslations {
-    display: flex !important;
-  }
-
-  .VPNavBarExtra .group.translations,
-  .VPNavBarExtra .translations {
-    display: none !important;
-  }
 }
 
 .VPNavBarSearch {
@@ -482,36 +428,6 @@
   html.ov-assistant-open .VPNav,
   html.ov-assistant-open .VPSidebar {
     transition: padding-right 0.24s ease, right 0.24s ease;
-  }
-
-  /* VitePress absolutely positions the title against the sidebar column; once
-     the whole layout is inset, that anchor is wrong and the logo collides with
-     the content. Let it sit in the flex row instead. */
-  html.ov-assistant-open .VPNavBar.has-sidebar .wrapper {
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-
-  html.ov-assistant-open .VPNavBar.has-sidebar .container > .title {
-    position: relative;
-    top: auto;
-    left: auto;
-    width: auto;
-    flex: 0 0 auto;
-    padding: 0;
-  }
-
-  html.ov-assistant-open .VPNavBar.has-sidebar .container > .content {
-    padding-right: 0;
-    padding-left: 24px;
-  }
-
-  html.ov-assistant-open .VPNavBarTitle .logo {
-    display: block;
-    width: 28px;
-    height: 28px;
-    flex: 0 0 28px;
-    object-fit: cover;
   }
 
   html.ov-assistant-open .VPContent .VPDoc {

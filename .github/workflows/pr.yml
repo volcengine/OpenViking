@@ -20,6 +20,13 @@ on:
 jobs:
   plugin-tests:
     runs-on: ubuntu-24.04
+    env:
+      # The tests that fork whole installs, named once: the step below runs
+      # exactly what the parallel run subtracts, so renaming one cannot leave
+      # it in both.
+      INSTALLER_TESTS: >-
+        examples/memory-plugin-shared/install-agent-hooks.test.mjs
+        examples/memory-plugin-shared/release-marketplace.test.mjs
     steps:
       - uses: actions/checkout@v6
 
@@ -29,67 +36,44 @@ jobs:
           node-version: '24'
 
       - run: npm ci --prefix examples/dsh-memory-plugin
+      - run: npm ci --prefix examples/pi-coding-agent-extension --ignore-scripts
+
+      # The plugins published as packages keep no shared copies in git; they are
+      # built on the way out, and the tests import them like the package would.
+      - name: Generate the shared runtime copies
+        run: node examples/memory-plugin-shared/sync.mjs
+
+      - name: Committed generator output must be up to date
+        run: |
+          # A module the closure grew reaches the committed lanes as an
+          # untracked file, which `git diff` does not see at all.
+          status=$(git status --porcelain --untracked-files=normal -- examples agent-plugins)
+          if [ -n "$status" ]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+          git diff --exit-code
 
       - name: Run memory plugin tests
         run: |
-          node --test \
-            examples/codex-memory-plugin/servers/mcp-proxy.test.mjs \
-            examples/codex-memory-plugin/scripts/auto-capture.test.mjs \
-            examples/codex-memory-plugin/scripts/capture-utils.test.mjs \
-            examples/codex-memory-plugin/scripts/marketplace.test.mjs \
-            examples/codex-memory-plugin/scripts/ov-credentials.test.mjs \
-            examples/codex-memory-plugin/scripts/ov-memory-doctor.test.mjs \
-            examples/codex-memory-plugin/scripts/recall-compressor-profile.test.mjs \
-            examples/codex-memory-plugin/scripts/auto-recall.test.mjs \
-            examples/codex-memory-plugin/scripts/session-start-commit.test.mjs \
-            examples/codex-memory-plugin/scripts/session-end.test.mjs \
-            examples/codex-memory-plugin/scripts/pre-compact-capture.test.mjs \
-            examples/codex-memory-plugin/scripts/session-state.test.mjs \
-            examples/codex-memory-plugin/scripts/config.test.mjs \
-            examples/claude-code-memory-plugin/scripts/auto-capture.test.mjs \
-            examples/claude-code-memory-plugin/scripts/auto-recall-filters.test.mjs \
-            examples/claude-code-memory-plugin/scripts/config.test.mjs \
-            examples/claude-code-memory-plugin/scripts/marketplace.test.mjs \
-            examples/claude-code-memory-plugin/scripts/skill-experience.test.mjs \
-            examples/claude-code-memory-plugin/scripts/uri-guard.test.mjs \
-            examples/claude-code-memory-plugin/scripts/lib/pending-queue.test.mjs \
-            examples/claude-code-memory-plugin/scripts/lib/recall-core-timeout.test.mjs \
-            examples/cursor-memory-plugin/scripts/cursor-plugin.test.mjs \
-            examples/trae-memory-hooks/scripts/trae-hooks.test.mjs \
-            examples/trae-cli-memory-hooks/scripts/trae-cli-hooks.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-async.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-capture.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-hooks.test.mjs \
-            examples/zcode-memory-plugin/scripts/zcode-turns.test.mjs \
-            examples/memory-plugin-shared/agent-hook-runtime.test.mjs \
-            examples/memory-plugin-shared/batch-send.test.mjs \
-            examples/memory-plugin-shared/doctor-core.test.mjs \
-            examples/memory-plugin-shared/install-agent-hooks.test.mjs \
-            examples/memory-plugin-shared/install-lib-closure.test.mjs \
-            examples/memory-plugin-shared/install-opencode-jsonc.test.mjs \
-            examples/memory-plugin-shared/install-tui.test.mjs \
-            examples/memory-plugin-shared/release-marketplace.test.mjs \
-            examples/memory-plugin-shared/setup-wizard.test.mjs \
-            examples/memory-plugin-shared/sync.test.mjs \
-            examples/memory-plugin-shared/mcp-proxy-config.test.mjs \
-            examples/memory-plugin-shared/mcp-proxy-core.test.mjs \
-            examples/memory-plugin-shared/recall-compress-core.test.mjs \
-            examples/memory-plugin-shared/recall-core.test.mjs \
-            examples/memory-plugin-shared/recall-session-wiring.test.mjs \
-            examples/memory-plugin-shared/workspace-peer.test.mjs \
-            examples/memory-plugin-shared/peer-guidance.test.mjs \
-            examples/memory-plugin-shared/workspace-identity.test.mjs \
-            examples/memory-plugin-shared/workspace-config.test.mjs \
-            examples/memory-plugin-shared/workspace-registry.test.mjs \
-            examples/memory-plugin-shared/plugin-known-keys.test.mjs \
-            examples/memory-plugin-shared/uri-guard.test.mjs \
-            examples/memory-plugin-shared/capture-utils.test.mjs \
-            examples/memory-plugin-shared/input-filters.test.mjs \
-            examples/dsh-memory-plugin/*.test.mjs \
-            examples/opencode-plugin/tests/*.test.mjs \
-            examples/opencode-plugin/servers/mcp-proxy.test.mjs \
-            examples/pi-coding-agent-extension/tests/*.test.mjs \
-            agent-plugins/plugin.test.mjs
+          # A pattern no plugin matches yet contributes nothing rather than
+          # reaching node as a literal.
+          shopt -s nullglob
+          files=$(printf '%s\n' \
+            examples/*/scripts/*.test.mjs \
+            examples/*/scripts/lib/*.test.mjs \
+            examples/*/servers/*.test.mjs \
+            examples/*/tests/*.test.mjs \
+            examples/*-plugin/*.test.mjs \
+            examples/memory-plugin-shared/*.test.mjs \
+            agent-plugins/*.test.mjs \
+            | grep -vFxf <(printf '%s\n' $INSTALLER_TESTS))
+          node --test $files
+
+      # Staging the marketplace regenerates the shared copies the rest of the
+      # suite imports, and both tests fork whole installs, so they run alone.
+      - name: Run the installer tests
+        run: node --test --test-concurrency=1 $INSTALLER_TESTS
 
       - name: Check installer scripts parse
         run: |
@@ -114,21 +98,41 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Generate the shared runtime copies
+        run: node ../memory-plugin-shared/sync.mjs
+
       - name: Install plugin dependencies
         run: npm ci --ignore-scripts
 
       - name: Run the OpenClaw plugin Vitest suite
         # The suite is otherwise never exercised by CI, so regressions in
         # examples/openclaw-plugin only surface in user installs.
-        # tests/ut/architecture-boundaries.test.ts is excluded until its 4
-        # pre-existing main failures are resolved (see #4720 / #4731 / #4732);
-        # every other file passes on main (44 files / 690 tests).
+        # tests/ut/architecture-boundaries.test.ts is excluded until its 2
+        # pre-existing failures are resolved (see #4720 / #4731 / #4732);
+        # every other file passes (42 files / 675 tests).
         # The node_modules exclude restores vitest's default filters, which a
         # custom --exclude replaces.
         run: >
           npm test --
           --exclude "tests/ut/architecture-boundaries.test.ts"
           --exclude "**/node_modules/**"
+
+  plugin-versions:
+    runs-on: ubuntu-24.04
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Plugins that changed must move their version string
+        run: |
+          git fetch --quiet origin ${{ github.base_ref }}
+          bash .github/scripts/check-plugin-version-bumps.sh "origin/${{ github.base_ref }}"
 
   check-deps:
     runs-on: ubuntu-24.04
@@ -137,6 +141,7 @@ jobs:
       cuvs_changed: ${{ steps.check.outputs.cuvs_changed }}
       langchain_changed: ${{ steps.check.outputs.langchain_changed }}
       openclaw_changed: ${{ steps.check.outputs.openclaw_changed }}
+      sdk_python_changed: ${{ steps.check.outputs.sdk_python_changed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -176,7 +181,7 @@ jobs:
             echo "cuvs_changed=false" >> $GITHUB_OUTPUT
           fi
 
-          LANGCHAIN_PATTERN="integrations/langchain/|openviking/integrations/langchain/|tests/(unit/test_langchain|integration/langchain_langgraph/)|examples/langchain-langgraph/|pyproject\.toml|uv\.lock|\.github/workflows/(pr|python-langchain-release)\.yml"
+          LANGCHAIN_PATTERN="examples/langchain/|openviking/integrations/langchain/|tests/(unit/test_langchain|integration/langchain_langgraph/)|examples/langchain-langgraph/|pyproject\.toml|uv\.lock|\.github/workflows/(pr|python-langchain-release)\.yml"
           LANGCHAIN_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$LANGCHAIN_PATTERN" || true)
 
           if [ -n "$LANGCHAIN_CHANGED_FILES" ]; then
@@ -188,7 +193,7 @@ jobs:
             echo "langchain_changed=false" >> $GITHUB_OUTPUT
           fi
 
-          OPENCLAW_PATTERN="examples/openclaw-plugin/|\.github/workflows/pr\.yml"
+          OPENCLAW_PATTERN="examples/openclaw-plugin/|examples/memory-plugin-shared/(lib/|sync\.mjs)|\.github/workflows/pr\.yml"
           OPENCLAW_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$OPENCLAW_PATTERN" || true)
 
           if [ -n "$OPENCLAW_CHANGED_FILES" ]; then
@@ -200,10 +205,60 @@ jobs:
             echo "openclaw_changed=false" >> $GITHUB_OUTPUT
           fi
 
+          SDK_PYTHON_PATTERN="sdk/python/|\.github/workflows/pr\.yml"
+          SDK_PYTHON_CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$SDK_PYTHON_PATTERN" || true)
+
+          if [ -n "$SDK_PYTHON_CHANGED_FILES" ]; then
+            echo "Standalone Python SDK-related changes detected:"
+            echo "$SDK_PYTHON_CHANGED_FILES"
+            echo "sdk_python_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No standalone Python SDK-related changes detected."
+            echo "sdk_python_changed=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.deps_changed == 'true' }}
     uses: ./.github/workflows/_build.yml
+
+  sdk-python-tests:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.sdk_python_changed == 'true' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install standalone SDK test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e sdk/python "pytest<8" "pytest-asyncio<0.22"
+
+      - name: Run standalone SDK tests
+        run: |
+          python -m pytest -q sdk/python/tests \
+            -o addopts='' \
+            --ignore=sdk/python/tests/test_legacy_shims.py \
+            --ignore=sdk/python/tests/test_main_package_exports.py
+
+      - name: Build and test installed wheel
+        if: matrix.python-version == '3.8'
+        run: |
+          python -m pip install "build<1.3"
+          python -m build sdk/python
+          python -m venv /tmp/openviking-sdk-wheel
+          WHEEL_PATH=$(find sdk/python/dist -name '*.whl' -print -quit)
+          /tmp/openviking-sdk-wheel/bin/python -m pip install "$WHEEL_PATH"
+          cd /tmp
+          /tmp/openviking-sdk-wheel/bin/python -c "import openviking_sdk"
 
   cuvs-tests:
     needs: check-deps
@@ -237,19 +292,19 @@ jobs:
       - name: Install standalone integration
         run: |
           uv pip install --system -e sdk/python
-          uv pip install --system -e "integrations/langchain[langgraph,test,dev]"
+          uv pip install --system -e "examples/langchain[langgraph,test,dev]"
 
       - name: Check package formatting and lint
         run: |
           ruff format --check \
-            integrations/langchain/src \
-            integrations/langchain/tests \
+            examples/langchain/src \
+            examples/langchain/tests \
             openviking/integrations/langchain \
             tests/integration/langchain_langgraph \
             tests/unit/test_langchain*.py
           ruff check \
-            integrations/langchain/src \
-            integrations/langchain/tests \
+            examples/langchain/src \
+            examples/langchain/tests \
             openviking/integrations/langchain \
             tests/integration/langchain_langgraph \
             tests/unit/test_langchain*.py
@@ -257,8 +312,8 @@ jobs:
       - name: Type-check package
         run: >-
           mypy
-          --config-file integrations/langchain/pyproject.toml
-          integrations/langchain/src/langchain_openviking
+          --config-file examples/langchain/pyproject.toml
+          examples/langchain/src/langchain_openviking
 
       - name: Run LangChain and LangGraph tests
         run: |
@@ -268,13 +323,13 @@ jobs:
 
       - name: Build and inspect distributions
         run: |
-          python -m build integrations/langchain
-          python -m twine check integrations/langchain/dist/*
+          python -m build examples/langchain
+          python -m twine check examples/langchain/dist/*
 
       - name: Verify the installed wheel
         if: matrix.python-version == '3.12'
         run: |
-          WHEEL_PATH="${GITHUB_WORKSPACE}/$(find integrations/langchain/dist -name '*.whl' -print -quit)"
+          WHEEL_PATH="${GITHUB_WORKSPACE}/$(find examples/langchain/dist -name '*.whl' -print -quit)"
           uv venv .langchain-wheel-venv --python "${{ matrix.python-version }}"
           uv pip install \
             --python .langchain-wheel-venv/bin/python \
@@ -282,10 +337,10 @@ jobs:
             "${WHEEL_PATH}"
           cd /tmp
           "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
-            "${GITHUB_WORKSPACE}/integrations/langchain/tests/installed_base_smoke.py"
+            "${GITHUB_WORKSPACE}/examples/langchain/tests/installed_base_smoke.py"
           uv pip install \
             --python "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
             "${WHEEL_PATH}[langgraph]"
           "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python" \
-            "${GITHUB_WORKSPACE}/integrations/langchain/tests/installed_smoke.py"
+            "${GITHUB_WORKSPACE}/examples/langchain/tests/installed_smoke.py"
           uv pip check --python "${GITHUB_WORKSPACE}/.langchain-wheel-venv/bin/python"

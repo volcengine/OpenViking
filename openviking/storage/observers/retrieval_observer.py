@@ -31,6 +31,11 @@ class RetrievalObserver(BaseObserver):
         """Format retrieval statistics as a string table."""
         return self._format_status_as_table()
 
+    def get_status_json(self) -> dict:
+        """Return retrieval statistics as structured JSON."""
+        stats = self._get_collector().snapshot()
+        return stats.to_dict()
+
     def _format_status_as_table(self) -> str:
         """Format retrieval stats as a table using tabulate."""
         from tabulate import tabulate

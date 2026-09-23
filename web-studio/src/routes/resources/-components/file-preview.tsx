@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
+import {
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  lazy,
+  Suspense,
+} from 'react'
 import type { ComponentProps, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import hljs from 'highlight.js/lib/core'
@@ -14,6 +22,7 @@ import { Button } from '#/components/ui/button'
 import { ScrollArea } from '#/components/ui/scroll-area'
 import { client } from '#/gen/ov-client/client.gen'
 import { getContentDownload, ovClient } from '#/lib/ov-client'
+import { splitMarkdownFrontmatter } from '#/lib/markdown-frontmatter'
 import { parseOkfSidecarMarkdown } from '#/lib/okf-markdown'
 import { fileNameFromUri } from '#/lib/viking-uri'
 import type { GetContentDownloadData } from '#/gen/ov-client/types.gen'
@@ -34,9 +43,13 @@ import { useJsonFormat } from '../-hooks/use-json-format'
 import type { VikingFsEntry } from '../-types/viking-fm'
 import type { CodeEditorHandle } from './code-editor'
 import { OkfMetadataPanel } from './okf-metadata-panel'
+import { YamlMetadata } from './yaml-metadata'
 
 const LazyCodeEditor = lazy(() =>
   import('./code-editor').then((m) => ({ default: m.CodeEditor })),
+)
+const LazyMermaidDiagram = lazy(() =>
+  import('./mermaid-diagram').then((m) => ({ default: m.MermaidDiagram })),
 )
 
 const languageLoaders: Partial<
@@ -133,15 +146,15 @@ const DIRECTORY_LEVEL_META: Array<{
 }> = [
   {
     id: 'abstract',
-    label: 'Abstract',
+    label: 'filePreview.directoryLevels.abstractLabel',
     name: 'L0',
-    title: 'Short semantic abstract',
+    title: 'filePreview.directoryLevels.abstractDescription',
   },
   {
     id: 'overview',
-    label: 'Overview',
+    label: 'filePreview.directoryLevels.overviewLabel',
     name: 'L1',
-    title: 'Directory overview',
+    title: 'filePreview.directoryLevels.overviewDescription',
   },
 ]
 
@@ -228,7 +241,9 @@ function directoryLevelPreview(
 }
 
 function useDirectoryPreview(file: VikingFsEntry | null) {
-  const enabled = Boolean(file?.isDir)
+  const enabled = Boolean(
+    file?.isDir && normalizeDirUri(file.uri) !== 'viking://',
+  )
   const abstractQuery = useQuery({
     enabled,
     queryKey: ['viking-directory-sidecar', file?.uri, 'abstract'],
@@ -718,6 +733,26 @@ function MarkdownCode({
 }
 
 function MarkdownPre({ children }: ComponentProps<'pre'>) {
+  const child =
+    Array.isArray(children) && children.length === 1 ? children[0] : children
+  if (
+    isValidElement<{ className?: string; children?: ReactNode }>(child) &&
+    normalizeMarkdownLanguage(child.props.className) === 'mermaid'
+  ) {
+    const chart = textFromReactNode(child.props.children).replace(/\n$/, '')
+    return (
+      <Suspense
+        fallback={
+          <pre className="overflow-x-auto rounded-md border bg-muted/30 p-3 text-xs leading-6 text-foreground dark:bg-muted-foreground/20">
+            <code className="hljs block whitespace-pre font-mono">{chart}</code>
+          </pre>
+        }
+      >
+        <LazyMermaidDiagram chart={chart} />
+      </Suspense>
+    )
+  }
+
   return (
     <pre className="overflow-x-auto rounded-md border bg-muted/30 p-3 text-xs leading-6 text-foreground dark:bg-muted-foreground/20">
       {children}
@@ -1357,6 +1392,7 @@ export function FilePreview({
     () => memoryFieldsDisplayContent(preview?.content || ''),
     [preview?.content],
   )
+  const frontmatter = useMemo(() => splitMarkdownFrontmatter(displayContent || ''), [displayContent])
   const okfDocument = useMemo(
     () =>
       file && preview?.fileType === 'markdown'
@@ -1741,7 +1777,7 @@ export function FilePreview({
                               ? 'border-border bg-muted text-foreground'
                               : 'border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground'
                           }`}
-                          title={level.title}
+                          title={t(level.title)}
                           onClick={() =>
                             setActiveDirectoryLevels((current) => {
                               const next = new Set(current)
@@ -1757,7 +1793,7 @@ export function FilePreview({
                           <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-primary">
                             {level.name}
                           </span>
-                          <span className="font-medium">{level.label}</span>
+                          <span className="font-medium">{t(level.label)}</span>
                         </button>
                       )
                     })}
@@ -1786,9 +1822,9 @@ export function FilePreview({
                           <span className="font-mono font-semibold uppercase tracking-wide text-primary">
                             {level.name}
                           </span>
-                          <span className="font-medium">{level.label}</span>
+                          <span className="font-medium">{t(level.label)}</span>
                           <span className="text-muted-foreground">
-                            {level.title}
+                            {t(level.title)}
                           </span>
                         </header>
                         {level.document ? (
@@ -1906,7 +1942,7 @@ export function FilePreview({
                     onNavigate={onNavigate}
                     rawFrontmatter={okfDocument.rawFrontmatter}
                   />
-                ) : null}
+                ) : frontmatter ? <YamlMetadata rawFrontmatter={frontmatter.rawFrontmatter} defaultOpen /> : null}
                 <article className="prose prose-sm max-w-none break-words dark:prose-invert dark:prose-pre:bg-muted-foreground/20">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
@@ -1934,7 +1970,7 @@ export function FilePreview({
                   >
                     {okfDocument
                       ? okfDocument.body || emptyFileText
-                      : displayContent || emptyFileText}
+                      : (frontmatter?.body ?? displayContent) || emptyFileText}
                   </ReactMarkdown>
                 </article>
               </div>

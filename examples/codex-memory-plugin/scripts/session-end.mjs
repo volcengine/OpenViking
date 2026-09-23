@@ -31,6 +31,7 @@ import {
   saveState,
   withSessionLock,
 } from "./session-state.mjs";
+import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -142,40 +143,21 @@ async function finish(sessionId, transcriptPath, cwd, endToken, heartbeat) {
   await clearEnded(sessionId, { before: endToken + 1 });
 }
 
-async function main() {
-  if (!cfg.autoCapture) {
-    log("skip", { stage: "init", reason: "autoCapture disabled" });
-    output({});
-    return;
-  }
-
-  let raw;
-  let input;
-  try {
-    raw = await readHookStdin();
-    input = JSON.parse(raw);
-  } catch {
-    log("skip", { stage: "stdin_parse", reason: "invalid input" });
-    output({});
-    return;
-  }
-
-  const sessionId = input.session_id;
+runHookStage({
+  loadConfig,
+  input: { read: readHookStdin },
+  // The gates answer before markEnded below: a bypassed session was never
+  // captured, so leaving a marker behind would only make the next SessionStart
+  // sweep chase nothing.
+  gates: { enabled: (reloaded) => reloaded.autoCapture },
+  envelope: () => output({}),
+  onSkip: (reason) => log("skip", { stage: "init", reason }),
+}, async ({ cfg: reloaded, input, raw, cwd, sessionId, emit }) => {
+  cfg = reloaded;
   const transcriptPath = input.transcript_path || null;
-  // The workspace layer belongs to the session's directory, which only the
-  // payload knows; see loadConfig for why re-resolving this late is safe.
-  const cwd = typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
-  cfg = loadConfig(cwd);
-  if (!cfg.autoCapture) {
-    // The gate above ran against this process's directory, not the session's.
-    log("skip", { stage: "init", reason: "autoCapture disabled" });
-    output({});
-    return;
-  }
 
   if (!sessionId) {
     log("skip", { stage: "init", reason: "no session_id" });
-    output({});
     return;
   }
 
@@ -193,10 +175,7 @@ async function main() {
     // stdin is already drained; hand the payload to the worker through the
     // shared cache env var.
     process.env.OPENVIKING_HOOK_STDIN_CACHE = raw;
-    const detached = await maybeDetach(
-      { ...cfg, writePathAsync: true },
-      { approve: () => output({}) },
-    );
+    const detached = await maybeDetach({ ...cfg, writePathAsync: true }, { approve: emit });
     if (detached) return;
     delete process.env.OPENVIKING_HOOK_STDIN_CACHE;
     logError("detach_failed", "running the commit inline; Codex may kill it at the timeout");
@@ -210,7 +189,4 @@ async function main() {
   if (outcome.skipped) {
     logError("lock_timeout", `another writer holds ${sessionId}; end marker left for the sweep`);
   }
-  output({});
-}
-
-main().catch((err) => { logError("uncaught", err); output({}); });
+}).catch((err) => { logError("uncaught", err); output({}); });

@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Focused tests for QueueManager concurrency selection."""
 
+import asyncio
 import json
 import os
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -44,6 +46,134 @@ def test_queue_concurrency_uses_separate_configured_values() -> None:
     assert manager._max_concurrent_for_queue(manager.EXTERNAL_PARSE) == 9
     assert manager._max_concurrent_for_queue(manager.ADD_RESOURCE) == 7
     assert manager._max_concurrent_for_queue(manager.SESSION_COMMIT) == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrency", [1, 2])
+async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
+    transport, monkeypatch, concurrency
+):
+    from openviking.service.task_tracker_concurrency import run_to_completion
+    from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
+    from openviking.storage.queuefs.semantic_msg import SemanticMsg
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+    from openviking.telemetry import OperationTelemetry
+    from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
+
+    tracker = get_request_wait_tracker()
+    telemetry_id = OperationTelemetry("skill-shutdown").telemetry_id
+    tracker.register_request(telemetry_id)
+    msg = SemanticMsg(
+        uri="viking://agent/skills/demo", context_type="skill", telemetry_id=telemetry_id
+    )
+    started, queued, release = threading.Event(), threading.Event(), threading.Event()
+    events = []
+
+    class Lease:
+        lock = {"lease_ref": "demo"}
+
+        async def close(self):
+            events.append("lock-released")
+
+    class Dag:
+        stale = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, uri):
+            tracker.register_embedding_root(telemetry_id, "active")
+            tracker.register_embedding_root(telemetry_id, "queued")
+            queued.set()
+
+        def get_stats(self):
+            return SemanticTreeStats()
+
+    async def write(data):
+        async def finish():
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+            events.append("write-finished")
+            tracker.mark_embedding_done(telemetry_id, "active")
+
+        await run_to_completion(finish)
+        return ProcessResult.success()
+
+    class Queue:
+        def __init__(self, name, handler):
+            self.name, self.handler, self.dispatched = name, handler, False
+
+        def has_dequeue_handler(self):
+            return True
+
+        async def size(self):
+            return int(not self.dispatched)
+
+        async def dequeue_raw(self):
+            if self.dispatched:
+                return None
+            self.dispatched = True
+            return {"id": self.name, "data": msg.to_json()}
+
+        async def process_dequeued(self, data):
+            return await self.handler(data)
+
+        async def ack(self, *args):
+            events.append(f"ack-{self.name}")
+
+        async def dequeue(self):
+            data = await self.dequeue_raw()
+            await self.process_dequeued(data)
+            await self.ack(data)
+
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor", Dag)
+    monkeypatch.setattr(
+        SemanticProcessor, "_resolve_skill_semantic_lock", AsyncMock(return_value=Lease())
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: SimpleNamespace(exists=AsyncMock(return_value=True)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.collection_schemas.TextEmbeddingHandler", lambda _: SimpleNamespace()
+    )
+    manager = QueueManager(
+        object(), max_concurrent_semantic=concurrency, max_concurrent_embedding=concurrency
+    )
+    manager._poll_interval = 0.001
+    manager.setup_standard_queues(object(), start=False)
+    semantic = manager._queues[manager.SEMANTIC]._dequeue_handler
+    manager._queues = {
+        manager.EMBEDDING: Queue(manager.EMBEDDING, write),
+        manager.SEMANTIC: Queue(manager.SEMANTIC, semantic.on_dequeue),
+    }
+    manager.start()
+    threads = list(manager._queue_threads.values())
+    stopping = None
+    try:
+        async with asyncio.timeout(2):
+            while not (started.is_set() and queued.is_set()):
+                await asyncio.sleep(0.01)
+        stopping = asyncio.create_task(asyncio.to_thread(manager.stop))
+        # Cross the concurrent worker's cancellation deadline while a physical
+        # write is still active: the Skill lease must remain held.
+        await asyncio.sleep(5.2 if concurrency == 2 else 0.1)
+        assert "lock-released" not in events
+        assert not manager._embedding_worker_stopped.is_set()
+        release.set()
+        await asyncio.wait_for(asyncio.shield(stopping), 2)
+        assert all(not thread.is_alive() for thread in threads)
+        assert events.index("write-finished") < events.index("lock-released")
+        assert f"ack-{manager.SEMANTIC}" not in events
+        assert not tracker.is_complete(telemetry_id)  # Queued vectors await restart.
+    finally:
+        release.set()
+        if stopping is not None:
+            await stopping
+        else:
+            await asyncio.to_thread(manager.stop)
+        tracker.cleanup(telemetry_id)
 
 
 async def test_status_waits_for_processing_messages_from_other_workers(monkeypatch) -> None:

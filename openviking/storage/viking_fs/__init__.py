@@ -52,7 +52,6 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 
 # Import mixins
 from openviking.storage.viking_fs import _base as _base_mod
@@ -155,7 +154,7 @@ class VikingFS(
             "vikingfs_bound_ctx", default=None
         )
         self._background_tasks: set = set()
-        self._user_deletion_guard: Optional[Callable[[str, str], bool]] = None
+        self._deletion_guard: Optional[Callable[[str, str], bool]] = None
 
 
 VikingFS.__module__ = __name__

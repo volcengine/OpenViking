@@ -14,12 +14,14 @@ import {
   MoonIcon,
   ActivityIcon,
   BotIcon,
+  PanelsTopLeftIcon,
   CableIcon,
   ScrollTextIcon,
   SearchIcon,
   SparklesIcon,
   SunIcon,
   UsersRoundIcon,
+  WorkflowIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
@@ -91,11 +93,18 @@ const NAV_ITEMS: readonly NavItem[] = [
     to: '/home',
   },
   {
-    icon: BotIcon,
+    icon: PanelsTopLeftIcon,
     id: 'playground',
     section: 'workspace',
     titleKey: 'navigation.playground.title',
     to: '/playground',
+  },
+  {
+    icon: BotIcon,
+    id: 'vikingbot',
+    section: 'workspace',
+    titleKey: 'vikingbot:title',
+    to: '/vikingbot',
   },
   {
     icon: SearchIcon,
@@ -111,12 +120,13 @@ const NAV_ITEMS: readonly NavItem[] = [
     titleKey: 'navigation.skills.title',
     to: '/skills',
   },
+
   {
-    icon: BrainIcon,
-    id: 'agentExperience',
+    icon: WorkflowIcon,
+    id: 'compile',
     section: 'workspace',
-    titleKey: 'navigation.agentExperience.title',
-    to: '/agent-experience',
+    titleKey: 'navigation.compile.title',
+    to: '/compile',
   },
   {
     icon: MessagesSquareIcon,
@@ -124,6 +134,13 @@ const NAV_ITEMS: readonly NavItem[] = [
     section: 'operations',
     titleKey: 'navigation.sessions.title',
     to: '/sessions',
+  },
+  {
+    icon: BrainIcon,
+    id: 'agentExperience',
+    section: 'operations',
+    titleKey: 'navigation.agentExperience.title',
+    to: '/agent-experience',
   },
   {
     icon: ScrollTextIcon,
@@ -180,7 +197,7 @@ const LANGUAGE_OPTIONS = [
 ] as const
 
 const HEADER_ICON_BUTTON_CLASS =
-  'relative inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
+  'relative inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border/80 bg-muted/60 text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
 
 function resolveLanguage(
   value: string | undefined,
@@ -506,17 +523,17 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
       </Sidebar>
 
       <SidebarInset className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 md:m-0 md:ml-0">
-        <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-background px-4 backdrop-blur-md md:px-6">
+        <header className="flex h-12 shrink-0 items-center justify-end border-b border-border/70 bg-sidebar px-4 backdrop-blur-md md:px-6">
           <SidebarTrigger className="mr-auto shrink-0 md:hidden" />
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <div
               aria-label={t('language.label', { ns: 'common' })}
-              className="relative flex h-10 items-center rounded-2xl border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
+              className="relative flex h-8 items-center rounded-lg border border-border/80 bg-muted/60 p-1 text-xs shadow-xs"
               role="group"
             >
               <span
                 className={cn(
-                  'absolute h-8 min-w-10 rounded-xl bg-background shadow-sm transition-transform duration-200 ease-in-out',
+                  'absolute h-6 min-w-8 rounded-md bg-background shadow-sm transition-transform duration-200 ease-in-out',
                   currentLanguage === 'en' && 'translate-x-full',
                 )}
               />
@@ -529,7 +546,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                     type="button"
                     aria-pressed={isActive}
                     className={cn(
-                      'relative z-10 h-8 min-w-10 rounded-xl px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                      'relative z-10 h-6 min-w-8 rounded-md px-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                       isActive && 'text-foreground',
                     )}
                     onClick={() => {
@@ -552,8 +569,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
                 setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')
               }
             >
-              <MoonIcon className="size-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <SunIcon className="absolute size-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+              <MoonIcon className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+              <SunIcon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
             </button>
 
             <a
@@ -563,7 +580,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
               aria-label={t('footer.github', { ns: 'appShell' })}
               className={HEADER_ICON_BUTTON_CLASS}
             >
-              <GithubIcon className="size-5" />
+              <GithubIcon className="size-4" />
             </a>
 
             <div className="h-6 w-px bg-border/80" aria-hidden="true" />

@@ -16,6 +16,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service.pack_service import PackService
+from openviking.storage.acl import AclManager, AclMode
 from openviking.storage.index_consistency import IndexConsistencyReport, IndexExpectation
 from openviking.storage.ovpack.operations import (
     backup_ovpack,
@@ -23,8 +24,10 @@ from openviking.storage.ovpack.operations import (
     import_ovpack,
     restore_ovpack,
 )
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
+from tests.storage.test_transfer_merge_binding import binding_fs as binding_fs
+from tests.storage.test_transfer_merge_binding import indexed_fs as indexed_fs
 
 
 class FakeVikingFS:
@@ -339,6 +342,7 @@ class FakeVectorStore:
                     "context_type": "resource",
                     "level": 2,
                     "abstract": "note summary",
+                    "md5": "note-md5",
                     "tags": ["snapshot"],
                     "vector": [0.1, 0.2, 0.3],
                 }
@@ -564,11 +568,13 @@ def test_index_consistency_report_limits_public_and_error_records():
 async def test_export_ovpack_writes_v3_manifest_with_abstract_overviews(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
+    vector_store = FakeVectorStore()
     await export_ovpack(
         FakeExportVikingFS(),
         "viking://resources/demo",
         str(temp_ovpack_path),
         ctx=request_ctx,
+        vector_store=vector_store,
     )
 
     with zipfile.ZipFile(temp_ovpack_path, "r") as zf:
@@ -599,6 +605,8 @@ async def test_export_ovpack_writes_v3_manifest_with_abstract_overviews(
     assert manifest["index"]["records"]["count"] == len(index_records)
     assert index_records[0]["path"] == ""
     assert index_records[0]["text"] == "root abstract"
+    note_record = next(record for record in index_records if record["path"] == "notes.txt")
+    assert note_record["scalars"]["md5"] == "note-md5"
 
 
 @pytest.mark.asyncio
@@ -745,6 +753,7 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
                     "abstract": "portable summary",
                     "description": "portable description",
                     "tags": ["portable"],
+                    "md5": "portable-md5",
                 },
             }
         ],
@@ -768,6 +777,7 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
         "summary": "portable summary",
     }
     assert vectorized_files[0]["scalar_override"]["tags"] == ["portable"]
+    assert vectorized_files[0]["scalar_override"]["md5"] == "portable-md5"
 
 
 @pytest.mark.asyncio
@@ -1119,3 +1129,104 @@ async def test_import_top_level_scope_package_requires_root_target(
         await import_ovpack(
             FakeVikingFS(), str(temp_ovpack_path), "viking://resources", request_ctx
         )
+
+
+async def _restricted_pack_source(indexed_fs):
+    fs, backend = indexed_fs
+    admin = RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN)
+    reader = RequestContext(user=UserIdentifier("acct", "reader"), role=Role.USER)
+    outsider = RequestContext(user=UserIdentifier("acct", "outsider"), role=Role.USER)
+    root = "viking://resources/repo"
+    original = root + "/nested/guide.md"
+    await fs.write_file_bytes(original, b"# Current operating guide\n", ctx=admin)
+    for uri, level in [(root, 1), (root + "/nested", 1), (original, 2)]:
+        await backend.upsert(
+            {
+                "id": uri,
+                "uri": uri,
+                "account_id": admin.account_id,
+                "level": level,
+                "vector": [0.1, 0.2, 0.3, 0.4],
+            },
+            ctx=admin,
+        )
+    acl = AclManager(backend)
+    acl.set_enabled(admin.account_id, True)
+    fs.acl_manager = backend.acl_manager = acl
+    await fs.set_acl(
+        root,
+        entries=[{"principal": "user:reader", "level": "read"}],
+        acl_mode=AclMode.RESTRICTED,
+        ctx=admin,
+    )
+    assert await fs.read_file_bytes(original, ctx=reader) == b"# Current operating guide\n"
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file_bytes(original, ctx=outsider)
+    return fs, admin, reader, outsider, original
+
+
+@pytest.mark.asyncio
+async def test_account_backup_includes_restricted_originals_without_crossing_accounts(
+    indexed_fs, tmp_path
+):
+    fs, admin, reader, outsider, original = await _restricted_pack_source(indexed_fs)
+    peer_uri = "viking://user/reader/memories/notes.md"
+    await fs.write_file_bytes(peer_uri, b"same-account private notes", ctx=reader)
+    other_admin = RequestContext(user=UserIdentifier("other", "admin"), role=Role.ADMIN)
+    other_uri = "viking://resources/other-account-only.md"
+    await fs.write_file_bytes(other_uri, b"other-account content", ctx=other_admin)
+    pack = PackService(fs)
+    archive = tmp_path / "account.ovpack"
+
+    with pytest.raises(PermissionDeniedError):
+        await pack.backup_ovpack(str(archive), ctx=reader)
+    assert not archive.exists()
+    await pack.backup_ovpack(str(archive), ctx=admin)
+
+    with zipfile.ZipFile(archive) as zf:
+        prefix = "openviking-backup/files/"
+        assert zf.read(prefix + "resources/repo/nested/guide.md") == await fs.read_file_bytes(
+            original, ctx=admin
+        )
+        assert zf.read(prefix + "user/reader/memories/notes.md") == b"same-account private notes"
+        assert prefix + "resources/other-account-only.md" not in zf.namelist()
+        assert all(zf.read(name) != b"other-account content" for name in zf.namelist())
+    assert await fs.read_file_bytes(other_uri, ctx=other_admin) == b"other-account content"
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file_bytes(original, ctx=outsider)
+
+
+@pytest.mark.asyncio
+async def test_account_restore_overwrites_original_beneath_existing_restricted_root(
+    indexed_fs, tmp_path, monkeypatch
+):
+    fs, admin, reader, outsider, original = await _restricted_pack_source(indexed_fs)
+    archive = tmp_path / "account.ovpack"
+    # Prepare a native package before restriction to isolate restore from backup's
+    # own regression; the destination is restricted at the actual restore call.
+    await fs.set_acl("viking://resources/repo", entries=[], acl_mode=AclMode.NONE, ctx=admin)
+    await PackService(fs).backup_ovpack(str(archive), ctx=admin)
+    await fs.set_acl(
+        "viking://resources/repo",
+        entries=[{"principal": "user:reader", "level": "read"}],
+        acl_mode=AclMode.RESTRICTED,
+        ctx=admin,
+    )
+    await fs.write_file_bytes(original, b"superseded content", ctx=admin)
+    enqueue = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations._enqueue_direct_vectorization", enqueue
+    )
+
+    with pytest.raises(PermissionDeniedError):
+        await PackService(fs).restore_ovpack(str(archive), ctx=reader, on_conflict="overwrite")
+    assert await fs.read_file_bytes(original, ctx=reader) == b"superseded content"
+    assert (
+        await PackService(fs).restore_ovpack(str(archive), ctx=admin, on_conflict="overwrite")
+        == "viking://"
+    )
+    assert await fs.read_file_bytes(original, ctx=reader) == b"# Current operating guide\n"
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file_bytes(original, ctx=outsider)
+    enqueue.assert_awaited_once()
+    assert enqueue.call_args.args[1] == "viking://resources"

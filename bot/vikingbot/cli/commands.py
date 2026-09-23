@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import select
+import signal
 import socket
 import sys
 import time
@@ -33,7 +34,7 @@ from vikingbot.config.loader import (
     load_config,
     validate_openviking_auth,
 )
-from vikingbot.config.schema import SessionKey, requires_gateway_token
+from vikingbot.config.schema import Config, SessionKey, requires_gateway_token
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
@@ -466,6 +467,13 @@ def gateway(
     bus = MessageBus()
     path = Path(config_path).expanduser() if config_path is not None else None
     config = ensure_config(path)
+    from vikingbot.utils.startup import report_startup
+
+    startup_timeout = getattr(getattr(config, "sandbox", None), "backends", None)
+    report_startup(
+        "starting",
+        timeout=(startup_timeout.opensandbox.startup_timeout + 60) if startup_timeout else 600,
+    )
     effective_host = host if host is not None else config.gateway.host
     effective_port = port if port is not None else config.gateway.port
     config.gateway.host = effective_host
@@ -493,7 +501,7 @@ def gateway(
         version="1.0.0",
     )
 
-    cron = prepare_cron(bus)
+    cron = prepare_cron(config, bus)
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     from vikingbot.compile.service import BotCompileService
 
@@ -511,6 +519,8 @@ def gateway(
     async def run():
         import uvicorn
 
+        from vikingbot.sandbox.runtime import OpenSandboxRuntime
+
         # Start uvicorn server for OpenAPI
         config_uvicorn = uvicorn.Config(
             fastapi_app,
@@ -520,24 +530,73 @@ def gateway(
         )
         server = uvicorn.Server(config_uvicorn)
 
-        tasks = [
-            cron.start(),
-            heartbeat.start(),
-            compile_service.start(),
-            channels.start_all(),
-            agent_loop.run(),
-            server.serve(),
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        finally:
-            await agent_loop.close_mcp()
+        runtime = OpenSandboxRuntime(config)
+        manager = getattr(agent_loop, "sandbox_manager", None)
+        loop = asyncio.get_running_loop()
+        current = asyncio.current_task()
+        previous_sigterm = signal.signal(
+            signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(current.cancel)
+        )
+        tasks = []
 
-    asyncio.run(run())
+        async def report_ready(server_task):
+            while not getattr(server, "started", False):
+                if server_task.done():
+                    return
+                await asyncio.sleep(0.05)
+            report_startup("ready")
+
+        try:
+            await runtime.start(manager)
+            await compile_service.start()
+            server_task = asyncio.create_task(server.serve())
+            tasks = [
+                server_task,
+                asyncio.create_task(report_ready(server_task)),
+                asyncio.create_task(heartbeat.start()),
+                asyncio.create_task(channels.start_all()),
+                asyncio.create_task(agent_loop.run()),
+            ]
+            if cron is not None:
+                tasks.append(asyncio.create_task(cron.start()))
+            combined = asyncio.gather(*tasks)
+            await asyncio.wait({combined, server_task}, return_when=asyncio.FIRST_COMPLETED)
+            if combined.done():
+                await combined
+            else:
+                await server_task
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if tasks:
+                await asyncio.gather(combined, return_exceptions=True)
+            try:
+                if hasattr(compile_service, "close"):
+                    await compile_service.close()
+                if hasattr(heartbeat, "stop"):
+                    heartbeat.stop()
+                if cron is not None and hasattr(cron, "stop"):
+                    cron.stop()
+                await agent_loop.close_mcp()
+            finally:
+                try:
+                    if manager is not None:
+                        await manager.cleanup_all()
+                finally:
+                    await runtime.stop()
+                    signal.signal(signal.SIGTERM, previous_sigterm)
+
+    try:
+        asyncio.run(run())
+    except (Exception, asyncio.CancelledError) as exc:
+        report_startup("failed", error=str(exc) or "Gateway startup cancelled")
+        console.print(f"[red]Gateway failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
 
 def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, eval: bool = False):
-    sandbox_parent_path = config.workspace_path
+    sandbox_parent_path = config.sandbox_workspace_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
     if config.sandbox.backend == "direct":
@@ -569,7 +628,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
     agent = AgentLoop(
         bus=bus,
         provider=provider,
-        workspace=config.workspace_path,
+        workspace=config.sandbox_workspace_path,
         model=config.agents.model,
         temperature=config.agents.temperature,
         max_iterations=config.agents.max_tool_iterations,
@@ -591,7 +650,12 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
     return agent
 
 
-def prepare_cron(bus, quiet: bool = False) -> CronService:
+def prepare_cron(config: Config, bus, quiet: bool = False) -> CronService | None:
+    if not config.tools.cron.enabled:
+        if not quiet:
+            logger.info("Cron: disabled")
+        return None
+
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
@@ -685,6 +749,9 @@ def prepare_channel(
             global_config=config,
             compile_service=compile_service,
         )
+        from vikingbot.studio.service import StudioService
+
+        openapi_channel._studio_service = StudioService(config, channels)
         channels.add_channel(openapi_channel)
         logger.info(f"OpenAPI channel enabled on port {openapi_port}")
 
@@ -709,7 +776,7 @@ def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
         )
 
     heartbeat = HeartbeatService(
-        workspace=config.workspace_path,
+        workspace=config.sandbox_workspace_path,
         on_heartbeat=on_heartbeat,
         interval_s=config.heartbeat.interval_seconds,
         enabled=config.heartbeat.enabled,
@@ -858,7 +925,7 @@ def chat(
     # Use unified default session ID
     if session_id is None:
         session_id = get_or_create_machine_id()
-    cron = None if eval else prepare_cron(bus, quiet=is_single_turn)
+    cron = None if eval else prepare_cron(config, bus, quiet=is_single_turn)
     channels = prepare_agent_channel(
         config,
         bus,
@@ -1255,7 +1322,7 @@ def status():
 
     config_path = get_config_path()
     config = load_config()
-    workspace = config.workspace_path
+    workspace = config.sandbox_workspace_path
 
     console.print(f"{__logo__} vikingbot Status\n")
 

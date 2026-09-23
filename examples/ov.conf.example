@@ -185,7 +185,7 @@
     "vlm_codex_example": {
         "_comment": "For Codex OAuth via subscription. Complete sign-in from `openviking-server init`. OV stores tokens in ~/.openviking/codex_auth.json and can bootstrap from an existing Codex CLI auth file if needed.",
         "provider": "openai-codex",
-        "model": "gpt-5.3-codex",
+        "model": "gpt-5.6-terra",
         "api_base": "https://chatgpt.com/backend-api/codex",
         "reasoning_effort": "xhigh",
         "temperature": 0.0,
@@ -224,6 +224,22 @@
         "api_key": "{your-api-key}",
         "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
         "model": "qwen3-rerank",
+        "threshold": 0.1,
+    },
+    "rerank_jev_example": {
+        "_comment": "For direct Jev access through the TypeSafe System One API:",
+        "provider": "jev",
+        "api_key": "{your-typesafe-api-key}",
+        "model": "jev-latest",
+        "log_payloads": false,
+        "threshold": 0.1,
+    },
+    "rerank_jev_vercel_example": {
+        "_comment": "For Jev through Vercel AI Gateway (TypeSafe-compatible endpoint):",
+        "provider": "jev",
+        "api_key": "{your-vercel-ai-gateway-api-key}",
+        "api_base": "https://ai-gateway.vercel.sh/typesafe",
+        "model": "typesafe-ai/jev",
         "threshold": 0.1,
     },
     "retrieval": {

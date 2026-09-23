@@ -174,7 +174,7 @@ fn pathlock_err_to_py(err: PathLockError) -> PyErr {
         }
         PathLockError::InvalidRequest(_) => PyValueError::new_err(err.to_string()),
         PathLockError::Io(_) | PathLockError::InvalidToken(_) | PathLockError::Internal(_) => {
-            PyRuntimeError::new_err(err.to_string())
+            new_py_err("AGFSInternalError", err.to_string())
         }
     }
 }
@@ -204,14 +204,16 @@ use ragfs::core::builder::{
 };
 use ragfs::core::{
     build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
-    FsContextInner, FsOperation, GlobPage, GrepResult, ListSortBy, MountableFS, OperationStats,
-    PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag, FS_CTX,
+    FsContextInner, FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy, MountableFS,
+    OperationStats, PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
+    FS_CTX,
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{
     BorrowedPathLockLease, OwnedPathLockLease, PathLockConfig, PathLockHandoffRef, PathLockKind,
     PathLockManager, PathLockRequest,
 };
+use ragfs::metrics::{RagfsMetric, RagfsMetricValue};
 
 /// Parse an optional listing sort field and return the matching RagFS value.
 fn parse_list_sort_by(value: Option<&str>) -> PyResult<Option<ListSortBy>> {
@@ -489,12 +491,9 @@ fn pathlock_config_from_value(value: &serde_json::Value) -> Result<PathLockConfi
         }
     }
 
-    let lock_timeout_secs =
-        f64_field(pathlock, "lock_timeout_secs", 0.0)?;
+    let lock_timeout_secs = f64_field(pathlock, "lock_timeout_secs", 0.0)?;
     if !lock_timeout_secs.is_finite() || lock_timeout_secs < 0.0 {
-        return Err(
-            "pathlock.lock_timeout_secs must be a finite non-negative number".to_string(),
-        );
+        return Err("pathlock.lock_timeout_secs must be a finite non-negative number".to_string());
     }
     let lock_expire_secs = f64_field(pathlock, "lock_expire_secs", 30.0)?;
     if !lock_expire_secs.is_finite() || lock_expire_secs < 1.0 {
@@ -532,8 +531,7 @@ fn cache_config_from_ov_conf_with_runtime(
 fn cache_config_from_canonical_ov_conf(
     json: &serde_json::Value,
 ) -> Result<RagfsCacheConfig, String> {
-    let pathlock_uses_cache =
-        pathlock_config_from_canonical_ov_conf(json)?.provider == "cache";
+    let pathlock_uses_cache = pathlock_config_from_canonical_ov_conf(json)?.provider == "cache";
     cache_config_from_canonical_ov_conf_with_runtime(json, pathlock_uses_cache)
 }
 
@@ -975,6 +973,7 @@ fn to_py_err(e: ragfs::core::Error) -> PyErr {
         ragfs::core::Error::Network(_) => new_py_err("AGFSNetworkError", msg),
         ragfs::core::Error::Timeout(_) => new_py_err("AGFSTimeoutError", msg),
         ragfs::core::Error::WouldBlock(_) => new_py_err("AGFSTimeoutError", msg),
+        ragfs::core::Error::PathLock(error) => pathlock_err_to_py(error),
         ragfs::core::Error::SyncWriteQuorum { .. } => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::ContextMissing(_) => new_py_err("AGFSInternalError", msg),
         ragfs::core::Error::Internal(_) => new_py_err("AGFSInternalError", msg),
@@ -1059,7 +1058,7 @@ fn serde_json_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAn
 }
 
 /// Convert GrepResult to a Python dict matching the Go binding JSON format:
-/// {"matches": [{"file": str, "line": int, "content": str}, ...], "count": int}
+/// {"matches": [{"file": str, "line": int, "content": str, ...}, ...], "count": int}
 fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
 
@@ -1069,6 +1068,26 @@ fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<Py
         match_dict.set_item("file", &m.file)?;
         match_dict.set_item("line", m.line)?;
         match_dict.set_item("content", &m.content)?;
+        if let Some(lines) = &m.before_context {
+            let context = PyList::empty(py);
+            for line in lines {
+                let item = PyDict::new(py);
+                item.set_item("line", line.line)?;
+                item.set_item("content", &line.content)?;
+                context.append(item)?;
+            }
+            match_dict.set_item("before_context", context)?;
+        }
+        if let Some(lines) = &m.after_context {
+            let context = PyList::empty(py);
+            for line in lines {
+                let item = PyDict::new(py);
+                item.set_item("line", line.line)?;
+                item.set_item("content", &line.content)?;
+                context.append(item)?;
+            }
+            match_dict.set_item("after_context", context)?;
+        }
         matches_list.append(match_dict)?;
     }
 
@@ -1078,14 +1097,54 @@ fn grep_result_to_py_dict(py: Python<'_>, result: &GrepResult) -> PyResult<Py<Py
     Ok(dict.into())
 }
 
-/// Convert OperationStats to a Python dict.
+/// Convert the supplied native statistics into the legacy microsecond Python dict.
 fn operation_stats_to_py_dict(py: Python<'_>, stats: &OperationStats) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("count", stats.count)?;
-    dict.set_item("total_time_us", stats.total_time_us)?;
-    dict.set_item("min_time_us", stats.min_time_us)?;
-    dict.set_item("max_time_us", stats.max_time_us)?;
-    dict.set_item("avg_time_us", stats.avg_time_us())?;
+    dict.set_item("total_time_us", stats.total_time_ns / 1_000)?;
+    dict.set_item(
+        "min_time_us",
+        if stats.count == 0 {
+            u64::MAX
+        } else {
+            stats.min_time_ns / 1_000
+        },
+    )?;
+    dict.set_item("max_time_us", stats.max_time_ns / 1_000)?;
+    dict.set_item("avg_time_us", stats.avg_time_ns() / 1_000.0)?;
+    Ok(dict.into())
+}
+
+/// Convert the supplied native metric into a flat Python dict, preserving integer values.
+fn metric_to_py_dict(py: Python<'_>, metric: &RagfsMetric) -> PyResult<Py<PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("name", &metric.name)?;
+    dict.set_item("labels", &metric.labels)?;
+    match &metric.value {
+        RagfsMetricValue::Counter { value, scale } => {
+            dict.set_item("type", "counter")?;
+            dict.set_item("value", value)?;
+            dict.set_item("scale", scale)?;
+        }
+        RagfsMetricValue::Gauge(value) => {
+            dict.set_item("type", "gauge")?;
+            dict.set_item("value", value)?;
+        }
+        RagfsMetricValue::Histogram {
+            bucket_bounds,
+            bucket_counts,
+            count,
+            sum,
+            scale,
+        } => {
+            dict.set_item("type", "histogram")?;
+            dict.set_item("bucket_bounds", bucket_bounds)?;
+            dict.set_item("bucket_counts", bucket_counts)?;
+            dict.set_item("count", count)?;
+            dict.set_item("sum", sum)?;
+            dict.set_item("scale", scale)?;
+        }
+    }
     Ok(dict.into())
 }
 
@@ -1523,8 +1582,8 @@ impl RAGFSBindingClient {
             }
             if let Some(pl_obj) = cfg.get("pathlock") {
                 let pl_value = py_to_json_value(pl_obj.bind(py))?;
-                ragfs_cfg.pathlock = pathlock_config_from_value(&pl_value)
-                    .map_err(PyValueError::new_err)?;
+                ragfs_cfg.pathlock =
+                    pathlock_config_from_value(&pl_value).map_err(PyValueError::new_err)?;
             }
         }
 
@@ -2203,10 +2262,12 @@ impl RAGFSBindingClient {
     ///     exclude_path: Optional path prefix to exclude from search (default: None)
     ///     level_limit: Optional maximum depth relative to query root (default: None)
     ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
+    ///     before_context: Number of lines to include before each match (default: 0)
+    ///     after_context: Number of lines to include after each match (default: 0)
     ///
     /// Returns:
     ///     A dict with "matches" (list of match dicts) and "count" (total matches)
-    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None, ctx=None))]
+    #[pyo3(signature = (path, pattern, recursive=false, case_insensitive=false, stream=false, node_limit=None, exclude_path=None, level_limit=None, ctx=None, before_context=0, after_context=0))]
     #[allow(clippy::too_many_arguments)]
     fn grep(
         &self,
@@ -2220,6 +2281,8 @@ impl RAGFSBindingClient {
         exclude_path: Option<String>,
         level_limit: Option<i32>,
         ctx: Option<HashMap<String, String>>,
+        before_context: i32,
+        after_context: i32,
     ) -> PyResult<Py<PyAny>> {
         if stream {
             return Err(PyRuntimeError::new_err(
@@ -2231,17 +2294,23 @@ impl RAGFSBindingClient {
         let top = self.top.clone();
         let limit = node_limit.map(|n| if n < 0 { 0 } else { n as usize });
         let level_limit_usize = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let before_context = before_context.max(0) as usize;
+        let after_context = after_context.max(0) as usize;
 
         let result = self
             .run_scoped(py, fs_ctx, move || async move {
                 top.grep(
                     &path,
                     &pattern,
-                    recursive,
-                    case_insensitive,
-                    limit,
-                    exclude_path.as_deref(),
-                    level_limit_usize,
+                    GrepOptions {
+                        recursive,
+                        case_insensitive,
+                        node_limit: limit,
+                        exclude_path: exclude_path.as_deref(),
+                        level_limit: level_limit_usize,
+                        before_context,
+                        after_context,
+                    },
                 )
                 .await
             })
@@ -2905,6 +2974,20 @@ impl RAGFSBindingClient {
         })
     }
 
+    /// Read all native metrics with no arguments and return a list of flat Python dicts.
+    fn metrics(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let fs = self.mountable.clone();
+        let metrics = py_detach_blocking(py, move || {
+            self.rt.block_on(async move { fs.metrics().await })
+        })
+        .map_err(to_py_err)?;
+        let result = PyList::empty(py);
+        for metric in &metrics {
+            result.append(metric_to_py_dict(py, metric)?)?;
+        }
+        Ok(result.into())
+    }
+
     /// Get filesystem statistics.
     ///
     /// Args:
@@ -3002,7 +3085,7 @@ mod tests {
     }
 
     #[test]
-    fn pathlock_io_error_maps_to_runtime_error() {
+    fn pathlock_failures_remain_internal_through_filesystem_wrappers() {
         Python::initialize();
         Python::attach(|py| {
             let errors_mod = py.import("openviking.storage.errors").unwrap();
@@ -3013,15 +3096,25 @@ mod tests {
                 .unwrap();
             let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
 
-            let error =
-                pathlock_err_to_py(PathLockError::Io("failed to create lock dir".to_string()));
-
-            assert!(error.is_instance_of::<PyRuntimeError>(py));
+            let internal_error_type = get_exception(py, "AGFSInternalError").unwrap();
+            for wrapped in [false, true] {
+                for failure in [
+                    PathLockError::Io("failed to create lock dir".to_string()),
+                    PathLockError::InvalidToken("missing ':' in token".to_string()),
+                ] {
+                    let error = if wrapped {
+                        to_py_err(failure.into())
+                    } else {
+                        pathlock_err_to_py(failure)
+                    };
+                    assert!(error.is_instance(py, &internal_error_type));
+                }
+            }
         });
     }
 
     #[test]
-    fn pathlock_busy_error_maps_to_lock_acquisition_error() {
+    fn pathlock_contention_survives_filesystem_wrappers() {
         Python::initialize();
         Python::attach(|py| {
             let errors_mod = py.import("openviking.storage.errors").unwrap();
@@ -3032,12 +3125,22 @@ mod tests {
                 .unwrap();
             let _ = LOCK_ACQUISITION_ERROR_TYPE.set(lock_error_type.clone_ref(py));
 
-            let error = pathlock_err_to_py(PathLockError::Busy {
-                lock_path: "/data/.path.ovlock".to_string(),
-                operation: "remove".to_string(),
-            });
-
-            assert!(error.is_instance(py, lock_error_type.bind(py)));
+            for wrapped in [false, true] {
+                for contention in [
+                    PathLockError::Busy {
+                        lock_path: "/data/.path.ovlock".to_string(),
+                        operation: "remove".to_string(),
+                    },
+                    PathLockError::Timeout { elapsed_ms: 1000 },
+                ] {
+                    let error = if wrapped {
+                        to_py_err(contention.into())
+                    } else {
+                        pathlock_err_to_py(contention)
+                    };
+                    assert!(error.is_instance(py, lock_error_type.bind(py)));
+                }
+            }
         });
     }
 

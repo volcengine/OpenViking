@@ -14,10 +14,6 @@ from openviking.core.directories import DirectoryInitializer
 from openviking.privacy import UserPrivacyConfigService
 from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
 from openviking.resource.watch_scheduler import WatchScheduler
-from openviking.server.account_settings import (
-    effective_acl_enabled,
-    read_account_settings,
-)
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_service import CompileService
@@ -52,6 +48,7 @@ from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import OPENVIKING_ENABLE_RECORDER_ENV, get_openviking_config
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.git_config import GitConfig
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
@@ -87,6 +84,7 @@ class OpenVikingService:
             path=path,
         )
         self._config = config
+        self._agent_evolution_base_config = config.agent_evolution.model_copy(deep=True)
         self._user = user or UserIdentifier(config.default_account, config.default_user)
 
         # Infrastructure
@@ -104,6 +102,7 @@ class OpenVikingService:
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
+        self._runtime_config_manager: Optional[Any] = None
         self._data_dir_lock_acquired = False
         self._data_dir_lock_path: Optional[str] = None
 
@@ -129,8 +128,7 @@ class OpenVikingService:
         # State
         self._initialized = False
 
-        # Acquire the data-dir lock before encryption bootstrap so first-run root-key creation is
-        # serialized with storage initialization across processes.
+        # Acquire local-storage exclusivity before encryption and storage initialization.
         self._ensure_data_dir_lock_acquired()
 
         # Resolve encryption config (root_key) BEFORE building the agfs client, so the binding
@@ -214,32 +212,80 @@ class OpenVikingService:
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(self._config)
         return binding_config
 
-    async def load_acl_settings(self, account_ids: list[str]) -> None:
-        if self._viking_fs is None:
-            raise NotInitializedError("VikingFS")
+    @property
+    def runtime_config_manager(self) -> Optional[Any]:
+        """The runtime config manager bound to the cluster + account models."""
+        return self._runtime_config_manager
+
+    def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
+        """Set the legacy server value used as the cluster startup baseline."""
+        self._agent_evolution_base_config = config.model_copy(deep=True)
+        self._session_service.set_agent_evolution_config(config)
+
+    async def apply_agent_evolution_config(self) -> None:
+        """Apply the legacy server value to an already initialized manager."""
+        manager = self._runtime_config_manager
+        if manager is None:
+            return
+        base_config = self._config.model_copy(
+            update={
+                "agent_evolution": self._agent_evolution_base_config.model_copy(
+                    deep=True
+                )
+            }
+        )
+        await manager.replace_base_config(base_config)
+
+    async def _init_runtime_config_manager(self) -> None:
+        """Build and start the runtime config manager over the AGFS config source.
+
+        Publishing a cluster override swaps the global ``OpenVikingConfig``
+        singleton, so it is available process-wide through
+        ``get_openviking_config`` exactly as before; account overrides are cached
+        per account and loaded on demand by field.
+        """
+        from openviking.config.binding import build_runtime_config_manager
+        from openviking.pyagfs import AsyncAGFSClient
+
+        if self._agfs_client is None:
+            raise RuntimeError("AGFS client not initialized")
+        base_config = self._config.model_copy(
+            update={
+                "agent_evolution": self._agent_evolution_base_config.model_copy(
+                    deep=True
+                )
+            },
+        )
+        manager = build_runtime_config_manager(
+            AsyncAGFSClient(self._agfs_client),
+            settings=self._config.runtime_config,
+            base_config=base_config,
+        )
+        await manager.initialize()
+        self._runtime_config_manager = manager
         if self._vikingdb_manager is None or self._vikingdb_manager.acl_manager is None:
             raise NotInitializedError("ACL")
-        for account_id in dict.fromkeys(account_ids):
-            settings = await read_account_settings(self._viking_fs, account_id)
-            self._vikingdb_manager.acl_manager.set_enabled(
-                account_id,
-                effective_acl_enabled(settings),
-            )
+        self._vikingdb_manager.acl_manager.set_runtime_config_manager(manager)
+        self._session_service.set_runtime_config_manager(manager)
 
     def _ensure_data_dir_lock_acquired(self) -> None:
-        """Acquire the process-level data directory lock once for this service instance."""
+        """Protect embedded vector storage from concurrent processes in one workspace."""
         if self._data_dir_lock_acquired:
             return
 
-        # contention (see https://github.com/volcengine/OpenViking/issues/473).
-        if not self._config.storage.skip_process_lock:
+        storage = self._config.storage
+        if storage.vectordb.backend not in {"local", "cuvs"}:
+            return
+
+        if not storage.skip_process_lock:
             from openviking.utils.process_lock import acquire_data_dir_lock
 
-            self._data_dir_lock_path = acquire_data_dir_lock(self._config.storage.workspace)
+            self._data_dir_lock_path = acquire_data_dir_lock(storage.workspace)
         else:
             logger.warning(
-                "Skipping workspace process lock for '%s'; multi-process access may corrupt data",
-                self._config.storage.workspace,
+                "Skipping workspace process lock for '%s'; multi-process access may corrupt "
+                "embedded vector storage",
+                storage.workspace,
             )
         self._data_dir_lock_acquired = True
 
@@ -394,10 +440,11 @@ class OpenVikingService:
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
-        await self.load_acl_settings([self._user.account_id])
+        await self._init_runtime_config_manager()
 
         self._resource_processor = ResourceProcessor(
             vikingdb=self._vikingdb_manager,
+            runtime_config_manager=self._runtime_config_manager,
         )
 
         # Initialize directories
@@ -431,6 +478,7 @@ class OpenVikingService:
             resource_service=self._resource_service,
             viking_fs=self._viking_fs,
             uri_mutation_coordinator=self._uri_mutation_coordinator,
+            runtime_config_manager=self._runtime_config_manager,
         )
 
         # Wire up sub-services
@@ -454,6 +502,7 @@ class OpenVikingService:
             skill_processor=self._skill_processor,
             watch_scheduler=self._watch_scheduler,
             resource_memory_link_service=self._resource_memory_link_service,
+            runtime_config_manager=self._runtime_config_manager,
         )
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -498,7 +547,6 @@ class OpenVikingService:
                     queue_name,
                     dequeue_handler=AddResourceProcessor(
                         self._resource_service,
-                        asyncio.get_running_loop(),
                         queue_name,
                         self._viking_fs,
                     ),
@@ -508,7 +556,6 @@ class OpenVikingService:
                 self._queue_manager.SESSION_COMMIT,
                 dequeue_handler=SessionCommitProcessor(
                     self._session_service,
-                    asyncio.get_running_loop(),
                 ),
                 allow_create=True,
             )
@@ -516,17 +563,13 @@ class OpenVikingService:
                 self._queue_manager.EXTERNAL_TASK,
                 dequeue_handler=ExternalTaskProcessor(
                     self._external_task_service,
-                    asyncio.get_running_loop(),
                 ),
                 allow_create=True,
             )
             # Auth state is initialized by the HTTP server after the core service.
-            # Register the durable queue now so task tracking can rebuild its work;
-            # the user-deletion service binds the handler once auth is ready.
-            self._queue_manager.get_queue(
-                self._queue_manager.USER_DELETION,
-                allow_create=True,
-            )
+            # Register durable cleanup work before restoring tracked tasks;
+            # the deletion service binds consumers once auth is ready.
+            self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
             restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
             await self._external_task_service.restore_tasks(restored_tasks)
 
@@ -559,12 +602,19 @@ class OpenVikingService:
                     "MinerU preflight failed (fallback will retry on first parse): %s", exc
                 )
 
+        if self._runtime_config_manager is not None:
+            self._runtime_config_manager.start_refresh_loop()
         self._initialized = True
         logger.info("OpenVikingService initialized")
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
         await self._resource_service.close_background_tasks()
+
+        if self._runtime_config_manager:
+            await self._runtime_config_manager.stop_refresh_loop()
+            self._runtime_config_manager = None
+            logger.info("Runtime config manager stopped")
 
         if self._watch_scheduler:
             await self._watch_scheduler.stop()
@@ -580,6 +630,9 @@ class OpenVikingService:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
             logger.info("Queue manager stopped")
+
+        self._config.vlm.close()
+        await asyncio.sleep(0)
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()
@@ -616,9 +669,8 @@ class OpenVikingService:
         if get_service_or_none() is self:
             set_service(None)
 
-        # The PID lock protects every live workspace resource above.  If any
-        # cleanup step failed or was cancelled, keep the lock so another
-        # process cannot enter while this service may still own storage state.
+        # Keep embedded storage exclusive until cleanup succeeds. If cleanup
+        # fails or is cancelled, this service may still own live storage state.
         self._release_data_dir_lock()
 
         logger.info("OpenVikingService closed")

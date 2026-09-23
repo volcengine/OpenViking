@@ -12,7 +12,7 @@ pip install openviking-sdk
 
 Requirements:
 
-- Python 3.10+
+- Python 3.8+
 - A reachable OpenViking HTTP server, for example `http://127.0.0.1:1933`
 
 ## Package Name vs Import Name

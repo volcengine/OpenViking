@@ -75,7 +75,14 @@ function splitTopLevel(source) {
 
 const routes = new Map()
 const middlewareQueryParameters = new Set(['profile'])
-const internalRouterFiles = new Set(['console.py', 'debug.py', 'stats.py', 'user_settings.py'])
+// Studio management routes are internal UI APIs, not part of the public HTTP reference.
+const internalRouterFiles = new Set([
+  'bot_studio.py',
+  'console.py',
+  'debug.py',
+  'stats.py',
+  'user_settings.py',
+])
 for (const file of fs.readdirSync(routerDir).filter((name) => name.endsWith('.py'))) {
   if (internalRouterFiles.has(file)) continue
   const source = fs.readFileSync(path.join(routerDir, file), 'utf8')

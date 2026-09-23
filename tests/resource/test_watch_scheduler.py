@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -61,6 +62,35 @@ class TestWatchSchedulerExecutionHold:
         await asyncio.gather(*list(scheduler._execution_tasks))
         assert len(resource_service.calls) == 1
         assert scheduler._executing_tasks == set()
+
+        # A manual execution must also settle before account cleanup proceeds.
+        started, cancelled, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def blocked_refresh(**kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                await release.wait()
+                raise
+
+        resource_service.refresh_resource = blocked_refresh
+        execution = asyncio.create_task(scheduler.schedule_task(task.task_id))
+        await asyncio.wait_for(started.wait(), 1)
+        other = await manager.create_task(
+            path="https://example.com/other", to_uri="viking://resources/other",
+            account_id="other", user_id="user", watch_interval=5,
+        )
+        deletion = asyncio.create_task(scheduler.delete_tasks(task.account_id))
+        await asyncio.wait_for(cancelled.wait(), 1)
+        assert not deletion.done()
+        release.set()
+        await asyncio.wait_for(deletion, 1)
+        await asyncio.gather(execution, return_exceptions=True)
+        assert await manager.get_task(task.task_id) is None
+        assert await manager.get_task(other.task_id) is not None
+        assert scheduler.executing_tasks == set()
 
     @pytest.mark.asyncio
     async def test_stuck_ingestion_does_not_block_later_scheduler_passes(self, monkeypatch):
@@ -249,9 +279,18 @@ class TestWatchSchedulerResourceExistence:
             processing_mode="vectors_only",
         )
 
+        started = threading.Event()
+
+        async def execute_from_worker():
+            started.set()
+            await scheduler._execute_task(task.model_copy(deep=True))
+
         async with coordinator.mutation(task.account_id, [old_uri, new_uri]):
-            execution = asyncio.create_task(scheduler._execute_task(task.model_copy(deep=True)))
-            await asyncio.sleep(0)
+            execution = asyncio.create_task(
+                asyncio.to_thread(lambda: asyncio.run(execute_from_worker()))
+            )
+            assert await asyncio.to_thread(started.wait, 3)
+            await asyncio.sleep(0.01)
             assert resource_service.calls == []
             await manager.rewrite_target_prefix_internal(
                 old_uri,

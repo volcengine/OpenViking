@@ -29,6 +29,8 @@ be a real package. Linking a source checkout (`dsh plugin --profile web add
 ./examples/dsh-memory-plugin`) only works when that checkout has its own
 `node_modules`, because Node resolves the bundle's dsh peers from the source
 tree's realpath rather than from the profile.
+It also needs `node examples/memory-plugin-shared/sync.mjs` run first: the
+`shared/` modules the bundle imports are generated, not committed.
 
 ## Requirements
 
@@ -122,11 +124,13 @@ SDK client opens that standalone stream it stops resolving POST responses, so
 `tools/list` never returns. The proxy owns the transport itself and is
 unaffected.
 
-The bundle's resolved credentials travel to the proxy through the child
-environment, because DSH scrubs credential-shaped names out of the inherited env
-and a subprocess cannot see the Cordis patch; the proxy then applies the usual
-`OPENVIKING_*` → `ovcli.conf` → `ov.conf` chain and reloads when those files
-change.
+The bundle's resolved connection — url, MCP url, key, account, user and auth
+mode — travels to the proxy through the child environment, because DSH scrubs
+credential-shaped names out of the inherited env and a subprocess cannot see the
+Cordis patch. It goes with `OPENVIKING_CREDENTIAL_SOURCE=env`, so the proxy reads
+no config file and reaches the server exactly as the runtime does, including
+with no key when the runtime has none. A changed `ovcli.conf` therefore takes
+effect for the tools when DSH restarts the bundle, as it does for the runtime.
 
 Two consequences follow from the proxy being one process per profile:
 
@@ -192,14 +196,16 @@ The patch can also carry plugin config:
 
 ## Behavior
 
-- `agent/session-start` injects the OpenViking profile and available-memory index through `agent.inject()`.
+- `agent/session-start` injects the OpenViking profile, the available-memory index, and the `<available-skills>` catalog through `agent.inject()`.
 - `agent/pre-step` retrieves with the current step input and appends a durable plugin message to that same step.
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
 - `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
+- `skillCatalog` (default `true`) and `skillCatalogTokenBudget` (default `1200`; `0` also turns the catalog off) govern `<available-skills>`. The catalog comes from one `GET /api/v1/skills?node_limit=200` call: the user's own skills first, then those shared under `viking://agent/skills` minus any whose name the user also owns, each description cut to about 40 tokens. Its budget is separate from `profileTokenBudget`. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit); when not even one name fits, it shrinks to a one-line count; with no skills, or a server without the endpoint, it is omitted.
 - Failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
-- `tools/pre-execute` blocks DSH filesystem and shell tools from treating `viking://` URIs as local paths, pointing the model at the bridged `mcp__openviking__*` tools instead.
+- `tools/pre-execute` denies a DSH filesystem tool (`read`, `glob`, `grep`, `edit`, `write`, `str_replace_editor`) whose path argument is a `viking://` URI, pointing the model at the bridged `mcp__openviking__*` tools instead. A `write` or `edit` under a skill directory (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) points at `mcp__openviking__add_skill` instead, which creates or replaces a whole skill from its `SKILL.md` text. A `grep` whose pattern is `viking://` text still runs.
+- `tools/post-execute` lets a `bash` command that carries a `viking://` URI run unchanged and attaches a notice for the model: use the bridged tools if it meant OpenViking content, or ignore the notice when the URI is intentional data such as an `ov` argument or an HTTP payload.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. DSH does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect; pin a peer with `OPENVIKING_PEER_ID` instead. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
 
@@ -210,16 +216,18 @@ names — `mcp__openviking__search`, `mcp__openviking__read`,
 `mcp__openviking__list`, `mcp__openviking__tree`, `mcp__openviking__grep`,
 `mcp__openviking__glob`, `mcp__openviking__remember`,
 `mcp__openviking__write`, `mcp__openviking__edit`,
-`mcp__openviking__forget`, `mcp__openviking__add_resource`, and the rest of
-whatever the connected server advertises. The list re-syncs when the server
-announces a change, so a server upgrade adds tools without a bundle release.
+`mcp__openviking__forget`, `mcp__openviking__add_resource`,
+`mcp__openviking__add_skill`, and the rest of whatever the connected server
+advertises. The list re-syncs when the server announces a change, so a server
+upgrade adds tools without a bundle release.
 
 `mcp__openviking__forget` performs permanent deletion. The calling model should
 use it only when the user explicitly requests deletion.
 
-The bundle also serves the shared `openviking-memory` skill from `skills/`
-through its own isolated `ctx.skills` provider, so the model gets the same
-guidance on when to search, read, and write that the other integrations ship.
+The bundle also serves the shared `openviking-memory` and `openviking-skills`
+skills from `skills/` through its own isolated `ctx.skills` provider, so the
+model gets the same guidance the other integrations ship: when to search, read,
+and write, and how to find, use, create, share, and migrate OpenViking skills.
 
 ## Testing
 
