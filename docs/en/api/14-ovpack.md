@@ -301,6 +301,9 @@ pure-dense vector snapshots; hybrid index types reject vector snapshot export.
 Backup reads live files and does not provide an atomic point-in-time snapshot.
 Callers that require strict consistency should pause writes during the backup window.
 
+Watch task schedules are instance-local and do not migrate: backup excludes
+their control files, and restore skips any that older packs contain.
+
 ```
 POST /api/v1/pack/backup
 ```
