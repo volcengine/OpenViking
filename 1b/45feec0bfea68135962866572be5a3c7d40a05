@@ -1,0 +1,22 @@
+bot/vikingbot/compile/ops/reduce.py
+  h_b34c679d17e2ac 15,33-56,249,251-252,254-255
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 179-183,185-186,216-218,256,278,280,282,286,288-290,292
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 451-455,466-469,476-483,486
+bot/vikingbot/compile/resume.py
+  h_b34c679d17e2ac 106,117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1b45feec0bfea68135962866572be5a3c7d40a05",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
