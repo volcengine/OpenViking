@@ -2877,3 +2877,51 @@ def test_declared_git_keeps_args_whitelist(connector_config, ctx, service):
             to="viking://resources/x",
             connector_args={"depth": 1},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("add_type", ["meego", "feishu_project"])
+async def test_project_oauth_dispatch_and_watch_replay(
+    monkeypatch, connector_config, ctx, service, add_type
+):
+    from openviking.connector import auth
+
+    connector_config.allowed_add_types = [add_type]
+    connector_config.auth = "https://connector.example/oauth/access_token"
+    tracker = _task_tracker()
+    client = SimpleNamespace(submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"}))
+    _install_connector_dependencies(monkeypatch, tracker, client)
+    reference = {
+        "account_id": "cloud-account", "user_id": "cloud-user", "ov_user_id": "alice",
+        "platform": "feishu_project", "type": "oauth",
+    }
+    fetch = Mock(side_effect=[
+        {"access_token": token, "account": {"id": "project-user"}} for token in ("first", "second")
+    ])
+    monkeypatch.setattr(auth.ConnectorClient, "get_oauth_access_token", fetch)
+    args = {auth.OAUTH_REF_ARG: reference, "project_keys": ["project"]}
+    path = "https://project.feishu.cn/project"
+    delegate = service._connector
+    state = await delegate.create_watch_auth_state(
+        api_key=ctx.api_key, account_id=ctx.account_id, add_type=add_type, path=path, connector_args=args
+    )
+    for token in ("first", "second"):
+        api_key, restored_type, restored_args = await delegate.restore_watch_request(
+            state, account_id=ctx.account_id, path=path
+        )
+        assert api_key == ctx.api_key
+        await service.add_resource(
+            path=path, ctx=ctx, add_type=restored_type, to="viking://resources/kb/project", args=restored_args
+        )
+        request = client.submit_doc_add.call_args.kwargs
+        assert request["auth_config"] == {"user_access_token": token, "user_key": "project-user"}
+        assert request["param_config"] == {"project_keys": ["project"], "path": path}
+        assert restored_args == args
+    assert fetch.call_count == 2
+    assert "access_token" not in json.dumps(state)
+    fetch.side_effect = InvalidArgumentError("OAuth unavailable")
+    with pytest.raises(InvalidArgumentError, match="OAuth unavailable"):
+        await service.add_resource(
+            path=path, ctx=ctx, add_type=add_type, to="viking://resources/kb/project", args=args
+        )
+    assert client.submit_doc_add.await_count == 2
