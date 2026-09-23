@@ -440,6 +440,22 @@ class TestObserverService:
             "error": "Not initialized",
         }
 
+    def test_models_property_delegates_to_get_models_status(self):
+        """Test models property reuses the explicit status collection path."""
+        service = ObserverService()
+        expected = ComponentStatus(
+            name="models",
+            is_healthy=True,
+            has_errors=False,
+            status="table-status",
+        )
+
+        with patch.object(service, "get_models_status", return_value=expected) as mock_get_status:
+            status = service.models
+
+        assert status is expected
+        mock_get_status.assert_called_once_with()
+
     def test_lock_json_status_without_dependency_is_structured(self):
         """Test lock json format returns a structured payload when uninitialized."""
         service = ObserverService()
@@ -452,7 +468,6 @@ class TestObserverService:
             "active_locks": 0,
             "waiting_locks": 0,
             "stale_locks_removed": 0,
-            "conflicts": [],
             "conflict_count": 0,
             "error": "Not initialized",
         }

@@ -96,7 +96,7 @@ class _FakeSemanticQueue:
     _dequeue_handler = _FakeSemanticHandler()
 
 
-def test_status_json_summary_includes_semantic_nodes() -> None:
+def test_status_json_summary_matches_table_totals() -> None:
     queue_manager = _FakeQueueManager(
         {
             "Semantic": QueueStatus(
@@ -122,10 +122,10 @@ def test_status_json_summary_includes_semantic_nodes() -> None:
         "total": 9,
     }
     assert status["summary"] == {
-        "pending": 1,
+        "pending": 0,
         "in_progress": 0,
-        "processed": 10,
+        "processed": 2,
         "requeued": 0,
         "errors": 0,
-        "total": 11,
+        "total": 2,
     }

@@ -73,7 +73,6 @@ def _lock_not_initialized_status(format: str) -> Any:
             "active_locks": 0,
             "waiting_locks": 0,
             "stale_locks_removed": 0,
-            "conflicts": [],
             "conflict_count": 0,
             "error": "Not initialized",
         }
@@ -219,41 +218,7 @@ class ObserverService:
     @property
     def models(self) -> ComponentStatus:
         """Get Models status (VLM, Embedding, Rerank)."""
-        if self._config is None:
-            return ComponentStatus(
-                name="models",
-                is_healthy=False,
-                has_errors=True,
-                status="Not initialized",
-            )
-
-        vlm_instance = self._config.vlm.get_vlm_instance()
-        embedding_instance = None
-        rerank_instance = None
-        embedding_config = getattr(self._config, "embedding", None)
-        rerank_config = getattr(self._config, "rerank", None)
-
-        # Get embedding instance if available
-        if embedding_config:
-            embedding_instance = embedding_config.get_embedder()
-
-        # Get rerank instance if available
-        if rerank_config and rerank_config.is_available():
-            from openviking.models.rerank import RerankClient
-
-            rerank_instance = RerankClient.from_config(rerank_config)
-
-        observer = ModelsObserver(
-            vlm_instance=vlm_instance,
-            embedding_instance=embedding_instance,
-            rerank_instance=rerank_instance,
-        )
-        return ComponentStatus(
-            name="models",
-            is_healthy=observer.is_healthy(),
-            has_errors=observer.has_errors(),
-            status=observer.get_status_table(),
-        )
+        return self.get_models_status()
 
     def get_models_status(self, *, format: str = "table") -> ComponentStatus:
         """Get Models status (VLM, Embedding, Rerank) with a specific status format."""
@@ -343,7 +308,6 @@ class ObserverService:
                 "active_locks": active,
                 "waiting_locks": waiting,
                 "stale_locks_removed": stale,
-                "conflicts": conflicts,
                 "conflict_count": len(conflicts),
             }
         else:
