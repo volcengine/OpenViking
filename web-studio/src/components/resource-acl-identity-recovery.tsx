@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -149,9 +150,9 @@ export function ResourceAclIdentityRecovery({
         </>
       )}
       {admins.length === 0 && (
-        <a href="/users" className="text-sm underline">
+        <Link to="/users" className="text-sm underline">
           {t('acl.recovery.users')}
-        </a>
+        </Link>
       )}
       {onRetry && (
         <Button variant="outline" onClick={onRetry}>

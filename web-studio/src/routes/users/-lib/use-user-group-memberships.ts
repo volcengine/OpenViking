@@ -38,5 +38,14 @@ export function useUserGroupMemberships(
         ? 'loading'
         : 'ready'
 
-  return { byUser, status }
+  const errors = [
+    ...(groups.isError ? [{ groupId: undefined, error: groups.error }] : []),
+    ...members.flatMap((query, index) =>
+      query.isError
+        ? [{ groupId: populatedGroups[index].group_id, error: query.error }]
+        : [],
+    ),
+  ]
+
+  return { byUser, status, errors }
 }

@@ -810,7 +810,7 @@ const workspace = {
       limitAccess: '限制访问',
       limitTitle: '限制这个目录的访问？',
       limitWarning:
-        '此目录及下级内容将从默认共享改为仅授权对象可访问。切换后请添加授权。账号管理员仍可访问。',
+        '此目录将停止继承上级授权。已有的直接授权（包括所有人授权）仍然生效，请在切换后检查这些授权。账号管理员仍可访问。',
       peopleWithAccess: '有权限的用户和用户组',
       defaultRule: '默认共享',
       onlyAdmins: '暂无授权对象，仅账号管理员可访问',

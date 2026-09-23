@@ -688,9 +688,20 @@ export function UserManagementPanel() {
                               {t('loading')}
                             </span>
                           ) : memberships.status === 'error' ? (
-                            <span className="text-muted-foreground">
-                              {t('groups.loadFailed')}
-                            </span>
+                            <details className="text-muted-foreground">
+                              <summary className="cursor-pointer">
+                                {t('groups.loadFailed')}
+                              </summary>
+                              {memberships.errors.map(({ groupId, error }) => (
+                                <p
+                                  key={groupId ?? 'groups'}
+                                  className="mt-1 break-all text-xs"
+                                >
+                                  {groupId ? `${groupId}: ` : ''}
+                                  {getErrorMessage(error)}
+                                </p>
+                              ))}
+                            </details>
                           ) : userGroups.length === 0 ? (
                             <span className="text-muted-foreground">
                               {t('groups.notJoined')}

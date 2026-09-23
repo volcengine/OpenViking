@@ -9,6 +9,12 @@ import {
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router'
 import { ResourcePermissionsPanel } from './resource-permissions'
 import { OvClientError } from '#/lib/ov-client'
 import type { AclReport } from '#/lib/resource-acl'
@@ -101,13 +107,33 @@ function mount() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  const view = render(
-    <QueryClientProvider client={client}>
-      <ResourcePermissionsPanel uri={uri} />
-    </QueryClientProvider>,
-  )
+  const router = createRouter({
+    basepath: '/studio',
+    history: createMemoryHistory({ initialEntries: ['/studio/'] }),
+    routeTree: createRootRoute({
+      component: () => (
+        <QueryClientProvider client={client}>
+          <ResourcePermissionsPanel uri={uri} />
+        </QueryClientProvider>
+      ),
+    }),
+  })
+  const view = render(<RouterProvider router={router} />)
   return { ...view, client, user: userEvent.setup() }
 }
+it('keeps the no-admin recovery link inside the Studio base path', async () => {
+  mocks.admins.mockResolvedValue([])
+  mocks.get.mockRejectedValue(
+    new OvClientError({
+      code: 'PERMISSION_DENIED',
+      message: 'Denied',
+      statusCode: 403,
+    }),
+  )
+  mount()
+  const link = await screen.findByRole('link', { name: 'acl.recovery.users' })
+  expect(link.getAttribute('href')).toBe('/studio/users')
+})
 it('shows current access and source of each grant without explanatory panels', async () => {
   mount()
   await screen.findByText('bob')

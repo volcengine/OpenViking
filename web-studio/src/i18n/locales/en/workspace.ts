@@ -845,7 +845,7 @@ const workspace = {
       limitAccess: 'Restrict access',
       limitTitle: 'Restrict access to this directory?',
       limitWarning:
-        'This directory and its contents will no longer be shared with everyone. Add grants after switching. Account administrators retain access.',
+        'This directory will stop inheriting parent grants. Existing direct grants, including Everyone grants, remain active. Review these grants after switching. Account administrators retain access.',
       peopleWithAccess: 'People and groups with access',
       defaultRule: 'Shared by default',
       onlyAdmins: 'No grants yet; account administrators can still access',

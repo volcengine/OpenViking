@@ -53,7 +53,8 @@ it('maps users to their groups and skips empty groups', async () => {
 })
 
 it('reports incomplete membership data as an error', async () => {
-  api.members.mockRejectedValueOnce(new Error('Failed to load'))
+  const error = new Error('Failed to load')
+  api.members.mockRejectedValueOnce(error)
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -65,4 +66,22 @@ it('reports incomplete membership data as an error', async () => {
     { wrapper },
   )
   await waitFor(() => expect(result.current.status).toBe('error'))
+  expect(result.current.errors).toEqual([{ groupId: 'fe-dev', error }])
+})
+
+it('preserves the group-list request error for diagnosis', async () => {
+  const error = new Error('Forbidden')
+  api.groups.mockRejectedValue(error)
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  )
+  const { result } = renderHook(
+    () => useUserGroupMemberships(connection, true),
+    { wrapper },
+  )
+  await waitFor(() => expect(result.current.status).toBe('error'))
+  expect(result.current.errors).toEqual([{ groupId: undefined, error }])
 })
