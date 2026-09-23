@@ -238,3 +238,145 @@ async def test_commit_if_needed_still_recovers_after_crash(tmp_path):
     replayer = SessionReplayer(fake, store)
     assert await replayer.commit_if_needed("claude_code", ref) is True
     assert fake.committed == ["import__claude_code__s1"]
+
+
+async def test_commit_if_needed_recovers_when_commit_is_consumed_before_error(tmp_path):
+    class _CommitConsumedErrorReplay(_FakeReplay):
+        async def commit(self, sid, keep_recent_count=0):
+            self.committed.append(sid)
+            self.pending = 0
+            raise RuntimeError("response lost after commit")
+
+    store = CursorStore(tmp_path)
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    fake = _CommitConsumedErrorReplay(pending=500)
+    replayer = SessionReplayer(fake, store)
+
+    assert await replayer.commit_if_needed("claude_code", _ref()) is True
+    assert store.get("claude_code", "s1").needs_commit is False
+    assert await replayer.commit_if_needed("claude_code", _ref()) is False
+    assert fake.committed == ["import__claude_code__s1"]
+
+
+async def test_commit_if_needed_reraises_when_commit_was_not_consumed(tmp_path):
+    commit_error = RuntimeError("commit rejected")
+
+    class _CommitErrorReplay(_FakeReplay):
+        async def commit(self, sid, keep_recent_count=0):
+            self.committed.append(sid)
+            raise commit_error
+
+    store = CursorStore(tmp_path)
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    replayer = SessionReplayer(_CommitErrorReplay(pending=500), store)
+
+    try:
+        await replayer.commit_if_needed("claude_code", _ref())
+    except RuntimeError as raised:
+        assert raised is commit_error
+    else:
+        raise AssertionError("commit error was not re-raised")
+    assert store.get("claude_code", "s1").needs_commit is True
+
+
+async def test_commit_if_needed_raises_original_error_when_probe_also_fails(tmp_path):
+    """An unreadable probe must not upgrade an ambiguous commit into a verdict.
+
+    When ``pending_tokens`` itself fails we cannot tell whether the commit landed,
+    so the contract is to surface the *commit* failure -- not the probe's -- and
+    leave ``needs_commit`` set for an at-least-once retry.
+    """
+    commit_error = RuntimeError("response lost after commit")
+    probe_error = RuntimeError("probe unavailable")
+
+    class _ProbeFailsReplay(_FakeReplay):
+        def __init__(self, pending=0):
+            super().__init__(pending=pending)
+            self.probe_calls = 0
+
+        async def commit(self, sid, keep_recent_count=0):
+            self.committed.append(sid)
+            raise commit_error
+
+        async def pending_tokens(self, sid):
+            self.probe_calls += 1
+            # The entry check must still work; only the post-failure probe breaks.
+            if self.probe_calls == 1:
+                return self.pending
+            raise probe_error
+
+    store = CursorStore(tmp_path)
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    fake = _ProbeFailsReplay(pending=500)
+    replayer = SessionReplayer(fake, store)
+
+    try:
+        await replayer.commit_if_needed("claude_code", _ref())
+    except RuntimeError as raised:
+        # Identity, not type: the probe's error must not shadow the commit's.
+        assert raised is commit_error
+    else:
+        raise AssertionError("commit error was not re-raised")
+    assert fake.probe_calls == 2
+    assert store.get("claude_code", "s1").needs_commit is True
+
+
+async def test_maybe_commit_on_threshold_reconciles_consumed_commit(tmp_path):
+    """The threshold path shares the reconcile, so it cannot re-commit either.
+
+    Both call sites go through ``_commit_and_mark``; without that the threshold
+    path would raise here and re-commit on the next crossing.
+    """
+
+    class _CommitConsumedErrorReplay(_FakeReplay):
+        async def commit(self, sid, keep_recent_count=0):
+            self.committed.append(sid)
+            self.pending = 0
+            raise RuntimeError("response lost after commit")
+
+    store = CursorStore(tmp_path)
+    store.set_pending(
+        "claude_code",
+        "s1",
+        "import__claude_code__s1",
+        Cursor(BYTE_OFFSET, {"offset": 0}),
+        Cursor(BYTE_OFFSET, {"offset": 10}),
+        1,
+        0,
+    )
+    store.confirm_append("claude_code", "s1", Cursor(BYTE_OFFSET, {"offset": 10}), 1)
+    fake = _CommitConsumedErrorReplay(pending=500)
+    replayer = SessionReplayer(fake, store)
+
+    assert await replayer.maybe_commit_on_threshold("claude_code", _ref(), 100) is True
+    assert store.get("claude_code", "s1").needs_commit is False
+    # pending is now 0, so the next crossing does not re-commit.
+    assert await replayer.maybe_commit_on_threshold("claude_code", _ref(), 100) is False
+    assert fake.committed == ["import__claude_code__s1"]
