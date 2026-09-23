@@ -264,9 +264,9 @@ class ReindexExecutor:
         tags: list[str] | None,
         tag_mode: str,
     ) -> IngestOptions | None:
-        if mode == "prune_orphans" or tags is None:
+        if mode == "prune_orphans" or (tags is None and tag_mode != "clear"):
             return None
-        if tag_mode not in {"replace", "append"}:
+        if tag_mode not in {"replace", "append", "clear"}:
             raise InvalidArgumentError(f"unsupported tag mode: {tag_mode}")
         return IngestOptions.from_search_tags(tags, mode=tag_mode)
 

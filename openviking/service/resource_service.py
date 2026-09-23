@@ -61,7 +61,7 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.storage.acl import AclAction
+from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
 from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
@@ -148,11 +148,12 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "prepared_resource",
         "tags",
         "tag_mode",
+        "acl",
         "internal_task",
     }
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
-_ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append"})
+_ADD_RESOURCE_TAG_MODES = frozenset({"replace", "append", "clear"})
 
 _INTERNAL_INGESTION_FIELDS = frozenset(
     {
@@ -323,8 +324,9 @@ class ResourceService:
         tag_mode: str,
     ) -> Dict[str, Any]:
         watch_kwargs = self._sanitize_watch_processor_kwargs(processor_kwargs)
-        if tags is not None:
-            watch_kwargs["tags"] = tags
+        if tags is not None or tag_mode == "clear":
+            if tags is not None:
+                watch_kwargs["tags"] = tags
             watch_kwargs["tag_mode"] = tag_mode
         return watch_kwargs
 
@@ -348,18 +350,8 @@ class ResourceService:
         tags: Optional[List[str]],
         tag_mode: str,
     ) -> None:
-        if tags is not None and tag_mode not in _ADD_RESOURCE_TAG_MODES:
+        if (tags is not None or tag_mode == "clear") and tag_mode not in _ADD_RESOURCE_TAG_MODES:
             raise InvalidArgumentError(f"unsupported tag mode: {tag_mode}")
-
-    def _add_resource_ingest_tag_kwargs(
-        self,
-        *,
-        tags: Optional[List[str]],
-        tag_mode: str,
-    ) -> Dict[str, Any]:
-        if tags is None:
-            return {}
-        return {"ingest_options": IngestOptions.from_search_tags(tags, mode=tag_mode)}
 
     @staticmethod
     def _ensure_single_resource_target(
@@ -858,6 +850,7 @@ class ResourceService:
                         watch_interval=msg.watch_interval,
                         is_active=msg.is_active,
                         manage_watch=not msg.skip_watch_management,
+                        acl=msg.acl,
                         tags=msg.tags,
                         tag_mode=msg.tag_mode,
                         allow_local_path_resolution=msg.allow_local_path_resolution,
@@ -905,10 +898,7 @@ class ResourceService:
             summarize=msg.summarize,
             build_index=msg.build_index,
             processing_mode=msg.processing_mode,
-            **self._add_resource_ingest_tag_kwargs(
-                tags=msg.tags,
-                tag_mode=msg.tag_mode,
-            ),
+            ingest_options=IngestOptions.from_search_tags(msg.tags, mode=msg.tag_mode),
         )
 
     def _restore_source_task_auth(
@@ -1237,6 +1227,7 @@ class ResourceService:
         manage_watch: bool,
         tags: Optional[List[str]],
         tag_mode: str,
+        acl: AclSpec | None,
         to_is_directory: Optional[bool],
         allow_local_path_resolution: bool,
         enforce_public_remote_targets: bool,
@@ -1311,6 +1302,7 @@ class ResourceService:
                 parse_mode=mode.value,
                 watch_interval=watch_interval,
                 is_active=is_active,
+                acl=acl.model_dump(mode="json", exclude_none=True) if acl is not None else None,
                 skip_watch_management=not manage_watch,
                 tags=tags,
                 tag_mode=tag_mode,
@@ -1536,6 +1528,7 @@ class ResourceService:
         internal_task: bool = False,
         args: Optional[Dict[str, Any]] = None,
         shared_source: Optional["SharedSource"] = None,
+        acl: AclSpec | dict[str, Any] | None = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Accept and route a new resource-add request."""
@@ -1562,6 +1555,7 @@ class ResourceService:
             processing_mode=processing_mode,
             watch_interval=watch_interval,
             is_active=is_active,
+            acl=acl,
             manage_watch=True,
             tags=tags,
             tag_mode=tag_mode,
@@ -1645,6 +1639,7 @@ class ResourceService:
         args: Optional[Dict[str, Any]] = None,
         connector_states: Optional[Dict[str, Any]] = None,
         shared_source: Optional["SharedSource"] = None,
+        acl: AclSpec | dict[str, Any] | None = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Validate and route one resource ingestion request.
@@ -1780,6 +1775,8 @@ class ResourceService:
         target_to = to or ""
         target_parent = parent or ""
         target_create_parent = bool(kwargs.get("create_parent", False))
+        if acl is not None:
+            acl = AclSpec.model_validate(acl)
 
         connector = self._connector
         delegate_to_connector = connector.should_delegate(
@@ -1802,6 +1799,11 @@ class ResourceService:
             resolved = connector.resolve_add_type(path, add_type)
             if resolved is None:  # pragma: no cover - should_delegate already resolved it
                 raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
+            acl_update = (
+                await self._viking_fs.prepare_acl_update(target_to, acl, ctx)
+                if acl is not None
+                else None
+            )
             watch_manager = self._get_watch_manager()
             watch_auth_state = None
             create_watch = bool(watch_manager and manage_watch and watch_interval > 0)
@@ -1889,6 +1891,20 @@ class ResourceService:
 
                 on_complete = record_first_run
                 on_success = store_connector_states
+            if acl_update is not None:
+                watch_on_success = on_success
+
+                async def apply_connector_acl(new_states=None):
+                    await self._viking_fs.set_acl(
+                        acl_update.uri,
+                        acl_update.acl.entries,
+                        ctx=ctx,
+                        acl_mode=acl_update.acl.acl_mode,
+                    )
+                    if watch_on_success is not None:
+                        await watch_on_success(new_states)
+
+                on_success = apply_connector_acl
             try:
                 result = await connector.submit(
                     path=path,
@@ -1966,6 +1982,7 @@ class ResourceService:
                 manage_watch=manage_watch,
                 tags=tags,
                 tag_mode=tag_mode,
+                acl=acl,
                 to_is_directory=to_is_directory,
                 allow_local_path_resolution=allow_local_path_resolution,
                 enforce_public_remote_targets=enforce_public_remote_targets,
@@ -1997,6 +2014,7 @@ class ResourceService:
                 enforce_public_remote_targets=enforce_public_remote_targets,
                 watch_auth_state=normalized_args.watch_auth_state,
                 internal_task=internal_task,
+                acl=acl,
                 **kwargs,
             )
         get_current_telemetry().set("resource.flags.wait", wait)
@@ -2063,6 +2081,7 @@ class ResourceService:
         prepared_resource: Optional["LocalResource"] = None,
         internal_task: bool = False,
         on_watch_ready: Optional[Callable[[str], None]] = None,
+        acl: AclSpec | dict[str, Any] | None = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Execute an already-routed resource ingestion."""
@@ -2075,10 +2094,6 @@ class ResourceService:
         register_telemetry(telemetry)
         job_enqueued = False
         deferred_lock: Optional[Dict[str, Any]] = None
-        ingest_tag_kwargs = self._add_resource_ingest_tag_kwargs(
-            tags=tags,
-            tag_mode=tag_mode,
-        )
         watch_manager = self._get_watch_manager()
         watch_enabled = bool(watch_manager and manage_watch and watch_interval > 0)
 
@@ -2115,7 +2130,9 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
                 defer_post_processing=True,
-                **ingest_tag_kwargs,
+                tags=tags,
+                tag_mode=tag_mode,
+                acl=acl,
                 **kwargs,
             )
             prepared_resource = None
@@ -2208,17 +2225,6 @@ class ResourceService:
             else:
                 processing_lock = deferred_lock
                 deferred_lock = None
-                post_process_kwargs = dict(kwargs)
-                for key in (
-                    "resource_lock",
-                    "request_validator",
-                    "auth_config",
-                    FEISHU_ACCESS_TOKEN_ARG,
-                    FEISHU_REFRESH_TOKEN_ARG,
-                    "parser_backend",
-                    "resolved_extension",
-                ):
-                    post_process_kwargs.pop(key, None)
                 post_result = await self._resource_processor.finish_prepared_resource(
                     prepared,
                     ctx=ctx,
@@ -2226,8 +2232,7 @@ class ResourceService:
                     summarize=summarize,
                     build_index=build_index,
                     processing_mode=processing_mode,
-                    **ingest_tag_kwargs,
-                    **post_process_kwargs,
+                    ingest_options=IngestOptions.from_search_tags(tags, mode=tag_mode),
                 )
                 if post_result.get("warnings"):
                     result.setdefault("warnings", []).extend(post_result["warnings"])

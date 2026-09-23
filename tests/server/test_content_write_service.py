@@ -107,156 +107,110 @@ async def test_memory_replace_preserves_metadata(service):
 async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     service, sample_markdown_file
 ):
-    """New shared content grants creator manage without changing file content."""
-    creator = RequestContext(
-        user=service.user,
-        role=Role.USER,
-        group_ids=("writers",),
-    )
+    """Shared content inherits permissions without granting its creator extra access."""
+    writer = RequestContext(user=service.user, role=Role.USER, group_ids=("writers",))
     admin = RequestContext(user=service.user, role=Role.ADMIN)
     reader = RequestContext(
-        user=UserIdentifier(admin.account_id, "reader"),
-        role=Role.USER,
-        group_ids=("readers",),
+        user=UserIdentifier(admin.account_id, "reader"), role=Role.USER, group_ids=("readers",)
     )
-    outsider = RequestContext(
-        user=UserIdentifier(admin.account_id, "outsider"),
-        role=Role.USER,
-    )
-    late_reader = RequestContext(
-        user=UserIdentifier(admin.account_id, "late_reader"),
-        role=Role.USER,
-    )
+    outsider = RequestContext(user=UserIdentifier(admin.account_id, "outsider"), role=Role.USER)
+    public_uri = "viking://resources/public"
     parent_uri = "viking://resources/append_plain"
-    auto_protected_dir = "viking://resources/auto_protected"
-    uri = "viking://resources/append_plain/journal.md"
+    uri = f"{parent_uri}/journal.md"
+    everyone = [{"principal": "user:*", "level": "manage"}]
 
-    await service.runtime_config_manager.patch_account(
-        creator.account_id, {"acl": {"enabled": True}}
+    # Disabled ACL does not change access, but explicit inherited ACL must survive
+    # writes and retain the fixed root grant when the account enables enforcement.
+    off_file = "viking://resources/created_while_disabled.md"
+    await service.fs.write(
+        off_file,
+        "before",
+        ctx=admin,
+        wait=True,
+        acl={"entries": [{"principal": "user:reader", "level": "read"}]},
     )
-    await service.fs.mkdir(auto_protected_dir, ctx=creator)
+    await service.fs.write(off_file, "after", ctx=admin, wait=True)
+
+    # Content created with ACL disabled gains default management when enabled.
+    await service.fs.mkdir(public_uri, ctx=writer)
     await service.resources.wait_processed()
-    auto_protected_acl = await service.fs.get_acl(auto_protected_dir, ctx=creator)
-    creator_entry = {
-        "principal": f"user:{creator.user.user_id}",
-        "level": "manage",
-    }
-    assert auto_protected_acl["direct_entries"] == [creator_entry]
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.get_acl(public_uri, ctx=outsider)
+    await service.runtime_config_manager.patch_account(
+        writer.account_id, {"acl": {"enabled": True}}
+    )
+    assert (await service.fs.get_acl("viking://resources", ctx=outsider))[
+        "direct_entries"
+    ] == everyone
+    off_acl = await service.fs.get_acl(off_file, ctx=outsider)
+    assert off_acl["direct_entries"] == [{"principal": "user:reader", "level": "read"}]
+    assert off_acl["inherited_entries"] == everyone
+    public_acl = await service.fs.get_acl(public_uri, ctx=outsider)
+    assert public_acl["direct_entries"] == []
+    assert public_acl["inherited_entries"] == everyone
+    with pytest.raises(InvalidArgumentError):
+        await service.fs.set_acl("viking://resources", [], ctx=outsider)
 
-    await service.viking_fs.mkdir(parent_uri, ctx=admin)
-    assert await service.vikingdb_manager.upsert(
-        {
-            "id": "append-plain-parent",
-            "uri": parent_uri,
-            "account_id": admin.account_id,
-            "context_type": "resource",
-            "level": 0,
-            "vector": [0.1] * service.vikingdb_manager.vector_dim,
-        },
-        ctx=admin,
-    )
-    assert (await service.fs.get_acl(parent_uri, ctx=admin))["acl_mode"] == "none"
-    parent_acl = await service.fs.set_acl(
-        parent_uri,
-        [
-            {"principal": "group:readers", "level": "read"},
-            {"principal": "group:writers", "level": "write"},
-        ],
-        ctx=admin,
-    )
+    await service.fs.mkdir(parent_uri, ctx=writer)
+    await service.resources.wait_processed()
+    parent_acl = await service.fs.get_acl(parent_uri, ctx=outsider)
     assert parent_acl["acl_mode"] == "inherit"
+    assert parent_acl["direct_entries"] == []
+    assert parent_acl["effective_entries"] == everyone
 
-    await service.fs.write(uri, content="line1\n", ctx=creator, mode="create", wait=True)
     inherited_entries = [
         {"principal": "group:readers", "level": "read"},
         {"principal": "group:writers", "level": "write"},
     ]
-    created_acl = await service.fs.get_acl(uri, ctx=creator)
-    assert created_acl["direct_entries"] == [creator_entry]
+    # Any account member can establish a restricted boundary on an open node.
+    parent_acl = await service.fs.set_acl(
+        parent_uri, inherited_entries, acl_mode=AclMode.RESTRICTED, ctx=outsider
+    )
+    assert parent_acl["effective_entries"] == inherited_entries
+
+    await service.fs.write(uri, content="line1\n", ctx=writer, mode="create", wait=True)
+    created_acl = await service.fs.get_acl(uri, ctx=admin)
+    assert created_acl["direct_entries"] == []
     assert created_acl["inherited_entries"] == inherited_entries
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.get_acl(uri, ctx=writer)
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.set_acl(uri, [], ctx=writer)
 
     imported = await service.resources.add_resource(
         path=str(sample_markdown_file),
         parent=parent_uri,
-        ctx=creator,
+        ctx=writer,
         reason="ACL import",
         wait=True,
     )
+    # Include ancestor refreshes after the import's own task completes.
+    queue_status = await service.resources.wait_processed()
+    assert queue_status["Embedding"]["error_count"] == 0
     import_root = imported["root_uri"]
-    imported_acl = await service.fs.get_acl(import_root, ctx=creator)
-    assert imported_acl["direct_entries"] == [creator_entry]
-    assert imported_acl["inherited_entries"] == inherited_entries
-    children = await service.fs.ls(import_root, ctx=creator, simple=True)
-    child_acl = await service.fs.get_acl(children[0], ctx=creator)
-    assert child_acl["direct_entries"] == []
-    assert child_acl["inherited_entries"] == [*inherited_entries, creator_entry]
+    children = await service.fs.ls(import_root, ctx=writer, simple=True)
+    for target in [import_root, *children]:
+        acl = await service.fs.get_acl(target, ctx=admin)
+        assert acl["direct_entries"] == []
+        assert acl["inherited_entries"] == inherited_entries
 
-    restricted_acl = await service.fs.set_acl(
-        import_root,
-        None,
-        ctx=creator,
-        acl_mode=AclMode.RESTRICTED,
-    )
-    assert restricted_acl["acl_mode"] == "restricted"
-    assert restricted_acl["inherited_entries"] == inherited_entries
-    assert restricted_acl["effective_entries"] == [creator_entry]
-    child_acl = await service.fs.get_acl(children[0], ctx=creator)
-    assert child_acl["inherited_entries"] == [creator_entry]
-    with pytest.raises(PermissionDeniedError):
-        await service.fs.ls(import_root, ctx=reader, simple=True)
-
-    refreshed_inherited_entries = [
-        *inherited_entries,
-        {"principal": "user:late_reader", "level": "read"},
-    ]
-    await service.fs.set_acl(
-        parent_uri,
-        [
-            {"principal": "group:readers", "level": "read"},
-            {"principal": "group:writers", "level": "write"},
-            {"principal": "user:late_reader", "level": "read"},
-        ],
-        ctx=admin,
-    )
-    restricted_acl = await service.fs.get_acl(import_root, ctx=creator)
-    assert restricted_acl["inherited_entries"] == refreshed_inherited_entries
-    assert restricted_acl["effective_entries"] == [creator_entry]
-    child_acl = await service.fs.get_acl(children[0], ctx=creator)
-    assert child_acl["inherited_entries"] == [creator_entry]
-    with pytest.raises(PermissionDeniedError):
-        await service.fs.ls(import_root, ctx=late_reader, simple=True)
-
-    inherited_acl = await service.fs.set_acl(
-        import_root,
-        None,
-        ctx=creator,
-        acl_mode=AclMode.INHERIT,
-    )
-    assert inherited_acl["acl_mode"] == "inherit"
-    assert inherited_acl["inherited_entries"] == refreshed_inherited_entries
-    assert await service.fs.ls(import_root, ctx=late_reader, simple=True) == children
-
-    await service.fs.set_acl(import_root, [], acl_mode=AclMode.RESTRICTED, ctx=creator)
+    # An empty restricted ACL remains closed, including its inherit descendants.
+    await service.fs.set_acl(import_root, [], acl_mode=AclMode.RESTRICTED, ctx=admin)
     child_acl = await service.fs.get_acl(children[0], ctx=admin)
     assert child_acl["acl_mode"] == "inherit"
     assert child_acl["effective_entries"] == []
-    with pytest.raises(PermissionDeniedError):
-        await service.fs.ls(import_root, ctx=late_reader, simple=True)
-    with pytest.raises(PermissionDeniedError):
-        await service.viking_fs.read_file(children[0], ctx=late_reader)
+    for caller in (writer, reader, outsider):
+        with pytest.raises(PermissionDeniedError):
+            await service.viking_fs.read_file(children[0], ctx=caller)
 
     removed_acl = await service.fs.delete_acl(import_root, ctx=admin)
     assert removed_acl["acl_mode"] == "inherit"
     assert removed_acl["direct_entries"] == []
-    assert removed_acl["inherited_entries"] == refreshed_inherited_entries
-    with pytest.raises(PermissionDeniedError):
-        await service.fs.get_acl(import_root, ctx=creator)
-    assert (await service.fs.get_acl(import_root, ctx=admin))["effective_entries"] == (
-        refreshed_inherited_entries
-    )
+    assert removed_acl["effective_entries"] == inherited_entries
+    assert await service.fs.ls(import_root, ctx=reader, simple=True) == children
 
-    await service.fs.write(uri, content="line2\n", ctx=creator, mode="append", wait=True)
-
+    await service.fs.write(uri, content="line2\n", ctx=writer, mode="append", wait=True)
+    assert (await service.fs.get_acl(uri, ctx=admin))["direct_entries"] == []
     stored = await service.viking_fs.read_file(uri, ctx=reader)
     assert stored == "line1\nline2\n"
     with pytest.raises(PermissionDeniedError):
@@ -265,18 +219,69 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
         await service.viking_fs.read_file(uri, ctx=outsider)
 
     await service.runtime_config_manager.patch_account(
-        creator.account_id, {"acl": {"enabled": False}}
+        writer.account_id, {"acl": {"enabled": False}}
     )
     assert await service.viking_fs.read_file(uri, ctx=outsider) == stored
-
-    internal_ctx = RequestContext(
-        user=outsider.user,
-        role=outsider.role,
-        bypass_acl=True,
+    await service.runtime_config_manager.patch_account(
+        writer.account_id, {"acl": {"enabled": True}}
     )
-    assert await service.viking_fs.read_file(uri, ctx=internal_ctx) == stored
     with pytest.raises(PermissionDeniedError):
-        await service.fs.get_acl(uri, ctx=internal_ctx)
+        await service.viking_fs.read_file(uri, ctx=outsider)
+
+    # Resuming inheritance restores user:* manage without adding direct grants.
+    restored_acl = await service.fs.delete_acl(parent_uri, ctx=admin)
+    assert restored_acl["effective_entries"] == everyone
+    assert (await service.fs.get_acl(uri, ctx=outsider))["effective_entries"] == everyone
+
+    # Creation ACL shares one contract across directories, files and imports.
+    restricted = {"acl_mode": "restricted", "entries": inherited_entries}
+    explicit_dir = "viking://resources/explicit"
+    await service.fs.mkdir(explicit_dir, ctx=outsider, acl=restricted)
+    await service.resources.wait_processed()
+    assert (await service.fs.get_acl(explicit_dir, ctx=admin))[
+        "effective_entries"
+    ] == inherited_entries
+    with pytest.raises(PermissionDeniedError):
+        await service.fs.write(f"{explicit_dir}/denied.md", "denied", ctx=writer, acl=restricted)
+    assert not await service.viking_fs.exists(f"{explicit_dir}/denied.md", ctx=admin)
+
+    explicit_file = f"{explicit_dir}/explicit.md"
+    await service.fs.write(
+        explicit_file, "first", ctx=admin, mode="create", wait=True, acl=restricted
+    )
+    assert (await service.fs.get_acl(explicit_file, ctx=admin))[
+        "direct_entries"
+    ] == inherited_entries
+    assert (await service.fs.get_acl(explicit_dir, ctx=admin))[
+        "direct_entries"
+    ] == inherited_entries
+    await service.fs.write(
+        explicit_file, "first", ctx=admin, wait=True, acl={"entries": []}
+    )
+    assert (await service.fs.get_acl(explicit_file, ctx=admin))["effective_entries"] == []
+
+    explicit_import = "viking://resources/explicit_import"
+    await service.resources.add_resource(
+        path=str(sample_markdown_file), to=explicit_import, ctx=admin, wait=True, acl=restricted
+    )
+    await service.resources.wait_processed()
+    assert (await service.fs.get_acl(explicit_import, ctx=admin))[
+        "direct_entries"
+    ] == inherited_entries
+    imported_children = await service.fs.ls(explicit_import, ctx=admin, simple=True)
+    for child in imported_children:
+        report = await service.fs.get_acl(child, ctx=admin)
+        assert report["direct_entries"] == []
+        assert report["effective_entries"] == inherited_entries
+    await service.resources.add_resource(
+        path=str(sample_markdown_file),
+        to=explicit_import,
+        ctx=admin,
+        wait=True,
+        acl={"entries": []},
+    )
+    await service.resources.wait_processed()
+    assert (await service.fs.get_acl(explicit_import, ctx=admin))["effective_entries"] == []
 
 
 @pytest.mark.asyncio

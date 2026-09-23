@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { enqueue, listPending } from "./shared/pending-queue.mjs";
 import { deriveWorkspacePeerId } from "./shared/workspace-peer.mjs";
+import { OPENVIKING_PLUGIN_KIND } from "./capture.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 
 const originalPendingDir = process.env.OPENVIKING_PENDING_DIR;
@@ -256,6 +257,7 @@ test("persisted profile delivery survives dispose and re-seed", async () => {
   firstState.profileBlock = "profile v1";
 
   const profile = await runtime.profileMessage({ session });
+  assert.equal(profile?.source?.kind, OPENVIKING_PLUGIN_KIND);
   assert.equal(profile?.source?.form, "instructions");
   session.events.push({ type: "user/message", data: profile });
   await runtime.dispose(session);

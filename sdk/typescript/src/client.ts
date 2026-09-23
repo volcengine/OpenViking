@@ -8,6 +8,7 @@ import {
 import { OpenVikingTransport, type TransportOptions } from "./transport.js";
 import type {
   AddResourceOptions,
+  AclSpec,
   BatchAddMessagesOptions,
   BatchWriteOperation,
   BatchWriteOptions,
@@ -157,7 +158,11 @@ export class OpenVikingClient {
           ? options.args
           : undefined,
       tags: options.tags,
-      tag_mode: options.tags ? options.tagMode : undefined,
+      acl: options.acl,
+      tag_mode:
+        options.tags !== undefined || options.tagMode === "clear"
+          ? (options.tagMode ?? "replace")
+          : undefined,
       telemetry: options.telemetry,
     });
     const local = await nodePathToBlob(source);
@@ -530,9 +535,38 @@ export class OpenVikingClient {
     });
   }
   /** Create a directory. */
-  mkdir(uri: string, description?: string): Promise<void> {
+  mkdir(uri: string, description?: string, acl?: AclSpec): Promise<void> {
     return this.request("POST", "/api/v1/fs/mkdir", {
-      body: compact({ uri: normalizeURI(uri), description }),
+      body: compact({ uri: normalizeURI(uri), description, acl }),
+    });
+  }
+  aclGet(uri: string): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/acl", {
+      query: { uri: normalizeURI(uri) },
+    });
+  }
+  aclSet(uri: string, acl: AclSpec): Promise<JsonObject> {
+    return this.request("PUT", "/api/v1/acl", {
+      body: { uri: normalizeURI(uri), ...acl },
+    });
+  }
+  aclGrant(
+    uri: string,
+    principal: string,
+    level: "read" | "write" | "manage",
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/acl/grant", {
+      body: { uri: normalizeURI(uri), principal, level },
+    });
+  }
+  aclRevoke(uri: string, principal: string): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/acl/revoke", {
+      body: { uri: normalizeURI(uri), principal },
+    });
+  }
+  aclDelete(uri: string): Promise<JsonObject> {
+    return this.request("DELETE", "/api/v1/acl", {
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Remove a resource or directory. */
@@ -601,8 +635,11 @@ export class OpenVikingClient {
       mode: options.mode,
       processing_mode: options.processingMode,
       tags: options.tags,
+      acl: options.acl,
       tag_mode:
-        options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
+        options.tags !== undefined || options.tagMode === "clear"
+          ? (options.tagMode ?? "replace")
+          : undefined,
       wait: options.wait,
       timeout: options.timeout,
       telemetry: options.telemetry,
@@ -668,7 +705,9 @@ export class OpenVikingClient {
       recursive: options.recursive ?? true,
       tags: options.tags,
       tag_mode:
-        options.tags === undefined ? undefined : (options.tagMode ?? "replace"),
+        options.tags !== undefined || options.tagMode === "clear"
+          ? (options.tagMode ?? "replace")
+          : undefined,
     });
     return this.request("POST", "/api/v1/content/reindex", {
       body: mergeExtra(body, options.extra, ["tags", "tag_mode"]),
@@ -1191,7 +1230,12 @@ export class OpenVikingClient {
   /** List users in an account, in creation order. `name` supports wildcard (* and ?) matching. */
   adminListUsers(
     accountId: string,
-    options: { limit?: number; name?: string; role?: string; page?: number } = {},
+    options: {
+      limit?: number;
+      name?: string;
+      role?: string;
+      page?: number;
+    } = {},
   ): Promise<unknown[]> {
     return this.request(
       "GET",

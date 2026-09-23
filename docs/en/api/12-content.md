@@ -223,7 +223,7 @@ Write a file and automatically refresh related semantics and vectors.
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | timeout | float | No | `null` | Timeout in seconds when `wait=true` |
 | tags | string[] | No | Unset | Explicit retrieval tags for the written file, for example `["team=search", "env=prod"]` |
-| tag_mode | string | No | `replace` | Tag update mode when `tags` is supplied: `replace` overwrites tags; `append` merges tags by key |
+| tag_mode | string | No | `replace` | Tag update mode: `replace` overwrites tags, `append` merges by key, and `clear` removes existing tags without requiring `tags` |
 
 **Notes**
 
@@ -233,7 +233,7 @@ Write a file and automatically refresh related semantics and vectors.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
 - Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
-- When `tags` is supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags` preserves existing tags; explicit `tags: []` with `tag_mode: "replace"` clears them.
+- When non-empty `tags` are supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags`, or using `tags: []` with `tag_mode: "replace"`, preserves existing tags. Use `tag_mode: "clear"` to remove all existing tags; `clear` ignores any supplied tag values.
 
 
 **Python SDK**
@@ -601,8 +601,8 @@ This API operates on existing `viking://...` content. It does not import new fil
 | wait | bool | No | `true` | Whether to wait for completion |
 | dry_run | bool | No | `false` | Only valid with `mode="prune_orphans"`; report orphan vector records without deleting them |
 | recursive | bool | No | `true` | Whether to process descendants recursively; `false` applies only to `semantic_and_vectors` on a `resource`, `memory`, or `skill` directory |
-| tags | list[str] | No | `null` | Write tags to every successfully rebuilt vector record. Omit to preserve existing tags; an empty list with `replace` clears them |
-| tag_mode | str | No | `replace` | Tag write mode: `replace` or `append` |
+| tags | list[str] | No | `null` | Write tags to every successfully rebuilt vector record. Omitting tags, or passing an empty list with `replace`, preserves existing tags |
+| tag_mode | str | No | `replace` | Tag write mode: `replace`, `append`, or `clear`; `clear` removes existing tags without requiring `tags` |
 
 The HTTP request body rejects unknown fields. `uri` may use OpenViking path variables accepted by other content APIs; it is resolved before validation.
 
@@ -635,7 +635,7 @@ For a `resource` or `memory` directory, `recursive=false` regenerates only the t
 
 For `prune_orphans`, source existence is checked against the filesystem. If an entire directory is missing, vector records for files and semantic sidecars below that directory, such as `.abstract.md` and `.overview.md`, are pruned together. `dry_run` is rejected for other modes.
 
-When `tags` is provided, tags are included in the same upsert as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. When `tags` is omitted, `tag_mode` is ignored and existing tags remain unchanged. `prune_orphans` produces no vectors and ignores both fields.
+When non-empty `tags` are provided, tags are included in the same upsert as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. `replace` with an empty tag list is a no-op. `clear` removes existing tags and does not require `tags`; if values are supplied with `clear`, they are ignored. `prune_orphans` produces no vectors and ignores both fields.
 
 Subtree reindex is not transactional. Records skipped because no semantic source is available, or records whose embedding fails, do not receive the new tags.
 
@@ -738,7 +738,11 @@ openviking reindex viking://resources --mode vectors_only \
   --tags team=search,env=prod --tag-mode replace
 ```
 
-The CLI sends tag fields only when non-empty `--tags` is provided. Use HTTP or an SDK to clear tags with `tags: []`.
+Use `--tag-mode clear` without `--tags` to clear existing tags:
+
+```bash
+openviking reindex viking://resources --mode vectors_only --tag-mode clear
+```
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false

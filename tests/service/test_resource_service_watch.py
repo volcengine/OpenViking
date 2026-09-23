@@ -303,10 +303,8 @@ class TestWatchTaskCreation:
         )
 
         assert "tags_result" not in result
-        assert resource_service._resource_processor.calls[-1]["ingest_options"] == IngestOptions(
-            search_tags=["team=search"],
-            search_tag_mode="append",
-        )
+        assert resource_service._resource_processor.calls[-1]["tags"] == ["team=search"]
+        assert resource_service._resource_processor.calls[-1]["tag_mode"] == "append"
 
     @pytest.mark.asyncio
     async def test_add_resource_rejects_invalid_tag_mode_before_processing(
@@ -404,6 +402,27 @@ class TestWatchTaskCreation:
             search_tags=["team=search"],
             search_tag_mode="append",
         )
+
+    def test_watch_persists_clear_without_tags(self, resource_service: ResourceService):
+        assert resource_service._watch_processor_kwargs({}, None, "clear") == {
+            "tag_mode": "clear"
+        }
+
+    def test_add_resource_message_round_trip_preserves_clear_without_tags(self):
+        message = AddResourceMsg(
+            task_id="task-clear",
+            path="https://example.com/demo.md",
+            root_uri="viking://resources/demo",
+            account_id="acct",
+            user_id="user",
+            role="user",
+            tag_mode="clear",
+        )
+
+        restored = AddResourceMsg.from_dict(message.to_dict())
+
+        assert restored.tags is None
+        assert restored.tag_mode == "clear"
 
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(

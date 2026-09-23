@@ -1213,7 +1213,8 @@ async def add_resource(
             ``add_type`` is set. Leaving both empty derives the directory and the name
             from the source and handles collisions like ``parent``.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
-        tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
+        tag_mode: Tag update mode: "replace", "append", or "clear". Clear removes
+            existing tags without requiring ``tags``. Defaults to "replace".
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
             for native HTTPS Git imports and watches, {"feishu_access_token": "..."}
             for Feishu imports, {"site": true} for whole-site ingestion, or

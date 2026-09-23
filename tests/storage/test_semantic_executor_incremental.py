@@ -136,13 +136,11 @@ class _FakeProcessor:
         ctx=None,
         use_summary=False,
         ingest_options=None,
-        creator_acl_grant=None,
         file_md5=None,
         file_content=None,
         scalar_override=None,
         action="merge",
     ):
-        del creator_acl_grant
         self.vectorized_files.append(file_path)
         self.file_ingest_options[file_path] = ingest_options
         self.file_md5s[file_path] = file_md5
@@ -159,13 +157,11 @@ class _FakeProcessor:
         overview,
         ctx=None,
         ingest_options=None,
-        creator_acl_grant=None,
         scalar_overrides=None,
         actions=None,
         include_abstract=True,
         include_overview=True,
     ):
-        del creator_acl_grant
         self.directory_ingest_options[uri] = ingest_options
         self.vectorized_dirs.append(uri)
         self.file_contents[("actions", uri)] = actions

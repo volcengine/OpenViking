@@ -125,7 +125,6 @@ async def test_target_source_syncs_before_semantic_executor(monkeypatch):
         uri="viking://temp/import_root/repository",
         target_uri="viking://resources/org/repo",
         context_type="resource",
-        target_preexisting=True,
     )
 
     await processor.on_dequeue(msg.to_dict())

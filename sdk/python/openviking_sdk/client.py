@@ -1157,10 +1157,14 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
+    async def mkdir(
+        self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
+    ) -> None:
         payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
             payload["description"] = description
+        if acl is not None:
+            payload["acl"] = acl
         response = await self._request("POST", "/api/v1/fs/mkdir", json=payload)
         self._handle_response(response)
 
@@ -2518,8 +2522,10 @@ class SyncHTTPClient:
     def attrs(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.attrs(uri))
 
-    def mkdir(self, uri: str, description: Optional[str] = None) -> None:
-        run_async(self._async_client.mkdir(uri, description=description))
+    def mkdir(
+        self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
+    ) -> None:
+        run_async(self._async_client.mkdir(uri, description=description, acl=acl))
 
     def rm(
         self,

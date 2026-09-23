@@ -343,6 +343,23 @@ async def test_async_http_client_reindex_sends_explicit_empty_tags():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_reindex_sends_clear_without_tags():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"status": "completed"}
+
+    await client.reindex(
+        "viking://resources/demo",
+        options={"tag_mode": "clear"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "tags" not in payload
+    assert payload["tag_mode"] == "clear"
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_write_forwards_processing_mode():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -377,6 +394,24 @@ async def test_async_http_client_write_forwards_explicit_tags_and_mode():
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["tags"] == []
     assert payload["tag_mode"] == "replace"
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_write_forwards_clear_without_tags():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.write(
+        "viking://resources/demo.md",
+        "updated",
+        options={"tag_mode": "clear"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "tags" not in payload
+    assert payload["tag_mode"] == "clear"
 
 
 @pytest.mark.asyncio
@@ -1177,6 +1212,25 @@ async def test_add_resource_sends_tags_and_tag_mode():
             "tag_mode": "append",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_sends_clear_without_tags():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource(
+        "https://example.com/demo.md",
+        options={"tag_mode": "clear"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "tags" not in payload
+    assert payload["tag_mode"] == "clear"
 
 
 @pytest.mark.asyncio

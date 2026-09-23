@@ -142,20 +142,6 @@ class Summarizer:
         lock_handoff: Optional[Dict[str, Any]] = None
         if lock is not None:
             lock_handoff = await get_viking_fs()._async_agfs.pathlock_to_handoff(lock)
-        target_preexisting_arg = kwargs.get("target_preexisting")
-
-        def resolve_target_preexisting(index: int, target_uri: str) -> Optional[bool]:
-            if target_preexisting_arg is None:
-                return None
-            if isinstance(target_preexisting_arg, dict):
-                value = target_preexisting_arg.get(target_uri)
-                return None if value is None else bool(value)
-            if isinstance(target_preexisting_arg, (list, tuple)):
-                if index >= len(target_preexisting_arg):
-                    return None
-                value = target_preexisting_arg[index]
-                return None if value is None else bool(value)
-            return bool(target_preexisting_arg)
 
         def is_resources_root(uri: str) -> bool:
             return (uri or "").rstrip("/") == "viking://resources"
@@ -192,7 +178,7 @@ class Summarizer:
             else:
                 enqueue_units.append((uri, temp_uri))
 
-            for idx, (target_uri, source_uri) in enumerate(enqueue_units):
+            for target_uri, source_uri in enqueue_units:
                 msg = SemanticMsg(
                     uri=source_uri,
                     context_type=context_type,
@@ -206,7 +192,6 @@ class Summarizer:
                     target_uri=target_uri if target_uri != source_uri else None,
                     lock_handoff=lock_handoff,
                     is_code_repo=kwargs.get("is_code_repo", False),
-                    target_preexisting=resolve_target_preexisting(idx, target_uri),
                     ingest_options=ingest_options,
                     source=source,
                     generation_trigger=generation_trigger,

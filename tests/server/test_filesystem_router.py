@@ -169,7 +169,7 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
         "-->"
     )
 
-    async def fake_stat(uri, ctx=None):
+    async def fake_stat(uri, ctx=None, skip_count=False):
         return {"isDir": False}
 
     async def fake_read(uri, ctx=None):

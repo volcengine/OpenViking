@@ -74,8 +74,14 @@ export interface WaitOptions {
   timeout?: number;
   telemetry?: unknown;
 }
+/** Writable direct grants and inheritance mode. */
+export interface AclSpec {
+  acl_mode?: "inherit" | "restricted";
+  entries?: { principal: string; level: "read" | "write" | "manage" }[];
+}
 /** Resource import options. */
 export interface AddResourceOptions extends WaitOptions {
+  acl?: AclSpec;
   to?: string;
   parent?: string;
   createParent?: boolean;
@@ -91,15 +97,16 @@ export interface AddResourceOptions extends WaitOptions {
   processingMode?: ProcessingMode;
   args?: JsonObject;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
+  acl?: AclSpec;
   mode?: string;
   processingMode?: ProcessingMode;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -133,7 +140,7 @@ export interface ReindexOptions {
   dryRun?: boolean;
   recursive?: boolean;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** Semantic retrieval options shared by find and search. */

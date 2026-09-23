@@ -446,7 +446,6 @@ async def test_resource_processor_first_add_summarizes_from_committed_uri(monkey
     assert fake_fs.persist_calls == []
     assert fake_fs.delete_temp_calls == [("viking://temp/tmpdir", None)]
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root"]
-    assert summarize_calls[0]["target_preexisting"] is False
 
 
 @pytest.mark.asyncio
@@ -675,17 +674,18 @@ async def test_resource_processor_second_add_preserves_temp_uri_for_incremental(
     assert result["status"] == "success"
     assert result["root_uri"] == "viking://resources/root"
     assert summarize_calls[0]["temp_uris"] == ["viking://resources/root"]
-    assert summarize_calls[0]["target_preexisting"] is True
     assert fake_fs.persist_calls == []
 
 
 @pytest.mark.asyncio
-async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeypatch):
+async def test_resource_processor_releases_resolved_candidate_when_acl_denied(monkeypatch):
     from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.exceptions import PermissionDeniedError
 
     fake_pathlock = _FakePathLock(busy_tree_paths={"/mock/resources/root_1"})
     fake_fs = _FakeVikingFS(existing_uris={"viking://resources/root"}, pathlock=fake_pathlock)
-    summarize_calls = []
+    fake_fs.prepare_acl_update = AsyncMock(side_effect=PermissionDeniedError("ACL denied"))
+    fake_pathlock.pathlock_release = AsyncMock()
 
     monkeypatch.setattr(
         "openviking.utils.resource_processor.get_current_telemetry",
@@ -713,28 +713,11 @@ async def test_resource_processor_auto_candidate_skips_existing_and_busy(monkeyp
     rp._commit_directory_artifact_with_plan = AsyncMock(
         side_effect=lambda **kwargs: _directory_plan(kwargs["root_uri"])
     )
-    rp._summarizer = SimpleNamespace(
-        summarize=AsyncMock(
-            side_effect=lambda *args, **kwargs: (
-                summarize_calls.append(kwargs) or {"status": "success"}
-            )
+    with pytest.raises(PermissionDeniedError):
+        await rp.process_resource(
+            path="x", ctx=object(), build_index=True, acl={"acl_mode": "inherit"}
         )
-    )
 
-    result = await rp.process_resource(path="x", ctx=object(), build_index=True)
-
-    assert result["status"] == "success"
-    assert result["root_uri"] == "viking://resources/root_2"
-    assert fake_fs.exists_calls == [
-        "viking://resources/root",
-        "viking://resources/root_1",
-        "viking://resources/root_2",
-    ]
-    assert fake_pathlock.tree_attempts == [
-        ("/mock/resources/root_1", 0.0),
-        ("/mock/resources/root_2", 0.0),
-    ]
     assert fake_pathlock.acquired_tree_paths == ["/mock/resources/root_2"]
-    assert summarize_calls[0]["temp_uris"] == ["viking://resources/root_2"]
-    assert summarize_calls[0]["target_preexisting"] is False
-    assert fake_fs.persist_calls == []
+    fake_pathlock.pathlock_release.assert_awaited_once_with({"id": "lock-1"})
+    rp._commit_directory_artifact_with_plan.assert_not_awaited()
