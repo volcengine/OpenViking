@@ -219,8 +219,16 @@ export async function addAgentMessage(fetchJSON, sessionId, payload) {
   return notePendingWrite("addMessage", sessionId, payload, result);
 }
 
-export async function addAgentMessages(fetchJSON, sessionId, payloads) {
-  return sendSessionMessages(fetchJSON, sessionId, payloads, { enqueueOnRetryable: true });
+/**
+ * Session routes attribute a message by its body `peer_id` alone: the
+ * actor-peer header scopes reads, not session writes. A payload that already
+ * names its peer keeps it; an empty `peerId` (peer mode off) stamps nothing.
+ */
+export async function addAgentMessages(fetchJSON, sessionId, payloads, peerId = "") {
+  const stamped = peerId
+    ? payloads.map((payload) => (payload.peer_id ? payload : { ...payload, peer_id: peerId }))
+    : payloads;
+  return sendSessionMessages(fetchJSON, sessionId, stamped, { enqueueOnRetryable: true });
 }
 
 export async function commitAgentSession(fetchJSON, sessionId, log = () => {}, payload = {}) {

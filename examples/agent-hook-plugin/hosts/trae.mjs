@@ -42,7 +42,7 @@ export const trae = {
       }
       toSend.push({ hash, turn: kept[0] });
     }
-    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.turn));
+    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.turn), ctx.peerId);
     const captured = result.sent + result.queued;
     for (const item of toSend.slice(0, captured)) hashes.add(item.hash);
     let nextCount = Number(state.capturedSinceCommit || 0) + captured;

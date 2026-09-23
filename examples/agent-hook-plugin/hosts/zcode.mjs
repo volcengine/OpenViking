@@ -45,7 +45,7 @@ export const zcode = {
     // could be a Stop with no new content, or a race with UserPromptSubmit).
     if (plan.toSend.length === 0) return null;
 
-    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads);
+    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
     const { captured, ...nextState } = applyZcodeCaptureResult(state, plan, result);
     let nextCount = Number(state.capturedSinceCommit || 0) + captured;
     if (captured > 0) {
