@@ -146,7 +146,7 @@ claude
 | `OPENVIKING_RECALL_TOKEN_BUDGET`       | `2000`        | 仅用于最终 raw-find fallback 的内联 token 预算                      |
 | `OPENVIKING_RECALL_MAX_CONTENT_CHARS`  | `500`         | 单条记忆内容字符上限                                               |
 | `OPENVIKING_RECALL_PREFER_ABSTRACT`    | `true`        | 有 abstract 时优先用 abstract 而非完整 body                        |
-| `OPENVIKING_SCORE_THRESHOLD`           | `0.35`        | 最低相关度得分（0–1）                                               |
+| `OPENVIKING_SCORE_THRESHOLD`           | `0.35`        | 按 reranker 原始分数尺度解释的最低相关度得分；logit reranker 可能需要 `-8` 这类负值 |
 | `OPENVIKING_MIN_QUERY_LENGTH`          | `3`           | 短于此长度的 query 跳过召回                                        |
 | `OPENVIKING_RECALL_QUERY_FILTERS`      | `""`          | 逗号分隔的正则规则，在 prompt 变成检索 query 前生效 —— 见[输入过滤器](#输入过滤器) |
 | `OPENVIKING_LOG_RANKING_DETAILS`       | `false`       | 每候选打分日志（很啰嗦）                                           |

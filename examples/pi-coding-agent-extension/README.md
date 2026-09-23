@@ -146,7 +146,7 @@ All fields below live in `ovcli.conf`'s `plugin` section, or in the `plugin.pi` 
 | `recallMaxContentChars`  | `500`      | Per-item content cap for search results                                  |
 | `recallPreferAbstract`   | `true`     | Prefer L0 abstract over L2 full body when available                      |
 | `recallLimit`            | `10`       | Legacy quota-scaling input converted to six coding quotas, not a final cap |
-| `scoreThreshold`         | `0.35`     | Min relevance score (0–1)                                                |
+| `scoreThreshold`         | `0.35`     | Min relevance score in the reranker's native scale; logit rerankers may need negative values |
 | `minQueryLength`         | `3`        | Skip recall for queries shorter than N characters                        |
 | `recallLedger`           | `true`     | Persist injected blocks and re-apply them to historical user messages so provider prompt-prefix caches keep hitting |
 

@@ -68,6 +68,17 @@ function jsonResponse(status, value) {
   });
 }
 
+test("agent hook config preserves logit-scale score thresholds", () => {
+  const previous = process.env.OPENVIKING_SCORE_THRESHOLD;
+  process.env.OPENVIKING_SCORE_THRESHOLD = "-8";
+  try {
+    assert.equal(loadAgentHookConfig("zcode").scoreThreshold, -8);
+  } finally {
+    if (previous === undefined) delete process.env.OPENVIKING_SCORE_THRESHOLD;
+    else process.env.OPENVIKING_SCORE_THRESHOLD = previous;
+  }
+});
+
 test("agent fetch and commit logging preserve response trace_id", async (t) => {
   const responses = [
     jsonResponse(200, {
