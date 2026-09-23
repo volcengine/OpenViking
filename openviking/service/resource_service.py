@@ -1798,6 +1798,11 @@ class ResourceService:
             resolved = connector.resolve_add_type(path, add_type)
             if resolved is None:  # pragma: no cover - should_delegate already resolved it
                 raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
+            acl_update = (
+                await self._viking_fs.prepare_acl_update(target_to, acl, ctx)
+                if acl is not None
+                else None
+            )
             watch_manager = self._get_watch_manager()
             watch_auth_state = None
             create_watch = bool(watch_manager and manage_watch and watch_interval > 0)
@@ -1885,8 +1890,7 @@ class ResourceService:
 
                 on_complete = record_first_run
                 on_success = store_connector_states
-            if acl is not None:
-                acl_update = await self._viking_fs.prepare_acl_update(target_to, acl, ctx)
+            if acl_update is not None:
                 watch_on_success = on_success
 
                 async def apply_connector_acl(new_states=None):

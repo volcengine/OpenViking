@@ -19,8 +19,9 @@ from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.storage.acl import AclSpec, AclUpdate
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg, AddResourcePhase
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 # Deterministic stand-in for the code-hosting predicate: routing tests must
@@ -426,14 +427,31 @@ async def test_connector_watch_releases_hold_when_submission_is_cancelled(
     service._connector.create_watch_auth_state = AsyncMock(return_value={"provider": "test"})
     service._connector.submit = AsyncMock(side_effect=asyncio.CancelledError)
     to_uri = "viking://resources/docs"
+    acl = AclSpec(acl_mode="inherit")
+    request = {
+        "path": "tos://bucket/docs/",
+        "ctx": ctx,
+        "to": to_uri,
+        "watch_interval": 5,
+        "acl": acl,
+    }
+    service._viking_fs.prepare_acl_update = AsyncMock(
+        side_effect=[
+            PermissionDeniedError("ACL management denied"),
+            AclUpdate(uri=to_uri, acl=acl),
+        ]
+    )
 
+    with pytest.raises(PermissionDeniedError, match="ACL management denied"):
+        await service.add_resource(**request)
+
+    assert await watch_manager.get_all_tasks("acct", "alice", str(Role.USER)) == []
+    assert scheduler._executing_tasks == set()
+    service._connector.submit.assert_not_awaited()
+
+    # Once authorized, cancellation after the Watch is created must release its hold.
     with pytest.raises(asyncio.CancelledError):
-        await service.add_resource(
-            path="tos://bucket/docs/",
-            ctx=ctx,
-            to=to_uri,
-            watch_interval=5,
-        )
+        await service.add_resource(**request)
 
     task = await watch_manager.get_task_by_uri(
         to_uri,
