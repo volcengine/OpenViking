@@ -104,10 +104,14 @@ class TestContentTemplateRendering:
 class TestEmbeddingTextConstruction:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("tags", "mode"),
-        [(["team=search"], "replace"), (["env=prod"], "append"), ([], "replace")],
+        ("tags", "mode", "expected_mode"),
+        [
+            (["team=search"], "replace", "replace"),
+            (["env=prod"], "append", "append"),
+            ([], "clear", "replace"),
+        ],
     )
-    async def test_vectorization_preserves_write_tag_mode(self, tags, mode):
+    async def test_vectorization_preserves_write_tag_mode(self, tags, mode, expected_mode):
         registry = MemoryTypeRegistry(load_schemas=False)
         memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
         registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
@@ -147,7 +151,9 @@ class TestEmbeddingTextConstruction:
 
         embedding_msg = updater._vikingdb.enqueue_embedding_msg.await_args.args[0]
         assert embedding_msg.context_data["search_tags"] == tags
-        assert embedding_msg.context_data["_upsert_options"] == {"search_tag_mode": mode}
+        assert embedding_msg.context_data["_upsert_options"] == {
+            "search_tag_mode": expected_mode
+        }
 
     @pytest.mark.asyncio
     async def test_trajectory_vectorization_adds_source_experience_search_tags(self):

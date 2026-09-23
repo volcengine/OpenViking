@@ -315,6 +315,7 @@ const resources = {
     tagMode: 'Tag Write Mode',
     'tagMode.replace': 'Replace',
     'tagMode.append': 'Append',
+    'tagMode.clear': 'Clear',
     reason: 'Reason',
     'reason.placeholder': 'Why are you adding this resource?',
     instruction: 'Instruction',

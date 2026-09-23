@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.storage.abstract_overview import body_for_preview
@@ -103,10 +104,8 @@ class _FakeMutationCoordinator:
 
 
 class _MkdirPathlockAGFS:
-    def __init__(self, owner, *, inject_custom_on_acquire=False):
-        self._owner = owner
+    def __init__(self):
         self._lock = asyncio.Lock()
-        self._inject_custom_on_acquire = inject_custom_on_acquire
         self.held = False
         self.acquire_count = 0
 
@@ -116,8 +115,6 @@ class _MkdirPathlockAGFS:
         await self._lock.acquire()
         self.held = True
         self.acquire_count += 1
-        if self._inject_custom_on_acquire and self._owner.abstract_content is None:
-            self._owner.abstract_content = "custom summary"
         return {"lease_ref": f"mkdir-{self.acquire_count}"}
 
     async def pathlock_release(self, _lease):
@@ -126,36 +123,19 @@ class _MkdirPathlockAGFS:
 
 
 class _MkdirVikingFS:
-    def __init__(self, *, inject_custom_on_acquire=False):
+    def __init__(self):
         self.directory_exists = False
         self.abstract_content = None
-        self.abstract_checks = 0
-        self.abstract_checks_ready = asyncio.Event()
-        self._async_agfs = _MkdirPathlockAGFS(
-            self, inject_custom_on_acquire=inject_custom_on_acquire
-        )
+        self._async_agfs = _MkdirPathlockAGFS()
 
     def _uri_to_path(self, uri, ctx=None):
         del ctx
         return f"/local/default/{uri.removeprefix('viking://')}"
 
-    async def exists(self, uri, ctx=None):
-        del ctx
-        if uri.endswith("/.abstract.md"):
-            if self._async_agfs.held:
-                return self.abstract_content is not None
-            if self._async_agfs._inject_custom_on_acquire:
-                self.abstract_content = "custom summary"
-                return False
-            self.abstract_checks += 1
-            if self.abstract_checks == 2:
-                self.abstract_checks_ready.set()
-            await self.abstract_checks_ready.wait()
-            return False
-        return self.directory_exists
-
     async def mkdir(self, _uri, ctx=None):
         del ctx
+        if self.directory_exists:
+            raise AGFSAlreadyExistsError("directory already exists")
         self.directory_exists = True
 
     async def write_file(self, _uri, content, ctx=None, lease_ref=None):
@@ -163,26 +143,6 @@ class _MkdirVikingFS:
         assert self._async_agfs.held
         assert lease_ref is not None
         self.abstract_content = content
-
-
-@pytest.mark.asyncio
-async def test_mkdir_default_does_not_overwrite_concurrent_abstract(monkeypatch, request_context):
-    viking_fs = _MkdirVikingFS(inject_custom_on_acquire=True)
-    vectorized = []
-
-    async def record_vectorization(**kwargs):
-        assert viking_fs._async_agfs.held
-        vectorized.append(kwargs["abstract"])
-
-    monkeypatch.setattr(
-        "openviking.service.fs_service.vectorize_directory_meta", record_vectorization
-    )
-    service = FSService(viking_fs=viking_fs)
-
-    await service.mkdir("viking://resources/shared", ctx=request_context)
-
-    assert body_for_preview(viking_fs.abstract_content) == "custom summary"
-    assert vectorized == []
 
 
 @pytest.mark.asyncio
@@ -200,10 +160,14 @@ async def test_concurrent_default_mkdir_vectorizes_once(monkeypatch, request_con
     )
     service = FSService(viking_fs=viking_fs)
 
-    await asyncio.gather(
+    results = await asyncio.gather(
         service.mkdir("viking://resources/shared", ctx=request_context),
         service.mkdir("viking://resources/shared", ctx=request_context),
+        return_exceptions=True,
     )
+
+    assert sum(result is None for result in results) == 1
+    assert sum(isinstance(result, AGFSAlreadyExistsError) for result in results) == 1
 
     assert body_for_preview(viking_fs.abstract_content) == "# shared"
     assert vectorized == ["# shared"]

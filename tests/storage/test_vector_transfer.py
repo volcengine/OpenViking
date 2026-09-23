@@ -1372,7 +1372,7 @@ async def test_unindexed_source_preserves_target_records_and_acl(
                 target,
                 level=level,
                 abstract="old abstract",
-                acl_mode="inherit" if private else "none",
+                acl_mode="restricted" if private else "none",
                 acl_direct_grants=["7:user:bob"] if private else [],
                 acl_inherited_grants=[],
             ),
@@ -1391,9 +1391,9 @@ async def test_unindexed_source_preserves_target_records_and_acl(
     assert backend.acl_manager is not None
     effective = await backend.acl_manager.resolve(target, _ctx())
     assert effective.context_fields() == {
-        "acl_mode": "inherit" if private else "none",
+        "acl_mode": "restricted" if private else "inherit",
         "acl_direct_grants": ["7:user:bob"] if private else [],
-        "acl_inherited_grants": [],
+        "acl_inherited_grants": [] if private else ["7:user:*"],
     }
 
 
@@ -1434,8 +1434,17 @@ async def test_copy_directory_preserves_root_acl_and_inherits_it_to_new_entries(
                 "target-root",
                 target,
                 level=0,
-                acl_mode="inherit",
+                acl_mode="restricted",
                 acl_direct_grants=root_acl,
+                acl_inherited_grants=[],
+            ),
+            # Another index level can still carry an older ACL snapshot.
+            _record(
+                "target-root-l1",
+                target,
+                level=1,
+                acl_mode="restricted",
+                acl_direct_grants=["1:user:carol"],
                 acl_inherited_grants=[],
             ),
             _record(

@@ -359,7 +359,7 @@ async def test_overwrite_preserves_target_acl_with_real_storage(
                 "level": 2,
                 "abstract": "old private",
                 "vector": [0.9, 0.8, 0.7, 0.6],
-                "acl_mode": "inherit",
+                "acl_mode": "restricted",
                 "acl_direct_grants": [f"3:user:{ctx.user.user_id}"],
                 "acl_inherited_grants": [],
             }
@@ -402,7 +402,7 @@ async def test_chunk_only_copy_preserves_private_target_main_record(indexed_fs):
         "level": 2,
         "abstract": "old",
         "vector": [0.1] * 4,
-        "acl_mode": "inherit",
+        "acl_mode": "restricted",
         "acl_direct_grants": [f"7:user:{ctx.user.user_id}"],
         "acl_inherited_grants": [],
     }
@@ -483,7 +483,7 @@ async def test_transfer_protects_chunk_shaped_target_file(
                 "level": 2,
                 "abstract": "private sibling",
                 "vector": [0.1] * 4,
-                "acl_mode": "inherit",
+                "acl_mode": "restricted",
                 "acl_direct_grants": [f"7:user:{ctx.user.user_id}"],
                 "acl_inherited_grants": [],
             }

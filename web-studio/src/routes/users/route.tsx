@@ -1,6 +1,12 @@
 import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, createFileRoute } from '@tanstack/react-router'
+import {
+  Link,
+  Outlet,
+  createFileRoute,
+  useNavigate,
+  useRouterState,
+} from '@tanstack/react-router'
 import {
   CheckIcon,
   CopyIcon,
@@ -9,21 +15,23 @@ import {
   PlusIcon,
   RefreshCwIcon,
   RotateCwIcon,
+  ShieldCheckIcon,
   ShieldAlertIcon,
   Trash2Icon,
+  UserRoundIcon,
   UsersRoundIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '#/components/ui/tabs'
-import { UserGroups } from './-components/user-groups'
 
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Input } from '#/components/ui/input'
 import { UserPagination } from './-components/user-pagination'
 import { useUserList } from './-lib/use-user-list'
+import { useUserGroupMemberships } from './-lib/use-user-group-memberships'
 import {
   Card,
   CardContent,
@@ -90,6 +98,8 @@ export const Route = createFileRoute('/users')({
 })
 
 const USER_ROLE_OPTIONS: AdminUserRole[] = ['user', 'admin', 'root']
+const managementTabClassName =
+  'h-12 flex-none rounded-none border-0 px-4 text-sm data-active:bg-transparent data-active:font-semibold dark:data-active:border-transparent dark:data-active:bg-transparent focus-visible:border-transparent focus-visible:bg-transparent focus-visible:ring-0 focus-visible:outline-none focus-visible:after:h-1 focus-visible:after:bg-ring focus-visible:after:opacity-100 after:bg-primary'
 
 function isAdminUserRole(role: string): role is AdminUserRole {
   return USER_ROLE_OPTIONS.includes(role as AdminUserRole)
@@ -111,46 +121,64 @@ function resolveKeyLabel(user: AdminUser): string {
 
 function UserManagementRoute() {
   const { t } = useTranslation('settings')
-  const { connection, connectionRole, isConnectionRoleLoading, serverMode } =
-    useAppConnection()
-  const { canManageUsers } = resolveStudioManagementCapabilities({
-    hasControlCredential: Boolean(connection.adminApiKey.trim()),
-    isRoleLoading: isConnectionRoleLoading,
-    role: connectionRole,
-    serverMode,
+  const navigate = useNavigate()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
   })
-  if (!canManageUsers) return <UserManagementPanel />
-  const adminConnection: AdminConnection = {
-    accountId: connection.accountId,
-    apiKey: connection.adminApiKey,
-    baseUrl: connection.baseUrl,
-    userId: connection.userId,
-  }
+  const activeTab = pathname.startsWith('/users/permissions')
+    ? 'permissions'
+    : pathname.startsWith('/users/groups')
+      ? 'groups'
+      : 'users'
   return (
     <Tabs
-      key={JSON.stringify([
-        connection.baseUrl,
-        connection.accountId,
-        connection.adminApiKey,
-      ])}
-      defaultValue="users"
+      value={activeTab}
+      onValueChange={(value) => {
+        const to =
+          value === 'groups'
+            ? '/users/groups'
+            : value === 'permissions'
+              ? '/users/permissions'
+              : '/users'
+        void navigate({ to })
+      }}
       className="w-full min-w-0"
     >
-      <TabsList aria-label={t('groups.navigation')}>
-        <TabsTrigger value="users">{t('groups.usersTab')}</TabsTrigger>
-        <TabsTrigger value="groups">{t('groups.title')}</TabsTrigger>
+      <h1 className="mb-3 text-2xl font-semibold tracking-tight">
+        {t('groups.navigation')}
+      </h1>
+      <TabsList
+        variant="line"
+        aria-label={t('groups.navigation')}
+        className="w-full justify-start gap-1 border-b border-border p-0 group-data-horizontal/tabs:h-12"
+      >
+        <TabsTrigger value="users" className={managementTabClassName}>
+          <UserRoundIcon />
+          {t('groups.usersTab')}
+        </TabsTrigger>
+        <TabsTrigger value="groups" className={managementTabClassName}>
+          <UsersRoundIcon />
+          {t('groups.title')}
+        </TabsTrigger>
+        <TabsTrigger value="permissions" className={managementTabClassName}>
+          <ShieldCheckIcon />
+          {t('acl.page.title')}
+        </TabsTrigger>
       </TabsList>
-      <TabsContent value="users">
-        <UserManagementPanel />
+      <TabsContent value="users" className="pt-5">
+        {activeTab === 'users' && <Outlet />}
       </TabsContent>
-      <TabsContent value="groups">
-        <UserGroups connection={adminConnection} />
+      <TabsContent value="groups" className="pt-5">
+        {activeTab === 'groups' && <Outlet />}
+      </TabsContent>
+      <TabsContent value="permissions" className="pt-5">
+        {activeTab === 'permissions' && <Outlet />}
       </TabsContent>
     </Tabs>
   )
 }
 
-function UserManagementPanel() {
+export function UserManagementPanel() {
   const { t } = useTranslation('settings')
   const queryClient = useQueryClient()
   const {
@@ -227,6 +255,10 @@ function UserManagementPanel() {
     ],
     retry: false,
   })
+  const memberships = useUserGroupMemberships(
+    adminConnection,
+    canManageUsers && Boolean(connection.accountId),
+  )
   const users = usersQuery.data?.users ?? []
   const total = usersQuery.data?.total ?? 0
   const accountTotal = usersQuery.data?.accountTotal ?? 0
@@ -386,18 +418,11 @@ function UserManagementPanel() {
     <div className="flex w-full min-w-0 flex-col gap-5">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex min-w-0 flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {t('management.title')}
-            </h1>
-            <Badge variant="secondary" className="max-w-72 truncate font-mono">
-              {connection.accountId}
-            </Badge>
-          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {t('management.title')}
+          </h1>
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            {t('management.currentAccountDescription', {
-              account: connection.accountId,
-            })}
+            {t('management.currentAccountDescription')}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
@@ -412,6 +437,22 @@ function UserManagementPanel() {
             variant="outline"
             onClick={() => {
               void usersQuery.refetch()
+              void queryClient.invalidateQueries({
+                queryKey: [
+                  'managed-groups',
+                  adminConnection.baseUrl,
+                  adminConnection.accountId,
+                  adminConnection.apiKey,
+                ],
+              })
+              void queryClient.invalidateQueries({
+                queryKey: [
+                  'managed-group-members',
+                  adminConnection.baseUrl,
+                  adminConnection.accountId,
+                  adminConnection.apiKey,
+                ],
+              })
               void queryClient.invalidateQueries({
                 queryKey: [
                   'user-memory-settings',
@@ -520,6 +561,7 @@ function UserManagementPanel() {
                   <TableRow className="bg-muted/20 hover:bg-muted/20">
                     <TableHead>{t('table.user')}</TableHead>
                     <TableHead>{t('table.role')}</TableHead>
+                    <TableHead>{t('table.groups')}</TableHead>
                     <TableHead>{t('memoryPolicy.title')}</TableHead>
                     <TableHead>{t('table.apiKey')}</TableHead>
                     <TableHead className="text-right">
@@ -530,6 +572,7 @@ function UserManagementPanel() {
                 <TableBody>
                   {users.map((user) => {
                     const identityKey = `${user.accountId}:${user.userId}`
+                    const userGroups = memberships.byUser.get(user.userId) ?? []
                     const isCurrentIdentity =
                       user.accountId === connection.accountId &&
                       user.userId === connection.userId
@@ -556,8 +599,8 @@ function UserManagementPanel() {
                         }
                       >
                         <TableCell className="font-medium">
-                          <div className="flex items-center gap-2">
-                            {user.userId}
+                          <div className="group/user flex items-center gap-2">
+                            <span className="truncate">{user.userId}</span>
                             {isCurrentIdentity ? (
                               <Badge
                                 variant="secondary"
@@ -566,6 +609,27 @@ function UserManagementPanel() {
                                 <CheckIcon />
                                 {t('actions.currentIdentity')}
                               </Badge>
+                            ) : null}
+                            {canSwitchIdentity ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="xs"
+                                disabled={Boolean(switchingIdentityKey)}
+                                className={
+                                  isSwitching
+                                    ? 'opacity-100'
+                                    : 'opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100 [@media(hover:none)]:opacity-100'
+                                }
+                                onClick={() => void useUserIdentity(user)}
+                              >
+                                {isSwitching ? (
+                                  <LoaderCircleIcon className="animate-spin" />
+                                ) : (
+                                  <KeyRoundIcon />
+                                )}
+                                {t('actions.switchIdentity')}
+                              </Button>
                             ) : null}
                           </div>
                         </TableCell>
@@ -616,6 +680,52 @@ function UserManagementPanel() {
                                 defaultValue: user.role,
                               })}
                             </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {memberships.status === 'loading' ? (
+                            <span className="text-muted-foreground">
+                              {t('loading')}
+                            </span>
+                          ) : memberships.status === 'error' ? (
+                            <details className="text-muted-foreground">
+                              <summary className="cursor-pointer">
+                                {t('groups.loadFailed')}
+                              </summary>
+                              {memberships.errors.map(({ groupId, error }) => (
+                                <p
+                                  key={groupId ?? 'groups'}
+                                  className="mt-1 break-all text-xs"
+                                >
+                                  {groupId ? `${groupId}: ` : ''}
+                                  {getErrorMessage(error)}
+                                </p>
+                              ))}
+                            </details>
+                          ) : userGroups.length === 0 ? (
+                            <span className="text-muted-foreground">
+                              {t('groups.notJoined')}
+                            </span>
+                          ) : (
+                            <div
+                              className="flex max-w-56 items-center gap-1.5"
+                              title={userGroups.join(', ')}
+                            >
+                              {userGroups.slice(0, 2).map((groupId) => (
+                                <Badge
+                                  key={groupId}
+                                  variant="secondary"
+                                  className="max-w-24 min-w-0"
+                                >
+                                  <span className="truncate">{groupId}</span>
+                                </Badge>
+                              ))}
+                              {userGroups.length > 2 && (
+                                <Badge variant="outline">
+                                  +{userGroups.length - 2}
+                                </Badge>
+                              )}
+                            </div>
                           )}
                         </TableCell>
                         <TableCell>
@@ -679,29 +789,6 @@ function UserManagementPanel() {
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center justify-end gap-1">
-                            {canSwitchIdentity ? (
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                size="sm"
-                                disabled={Boolean(switchingIdentityKey)}
-                                onClick={() => void useUserIdentity(user)}
-                              >
-                                {isSwitching ? (
-                                  <LoaderCircleIcon className="animate-spin" />
-                                ) : (
-                                  <KeyRoundIcon />
-                                )}
-                                {t('actions.switchIdentity')}
-                              </Button>
-                            ) : isCurrentIdentity ? (
-                              <span
-                                aria-hidden="true"
-                                className="px-3 text-muted-foreground/45"
-                              >
-                                —
-                              </span>
-                            ) : null}
                             <Tooltip>
                               <TooltipTrigger
                                 render={

@@ -62,6 +62,7 @@ class AddResourceMsg:
     parse_mode: str = "default"
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
+    acl: Optional[Dict[str, Any]] = None
     internal_task: bool = False
 
     def __post_init__(self) -> None:
@@ -221,6 +222,7 @@ class AddResourceMsg:
             ),
             processing_mode=data.get("processing_mode", DEFAULT_PROCESSING_MODE),
             parse_mode=str(data.get("parse_mode") or "default"),
+            acl=data.get("acl"),
             tags=(list(data["tags"]) if isinstance(data.get("tags"), list) else None),
             tag_mode=str(data.get("tag_mode") or "replace"),
             internal_task=bool(data.get("internal_task", False)),

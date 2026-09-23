@@ -100,7 +100,6 @@ class _FakeProcessor:
         overview,
         ctx=None,
         ingest_options=None,
-        creator_acl_grant=None,
     ):
         self.vectorized_dirs.append(uri)
 
@@ -113,7 +112,6 @@ class _FakeProcessor:
         ctx=None,
         use_summary=False,
         ingest_options=None,
-        creator_acl_grant=None,
         file_md5=None,
     ):
         if self.verify_streaming:
@@ -386,6 +384,34 @@ async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
     assert processor.vectorized_files == [changed]
     assert processor.vectorized_dirs == []
     assert executor.get_stats().total_nodes == 2
+
+
+@pytest.mark.asyncio
+async def test_directory_listing_lock_conflict_propagates_for_retry(monkeypatch):
+    root_uri = "viking://resources"
+    changed = f"{root_uri}/cp-source-test.md"
+    fake_fs = _FakeVikingFS({})
+    fake_fs.ls = AsyncMock(side_effect=LockAcquisitionError("source write still locked"))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    _patch_semantic_config(monkeypatch)
+
+    executor = SemanticTreeExecutor(
+        processor=_FakeProcessor(),
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        incremental_update=True,
+        target_uri=root_uri,
+        recursive=False,
+        changes={"added": [changed]},
+        generation_trigger="content_write",
+        aggregate_directory=False,
+    )
+
+    with pytest.raises(LockAcquisitionError, match="source write still locked"):
+        await executor.run(root_uri)
 
 
 @pytest.mark.asyncio

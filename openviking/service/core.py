@@ -703,7 +703,7 @@ class OpenVikingService:
         }
         if not recursive:
             execute_kwargs["recursive"] = False
-        if tags is not None:
+        if tags is not None or tag_mode == "clear":
             execute_kwargs["tags"] = tags
             execute_kwargs["tag_mode"] = tag_mode
         return await get_reindex_executor().execute(**execute_kwargs)

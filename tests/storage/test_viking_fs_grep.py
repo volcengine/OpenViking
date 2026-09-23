@@ -1224,7 +1224,7 @@ class _RestrictedAclManager:
     def __init__(self, effective_by_uri):
         self.effective_by_uri = effective_by_uri
 
-    def is_enabled(self, account_id):
+    async def is_enabled(self, account_id):
         return True
 
     async def resolve_many(self, uris, ctx):

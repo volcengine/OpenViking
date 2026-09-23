@@ -41,6 +41,17 @@ def test_write_content_request_accepts_tags_and_tag_mode():
     assert request.tag_mode == "append"
 
 
+def test_write_content_request_accepts_clear_without_tags():
+    request = WriteContentRequest(
+        uri="viking://resources/demo.md",
+        content="updated",
+        tag_mode="clear",
+    )
+
+    assert request.tags is None
+    assert request.tag_mode == "clear"
+
+
 async def test_write_forwards_processing_mode_to_service(monkeypatch):
     seen = {}
 
@@ -88,6 +99,30 @@ async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):
 
     assert seen["tags"] == ["env=prod"]
     assert seen["tag_mode"] == "append"
+
+
+async def test_write_forwards_clear_without_tags_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_write(**kwargs):
+        seen.update(kwargs)
+        return {"uri": kwargs["uri"]}
+
+    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
+    monkeypatch.setattr(content_router, "get_service", lambda: service)
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    await content_router.write(
+        WriteContentRequest(
+            uri="viking://resources/demo.md",
+            content="updated",
+            tag_mode="clear",
+        ),
+        ctx,
+    )
+
+    assert seen["tags"] is None
+    assert seen["tag_mode"] == "clear"
 
 
 async def _first_child_uri(client, uri: str) -> str:

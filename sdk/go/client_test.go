@@ -398,6 +398,26 @@ func TestReindexSendsExplicitEmptyTags(t *testing.T) {
 	}
 }
 
+func TestReindexSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"status": "completed"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
+		TagMode: "clear",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReindexSendsExtraAndRejectsOverrides(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
@@ -665,6 +685,26 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 		TagMode:        "replace",
 		Wait:           true,
 		Extra:          map[string]any{"future_flag": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
+		TagMode: "clear",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1162,6 +1202,26 @@ func TestAddResourceSendsTagsAndTagMode(t *testing.T) {
 	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
 		Tags:    []string{"team=search"},
 		TagMode: "append",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddResourceSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/demo.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
+		TagMode: "clear",
 	}); err != nil {
 		t.Fatal(err)
 	}

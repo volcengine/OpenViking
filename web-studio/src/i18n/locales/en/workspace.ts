@@ -6,7 +6,7 @@ const workspace = {
       docs: 'Documentation',
       github: 'GitHub',
       sdkApi: 'SDK & API',
-      users: 'User Management',
+      users: 'Users & Permissions',
     },
     header: {
       currentUser: {
@@ -779,12 +779,182 @@ const workspace = {
     },
   },
   settings: {
+    acl: {
+      page: {
+        advanced: 'Advanced settings',
+        aboutLevels: 'About permission levels',
+        title: 'Resource permissions',
+        description:
+          'Browse shared resource directories and manage access to each one.',
+        path: 'Current directory',
+        back: 'Go to parent directory',
+        listFailed: 'Could not load directory',
+        parentAclFailed:
+          'Could not load permissions for the current directory. Changes to subdirectory permissions are unavailable until you retry.',
+        emptyDirectory: 'No subdirectories here.',
+        nameColumn: 'Name',
+        ruleColumn: 'Permission rule',
+        granteesColumn: 'Grants on this directory',
+        actionsColumn: 'Actions',
+        unreadable: 'Unable to load',
+        noGrantees: 'No direct grants',
+        editAction: 'Edit permissions',
+        manageAction: 'Manage permissions',
+        limitFor: 'Restrict access to {{directory}}',
+        restoreInheritanceTitle: 'Inherit permissions from the parent again?',
+        restoreInheritanceWarning:
+          'Parent directory grants will apply again. Grants added on this directory will remain.',
+        disableLimitTitle: 'Clear direct grants and restore inheritance?',
+        disableLimitWarning:
+          'Direct grants on this directory will be cleared and parent permissions inherited again. Separate permissions on child directories remain.',
+        editDirectory: 'Who can access {{directory}}',
+        whoCanAccess: 'Grant access to these users or groups',
+        grantScope:
+          'Permissions set here apply to this directory and its descendants by default. A child directory can have different rules.',
+        advancedRules: 'Parent permissions and other settings',
+        parentAccess: 'Parent directory grants',
+        parentGrantsActive:
+          '{{count}} additional parent grants apply here. Open “Parent permissions and other settings” to review them.',
+        parentGrantsInactive:
+          '{{count}} parent grants exist, but this directory has stopped inheriting them.',
+        unavailable:
+          'This page requires account administrator or Root management credentials. Check connection settings.',
+      },
+      title: 'Access permissions',
+      accountTitle: 'Resource access control · {{account}}',
+      accountHint:
+        'Applies to shared resources in this Account. When disabled, ACL checks are skipped. When enabled, the shared root grants everyone management access. Descendants inherit by default and can restrict access separately.',
+      enableAction: 'Enable access control',
+      disableAction: 'Disable access control',
+      enabled: 'Enabled',
+      disabled: 'Disabled — resource ACL grants are not enforced',
+      enableTitle: 'Enable resource access control?',
+      disableTitle: 'Disable resource access control?',
+      enableWarning:
+        'Enable ACL for Account {{account}}? The shared root always grants everyone management access; these permissions cannot be changed. New resources inherit parent permissions by default, with no extra grants for their creator. Existing ACLs take effect.',
+      disableWarning:
+        'Disable ACL for Account {{account}}? All configured resource ACLs stop being enforced. Resources follow the original sharing rules, which may expand access. Stored grants are retained.',
+      saved: 'Permissions updated',
+      failed: 'Could not update permissions',
+      confirm: 'Confirm',
+      parentGrantsLabel: 'Parent directory grants',
+      parentIncluded: 'Includes parent grants',
+      parentExcluded: 'Excludes parent grants',
+      includeParent: 'Include parent grants',
+      excludeParent: 'Exclude parent grants',
+      limitAccess: 'Restrict access',
+      limitTitle: 'Restrict access to this directory?',
+      limitWarning:
+        'This directory will stop inheriting parent grants. Existing direct grants, including Everyone grants, remain active. Review these grants after switching. Account administrators retain access.',
+      peopleWithAccess: 'People and groups with access',
+      defaultRule: 'Inherits parent permissions by default',
+      onlyAdmins: 'No grants yet; account administrators can still access',
+      directSource: 'Granted here',
+      inheritedSource: 'From parent',
+      adminCredentialIdentity:
+        'Permission management uses the account administrator credential for {{account}}. Resource browsing still uses the current user.',
+      identity:
+        'Resource operations use the current data identity: {{account}} / {{user}}.',
+      loadFailed: 'Could not load resource permissions',
+      accessHint:
+        'The current data identity needs resource management access. In API Key mode, use an Account Admin user key, not a Root key.',
+      retryHint:
+        'The request failed. Retry, or inspect the error details if it persists.',
+      recovery: {
+        loadFailed: 'Failed to load account administrators.',
+        switchFailed: 'Failed to switch user.',
+        title: 'Switch to a user with permission',
+        description:
+          'This panel manages access to the current resource. Your user cannot read its grants. Switch to an account administrator to add users or groups with read, write, or manage access.',
+        scope:
+          'Switching also changes the user identity used throughout Web Studio to browse and operate on resources.',
+        unsupported:
+          'This connection mode does not support switching users here. Check your connection settings.',
+        noAdmins:
+          'No account administrators are available. Check user roles in Users & Permissions, or ask someone with resource management access to grant permission.',
+        admin: 'Account administrator',
+        selectAdmin: 'Select an account administrator',
+        key: 'Administrator user API key',
+        keyHint:
+          'The server did not return a key for this user. Enter their existing API key. A Root key cannot be used here.',
+        switch: 'Switch user and load permissions',
+        switching: 'Switching…',
+        switched:
+          'User switched. Select a directory to continue managing permissions.',
+        retryAccess: 'Check access again',
+        details: 'Error details',
+        scopeTitle: 'About switching identity',
+        users: 'Go to Users & Permissions',
+      },
+      modes: {
+        none: 'Inherited by default',
+        inherit: 'Inherited permissions',
+        restricted: 'Custom permissions',
+      },
+      modeDescriptions: {
+        none: 'No permissions are configured on this directory. It inherits parent permissions by default.',
+        inherit:
+          'Parent grants and grants added here both apply, including to descendant directories and files by default. A descendant can stop inheritance.',
+        restricted:
+          'This directory does not use parent grants. Grants added here still apply to descendant directories and files unless a descendant stops inheritance.',
+      },
+      levels: {
+        read: 'View',
+        write: 'Edit',
+        manage: 'Manage',
+      },
+      levelHint:
+        'View: read and search. Edit: create, modify, delete or move files. Manage: edit permissions and delete or move directories; directory operations also check the entire subtree.',
+      direct: 'Grants added to this directory',
+      inherited: 'Grants from parent directories',
+      noDirect:
+        'No direct grants have been added. Users may still have access through parent grants when inheritance is enabled.',
+      noInherited: 'No inherited grants.',
+      inheritedHint:
+        'These grants apply here and to descendant directories and files by default. Edit them in the parent directory.',
+      inheritedInactive:
+        'These parent grants remain stored but do not apply here or to descendants through this directory.',
+      inactive: 'Inactive',
+      adminHint:
+        'Account administrators always retain management access, even when no grants are listed.',
+      indexHint:
+        'Changing permissions requires an indexed resource. Wait for indexing to finish before configuring newly created resources.',
+      levelFor: 'Permission for {{principal}}',
+      remove: 'Remove grant',
+      restoreInheritance: 'Restore parent permissions',
+      restrict: 'Stop inheriting parent permissions',
+      restrictTitle: 'Stop inheriting parent directory permissions?',
+      restoreTitle: 'Restore parent directory permissions?',
+      restrictWarning:
+        'Parent grants will stop applying to this directory and its contents. Only grants added here and account administrators will have access.',
+      restoreWarning:
+        'Parent grants will apply to this directory and its contents again.',
+      removeWarning:
+        'Remove the direct grant for {{principal}}? Access may remain through inherited grants, groups, or an Everyone grant. Removing a grant does not change the inheritance mode.',
+      subjectType: 'Grant to',
+      subjects: {
+        user: 'User',
+        group: 'User group',
+        everyoneShort: 'All users',
+        everyone: 'Everyone in this Account',
+      },
+      everyone: 'Everyone in this Account',
+      search: 'Search users or groups',
+      subject: 'User or group',
+      selectSubject: 'Select a user or group',
+      noCandidates: 'No matching users or groups.',
+      candidatesFailed: 'Could not load grant candidates',
+      level: 'Permission level',
+      addGrant: 'Add permission',
+      backToGrants: 'Back to permissions',
+      confirmGrant: 'Grant {{level}} access to {{count}} selected',
+      confirmEveryoneGrant: 'Grant {{level}} access to all users',
+    },
     groups: {
-      navigation: 'User management',
+      navigation: 'Users & Permissions',
       usersTab: 'Users',
       title: 'User groups',
-      description:
-        'Manage groups within Account {{account}}. Resource permissions are granted separately.',
+      description: 'Manage groups and members in the current account.',
       id: 'Group ID',
       count: 'Members',
       actions: 'Actions',
@@ -797,6 +967,7 @@ const workspace = {
       deleteDescription:
         'Delete {{group}}? Existing resource ACL references are not removed. Recreating this ID may reactivate those grants.',
       empty: 'No user groups yet.',
+      notJoined: 'No groups',
       search: 'Search groups',
       members: 'Members of {{group}}',
       memberHint:
@@ -855,14 +1026,14 @@ const workspace = {
           primary:
             'The Root/Admin API Key is mainly for management. The Playground and tenant data APIs require a User API Key bound to a user identity.',
           secondary:
-            'Select or create a user in User Management, or regenerate its key, then use it as the User API Key.',
+            'Select or create a user in Users & Permissions, or regenerate its key, then use it as the User API Key.',
           title: 'A User API Key is still required',
         },
         empty: {
           primary:
             'Regular users should request a User API Key from their Account admin.',
           secondary:
-            'Deployment admins can find the Root API Key at server.root_api_key in the server-side ov.conf. Add it here, then create or regenerate a User Key in User Management.',
+            'Deployment admins can find the Root API Key at server.root_api_key in the server-side ov.conf. Add it here, then create or regenerate a User Key in Users & Permissions.',
           title: 'No OpenViking API Key yet?',
         },
         learnMore: 'Learn how to get an API Key',
@@ -990,7 +1161,7 @@ const workspace = {
         'User management requires a validated Root or Account Admin API key.',
       accessDeniedTitle: 'User management unavailable',
       currentAccountDescription:
-        'Manage users and access credentials in the {{account}} workspace.',
+        'Manage users and access credentials in the current account.',
       description:
         'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
       memberListDescription:
@@ -1004,7 +1175,7 @@ const workspace = {
       noUsableKey:
         'This user has no plaintext API key available for data access.',
       openConnection: 'Open connection settings',
-      title: 'User management',
+      title: 'Users',
     },
     page: {
       adminDescription:
@@ -1046,6 +1217,7 @@ const workspace = {
       actions: 'Actions',
       apiKey: 'API key',
       role: 'Role',
+      groups: 'Groups',
       user: 'User',
     },
     toast: {

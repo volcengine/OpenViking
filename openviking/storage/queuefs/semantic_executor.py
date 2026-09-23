@@ -29,7 +29,6 @@ from openviking.storage.abstract_overview import (
     read_abstract_overview_pending_snapshot,
     write_abstract_overview,
 )
-from openviking.storage.acl import CreatorAclGrant
 from openviking.storage.context_update_plan import FileVectorSource, SemanticAction
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
@@ -182,7 +181,6 @@ class SemanticTreeExecutor:
         ctx: RequestContext,
         incremental_update: bool = False,
         target_uri: Optional[str] = None,
-        target_preexisting: Optional[bool] = None,
         recursive: bool = True,
         lock: Optional[Dict[str, Any]] = None,
         is_code_repo: bool = False,
@@ -205,7 +203,6 @@ class SemanticTreeExecutor:
         self._ctx = ctx
         self._incremental_update = incremental_update
         self._target_uri = target_uri
-        self._target_preexisting = target_preexisting
         self._recursive = recursive
         self._lock = lock
         self._is_code_repo = bool(
@@ -240,7 +237,6 @@ class SemanticTreeExecutor:
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
-        self._added_paths = {path.rstrip("/") for path in self._changes.get("added", [])}
         self._tree_changed_paths = {
             path.rstrip("/") for key in ("added", "deleted") for path in self._changes.get(key, [])
         }
@@ -285,13 +281,6 @@ class SemanticTreeExecutor:
         from openviking.storage.context_update_plan import SemanticAction
 
         root = plan.root_uri.rstrip("/")
-        root_entry = next(
-            (entry for entry in plan.tree.entries if entry.relative_path == ""),
-            None,
-        )
-        self._target_preexisting = not (
-            root_entry is not None and root_entry.content_state.value in {"added", "restore"}
-        )
         current_entries = list(plan.tree.entries)
         children: Dict[str, tuple[List[str], List[str]]] = {}
         for entry in current_entries:
@@ -331,11 +320,6 @@ class SemanticTreeExecutor:
         self._recursive = True
         self._changes_provided = True
         self._changed_paths = set(changed_uris)
-        self._added_paths = {
-            uri
-            for uri, entry in self._plan_entries_by_uri.items()
-            if entry.content_state.value in {"added", "restore", "replace_kind"}
-        }
         self._tree_changed_paths = {
             root if not entry.relative_path else f"{root}/{entry.relative_path}"
             for entry in plan.tree.entries
@@ -351,18 +335,6 @@ class SemanticTreeExecutor:
             for uri, entry in self._plan_entries_by_uri.items()
             if entry.kind == "file" and (abstract := self._entry_record_abstract(entry, 2))
         }
-
-    def _creator_acl_grant(self, uri: str) -> CreatorAclGrant | None:
-        normalized = uri.rstrip("/")
-        if (
-            self._generation_trigger == "resource_ingest" or self._semantic_plan is not None
-        ) and self._target_preexisting is False:
-            root = (self._semantic_resource_root or self._root_uri).rstrip("/")
-            if normalized == root:
-                return CreatorAclGrant.DIRECT
-            if normalized.startswith(f"{root}/"):
-                return CreatorAclGrant.INHERITED
-        return CreatorAclGrant.DIRECT if normalized in self._added_paths else None
 
     def _record_skill_failure(self, uri: str, error: Exception) -> None:
         if self._context_type == "skill":
@@ -720,6 +692,11 @@ class SemanticTreeExecutor:
                     for child_uri in children_dirs:
                         self._schedule_dir(child_uri, dir_uri)
             return False
+        except LockAcquisitionError:
+            # A content-write message can be dequeued before the writer releases
+            # its exact-path lease. Let SemanticProcessor re-enqueue this
+            # recoverable conflict instead of acknowledging unfinished file work.
+            raise
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
             self._record_skill_failure(dir_uri, e)
@@ -909,12 +886,12 @@ class SemanticTreeExecutor:
 
     def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
         if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
-            return IngestOptions()
+            return IngestOptions(acl_update=self._ingest_options.acl_update)
         return self._ingest_options
 
     def _ingest_options_for_directory(self) -> IngestOptions:
         if self._generation_trigger == "content_write":
-            return IngestOptions()
+            return IngestOptions(acl_update=self._ingest_options.acl_update)
         return self._ingest_options
 
     def _plan_scalar_override(self, uri: str, level: int) -> Optional[Dict[str, Any]]:
@@ -1185,11 +1162,10 @@ class SemanticTreeExecutor:
                     ctx=self._ctx,
                     use_summary=use_summary,
                     ingest_options=(
-                        IngestOptions()
+                        IngestOptions(acl_update=self._ingest_options.acl_update)
                         if self._semantic_plan is not None
                         else self._ingest_options_for_file(file_path)
                     ),
-                    creator_acl_grant=self._creator_acl_grant(file_path),
                     file_md5=file_md5,
                     **vectorize_kwargs,
                 )
@@ -1549,11 +1525,10 @@ class SemanticTreeExecutor:
                             overview=overview,
                             ctx=self._ctx,
                             ingest_options=(
-                                IngestOptions()
+                                IngestOptions(acl_update=self._ingest_options.acl_update)
                                 if self._semantic_plan is not None
                                 else self._ingest_options_for_directory()
                             ),
-                            creator_acl_grant=self._creator_acl_grant(dir_uri),
                             **(
                                 {"skill_source_path": (self._source or {}).get("path", "")}
                                 if self._context_type == "skill"
