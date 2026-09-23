@@ -777,7 +777,7 @@ async def read(
 
 @mcp.tool(name="list")
 async def ls(
-    uri: str,
+    uri: str = "viking://",
     recursive: bool = False,
     offset: int = 0,
     limit: int | None = None,
@@ -787,7 +787,7 @@ async def ls(
     """List one sorted page under a viking:// directory URI.
 
     Args:
-        uri: Directory URI to list.
+        uri: Directory URI to list; defaults to "viking://" like tree and glob.
         recursive: Whether to recursively list descendants.
         offset: Number of visible entries to skip.
         limit: Optional maximum number of entries.
@@ -1024,8 +1024,11 @@ async def edit(
         raise NotFoundError(uri, "file") from exc
     occurrences = current.count(old_string)
     if occurrences == 0:
+        hint = ""
+        if current.replace("\r\n", "\n").count(old_string.replace("\r\n", "\n")):
+            hint = " old_string matches only after normalizing CRLF/LF line endings."
         raise InvalidArgumentError(
-            f"old_string not found in {uri}. "
+            f"old_string not found in {uri}.{hint} "
             "Re-read the file with the read tool to get its current content."
         )
     if occurrences > 1 and not replace_all:
