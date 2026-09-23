@@ -8,10 +8,11 @@ serve any region. Token and retrieval rollups are hour-grained so cross-tz
 "today" queries can slice at user-local day boundaries.
 """
 
-# Stored on the `_schema_meta` row. Version 4 has an explicit additive migration;
-# unhandled newer transitions fail closed, while older incompatible snapshots
-# continue to use the reset path.
-SCHEMA_VERSION = 5
+# Stored on the `_schema_meta` row. Versions 4 and 5 have explicit additive
+# migrations and chain, so a v4 snapshot reaches the current version without
+# losing data; unhandled newer transitions fail closed, while older incompatible
+# snapshots continue to use the reset path.
+SCHEMA_VERSION = 6
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS _schema_meta (
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS request_audit (
     user_id TEXT,
     method TEXT NOT NULL,
     route TEXT NOT NULL,
+    url_path TEXT,
     api_type TEXT NOT NULL,
     status_code INTEGER NOT NULL,
     duration_ms REAL NOT NULL,
