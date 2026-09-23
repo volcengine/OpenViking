@@ -755,6 +755,8 @@ const workspace = {
         path: '当前目录',
         back: '返回上一级目录',
         listFailed: '无法读取目录',
+        parentAclFailed:
+          '无法读取当前目录权限，暂时无法修改子目录权限，请重试。',
         emptyDirectory: '当前目录下没有子目录。',
         nameColumn: '名称',
         ruleColumn: '权限规则',

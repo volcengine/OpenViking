@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowLeftIcon,
   ChevronRightIcon,
@@ -17,6 +17,7 @@ import { ResourceAclIdentityRecovery } from '#/components/resource-acl-identity-
 import { Badge } from '#/components/ui/badge'
 import { Button } from '#/components/ui/button'
 import { Switch } from '#/components/ui/switch'
+import { Alert, AlertTitle, AlertDescription } from '#/components/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -109,7 +110,8 @@ function DirectoryPermissions() {
     currentUri !== root &&
     parentReport.isSuccess &&
     parentReport.data.acl_mode !== 'none'
-  const parentKnown = currentUri === root || parentReport.isSuccess
+  const parentKnown =
+    currentUri === root || (parentReport.isSuccess && !parentReport.isFetching)
   const pathParts = currentUri.slice(root.length).split('/').filter(Boolean)
   const breadcrumbs = [
     { label: 'resources', uri: root },
@@ -175,6 +177,20 @@ function DirectoryPermissions() {
           <RotateCwIcon />
         </Button>
       </div>
+      {currentUri !== root && parentReport.isError && (
+        <Alert variant="destructive">
+          <AlertTitle>{t('acl.page.parentAclFailed')}</AlertTitle>
+          <AlertDescription>
+            <p>{getErrorMessage(parentReport.error)}</p>
+            <Button
+              variant="outline"
+              onClick={() => void parentReport.refetch()}
+            >
+              {t('actions.refresh')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <div className="rounded-lg border">
         <Table className="min-w-[900px] table-fixed">
           <TableHeader>
@@ -246,7 +262,11 @@ function DirectoryPermissions() {
                 <DirectoryRow
                   key={entry.uri}
                   entry={entry}
-                  accountEnabled={state.settings.data === true}
+                  accountEnabled={
+                    state.settings.data === true &&
+                    state.settings.isSuccess &&
+                    !state.settings.isFetching
+                  }
                   parentControlled={parentControlled}
                   parentKnown={parentKnown}
                   onOpen={() => setCurrentUri(entry.uri)}
@@ -302,6 +322,9 @@ function DirectoryRow({
   const { t } = useTranslation('settings')
   const client = useQueryClient()
   const [next, setNext] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (!accountEnabled) setNext(null)
+  }, [accountEnabled])
   const uri = entry.uri
   const key = ['resource-acl', state.aclIdentityScopeKey, uri]
   const report = useQuery({
@@ -481,10 +504,10 @@ function DirectoryRow({
               {t('actions.cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
-              disabled={update.isPending}
+              disabled={!writable || update.isPending}
               onClick={(event) => {
                 event.preventDefault()
-                if (next !== null) update.mutate(next)
+                if (writable && next !== null) update.mutate(next)
               }}
             >
               {update.isPending ? t('loading') : t('acl.confirm')}

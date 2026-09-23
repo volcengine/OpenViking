@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   accountId: 'acme',
   allowed: true,
   enabled: true,
+  settingsFetching: false,
   modes: {} as Record<string, 'none' | 'inherit' | 'restricted'>,
   list: vi.fn(),
   change: vi.fn(),
@@ -31,7 +32,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('#/hooks/use-acl-management', () => ({
   useAclManagement: () => ({
     allowed: mocks.allowed,
-    settings: { data: mocks.enabled },
+    settings: {
+      data: mocks.enabled,
+      isSuccess: true,
+      isFetching: mocks.settingsFetching,
+    },
     settingsKey: ['account-acl', mocks.accountId],
     connection: { baseUrl: 'http://localhost', accountId: mocks.accountId },
     identityScopeKey: mocks.accountId,
@@ -59,6 +64,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 beforeEach(() => {
   mocks.allowed = true
   mocks.enabled = true
+  mocks.settingsFetching = false
   mocks.accountId = 'acme'
   mocks.modes = {}
   mocks.list.mockReset()
@@ -101,6 +107,70 @@ function mount() {
     refresh: () => view.rerender(element()),
   }
 }
+it('shows parent ACL errors and restores child controls after retry', async () => {
+  const getReport = mocks.get.getMockImplementation()!
+  let parentFails = true
+  mocks.get.mockImplementation(async (uri) => {
+    if (uri === `${root}im/` && parentFails) {
+      throw new Error('Parent ACL request timed out')
+    }
+    return getReport(uri)
+  })
+  const { user } = mount()
+  await user.click(await screen.findByRole('button', { name: 'im' }))
+  const row = (await screen.findByRole('button', { name: 'feishu' })).closest(
+    'tr',
+  )!
+  const alert = await screen.findByRole('alert')
+  expect(within(alert).getByText('acl.page.parentAclFailed')).toBeTruthy()
+  expect(within(alert).getByText('Parent ACL request timed out')).toBeTruthy()
+  const toggle = await within(row).findByRole('switch')
+  const manager = within(row).getByRole('button', {
+    name: 'acl.page.manageAction',
+  })
+  expect(toggle.hasAttribute('data-disabled')).toBe(true)
+  expect(manager.hasAttribute('disabled')).toBe(true)
+  parentFails = false
+  await user.click(
+    within(alert).getByRole('button', { name: 'actions.refresh' }),
+  )
+  await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  expect(toggle.hasAttribute('data-disabled')).toBe(false)
+  expect(manager.hasAttribute('disabled')).toBe(false)
+})
+
+it('discards an open confirmation when account ACL is disabled', async () => {
+  const { user, refresh } = mount()
+  const row = (await screen.findByRole('button', { name: 'im' })).closest('tr')!
+  await user.click(await within(row).findByRole('switch'))
+  expect(screen.getByRole('alertdialog')).toBeTruthy()
+  mocks.enabled = false
+  refresh()
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  expect(within(row).getByRole('switch').hasAttribute('data-disabled')).toBe(
+    true,
+  )
+  expect(mocks.change).not.toHaveBeenCalled()
+  mocks.enabled = true
+  refresh()
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+})
+
+it('blocks directory changes while account settings are refreshing', async () => {
+  const { user, refresh } = mount()
+  const row = (await screen.findByRole('button', { name: 'im' })).closest('tr')!
+  const toggle = await within(row).findByRole('switch')
+  mocks.settingsFetching = true
+  refresh()
+  expect(toggle.hasAttribute('data-disabled')).toBe(true)
+  await user.click(toggle)
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  expect(mocks.change).not.toHaveBeenCalled()
+  mocks.settingsFetching = false
+  refresh()
+  expect(toggle.hasAttribute('data-disabled')).toBe(false)
+})
+
 it('browses resources one directory at a time and edits permissions separately', async () => {
   const { user } = mount()
   expect(await screen.findByRole('button', { name: 'im' })).toBeTruthy()

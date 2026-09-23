@@ -789,6 +789,8 @@ const workspace = {
         path: 'Current directory',
         back: 'Go to parent directory',
         listFailed: 'Could not load directory',
+        parentAclFailed:
+          'Could not load permissions for the current directory. Changes to subdirectory permissions are unavailable until you retry.',
         emptyDirectory: 'No subdirectories here.',
         nameColumn: 'Name',
         ruleColumn: 'Permission rule',
