@@ -69,7 +69,7 @@ ACL 统一通过 `attrs` 查询和修改，只适用于 `viking://resources/...`
 
 ACL 仍保存在 context 索引内，允许短暂不一致，按现有异步任务和 wait 语义生效。独立修改 ACL 要求目标已有 context 记录；本次不增加无向量记录或空文件支持。
 
-## CLI
+**CLI**
 
 ```bash
 ov attrs get viking://resources/project-a acl

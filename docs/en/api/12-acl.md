@@ -53,7 +53,7 @@ The account's `acl.enabled` defaults to false: namespace rules apply and ACL is 
 
 ACL stays in the context index and follows existing asynchronous processing and wait semantics. Temporary inconsistency is accepted. Standalone ACL mutations require an existing context record. Vectorless records and empty-file support are outside this change.
 
-## CLI
+**CLI**
 
 ```bash
 ov attrs get viking://resources/project-a acl
