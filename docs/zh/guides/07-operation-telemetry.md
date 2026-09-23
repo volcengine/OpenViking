@@ -31,7 +31,9 @@ Telemetry 是按需返回的。只有你显式请求时，OpenViking 才会在�
         "llm": {
           "input": 12,
           "output": 6,
-          "total": 18
+          "total": 18,
+          "prompt_cached": 8,
+          "completion_reasoning": 4
         }
       },
       "vector": {
@@ -163,6 +165,8 @@ summary 顶层这 3 个基础字段总会存在：
 | `summary.tokens.llm.input` | LLM 输入 token 总量 |
 | `summary.tokens.llm.output` | LLM 输出 token 总量 |
 | `summary.tokens.llm.total` | LLM token 总量 |
+| `summary.tokens.llm.prompt_cached` | 服务方返回的命中缓存的 prompt token 数 |
+| `summary.tokens.llm.completion_reasoning` | 服务方返回的 completion 中的推理 token 数 |
 | `summary.tokens.embedding.total` | embedding 模型 token 总量 |
 
 ### `summary.vector`
