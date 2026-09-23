@@ -21,6 +21,7 @@ from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
     classify_api_error,
+    extract_metric_error_code,
     retry_async,
     retry_sync,
 )
@@ -39,6 +40,9 @@ logger = get_logger(__name__)
 # invariant breaks and the cache would need a lock.
 query_embed_cache_var: contextvars.ContextVar[Optional[Dict[Any, "asyncio.Task"]]] = (
     contextvars.ContextVar("ov_query_embed_cache", default=None)
+)
+_active_embedding_span_var: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "ov_active_embedding_span", default=None
 )
 
 
@@ -141,7 +145,29 @@ async def embed_compat(
         if cached is not None:
             return cached
     with bind_telemetry_stage(stage):
-        return await embedder.embed_async(embedding_input, is_query=is_query)
+        return await _embed_async_with_span(embedder, embedding_input, is_query=is_query)
+
+
+def _embed_with_span(
+    embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool
+) -> "EmbedResult":
+    if getattr(embedder, "_is_embedding_wrapper", False) or not hasattr(
+        embedder, "_embedding_span"
+    ):
+        return embedder.embed(content, is_query=is_query)
+    with embedder._embedding_span():
+        return embedder.embed(content, is_query=is_query)
+
+
+async def _embed_async_with_span(
+    embedder: "EmbedderBase", content: "EmbeddingInput", *, is_query: bool
+) -> "EmbedResult":
+    if getattr(embedder, "_is_embedding_wrapper", False) or not hasattr(
+        embedder, "_embedding_span"
+    ):
+        return await embedder.embed_async(content, is_query=is_query)
+    with embedder._embedding_span():
+        return await embedder.embed_async(content, is_query=is_query)
 
 
 async def _embed_from_request_cache(
@@ -164,7 +190,9 @@ async def _embed_from_request_cache(
         # sibling tasks of the same request then see this entry and await the
         # same in-flight embed instead of starting their own.
         with bind_telemetry_stage(stage):
-            pending = asyncio.create_task(embedder.embed_async(embedding_input, is_query=True))
+            pending = asyncio.create_task(
+                _embed_async_with_span(embedder, embedding_input, is_query=True)
+            )
         cache[key] = pending
     try:
         # Shield the shared task: cancelling a waiter propagates to the future
@@ -250,6 +278,8 @@ class EmbedderBase(ABC):
 
     Provides unified embedding interface supporting dense, sparse, and hybrid modes.
     """
+
+    _is_embedding_wrapper = False
 
     def __init__(self, model_name: str, config: Optional[Dict[str, Any]] = None):
         """Initialize embedder
@@ -340,6 +370,71 @@ class EmbedderBase(ABC):
         """Release resources, subclasses can override as needed"""
         pass
 
+    @contextmanager
+    def _embedding_span(self) -> Iterator[Any]:
+        """Create one privacy-safe client span for a real provider request."""
+        active_span = _active_embedding_span_var.get()
+        if active_span is not None:
+            yield active_span
+            return
+
+        span_context = None
+        span = None
+        try:
+            from opentelemetry.trace import SpanKind, Status, StatusCode
+
+            from openviking.telemetry import tracer_module
+
+            if tracer_module.is_enabled():
+                otel_tracer = tracer_module.get_tracer()
+                span_context = otel_tracer.start_as_current_span(
+                    f"embeddings {self.model_name}",
+                    kind=SpanKind.CLIENT,
+                )
+                span = span_context.__enter__()
+        except Exception:
+            # Tracing must never prevent an embedding request.
+            span_context = None
+            span = None
+
+        token = _active_embedding_span_var.set(span)
+        try:
+            if span is not None:
+                try:
+                    span.set_attribute("gen_ai.operation.name", "embeddings")
+                    if self.provider and self.provider != "unknown":
+                        span.set_attribute("gen_ai.provider.name", str(self.provider))
+                    if self.model_name:
+                        span.set_attribute("gen_ai.request.model", str(self.model_name))
+                    dimension_getter = getattr(self, "get_dimension", None)
+                    if callable(dimension_getter):
+                        dimension = dimension_getter()
+                        if dimension is not None:
+                            span.set_attribute("gen_ai.embeddings.dimension.count", int(dimension))
+                except Exception:
+                    logger.debug("failed to set embedding span attributes", exc_info=True)
+            try:
+                yield span
+            except Exception as exc:
+                if span is not None:
+                    try:
+                        error_type = extract_metric_error_code(exc)
+                        span.set_attribute("error.type", error_type)
+                        span.record_exception(
+                            RuntimeError(f"{type(exc).__name__} (error.type={error_type})")
+                        )
+                        span.set_status(Status(StatusCode.ERROR))
+                    except Exception:
+                        logger.debug("failed to record embedding span error", exc_info=True)
+                raise
+        finally:
+            _active_embedding_span_var.reset(token)
+            if span_context is not None:
+                try:
+                    span_context.__exit__(None, None, None)
+                except Exception:
+                    logger.debug("failed to close embedding span", exc_info=True)
+
     def _run_with_retry(self, func: Callable[[], T], *, logger=None, operation_name: str) -> T:
         def _wrapped() -> T:
             previous_started_at = self._active_call_started_at
@@ -349,12 +444,13 @@ class EmbedderBase(ABC):
             finally:
                 self._active_call_started_at = previous_started_at
 
-        return retry_sync(
-            _wrapped,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name=operation_name,
-        )
+        with self._embedding_span():
+            return retry_sync(
+                _wrapped,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name=operation_name,
+            )
 
     async def _run_with_async_retry(
         self,
@@ -392,12 +488,13 @@ class EmbedderBase(ABC):
                 self._active_call_started_at = previous_started_at
                 semaphore.release()
 
-        return await retry_async(
-            _wrapped,
-            max_retries=self.max_retries,
-            logger=logger,
-            operation_name=operation_name,
-        )
+        with self._embedding_span():
+            return await retry_async(
+                _wrapped,
+                max_retries=self.max_retries,
+                logger=logger,
+                operation_name=operation_name,
+            )
 
     @property
     def is_dense(self) -> bool:
@@ -449,6 +546,12 @@ class EmbedderBase(ABC):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        span = _active_embedding_span_var.get()
+        if span is not None:
+            try:
+                span.set_attribute("gen_ai.usage.input_tokens", int(prompt_tokens))
+            except Exception:
+                logger.debug("failed to set embedding span token usage", exc_info=True)
         try:
             from openviking.metrics.datasources import EmbeddingEventDataSource
             from openviking.observability.context import get_root_observability_context
@@ -617,6 +720,8 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         >>> result = embedder.embed("test")
     """
 
+    _is_embedding_wrapper = True
+
     def __init__(self, dense_embedder: DenseEmbedderBase, sparse_embedder: SparseEmbedderBase):
         """Initialize with two separate embedders"""
         super().__init__(
@@ -635,8 +740,8 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         """Combine results from both embedders"""
         dense_input = self.dense_embedder.prepare_embedding_input(content)
         sparse_input = self.sparse_embedder.prepare_embedding_input(content)
-        dense_res = self.dense_embedder.embed(dense_input, is_query=is_query)
-        sparse_res = self.sparse_embedder.embed(sparse_input, is_query=is_query)
+        dense_res = _embed_with_span(self.dense_embedder, dense_input, is_query=is_query)
+        sparse_res = _embed_with_span(self.sparse_embedder, sparse_input, is_query=is_query)
 
         return EmbedResult(
             dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
@@ -646,8 +751,8 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         dense_input = self.dense_embedder.prepare_embedding_input(content)
         sparse_input = self.sparse_embedder.prepare_embedding_input(content)
         dense_res, sparse_res = await asyncio.gather(
-            self.dense_embedder.embed_async(dense_input, is_query=is_query),
-            self.sparse_embedder.embed_async(sparse_input, is_query=is_query),
+            _embed_async_with_span(self.dense_embedder, dense_input, is_query=is_query),
+            _embed_async_with_span(self.sparse_embedder, sparse_input, is_query=is_query),
         )
         return EmbedResult(
             dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
@@ -737,6 +842,8 @@ class FailoverEmbedder(EmbedderBase):
     Credentials are tried in order (index 0 is highest priority).
     """
 
+    _is_embedding_wrapper = True
+
     def __init__(
         self,
         embedders: List[EmbedderBase],
@@ -811,8 +918,11 @@ class FailoverEmbedder(EmbedderBase):
             embedder = self._embedders[idx]
 
             try:
-                method = getattr(embedder, method_name)
-                result = method(*args, **kwargs)
+                if method_name == "embed":
+                    result = _embed_with_span(embedder, *args, **kwargs)
+                else:
+                    method = getattr(embedder, method_name)
+                    result = method(*args, **kwargs)
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
@@ -856,8 +966,11 @@ class FailoverEmbedder(EmbedderBase):
             embedder = self._embedders[idx]
 
             try:
-                method = getattr(embedder, method_name)
-                result = await method(*args, **kwargs)
+                if method_name == "embed_async":
+                    result = await _embed_async_with_span(embedder, *args, **kwargs)
+                else:
+                    method = getattr(embedder, method_name)
+                    result = await method(*args, **kwargs)
                 self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
