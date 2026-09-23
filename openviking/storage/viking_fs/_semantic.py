@@ -25,6 +25,7 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.retrieve import ContextType
 
 
 class _SemanticMixin:
@@ -199,6 +200,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[ContextType] = None,
     ):
         """Semantic search.
 
@@ -232,13 +234,14 @@ class _SemanticMixin:
             RetrieverMode,
         )
         from openviking_cli.retrieve import (
-            ContextType,
             FindResult,
             TypedQuery,
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        retrieval_targets = resolve_retrieval_targets(
+            target_uri, real_ctx, context_type=context_type
+        )
 
         if filter_only:
             return await self._find_by_filter(
@@ -382,6 +385,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        context_type: Optional[ContextType] = None,
     ):
         """Complex search with session context.
 
@@ -400,14 +404,15 @@ class _SemanticMixin:
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
-            ContextType,
             FindResult,
             QueryPlan,
             TypedQuery,
         )
 
         real_ctx = self._ctx_or_default(ctx)
-        retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        retrieval_targets = resolve_retrieval_targets(
+            target_uri, real_ctx, context_type=context_type
+        )
         primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (
