@@ -53,6 +53,8 @@ class UpdateWatchRequest(BaseModel):
     is_active: Optional[bool] = None
     reason: Optional[str] = None
     instruction: Optional[str] = None
+    schedule_time: Optional[str] = None
+    schedule_timezone: Optional[str] = None
 
     @field_validator("watch_interval")
     @classmethod
@@ -216,6 +218,8 @@ async def _patch_impl(target: WatchTask, body: UpdateWatchRequest, ctx: RequestC
             is_active=body.is_active,
             reason=body.reason,
             instruction=body.instruction,
+            schedule_time=body.schedule_time,
+            schedule_timezone=body.schedule_timezone,
         )
     except wm_mod.PermissionDeniedError as e:
         raise _translate_perm(e, target.to_uri or target.task_id) from e
