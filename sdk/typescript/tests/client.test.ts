@@ -1216,6 +1216,34 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("supports optional observer format query parameters", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(ok({ is_healthy: true }))
+      .mockResolvedValueOnce(ok({ name: "queue" }))
+      .mockResolvedValueOnce(ok({ name: "models" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await expect(client.getStatus()).resolves.toEqual({ is_healthy: true });
+    await expect(client.queueStatus("json")).resolves.toEqual({ name: "queue" });
+    await expect(client.modelsStatus("table")).resolves.toEqual({
+      name: "models",
+    });
+
+    const first = new URL(String(fetcher.mock.calls[0]![0]));
+    const second = new URL(String(fetcher.mock.calls[1]![0]));
+    const third = new URL(String(fetcher.mock.calls[2]![0]));
+    expect(first.pathname).toBe("/api/v1/observer/system");
+    expect(first.searchParams.get("format")).toBeNull();
+    expect(second.pathname).toBe("/api/v1/observer/queue");
+    expect(second.searchParams.get("format")).toBe("json");
+    expect(third.pathname).toBe("/api/v1/observer/models");
+    expect(third.searchParams.get("format")).toBe("table");
+  });
+
   it("supports snapshot restore, binary show, log, diff and ignore operations", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

@@ -32,7 +32,7 @@ class ComponentStatus:
     name: str
     is_healthy: bool
     has_errors: bool
-    status: str
+    status: Any
 
     def __str__(self) -> str:
         health = "healthy" if self.is_healthy else "unhealthy"
@@ -89,8 +89,7 @@ class ObserverService:
         """Check if both vikingdb and config dependencies are set."""
         return self._vikingdb is not None and self._config is not None
 
-    @property
-    def queue(self) -> ComponentStatus:
+    def get_queue_status(self, *, format: str = "table") -> ComponentStatus:
         """Get queue status."""
         try:
             qm = get_queue_manager()
@@ -102,14 +101,44 @@ class ObserverService:
                 status="Not initialized",
             )
         observer = QueueObserver(qm)
+        try:
+            status = observer.get_status_json() if format == "json" else observer.get_status_table()
+            is_healthy = observer.is_healthy()
+            has_errors = observer.has_errors()
+        except Exception as exc:
+            logger.warning("Queue observer status unavailable: %s", exc)
+            if format == "json":
+                status = {
+                    "queues": [],
+                    "summary": {
+                        "pending": 0,
+                        "in_progress": 0,
+                        "processed": 0,
+                        "requeued": 0,
+                        "errors": 0,
+                        "total": 0,
+                    },
+                    "error": str(exc),
+                }
+            else:
+                status = f"Status unavailable: {exc}"
+            is_healthy = False
+            has_errors = True
         return ComponentStatus(
             name="queue",
-            is_healthy=observer.is_healthy(),
-            has_errors=observer.has_errors(),
-            status=observer.get_status_table(),
+            is_healthy=is_healthy,
+            has_errors=has_errors,
+            status=status,
         )
 
-    def vikingdb(self, ctx: Optional[RequestContext] = None) -> ComponentStatus:
+    @property
+    def queue(self) -> ComponentStatus:
+        """Get queue status."""
+        return self.get_queue_status()
+
+    def get_vikingdb_status(
+        self, ctx: Optional[RequestContext] = None, *, format: str = "table"
+    ) -> ComponentStatus:
         """Get VikingDB status."""
         if self._vikingdb is None:
             return ComponentStatus(
@@ -123,8 +152,14 @@ class ObserverService:
             name="vikingdb",
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
-            status=observer.get_status_table(ctx=ctx),
+            status=observer.get_status_json(ctx=ctx)
+            if format == "json"
+            else observer.get_status_table(ctx=ctx),
         )
+
+    def vikingdb(self, ctx: Optional[RequestContext] = None) -> ComponentStatus:
+        """Get VikingDB status."""
+        return self.get_vikingdb_status(ctx=ctx)
 
     @property
     def models(self) -> ComponentStatus:
@@ -140,16 +175,18 @@ class ObserverService:
         vlm_instance = self._config.vlm.get_vlm_instance()
         embedding_instance = None
         rerank_instance = None
+        embedding_config = getattr(self._config, "embedding", None)
+        rerank_config = getattr(self._config, "rerank", None)
 
         # Get embedding instance if available
-        if self._config.embedding:
-            embedding_instance = self._config.embedding.get_embedder()
+        if embedding_config:
+            embedding_instance = embedding_config.get_embedder()
 
         # Get rerank instance if available
-        if self._config.rerank and self._config.rerank.is_available():
+        if rerank_config and rerank_config.is_available():
             from openviking.models.rerank import RerankClient
 
-            rerank_instance = RerankClient.from_config(self._config.rerank)
+            rerank_instance = RerankClient.from_config(rerank_config)
 
         observer = ModelsObserver(
             vlm_instance=vlm_instance,
@@ -161,6 +198,42 @@ class ObserverService:
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
             status=observer.get_status_table(),
+        )
+
+    def get_models_status(self, *, format: str = "table") -> ComponentStatus:
+        """Get Models status (VLM, Embedding, Rerank) with a specific status format."""
+        if self._config is None:
+            return ComponentStatus(
+                name="models",
+                is_healthy=False,
+                has_errors=True,
+                status="Not initialized",
+            )
+
+        vlm_instance = self._config.vlm.get_vlm_instance()
+        embedding_instance = None
+        rerank_instance = None
+        embedding_config = getattr(self._config, "embedding", None)
+        rerank_config = getattr(self._config, "rerank", None)
+
+        if embedding_config:
+            embedding_instance = embedding_config.get_embedder()
+
+        if rerank_config and rerank_config.is_available():
+            from openviking.models.rerank import RerankClient
+
+            rerank_instance = RerankClient.from_config(rerank_config)
+
+        observer = ModelsObserver(
+            vlm_instance=vlm_instance,
+            embedding_instance=embedding_instance,
+            rerank_instance=rerank_instance,
+        )
+        return ComponentStatus(
+            name="models",
+            is_healthy=observer.is_healthy(),
+            has_errors=observer.has_errors(),
+            status=observer.get_status_json() if format == "json" else observer.get_status_table(),
         )
 
     @property
@@ -194,6 +267,46 @@ class ObserverService:
             status="\n".join(lines),
         )
 
+    def get_lock_status(self, *, format: str = "table") -> ComponentStatus:
+        """Get lock system status via pathlock_observe snapshot."""
+        try:
+            viking_fs = get_viking_fs()
+            snapshot = run_async(viking_fs._async_agfs.pathlock_observe())
+        except Exception:
+            return ComponentStatus(
+                name="lock",
+                is_healthy=False,
+                has_errors=True,
+                status="Not initialized",
+            )
+        active = snapshot.get("active_locks", 0)
+        waiting = snapshot.get("waiting_locks", 0)
+        stale = snapshot.get("stale_locks_removed", 0)
+        conflicts = snapshot.get("conflicts", [])
+        if format == "json":
+            status: Any = {
+                "active_locks": active,
+                "waiting_locks": waiting,
+                "stale_locks_removed": stale,
+                "conflicts": conflicts,
+                "conflict_count": len(conflicts),
+            }
+        else:
+            status = "\n".join(
+                [
+                    f"Active locks: {active}",
+                    f"Waiting locks: {waiting}",
+                    f"Stale locks removed: {stale}",
+                    f"Conflicts: {len(conflicts)}",
+                ]
+            )
+        return ComponentStatus(
+            name="lock",
+            is_healthy=True,
+            has_errors=False,
+            status=status,
+        )
+
     @property
     def retrieval(self) -> ComponentStatus:
         """Get retrieval quality status."""
@@ -205,6 +318,16 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
+    def get_retrieval_status(self, *, format: str = "table") -> ComponentStatus:
+        """Get retrieval quality status."""
+        observer = RetrievalObserver()
+        return ComponentStatus(
+            name="retrieval",
+            is_healthy=observer.is_healthy(),
+            has_errors=observer.has_errors(),
+            status=observer.get_status_json() if format == "json" else observer.get_status_table(),
+        )
+
     @property
     def filesystem(self) -> ComponentStatus:
         """Get filesystem operation status."""
@@ -214,6 +337,16 @@ class ObserverService:
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
             status=observer.get_status_table(),
+        )
+
+    def get_filesystem_status(self, *, format: str = "table") -> ComponentStatus:
+        """Get filesystem operation status."""
+        observer = FilesystemObserver()
+        return ComponentStatus(
+            name="filesystem",
+            is_healthy=observer.is_healthy(),
+            has_errors=observer.has_errors(),
+            status=observer.get_status_json() if format == "json" else observer.get_status_table(),
         )
 
     async def get_filesystem_stats(self, mount_path: Optional[str] = None) -> dict:
@@ -240,15 +373,15 @@ class ObserverService:
             logger.error(f"Error getting filesystem stats: {e}")
             return {}
 
-    def system(self, ctx: Optional[RequestContext] = None) -> SystemStatus:
+    def system(self, ctx: Optional[RequestContext] = None, *, format: str = "table") -> SystemStatus:
         """Get system overall status."""
         components = {
-            "queue": self.queue,
-            "vikingdb": self.vikingdb(ctx=ctx),
-            "models": self.models,
-            "lock": self.lock,
-            "retrieval": self.retrieval,
-            "filesystem": self.filesystem,
+            "queue": self.get_queue_status(format=format),
+            "vikingdb": self.get_vikingdb_status(ctx=ctx, format=format),
+            "models": self.get_models_status(format=format),
+            "lock": self.get_lock_status(format=format),
+            "retrieval": self.get_retrieval_status(format=format),
+            "filesystem": self.get_filesystem_status(format=format),
         }
         errors = [f"{c.name} has errors" for c in components.values() if c.has_errors]
         return SystemStatus(

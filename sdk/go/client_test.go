@@ -1754,6 +1754,65 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestObserverStatusSupportsOptionalFormat(t *testing.T) {
+	requests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			if r.URL.Path != "/api/v1/observer/system" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"is_healthy": true})
+		case 2:
+			if r.URL.Path != "/api/v1/observer/queue" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "json" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "queue"})
+		case 3:
+			if r.URL.Path != "/api/v1/observer/models" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "table" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "models"})
+		default:
+			t.Fatalf("unexpected request %d: %s", requests, r.URL.String())
+		}
+	}))
+	defer closeServer()
+
+	status, err := client.GetStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, err := client.QueueStatus(context.Background(), ObserverStatusOptions{Format: "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := client.ModelsStatus(context.Background(), ObserverStatusOptions{Format: "table"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if status["is_healthy"] != true {
+		t.Fatalf("status = %#v", status)
+	}
+	if queue["name"] != "queue" {
+		t.Fatalf("queue = %#v", queue)
+	}
+	if models["name"] != "models" {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
 func TestSetTagsSendsBody(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/fs/attrs/set_tags" {
