@@ -71,6 +71,9 @@ class QueueObserver(BaseObserver):
             "total": getattr(tree_stats, "total_nodes", 0) if tree_stats else 0,
         }
         queues.append(semantic)
+        total_pending += semantic["pending"]
+        total_in_progress += semantic["in_progress"]
+        total_processed += semantic["processed"]
 
         return {
             "queues": queues,

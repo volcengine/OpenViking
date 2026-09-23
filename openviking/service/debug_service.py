@@ -25,6 +25,61 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _queue_not_initialized_status(format: str) -> Any:
+    if format == "json":
+        return {
+            "queues": [],
+            "summary": {
+                "pending": 0,
+                "in_progress": 0,
+                "processed": 0,
+                "requeued": 0,
+                "errors": 0,
+                "total": 0,
+            },
+            "error": "Not initialized",
+        }
+    return "Not initialized"
+
+
+def _vikingdb_not_initialized_status(format: str) -> Any:
+    if format == "json":
+        return {
+            "collections": [],
+            "summary": {
+                "index_count": 0,
+                "vector_count": 0,
+                "collection_count": 0,
+            },
+            "error": "Not initialized",
+        }
+    return "Not initialized"
+
+
+def _models_not_initialized_status(format: str) -> Any:
+    if format == "json":
+        return {
+            "vlm": [],
+            "embedding": [],
+            "rerank": [],
+            "error": "Not initialized",
+        }
+    return "Not initialized"
+
+
+def _lock_not_initialized_status(format: str) -> Any:
+    if format == "json":
+        return {
+            "active_locks": 0,
+            "waiting_locks": 0,
+            "stale_locks_removed": 0,
+            "conflicts": [],
+            "conflict_count": 0,
+            "error": "Not initialized",
+        }
+    return "Not initialized"
+
+
 @dataclass
 class ComponentStatus:
     """Component status."""
@@ -98,7 +153,7 @@ class ObserverService:
                 name="queue",
                 is_healthy=False,
                 has_errors=True,
-                status="Not initialized",
+                status=_queue_not_initialized_status(format),
             )
         observer = QueueObserver(qm)
         try:
@@ -145,7 +200,7 @@ class ObserverService:
                 name="vikingdb",
                 is_healthy=False,
                 has_errors=True,
-                status="Not initialized",
+                status=_vikingdb_not_initialized_status(format),
             )
         observer = VikingDBObserver(self._vikingdb)
         return ComponentStatus(
@@ -207,7 +262,7 @@ class ObserverService:
                 name="models",
                 is_healthy=False,
                 has_errors=True,
-                status="Not initialized",
+                status=_models_not_initialized_status(format),
             )
 
         vlm_instance = self._config.vlm.get_vlm_instance()
@@ -247,7 +302,7 @@ class ObserverService:
                 name="lock",
                 is_healthy=False,
                 has_errors=True,
-                status="Not initialized",
+                status=_lock_not_initialized_status(format),
             )
         active = snapshot.get("active_locks", 0)
         waiting = snapshot.get("waiting_locks", 0)
@@ -277,7 +332,7 @@ class ObserverService:
                 name="lock",
                 is_healthy=False,
                 has_errors=True,
-                status="Not initialized",
+                status=_lock_not_initialized_status(format),
             )
         active = snapshot.get("active_locks", 0)
         waiting = snapshot.get("waiting_locks", 0)
