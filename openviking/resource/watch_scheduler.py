@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
 from openviking.connector.auth import (
-    OAUTH_REF_ARG,
     is_external_feishu_auth,
     restore_feishu_request,
 )
@@ -350,14 +349,9 @@ class WatchScheduler:
                     processor_kwargs.pop("build_index", None)
                     processor_kwargs.pop("summarize", None)
                     if is_external_feishu_auth(auth_state):
-                        (
-                            api_key,
-                            reference,
-                        ) = await restore_feishu_request(
+                        ctx.api_key, processor_kwargs["args"] = await restore_feishu_request(
                             self._resource_service._connector, auth_state, path=task.path, ctx=ctx
                         )
-                        ctx.api_key = api_key
-                        processor_kwargs["args"] = {OAUTH_REF_ARG: reference}
                     elif is_feishu_auth_state(auth_state):
                         try:
                             auth_state = await self._prepare_feishu_auth_state(task, auth_state)
