@@ -16,7 +16,16 @@ import type {
   TrajectoryPage,
 } from './types'
 
-/** Fetch one page; the extra raw entry determines whether another page exists. */
+function isDirectory(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'isDir' in value &&
+    value.isDir === true
+  )
+}
+
+/** Fetch one page of experience files, skipping the directory-first prefix. */
 export async function fetchExperiences(options: {
   experiencesUri: string
   page: number
@@ -25,24 +34,56 @@ export async function fetchExperiences(options: {
 }): Promise<ExperiencePage> {
   const { experiencesUri, page, pageSize, signal } = options
   try {
-    const result = await getOvResult<unknown>(
-      ovClient.client.get({
-        query: {
-          limit: pageSize + 1,
-          offset: (page - 1) * pageSize,
-          output: 'original',
-          sort_by: 'mtime',
-          sort_order: 'desc',
-          uri: experiencesUri,
-        },
-        signal,
-        url: '/api/v1/fs/ls',
-      }),
-    )
-    if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+    const fetchEntries = async (
+      offset: number,
+      limit: number,
+    ): Promise<unknown[]> => {
+      const result = await getOvResult<unknown>(
+        ovClient.client.get({
+          query: {
+            limit,
+            offset,
+            output: 'original',
+            sort_by: 'mtime',
+            sort_order: 'desc',
+            uri: experiencesUri,
+          },
+          signal,
+          url: '/api/v1/fs/ls',
+        }),
+      )
+      if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+      return result
+    }
+
+    const limit = pageSize + 1
+    let entries = await fetchEntries(0, limit)
+    if (isDirectory(entries[0])) {
+      let offset = 0
+      let scanLimit = limit
+      while (entries.length > 0) {
+        const firstFile = entries.findIndex((entry) => !isDirectory(entry))
+        if (firstFile >= 0) {
+          entries = await fetchEntries(
+            offset + firstFile + (page - 1) * pageSize,
+            limit,
+          )
+          break
+        }
+        if (entries.length < scanLimit) {
+          entries = []
+          break
+        }
+        offset += entries.length
+        scanLimit = 100
+        entries = await fetchEntries(offset, scanLimit)
+      }
+    } else if (page > 1) {
+      entries = await fetchEntries((page - 1) * pageSize, limit)
+    }
     return {
-      items: normalizeExperienceFiles(result.slice(0, pageSize)),
-      hasMore: result.length > pageSize,
+      items: normalizeExperienceFiles(entries.slice(0, pageSize)),
+      hasMore: entries.length > pageSize,
       page,
       pageSize,
     }

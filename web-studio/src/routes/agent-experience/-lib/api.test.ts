@@ -15,12 +15,28 @@ vi.mock('#/lib/ov-client', () => ({
 
 const experiencesUri = 'viking://user/default/memories/experiences'
 const file = (name: string) => ({ name, uri: `${experiencesUri}/${name}` })
+const mockListing = (entries: unknown[]) => {
+  get.mockImplementation(
+    (request?: { query: { offset: number; limit: number } }) => {
+      const query = request?.query
+      return Promise.resolve(
+        query ? entries.slice(query.offset, query.offset + query.limit) : [],
+      )
+    },
+  )
+}
 
 describe('experience listing server pagination', () => {
   beforeEach(() => get.mockReset())
 
   it('requests a page beyond the old 1000 limit with one lookahead entry', async () => {
-    get.mockResolvedValue([file('a.md'), file('b.md'), file('c.md')])
+    get.mockImplementation((request?: { query: { offset: number } }) =>
+      Promise.resolve(
+        request?.query.offset === 1002
+          ? [file('a.md'), file('b.md'), file('c.md')]
+          : [file('first.md')],
+      ),
+    )
     const result = await fetchExperiences({
       experiencesUri,
       page: 502,
@@ -42,32 +58,77 @@ describe('experience listing server pagination', () => {
   })
 
   it('does not skip lookahead records between pages', async () => {
-    get.mockResolvedValueOnce([file('a.md'), file('b.md'), file('c.md')])
-    get.mockResolvedValueOnce([file('c.md'), file('d.md')])
+    mockListing([file('a.md'), file('b.md'), file('c.md'), file('d.md')])
     await fetchExperiences({ experiencesUri, page: 1, pageSize: 2 })
     const last = await fetchExperiences({
       experiencesUri,
       page: 2,
       pageSize: 2,
     })
-    expect(get.mock.calls[1][0].query.offset).toBe(2)
     expect(last.items.map((item) => item.name)).toEqual(['c.md', 'd.md'])
     expect(last.hasMore).toBe(false)
   })
 
-  it('applies pagination to raw entries before filtering out directories', async () => {
-    get.mockResolvedValue([
-      { ...file('folder'), isDir: true },
-      file('a.md'),
-      file('b.md'),
+  it('shows file pages after a directory-only prefix', async () => {
+    mockListing([
+      ...Array.from({ length: 125 }, (_, index) => ({
+        ...file(`folder-${index}`),
+        isDir: true,
+      })),
+      ...['a.md', 'b.md', 'c.md', 'd.md', 'e.md'].map(file),
     ])
+    const first = await fetchExperiences({
+      experiencesUri,
+      page: 1,
+      pageSize: 2,
+    })
+    expect(first.items.map((item) => item.name)).toEqual(['a.md', 'b.md'])
+    expect(first.hasMore).toBe(true)
+
+    const last = await fetchExperiences({
+      experiencesUri,
+      page: 3,
+      pageSize: 2,
+    })
+    expect(last.items.map((item) => item.name)).toEqual(['e.md'])
+    expect(last.hasMore).toBe(false)
+  })
+
+  it('jumps to a distant file page after scanning the directory prefix', async () => {
+    mockListing([
+      ...Array.from({ length: 125 }, (_, index) => ({
+        ...file(`folder-${index}`),
+        isDir: true,
+      })),
+      ...Array.from({ length: 1005 }, (_, index) => file(`file-${index}.md`)),
+    ])
+    const result = await fetchExperiences({
+      experiencesUri,
+      page: 502,
+      pageSize: 2,
+    })
+    expect(result.items.map((item) => item.name)).toEqual([
+      'file-1002.md',
+      'file-1003.md',
+    ])
+    expect(result.hasMore).toBe(true)
+    expect(get.mock.calls.length).toBeLessThan(10)
+  })
+
+  it('does not offer another page when the listing contains only directories', async () => {
+    mockListing(
+      Array.from({ length: 5 }, (_, index) => ({
+        ...file(`folder-${index}`),
+        isDir: true,
+      })),
+    )
     const result = await fetchExperiences({
       experiencesUri,
       page: 1,
       pageSize: 2,
     })
-    expect(result.items.map((item) => item.name)).toEqual(['a.md'])
-    expect(result.hasMore).toBe(true)
+    expect(result.items).toEqual([])
+    expect(result.hasMore).toBe(false)
   })
 
   it('allows an empty later page without inventing a total', async () => {
