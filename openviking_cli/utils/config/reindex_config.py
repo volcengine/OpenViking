@@ -13,3 +13,8 @@ class ReindexConfig(BaseModel):
         gt=0,
         description="Maximum number of files read, prepared, and enqueued concurrently",
     )
+    directory_vectorization_concurrency: int = Field(
+        default=8,
+        gt=0,
+        description="Maximum number of resource directories read and enqueued concurrently",
+    )

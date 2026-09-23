@@ -262,6 +262,7 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `file_vectorization_concurrency` | integer | `8` | 单个 `vectors_only` reindex 任务内并发读取、准备并入队的文件数，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
+| `directory_vectorization_concurrency` | integer | `8` | 单个 reindex 任务内并发读取并入队的资源目录数，与文件并发数独立；必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
 ## HTTP 服务配置
 

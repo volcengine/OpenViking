@@ -62,7 +62,7 @@ logger = get_logger(__name__)
 REINDEX_TASK_TYPE = "admin_reindex"
 PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
 PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
-_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
+_MAX_REINDEX_VECTORIZATION_CONCURRENCY = 64
 
 
 # Trailing markers VikingFS appends when a directory has no generated .abstract.md/.overview.md
@@ -153,7 +153,18 @@ class ReindexExecutor:
             1,
             min(
                 int(config.file_vectorization_concurrency),
-                _MAX_FILE_VECTORIZATION_CONCURRENCY,
+                _MAX_REINDEX_VECTORIZATION_CONCURRENCY,
+            ),
+        )
+
+    @staticmethod
+    def _effective_directory_vectorization_concurrency() -> int:
+        config = get_openviking_config().reindex
+        return max(
+            1,
+            min(
+                int(config.directory_vectorization_concurrency),
+                _MAX_REINDEX_VECTORIZATION_CONCURRENCY,
             ),
         )
 
@@ -167,7 +178,15 @@ class ReindexExecutor:
     ) -> None:
         for start in range(0, len(items), concurrency):
             batch = items[start : start + concurrency]
-            for item_counters in await asyncio.gather(*(processor(item) for item in batch)):
+            tasks = [asyncio.create_task(processor(item)) for item in batch]
+            try:
+                results = await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+            for item_counters in results:
                 counters.merge_from(item_counters)
 
     @staticmethod
@@ -1177,18 +1196,16 @@ class ReindexExecutor:
                 deduped_files.append(file_uri)
                 seen_files.add(file_uri)
 
-        for directory_uri in deduped_directories:
-            if directory_uri == "viking://":
-                continue
-            counters.scanned_records += 1
+        async def process_directory(directory_uri: str) -> _ReindexCounters:
+            directory_counters = _ReindexCounters(scanned_records=1)
             abstract = await self._read_directory_abstract(directory_uri, ctx=ctx)
             overview = await self._read_directory_overview(directory_uri, ctx=ctx)
             if not overview:
                 overview = abstract
             if not abstract and not overview:
-                counters.unsupported_records += 1
-                counters.warnings.append(f"No semantic source found for {directory_uri}")
-                continue
+                directory_counters.unsupported_records += 1
+                directory_counters.warnings.append(f"No semantic source found for {directory_uri}")
+                return directory_counters
             if abstract:
                 try:
                     await self._upsert_context(
@@ -1204,10 +1221,12 @@ class ReindexExecutor:
                         ctx=ctx,
                         ingest_options=ingest_options,
                     )
-                    counters.rebuilt_records += 1
+                    directory_counters.rebuilt_records += 1
                 except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {directory_uri} L0 vector: {exc}")
+                    directory_counters.failed_records += 1
+                    directory_counters.warnings.append(
+                        f"Failed to reindex {directory_uri} L0 vector: {exc}"
+                    )
             if overview:
                 try:
                     await self._upsert_context(
@@ -1224,10 +1243,29 @@ class ReindexExecutor:
                         ctx=ctx,
                         ingest_options=ingest_options,
                     )
-                    counters.rebuilt_records += 1
+                    directory_counters.rebuilt_records += 1
                 except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {directory_uri} L1 vector: {exc}")
+                    directory_counters.failed_records += 1
+                    directory_counters.warnings.append(
+                        f"Failed to reindex {directory_uri} L1 vector: {exc}"
+                    )
+            return directory_counters
+
+        directories_to_process = [uri for uri in deduped_directories if uri != "viking://"]
+        directory_concurrency = self._effective_directory_vectorization_concurrency()
+        if directories_to_process:
+            logger.info(
+                "Reindex resource directory vectorization: root=%s directories=%d concurrency=%d",
+                root_uri,
+                len(directories_to_process),
+                directory_concurrency,
+            )
+        await self._run_ordered_counter_batches(
+            directories_to_process,
+            concurrency=directory_concurrency,
+            processor=process_directory,
+            counters=counters,
+        )
 
         async def process_file(file_uri: str) -> _ReindexCounters:
             file_counters = _ReindexCounters(scanned_records=1)

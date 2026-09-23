@@ -263,6 +263,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued by one `vectors_only` reindex task; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
+| `directory_vectorization_concurrency` | integer | `8` | Number of resource directories concurrently read and enqueued by one reindex task, independently of file concurrency; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
 ## HTTP Server Settings
 
