@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from openviking.core.namespace import relative_uri_path
 from vikingbot.compile import file_ops
 from vikingbot.compile.ops import common
-from vikingbot.compile.ops.common import _FIDELITY, _RECORDS
+from vikingbot.compile.ops.common import _RECORDS
 from vikingbot.compile.pipeline_io import bounded_jobs
 from vikingbot.compile.plan import (
     FileDraft,
@@ -30,37 +30,31 @@ if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
 
 
-_FILES = (
-    _FIDELITY
-    + """Generate final files for this output group following all Skill requirements.
-Submit files[].path with content or content_ref. ready_* keys belong only to record transforms.
-Original evidence is authoritative; derived payload fields are fallible extraction notes.
-Verify numbers, units, boundaries, exceptions and claimed uncertainty against original_evidence.
-original_evidence may contain excerpts marked complete=false; absence from an excerpt is not absence
-from the source. Expand with read_evidence when conditions, table context or referenced clauses are
-missing, ambiguous or conflicting; omit line bounds to read the full shard. Correct extraction mistakes.
-Use original source citations carried by evidence; preserve exceptions and applicability conditions.
-For existing files, prefer exact unique-anchor patches and return the supplied base_hash.
-Patch anchors must be copied from the supplied old text, occur exactly once and not overlap.
-Full content replacement is allowed for small files or whole-file changes; do not mix with patches.
-For a selected large-file section, patches can only modify that section; never replace other text.
-For new files return exact content and no base_hash. Each work set contains candidate evidence,
-not a predetermined file: combine supplements, preserve conflicting facts with their applicability,
-and split independent subjects into as many files as needed. Input paths and scopes do not bind
-output paths. historical_files supplies recalled paths, content and base_hash for comparison;
-update relevant files using their exact path and hash, leaving irrelevant history unchanged.
-A Skill's overall required outputs are fulfilled collectively across work sets.
-related_outputs is a partial catalog of accepted current-task files with real final paths. Use
-relevant entries for links and avoid duplicating their full bodies. An unlisted page is unknown,
-not absent; never claim another group has not produced a page. When a target path is unknown,
-mention the relevant subject naturally without inventing a destination.
-related_subjects contains assigned topics, not accepted files; do not treat them as link targets.
-Set each file.inputs to supplied input IDs actually used by that file. Multiple inputs may support
-one file; output counts and independence follow the Skill and stage task. Do not claim unrelated sources.
-Wiki files require YAML type, title, single-line description and source citations. Generic files
-follow their declared format. Never fabricate requirements, source identities or existing paths.
+_FILES = """# File generation
+Follow the Skill, user instruction and assigned stage task for file count, paths, format and
+content organization. This assignment contributes to the overall task's deliverables.
+
+## Evidence
+Check derived records against original sources and distinguish source facts from inference.
+original_evidence entries marked complete=false are excerpts; read more with read_evidence
+when the supplied text is insufficient.
+
+## Related context
+- related_outputs: a partial catalog of confirmed output files; an omitted page may still exist.
+- related_subjects: topics assigned elsewhere, not confirmed files or link destinations.
+Use known destinations for links.
+
+## Submission
+Submit files through emit using its field definitions.
 """
-)
+
+_EXISTING_FILES = """
+## Existing files
+historical_files supplies paths, content and revision hashes. Update only relevant files,
+using their supplied paths and base_hash values. Use patches for local edits or complete
+content for a full replacement. If only a section is supplied, patch within that section
+and preserve the rest of the file.
+"""
 
 
 async def run(runtime: Pipeline, node: Node, groups: list[Group]) -> list[Record] | list[str]:
@@ -252,10 +246,13 @@ async def reduce_group(runtime: Pipeline, node, group: Group, *, stage="reduce")
         extra.update(record_fields=transform.fields, scope_fields=runtime.contract.distinguish)
     system = (
         runtime.system
-        + (_RECORDS if transform.output == "records" else _FILES)
-        + "\nTask: "
+        + "\n\n# Stage task\n"
         + transform.instructions
+        + "\n\n"
+        + (_RECORDS if transform.output == "records" else _FILES)
     )
+    if old:
+        system += _EXISTING_FILES
     for depth in range(4):
         data = {**extra, "inputs": [await common.payload(runtime, r) for r in records]}
         if (

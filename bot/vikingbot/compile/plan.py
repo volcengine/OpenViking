@@ -448,8 +448,11 @@ class RouteBatchResponse(StrictModel):
 class Patch(StrictModel):
     """Exact, unique old-text anchor and its replacement, bound to an old-file hash."""
 
-    old: str = Field(min_length=1)
-    new: str
+    old: str = Field(
+        min_length=1,
+        description="Exact text occurring once in the supplied old content; anchors must not overlap.",
+    )
+    new: str = Field(description="Replacement text for this anchor; empty text deletes it.")
 
 
 class FileDraft(StrictModel):
@@ -460,18 +463,27 @@ class FileDraft(StrictModel):
     """
 
     path: str = Field(description="Destination path relative to the compile target.")
-    content: str | None = None
+    content: str | None = Field(
+        default=None,
+        description="Complete file content. Omit when using content_ref or patches.",
+    )
     content_ref: str | None = Field(
         default=None,
         description="Existing file to read, relative to your scratch root. "
         "Use this after write_file; omit inline content.",
     )
     content_sha256: str | None = None
-    patches: list[Patch] = Field(default_factory=list, max_length=32)
-    base_hash: str | None = None
+    patches: list[Patch] = Field(
+        default_factory=list,
+        description="Edits to supplied historical content; do not combine with content or content_ref.",
+    )
+    base_hash: str | None = Field(
+        default=None,
+        description="Copy the supplied historical file hash when updating; omit for new files.",
+    )
     inputs: list[str] = Field(
         min_length=1,
-        description="Supplied input IDs actually used by this file; multiple inputs may support "
+        description="Unique supplied input IDs actually used by this file; multiple inputs may support "
         "one file, and one input may support multiple files.",
     )
 

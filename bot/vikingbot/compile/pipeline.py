@@ -135,11 +135,6 @@ contract.required_paths.
 
 The final SKILL.md must have YAML frontmatter with name matching the package directory
 and a nonempty description. Preserve attachments in their native formats.
-The runtime does not add Wiki frontmatter, citations or navigation.
-"""
-
-_WIKI_OUTPUT = """For OKF Wiki, generate content pages only; navigation indexes are generated
-automatically. Do not generate or require OKF index pages.
 """
 
 
@@ -181,10 +176,14 @@ class Pipeline:
 
     @property
     def output_instructions(self) -> str:
-        """Return target-specific output constraints; ordinary file generation adds none."""
+        """Return shared output-root semantics and target-specific output constraints."""
+        instructions = (
+            '"to" in the instruction refers to the compile output root; return paths '
+            'relative to it without adding a literal "to/" prefix.\n'
+        )
         if self.skill_target:
-            return _SKILL_OUTPUT
-        return _WIKI_OUTPUT if self.request.wiki_links else ""
+            return instructions + _SKILL_OUTPUT
+        return instructions
 
     async def run(self, batches) -> RenderedBundle:
         """Plan, expand and execute collections; errors preserve honest pending/failed states."""
@@ -214,6 +213,9 @@ class Pipeline:
                 await self.files.put("runtime", runtime)
             if runtime.get("wiki_links", False) != self.request.wiki_links:
                 raise ValueError("Wiki link setting differs from the task runtime")
+            prompt_runtime = {
+                key: value for key, value in runtime.items() if key in {"time", "skill"}
+            }
             self.metrics["input_ranges"] = len(sources)
             self.metrics["input_files"] = len({x["uri"] for x in self.evidence.values()})
             source_summary, samples = await self.summarize_sources(sources)
@@ -251,12 +253,11 @@ class Pipeline:
                 {
                     "skill": self.skill,
                     "skill_resources": references,
-                    "runtime": runtime,
+                    "runtime": prompt_runtime,
                     "request": {
                         "to": self.target,
                         "instruction": self.request.instruction,
                         "source_root_count": len(self.request.from_),
-                        "wiki_links": self.request.wiki_links,
                     },
                     "source_counts": dict(self.metrics),
                     "source_summary": source_summary,
@@ -274,20 +275,21 @@ class Pipeline:
                 )
             nodes = parse_plan(proposal.plan, self.contract)
             self.system = (
-                "Original Skill (authoritative):\n"
+                "# Original Skill (authoritative)\n"
                 + self.skill
-                + "\nInstruction:\n"
+                + "\n\n# User instruction\n"
                 + self.request.instruction
-                + "\nShared requirements:\n"
+                + "\n\n# Shared requirements\n"
                 + self.contract.model_dump_json(
                     include={"preserve", "validation", "required_paths"}
                 )
-                + "\n"
+                + "\n\n# Output rules\n"
                 + self.output_instructions
-                + "\nRuntime: "
-                + json.dumps(runtime)
-                + "\nSkill attachments (read necessary rules before use): "
+                + "\n# Runtime\n"
+                + json.dumps(prompt_runtime)
+                + "\n\n# Skill attachments (read necessary rules before use)\n"
                 + json.dumps(self.resources.hashes)
+                + "\n"
             )
             contract_hash = digest(
                 [self.skill, self.contract.model_dump(), self.model.identity, self.resources.hashes]
