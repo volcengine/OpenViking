@@ -317,12 +317,6 @@ async def generate_image_summary(
             )
             return {"name": file_name, "summary": f"Unsupported image format: {str(e)}"}
         raise
-    except Exception as e:
-        logger.error(
-            f"[MediaUtils.generate_image_summary] Failed to generate image summary: {e}",
-            exc_info=True,
-        )
-        return {"name": file_name, "summary": "Image summary generation failed"}
 
 
 async def generate_audio_summary(
@@ -483,7 +477,7 @@ async def _generate_media_summary(
             code,
             request_id,
         )
-        return result
+        raise
     finally:
         if temporary_path is not None:
             try:

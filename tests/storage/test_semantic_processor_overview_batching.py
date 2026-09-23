@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -32,8 +33,29 @@ class MergePlaceholderVLM(RecordingVLM):
 
 
 @pytest.mark.asyncio
-async def test_children_only_oversized_overview_is_batched(monkeypatch):
+@pytest.mark.parametrize("failure_stage", [None, "batch", "merge"])
+async def test_children_only_oversized_overview_is_batched(monkeypatch, failure_stage):
     vlm = RecordingVLM()
+    error = RuntimeError("500 model unavailable")
+    pending_started = asyncio.Event()
+    pending_stopped = asyncio.Event()
+    complete = vlm.get_completion_async
+
+    async def fail_completion(prompt):
+        if failure_stage == "batch":
+            if "child-0" in prompt:
+                await pending_started.wait()
+                raise error
+            pending_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                pending_stopped.set()
+        if failure_stage == "merge" and "overview-1" in prompt:
+            raise error
+        return await complete(prompt)
+
+    vlm.get_completion_async = fail_completion
     config = SimpleNamespace(
         vlm=vlm,
         semantic=SimpleNamespace(
@@ -56,11 +78,19 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
     )
     children = [{"name": f"child-{index}", "abstract": "x" * 20} for index in range(3)]
 
-    overview = await SemanticProcessor()._generate_overview(
+    generation = SemanticProcessor()._generate_overview(
         "viking://resources/root",
         file_summaries=[],
         children_abstracts=children,
     )
+    if failure_stage is not None:
+        with pytest.raises(RuntimeError) as exc_info:
+            await asyncio.wait_for(generation, timeout=2)
+        assert exc_info.value is error
+        if failure_stage == "batch":
+            assert pending_stopped.is_set()
+        return
+    overview = await generation
 
     assert overview == "overview-3"
     assert len(vlm.prompts) == 3

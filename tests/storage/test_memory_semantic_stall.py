@@ -162,42 +162,136 @@ async def test_memory_ls_error_returns_failed():
 
 
 @pytest.mark.asyncio
-async def test_memory_ls_transient_error_requeues():
-    """Transient errors during ls() re-enqueue the msg and increment requeue count.
-
-    A 500-class error wrapped by the processor's `raise RuntimeError(...) from e`
-    is classified as `transient`. The outer on_dequeue() path must call
-    _reenqueue_semantic_msg(), bump requeue_count, and return REQUEUED without
-    a terminal error.
-    """
+@pytest.mark.parametrize(
+    ("context_type", "failure_stage", "error_message", "outcome"),
+    [
+        ("memory", "listing", "500 Internal Server Error", ProcessOutcome.REQUEUED),
+        ("resource", "summary", "500 model unavailable", ProcessOutcome.REQUEUED),
+        ("memory", "summary", "400 invalid model", ProcessOutcome.FAILED),
+        ("resource", "overview", "400 invalid model", ProcessOutcome.FAILED),
+        ("memory", "overview", "500 model unavailable", ProcessOutcome.REQUEUED),
+        ("skill", "summary", "400 invalid model", ProcessOutcome.FAILED),
+    ],
+)
+async def test_semantic_errors_reach_queue_outcome(
+    monkeypatch, context_type, failure_stage, error_message, outcome
+):
+    """Real generation errors reach retry/failure accounting without publishing placeholders."""
     processor = SemanticProcessor()
+    error = RuntimeError(error_message)
 
-    fake_fs = MagicMock()
-    fake_fs.exists = AsyncMock(return_value=True)
-    fake_fs.ls = AsyncMock(side_effect=RuntimeError("500 Internal Server Error"))
+    async def read_file(uri, ctx=None):
+        if uri.endswith(("/.overview.md", "/.abstract.md")):
+            raise FileNotFoundError(uri)
+        return "Document content"
 
-    msg = _make_msg(telemetry_id="tel-1")
-    data = _build_data(msg)
-
-    reenqueue_mock = AsyncMock()
-
-    with (
-        patch(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-            return_value=fake_fs,
+    fake_fs = SimpleNamespace(
+        exists=AsyncMock(return_value=True),
+        ls=AsyncMock(return_value=[{"name": "file1.md", "isDir": False}]),
+        read_file=AsyncMock(side_effect=read_file),
+        write_file=AsyncMock(),
+        _uri_to_path=lambda uri, ctx=None: uri.replace("viking://", "/local/acc1/"),
+        _async_agfs=SimpleNamespace(
+            pathlock_acquire_exact_batch=AsyncMock(return_value={"lease_ref": "test"}),
+            pathlock_release=AsyncMock(),
         ),
-        patch(
-            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
-            return_value=None,
-        ),
-        patch.object(processor, "_reenqueue_semantic_msg", new=reenqueue_mock),
-    ):
-        result = await processor.on_dequeue(data)
+    )
+    if failure_stage == "listing":
+        fake_fs.ls.side_effect = error
+    if context_type == "skill" or failure_stage == "summary" and context_type == "memory":
+        fake_fs.ls.return_value.append({"name": "file2.md", "isDir": False})
+    if context_type == "skill":
+        monkeypatch.setattr(
+            processor,
+            "_resolve_skill_semantic_lock",
+            AsyncMock(return_value=SimpleNamespace(lock={}, close=AsyncMock())),
+        )
+        monkeypatch.setattr(
+            processor,
+            "_skill_root_semantics",
+            AsyncMock(return_value=("# Skill definition", "Skill definition")),
+        )
 
-    assert result.outcome is ProcessOutcome.REQUEUED
-    assert result.value is None
-    assert result.error is None
-    reenqueue_mock.assert_awaited_once()
+    sibling_started, sibling_stopped = asyncio.Event(), asyncio.Event()
+
+    async def complete(prompt):
+        name, filename = prompt
+        if failure_stage == "summary" and context_type == "memory":
+            if filename == "file2.md":
+                sibling_started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    sibling_stopped.set()
+            await sibling_started.wait()
+        if (failure_stage == "summary" and name == "semantic.document_summary") or (
+            failure_stage == "overview" and name == "semantic.overview_generation"
+        ):
+            raise error
+        return "# Document\n\nUseful summary."
+
+    config = SimpleNamespace(
+        vlm=SimpleNamespace(is_available=lambda: True, get_completion_async=complete),
+        semantic=SimpleNamespace(
+            max_file_content_chars=10000,
+            max_overview_prompt_chars=10000,
+            overview_batch_size=32,
+            overview_sample_limit=32,
+            overview_max_chars=10000,
+            abstract_max_chars=256,
+        ),
+        output_language_override="en",
+    )
+    for module in ("semantic_processor", "semantic_executor"):
+        monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fake_fs)
+        monkeypatch.setattr(
+            f"openviking.storage.queuefs.{module}.get_openviking_config", lambda: config
+        )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.render_prompt",
+        lambda name, values: (name, values.get("file_name")),
+    )
+    reenqueue = AsyncMock()
+    monkeypatch.setattr(processor, "_reenqueue_semantic_msg", reenqueue)
+    msg = _make_msg(
+        uri={
+            "resource": "viking://resources/docs",
+            "memory": "viking://user/usr1/memories",
+            "skill": "viking://user/usr1/skills/demo",
+        }[context_type],
+        context_type=context_type,
+        telemetry_id=str(uuid4()),
+        skip_vectorization=True,
+        propagate_to_parent=False,
+    )
+    tracker = get_request_wait_tracker()
+    tracker.register_request(msg.telemetry_id)
+    tracker.register_semantic_root(msg.telemetry_id, msg.id)
+    try:
+        result = await asyncio.wait_for(processor.on_dequeue(msg.to_dict()), timeout=2)
+        assert result.outcome is outcome
+        if failure_stage == "summary" and context_type == "memory":
+            assert sibling_stopped.is_set()
+        status = tracker.build_queue_status(msg.telemetry_id)["Semantic"]
+        assert status["processed"] == 0
+        expected_errors = 2 if context_type == "skill" else int(outcome is ProcessOutcome.FAILED)
+        assert status["error_count"] == expected_errors
+        assert status["requeue_count"] == int(outcome is ProcessOutcome.REQUEUED)
+        if outcome is ProcessOutcome.FAILED:
+            if context_type == "skill":
+                for filename in ("file1.md", "file2.md"):
+                    assert f"{msg.uri}/{filename}: {error_message}" in result.error
+            else:
+                assert result.error == error_message
+            assert tracker.is_complete(msg.telemetry_id)
+            reenqueue.assert_not_awaited()
+        else:
+            assert result.error is None
+            assert not tracker.is_complete(msg.telemetry_id)
+            reenqueue.assert_awaited_once()
+        fake_fs.write_file.assert_not_awaited()
+    finally:
+        tracker.cleanup(msg.telemetry_id)
 
 
 @pytest.mark.asyncio

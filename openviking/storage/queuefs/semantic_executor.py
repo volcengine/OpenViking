@@ -1139,6 +1139,8 @@ class SemanticTreeExecutor:
             # corrupted YAML into a later regeneration.
             raise
         except Exception as e:
+            if self._context_type != "skill":
+                raise
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}
@@ -1458,153 +1460,162 @@ class SemanticTreeExecutor:
                         )
                 overview, abstract = self._processor._normalize_overview_generation(overview)
 
-            if self._closed:
-                return
-
-            # Persist sidecars before publishing their directory vectors.
-            if should_write:
-                assert overview is not None and abstract is not None
-                try:
-                    write_result = await self._write_directory_semantics(
-                        dir_uri,
-                        overview,
-                        abstract,
-                        total_entries=total_entries,
-                        sampled_entries=sampled_entries,
-                        consume_pending=node.pending_snapshot,
-                        missing_summary_entries=node.missing_summary_entries,
-                    )
-                    if dir_uri == self._root_uri:
-                        self._root_write_result = write_result
-                    if not write_result.wrote:
-                        need_vectorize = False
-                except AbstractOverviewFormatError:
-                    raise
-                except Exception as exc:
-                    self._record_skill_failure(dir_uri, exc)
-                    if self._semantic_plan is not None:
-                        self.fail(exc)
-                        return
-                    raise
-
         except AbstractOverviewFormatError:
             raise
         except Exception as e:
+            if self._context_type != "skill":
+                raise
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             self._record_skill_failure(dir_uri, e)
         else:
-            slots = {}
-            if self._semantic_plan is not None:
-                entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
-                slots = {slot.level: slot for slot in entry.index_slots} if entry else {}
+            try:
+                if self._closed:
+                    return
 
-            if need_vectorize and not self._skip_vectorization:
-                assert overview is not None and abstract is not None
-                try:
-                    directory_vector_kwargs: Dict[str, Any] = {}
-                    include_abstract = True
-                    include_overview = True
-                    if self._semantic_plan is not None:
-                        from openviking.storage.context_update_plan import (
-                            IndexAction,
-                        )
-
-                        def should_emit(level: int) -> bool:
-                            slot = slots.get(level)
-                            if slot is None or slot.action not in {
-                                IndexAction.UPSERT,
-                                IndexAction.MERGE,
-                            }:
-                                return False
-                            old_body = slot.abstract
-                            new_body = abstract if level == 0 else overview
-                            return not old_body or old_body != new_body
-
-                        include_abstract = should_emit(0)
-                        include_overview = should_emit(1)
-                        directory_vector_kwargs = {
-                            "scalar_overrides": {
-                                level: values
-                                for level in (0, 1)
-                                if (values := self._plan_scalar_override(dir_uri, level))
-                            },
-                            "actions": {
-                                level: slot.action
-                                for level, slot in slots.items()
-                                if slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
-                            },
-                            "field_patches": {
-                                level: slot.field_patch
-                                for level, slot in slots.items()
-                                if slot.field_patch is not None
-                            },
-                            "include_abstract": include_abstract,
-                            "include_overview": include_overview,
-                        }
-                    if include_abstract or include_overview:
-                        enqueued_levels = await self._processor._vectorize_directory(
+                # Persist sidecars before publishing their directory vectors.
+                if should_write:
+                    assert overview is not None and abstract is not None
+                    try:
+                        write_result = await self._write_directory_semantics(
                             dir_uri,
-                            context_type=self._context_type,
-                            abstract=abstract,
-                            overview=overview,
-                            ctx=self._ctx,
-                            ingest_options=(
-                                IngestOptions()
-                                if self._semantic_plan is not None
-                                else self._ingest_options_for_directory()
-                            ),
-                            creator_acl_grant=self._creator_acl_grant(dir_uri),
-                            **(
-                                {"skill_source_path": (self._source or {}).get("path", "")}
-                                if self._context_type == "skill"
-                                and classify_uri(dir_uri).is_skill_root
-                                else {}
-                            ),
-                            **directory_vector_kwargs,
+                            overview,
+                            abstract,
+                            total_entries=total_entries,
+                            sampled_entries=sampled_entries,
+                            consume_pending=node.pending_snapshot,
+                            missing_summary_entries=node.missing_summary_entries,
                         )
-                    else:
-                        enqueued_levels = set()
-                except Exception as e:
-                    logger.error(
-                        "Failed to schedule vectorization for %s: %s",
-                        dir_uri,
-                        e,
-                        exc_info=True,
-                    )
-                    if self._context_type != "skill":
+                        if dir_uri == self._root_uri:
+                            self._root_write_result = write_result
+                        if not write_result.wrote:
+                            need_vectorize = False
+                    except AbstractOverviewFormatError:
                         raise
-                    self._record_skill_failure(dir_uri, e)
+                    except Exception as exc:
+                        self._record_skill_failure(dir_uri, exc)
+                        if self._semantic_plan is not None:
+                            self.fail(exc)
+                            return
+                        raise
+
+            except AbstractOverviewFormatError:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to write overview for {dir_uri}: {e}", exc_info=True)
+                self._record_skill_failure(dir_uri, e)
             else:
-                enqueued_levels = set()
+                slots = {}
+                if self._semantic_plan is not None:
+                    entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
+                    slots = {slot.level: slot for slot in entry.index_slots} if entry else {}
 
-            for level, slot in sorted(slots.items()):
-                if (
-                    level in enqueued_levels
-                    or not slot.fallback_to_patch
-                    or slot.field_patch is None
-                ):
-                    continue
-                enqueued = await self._processor._update_vector_fields(
-                    record_id=slot.record_id,
-                    uri=dir_uri,
-                    level=level,
-                    field_patch=slot.field_patch.with_seed(
-                        {
-                            **dict(slot.existing_fields or {}),
-                            "uri": dir_uri,
-                            "level": level,
-                            "account_id": self._ctx.account_id,
-                        }
-                    ),
-                    ctx=self._ctx,
-                )
-                if enqueued:
-                    enqueued_levels.add(level)
+                if need_vectorize and not self._skip_vectorization:
+                    assert overview is not None and abstract is not None
+                    try:
+                        directory_vector_kwargs: Dict[str, Any] = {}
+                        include_abstract = True
+                        include_overview = True
+                        if self._semantic_plan is not None:
+                            from openviking.storage.context_update_plan import (
+                                IndexAction,
+                            )
 
-            if self._semantic_plan is not None:
-                self._scheduled_vector_record_ids.update(
-                    slot.record_id for slot in slots.values() if slot.level in enqueued_levels
-                )
+                            def should_emit(level: int) -> bool:
+                                slot = slots.get(level)
+                                if slot is None or slot.action not in {
+                                    IndexAction.UPSERT,
+                                    IndexAction.MERGE,
+                                }:
+                                    return False
+                                old_body = slot.abstract
+                                new_body = abstract if level == 0 else overview
+                                return not old_body or old_body != new_body
+
+                            include_abstract = should_emit(0)
+                            include_overview = should_emit(1)
+                            directory_vector_kwargs = {
+                                "scalar_overrides": {
+                                    level: values
+                                    for level in (0, 1)
+                                    if (values := self._plan_scalar_override(dir_uri, level))
+                                },
+                                "actions": {
+                                    level: slot.action
+                                    for level, slot in slots.items()
+                                    if slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
+                                },
+                                "field_patches": {
+                                    level: slot.field_patch
+                                    for level, slot in slots.items()
+                                    if slot.field_patch is not None
+                                },
+                                "include_abstract": include_abstract,
+                                "include_overview": include_overview,
+                            }
+                        if include_abstract or include_overview:
+                            enqueued_levels = await self._processor._vectorize_directory(
+                                dir_uri,
+                                context_type=self._context_type,
+                                abstract=abstract,
+                                overview=overview,
+                                ctx=self._ctx,
+                                ingest_options=(
+                                    IngestOptions()
+                                    if self._semantic_plan is not None
+                                    else self._ingest_options_for_directory()
+                                ),
+                                creator_acl_grant=self._creator_acl_grant(dir_uri),
+                                **(
+                                    {"skill_source_path": (self._source or {}).get("path", "")}
+                                    if self._context_type == "skill"
+                                    and classify_uri(dir_uri).is_skill_root
+                                    else {}
+                                ),
+                                **directory_vector_kwargs,
+                            )
+                        else:
+                            enqueued_levels = set()
+                    except Exception as e:
+                        logger.error(
+                            "Failed to schedule vectorization for %s: %s",
+                            dir_uri,
+                            e,
+                            exc_info=True,
+                        )
+                        if self._context_type != "skill":
+                            raise
+                        self._record_skill_failure(dir_uri, e)
+                else:
+                    enqueued_levels = set()
+
+                for level, slot in sorted(slots.items()):
+                    if (
+                        level in enqueued_levels
+                        or not slot.fallback_to_patch
+                        or slot.field_patch is None
+                    ):
+                        continue
+                    enqueued = await self._processor._update_vector_fields(
+                        record_id=slot.record_id,
+                        uri=dir_uri,
+                        level=level,
+                        field_patch=slot.field_patch.with_seed(
+                            {
+                                **dict(slot.existing_fields or {}),
+                                "uri": dir_uri,
+                                "level": level,
+                                "account_id": self._ctx.account_id,
+                            }
+                        ),
+                        ctx=self._ctx,
+                    )
+                    if enqueued:
+                        enqueued_levels.add(level)
+
+                if self._semantic_plan is not None:
+                    self._scheduled_vector_record_ids.update(
+                        slot.record_id for slot in slots.values() if slot.level in enqueued_levels
+                    )
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)

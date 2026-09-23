@@ -306,26 +306,30 @@ async def test_success_normalizes_markdown_and_filename_heading(
     client.get_media_completion_async.assert_awaited_once()
 
 
-async def test_provider_failure_returns_empty_summary(monkeypatch):
-    client = _lazy_client(side_effect=RuntimeError("status code 401"))
-    model_config = SimpleNamespace(
-        model="doubao-seed-2-0-lite-260428",
-        get_client_instance=lambda: client,
-    )
-    fs = _FS()
+@pytest.mark.parametrize("media_type", ["image", "audio", "video"])
+async def test_provider_failure_propagates_and_cleans_staging(monkeypatch, media_type):
+    error = RuntimeError("status code 401")
+    staged_paths = []
+
+    async def fail_completion(*, media_path=None, prepare_media=None, **kwargs):
+        if prepare_media is not None:
+            await prepare_media()
+            assert media_path.exists()
+            staged_paths.append(media_path)
+        raise error
+
+    client = _MediaVLM()
+    client.get_media_completion_async = fail_completion
+    client.get_vision_completion_async = fail_completion
+    fs = _FS(_jpeg_bytes(8, 8) if media_type == "image" else b"media")
     monkeypatch.setattr(media_utils, "get_viking_fs", lambda: fs)
-    monkeypatch.setattr(
-        media_utils,
-        "get_openviking_config",
-        lambda: _config(model_config),
-    )
-
-    result = await media_utils.generate_video_summary(
-        "viking://resources/video/clip.mp4",
-        "clip.mp4",
-    )
-
-    assert result == {"name": "clip.mp4", "summary": ""}
+    monkeypatch.setattr(media_utils, "get_openviking_config", lambda: _config(client))
+    filename = {"image": "photo.jpg", "audio": "clip.mp3", "video": "clip.mp4"}[media_type]
+    generate = getattr(media_utils, f"generate_{media_type}_summary")
+    with pytest.raises(RuntimeError) as exc_info:
+        await generate(f"viking://resources/media/{filename}", filename)
+    assert exc_info.value is error
+    assert all(not path.exists() for path in staged_paths)
 
 
 def test_refusal_provider_output_is_rejected():
