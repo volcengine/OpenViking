@@ -78,7 +78,7 @@ beforeEach(() => {
   }))
   mocks.change.mockReset()
   mocks.change.mockImplementation(async (uri, change) => {
-    mocks.modes[uri] = change.kind === 'reset' ? 'none' : change.mode
+    mocks.modes[uri] = change.kind === 'reset' ? 'inherit' : change.mode
     return mocks.get(uri)
   })
   mocks.list.mockImplementation(async (uri: string) => ({
@@ -247,10 +247,35 @@ it('enables permission management only after restricted access is switched on', 
   )
   await waitFor(() => expect(manager.hasAttribute('disabled')).toBe(false))
 })
-it('turns off an independent restriction and disables its management action', async () => {
+it('toggles a root child restriction independently of inherited grants', async () => {
+  mocks.get.mockImplementation(async (uri: string) => {
+    const mode = mocks.modes[uri] ?? 'inherit'
+    const inherited = [{ principal: 'user:*', level: 'manage' }]
+    return {
+      uri,
+      acl_mode: mode,
+      direct_entries: [],
+      inherited_entries: inherited,
+      effective_entries: mode === 'restricted' ? [] : inherited,
+    }
+  })
   const { user } = mount()
   const row = (await screen.findByRole('button', { name: 'im' })).closest('tr')!
-  await user.click(await within(row).findByRole('switch'))
+  const toggle = await within(row).findByRole('switch')
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+  await user.click(toggle)
+  await user.click(
+    within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'acl.confirm',
+    }),
+  )
+  await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'))
+  expect(mocks.change).toHaveBeenCalledWith(`${root}im/`, {
+    kind: 'mode',
+    mode: 'restricted',
+  })
+  await user.click(toggle)
+  expect(screen.getByText('acl.page.disableLimitWarning')).toBeTruthy()
   await user.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
       name: 'acl.confirm',
@@ -259,13 +284,8 @@ it('turns off an independent restriction and disables its management action', as
   await waitFor(() =>
     expect(mocks.change).toHaveBeenCalledWith(`${root}im/`, { kind: 'reset' }),
   )
-  await waitFor(() =>
-    expect(
-      within(row)
-        .getByRole('button', { name: 'acl.page.manageAction' })
-        .hasAttribute('disabled'),
-    ).toBe(true),
-  )
+  await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('false'))
+  expect(within(row).getByText('acl.modes.inherit')).toBeTruthy()
 })
 it('lets a child stop and restore inheritance without clearing its grants', async () => {
   const { user } = mount()

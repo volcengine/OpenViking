@@ -452,7 +452,7 @@ function DirectoryRow({
         <TableCell className="text-center">
           {report.isSuccess ? (
             <Switch
-              checked={parentControlled ? restricted : hasAcl}
+              checked={restricted}
               disabled={!writable || update.isPending}
               aria-label={t('acl.page.limitFor', { directory: name })}
               onCheckedChange={setNext}

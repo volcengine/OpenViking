@@ -770,9 +770,9 @@ const workspace = {
         restoreInheritanceTitle: '恢复继承上级权限？',
         restoreInheritanceWarning:
           '上级目录的授权将重新生效，本目录已添加的授权会保留。',
-        disableLimitTitle: '关闭此目录的限制访问？',
+        disableLimitTitle: '清空直接授权并恢复继承？',
         disableLimitWarning:
-          '本目录的授权将被清除，目录恢复默认共享；下级目录的独立权限设置会保留。',
+          '将清空本目录的直接授权，并恢复继承父目录权限；下级目录的独立权限设置会保留。',
         editDirectory: '谁可以访问 {{directory}}',
         whoCanAccess: '授权给以下用户或用户组',
         grantScope:
@@ -788,7 +788,7 @@ const workspace = {
       title: '访问权限',
       accountTitle: '资源访问控制 · {{account}}',
       accountHint:
-        '作用于当前 Account 的所有共享资源。已有且未配置 ACL 的资源仍按原规则共享。',
+        '作用于当前 Account 的共享资源。关闭时不执行 ACL 鉴权；开启后，共享根目录固定为全员管理，下级默认继承，可单独限制访问。',
       enableAction: '启用访问控制',
       disableAction: '关闭访问控制',
       enabled: '已启用',
@@ -796,7 +796,7 @@ const workspace = {
       enableTitle: '启用资源访问控制？',
       disableTitle: '关闭资源访问控制？',
       enableWarning:
-        '为 Account {{account}} 启用 ACL？新建共享资源会给创建者管理权，并继承父目录权限。已有未配置 ACL 的资源仍按原规则共享；此前配置的 ACL 会重新生效。',
+        '为 Account {{account}} 启用 ACL？共享根目录固定授予全员管理权限，且不可修改。新资源默认继承父目录权限，创建者没有额外授权；已有 ACL 将生效。',
       disableWarning:
         '关闭 Account {{account}} 的 ACL 后，所有资源授权将停止参与鉴权，资源恢复原有共享规则，可能扩大访问范围。已保存的授权不会被删除。',
       saved: '权限已更新',
@@ -812,7 +812,7 @@ const workspace = {
       limitWarning:
         '此目录将停止继承上级授权。已有的直接授权（包括所有人授权）仍然生效，请在切换后检查这些授权。账号管理员仍可访问。',
       peopleWithAccess: '有权限的用户和用户组',
-      defaultRule: '默认共享',
+      defaultRule: '默认继承上级权限',
       onlyAdmins: '暂无授权对象，仅账号管理员可访问',
       directSource: '本目录授权',
       inheritedSource: '上级目录授权',
@@ -847,12 +847,12 @@ const workspace = {
         users: '前往用户与权限',
       },
       modes: {
-        none: '默认共享',
+        none: '默认继承',
         inherit: '继承上级权限',
         restricted: '自定义权限',
       },
       modeDescriptions: {
-        none: '当前目录沿用默认共享规则。在这里添加的授权默认适用于下级目录和文件。',
+        none: '当前目录未单独配置权限，默认继承父目录权限。',
         inherit:
           '上级授权和本目录授权共同生效，并默认适用于下级目录和文件；下级节点可以单独关闭继承。',
         restricted:
@@ -867,8 +867,7 @@ const workspace = {
         '查看：读取、浏览、检索。编辑：创建、修改、删除或移动文件。管理：调整授权、删除或移动目录；目录操作还会检查整个子树。',
       direct: '本目录添加的授权',
       inherited: '来自上级目录的授权',
-      noDirect:
-        '还没有为本目录单独授权。用户仍可能通过上级目录或默认共享规则访问。',
+      noDirect: '未添加直接授权。继承已开启时，用户仍可通过父目录授权访问。',
       noInherited: '没有继承授权。',
       inheritedHint:
         '这些授权在当前目录生效，并默认适用于下级目录和文件；如需修改，请到上级目录操作。',
@@ -887,7 +886,7 @@ const workspace = {
         '当前目录及下级内容将不再使用上级授权。只有本目录授权对象和账号管理员可以访问。',
       restoreWarning: '上级目录的授权将重新作用于当前目录及下级内容。',
       removeWarning:
-        '移除 {{principal}} 的直接授权？该用户或组仍可能通过继承、组成员关系或全体用户授权访问。若继承已开启且上级未受控，移除最后一条授权可能恢复默认共享。',
+        '移除 {{principal}} 的直接授权？继承、用户组或全体用户授权仍可能允许访问。移除授权不会改变继承模式。',
       subjectType: '授权对象类型',
       subjects: {
         user: '用户',

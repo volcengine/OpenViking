@@ -804,9 +804,9 @@ const workspace = {
         restoreInheritanceTitle: 'Inherit permissions from the parent again?',
         restoreInheritanceWarning:
           'Parent directory grants will apply again. Grants added on this directory will remain.',
-        disableLimitTitle: 'Turn off restricted access for this directory?',
+        disableLimitTitle: 'Clear direct grants and restore inheritance?',
         disableLimitWarning:
-          'Grants added here will be removed and default sharing restored. Separate permissions on child directories remain.',
+          'Direct grants on this directory will be cleared and parent permissions inherited again. Separate permissions on child directories remain.',
         editDirectory: 'Who can access {{directory}}',
         whoCanAccess: 'Grant access to these users or groups',
         grantScope:
@@ -823,7 +823,7 @@ const workspace = {
       title: 'Access permissions',
       accountTitle: 'Resource access control · {{account}}',
       accountHint:
-        'Account-wide setting for shared resources. Existing resources without ACL remain shared under the original rules.',
+        'Applies to shared resources in this Account. When disabled, ACL checks are skipped. When enabled, the shared root grants everyone management access. Descendants inherit by default and can restrict access separately.',
       enableAction: 'Enable access control',
       disableAction: 'Disable access control',
       enabled: 'Enabled',
@@ -831,7 +831,7 @@ const workspace = {
       enableTitle: 'Enable resource access control?',
       disableTitle: 'Disable resource access control?',
       enableWarning:
-        'Enable ACL for Account {{account}}? New shared resources grant their creator management access and inherit parent permissions. Existing resources without ACL remain shared; previously configured ACLs take effect again.',
+        'Enable ACL for Account {{account}}? The shared root always grants everyone management access; these permissions cannot be changed. New resources inherit parent permissions by default, with no extra grants for their creator. Existing ACLs take effect.',
       disableWarning:
         'Disable ACL for Account {{account}}? All configured resource ACLs stop being enforced. Resources follow the original sharing rules, which may expand access. Stored grants are retained.',
       saved: 'Permissions updated',
@@ -847,7 +847,7 @@ const workspace = {
       limitWarning:
         'This directory will stop inheriting parent grants. Existing direct grants, including Everyone grants, remain active. Review these grants after switching. Account administrators retain access.',
       peopleWithAccess: 'People and groups with access',
-      defaultRule: 'Shared by default',
+      defaultRule: 'Inherits parent permissions by default',
       onlyAdmins: 'No grants yet; account administrators can still access',
       directSource: 'Granted here',
       inheritedSource: 'From parent',
@@ -887,12 +887,12 @@ const workspace = {
         users: 'Go to Users & Permissions',
       },
       modes: {
-        none: 'Shared by default',
+        none: 'Inherited by default',
         inherit: 'Inherited permissions',
         restricted: 'Custom permissions',
       },
       modeDescriptions: {
-        none: 'This directory follows the default sharing rules. Grants added here apply to descendant directories and files by default.',
+        none: 'No permissions are configured on this directory. It inherits parent permissions by default.',
         inherit:
           'Parent grants and grants added here both apply, including to descendant directories and files by default. A descendant can stop inheritance.',
         restricted:
@@ -908,7 +908,7 @@ const workspace = {
       direct: 'Grants added to this directory',
       inherited: 'Grants from parent directories',
       noDirect:
-        'No grants have been added here. Access may still come from a parent directory or default sharing rules.',
+        'No direct grants have been added. Users may still have access through parent grants when inheritance is enabled.',
       noInherited: 'No inherited grants.',
       inheritedHint:
         'These grants apply here and to descendant directories and files by default. Edit them in the parent directory.',
@@ -930,7 +930,7 @@ const workspace = {
       restoreWarning:
         'Parent grants will apply to this directory and its contents again.',
       removeWarning:
-        'Remove the direct grant for {{principal}}? Access may remain through ancestors, groups, or the Account-wide grant. Removing the last grant may restore default sharing if inheritance is enabled and no ancestor is controlled.',
+        'Remove the direct grant for {{principal}}? Access may remain through inherited grants, groups, or an Everyone grant. Removing a grant does not change the inheritance mode.',
       subjectType: 'Grant to',
       subjects: {
         user: 'User',
