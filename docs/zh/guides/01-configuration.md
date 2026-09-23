@@ -720,6 +720,7 @@ LiteLLM 的 Bedrock bearer-token API-key 鉴权，请设置 `forward_api_key=tru
 常见使用场景：
 - **OpenRouter**: 需要 `HTTP-Referer` 和 `X-Title` 来标识应用
 - **Kimi Coding**: 需要自定义 user agent 或追加订阅请求头时可以在这里覆盖
+- **OpenCode Go**（`https://opencode.ai/zen/go/v1`）: 请求不带 `x-opencode-session` 会返回 HTTP 400 `MissingSessionID`。配置一个固定值即可，例如 `"extra_headers": {"x-opencode-session": "openviking-<your-host>"}`。OpenCode Go 只用这个 id 做路由和 prompt cache 优化，固定值不影响使用
 - **自定义代理**: 添加认证头或追踪头
 - **API 网关**: 添加版本或路由标识
 
