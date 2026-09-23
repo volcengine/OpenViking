@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -13,8 +12,6 @@ from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import DiscordChannelConfig
-from vikingbot.channels.utils import extract_image_paths, read_image_file
-
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
@@ -84,18 +81,36 @@ class DiscordChannel(BaseChannel):
             return
 
         url = f"{DISCORD_API_BASE}/channels/{msg.session_key.chat_id}/messages"
-        payload: dict[str, Any] = {"content": msg.content}
+        cleaned, send_images = await self._extract_send_images(msg.content)
+        payload: dict[str, Any] = {"content": cleaned}
 
         if msg.reply_to:
             payload["message_reference"] = {"message_id": msg.reply_to}
             payload["allowed_mentions"] = {"replied_user": False}
 
         headers = {"Authorization": f"Bot {self.config.token}"}
+        files: dict[str, tuple[str, bytes]] = {}
+        for index, (filename, image_bytes) in enumerate(send_images):
+            if len(image_bytes) > MAX_ATTACHMENT_BYTES:
+                logger.warning(f"Skipping Discord image {filename}: exceeds attachment limit")
+                continue
+            files[f"files[{index}]"] = (filename, image_bytes)
+
+        if not payload["content"] and not files:
+            return
 
         try:
             for attempt in range(3):
                 try:
-                    response = await self._http.post(url, headers=headers, json=payload)
+                    if files:
+                        response = await self._http.post(
+                            url,
+                            headers=headers,
+                            data={"payload_json": json.dumps(payload)},
+                            files=files,
+                        )
+                    else:
+                        response = await self._http.post(url, headers=headers, json=payload)
                     if response.status_code == 429:
                         data = response.json()
                         retry_after = float(data.get("retry_after", 1.0))
