@@ -965,21 +965,26 @@ class ResourceProcessor:
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
                     source_committed = True
-                except Exception:
+                except BaseException:
                     # Mirror the Phase 3 (finalize) on-error cleanup: a lock or
                     # persist failure here would otherwise orphan the
                     # viking://temp tree with no GC (#2478). Skip when the temp
                     # tree was already persisted + deleted on the success path.
-                    if not source_committed:
-                        try:
+                    try:
+                        if not source_committed:
                             await self._cleanup_parse_result_artifact(
                                 parse_result,
                                 output_store=output_store,
                                 viking_fs=get_viking_fs(),
                                 ctx=ctx,
                             )
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
+                    finally:
+                        # The caller still owns a preacquired lease. Release
+                        # leases acquired here if commit fails before handoff.
+                        if resource_lock is not None and preacquired_lock is None:
+                            await viking_fs._async_agfs.pathlock_release(resource_lock)
                     raise
 
             if artifact_ref is not None:
@@ -1194,12 +1199,14 @@ class ResourceProcessor:
                         if semantic_plan is not None:
                             raise
                         result["warnings"] = [f"Semantic enqueue failed: {exc}"]
-        except Exception:
+        except BaseException:
             derived_enqueue_status = "error"
-            await cleanup_artifact_if_owned()
-            if resource_lock is not None:
-                await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
-                resource_lock = None
+            try:
+                await cleanup_artifact_if_owned()
+            finally:
+                if resource_lock is not None:
+                    await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
+                    resource_lock = None
             raise
         finally:
             ResourceIngestionEventDataSource.record_stage(
