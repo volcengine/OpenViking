@@ -27,8 +27,6 @@ export type PluginSessionRouting = {
   ovSessionId?: string;
   agentId: string;
   actorPeerId?: string;
-  /** peer_role=sender with no sender: reads widened, so destructive tools must refuse. */
-  actorPeerUnscoped?: boolean;
 };
 
 export function createOpenVikingSessionRoutingRuntime(options: {
@@ -93,19 +91,17 @@ export function createOpenVikingSessionRoutingRuntime(options: {
     rememberSessionAgentId(session);
 
     const agentId = resolveAgentId(session.sessionId, session.sessionKey, session.ovSessionId);
-    const actorPeerId = resolveOpenVikingActorPeerId({
-      peerRole,
-      senderPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
-      assistantPeerId: agentId,
-      warn: (message) => options.logger.warn(message),
-    });
     return {
       sessionId: session.sessionId,
       sessionKey: session.sessionKey,
       ovSessionId: session.ovSessionId,
       agentId,
-      actorPeerId,
-      ...(peerRole === "sender" && !actorPeerId ? { actorPeerUnscoped: true } : {}),
+      actorPeerId: resolveOpenVikingActorPeerId({
+        peerRole,
+        senderPeerId: sanitizeOpenVikingPeerId(ctx?.requesterSenderId ?? ctx?.senderId),
+        assistantPeerId: agentId,
+        warn: (message) => options.logger.warn(message),
+      }),
     };
   };
 
