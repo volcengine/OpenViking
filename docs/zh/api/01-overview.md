@@ -383,11 +383,11 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/fs/attrs?key=acl` | 获取资源的直接、继承和有效 ACL |
-| POST | `/api/v1/fs/attrs/set_acl` | 替换资源的直接 ACL |
-| POST | `/api/v1/fs/attrs/reset_acl` | 清空资源的直接 ACL |
-| POST | `/api/v1/fs/attrs/grant_acl` | 设置一个 principal 的直接权限级别 |
-| POST | `/api/v1/fs/attrs/revoke_acl` | 删除一个 principal 的直接授权 |
+| GET | `/api/v1/acl` | 获取资源的直接、继承和有效 ACL |
+| PUT | `/api/v1/acl` | 替换资源的直接 ACL |
+| DELETE | `/api/v1/acl` | 清空资源的直接 ACL |
+| POST | `/api/v1/acl/grant` | 设置一个 principal 的直接权限级别 |
+| POST | `/api/v1/acl/revoke` | 删除一个 principal 的直接授权 |
 
 ### [内容](12-content.md)
 

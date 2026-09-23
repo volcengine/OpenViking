@@ -1,5 +1,5 @@
+pub mod acl;
 pub mod admin;
-pub mod attrs;
 pub mod chat;
 pub mod compile;
 pub mod content;

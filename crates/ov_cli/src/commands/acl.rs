@@ -8,6 +8,15 @@ fn show(value: Value, output_format: OutputFormat, compact: bool) -> Result<()> 
     Ok(())
 }
 
+pub async fn get(
+    client: &HttpClient,
+    uri: &str,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show(client.acl_get(uri).await?, output_format, compact)
+}
+
 pub async fn set(
     client: &HttpClient,
     uri: &str,
@@ -31,7 +40,7 @@ pub async fn set(
         entries.push(json!({"principal": principal, "level": level}));
     }
     show(
-        client.attrs_set_acl(uri, entries, acl_mode).await?,
+        client.acl_set(uri, entries, acl_mode).await?,
         output_format,
         compact,
     )
@@ -46,7 +55,7 @@ pub async fn grant(
     compact: bool,
 ) -> Result<()> {
     show(
-        client.attrs_grant_acl(uri, principal, level).await?,
+        client.acl_grant(uri, principal, level).await?,
         output_format,
         compact,
     )
@@ -60,7 +69,7 @@ pub async fn revoke(
     compact: bool,
 ) -> Result<()> {
     show(
-        client.attrs_revoke_acl(uri, principal).await?,
+        client.acl_revoke(uri, principal).await?,
         output_format,
         compact,
     )
@@ -72,5 +81,5 @@ pub async fn remove(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    show(client.attrs_reset_acl(uri).await?, output_format, compact)
+    show(client.acl_delete(uri).await?, output_format, compact)
 }

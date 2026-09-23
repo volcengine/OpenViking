@@ -920,7 +920,7 @@ pub async fn attrs(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let mut result = client.attrs(uri, key).await?;
+    let mut result = client.attrs(uri).await?;
     if let Some(key) = key {
         result = select_attr_key(&result, key)
             .cloned()

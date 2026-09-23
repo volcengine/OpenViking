@@ -74,7 +74,7 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 ```bash
 ov --sudo admin create-group acme engineering
 ov --sudo admin add-group-member acme engineering alice
-ov attrs grant-acl viking://resources/project-a \
+ov acl grant viking://resources/project-a \
   --principal group:engineering --level read
 ov --sudo admin remove-group-member acme engineering alice
 ov --sudo admin delete-group acme engineering

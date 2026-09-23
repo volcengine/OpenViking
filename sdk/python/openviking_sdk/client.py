@@ -1151,11 +1151,9 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def attrs(self, uri: str, key: Optional[str] = None) -> Dict[str, Any]:
+    async def attrs(self, uri: str) -> Dict[str, Any]:
         response = await self._request(
-            "GET",
-            "/api/v1/fs/attrs",
-            params={"uri": VikingURI.normalize(uri), **({"key": key} if key else {})},
+            "GET", "/api/v1/fs/attrs", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response(response)
 
@@ -1324,7 +1322,11 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
-    async def attrs_set_acl(
+    async def acl_get(self, uri: str) -> Dict[str, Any]:
+        response = await self._http.get("/api/v1/acl", params={"uri": VikingURI.normalize(uri)})
+        return self._handle_response_data(response).get("result", {})
+
+    async def acl_set(
         self,
         uri: str,
         entries: Optional[List[Dict[str, str]]] = None,
@@ -1338,15 +1340,15 @@ class AsyncHTTPClient:
             payload["entries"] = entries
         if acl_mode is not None:
             payload["acl_mode"] = acl_mode
-        response = await self._http.post(
-            "/api/v1/fs/attrs/set_acl",
+        response = await self._http.put(
+            "/api/v1/acl",
             json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
-    async def attrs_grant_acl(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
+    async def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
         response = await self._http.post(
-            "/api/v1/fs/attrs/grant_acl",
+            "/api/v1/acl/grant",
             json={
                 "uri": VikingURI.normalize(uri),
                 "principal": principal,
@@ -1355,16 +1357,16 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
-    async def attrs_revoke_acl(self, uri: str, principal: str) -> Dict[str, Any]:
+    async def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
         response = await self._http.post(
-            "/api/v1/fs/attrs/revoke_acl",
+            "/api/v1/acl/revoke",
             json={"uri": VikingURI.normalize(uri), "principal": principal},
         )
         return self._handle_response_data(response).get("result", {})
 
-    async def attrs_reset_acl(self, uri: str) -> Dict[str, Any]:
+    async def acl_delete(self, uri: str) -> Dict[str, Any]:
         response = await self._http.request(
-            "POST", "/api/v1/fs/attrs/reset_acl", json={"uri": VikingURI.normalize(uri)}
+            "DELETE", "/api/v1/acl", params={"uri": VikingURI.normalize(uri)}
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -2517,8 +2519,8 @@ class SyncHTTPClient:
     def stat(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.stat(uri))
 
-    def attrs(self, uri: str, key: Optional[str] = None) -> Dict[str, Any]:
-        return run_async(self._async_client.attrs(uri, key=key))
+    def attrs(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.attrs(uri))
 
     def mkdir(
         self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
@@ -2593,23 +2595,26 @@ class SyncHTTPClient:
             self._async_client.set_tags(uri, tags, mode=mode, recursive=recursive, options=options)
         )
 
-    def attrs_set_acl(
+    def acl_get(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_get(uri))
+
+    def acl_set(
         self,
         uri: str,
         entries: Optional[List[Dict[str, str]]] = None,
         *,
         acl_mode: Optional[Literal["inherit", "restricted"]] = None,
     ) -> Dict[str, Any]:
-        return run_async(self._async_client.attrs_set_acl(uri, entries, acl_mode=acl_mode))
+        return run_async(self._async_client.acl_set(uri, entries, acl_mode=acl_mode))
 
-    def attrs_grant_acl(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
-        return run_async(self._async_client.attrs_grant_acl(uri, principal, level))
+    def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_grant(uri, principal, level))
 
-    def attrs_revoke_acl(self, uri: str, principal: str) -> Dict[str, Any]:
-        return run_async(self._async_client.attrs_revoke_acl(uri, principal))
+    def acl_revoke(self, uri: str, principal: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_revoke(uri, principal))
 
-    def attrs_reset_acl(self, uri: str) -> Dict[str, Any]:
-        return run_async(self._async_client.attrs_reset_acl(uri))
+    def acl_delete(self, uri: str) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_delete(uri))
 
     def find(
         self,

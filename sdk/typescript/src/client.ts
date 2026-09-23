@@ -526,9 +526,9 @@ export class OpenVikingClient {
     });
   }
   /** Return URI logical attributes. */
-  attrs(uri: string, key?: string): Promise<JsonObject> {
+  attrs(uri: string): Promise<JsonObject> {
     return this.request("GET", "/api/v1/fs/attrs", {
-      query: { uri: normalizeURI(uri), key },
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Create a directory. */
@@ -537,28 +537,33 @@ export class OpenVikingClient {
       body: compact({ uri: normalizeURI(uri), description, acl }),
     });
   }
-  attrsSetAcl(uri: string, acl: AclSpec): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/fs/attrs/set_acl", {
+  aclGet(uri: string): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/acl", {
+      query: { uri: normalizeURI(uri) },
+    });
+  }
+  aclSet(uri: string, acl: AclSpec): Promise<JsonObject> {
+    return this.request("PUT", "/api/v1/acl", {
       body: { uri: normalizeURI(uri), ...acl },
     });
   }
-  attrsGrantAcl(
+  aclGrant(
     uri: string,
     principal: string,
     level: "read" | "write" | "manage",
   ): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/fs/attrs/grant_acl", {
+    return this.request("POST", "/api/v1/acl/grant", {
       body: { uri: normalizeURI(uri), principal, level },
     });
   }
-  attrsRevokeAcl(uri: string, principal: string): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/fs/attrs/revoke_acl", {
+  aclRevoke(uri: string, principal: string): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/acl/revoke", {
       body: { uri: normalizeURI(uri), principal },
     });
   }
-  attrsResetAcl(uri: string): Promise<JsonObject> {
-    return this.request("POST", "/api/v1/fs/attrs/reset_acl", {
-      body: { uri: normalizeURI(uri) },
+  aclDelete(uri: string): Promise<JsonObject> {
+    return this.request("DELETE", "/api/v1/acl", {
+      query: { uri: normalizeURI(uri) },
     });
   }
   /** Remove a resource or directory. */

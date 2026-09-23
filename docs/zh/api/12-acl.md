@@ -1,34 +1,38 @@
-# ACL 属性
+# ACL API
 
-ACL 统一通过 `attrs` 查询和修改，只适用于 `viking://resources/...` 共享资源。权限模型见[资源访问控制](../concepts/15-acl.md)。旧 `/api/v1/acl`、`ov acl` 和 SDK ACL 方法已删除，不保留兼容入口。
+ACL 通过独立的 `/api/v1/acl` 接口查询和修改，只适用于 `viking://resources/...` 共享资源。权限模型见[资源访问控制](../concepts/15-acl.md)。
 
 ## 接口
 
 | 方法 | 路径 | 行为 |
 |---|---|---|
-| GET | `/api/v1/fs/attrs?uri={uri}&key=acl` | 查询直接、继承和有效权限 |
-| POST | `/api/v1/fs/attrs/set_acl` | 设置直接授权、继承模式 |
-| POST | `/api/v1/fs/attrs/grant_acl` | 设置单个 principal 的直接权限 |
-| POST | `/api/v1/fs/attrs/revoke_acl` | 删除单个 principal 的直接授权 |
-| POST | `/api/v1/fs/attrs/reset_acl` | 清空直接授权并恢复 inherit |
+| GET | `/api/v1/acl?uri={uri}` | 查询直接、继承和有效权限 |
+| PUT | `/api/v1/acl` | 设置直接授权、继承模式 |
+| POST | `/api/v1/acl/grant` | 设置单个 principal 的直接权限 |
+| POST | `/api/v1/acl/revoke` | 删除单个 principal 的直接授权 |
+| DELETE | `/api/v1/acl?uri={uri}` | 清空直接授权并恢复 inherit |
 
-以上操作均要求 `manage`。GET 不传 `key` 时返回调用者可见的属性：无 manage 时省略 ACL；明确请求 `key=acl` 时返回 403。账号 ADMIN 隐式拥有 manage。
+**HTTP**
+
+```http
+GET /api/v1/acl?uri={uri}
+PUT /api/v1/acl
+DELETE /api/v1/acl?uri={uri}
+POST /api/v1/acl/grant
+POST /api/v1/acl/revoke
+```
+
+以上操作均要求 `manage`，无权限时返回 403。账号 ADMIN 隐式拥有 manage。
 
 查询响应中的 `result`：
 
 ```json
 {
   "uri": "viking://resources/project-a",
-  "context_type": "resource",
-  "attrs": {
-    "acl": {
-      "uri": "viking://resources/project-a",
-      "acl_mode": "restricted",
-      "direct_entries": [{"principal": "user:bob", "level": "read"}],
-      "inherited_entries": [{"principal": "user:*", "level": "manage"}],
-      "effective_entries": [{"principal": "user:bob", "level": "read"}]
-    }
-  }
+  "acl_mode": "restricted",
+  "direct_entries": [{"principal": "user:bob", "level": "read"}],
+  "inherited_entries": [{"principal": "user:*", "level": "manage"}],
+  "effective_entries": [{"principal": "user:bob", "level": "read"}]
 }
 ```
 
@@ -46,7 +50,7 @@ ACL 统一通过 `attrs` 查询和修改，只适用于 `viking://resources/...`
 - `acl_mode`：`inherit` 合并直接与继承授权，`restricted` 仅使用直接授权；省略则保留。
 - 两个字段至少传一个。继承和有效权限是只读字段。
 - principal 支持 `user:{id}`、`group:{id}`、`user:*`，level 支持 `read`、`write`、`manage`。重复 principal 保留最高 level。
-- `grant_acl` 请求为 `{uri, principal, level}`；`revoke_acl` 为 `{uri, principal}`；`reset_acl` 为 `{uri}`。增删单个条目由服务端在锁内完成。
+- `grant_acl` 请求为 `{uri, principal, level}`；`revoke_acl` 为 `{uri, principal}`；重置使用 `DELETE /api/v1/acl?uri={uri}`。增删单个条目由服务端在锁内完成。
 
 ## 创建和写入时设置
 
@@ -72,11 +76,11 @@ ACL 仍保存在 context 索引内，允许短暂不一致，按现有异步任�
 **CLI**
 
 ```bash
-ov attrs get viking://resources/project-a acl
-ov attrs set-acl viking://resources/project-a --acl-mode restricted --entry user:bob=read
-ov attrs grant-acl viking://resources/project-a --principal user:bob --level write
-ov attrs revoke-acl viking://resources/project-a --principal user:bob
-ov attrs reset-acl viking://resources/project-a
+ov acl get viking://resources/project-a
+ov acl set viking://resources/project-a --acl-mode restricted --entry user:bob=read
+ov acl grant viking://resources/project-a --principal user:bob --level write
+ov acl revoke viking://resources/project-a --principal user:bob
+ov acl rm viking://resources/project-a
 
 ov mkdir viking://resources/project-a --acl '{"acl_mode":"restricted","entries":[{"principal":"user:bob","level":"read"}]}'
 ov add-resource ./docs --to viking://resources/docs --acl '{"acl_mode":"restricted","entries":[]}'
@@ -90,11 +94,11 @@ acl = {"acl_mode": "restricted", "entries": [{"principal": "user:bob", "level": 
 client.mkdir(uri, acl=acl)
 client.add_resource("./docs", to=uri, options={"acl": acl})
 client.write(file_uri, "hello", options={"acl": acl})
-report = client.attrs(uri, key="acl")["attrs"]["acl"]
-client.attrs_set_acl(uri, [], acl_mode="restricted")
-client.attrs_grant_acl(uri, "user:bob", "read")
-client.attrs_revoke_acl(uri, "user:bob")
-client.attrs_reset_acl(uri)
+report = client.acl_get(uri)
+client.acl_set(uri, [], acl_mode="restricted")
+client.acl_grant(uri, "user:bob", "read")
+client.acl_revoke(uri, "user:bob")
+client.acl_delete(uri)
 ```
 
-异步 Python 使用相同方法名。TypeScript 对应 `attrs(uri, "acl")`、`attrsSetAcl`、`attrsGrantAcl`、`attrsRevokeAcl`、`attrsResetAcl`；创建接口的 options 支持 `acl`，mkdir 使用第三个参数。Go 对应 `Attrs(ctx, uri, "acl")`、`AttrsSetACL`、`AttrsGrantACL`、`AttrsRevokeACL`、`AttrsResetACL`，通过 `ACLSpec` 设置创建权限。
+异步 Python 使用相同方法名。TypeScript 对应 `aclGet(uri)`、`aclSet`、`aclGrant`、`aclRevoke`、`aclDelete`；创建接口的 options 支持 `acl`，mkdir 使用第三个参数。Go 对应 `ACL(ctx, uri)`、`SetACL`、`SetACLMode`、`GrantACL`、`RevokeACL`、`DeleteACL`，通过 `ACLSpec` 设置创建权限。

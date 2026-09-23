@@ -269,7 +269,7 @@ enum AttrsCommands {
         /// Viking URI to get attributes for
         #[arg(value_name = "uri")]
         uri: String,
-        /// Optional attrs key, for example acl, tags, memory, or memory.tags
+        /// Optional attrs key, for example tags, memory, or memory.tags
         #[arg(value_name = "key")]
         key: Option<String>,
     },
@@ -287,7 +287,14 @@ enum AttrsCommands {
         #[arg(long, default_value = "false")]
         recursive: bool,
     },
-    SetAcl {
+}
+
+#[derive(Subcommand)]
+enum AclCommands {
+    Get {
+        uri: String,
+    },
+    Set {
         uri: String,
         #[arg(long = "entry")]
         entries: Vec<String>,
@@ -295,19 +302,19 @@ enum AttrsCommands {
         #[arg(long, value_parser = ["inherit", "restricted"])]
         acl_mode: Option<String>,
     },
-    GrantAcl {
+    Grant {
         uri: String,
         #[arg(long)]
         principal: String,
         #[arg(long)]
         level: String,
     },
-    RevokeAcl {
+    Revoke {
         uri: String,
         #[arg(long)]
         principal: String,
     },
-    ResetAcl {
+    Rm {
         uri: String,
     },
 }
@@ -667,6 +674,11 @@ enum Commands {
     Attrs {
         #[command(subcommand)]
         action: AttrsCommands,
+    },
+    /// [Data] Manage resource ACL
+    Acl {
+        #[command(subcommand)]
+        action: AclCommands,
     },
     /// [Data] Read file content (Level 2)
     Read {
@@ -3596,7 +3608,16 @@ async fn main() {
         } => handlers::handle_cp(from_uri, to_uri, recursive, ctx).await,
         Commands::Mv { from_uri, to_uri } => handlers::handle_mv(from_uri, to_uri, ctx).await,
         Commands::Stat { uri } => handlers::handle_stat(uri, ctx).await,
-        Commands::Attrs { action } => handlers::handle_attrs(action, ctx).await,
+        Commands::Attrs { action } => match action {
+            AttrsCommands::Get { uri, key } => handlers::handle_attrs(uri, key, ctx).await,
+            AttrsCommands::SetTags {
+                uri,
+                tags,
+                mode,
+                recursive,
+            } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
+        },
+        Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,
         Commands::Tui { uri } => handlers::handle_tui(uri, ctx).await,
         Commands::Chat {

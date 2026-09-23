@@ -76,7 +76,7 @@ content grants no additional permissions. Import roots and descendants follow
 the same rule. Existing shared content without ACL fields uses default
 inheritance without a historical data migration. Disabling the setting stops
 enforcing existing ACLs. Re-embedding or replacing an existing context record
-does not change its direct ACL unless explicitly supplied. See [ACL attributes](../api/12-acl.md) for creation parameters.
+does not change its direct ACL unless explicitly supplied. See [ACL API](../api/12-acl.md) for creation parameters.
 
 `acl_mode` describes a resource's ACL behavior, separately from the account-wide `acl.enabled` switch:
 
@@ -146,19 +146,19 @@ Assume `project-a` is already restricted and the caller has `manage` on it.
 Grant Bob read-only access to the directory:
 
 ```bash
-ov attrs grant-acl viking://resources/project-a --principal user:bob --level read
+ov acl grant viking://resources/project-a --principal user:bob --level read
 ```
 
 Bob can read and retrieve descendants, but cannot write or delete them. Upgrade the grant to `write`:
 
 ```bash
-ov attrs grant-acl viking://resources/project-a --principal user:bob --level write
+ov acl grant viking://resources/project-a --principal user:bob --level write
 ```
 
 Remove Bob's direct grant from this node:
 
 ```bash
-ov attrs revoke-acl viking://resources/project-a --principal user:bob
+ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 If an ancestor still grants Bob access, that inherited permission remains effective.
@@ -166,7 +166,7 @@ If an ancestor still grants Bob access, that inherited permission remains effect
 Use only direct grants on the current node while preserving and refreshing inherited grants:
 
 ```bash
-ov attrs set-acl viking://resources/project-a --acl-mode restricted
+ov acl set viking://resources/project-a --acl-mode restricted
 ```
 
 ## Related Documentation

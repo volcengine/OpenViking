@@ -109,11 +109,8 @@ func (c *Client) Stat(ctx context.Context, uri string) (map[string]any, error) {
 }
 
 // Attrs returns logical extended attributes for a URI.
-func (c *Client) Attrs(ctx context.Context, uri string, key ...string) (map[string]any, error) {
+func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) {
 	query := url.Values{"uri": []string{NormalizeURI(uri)}}
-	if len(key) > 0 {
-		query.Set("key", key[0])
-	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodGet, "/api/v1/fs/attrs", query, nil, &result)
 	return result, err

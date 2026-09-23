@@ -1851,15 +1851,30 @@ pub async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
-pub async fn handle_attrs(action: crate::AttrsCommands, ctx: CliContext) -> Result<()> {
+pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::filesystem::attrs(
+        &client,
+        &uri,
+        key.as_deref(),
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match action {
-        crate::AttrsCommands::SetAcl {
+        crate::AclCommands::Get { uri } => {
+            commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
+        }
+        crate::AclCommands::Set {
             uri,
             entries,
             acl_mode,
         } => {
-            commands::attrs::set(
+            commands::acl::set(
                 &client,
                 &uri,
                 entries,
@@ -1869,12 +1884,12 @@ pub async fn handle_attrs(action: crate::AttrsCommands, ctx: CliContext) -> Resu
             )
             .await
         }
-        crate::AttrsCommands::GrantAcl {
+        crate::AclCommands::Grant {
             uri,
             principal,
             level,
         } => {
-            commands::attrs::grant(
+            commands::acl::grant(
                 &client,
                 &uri,
                 &principal,
@@ -1884,17 +1899,11 @@ pub async fn handle_attrs(action: crate::AttrsCommands, ctx: CliContext) -> Resu
             )
             .await
         }
-        crate::AttrsCommands::RevokeAcl { uri, principal } => {
-            commands::attrs::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
+        crate::AclCommands::Revoke { uri, principal } => {
+            commands::acl::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
         }
-        crate::AttrsCommands::ResetAcl { uri } => {
-            commands::attrs::remove(&client, &uri, ctx.output_format, ctx.compact).await
-        }
-        crate::AttrsCommands::Get { uri, key } => {
-            commands::filesystem::attrs(&client, &uri, key.as_deref(), ctx.output_format, ctx.compact).await
-        }
-        crate::AttrsCommands::SetTags { uri, tags, mode, recursive } => {
-            commands::content::set_tags(&client, &uri, tags, &mode, recursive, ctx.output_format, ctx.compact).await
+        crate::AclCommands::Rm { uri } => {
+            commands::acl::remove(&client, &uri, ctx.output_format, ctx.compact).await
         }
     }
 }

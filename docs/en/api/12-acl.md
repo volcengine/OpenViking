@@ -1,20 +1,30 @@
-# ACL attributes
+# ACL API
 
-ACL is managed through `attrs` for shared resources under `viking://resources/...`. See [resource access control](../concepts/15-acl.md) for inheritance rules. The old `/api/v1/acl`, `ov acl`, and standalone SDK ACL methods have been removed without compatibility aliases.
+ACL is queried and managed through the dedicated `/api/v1/acl` endpoints for shared resources under `viking://resources/...`. See [resource access control](../concepts/15-acl.md) for inheritance rules.
 
 ## Endpoints
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/v1/fs/attrs?uri={uri}&key=acl` | Read direct, inherited and effective permissions |
-| POST | `/api/v1/fs/attrs/set_acl` | Set direct entries and/or inheritance mode |
-| POST | `/api/v1/fs/attrs/grant_acl` | Set one principal's direct level |
-| POST | `/api/v1/fs/attrs/revoke_acl` | Remove one principal's direct grant |
-| POST | `/api/v1/fs/attrs/reset_acl` | Clear direct entries and restore inherit mode |
+| GET | `/api/v1/acl?uri={uri}` | Read direct, inherited and effective permissions |
+| PUT | `/api/v1/acl` | Set direct entries and/or inheritance mode |
+| POST | `/api/v1/acl/grant` | Set one principal's direct level |
+| POST | `/api/v1/acl/revoke` | Remove one principal's direct grant |
+| DELETE | `/api/v1/acl?uri={uri}` | Clear direct entries and restore inherit mode |
 
-All ACL operations require `manage`; account ADMIN has implicit manage. GET without `key` returns only visible attributes and omits ACL for non-managers. An explicit `key=acl` request returns 403 without manage.
+**HTTP**
 
-GET returns `result = {uri, context_type, attrs: {acl: report}}`. The report contains `uri`, `acl_mode`, `direct_entries`, `inherited_entries`, and `effective_entries`. Mutation endpoints return the report directly.
+```http
+GET /api/v1/acl?uri={uri}
+PUT /api/v1/acl
+DELETE /api/v1/acl?uri={uri}
+POST /api/v1/acl/grant
+POST /api/v1/acl/revoke
+```
+
+All ACL operations require `manage` and return 403 without it; account ADMIN has implicit manage.
+
+GET returns the ACL report directly in `result`. The report contains `uri`, `acl_mode`, `direct_entries`, `inherited_entries`, and `effective_entries`. Mutation endpoints return the report directly.
 
 Example `set_acl` body:
 
@@ -30,7 +40,7 @@ Example `set_acl` body:
 - `acl_mode`: `inherit` combines direct and inherited grants; `restricted` uses direct grants only. Omission preserves the mode.
 - Supply at least one field. Inherited and effective entries are read-only.
 - Principals are `user:{id}`, `group:{id}`, or `user:*`; levels are `read`, `write`, or `manage`. Duplicate principals retain the highest level.
-- `grant_acl` takes `{uri, principal, level}`, `revoke_acl` takes `{uri, principal}`, and `reset_acl` takes `{uri}`. Incremental changes run inside the server's existing lock.
+- `grant_acl` takes `{uri, principal, level}`, `revoke_acl` takes `{uri, principal}`, and resetting uses `DELETE /api/v1/acl?uri={uri}`. Incremental changes run inside the server's existing lock.
 
 ## Creation and content writes
 
@@ -56,11 +66,11 @@ ACL stays in the context index and follows existing asynchronous processing and 
 **CLI**
 
 ```bash
-ov attrs get viking://resources/project-a acl
-ov attrs set-acl viking://resources/project-a --acl-mode restricted --entry user:bob=read
-ov attrs grant-acl viking://resources/project-a --principal user:bob --level write
-ov attrs revoke-acl viking://resources/project-a --principal user:bob
-ov attrs reset-acl viking://resources/project-a
+ov acl get viking://resources/project-a
+ov acl set viking://resources/project-a --acl-mode restricted --entry user:bob=read
+ov acl grant viking://resources/project-a --principal user:bob --level write
+ov acl revoke viking://resources/project-a --principal user:bob
+ov acl rm viking://resources/project-a
 
 ov mkdir viking://resources/project-a --acl '{"acl_mode":"restricted","entries":[{"principal":"user:bob","level":"read"}]}'
 ov add-resource ./docs --to viking://resources/docs --acl '{"acl_mode":"restricted","entries":[]}'
@@ -74,11 +84,11 @@ acl = {"acl_mode": "restricted", "entries": [{"principal": "user:bob", "level": 
 client.mkdir(uri, acl=acl)
 client.add_resource("./docs", to=uri, options={"acl": acl})
 client.write(file_uri, "hello", options={"acl": acl})
-report = client.attrs(uri, key="acl")["attrs"]["acl"]
-client.attrs_set_acl(uri, [], acl_mode="restricted")
-client.attrs_grant_acl(uri, "user:bob", "read")
-client.attrs_revoke_acl(uri, "user:bob")
-client.attrs_reset_acl(uri)
+report = client.acl_get(uri)
+client.acl_set(uri, [], acl_mode="restricted")
+client.acl_grant(uri, "user:bob", "read")
+client.acl_revoke(uri, "user:bob")
+client.acl_delete(uri)
 ```
 
-Async Python uses the same method names. TypeScript provides `attrs(uri, "acl")`, `attrsSetAcl`, `attrsGrantAcl`, `attrsRevokeAcl`, and `attrsResetAcl`; creation options accept `acl`, while mkdir accepts it as its third argument. Go provides `Attrs(ctx, uri, "acl")`, `AttrsSetACL`, `AttrsGrantACL`, `AttrsRevokeACL`, and `AttrsResetACL`, with `ACLSpec` values for creation.
+Async Python uses the same method names. TypeScript provides `aclGet(uri)`, `aclSet`, `aclGrant`, `aclRevoke`, and `aclDelete`; creation options accept `acl`, while mkdir accepts it as its third argument. Go provides `ACL(ctx, uri)`, `SetACL`, `SetACLMode`, `GrantACL`, `RevokeACL`, and `DeleteACL`, with `ACLSpec` values for creation.

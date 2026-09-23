@@ -138,19 +138,19 @@ ACL 随索引更新，允许同一 URI 的不同索引记录短暂保留不同�
 将目录授权给 Bob 只读：
 
 ```bash
-ov attrs grant-acl viking://resources/project-a --principal user:bob --level read
+ov acl grant viking://resources/project-a --principal user:bob --level read
 ```
 
 Bob 可以读取和检索该目录的后代，但不能写入或删除。升级为 `write`：
 
 ```bash
-ov attrs grant-acl viking://resources/project-a --principal user:bob --level write
+ov acl grant viking://resources/project-a --principal user:bob --level write
 ```
 
 删除 Bob 在当前节点上的直接授权：
 
 ```bash
-ov attrs revoke-acl viking://resources/project-a --principal user:bob
+ov acl revoke viking://resources/project-a --principal user:bob
 ```
 
 如果 Bob 仍被祖先目录授权，该继承权限继续有效。
@@ -158,7 +158,7 @@ ov attrs revoke-acl viking://resources/project-a --principal user:bob
 只使用当前节点直接授权，同时保留并继续更新继承字段：
 
 ```bash
-ov attrs set-acl viking://resources/project-a --acl-mode restricted
+ov acl set viking://resources/project-a --acl-mode restricted
 ```
 
 ## 相关文档

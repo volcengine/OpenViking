@@ -388,11 +388,11 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/fs/attrs?key=acl` | Get direct, inherited, and effective ACLs |
-| POST | `/api/v1/fs/attrs/set_acl` | Replace a resource's direct ACL |
-| POST | `/api/v1/fs/attrs/reset_acl` | Clear a resource's direct ACL |
-| POST | `/api/v1/fs/attrs/grant_acl` | Set one principal's direct level |
-| POST | `/api/v1/fs/attrs/revoke_acl` | Remove one principal's direct grant |
+| GET | `/api/v1/acl` | Get direct, inherited, and effective ACLs |
+| PUT | `/api/v1/acl` | Replace a resource's direct ACL |
+| DELETE | `/api/v1/acl` | Clear a resource's direct ACL |
+| POST | `/api/v1/acl/grant` | Set one principal's direct level |
+| POST | `/api/v1/acl/revoke` | Remove one principal's direct grant |
 
 ### [Content](12-content.md)
 

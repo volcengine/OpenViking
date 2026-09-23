@@ -72,7 +72,7 @@ const CORE_WORKFLOW: &[HelpCommand] = help_commands![
 ];
 
 const FILESYSTEM: &[HelpCommand] = help_commands![
-    "ls", "tree", "mkdir", "rm", "cp", "mv", "stat", "attrs", "get"
+    "ls", "tree", "mkdir", "rm", "cp", "mv", "stat", "attrs", "acl", "get"
 ];
 
 const SEARCH_CONTEXT: &[HelpCommand] = help_commands![
@@ -358,14 +358,6 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov attrs set-tags viking://projects/acme/spec.md --tags team=search",
                 description: "Set retrieval tags on a resource.",
             },
-            HelpItem {
-                label: "ov attrs get viking://resources/project-a acl",
-                description: "Show direct, inherited and effective permissions (requires manage).",
-            },
-            HelpItem {
-                label: "ov attrs set-acl viking://resources/project-a --acl-mode restricted --entry user:bob=read",
-                description: "Set resource permissions.",
-            },
         ],
         next_steps: &[
             HelpItem {
@@ -377,6 +369,28 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Search with updated context.",
             },
         ],
+    },
+    CommandHelpSpec {
+        path: &["acl"],
+        purpose: "Get or update access permissions for a resource.",
+        examples: &[
+            HelpItem {
+                label: "ov acl get viking://resources/project-a",
+                description: "Show direct and effective permissions.",
+            },
+            HelpItem {
+                label: "ov acl grant viking://resources/project-a --principal user:bob --level read",
+                description: "Grant read access to a user.",
+            },
+            HelpItem {
+                label: "ov acl set viking://resources/project-a --acl-mode restricted",
+                description: "Ignore inherited permissions without deleting them.",
+            },
+        ],
+        next_steps: &[HelpItem {
+            label: "ov find \"query\" -u <uri>",
+            description: "Search within the permitted resource tree.",
+        }],
     },
     CommandHelpSpec {
         path: &["read"],
@@ -2354,6 +2368,7 @@ fn localized_command_description<'a>(
         "rm" => "删除资源",
         "mv" => "移动或重命名资源",
         "stat" => "查看资源元数据",
+        "acl" => "管理资源访问权限",
         "get" => "下载文件",
         "search" => "上下文感知检索",
         "grep" => "模式搜索",
@@ -2594,7 +2609,15 @@ fn version() -> String {
 fn is_bare_group_help_command(command: &str) -> bool {
     matches!(
         command,
-        "task" | "skills" | "session" | "snapshot" | "privacy" | "admin" | "system" | "observer"
+        "task"
+            | "skills"
+            | "session"
+            | "snapshot"
+            | "privacy"
+            | "acl"
+            | "admin"
+            | "system"
+            | "observer"
     )
 }
 
