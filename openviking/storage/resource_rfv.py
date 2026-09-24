@@ -226,7 +226,10 @@ async def build_rfv_snapshot(
         if keep_file_source or (
             not is_sidecar
             and (
-                request_intent.force or record is None or str(record.get("md5") or "") != source_md5
+                request_intent.processing_mode != "vectors_only"
+                or request_intent.force
+                or record is None
+                or str(record.get("md5") or "") != source_md5
             )
         ):
             source_contents[(node_uri, level)] = source

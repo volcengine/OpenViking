@@ -650,6 +650,43 @@ def _semantic_closure(
     return active, membership_changed, retained
 
 
+def _promote_missing_semantic_inputs(
+    *,
+    active: set[str],
+    retained: set[str],
+    new_kinds: Mapping[str, str],
+    records_by_path: Mapping[str, Mapping[int, VectorRecordSnapshot]],
+) -> None:
+    """Promote retained inputs that cannot provide an abstract to a parent.
+
+    An L2 record can be vector-complete after a vectors-only ingest while still
+    lacking the file abstract required by its parent's first aggregation.  The
+    same applies to a retained directory without an L0 abstract.  Semantic
+    closure therefore tracks reusable abstracts independently from index MD5.
+    """
+    while True:
+        promoted = {
+            path
+            for path in retained - active
+            if new_kinds.get(path) in {"file", "directory"}
+            and (
+                (
+                    record := records_by_path.get(path, {}).get(
+                        2 if new_kinds.get(path) == "file" else 0
+                    )
+                )
+                is None
+                or not str(record.fields.get("abstract") or "").strip()
+            )
+        }
+        if not promoted:
+            return
+        active.update(promoted)
+        for path in new_kinds:
+            if path and _parent(path) in promoted:
+                retained.add(path)
+
+
 async def hydrate_context_plan_records(
     *,
     diff: Any,
@@ -922,6 +959,14 @@ def build_context_update_plan(
                     )
                 )
                 scheduled_direct_ids.add(record.record_id)
+
+    if semantic_enabled:
+        _promote_missing_semantic_inputs(
+            active=active,
+            retained=retained,
+            new_kinds=new_kinds,
+            records_by_path=records_by_path,
+        )
 
     semantic_entries: list[SemanticTreeEntry] = []
     for path in sorted(retained, key=lambda value: (value.count("/"), value)):

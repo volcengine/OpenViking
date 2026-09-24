@@ -302,6 +302,39 @@ def test_rfv_semantic_plan_reuses_existing_semantic_actions_for_stale_nodes():
     ]
 
 
+def test_rfv_semantic_plan_generates_complete_file_without_reusable_abstract():
+    """A vectors-only L2 cannot satisfy a parent's first semantic aggregation."""
+    from openviking.storage.context_update_plan import (
+        SemanticAction,
+        build_rfv_context_update_plan,
+    )
+    from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
+
+    root = "viking://resources/demo"
+    snapshot = RFVSnapshot(
+        RequestIntent(root, "semantic_and_vectors"),
+        RFVFormalSnapshot(
+            {
+                "": RFVEntry(root, "", True, {}),
+                "a.md": RFVEntry(f"{root}/a.md", "a.md", False, {2: "same"}),
+            }
+        ),
+        VectorIndexSnapshot(
+            {"a-l2": _record("a-l2", f"{root}/a.md", "a.md", 2, "same")},
+            frozenset({"id", "uri", "level", "md5", "abstract"}),
+        ),
+        source_contents={(f"{root}/a.md", 2): b"current file body"},
+    )
+
+    _diff, plan = build_rfv_context_update_plan(
+        snapshot=snapshot, context_type="resource", account_id="acc"
+    )
+
+    entries = {entry.relative_path: entry for entry in plan.semantic_plan.tree.entries}
+    assert entries[""].semantic_action is SemanticAction.AGGREGATE
+    assert entries["a.md"].semantic_action is SemanticAction.GENERATE
+
+
 def test_rfv_semantic_file_uses_existing_file_refresh_without_duplicate_direct_upsert():
     from openviking.storage.context_update_plan import build_rfv_context_update_plan
     from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot

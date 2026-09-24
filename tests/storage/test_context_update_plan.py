@@ -971,6 +971,53 @@ def test_healthy_noop_produces_no_actions_or_semantic_plan():
     assert plan.is_noop()
     assert plan.content_tree_actions == ()
     assert plan.semantic_plan is None
+
+
+def test_shared_semantic_closure_generates_complete_file_without_abstract():
+    """RNFV add_resources and RFV reindex share this closure rule."""
+    from openviking.storage.context_update_plan import (
+        ContentState,
+        IndexState,
+        SemanticAction,
+        build_context_update_plan,
+    )
+    from openviking.storage.resource_diff import ResourceDiffEntry, ResourceDiffResult
+    from openviking.storage.resource_rnfv import RequestIntent, VectorRecordSnapshot
+
+    root = "viking://resources/repo"
+    plan = build_context_update_plan(
+        root_uri=root,
+        context_type="resource",
+        request=RequestIntent(root, "semantic_and_vectors"),
+        diff=ResourceDiffResult(
+            {
+                "": ResourceDiffEntry(
+                    "",
+                    ContentState.UNCHANGED,
+                    IndexState.MISSING,
+                    old_kind="directory",
+                    new_kind="directory",
+                ),
+                "a.md": ResourceDiffEntry(
+                    "a.md",
+                    ContentState.UNCHANGED,
+                    IndexState.COMPLETE,
+                    old_kind="file",
+                    new_kind="file",
+                    md5="same",
+                ),
+            }
+        ),
+        new_kinds={"": "directory", "a.md": "file"},
+        artifact_paths={"a.md": "repository/a.md"},
+        records={"a-l2": VectorRecordSnapshot("a-l2", f"{root}/a.md", "a.md", 2, {"md5": "same"})},
+        is_code_repo=False,
+        account_id="acc",
+    )
+
+    entries = {entry.relative_path: entry for entry in plan.semantic_plan.tree.entries}
+    assert entries[""].semantic_action is SemanticAction.AGGREGATE
+    assert entries["a.md"].semantic_action is SemanticAction.GENERATE
     assert plan.direct_index_actions == ()
 
 
