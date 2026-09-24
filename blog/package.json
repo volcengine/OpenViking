@@ -1,0 +1,15 @@
+{
+  "name": "openviking-blog",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "valaxy",
+    "build": "valaxy build",
+    "preview": "vite preview --host 127.0.0.1 --outDir dist"
+  },
+  "dependencies": {
+    "valaxy": "0.28.4",
+    "valaxy-theme-press": "0.28.4"
+  }
+}
