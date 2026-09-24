@@ -535,6 +535,16 @@ class LocalCollection(ICollection):
             label_list = label_list[:limit]
             scores_list = scores_list[:limit]
 
+        if dense_vector:
+            vector_index = index.get_meta_data()["VectorIndex"]
+            if vector_index["Distance"] == "cosine" and not (
+                sparse_vector
+                and vector_index.get("EnableSparse", False)
+                and vector_index.get("SearchWithSparseLogitAlpha", 0.0) > 0
+            ):
+                # Map raw cosine after ranking; clamp floating-point and quantization error.
+                scores_list = [min(1.0, max(0.0, (score + 1.0) / 2.0)) for score in scores_list]
+
         pk_list = label_list
         fields_list = []
         projected_fields = (

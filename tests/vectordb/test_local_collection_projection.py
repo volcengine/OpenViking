@@ -15,6 +15,10 @@ class _FakeIndex:
     def __init__(self, labels, scores):
         self.labels = labels
         self.scores = scores
+        self.distance = "ip"
+
+    def get_meta_data(self):
+        return {"VectorIndex": {"Distance": self.distance}}
 
     def search(self, *_args, **_kwargs):
         return list(self.labels), list(self.scores)
@@ -67,7 +71,18 @@ def _collection(store, labels=(11, 12), scores=(0.9, 0.8)):
     return collection
 
 
-def test_search_by_vector_projects_fields_without_decoding_vectors():
+@pytest.mark.parametrize(
+    ("distance", "scores", "expected_scores"),
+    [
+        ("cosine", (1.00001, -1.00001), (1.0, 0.0)),
+        ("cosine", (0.0, -0.6), (0.5, 0.2)),
+        ("ip", (2.0, -2.0), (2.0, -2.0)),
+        ("l2", (1.0, -3.0), (1.0, -3.0)),
+    ],
+)
+def test_search_by_vector_projects_fields_without_decoding_vectors(
+    distance, scores, expected_scores
+):
     store = _FakeStoreManager(
         [
             _candidate(11, "first", "/docs/one", [1.0, 0.0]),
@@ -75,14 +90,14 @@ def test_search_by_vector_projects_fields_without_decoding_vectors():
         ]
     )
 
-    result = _collection(store).search_by_vector(
-        "default", dense_vector=[1.0, 0.0], output_fields=["uri"]
-    )
+    collection = _collection(store, scores=scores)
+    collection.indexes.index.distance = distance
+    result = collection.search_by_vector("default", dense_vector=[1.0, 0.0], output_fields=["uri"])
 
     assert store.calls == [("fields", [11, 12])]
     assert [(item.id, item.fields, item.score) for item in result.data] == [
-        ("first", {"uri": "/docs/one"}, 0.9),
-        ("second", {"uri": "/docs/two"}, 0.8),
+        ("first", {"uri": "/docs/one"}, expected_scores[0]),
+        ("second", {"uri": "/docs/two"}, expected_scores[1]),
     ]
 
 
