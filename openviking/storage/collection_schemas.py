@@ -290,12 +290,13 @@ def _decode_collection_description(
     return base.strip(), payload if isinstance(payload, dict) else None
 
 
-async def init_context_collection(storage) -> bool:
+async def init_context_collection(storage, *, name: Optional[str] = None) -> bool:
     """
     Initialize the context collection with proper schema.
 
     Args:
         storage: Storage interface instance
+        name: Optional auxiliary collection name; the embedding schema is shared.
 
     Returns:
         True if collection was created, False if already exists
@@ -303,7 +304,7 @@ async def init_context_collection(storage) -> bool:
     from openviking_cli.utils.config import get_openviking_config
 
     config = get_openviking_config()
-    name = config.storage.vectordb.name
+    name = name or config.storage.vectordb.name
     vector_dim = config.embedding.dimension
     if not name:
         raise ValueError("Vector DB collection name is required")
@@ -781,6 +782,17 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             embedding_msg.message,
                             is_query=False,
                         )
+                        from openviking.storage.memory_trigger_index import MemoryTriggerIndex
+
+                        trigger_index = getattr(self._vikingdb, "trigger_index", None)
+                        if isinstance(trigger_index, MemoryTriggerIndex) and trigger_index.accepts(
+                            inserted_data
+                        ):
+                            inserted_data[
+                                "_memory_trigger_embeddings"
+                            ] = await trigger_index.embeddings(
+                                inserted_data.get("_memory_triggers"), self._embedder
+                            )
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
                             from openviking.metrics.datasources import EmbeddingEventDataSource

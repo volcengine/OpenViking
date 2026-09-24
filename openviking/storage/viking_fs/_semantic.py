@@ -25,6 +25,7 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking_cli.exceptions import NotFoundError
+from openviking_cli.utils.config import get_openviking_config
 
 
 class _SemanticMixin:
@@ -432,7 +433,14 @@ class _SemanticMixin:
             bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
         )
 
-        # With session context: optional intent analysis
+        # An explicitly configured planner can rewrite a standalone query too.
+        # Without one, preserve the existing context-dependent VLM fallback.
+        standalone_planning = False
+        if intent_enabled and not image_url and not (session_summary or current_messages):
+            planner = get_openviking_config().query_planner
+            standalone_planning = planner is not None and planner._has_any_config()
+
+        # Optional intent analysis, always constrained to the caller's scope.
         if image_url:
             typed_queries = [
                 TypedQuery(
@@ -445,7 +453,7 @@ class _SemanticMixin:
                     image_query=True,
                 )
             ]
-        elif intent_enabled and (session_summary or current_messages):
+        elif intent_enabled and (session_summary or current_messages or standalone_planning):
             analyzer = IntentAnalyzer(max_recent_messages=5)
             with telemetry.measure("search.intent_analysis"):
                 query_plan = await analyzer.analyze(
@@ -455,10 +463,23 @@ class _SemanticMixin:
                     target_abstract=target_abstract,
                 )
             typed_queries = query_plan.queries
+            if self.retrieval_config is not None and self.retrieval_config.query_rewrite_only:
+                # Consume only rewritten text. Caller targets and filters retain
+                # full control of the search scope, without model type routing.
+                typed_queries = [
+                    TypedQuery(
+                        query=tq.query,
+                        context_type=None,
+                        intent="",
+                        priority=1,
+                    )
+                    for tq in typed_queries
+                ]
+                query_plan.queries = typed_queries
             for tq in typed_queries:
                 tq.target_directories = retrieval_targets.target_directories
         else:
-            # No session context, or intent disabled: search with the raw query.
+            # No planning context/config, or intent disabled: use the raw query.
             typed_queries = [
                 TypedQuery(
                     query=query,

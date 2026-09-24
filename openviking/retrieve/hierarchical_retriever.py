@@ -172,9 +172,29 @@ class HierarchicalRetriever:
         if image_query and context_type is None:
             context_type = ContextType.RESOURCE.value
 
+        from openviking.storage.memory_trigger_index import MemoryTriggerIndex
+
+        trigger_index = getattr(self.vector_store, "trigger_index", None)
+        use_triggers = (
+            isinstance(trigger_index, MemoryTriggerIndex)
+            and trigger_index.recall_enabled
+            and not image_query
+            and query_vector is not None
+            and (level is None or 2 in level)
+            and (
+                context_type == ContextType.MEMORY.value
+                or (
+                    context_type is None
+                    and target_dirs
+                    and all("/memories" in uri for uri in target_dirs)
+                )
+            )
+        )
+        candidate_limit = max(limit, trigger_index.settings.candidate_k) if use_triggers else limit
+        retrieval_threshold = float("-inf") if use_triggers else effective_threshold
         if mode == RetrieverMode.QUICK:
             search_limit = (
-                max(limit * 5, 50) if image_query else max(limit, self.GLOBAL_SEARCH_TOPK)
+                max(limit * 5, 50) if image_query else max(candidate_limit, self.GLOBAL_SEARCH_TOPK)
             )
             with telemetry.measure("search.vector_retrieval"):
                 quick_results = await vector_proxy.search_in_tenant(
@@ -197,7 +217,7 @@ class HierarchicalRetriever:
                     continue
 
                 score = self._finite_score(result.get("_score", 0.0))
-                if not self._passes_threshold(score, effective_threshold, score_gte):
+                if not self._passes_threshold(score, retrieval_threshold, score_gte):
                     continue
 
                 candidate = dict(result)
@@ -225,7 +245,7 @@ class HierarchicalRetriever:
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=[0, 1],
-                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                    limit=max(candidate_limit, self.GLOBAL_SEARCH_TOPK),
                 )
             telemetry.count("vector.searches", 1)
             telemetry.count("vector.scored", len(global_results))
@@ -240,7 +260,7 @@ class HierarchicalRetriever:
                     target_directories=target_dirs,
                     extra_filter=scope_dsl,
                     level=[2],
-                    limit=max(limit, self.GLOBAL_SEARCH_TOPK),
+                    limit=max(candidate_limit, self.GLOBAL_SEARCH_TOPK),
                 )
                 telemetry.count("vector.searches", 1)
                 telemetry.count("vector.scored", len(leaf_results))
@@ -314,9 +334,9 @@ class HierarchicalRetriever:
                     query_vector=query_vector,
                     sparse_query_vector=sparse_query_vector,
                     starting_points=starting_points,
-                    limit=limit,
+                    limit=candidate_limit,
                     mode=mode,
-                    threshold=effective_threshold,
+                    threshold=retrieval_threshold,
                     score_gte=score_gte,
                     context_type=context_type,
                     target_dirs=target_dirs,
@@ -326,6 +346,44 @@ class HierarchicalRetriever:
                 )
             apply_hotness = True
             rerank_used = self._rerank_client is not None and mode == RetrieverMode.THINKING
+
+        if use_triggers:
+            from openviking.retrieve.memory_trigger_fusion import fuse_memory_candidates
+            from openviking.storage.viking_fs import get_viking_fs
+
+            fs = get_viking_fs()
+            triggered = await trigger_index.search(
+                ctx=ctx,
+                fs=fs,
+                query_vector=query_vector,
+                context_type="memory",
+                target_directories=target_dirs,
+                extra_filter=scope_dsl,
+                level=[2],
+                limit=candidate_limit,
+            )
+            telemetry.count("search.memory_triggers.native_candidates", len(candidates))
+            telemetry.count("search.memory_triggers.trigger_candidates", len(triggered))
+            final_threshold = effective_threshold
+            if triggered:
+                candidates = await fuse_memory_candidates(
+                    candidates,
+                    triggered,
+                    fs=fs,
+                    ctx=ctx,
+                )
+                apply_hotness = False
+                # Configured similarity/rerank thresholds use a different scale
+                # from RRF. Only an explicit caller threshold applies to RRF.
+                final_threshold = score_threshold if score_threshold is not None else 0.0
+                telemetry.count("search.memory_triggers.merged_candidates", len(candidates))
+            candidates = [
+                r
+                for r in candidates
+                if self._passes_threshold(
+                    r.get("_final_score", r.get("_score", 0)), final_threshold, score_gte
+                )
+            ]
 
         # Step 6: Convert results
         matched = await self._convert_to_matched_contexts(

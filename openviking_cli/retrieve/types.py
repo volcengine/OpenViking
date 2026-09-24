@@ -386,7 +386,7 @@ class FindResult:
         """Convert TypedQuery to dict."""
         return {
             "query": q.query,
-            "context_type": q.context_type.value,
+            "context_type": q.context_type.value if q.context_type is not None else None,
             "intent": q.intent,
             "priority": q.priority,
         }

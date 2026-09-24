@@ -58,6 +58,111 @@ class VikingDBManager(VikingVectorIndexBackend):
         # Queue management specific attributes
         self._queue_manager = queue_manager
         self._closing = False
+        self.trigger_index = None
+
+    async def initialize_trigger_index(self, settings) -> None:
+        from openviking.storage.collection_schemas import init_context_collection
+        from openviking.storage.memory_trigger_index import MemoryTriggerIndex
+
+        index = MemoryTriggerIndex(self, settings)
+        # Keep lifecycle cleanup active for an existing index even with recall disabled.
+        if settings.enabled or await index.store.collection_exists():
+            await init_context_collection(index.store, name=index.store.collection_name)
+            self.trigger_index = index
+        else:
+            await index.store.close()
+
+    async def upsert(self, data, *, ctx, options=None):
+        data = dict(data)
+        refresh = "_memory_trigger_embeddings" in data
+        embedding = data.pop("_memory_trigger_embeddings", None)
+        data.pop("_memory_triggers", None)
+        record_id = await super().upsert(data, ctx=ctx, options=options)
+        if self.trigger_index and record_id:
+            records = await self.get_strict([record_id], ctx=ctx)
+            if not records:
+                raise RuntimeError("Canonical record missing after trigger-index write")
+            await self.trigger_index.sync(records[0], ctx, refresh=refresh, embeddings=embedding)
+        return record_id
+
+    async def upsert_many(self, data_list, *, ctx):
+        ids = await super().upsert_many(data_list, ctx=ctx)
+        await self._sync_trigger_metadata(ids, ctx)
+        return ids
+
+    async def update(self, data, *, ctx):
+        result = await super().update(data, ctx=ctx)
+        if data.get("id"):
+            await self._sync_trigger_metadata([data["id"]], ctx)
+        return result
+
+    async def _upsert_many_raw(self, data_list, *, ctx):
+        ids = await super()._upsert_many_raw(data_list, ctx=ctx)
+        await self._sync_trigger_metadata(ids, ctx)
+        return ids
+
+    async def _sync_trigger_metadata(self, ids, ctx):
+        if self.trigger_index and ids:
+            for record in await self.get_strict(ids, ctx=ctx):
+                await self.trigger_index.sync(record, ctx)
+
+    async def delete(self, ids, *, ctx):
+        records = await self.get_strict(ids, ctx=ctx) if self.trigger_index else []
+        result = await super().delete(ids, ctx=ctx)
+        if self.trigger_index and records:
+            await self.trigger_index.store.delete_uris(ctx, [r["uri"] for r in records])
+        return result
+
+    async def remove_by_uri(self, uri, *, ctx):
+        result = await super().remove_by_uri(uri, ctx=ctx)
+        if self.trigger_index:
+            await self.trigger_index.store.remove_by_uri(uri, ctx=ctx)
+        return result
+
+    async def delete_uris(self, ctx, uris):
+        await super().delete_uris(ctx, uris)
+        if self.trigger_index:
+            await self.trigger_index.store.delete_uris(ctx, uris)
+
+    async def delete_account_data(self, account_id, *, ctx):
+        result = await super().delete_account_data(account_id, ctx=ctx)
+        if self.trigger_index:
+            await self.trigger_index.store.delete_account_data(account_id, ctx=ctx)
+        return result
+
+    async def delete_user_data(self, account_id, user_id, *, ctx):
+        result = await super().delete_user_data(account_id, user_id, ctx=ctx)
+        if self.trigger_index:
+            await self.trigger_index.store.delete_user_data(account_id, user_id, ctx=ctx)
+        return result
+
+    async def clear(self, *, ctx=None):
+        result = await super().clear(ctx=ctx)
+        if self.trigger_index:
+            await self.trigger_index.store.clear(ctx=ctx)
+        return result
+
+    async def drop_collection(self):
+        result = await super().drop_collection()
+        if self.trigger_index:
+            await self.trigger_index.store.drop_collection()
+        return result
+
+    async def copy_uri_mapping(self, ctx, source_uri, target_uri, recursive=False, **kwargs):
+        result = await super().copy_uri_mapping(ctx, source_uri, target_uri, recursive, **kwargs)
+        if self.trigger_index:
+            await self.trigger_index.store.copy_uri_mapping(
+                ctx, source_uri, target_uri, recursive, **kwargs
+            )
+        return result
+
+    async def update_uri_mapping(self, ctx, source_uri, target_uri, recursive=False, **kwargs):
+        result = await super().update_uri_mapping(ctx, source_uri, target_uri, recursive, **kwargs)
+        if self.trigger_index:
+            await self.trigger_index.store.update_uri_mapping(
+                ctx, source_uri, target_uri, recursive, **kwargs
+            )
+        return result
 
     def mark_closing(self) -> None:
         """Mark the manager as entering shutdown flow.
@@ -77,6 +182,8 @@ class VikingDBManager(VikingVectorIndexBackend):
 
             # Then close the base backend
             await super().close()
+            if self.trigger_index:
+                await self.trigger_index.store.close()
 
         except Exception as e:
             logger.error(f"Error closing VikingDB manager: {e}")

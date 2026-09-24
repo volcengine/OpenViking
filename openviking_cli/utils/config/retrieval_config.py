@@ -40,8 +40,17 @@ class RetrievalConfig(BaseModel):
         default=True,
         description=(
             "Whether search() loads session context and runs LLM intent analysis / query "
-            "planning when session_id is present. false skips session load, "
+            "planning with session context or an explicitly configured query_planner. "
+            "false skips session load, "
             "get_context_for_search, and IntentAnalyzer — searches with the raw query only "
-            "(same path as no-session search)."
+            "without invoking the planner."
+        ),
+    )
+    query_rewrite_only: bool = Field(
+        default=False,
+        description=(
+            "Use only query text from the search planner, ignoring its context type, "
+            "intent and priority. Retrieval remains constrained by caller targets and "
+            "filters. Requires enable_intent and a planner invocation."
         ),
     )

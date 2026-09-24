@@ -334,3 +334,102 @@ The OpenViking project uses different licenses for different components:
 - **crates/ov\_cli**: Apache 2.0 - see the [LICENSE](./crates/LICENSE) for details
 - **examples**: Apache 2.0 - see the [LICENSE](./examples/LICENSE) for details. The Hermes plugin in `examples/hermes-plugin` retains its [MIT license](./examples/hermes-plugin/LICENSE).
 - **third\_party**: Respective original licenses of third-party projects
+
+
+### Optional retrieval triggers on existing memories
+
+`memory.triggers` adds retrieval-only views to existing Event, Entity and Preference
+files. It does not create another topic/scene/item hierarchy or replace native OV
+retrieval. This is an OV adaptation of the write-time cue idea in
+[T-Mem](https://github.com/Sherlockwz/T-Mem), not a reproduction of its full pipeline.
+
+```json
+{
+  "memory": {
+    "triggers": {"enabled": true, "recall_enabled": true}
+  }
+}
+```
+
+The feature is off by default and does not require a rerank provider.
+After a normal memory write, a separate model call generates source-anchored cues;
+the original extraction schema, visible evidence and primary embedding are unchanged.
+Concept/bridge cues apply to Events, Entities and Preferences; Event files may also
+have descriptive scene and hypothetical horizon cues. Generation validates an exact
+source quote per cue, which establishes provenance but does not prove an association
+is useful or factually implied. Hypothetical cues are never answer evidence.
+
+Accepted cues are cached in the file's hidden `MEMORY_FIELDS.retrieval_triggers`
+metadata and individually embedded in `<collection>_memory_triggers`, pointing to
+the original URI. A body hash invalidates stale cues. No new memory files or types
+are created. Existing unmodified files are not automatically backfilled.
+
+Both `find` and `search` retain their ordinary memory candidates and add trigger
+candidates. The union is deduplicated by canonical URI and ordered by reciprocal
+rank fusion, `sum(1 / (60 + rank))`, with the caller's `limit` applied afterwards.
+Fused scores and explicit caller score thresholds use RRF rank scores, not cosine
+similarity. The default fused threshold is zero; a configured similarity/rerank
+threshold does not filter RRF scores. There are no fixed
+Scene/Item quotas. Trigger fusion makes no rerank call, including for QUICK `find`.
+Trigger text is never returned as evidence; current visible bodies are read instead. Different dated
+files are not merged merely because their summaries are similar.
+
+The auxiliary collection uses the same account, user, directory, tag and ACL scope;
+current file permissions and body hashes are rechecked at retrieval. Deletes and
+moves maintain the auxiliary records. A generation failure is logged and retains
+the normal memory. Commit and embedding queue workers share a cross-event-loop
+asynchronous limiter. Set `recall_enabled` to false to retain cached/indexed
+cues while using ordinary retrieval. Generation adds model/embedding cost at write
+time; recall adds an auxiliary vector lookup, evidence reads and local rank fusion.
+
+### Optional query-only rewriting before search
+
+`search` can call an explicitly configured `query_planner` even without a session.
+Set `retrieval.query_rewrite_only` to use only its rewritten query text, ignoring
+the planner's context type, intent and priority. Caller-supplied user, target URI,
+metadata filters, level and access controls still constrain every retrieval.
+This avoids a model-selected `resource` type excluding results from a search
+that the caller already restricted to memories.
+
+For the repository-supported local Ollama planner, pull
+`guoxuter/ov_intent_analysis_sft:v7_q8` separately and configure:
+
+```json
+{
+  "query_planner": {
+    "provider": "litellm",
+    "model": "ollama/guoxuter/ov_intent_analysis_sft:v7_q8",
+    "api_base": "http://127.0.0.1:11434",
+    "api_key": "no-key",
+    "temperature": 0,
+    "extra_request_body": {"think": false}
+  },
+  "retrieval": {
+    "enable_intent": true,
+    "query_rewrite_only": true
+  }
+}
+```
+
+Call the SDK's `search`, not `find`, to invoke the planner:
+
+```python
+result = await client.search(
+    query="When did Caroline go to the LGBTQ support group?",
+    target_uri="viking://~/memories",
+    limit=100,
+    options={"context_type": ["memory"], "level": 2},
+)
+```
+
+Query-only rewriting is off by default and can be enabled independently of
+`memory.triggers`. When both are enabled, each rewritten query reaches ordinary
+retrieval and Trigger recall. Without an explicit planner or session context,
+search keeps using the original query; `enable_intent: false` disables planning
+entirely. `find` does not call the planner. Effective query plans serialize the
+unused `context_type` as `null`.
+
+Rewriting adds model latency and can change or lose query meaning; it does not
+guarantee better recall or accuracy. Multiple rewrites keep search's existing
+per-query limits and ordered result concatenation, without global fusion across
+queries. Truncating that combined list can discard later query groups.

@@ -4,6 +4,7 @@ from typing import Any, Dict, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from openviking_cli.utils.config.memory_trigger_config import MemoryTriggerConfig
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,6 +22,8 @@ class SessionAutoCommitConfig(BaseModel):
 
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
+
+    triggers: MemoryTriggerConfig = Field(default_factory=MemoryTriggerConfig)
 
     version: str = Field(
         default="v3",
