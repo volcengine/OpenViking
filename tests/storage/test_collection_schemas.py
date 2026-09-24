@@ -86,7 +86,8 @@ class TextEmbeddingHandler(ProductionTextEmbeddingHandler):
         provider = AccountEmbeddingProvider(AccountVectorConfigResolver(manager), manager)
         vikingdb.account_uses_content_field = AsyncMock(
             return_value=getattr(
-                vikingdb, "uses_content_field",
+                vikingdb,
+                "uses_content_field",
                 config.storage.vectordb.backend in {"volcengine", "vikingdb"},
             )
         )
@@ -836,9 +837,10 @@ async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_w
         collection_schemas.logger.removeHandler(caplog.handler)
 
     warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-    assert warnings.count(
-        "Embedding circuit breaker is open; re-enqueueing messages account=default"
-    ) == 1
+    assert (
+        warnings.count("Embedding circuit breaker is open; re-enqueueing messages account=default")
+        == 1
+    )
     for result in (first_result, second_result):
         assert result.outcome is ProcessOutcome.REQUEUED
         assert result.value is None
@@ -1017,6 +1019,7 @@ async def test_embedding_handler_materialize_content_uses_preloaded_source(monke
             "abstract": "abstract",
             "is_leaf": True,
             "context_type": "resource",
+            "account_id": "default",
             "_materialized_content": "current body",
         },
     )

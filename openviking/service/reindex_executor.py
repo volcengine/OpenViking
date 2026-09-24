@@ -150,9 +150,7 @@ class ReindexExecutor:
 
     async def _semantic_processor_for(self, ctx: RequestContext) -> SemanticProcessor:
         if self.vlm_resolver is None:
-            raise RuntimeError(
-                "ReindexExecutor requires a VLM resolver for semantic reindexing"
-            )
+            raise RuntimeError("ReindexExecutor requires a VLM resolver for semantic reindexing")
         vlm = await self.vlm_resolver.get_vlm(ctx.account_id)
         return SemanticProcessor(
             max_concurrent_llm=vlm.max_concurrent,
@@ -1656,9 +1654,7 @@ class ReindexExecutor:
         if content_type == ResourceContentType.TEXT:
             if self.vector_config_resolver is None:
                 raise RuntimeError("ReindexExecutor requires a vector config resolver")
-            embedding_config = (
-                await self.vector_config_resolver.resolve(ctx.account_id)
-            ).embedding
+            embedding_config = (await self.vector_config_resolver.resolve(ctx.account_id)).embedding
             text_source = embedding_config.text_source
             if text_source in SUMMARY_TEXT_SOURCES and summary:
                 return summary

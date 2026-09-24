@@ -827,9 +827,7 @@ async def test_reindex_semantic_processor_uses_configured_vlm_concurrency(
         user=UserIdentifier(account_id="test", user_id="alice"),
         role=Role.ROOT,
     )
-    await reindex_mod.ReindexExecutor(
-        vlm_resolver=semantic_config
-    )._run_semantic_processor(
+    await reindex_mod.ReindexExecutor(vlm_resolver=semantic_config)._run_semantic_processor(
         uri="viking://resources/demo",
         context_type="resource",
         ctx=ctx,
@@ -1854,9 +1852,13 @@ async def test_reindex_resource_vector_text_summary_first_skips_content_read(mon
 
     monkeypatch.setattr(ReindexExecutor, "_safe_read_text", fail_if_content_read)
     monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
-    resolver = SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(
-        embedding=SimpleNamespace(text_source="summary_first"),
-    )))
+    resolver = SimpleNamespace(
+        resolve=AsyncMock(
+            return_value=SimpleNamespace(
+                embedding=SimpleNamespace(text_source="summary_first"),
+            )
+        )
+    )
     service = ReindexExecutor(vector_config_resolver=resolver)
     ctx = RequestContext(
         user=UserIdentifier(account_id="test", user_id="alice"),

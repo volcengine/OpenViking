@@ -186,26 +186,20 @@ class ResourceProcessor:
         if self._summarizer is not None:
             return self._summarizer
         if self.vlm_resolver is None:
-            raise RuntimeError(
-                "ResourceProcessor requires a VLM resolver for account-owned work"
-            )
+            raise RuntimeError("ResourceProcessor requires a VLM resolver for account-owned work")
         return Summarizer(await self._vlm_processor_for(ctx))
 
     def _get_vlm_processor(self) -> "VLMProcessor":
         """Return an explicitly configured standalone VLM processor."""
         if self._vlm_processor is None:
-            raise RuntimeError(
-                "ResourceProcessor requires an explicitly configured VLMProcessor"
-            )
+            raise RuntimeError("ResourceProcessor requires an explicitly configured VLMProcessor")
         return self._vlm_processor
 
     async def _vlm_processor_for(self, ctx: RequestContext) -> "VLMProcessor":
         from openviking.parse.vlm import VLMProcessor
 
         if self.vlm_resolver is None:
-            raise RuntimeError(
-                "ResourceProcessor requires a VLM resolver for account-owned work"
-            )
+            raise RuntimeError("ResourceProcessor requires a VLM resolver for account-owned work")
         return VLMProcessor(vlm=await self.vlm_resolver.get_vlm(ctx.account_id))
 
     def _get_media_processor(self):
@@ -1261,9 +1255,7 @@ class ResourceProcessor:
                     if vectors_only and target_preexisting and not root_is_file:
                         diff = await SemanticProcessor(
                             vlm_resolver=self.vlm_resolver
-                        )._sync_topdown_recursive(
-                            temp_uri, root_uri, ctx=ctx, lock=resource_lock
-                        )
+                        )._sync_topdown_recursive(temp_uri, root_uri, ctx=ctx, lock=resource_lock)
                         sync_deleted_files = list(getattr(diff, "deleted_files", []))
                         sync_deleted_dirs = list(getattr(diff, "deleted_dirs", []))
                     else:

@@ -82,6 +82,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
 class RequestQueueStats:
     processed: int = 0
     requeue_count: int = 0
@@ -152,9 +153,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
     async def _get_vlm_config(self, ctx: RequestContext) -> "VLMHandle":
         if self._vlm_resolver is None:
-            raise RuntimeError(
-                "SemanticProcessor requires a VLM resolver for account-owned work"
-            )
+            raise RuntimeError("SemanticProcessor requires a VLM resolver for account-owned work")
         return await self._vlm_resolver.get_vlm(ctx.account_id)
 
     @classmethod
@@ -529,8 +528,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                     if self._vlm_resolver is None:
                         raise RuntimeError(
-                            "SemanticProcessor requires a VLM resolver "
-                            "for account-owned work"
+                            "SemanticProcessor requires a VLM resolver for account-owned work"
                         )
                     if not await work.acquire_lock(current_ctx):
                         get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
