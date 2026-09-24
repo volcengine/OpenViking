@@ -9,8 +9,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.storage.queuefs.process_result import ProcessOutcome
+from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
+from openviking.storage.queuefs.semantic_lock import SemanticLockScope
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.queuefs.semantic_work import SemanticMessageWork
 
 
 def _processor():
@@ -66,6 +69,73 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
     )
 
     assert pathlock.release_calls == []
+
+
+@pytest.mark.asyncio
+async def test_durable_plan_waits_for_embeddings_before_releasing_handoff_lock(monkeypatch):
+    from openviking.storage.context_update_plan import (
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    events = []
+    pathlock = _FakePathLock()
+    lease = {"id": "durable-plan-lock"}
+    plan = SemanticPlan(
+        "viking://resources/demo",
+        "resource",
+        SemanticTreeSnapshot((SemanticTreeEntry("", "directory", "unchanged", "aggregate"),)),
+    )
+    msg = SemanticMsg(
+        uri=plan.root_uri,
+        context_type="resource",
+        telemetry_id="durable-plan",
+        lock_handoff={"owner_id": "producer"},
+        plan=plan,
+    )
+
+    class Tracker:
+        async def wait_for_embeddings(self, telemetry_id, **kwargs):
+            assert telemetry_id == msg.telemetry_id
+            events.append("embeddings-settled")
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_work.get_request_wait_tracker", lambda: Tracker()
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_lock.get_viking_fs",
+        lambda: _FakeVikingFS(pathlock),
+    )
+
+    work = SemanticMessageWork(SimpleNamespace(), msg, caller_lock=None)
+    work.scope = SemanticLockScope(lease, _owned=True)
+
+    await work.finish_processing(True)
+
+    assert events == ["embeddings-settled"]
+    assert pathlock.release_calls == ["durable-plan-lock"]
+
+
+def test_semantic_tree_stats_aggregate_multiple_plans_for_one_request():
+    telemetry_id = "reindex-request-stats"
+    SemanticProcessor._cache_tree_stats(
+        telemetry_id,
+        "viking://resources/one",
+        SemanticTreeStats(total_nodes=2, done_nodes=2, indexed_records=2, failures=["one failed"]),
+    )
+    SemanticProcessor._cache_tree_stats(
+        telemetry_id,
+        "viking://resources/two",
+        SemanticTreeStats(total_nodes=3, done_nodes=3, indexed_records=3, failures=["two failed"]),
+    )
+
+    stats = SemanticProcessor.consume_tree_stats(telemetry_id=telemetry_id)
+
+    assert stats.total_nodes == 5
+    assert stats.done_nodes == 5
+    assert stats.indexed_records == 5
+    assert stats.failures == ["one failed", "two failed"]
 
 
 @pytest.mark.asyncio

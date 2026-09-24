@@ -53,11 +53,6 @@ class FileVectorSource(str, Enum):
 
 
 @dataclass(frozen=True)
-class ParentPropagation:
-    enabled: bool = True
-
-
-@dataclass(frozen=True)
 class FileRefreshIntent:
     """Refresh a flat file and its parent after synchronous content commit."""
 
@@ -247,7 +242,6 @@ class SemanticPlan:
     context_type: str
     tree: SemanticTreeSnapshot
     vectorize: bool = True
-    propagation: ParentPropagation = field(default_factory=ParentPropagation)
     file_vector_source: FileVectorSource = FileVectorSource.CONTENT
     ingest_options: IngestOptions = field(default_factory=IngestOptions)
     source_metadata: Mapping[str, str] | None = None
@@ -301,7 +295,6 @@ class SemanticPlan:
             context_type=str(data["context_type"]),
             tree=SemanticTreeSnapshot.from_dict(data.get("tree", {})),
             vectorize=bool(data.get("vectorize", True)),
-            propagation=ParentPropagation(**dict(data.get("propagation", {}))),
             file_vector_source=FileVectorSource(
                 data.get("file_vector_source", FileVectorSource.CONTENT.value)
             ),
@@ -1099,50 +1092,6 @@ def build_rfv_context_update_plan(
 
     diff = resolve_rfv_state(snapshot)
     if snapshot.request.processing_mode != "vectors_only":
-        root_entry = snapshot.formal.entries.get("")
-        if root_entry is not None and not root_entry.is_dir:
-            vectors_request = RequestIntent(
-                target_uri=snapshot.request.target_uri,
-                processing_mode="vectors_only",
-                vectorize=snapshot.request.vectorize,
-                scalar_intents=snapshot.request.scalar_intents,
-                force=snapshot.request.force,
-            )
-            vector_snapshot = type(snapshot)(
-                vectors_request,
-                snapshot.formal,
-                snapshot.vectors,
-                snapshot.source_contents,
-                snapshot.source_raw_contents,
-                snapshot.source_metadata,
-            )
-            diff, vector_plan = build_rfv_context_update_plan(
-                snapshot=vector_snapshot,
-                context_type=context_type,
-                account_id=account_id,
-            )
-            root_diff = diff.entries[""]
-            needs_refresh = snapshot.request.force or IndexState(root_diff.index_state) in {
-                IndexState.MISSING,
-                IndexState.PARTIAL,
-                IndexState.STALE,
-                IndexState.LEVEL_CONFLICT,
-            }
-            return diff, ContextUpdatePlan(
-                root_uri=snapshot.request.target_uri,
-                context_type=context_type,
-                direct_index_actions=tuple(
-                    action
-                    for action in vector_plan.direct_index_actions
-                    if action.action in {IndexAction.DELETE, IndexAction.UPDATE_FIELDS}
-                ),
-                file_refresh=FileRefreshIntent(
-                    snapshot.request.target_uri,
-                    diff.entries[""].md5,
-                )
-                if needs_refresh
-                else None,
-            )
         plan = build_context_update_plan(
             root_uri=snapshot.request.target_uri,
             context_type=context_type,
@@ -1410,7 +1359,6 @@ __all__ = [
     "IndexAction",
     "IndexSlot",
     "IndexState",
-    "ParentPropagation",
     "SemanticAction",
     "SemanticPlan",
     "SemanticTreeEntry",

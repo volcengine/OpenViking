@@ -31,7 +31,6 @@ from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import get_viking_fs
@@ -116,6 +115,9 @@ class _ReindexRunContext:
     ctx: RequestContext
     counters: _ReindexCounters
     lock: dict | None = None
+    lease: dict | None = None
+    lease_handed_off: bool = False
+    lock_root_uri: str | None = None
     ingest_options: IngestOptions | None = None
     force: bool = False
     root_is_dir: bool | None = None
@@ -426,6 +428,15 @@ class ReindexExecutor:
             if message:
                 counters.warnings.append(f"Embedding queue failed during reindex: {message}")
 
+    @staticmethod
+    def _apply_semantic_tree_stats(counters: _ReindexCounters, stats: Any | None) -> None:
+        if stats is None:
+            return
+        counters.rebuilt_records += int(getattr(stats, "indexed_records", 0) or 0)
+        failures = list(getattr(stats, "failures", ()) or ())
+        counters.failed_records += len(failures)
+        counters.warnings.extend(failures)
+
     def _is_resource_entry_for_namespace(self, uri: str, target_root: str) -> bool:
         if not uri.startswith(self._child_prefix(target_root)):
             return False
@@ -529,6 +540,7 @@ class ReindexExecutor:
         if not root_is_dir:
             acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
         lease = await acquire_lock(path)
+        run: _ReindexRunContext | None = None
         try:
             borrowed = (
                 await service.viking_fs._async_agfs.pathlock_as_borrowed(lease)
@@ -539,9 +551,11 @@ class ReindexExecutor:
                 ctx=ctx,
                 counters=counters,
                 lock=borrowed,
+                lease=lease,
                 ingest_options=ingest_options,
                 force=force,
                 root_is_dir=root_is_dir,
+                lock_root_uri=uri.rstrip("/"),
             )
             if object_type == "global_namespace":
                 namespace_kwargs = {"uri": uri, "mode": mode, "run": run}
@@ -582,13 +596,18 @@ class ReindexExecutor:
 
             if telemetry_id:
                 await wait_tracker.wait_for_request(telemetry_id)
+                self._apply_semantic_tree_stats(
+                    counters,
+                    SemanticProcessor.consume_tree_stats(telemetry_id=telemetry_id),
+                )
                 self._apply_embedding_wait_status(
                     counters,
                     wait_tracker.build_queue_status(telemetry_id),
                 )
         finally:
-            if lease is not None:
-                await service.viking_fs._async_agfs.pathlock_release(lease)
+            active_lease = run.lease if run is not None else lease
+            if active_lease is not None and (run is None or not run.lease_handed_off):
+                await service.viking_fs._async_agfs.pathlock_release(active_lease)
             if telemetry_id:
                 wait_tracker.cleanup(telemetry_id)
 
@@ -737,33 +756,12 @@ class ReindexExecutor:
                     source_metadata=snapshot.source_metadata,
                 )
         if plan.semantic_plan is not None:
-            owner_ctx = self._content_owner_ctx(uri, run.ctx)
-            processor = await self._semantic_processor_for(owner_ctx)
-            executor = SemanticTreeExecutor(
-                processor=processor,
-                context_type=context_type,
-                max_concurrent_llm=processor.max_concurrent_llm,
-                ctx=owner_ctx,
-                lock=run.lock,
-                generation_trigger="reindex",
+            await self._enqueue_reindex_semantic_plan(
                 semantic_plan=plan.semantic_plan,
-                telemetry_id=get_current_telemetry().telemetry_id,
-                source_contents=snapshot.source_contents,
-                source_raw_contents=snapshot.source_raw_contents,
-                materialize_content=bool(service.vikingdb_manager.uses_content_field),
+                context_type=context_type,
+                recursive=recursive,
+                run=run,
             )
-            try:
-                await executor.run(uri)
-            finally:
-                # Embedding work may already be in flight when semantic work
-                # fails. Settle it before the outer reindex lease is released.
-                await get_request_wait_tracker().wait_for_embeddings(
-                    get_current_telemetry().telemetry_id
-                )
-            stats = executor.get_stats()
-            run.counters.rebuilt_records += stats.indexed_records
-            run.counters.failed_records += len(stats.failures)
-            run.counters.warnings.extend(stats.failures)
         elif plan.file_refresh is not None:
             service_processor = getattr(service, "_resource_processor", None)
             if service_processor is None:
@@ -774,6 +772,107 @@ class ReindexExecutor:
                 ingest_options=run.ingest_options,
                 file_md5=plan.file_refresh.md5,
             )
+
+    async def _enqueue_reindex_semantic_plan(
+        self,
+        *,
+        semantic_plan: Any,
+        context_type: str,
+        recursive: bool,
+        run: _ReindexRunContext,
+    ) -> None:
+        """Persist one fully planned reindex DAG without persisting its source bytes."""
+        from openviking.storage.queuefs import get_queue_manager
+
+        owner_ctx = self._content_owner_ctx(semantic_plan.root_uri, run.ctx)
+        telemetry_id = get_current_telemetry().telemetry_id
+        msg = SemanticMsg(
+            uri=semantic_plan.root_uri,
+            context_type=context_type,
+            recursive=recursive,
+            account_id=owner_ctx.account_id,
+            user_id=owner_ctx.user.user_id,
+            group_ids=list(owner_ctx.group_ids),
+            peer_id=owner_ctx.user.user_id,
+            role=str(owner_ctx.role),
+            telemetry_id=telemetry_id,
+            generation_trigger="reindex",
+            propagate_to_parent=recursive,
+            plan=semantic_plan,
+        )
+        tracker = get_request_wait_tracker()
+        if telemetry_id:
+            tracker.register_semantic_root(telemetry_id, msg.id)
+
+        queue_manager = get_queue_manager()
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+        if run.lease is None:
+            try:
+                enqueue_id = await semantic_queue.enqueue(msg)
+            except Exception:
+                if telemetry_id:
+                    tracker.mark_semantic_failed(
+                        telemetry_id, msg.id, "semantic plan enqueue failed"
+                    )
+                raise
+            if enqueue_id == "deduplicated" and telemetry_id:
+                tracker.mark_semantic_done(telemetry_id, msg.id, processed_delta=0)
+            return
+
+        viking_fs = get_service().viking_fs
+        agfs = viking_fs._async_agfs
+        use_outer_lease = run.lock_root_uri in {None, semantic_plan.root_uri.rstrip("/")}
+        plan_lease = run.lease
+        acquired_plan_lease = False
+        if not use_outer_lease:
+            root_entry = next(
+                entry for entry in semantic_plan.tree.entries if not entry.relative_path
+            )
+            acquire = (
+                agfs.pathlock_acquire_tree
+                if root_entry.kind == "directory"
+                else agfs.pathlock_acquire_exact
+            )
+            kwargs = {"owner_lease_ref": run.lease} if run.lease is not None else {}
+            plan_lease = await acquire(
+                viking_fs._uri_to_path(semantic_plan.root_uri, ctx=owner_ctx), **kwargs
+            )
+            acquired_plan_lease = True
+        assert plan_lease is not None
+        handoff = await agfs.pathlock_to_handoff(plan_lease)
+        handed_off = False
+        try:
+            await agfs.pathlock_handoff(plan_lease)
+            handed_off = True
+            msg.lock_handoff = handoff
+            enqueue_id = await semantic_queue.enqueue(msg)
+            if enqueue_id == "deduplicated":
+                lock = await agfs.pathlock_adopt(handoff)
+                await agfs.pathlock_release(lock)
+                if not acquired_plan_lease:
+                    run.lease_handed_off = True
+                    run.lease = None
+                    run.lock = None
+                if telemetry_id:
+                    tracker.mark_semantic_done(telemetry_id, msg.id, processed_delta=0)
+                return
+            if not acquired_plan_lease:
+                run.lease_handed_off = True
+                run.lease = None
+                run.lock = None
+        except BaseException:
+            if handed_off:
+                recovered_lease = await agfs.pathlock_adopt(handoff)
+                if acquired_plan_lease:
+                    await agfs.pathlock_release(recovered_lease)
+                else:
+                    run.lease = recovered_lease
+                    run.lock = await agfs.pathlock_as_borrowed(run.lease)
+            elif acquired_plan_lease:
+                await agfs.pathlock_release(plan_lease)
+            if telemetry_id:
+                tracker.mark_semantic_failed(telemetry_id, msg.id, "semantic plan enqueue failed")
+            raise
 
     async def _reindex_skill(
         self,

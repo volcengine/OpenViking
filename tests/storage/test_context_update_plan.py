@@ -306,6 +306,25 @@ def test_semantic_plan_validates_ancestors_without_rescanning_entries():
     assert entries.iterations <= 4
 
 
+def test_semantic_plan_serialization_ignores_legacy_parent_propagation():
+    from openviking.storage.context_update_plan import (
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    plan = SemanticPlan(
+        "viking://resources/repo",
+        "resource",
+        SemanticTreeSnapshot((SemanticTreeEntry("", "directory", "unchanged", "aggregate"),)),
+    )
+
+    serialized = plan.to_dict()
+
+    assert "propagation" not in serialized
+    assert SemanticPlan.from_dict({**serialized, "propagation": {"enabled": False}}) == plan
+
+
 def test_semantic_plan_rejects_missing_higher_ancestor_independent_of_entry_order():
     from openviking.storage.context_update_plan import (
         IndexSlot,

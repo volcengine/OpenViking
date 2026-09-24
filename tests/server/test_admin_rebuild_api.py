@@ -720,6 +720,107 @@ async def test_reindex_rfv_deletes_orphans_synchronously_with_owner_context(monk
 
 
 @pytest.mark.asyncio
+async def test_reindex_rfv_enqueues_semantic_plan_without_snapshot_source_bytes(monkeypatch):
+    import json
+
+    import openviking.service.reindex_executor as reindex_mod
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+    from openviking.storage.context_update_plan import (
+        ContextUpdatePlan,
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    root = "viking://resources/demo"
+    lease = {"id": "reindex-lease"}
+    plan = SemanticPlan(
+        root,
+        "resource",
+        SemanticTreeSnapshot((SemanticTreeEntry("", "directory", "unchanged", "aggregate"),)),
+    )
+    snapshot = SimpleNamespace(
+        formal=SimpleNamespace(entries={"": object()}),
+        source_contents={(root, 2): b"reindex source must stay in memory"},
+        source_raw_contents={(root, 2): b"raw source must stay in memory"},
+        source_metadata={"uri": "s3://source"},
+    )
+    handoff = {"owner_id": "semantic-worker", "covered_paths": []}
+    calls = []
+
+    class PathLock:
+        async def pathlock_to_handoff(self, current):
+            assert current == lease
+            calls.append("to_handoff")
+            return handoff
+
+        async def pathlock_handoff(self, current):
+            assert current == lease
+            calls.append("handoff")
+
+    class Queue:
+        async def enqueue(self, msg):
+            calls.append("enqueue")
+            self.message = msg
+            return "queued"
+
+    queue = Queue()
+    queue_manager = SimpleNamespace(SEMANTIC="semantic", get_queue=lambda *args, **kwargs: queue)
+    service = SimpleNamespace(
+        viking_fs=SimpleNamespace(_async_agfs=PathLock()),
+        vikingdb_manager=SimpleNamespace(uses_content_field=False),
+    )
+    monkeypatch.setattr(reindex_mod, "get_service", lambda: service)
+    monkeypatch.setattr(
+        "openviking.storage.resource_rfv.build_rfv_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.context_update_plan.build_rfv_context_update_plan",
+        lambda **kwargs: (None, ContextUpdatePlan(root, "resource", semantic_plan=plan)),
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+    run = _make_reindex_run(ctx, _ReindexCounters())
+    run.lease = lease
+
+    await ReindexExecutor()._reindex_rfv(
+        uri=root,
+        mode="semantic_and_vectors",
+        context_type="resource",
+        recursive=False,
+        run=run,
+    )
+
+    assert calls == ["to_handoff", "handoff", "enqueue"]
+    assert run.lease_handed_off is True
+    assert queue.message.plan == plan
+    assert queue.message.propagate_to_parent is False
+    assert queue.message.generation_trigger == "reindex"
+    assert queue.message.lock_handoff == handoff
+    assert b"reindex source must stay in memory" not in json.dumps(queue.message.to_dict()).encode()
+
+
+def test_reindex_merges_persisted_semantic_plan_stats_into_response_counters():
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+    from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
+
+    counters = _ReindexCounters(rebuilt_records=2)
+    ReindexExecutor._apply_semantic_tree_stats(
+        counters,
+        SemanticTreeStats(indexed_records=3, failures=["summary failed"]),
+    )
+
+    assert counters.rebuilt_records == 5
+    assert counters.failed_records == 1
+    assert counters.warnings == ["summary failed"]
+
+
+@pytest.mark.asyncio
 async def test_reindex_upsert_uses_uri_owner_for_user_scoped_records(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor
 

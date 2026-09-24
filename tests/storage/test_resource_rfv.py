@@ -147,6 +147,40 @@ def test_rfv_resolver_marks_missing_and_orphan_records():
     assert resolved.entries["old.md"].content_state.value == "absent"
 
 
+def test_rfv_single_file_semantic_plan_uses_generate_instead_of_file_refresh():
+    from openviking.storage.context_update_plan import SemanticAction, build_rfv_context_update_plan
+    from openviking.storage.resource_rfv import (
+        RFVEntry,
+        RFVFormalSnapshot,
+        RFVSnapshot,
+    )
+
+    uri = "viking://resources/report.md"
+    record = _record("report-l2", uri, "", 2, "old")
+    snapshot = RFVSnapshot(
+        RequestIntent(uri, "semantic_and_vectors"),
+        RFVFormalSnapshot({"": RFVEntry(uri, "", False, {2: "new"})}),
+        VectorIndexSnapshot(
+            {record.record_id: record},
+            frozenset({"id", "uri", "level", "md5", "abstract"}),
+        ),
+        source_contents={(uri, 2): b"new"},
+    )
+
+    _, plan = build_rfv_context_update_plan(
+        snapshot=snapshot,
+        context_type="resource",
+        account_id="acc",
+    )
+
+    assert plan.file_refresh is None
+    assert plan.semantic_plan is not None
+    entry = plan.semantic_plan.tree.entries[0]
+    assert entry.kind == "file"
+    assert entry.semantic_action is SemanticAction.GENERATE
+    assert entry.slot(2).record_id == "report-l2"
+
+
 def test_rfv_missing_directory_sidecar_is_deleted_for_vectors_only_but_repaired_for_semantic():
     from openviking.storage.resource_rfv import (
         RFVEntry,
@@ -335,7 +369,7 @@ def test_rfv_semantic_plan_generates_complete_file_without_reusable_abstract():
     assert entries["a.md"].semantic_action is SemanticAction.GENERATE
 
 
-def test_rfv_semantic_file_uses_existing_file_refresh_without_duplicate_direct_upsert():
+def test_rfv_semantic_file_uses_minimal_plan_without_duplicate_direct_upsert():
     from openviking.storage.context_update_plan import build_rfv_context_update_plan
     from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
 
@@ -353,10 +387,12 @@ def test_rfv_semantic_file_uses_existing_file_refresh_without_duplicate_direct_u
         snapshot=snapshot, context_type="resource", account_id="acc"
     )
 
-    assert plan.semantic_plan is None
+    assert plan.semantic_plan is not None
     assert plan.direct_index_actions == ()
-    assert plan.file_refresh.file_uri == uri
-    assert plan.file_refresh.md5 == "current"
+    assert plan.file_refresh is None
+    entry = plan.semantic_plan.tree.entries[0]
+    assert entry.semantic_action.value == "generate"
+    assert entry.slot(2).record_id == "file-l2"
 
 
 def test_rfv_semantic_file_is_noop_when_fingerprint_and_scalars_are_complete():
@@ -407,7 +443,7 @@ def test_rfv_semantic_file_applies_scalar_only_update_without_refresh():
     assert [action.action.value for action in plan.direct_index_actions] == ["update_fields"]
 
 
-def test_rfv_semantic_file_missing_l2_refreshes_with_request_scalars():
+def test_rfv_semantic_file_missing_l2_uses_minimal_plan_with_request_scalars():
     from openviking.storage.context_update_plan import build_rfv_context_update_plan
     from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
     from openviking.storage.resource_rnfv import ScalarIntent
@@ -430,9 +466,13 @@ def test_rfv_semantic_file_missing_l2_refreshes_with_request_scalars():
         snapshot=snapshot, context_type="resource", account_id="acc"
     )
 
-    assert plan.file_refresh is not None
-    assert plan.file_refresh.file_uri == uri
+    assert plan.file_refresh is None
+    assert plan.semantic_plan is not None
     assert plan.direct_index_actions == ()
+    entry = plan.semantic_plan.tree.entries[0]
+    assert entry.semantic_action.value == "generate"
+    assert entry.slot(2).field_patch.values == {"search_tags": ["team=search"]}
+    assert entry.slot(2).field_patch.modes == {"search_tags": "replace"}
 
 
 def action_record_id(uri: str, level: int) -> str:

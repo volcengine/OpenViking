@@ -369,6 +369,22 @@ class SemanticTreeExecutor:
                 self._stats.total_nodes = 1
                 self._stats.done_nodes = 1
                 return
+            if isinstance(entry, SemanticTreeEntry) and entry.kind == "file":
+                self._stats.total_nodes = 1
+                self._stats.in_progress_nodes = 1
+                # A file-root maintenance plan has no directory node or
+                # sidecars of its own. Execute its planned L2 work directly;
+                # the caller's parent freshness policy handles its parent.
+                previous_incremental = self._incremental_update
+                self._incremental_update = False
+                try:
+                    await self._file_summary_task(root_uri, root_uri)
+                finally:
+                    self._incremental_update = previous_incremental
+                self._root_write_result = AbstractOverviewWriteResult(
+                    wrote=True, abstract_body_changed=True
+                )
+                return
 
         owner = processing_owner.get()
         if owner is not None and self._task_context is not None:

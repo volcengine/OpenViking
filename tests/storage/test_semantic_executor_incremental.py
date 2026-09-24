@@ -141,6 +141,7 @@ class _FakeProcessor:
         materialize_content=False,
         scalar_override=None,
         action="merge",
+        field_patch=None,
     ):
         self.vectorized_files.append(file_path)
         self.file_ingest_options[file_path] = ingest_options
@@ -149,6 +150,7 @@ class _FakeProcessor:
         self.file_contents[("materialize_content", file_path)] = materialize_content
         self.file_contents[("action", file_path)] = action
         self.file_contents[("scalar_override", file_path)] = scalar_override
+        self.file_contents[("field_patch", file_path)] = field_patch
         return True
 
     async def _vectorize_directory(
@@ -215,6 +217,54 @@ class _FakeProcessor:
             added_dirs=[],
             deleted_dirs=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_file_root_semantic_plan_runs_file_node_without_listing_or_sidecars(monkeypatch):
+    from openviking.storage.context_update_plan import (
+        IndexSlot,
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    file_uri = "viking://resources/report.md"
+    fake_fs = _FakeVikingFS(tree={}, file_contents={file_uri: b"report body"})
+    fake_fs.ls = AsyncMock(side_effect=AssertionError("semantic plan must not list file root"))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    processor = _FakeProcessor(fake_fs)
+    plan = SemanticPlan(
+        file_uri,
+        "resource",
+        SemanticTreeSnapshot(
+            (
+                SemanticTreeEntry(
+                    "",
+                    "file",
+                    "modified",
+                    "generate",
+                    md5="fresh-md5",
+                    index_slots=(IndexSlot(2, "report-l2", action="upsert"),),
+                ),
+            )
+        ),
+    )
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=1,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        semantic_plan=plan,
+    )
+
+    await executor.run(file_uri)
+
+    assert processor.summarized_files == [file_uri]
+    assert processor.vectorized_files == [file_uri]
+    assert fake_fs.writes == []
+    assert executor.get_stats().indexed_records == 1
 
 
 @pytest.mark.asyncio

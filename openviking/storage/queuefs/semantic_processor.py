@@ -160,6 +160,16 @@ class SemanticProcessor(DequeueHandlerBase):
     def _cache_tree_stats(cls, telemetry_id: str, uri: str, stats: SemanticTreeStats) -> None:
         with cls._stats_lock:
             if telemetry_id:
+                previous = cls._tree_stats_by_telemetry_id.get(telemetry_id)
+                if previous is not None:
+                    stats = SemanticTreeStats(
+                        total_nodes=previous.total_nodes + stats.total_nodes,
+                        pending_nodes=previous.pending_nodes + stats.pending_nodes,
+                        in_progress_nodes=previous.in_progress_nodes + stats.in_progress_nodes,
+                        done_nodes=previous.done_nodes + stats.done_nodes,
+                        failures=[*previous.failures, *stats.failures],
+                        indexed_records=previous.indexed_records + stats.indexed_records,
+                    )
                 cls._tree_stats_by_telemetry_id[telemetry_id] = stats
             cls._tree_stats_by_uri[uri] = stats
             cls._tree_stats_order.append((telemetry_id, uri))
@@ -285,8 +295,10 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
-    async def _enqueue_skill_retry(self, queue, msg: SemanticMsg, scope: SemanticLockScope) -> None:
-        """Transfer the live package lease to a retry before releasing this worker.
+    async def _enqueue_semantic_retry(
+        self, queue, msg: SemanticMsg, scope: SemanticLockScope
+    ) -> None:
+        """Transfer the live semantic lease to a retry before releasing this worker.
 
         Reusing the consumed handoff would require acquiring an unrelated lock,
         which conflicts with an update request still waiting under its outer lease.
@@ -305,6 +317,10 @@ class SemanticProcessor(DequeueHandlerBase):
                 scope.lock = await agfs.pathlock_adopt(handoff)
                 scope._owned = True
             raise
+
+    async def _enqueue_skill_retry(self, queue, msg: SemanticMsg, scope: SemanticLockScope) -> None:
+        """Compatibility wrapper for existing skill retry callers."""
+        await self._enqueue_semantic_retry(queue, msg, scope)
 
     async def _requeue_semantic_msg_after_error(
         self,
@@ -560,7 +576,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 self._cache_tree_stats(
                                     msg.telemetry_id, run_uri, executor.get_stats()
                                 )
-                                if not executor.stale and msg.plan.propagation.enabled:
+                                if not executor.stale:
                                     write_result = getattr(
                                         executor,
                                         "root_write_result",

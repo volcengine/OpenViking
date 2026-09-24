@@ -41,6 +41,7 @@ class SemanticMessageWork:
         self.msg = msg
         self.caller_lock = caller_lock
         self.scope: SemanticLockScope | None = None
+        self._lock_closed = False
 
     def start(self) -> None:
         pass
@@ -61,22 +62,38 @@ class SemanticMessageWork:
 
     async def finish_processing(self, succeeded: bool) -> None:
         assert self.scope is not None
-        await self.scope.close()
+        if self.msg.plan is not None and self.msg.lock_handoff is not None:
+            await get_request_wait_tracker().wait_for_embeddings(
+                self.msg.telemetry_id,
+                stop_waiting=getattr(self.processor, "_embedding_worker_stopped", None),
+            )
+        if succeeded:
+            await self.scope.close()
+            self._lock_closed = True
 
     def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
         return None
 
     async def reenqueue(self) -> None:
-        await self.processor._reenqueue_semantic_msg(self.msg)
+        async def enqueue(queue, msg):
+            if self.scope is not None and self.scope.lock is not None and self.scope._owned:
+                await self.processor._enqueue_semantic_retry(queue, msg, self.scope)
+            else:
+                await queue.enqueue(msg)
+
+        await self.processor._reenqueue_semantic_msg(self.msg, enqueue=enqueue)
 
     async def reenqueue_after_error(self) -> None:
         await self.reenqueue()
 
     async def skip(self) -> None:
-        pass
+        if self.msg.lock_handoff is not None:
+            await self.processor._release_cancelled_semantic_lock(self.msg)
 
     async def cancel(self) -> None:
-        pass
+        if self.scope is None:
+            await self.skip()
+        get_request_wait_tracker().mark_semantic_done(self.msg.telemetry_id, self.msg.id)
 
     async def cancel_queued(self) -> None:
         if self.msg.telemetry_id and self.msg.id:
@@ -84,7 +101,9 @@ class SemanticMessageWork:
         await self.processor._release_cancelled_semantic_lock(self.msg)
 
     async def close(self) -> None:
-        pass
+        if self.scope is not None and not self._lock_closed:
+            await self.scope.close()
+            self._lock_closed = True
 
 
 class SkillSemanticMessageWork(SemanticMessageWork):
