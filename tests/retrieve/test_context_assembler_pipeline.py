@@ -451,6 +451,36 @@ async def test_rewrite_kernel_distinguishes_no_relevant_from_invalid_output(monk
     assert statuses == ["no_relevant", "failed", "failed"]
 
 
+def test_normalize_digest_folds_source_onto_following_line():
+    # Some models put the source on the line after the bullet. That is still a
+    # valid digest, so the bullet must not be dropped as uncited.
+    raw = "- 云台监控用于照射收银台。\n来源：viking://resources/a\n- 第二条。\n  来源：viking://resources/b"
+    digest = rewrite_module.normalize_digest(
+        raw,
+        valid_uris=["viking://resources/a", "viking://resources/b"],
+    )
+
+    assert digest == (
+        "OpenViking memory digest:\n"
+        "- 云台监控用于照射收银台。 来源：viking://resources/a\n"
+        "- 第二条。 来源：viking://resources/b"
+    )
+
+
+def test_normalize_digest_rejects_unserved_uri_on_following_line():
+    raw = "- fact\n来源：viking://resources/not-served"
+
+    assert rewrite_module.normalize_digest(raw, valid_uris=["viking://resources/a"]) == ""
+
+
+def test_normalize_digest_does_not_absorb_unrelated_following_text():
+    raw = "- fact 来源：viking://resources/a\n这不是来源，只是下一段普通文字。"
+
+    digest = rewrite_module.normalize_digest(raw, valid_uris=["viking://resources/a"])
+
+    assert digest == "OpenViking memory digest:\n- fact 来源：viking://resources/a"
+
+
 async def test_rewrite_receives_only_served_uris(monkeypatch):
     served_uri = f"{USER_ROOT}/memories/events/a.md"
     hits = [{"uri": served_uri, "score": 0.6, "abstract": "abs"}]
