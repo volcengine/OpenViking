@@ -146,3 +146,86 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
         "[second](viking://resources/业务%20docs/第二章%23file.md)"
     )
     assert "viking://input_sample_" not in overview
+
+
+@pytest.mark.asyncio
+async def test_oversized_children_abstracts_are_truncated_in_single_prompt(monkeypatch):
+    """Entry counts below the batch size must still fit the prompt budget.
+
+    The truncation branch is the only budget guard for directories whose entry
+    count stays under ``overview_batch_size``, so it has to bound subdirectory
+    summaries too, not just file summaries.
+    """
+    vlm = RecordingVLM()
+    config = SimpleNamespace(
+        vlm=vlm,
+        semantic=SimpleNamespace(
+            max_overview_prompt_chars=2_000,
+            overview_batch_size=50,
+        ),
+        output_language_override="en",
+    )
+    captured = {}
+    monkeypatch.setattr(
+        semantic_processor_module,
+        "get_openviking_config",
+        lambda: config,
+    )
+
+    def fake_render_prompt(_name, values):
+        captured.update(values)
+        return "prompt"
+
+    monkeypatch.setattr(semantic_processor_module, "render_prompt", fake_render_prompt)
+
+    await SemanticProcessor()._generate_overview(
+        "viking://resources/root",
+        file_summaries=[{"name": f"file-{index}.md", "summary": "f" * 3000} for index in range(4)],
+        children_abstracts=[
+            {"name": f"child-{index}", "abstract": "c" * 3000} for index in range(8)
+        ],
+    )
+
+    assert len(vlm.prompts) == 1
+    assert len(captured["file_summaries"]) <= config.semantic.max_overview_prompt_chars
+    assert len(captured["children_abstracts"]) <= config.semantic.max_overview_prompt_chars
+    # Truncation must keep every subdirectory link placeholder resolvable.
+    assert all(
+        f"(link: viking://input_sample_c{index})" in captured["children_abstracts"]
+        for index in range(1, 9)
+    )
+
+
+@pytest.mark.asyncio
+async def test_truncated_prompt_keeps_none_marker_without_files(monkeypatch):
+    vlm = RecordingVLM()
+    config = SimpleNamespace(
+        vlm=vlm,
+        semantic=SimpleNamespace(
+            max_overview_prompt_chars=1_500,
+            overview_batch_size=50,
+        ),
+        output_language_override="en",
+    )
+    captured = {}
+    monkeypatch.setattr(
+        semantic_processor_module,
+        "get_openviking_config",
+        lambda: config,
+    )
+
+    def fake_render_prompt(_name, values):
+        captured.update(values)
+        return "prompt"
+
+    monkeypatch.setattr(semantic_processor_module, "render_prompt", fake_render_prompt)
+
+    await SemanticProcessor()._generate_overview(
+        "viking://resources/root",
+        file_summaries=[],
+        children_abstracts=[
+            {"name": f"child-{index}", "abstract": "c" * 2000} for index in range(10)
+        ],
+    )
+
+    assert captured["file_summaries"] == "None"

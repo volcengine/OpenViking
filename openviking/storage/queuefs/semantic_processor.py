@@ -1614,13 +1614,31 @@ class SemanticProcessor(DequeueHandlerBase):
                 directory_coverage=directory_coverage,
             )
         elif over_budget:
-            # Few files but long summaries → truncate summaries to fit budget
+            # Few entries but long summaries → truncate summaries to fit budget
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars) with {len(file_summaries)} files. "
+                f"({estimated_size} chars) with {len(file_summaries)} files "
+                f"and {len(children_abstracts)} subdirectories. "
                 f"Truncating summaries to fit."
             )
             budget = semantic.max_overview_prompt_chars
+            # Share the budget between both inputs. Subtracting the untruncated
+            # subdirectory block would leave no budget for files while still
+            # sending the oversized block, so bound it first.
+            if children_abstracts:
+                child_budget = max(
+                    100, budget * len(children_abstracts_str) // max(estimated_size, 1)
+                )
+                per_child = max(100, child_budget // len(children_abstracts))
+                children_abstracts_str = "\n".join(
+                    self._child_summary_line(
+                        dir_uri,
+                        idx,
+                        {**item, "abstract": item["abstract"][:per_child]},
+                        link_map,
+                    )
+                    for idx, item in enumerate(children_abstracts, 1)
+                )
             budget -= len(children_abstracts_str)
             per_file = max(100, budget // max(len(file_summaries), 1))
             truncated_lines = []
@@ -1629,7 +1647,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 truncated_lines.append(
                     f"- {item['name']} (link: viking://input_sample_f{idx}): {summary}"
                 )
-            file_summaries_str = "\n".join(truncated_lines)
+            file_summaries_str = "\n".join(truncated_lines) if truncated_lines else "None"
             overview = await self._single_generate_overview(
                 dir_uri,
                 file_summaries_str,
