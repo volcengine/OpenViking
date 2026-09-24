@@ -21,6 +21,11 @@ impl FsEntry {
     }
 }
 
+fn parse_ls_entries(result: serde_json::Value) -> Result<Vec<FsEntry>, String> {
+    let entries = result.get("result").unwrap_or(&result);
+    serde_json::from_value(entries.clone()).map_err(|e| e.to_string())
+}
+
 #[derive(Debug, Clone)]
 pub struct TreeNode {
     pub entry: FsEntry,
@@ -158,13 +163,7 @@ impl TreeState {
             .await
             .map_err(|e| e.to_string())?;
 
-        let entries: Vec<FsEntry> = if let Some(arr) = result.as_array() {
-            arr.iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                .collect()
-        } else {
-            serde_json::from_value(result).unwrap_or_default()
-        };
+        let entries = parse_ls_entries(result)?;
 
         let mut nodes: Vec<TreeNode> = entries
             .into_iter()
@@ -337,5 +336,36 @@ impl TreeState {
             && !Self::ROOT_SCOPES
                 .iter()
                 .any(|s| selected_uri == format!("viking://{}", s))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_ls_entries_accepts_listing_envelope() {
+        let entries = parse_ls_entries(json!({
+            "result": [
+                {"uri": "viking://resources/a.md", "isDir": false}
+            ],
+            "has_more": false
+        }))
+        .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uri, "viking://resources/a.md");
+    }
+
+    #[test]
+    fn parse_ls_entries_accepts_legacy_array() {
+        let entries = parse_ls_entries(json!([
+            {"uri": "viking://resources/a.md", "isDir": false}
+        ]))
+        .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uri, "viking://resources/a.md");
     }
 }
