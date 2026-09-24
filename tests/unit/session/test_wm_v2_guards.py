@@ -15,6 +15,7 @@ import pytest
 from openviking.message.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.session.session import WM_SEVEN_SECTIONS, Session, SessionMeta
+from openviking.utils.model_retry import is_retryable_api_error
 
 # -----------------------------------------------------------------------
 # Helpers
@@ -612,17 +613,36 @@ class TestMergeWmSectionsEdgeCases:
         assert "Original Title" in merged
         assert "Running" in merged
 
-    def test_unknown_op_defaults_to_keep(self):
-        old_wm = _make_wm(current_state="Running")
-        ops = {
-            "Session Title": {"op": "KEEP"},
-            "Current State": {"op": "UNKNOWN_OP"},
-            "Task & Goals": {"op": "KEEP"},
-            "Key Facts & Decisions": {"op": "KEEP"},
-            "Files & Context": {"op": "KEEP"},
-            "Errors & Corrections": {"op": "KEEP"},
-            "Open Issues": {"op": "KEEP"},
-        }
+    @pytest.mark.parametrize(
+        "section, op, expected_error",
+        [
+            ("Current State", {"op": "UNKNOWN_OP"}, None),
+            (
+                "Session Title",
+                {"op": {"value": "UPDATE"}},
+                "Session Title.op must be a string, got dict",
+            ),
+            (
+                "Open Issues",
+                {"op": "UPDATE", "content": ["New issue"]},
+                "Open Issues.content must be a string, got list",
+            ),
+        ],
+    )
+    def test_invalid_ops(self, section, op, expected_error):
+        old_wm = _make_wm(
+            session_title="Original Title",
+            current_state="Running",
+            open_issues="- Existing issue",
+        )
+        ops = {section: op}
+        if expected_error:
+            with pytest.raises(ValueError) as exc:
+                Session._merge_wm_sections(old_wm, ops)
+            assert str(exc.value) == f"Invalid working memory update: {expected_error}"
+            assert not is_retryable_api_error(exc.value)
+            return
+
         merged = Session._merge_wm_sections(old_wm, ops)
         assert "Running" in merged
 

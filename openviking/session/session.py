@@ -5340,7 +5340,7 @@ class Session:
     def _merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
         """Merge LLM per-section ops into a new Working Memory document.
 
-        ``ops`` is the schema-validated dict shaped like::
+        ``ops`` is the parsed model output shaped like::
 
             {"Session Title":  {"op": "KEEP"},
              "Current State":  {"op": "UPDATE", "content": "..."},
@@ -5377,6 +5377,17 @@ class Session:
             full_header = f"## {header}"
             op = (ops or {}).get(header)
             old_content = old_sections.get(full_header, "").rstrip()
+
+            # Reject invalid model fields before any guard consumes them.
+            # Let Phase 2 record the failure without retrying or replacing the summary.
+            if isinstance(op, dict):
+                for field_name in ("op", "content"):
+                    value = op.get(field_name)
+                    if value is not None and not isinstance(value, str):
+                        raise ValueError(
+                            f"Invalid working memory update: {header}.{field_name} "
+                            f"must be a string, got {type(value).__name__}"
+                        )
 
             # ---------- per-section guards ----------
             if old_content:
