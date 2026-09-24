@@ -55,7 +55,12 @@ from openviking.session.tool_result_synopsis import (
 from openviking.storage.abstract_overview import body_for_preview, render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.model_retry import is_retryable_api_error, retry_async
+from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
+    classify_api_error,
+    is_retryable_api_error,
+    retry_async,
+)
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 from openviking_cli.exceptions import (
@@ -4474,7 +4479,7 @@ class Session:
             except Exception as e:
                 _wm_debug(f"creation failed: {e}")
                 logger.warning(f"WM creation failed: {e}")
-                if checkpoint_requests:
+                if checkpoint_requests or classify_api_error(e) == ERROR_CLASS_INPUT_TOO_LARGE:
                     raise
                 turn_count = len([m for m in messages if is_user_query(m)])
                 return (
@@ -4510,7 +4515,7 @@ class Session:
             import traceback as _tb
 
             _wm_debug(f"tool_call raised: {type(e).__name__}: {e} tb={_tb.format_exc()[-400:]}")
-            if checkpoint_requests:
+            if checkpoint_requests or classify_api_error(e) == ERROR_CLASS_INPUT_TOO_LARGE:
                 raise
             logger.warning("WM update tool_call failed (%s); falling back to creation prompt", e)
             return await self._fallback_generate_wm_creation(
@@ -4679,6 +4684,8 @@ class Session:
             return await vlm.get_completion_async(prompt)
         except Exception as e:
             logger.warning(f"WM creation fallback failed: {e}")
+            if classify_api_error(e) == ERROR_CLASS_INPUT_TOO_LARGE:
+                raise
             turn_count = len([m for m in messages if is_user_query(m)])
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"

@@ -16,6 +16,11 @@ from openviking.models.network import (
 )
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
+from openviking.utils.model_retry import (
+    ERROR_CLASS_INPUT_TOO_LARGE,
+    ERROR_CLASS_PERMANENT,
+    classify_api_error,
+)
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -283,6 +288,8 @@ class VolcEngineVLM(OpenAIVLM):
             except Exception as e:
                 self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=e)
                 last_error = e
+                if classify_api_error(e) in (ERROR_CLASS_INPUT_TOO_LARGE, ERROR_CLASS_PERMANENT):
+                    raise
                 if attempt < self.max_retries:
                     await asyncio.sleep(2**attempt)
 
