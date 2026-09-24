@@ -74,6 +74,7 @@ Task: <describe the plugin addition, fix, or maintenance change>
 | 通过配置文件安装 hook 和 MCP；公共调度足够表达生命周期 | 在 `agent-hook-plugin/hosts/` 增加适配器及宿主配置 | [agent-hook-plugin](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/README.md) |
 | 原生插件要求独立 manifest、目录和生命周期入口 | 独立插件目录，入口调用共享运行时 | [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md)、[Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) |
 | 以宿主 SDK 回调运行，需要常驻状态或 dispose/idle 回调 | 使用宿主扩展包，复用共享能力，明确自己的会话调度 | [OpenCode](https://github.com/volcengine/OpenViking/blob/main/examples/opencode-plugin/README.md)、[DSH](https://github.com/volcengine/OpenViking/blob/main/examples/dsh-memory-plugin/README.md) |
+| 宿主能注册原生工具，但自身没有 MCP 支持 | 使用官方 MCP 客户端，把服务端的 `tools/list` 注册成加 `openviking_` 前缀的宿主原生工具；不得自行维护工具目录 | [pi](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md) |
 | 只有 MCP，没有自动注入或完整会话记录 | 交付 MCP-only 集成，明确能力范围 | [Agent Plugins](https://github.com/volcengine/OpenViking/blob/main/agent-plugins/README.md) |
 
 只因新增宿主名称，不应复制 Claude Code 或 Codex 的整个目录。反过来，如果宿主有独立的会话状态机，也不应不断往公共 dispatcher 加 `isFoo`、`specialStop` 一类开关来容纳它。
@@ -112,7 +113,7 @@ sync / install / pack 负责把这张依赖图完整交付到机器上
 | 批量发送、离线重放、重试分类 | [batch-send.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/batch-send.mjs)、[pending-queue.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/pending-queue.mjs)、[retryable.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/retryable.mjs) | 何时调用、发送成功后如何推进宿主游标 |
 | 后台写入 | [async-writer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/async-writer.mjs) | 宿主允许的 detach 时机和恢复措施 |
 | MCP 配置与协议 | [mcp-proxy-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-config.mjs)、[mcp-proxy-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-core.mjs) | 配置投影、日志工厂、确有必要的本地工具 |
-| 虚拟 URI 检查、诊断 | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/uri-guard.mjs)、[doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/doctor-core.mjs) | 工具名、拒绝格式、宿主安装与状态检查 |
+| 虚拟 URI 检查、诊断 | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/uri-guard.mjs)、[doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/doctor-core.mjs) | 工具名、拒绝与提示 envelope、宿主安装与状态检查 |
 
 依赖必须从宿主适配器指向共享能力。共享能力不能 import 某个宿主目录；需要宿主动作时，由调用者传入小而明确的回调。不要为一次文件读取引入通用插件容器、服务定位器或继承体系。共享模块也不能反向依赖安装器、测试代码或用户界面。
 
@@ -164,7 +165,7 @@ sync / install / pack 负责把这张依赖图完整交付到机器上
 
 ### 4.2 凭据不是普通 workspace 配置
 
-连接和身份必须走 `credentials.mjs` 与 `buildPluginConfig()`。`OPENVIKING_CREDENTIAL_SOURCE` 的 `auto`、`cli`、`env` 控制凭据来源，不能简单套用行为配置优先级。必须验证自定义配置路径、`plugin.<harness>` 覆盖和 `ov config switch` 后 hook 与 MCP 的结果，不能只比较 loader 返回的几个默认字段。
+连接和身份必须走 `credentials.mjs` 的 `resolveConnection()`，`buildPluginConfig()` 就是调用它。`OPENVIKING_CREDENTIAL_SOURCE` 的 `auto`、`cli`、`env` 控制凭据来源，不能简单套用行为配置优先级。MCP proxy 导出 `readProxyConfig(env)`，经与 hook 相同的 loader 解析，再用 `toMcpProxyConfig()` 映射，不手工挑字段，也不直接调用 `credentials.mjs`。宿主若只把白名单里的环境变量交给 MCP 进程，白名单必须覆盖 `MCP_PROXY_ENV_VARS`；宿主若给的是封闭环境，就用 `forwardConnectionEnv()` 转发解析好的连接。新 proxy 必须加入 `mcp-hook-parity.test.mjs`，缺行时该测试会失败。
 
 workspace 文件不得包含 URL、API key、用户凭据等禁止字段，也不做环境变量插值。规则由 [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) 执行，不在每个宿主增加自己的白名单。安装器不得把解析后的 API key 固化到 `.mcp.json`，也不得替换用户已选择的云端连接。
 
@@ -192,7 +193,7 @@ peer 解析使用共享实现。现状默认从 Git 身份推导，普通非 Git
 | 压缩前 | 确认压缩前消息已写入，再执行相应提交 | `PreCompact` 提交已有消息；本入口不补采 transcript | `PreCompact` 补齐 transcript 后提交 |
 | 会话结束 | 完成尚未完成的写入与提交 | `SessionEnd` 提交已有消息；本入口不补采 transcript | `SessionEnd` 后台补齐并提交，保留启动补偿 |
 | 子代理 | 保留身份和父子关系，避免重复 | `SubagentStart`、`SubagentStop` | 当前 hook manifest 没有这两个事件 |
-| 本地工具检查 | 阻止把虚拟 URI 当本地路径 | `PreToolUse` URI guard | 当前 hook manifest 未注册 URI guard |
+| 本地工具检查 | 文件工具的路径是虚拟 URI 时拒绝；shell 命令带虚拟 URI 时附加提示 | `PreToolUse` URI guard，匹配 Read、Glob、Grep、Edit、Write、Bash | `PreToolUse` URI guard 只匹配 Bash，只附加提示；文件编辑走 `apply_patch`，没有路径参数 |
 
 以两份 [Claude Code hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/hooks/hooks.json) 和 [Codex hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/hooks/hooks.json) 为事件注册依据。相同事件名称不保证 payload 或输出格式相同。没有结束事件的宿主必须选择并说明替代提交点，例如 ZCode 在 Stop 提交；不能假装存在一个永远不会执行的 SessionEnd。
 
@@ -207,6 +208,8 @@ stdout 只承载宿主约定的结果，日志写 stderr 或共享日志文件�
 ### 5.3 Recall 与 profile 注入
 
 profile 与逐轮召回分别使用 `buildProfileBlock()` 和 `buildRecallBlock()` / `buildRecallBlockDetailed()`。宿主可提供压缩器、显示结果和统计信息，不能重写检索目标、排序、token 预算和服务端兼容回退。状态栏需要计数时，应消费共享结果和最终注入内容，不能再跑一次召回推算。
+
+会话启动时的 skill 清单（`<available-skills>`）也由 `buildProfileBlock()` 生成：调用方把解析好的插件配置作为第四个参数传入，由其中的 `skillCatalog` 和 `skillCatalogTokenBudget` 旋钮决定开关和预算。适配器不能自己请求 `GET /api/v1/skills`，也不能自己拼装 skill 列表。不传这个参数的宿主，得到的 profile 块里没有 skill 清单。
 
 自动召回必须携带正确会话身份和 peer，并遵守 input filter、bypass 和开关。空结果应保持为空，不把服务端的“无相关记忆”占位文本当成记忆注入。压缩失败可退回已有的未压缩结果；不得凭空补写摘要。压缩后的 `viking://` URI 必须仍可读取，原始用户问题、召回块与宿主包装也必须能在 capture 时区分，避免重复写入注入的旧记忆。
 
@@ -276,9 +279,11 @@ proxy 入口不得拥有自己的工具 schema、副本 API client、SSE parser 
 
 ## 7. URI guard、Skill 和诊断
 
-`viking://` 是虚拟 URI，不能交给本地文件或 shell 工具。宿主支持工具执行前检查时，应使用 `evaluateUriGuard()`，只在适配器中定义工具参数和拒绝 envelope。检查器不能扩展成一般命令拦截器；普通文件路径应保持原有行为。宿主不支持该事件时，明确限制并通过 Skill 指引模型使用 MCP，不得宣称具备等效拦截。
+`viking://` 是虚拟 URI。本地文件工具的路径参数是 `viking://` URI 时必然失败，所以宿主支持工具执行前检查时，用 `evaluateUriGuard()` 拒绝这次调用。shell 命令里的 `viking://` URI 可能只是数据（`ov` 命令参数、HTTP 请求体、搜索模式），所以命令照常执行，再通过宿主的模型可见上下文通道附上 `evaluateUriNotice()` 生成的提示；`PreToolUse` 类宿主直接用 `preToolUseOutput()`，它返回拒绝或提示 envelope。适配器中只定义替代工具提示和 envelope。检查器不能扩展成一般命令拦截器；普通文件路径应保持原有行为。宿主不支持该事件时，明确限制并通过 Skill 指引模型使用 MCP，不得宣称具备等效拦截。
 
 共享 Skill 的源文件放在 [`examples/skills/`](https://github.com/volcengine/OpenViking/tree/main/examples/skills/)，通过 `SKILL_TARGETS` 交付，禁止在多个插件副本里分别修改同一段指导。Skill 只描述真实可调用工具和实际能力；自动 hook 已处理的捕获、提交不应再要求模型每轮手动重复执行。不同工具集确有不同操作语义时，可以保留独立 Skill，并说明理由。生成 Skill 时不能在 YAML frontmatter 前插入生成标记。
+
+存放在 OpenViking 里的 skill 只通过服务端的 `add_skill` MCP 工具新建、安装、共享和替换，它和 REST `POST /api/v1/skills` 共用同一套安装代码。宿主不得自己实现安装：适配器不能把 `SKILL.md` 写进 skills 子树，也不能自行解包或上传 skill 目录。服务端的 `write`、`edit` 拒绝写用户根下的 skills 子树；本地 write/edit 指向 skill URI 而被拒绝时，URI guard 通过 `isSkillUri()` 把模型引导到 `add_skill`。`openviking-skills` 这个 Skill 负责教模型走这套流程，所以 `SKILL_TARGETS` 只把它交付给自带 Skill、且 `add_skill` 确实可用的 MCP 宿主。
 
 doctor 使用 `runDoctor(hostSpec)`，宿主只补充安装位置、manifest、hook 注册、状态文件等检查。公共配置、凭据、网络和输出格式由 `doctor-core.mjs` 负责。必须能够检查安装版本、配置来源、生效值、peer、MCP 入口、hook 时间限制和 pending/会话状态。优先提供离线模式和 JSON 输出，离线检查不应偷偷发起网络请求。
 
@@ -319,8 +324,8 @@ examples/<host>-memory-plugin/ 独立原生插件需要时才创建
 
 | 交付方式 | 当前例子 | 生成要求 |
 | --- | --- | --- |
-| 宿主直接加载 Git 中的插件目录 | Claude Code、Codex、`agent-plugins` | 共享副本提交到 Git，checkout 后即可加载 |
-| npm 包或安装归档 | OpenCode、DSH、OpenClaw、Pi | 在 prepack 或 staging 时生成；运行时副本不提交 Git |
+| 宿主直接加载 Git 中的插件目录 | Claude Code、Codex、`agent-plugins`、OpenClaw（`ov-install` 的 GitHub 源） | 共享副本提交到 Git，checkout 后即可加载 |
+| npm 包或安装归档 | OpenCode、DSH、Pi | 在 prepack 或 staging 时生成；运行时副本不提交 Git |
 | 安装器组装相邻运行时目录 | Cursor、TRAE、TRAE CN、ZCode | 使用 `ASSEMBLED_ROOTS` 推导 `lib/MANIFEST`，按 manifest 复制共享运行时 |
 
 [`sync.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/sync.mjs) 是上述目标的登记处。新增独立插件登记 `TARGETS` 的 source root、目标目录和 `committed`；新增组装根才扩展 `ASSEMBLED_ROOTS`，普通薄宿主通常已被现有根覆盖。是否交付 Skill 另外登记 `SKILL_TARGETS`。不要维护一份“需要复制的 20 个模块”清单。
@@ -397,7 +402,7 @@ PR 必须包含应提交的最新生成物，并检查新出现但未跟踪的�
 | 验证范围 | 至少覆盖的真实行为 | 现有入口 |
 | --- | --- | --- |
 | 配置与开关 | 分层覆盖、别名冲突、非法值、未配置标记、关闭后无新网络副作用 | `plugin-config.test.mjs`、`plugin-known-keys.test.mjs`、宿主 config 测试 |
-| 凭据与 peer | hook/MCP 的请求身份一致；自定义路径、profile 切换、多 workspace | `credentials.test.mjs`、`wire-headers.test.mjs`、`mcp-proxy-config.test.mjs` |
+| 凭据与 peer | hook/MCP 的请求身份一致；自定义路径、profile 切换、多 workspace | `credentials.test.mjs`、`mcp-hook-parity.test.mjs`、`wire-headers.test.mjs`、`mcp-proxy-config.test.mjs` |
 | Hook 输出 | 真实 payload、单次合法输出、空结果、未知/缺失字段、错误路径 | `agent-hook-runtime.test.mjs`、宿主事件测试 |
 | Recall | 开关、bypass、空结果、服务端兼容、压缩失败、可读 URI | `recall-core.test.mjs`、宿主 recall 测试 |
 | Capture | 完整文本和工具记录、重复事件、重复文本、嵌套工具、部分成功、截短恢复 | `capture-utils.test.mjs`、`batch-send.test.mjs`、宿主 transcript 测试 |

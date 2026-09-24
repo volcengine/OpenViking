@@ -602,6 +602,16 @@ bool parse_schema_fields(PyObject* fields_obj,
       return false;
     }
 
+    PyObject* legacy_type_obj = PyDict_GetItemString(item, "legacy_data_type");
+    if (legacy_type_obj != nullptr) {
+      vdb::FieldType legacy_type;
+      if (!py_to_field_type(legacy_type_obj, &legacy_type)) {
+        Py_DECREF(item);
+        return false;
+      }
+      field.legacy_data_type = legacy_type;
+    }
+
     const long field_id = PyLong_AsLong(id_obj);
     if (PyErr_Occurred() != nullptr) {
       Py_DECREF(item);
@@ -1053,10 +1063,13 @@ PyObject* py_bytes_row_deserialize(PyObject*, PyObject* args) {
     return nullptr;
   }
 
-  std::string payload;
-  if (!py_to_string(payload_obj, &payload, true)) {
+  char* payload_data = nullptr;
+  Py_ssize_t payload_size = 0;
+  if (PyBytes_AsStringAndSize(payload_obj, &payload_data, &payload_size) < 0) {
     return nullptr;
   }
+  // The call arguments keep these immutable bytes alive while the GIL is released.
+  const std::string_view payload(payload_data, static_cast<size_t>(payload_size));
 
   PyObject* result = PyDict_New();
   if (result == nullptr) {
@@ -1106,10 +1119,12 @@ PyObject* py_bytes_row_deserialize_field(PyObject*, PyObject* args) {
     return nullptr;
   }
 
-  std::string payload;
-  if (!py_to_string(payload_obj, &payload, true)) {
+  char* payload_data = nullptr;
+  Py_ssize_t payload_size = 0;
+  if (PyBytes_AsStringAndSize(payload_obj, &payload_data, &payload_size) < 0) {
     return nullptr;
   }
+  const std::string_view payload(payload_data, static_cast<size_t>(payload_size));
 
   const auto* meta = handle->schema->get_field_meta(field_name);
   if (meta == nullptr) {
@@ -1310,13 +1325,14 @@ PyObject* py_init_logging(PyObject*, PyObject* args, PyObject* kwargs) {
 
 PyObject* py_new_index_engine(PyObject*, PyObject* args) {
   const char* path_or_json = nullptr;
-  if (!PyArg_ParseTuple(args, "s", &path_or_json)) {
+  int normalize_vector = 0;
+  if (!PyArg_ParseTuple(args, "s|p", &path_or_json, &normalize_vector)) {
     return nullptr;
   }
 
   try {
-    return PyCapsule_New(new vdb::IndexEngine(path_or_json), kIndexCapsuleName,
-                         index_capsule_destructor);
+    return PyCapsule_New(new vdb::IndexEngine(path_or_json, normalize_vector != 0),
+                         kIndexCapsuleName, index_capsule_destructor);
   } catch (const std::exception& exc) {
     raise_runtime_error(exc.what());
     return nullptr;

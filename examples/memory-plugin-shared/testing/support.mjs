@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +30,44 @@ export function buildConfigForTest(harness) {
       OPENVIKING_HOME: dir,
     },
   });
+}
+
+/**
+ * An ovcli.conf / ov.conf pair in a fresh directory, and the env that points
+ * the credential chain at it. A file given as `null` is not written, so the
+ * chain sees it as absent rather than as a real ~/.openviking.
+ */
+export async function writeCredentialFiles(prefix, { ovcli = null, ov = null } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  const cliPath = join(dir, "ovcli.conf");
+  const ovPath = join(dir, "ov.conf");
+  if (ovcli) await writeFile(cliPath, JSON.stringify(ovcli, null, 2) + "\n");
+  if (ov) await writeFile(ovPath, JSON.stringify(ov, null, 2) + "\n");
+  return {
+    dir,
+    cliPath,
+    ovPath,
+    env: { OPENVIKING_CLI_CONFIG_FILE: cliPath, OPENVIKING_CONFIG_FILE: ovPath, OPENVIKING_HOME: join(dir, "home") },
+  };
+}
+
+const isOpenVikingVar = (name) => name.startsWith("OPENVIKING_") || name === "OV_DEBUG_LOG";
+
+/**
+ * Clear the developer shell's `OPENVIKING_*` out of process.env, and return
+ * the function that puts them back. A test that injects its env everywhere
+ * still runs under this, so a read that slips past the injection fails the
+ * same way on every machine instead of passing on the one with a config.
+ */
+export function scrubOpenVikingEnv() {
+  const saved = Object.entries(process.env).filter(([name]) => isOpenVikingVar(name));
+  for (const [name] of saved) delete process.env[name];
+  return () => {
+    for (const name of Object.keys(process.env)) {
+      if (isOpenVikingVar(name)) delete process.env[name];
+    }
+    for (const [name, value] of saved) process.env[name] = value;
+  };
 }
 
 const PENDING_ENV_KEYS = [

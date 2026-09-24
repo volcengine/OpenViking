@@ -28,5 +28,3 @@ class GlobConfig(BaseModel):
             "0 means always use VikingDB when available."
         ),
     )
-
-    model_config = {"extra": "forbid"}

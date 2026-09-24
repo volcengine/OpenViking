@@ -40,7 +40,7 @@ Skill 可以编排多个工具，但不会自动获得额外权限。工具是�
 | OpenViking | `openviking_list/search/grep/glob/multi_read` | 浏览、检索和读取上下文 |
 | OpenViking | `openviking_add_resource`、`openviking_memory_commit` | 添加资源和提交记忆 |
 | 对外操作 | `message`、`generate_image` | 主动发送消息或生成图片 |
-| 自动化 | `cron` | 管理定时 Agent 任务 |
+| 自动化 | `cron` | 管理定时 Agent 任务，默认关闭 |
 | 并行任务 | `spawn` | 启动后台子 Agent |
 
 ToolRegistry 负责注册、参数校验、执行和 Hook。ToolContext 为每次调用提供当前 SessionKey、发送者身份、渠道 metadata、沙箱和已认证的 OpenViking 连接。
@@ -158,7 +158,23 @@ VikingBot 支持三类多模态能力：
 | Cron | `at`、`every` 或 cron 表达式 | 指定时间提醒、固定周期任务 |
 | Heartbeat | 周期读取工作区 `HEARTBEAT.md` | 持续检查一组可能变化的事项 |
 
-Cron 任务持久化在 `cron/jobs.json`，保存原 SessionKey 和渠道 metadata；`deliver=true` 时将执行结果发回原渠道。
+Cron 通过 `cron` 工具提供新增、查看和删除定时任务的能力。例如，用户说“每天上午 9 点提醒我看日报”，Agent 可以创建相应任务，由调度服务到期后调用 Agent 执行。支持指定时间执行一次、固定间隔执行和 cron 表达式调度。
+
+**定时任务默认关闭**。在 `ov.conf` 中配置以下内容并重启 Bot，即可开启 `cron` 工具和调度服务，适用于 Gateway 和本地 Chat：
+
+```json
+{
+  "bot": {
+    "tools": {
+      "cron": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+设为 `false` 或省略此配置时，不注册 `cron` 工具，也不启动调度服务。Cron 任务持久化在 `cron/jobs.json`，关闭后仍保留，但不会自动执行。任务保存原 SessionKey 和渠道 metadata；`deliver=true` 时将执行结果发回原渠道。
 
 Heartbeat 跳过空文件、明确禁用心跳的 Session 和长期不活跃 Session。Agent 无需处理任务时返回 `HEARTBEAT_OK`。
 

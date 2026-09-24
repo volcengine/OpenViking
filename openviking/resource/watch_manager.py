@@ -6,7 +6,6 @@ Resource monitoring task manager.
 Provides task creation, update, deletion, query, and persistence storage.
 """
 
-import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -14,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.observability.http_error_context import sanitize_public_http_error
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.resource.uri_mutation_coordinator import (
@@ -200,7 +200,7 @@ class WatchManager:
         # (a refresh replaces the whole root); Connector watches write
         # ``to/<relative_path>`` and may share one target.
         self._uri_to_task: Dict[tuple[str, str], set[str]] = {}
-        self._lock = asyncio.Lock()
+        self._lock = AsyncSemaphore()
         self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
         self._viking_fs = viking_fs
         self._initialized = False

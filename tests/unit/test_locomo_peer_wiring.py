@@ -81,17 +81,20 @@ async def test_viking_ingest_uses_message_peer_id(monkeypatch):
         async def initialize(self):
             return None
 
-        async def create_session(self, memory_policy=None):
-            calls.append(("create_session", memory_policy))
+        async def create_session(self, session_id=None, options=None):
+            calls.append(("create_session", options))
             return {"session_id": "sess-1"}
 
-        async def get_session(self, session_id):
+        async def get_session(self, session_id, *, auto_create=False):
             calls.append(("get_session", session_id))
             return {"commit_count": 0}
 
         async def add_message(
-            self, session_id=None, role=None, parts=None, created_at=None, peer_id=None
+            self, session_id, role, content=None, parts=None, options=None, peer_id=None
         ):
+            if peer_id is not None and options and "peer_id" in options:
+                raise ValueError("options cannot override 'peer_id'")
+            option_values = options or {}
             calls.append(
                 (
                     "add_message",
@@ -99,14 +102,25 @@ async def test_viking_ingest_uses_message_peer_id(monkeypatch):
                         "session_id": session_id,
                         "role": role,
                         "parts": parts,
-                        "created_at": created_at,
-                        "peer_id": peer_id,
+                        "created_at": option_values.get("created_at"),
+                        "peer_id": peer_id if peer_id is not None else option_values.get("peer_id"),
                     },
                 )
             )
 
-        async def commit_session(self, session_id, telemetry=True, memory_policy=None):
-            calls.append(("commit_session", memory_policy))
+        async def commit_session(
+            self,
+            session_id,
+            telemetry=False,
+            *,
+            keep_recent_count=0,
+            retention_mode=None,
+            keep_recent_turn_count=None,
+            retained_message_token_budget=None,
+            min_raw_tail_steps=None,
+            event_tags=None,
+        ):
+            calls.append(("commit_session", telemetry))
             return {"status": "accepted", "task_id": None, "trace_id": "trace-1"}
 
         async def close(self):

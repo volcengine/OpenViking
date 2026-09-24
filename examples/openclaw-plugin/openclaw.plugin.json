@@ -272,8 +272,15 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "recallCompress": {
+        "type": "string",
+        "enum": ["off", "server", "auto"],
+        "default": "off",
+        "description": "Cloud recall compression. auto delegates to the server; off preserves raw context."
+      },
       "mode": {
         "type": "string",
+        "enum": ["local", "remote"],
         "description": "Legacy field kept for backward compatibility. Only 'remote' is supported."
       },
       "baseUrl": {
@@ -350,7 +357,8 @@
         "type": "boolean"
       },
       "captureMode": {
-        "type": "string"
+        "type": "string",
+        "enum": ["semantic", "keyword"]
       },
       "captureMaxLength": {
         "type": "number"

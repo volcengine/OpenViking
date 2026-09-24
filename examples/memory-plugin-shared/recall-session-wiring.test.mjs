@@ -57,7 +57,7 @@ test("pi wires the sync manager into the recall manager", async () => {
 });
 
 test("OpenCode passes the session manager into the recall component", async () => {
-  const source = await readFile(join(ROOT, "examples", "opencode-plugin", "index.mjs"), "utf-8");
+  const source = await readFile(join(ROOT, "examples", "opencode-plugin", "lib", "plugin-runtime.mjs"), "utf-8");
   assert.match(source, /createMemoryRecall\(\{\s*config,\s*sessionManager\s*\}\)/);
 });
 

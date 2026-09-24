@@ -50,6 +50,15 @@ test("explicit plugin config overrides credential files", () => {
   assert.equal(config.peerId, "plugin-peer");
 });
 
+test("the host's auth mode outranks the environment in either spelling", () => {
+  const env = { OPENVIKING_CLI_CONFIG_FILE: "/nonexistent/ovcli.conf", OPENVIKING_CONFIG_FILE: "/nonexistent/ov.conf", OPENVIKING_AUTH_MODE: "trusted" };
+  for (const input of [{ authMode: "api_key" }, { auth_mode: "api_key" }]) {
+    const config = resolveConfig({ account: "acme", workspacePeer: false, ...input }, env, "/workspace/project");
+    assert.equal(config.authMode, "api_key", JSON.stringify(input));
+    assert.equal(config.sendIdentityHeaders, false);
+  }
+});
+
 // A knob set once in ovcli.conf reaches this harness like any other, and the
 // host's own input is the lower layer.
 test("the ovcli.conf plugin section outranks the cordis input", async () => {

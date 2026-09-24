@@ -126,6 +126,20 @@ function profileHandler(requests, { archiveOverview = "" } = {}) {
         return;
       }
     }
+    if (req.method === "GET" && url.pathname === "/api/v1/skills") {
+      writeJson(res, {
+        status: "ok",
+        result: {
+          skills: [{
+            name: "pr-review",
+            uri: "viking://user/zeus/skills/pr-review",
+            description: "Review a pull request against the team checklist.",
+          }],
+          total: 1,
+        },
+      });
+      return;
+    }
     if (req.method === "GET" && url.pathname.endsWith("/context")) {
       writeJson(res, {
         status: "ok",
@@ -178,6 +192,10 @@ test("startup injects the shared profile block with workspace peer routing", asy
       assert.match(output.hookSpecificOutput.additionalContext, /Works on OpenViking integrations/);
       assert.match(output.hookSpecificOutput.additionalContext, /zeus\/workflow\.md/);
       assert.match(output.hookSpecificOutput.additionalContext, /software\/openviking\.md/);
+      assert.match(
+        output.hookSpecificOutput.additionalContext,
+        /<available-skills>[\s\S]*viking:\/\/user\/zeus\/skills\/\n {4}- pr-review — Review a pull request[\s\S]*<\/available-skills>\n<\/openviking-context>/,
+      );
       assert.equal(output.systemMessage, undefined);
     });
 
@@ -189,6 +207,48 @@ test("startup injects the shared profile block with workspace peer routing", asy
   } finally {
     await rm(stateDir, { recursive: true, force: true });
     await rm(repo, { recursive: true, force: true });
+  }
+});
+
+test("resume skips a profile block identical to the one this thread already got", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-session-start-"));
+  const requests = [];
+  try {
+    await withMockOpenViking(profileHandler(requests), async (baseUrl) => {
+      const env = baseEnv(baseUrl, stateDir);
+      const input = { session_id: "resume-dedup", cwd: "/tmp/codex-resume-dedup", hook_event_name: "SessionStart" };
+      const first = await runSessionStart({ ...input, source: "startup" }, env);
+      assert.match(first.output.hookSpecificOutput.additionalContext, /Works on OpenViking integrations/);
+
+      const resumed = await runSessionStart({ ...input, source: "resume" }, env);
+      assert.doesNotMatch(resumed.output.hookSpecificOutput?.additionalContext || "", /Works on OpenViking integrations/);
+    });
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("OPENVIKING_SKILL_CATALOG=false leaves the skill catalog out of the startup block", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-session-start-"));
+  const requests = [];
+  try {
+    await withMockOpenViking(profileHandler(requests), async (baseUrl) => {
+      const { output } = await runSessionStart(
+        {
+          session_id: "startup-no-skills",
+          source: "startup",
+          cwd: "/tmp/codex-no-skills",
+          hook_event_name: "SessionStart",
+        },
+        { ...baseEnv(baseUrl, stateDir), OPENVIKING_SKILL_CATALOG: "false" },
+      );
+
+      assert.match(output.hookSpecificOutput.additionalContext, /Works on OpenViking integrations/);
+      assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /available-skills/);
+    });
+    assert.ok(!requests.some((request) => request.path === "/api/v1/skills"));
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
   }
 });
 

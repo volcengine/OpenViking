@@ -343,6 +343,23 @@ async def test_async_http_client_reindex_sends_explicit_empty_tags():
 
 
 @pytest.mark.asyncio
+async def test_async_http_client_reindex_sends_clear_without_tags():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response = lambda _response: {"status": "completed"}
+
+    await client.reindex(
+        "viking://resources/demo",
+        options={"tag_mode": "clear"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "tags" not in payload
+    assert payload["tag_mode"] == "clear"
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_write_forwards_processing_mode():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -377,6 +394,24 @@ async def test_async_http_client_write_forwards_explicit_tags_and_mode():
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["tags"] == []
     assert payload["tag_mode"] == "replace"
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_write_forwards_clear_without_tags():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.write(
+        "viking://resources/demo.md",
+        "updated",
+        options={"tag_mode": "clear"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "tags" not in payload
+    assert payload["tag_mode"] == "clear"
 
 
 @pytest.mark.asyncio
@@ -456,15 +491,13 @@ def test_sync_http_client_reindex_forwards_to_async_client():
 def test_sync_http_client_forwards_tags_to_filesystem_methods():
     client = SyncHTTPClient(url="http://localhost:1933")
 
-    with (
-        patch.object(client._async_client, "ls", return_value=[]) as mock_ls,
-        patch.object(client._async_client, "tree", return_value=[]) as mock_tree,
-        patch.object(client._async_client, "grep", return_value={}) as mock_grep,
-        patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]),
-    ):
-        client.ls("viking://resources", tags=["env=prod"])
-        client.tree("viking://resources", tags=["env=prod"])
-        client.grep("viking://resources", "Sample", tags=["env=prod"])
+    with patch.object(client._async_client, "ls", return_value=[]) as mock_ls:
+        with patch.object(client._async_client, "tree", return_value=[]) as mock_tree:
+            with patch.object(client._async_client, "grep", return_value={}) as mock_grep:
+                with patch("openviking_sdk.client.run_async", side_effect=[[], [], {}]):
+                    client.ls("viking://resources", tags=["env=prod"])
+                    client.tree("viking://resources", tags=["env=prod"])
+                    client.grep("viking://resources", "Sample", tags=["env=prod"])
 
     assert mock_ls.call_args.kwargs["tags"] == ["env=prod"]
     assert mock_tree.call_args.kwargs["tags"] == ["env=prod"]
@@ -684,11 +717,64 @@ def test_sync_http_client_get_status_does_not_require_run_async():
     assert status == {"is_healthy": True}
 
 
+def test_sync_http_client_observer_methods_accept_format():
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client._async_client._get_queue_status = AsyncMock(return_value={"name": "queue"})
+    client._async_client._get_system_status = AsyncMock(return_value={"is_healthy": True})
+
+    queue_status = client.queue_status(format="json")
+    system_status = client.get_status(format="json")
+
+    assert queue_status == {"name": "queue"}
+    assert system_status == {"is_healthy": True}
+    client._async_client._get_queue_status.assert_awaited_once_with(format="json")
+    client._async_client._get_system_status.assert_awaited_once_with(format="json")
+
+
 def test_sync_http_client_health_wraps_async_coroutine():
     client = SyncHTTPClient(url="http://localhost:1933")
     client._async_client.health = AsyncMock(return_value=True)
 
     assert client.health() is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "format_value", "expected_path", "expected_params"),
+    [
+        ("_get_queue_status", None, "/api/v1/observer/queue", None),
+        ("_get_queue_status", "json", "/api/v1/observer/queue", {"format": "json"}),
+        ("_get_vikingdb_status", "json", "/api/v1/observer/vikingdb", {"format": "json"}),
+        ("_get_models_status", "table", "/api/v1/observer/models", {"format": "table"}),
+        ("_get_system_status", None, "/api/v1/observer/system", None),
+    ],
+)
+async def test_async_http_client_observer_requests_support_optional_format(
+    method_name, format_value, expected_path, expected_params
+):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {"ok": True}}
+
+    method = getattr(client, method_name)
+    if format_value is None:
+        result = await method()
+    else:
+        result = await method(format=format_value)
+
+    assert result == {"ok": True}
+    if expected_params is None:
+        client._request.assert_awaited_once_with(
+            "GET",
+            expected_path,
+            params=None,
+        )
+    else:
+        client._request.assert_awaited_once_with(
+            "GET",
+            expected_path,
+            params=expected_params,
+        )
 
 
 @pytest.mark.asyncio
@@ -1126,6 +1212,25 @@ async def test_add_resource_sends_tags_and_tag_mode():
             "tag_mode": "append",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_add_resource_sends_clear_without_tags():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {
+        "result": {"root_uri": "viking://resources/demo"}
+    }
+
+    await client.add_resource(
+        "https://example.com/demo.md",
+        options={"tag_mode": "clear"},
+    )
+
+    payload = fake_http.post.await_args.kwargs["json"]
+    assert "tags" not in payload
+    assert payload["tag_mode"] == "clear"
 
 
 @pytest.mark.asyncio

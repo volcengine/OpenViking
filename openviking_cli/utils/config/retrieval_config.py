@@ -45,5 +45,3 @@ class RetrievalConfig(BaseModel):
             "(same path as no-session search)."
         ),
     )
-
-    model_config = {"extra": "forbid"}

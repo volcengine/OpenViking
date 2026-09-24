@@ -4,7 +4,7 @@ import {
   stableHash,
 } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { denyHookSpecificOutput, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
 export const trae = {
@@ -22,12 +22,7 @@ export const trae = {
     }
     return value;
   },
-  guard(input = {}) {
-    const toolName = input.tool_name ?? input.toolName ?? input.name ?? input.tool;
-    const toolInput = input.tool_input ?? input.toolInput ?? input.input ?? {};
-    const decision = evaluateUriGuard(toolName, toolInput);
-    return decision ? denyHookSpecificOutput(decision.reason) : {};
-  },
+  guard: (input) => preToolUseOutput(input),
   prompt: (input) => cleanTraeText(input.prompt),
   async capture(ctx, state) {
     const hashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
@@ -47,7 +42,7 @@ export const trae = {
       }
       toSend.push({ hash, turn: kept[0] });
     }
-    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.turn));
+    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.turn), ctx.peerId);
     const captured = result.sent + result.queued;
     for (const item of toSend.slice(0, captured)) hashes.add(item.hash);
     let nextCount = Number(state.capturedSinceCommit || 0) + captured;

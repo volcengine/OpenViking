@@ -347,9 +347,20 @@ async def test_list_tasks_filters_by_owner(tracker: TaskTracker):
 
 async def test_list_limit(tracker: TaskTracker):
     for i in range(10):
-        await tracker.create("session_commit", resource_id=f"s{i}", **_owner_kwargs())
+        await tracker.create(
+            "session_commit",
+            resource_id=f"s{i}",
+            meta={"nested": {"values": [i]}},
+            **_owner_kwargs(),
+        )
     tasks = await tracker.list_tasks(limit=3)
-    assert len(tasks) == 3
+    assert [task.resource_id for task in tasks] == ["s9", "s8", "s7"]
+    tasks[0].meta["nested"]["values"].append("changed")
+    await tracker.start(tasks[0].task_id)
+    current = await tracker.list_tasks(limit=1)
+    assert current[0].meta["nested"]["values"] == [9]
+    assert current[0].status == TaskStatus.RUNNING
+    assert tasks[0].status == TaskStatus.PENDING
 
 
 async def test_list_can_hide_internal_tasks_before_limit(tracker: TaskTracker):
@@ -475,6 +486,7 @@ async def test_public_serialization_skips_private_payloads(tracker: TaskTracker)
 
     public = task.to_dict()
     assert set(public) == {
+        "processing_seconds",
         "task_id",
         "task_type",
         "status",
@@ -964,3 +976,29 @@ async def test_process_events_respect_owner_and_terminal_boundaries(tracker):
     assert (
         await tracker.get(task.task_id, **_owner_kwargs())
     ).execution_events == cancelled.execution_events
+
+
+async def test_processing_time_persists_and_restored_active_tasks_are_unknown(tracker, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr("openviking.service.task_processing_time.time.monotonic", lambda: now[0])
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    await tracker.start(task.task_id, **_owner_kwargs())
+    now[0] = 10
+    tracker.register_running_task(task.task_id)
+    now[0] = 13
+    assert (await tracker.get(task.task_id)).processing_seconds == 3
+    # A stage update neither resets nor stops the processing clock.
+    await tracker.update_stage(task.task_id, "semantic", **_owner_kwargs())
+    restarted = TaskTracker(store=tracker._store)
+    assert (await restarted.get(task.task_id, **_owner_kwargs())).processing_seconds is None
+    with tracker._work_index.pause_processing(task.task_id):
+        now[0] = 30
+        assert (await tracker.get(task.task_id)).processing_seconds == 3
+    now[0] = 32
+    await tracker.complete(task.task_id, result={"ok": True}, **_owner_kwargs())
+    await tracker.unregister_running_task(task.task_id)
+    finished = await tracker.get(task.task_id)
+    assert finished.status == TaskStatus.COMPLETED
+    assert finished.to_dict()["processing_seconds"] == 5
+    restored = await TaskTracker(store=tracker._store).get(task.task_id, **_owner_kwargs())
+    assert restored.processing_seconds == 5

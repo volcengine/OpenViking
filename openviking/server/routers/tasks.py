@@ -36,6 +36,8 @@ async def get_task(
     if _ctx.role == Role.ROOT:
         task = await tracker.get(task_id)
         if task is None:
+            task = await tracker.get(task_id, account_id=_ctx.account_id, user_id=_ctx.user.user_id)
+        if task is None:
             task = await tracker.get(
                 task_id,
                 account_id=SYSTEM_TASK_ACCOUNT_ID,
@@ -91,11 +93,52 @@ async def list_tasks(
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
     include_internal: bool = Query(False, description="Include internal Connector child tasks"),
-    limit: int = Query(50, le=200, description="Max results"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
+    pagination: Optional[str] = Query(None, pattern="^cursor$"),
+    cursor: Optional[str] = Query(None, max_length=2048),
+    q: Optional[str] = Query(None, max_length=200),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List background tasks with optional filters."""
     tracker = get_task_tracker()
+    if pagination == "cursor":
+        from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
+
+        # ROOT retains the legacy system + cached visibility and its own
+        # persisted tasks, including submissions restored after restart.
+        account = SYSTEM_TASK_ACCOUNT_ID if _ctx.role == Role.ROOT else _ctx.account_id
+        user = SYSTEM_TASK_USER_ID if _ctx.role == Role.ROOT else _ctx.user.user_id
+        filters = {
+            "task_type": task_type,
+            "status": status,
+            "resource_id": resource_id,
+            "include_internal": include_internal,
+            "q": q,
+        }
+        scope = page_scope(
+            account=_ctx.account_id, user=_ctx.user.user_id, role=str(_ctx.role), **filters
+        )
+        tasks = await tracker.list_page(
+            account_id=account,
+            user_id=user,
+            limit=limit + 1,
+            before=decode_cursor(cursor, scope),
+            include_cached=_ctx.role == Role.ROOT,
+            additional_owner=(_ctx.account_id, _ctx.user.user_id)
+            if _ctx.role == Role.ROOT
+            else None,
+            **filters,
+        )
+        more = len(tasks) > limit
+        items = [t.to_dict() for t in tasks[:limit]]
+        return Response(
+            status="ok",
+            result={
+                "items": items,
+                "has_more": more,
+                "next_cursor": encode_cursor(items[-1], scope) if more else None,
+            },
+        )
     if _ctx.role == Role.ROOT:
         system_tasks = await tracker.list_tasks(
             task_type=task_type,

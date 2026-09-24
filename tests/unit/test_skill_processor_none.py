@@ -157,8 +157,12 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=False)
     viking_fs = MagicMock()
     viking_fs.write_context = AsyncMock()
+    viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
+    viking_fs._async_agfs.pathlock_release = AsyncMock()
 
     processor = SkillProcessor(vikingdb=vikingdb)
+    processor._write_skill_content = AsyncMock()
+    processor._enqueue_skill_package = AsyncMock()
     result = await processor.process_skill(
         data={
             "name": "dict-skill",
@@ -173,9 +177,14 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     )
 
     assert result["name"] == "dict-skill"
-    written_content = viking_fs.write_context.await_args.kwargs["content"]
+    from openviking.core.skill_loader import SkillLoader
+
+    written = processor._write_skill_content.await_args.kwargs
+    assert written["overview"] == "# Dict Skill"
+    written_content = SkillLoader.to_skill_md(written["skill_dict"])
     assert "allowed-tools: Read" in written_content
     assert "tags:" in written_content
-    embedding_msg = vikingdb.enqueue_embedding_msg.await_args.args[0]
-    assert embedding_msg.context_data["meta"]["allowed_tools"] == ["Read"]
-    assert embedding_msg.context_data["meta"]["tags"] == ["dict"]
+    assert written["skill_dict"]["allowed_tools"] == ["Read"]
+    assert written["skill_dict"]["tags"] == ["dict"]
+    processor._enqueue_skill_package.assert_awaited_once()
+    viking_fs._async_agfs.pathlock_release.assert_not_awaited()

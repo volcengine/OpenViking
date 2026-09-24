@@ -79,6 +79,8 @@ Trusted deployments can also call Admin API through a trusted gateway. There are
 - Present the trusted deployment's `root_api_key`. For `/api/v1/admin/*`, the server treats the request as ROOT after validating that key.
 - Optionally also present `X-OpenViking-Account` + `X-OpenViking-User` when the admin route targets a specific account/user. Those headers must match the target URL and are kept as the request identity, but authorization still comes from the trusted `root_api_key`.
 
+The role-update API only promotes users to ADMIN. Trusted Admin API authorization comes from the validated deployment root key; creating a ROOT user is not required or supported.
+
 Example using a trusted upstream identity:
 
 ```bash
@@ -87,12 +89,6 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
   -H "X-API-Key: your-secret-root-key" \
   -H "Content-Type: application/json" \
   -d '{"account_id": "platform", "admin_user_id": "gateway-admin"}'
-
-# Then promote it to root if it needs cross-account admin access
-curl -X PUT http://localhost:1933/api/v1/admin/accounts/platform/users/gateway-admin/role \
-  -H "X-API-Key: your-secret-root-key" \
-  -H "Content-Type: application/json" \
-  -d '{"role": "root"}'
 
 # Then, in trusted mode, use that identity to call Admin API
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
@@ -127,7 +123,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 **Python SDK (HTTP)**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
@@ -612,7 +608,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",

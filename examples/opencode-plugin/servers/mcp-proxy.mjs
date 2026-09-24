@@ -3,8 +3,8 @@
 /**
  * stdio -> streamable-HTTP MCP proxy for the OpenViking OpenCode plugin.
  *
- * OpenCode starts this process as a local MCP server. The proxy reads the same
- * OpenViking credential sources as the lifecycle hooks, forwards JSON-RPC
+ * OpenCode starts this process as a local MCP server. The proxy resolves its
+ * connection through the plugin's own `loadConfig()`, forwards JSON-RPC
  * requests to the server's /mcp endpoint, and keeps stdout protocol-clean.
  */
 
@@ -12,27 +12,13 @@ import { resolve as resolvePath } from "node:path"
 import { fileURLToPath } from "node:url"
 import { loadConfig } from "../lib/config.mjs"
 import { createLogger } from "../lib/shared/debug-log.mjs"
-import { buildMcpProxyConfig, resolveMcpActorPeerId } from "../lib/shared/mcp-proxy-config.mjs"
+import { toMcpProxyConfig } from "../lib/shared/mcp-proxy-config.mjs"
 import { createOpenVikingMcpProxy } from "../lib/shared/mcp-proxy-core.mjs"
 
-function readProxyConfig() {
-  const cfg = loadConfig(resolvePath(fileURLToPath(import.meta.url), "..", ".."))
-  return buildMcpProxyConfig({
-    baseUrl: cfg.endpoint,
-    mcpUrl: cfg.mcpUrl,
-    apiKey: cfg.apiKey,
-    account: cfg.account,
-    user: cfg.user,
-    sendIdentityHeaders: cfg.sendIdentityHeaders,
-    peerId: resolveMcpActorPeerId(cfg),
-    userAgent: cfg.userAgent,
-    timeoutMs: cfg.timeoutMs,
-    debug: cfg.debug,
-    debugLogPath: cfg.debugLogPath,
-    credentialSource: cfg.credentialSource,
-    credentialPath: cfg.credentialPath || cfg.configPath,
-    watchedPaths: [cfg.credentialPath, cfg.configPath],
-  })
+const PLUGIN_ROOT = resolvePath(fileURLToPath(import.meta.url), "..", "..")
+
+export function readProxyConfig(env = process.env) {
+  return toMcpProxyConfig(loadConfig(PLUGIN_ROOT, undefined, { env }), { env })
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {

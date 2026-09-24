@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { captureEvent, promptText } from "./capture.mjs";
+import {
+  captureEvent,
+  isOpenVikingPluginMessage,
+  OPENVIKING_PLUGIN_KIND,
+  pluginMessage,
+  promptText,
+} from "./capture.mjs";
 
 const CONFIG = {
   captureAssistantTurns: true,
@@ -10,6 +16,27 @@ const CONFIG = {
   captureMode: "semantic",
   peerId: "workspace-a",
 };
+
+test("emits producer-owned kinds and filters namespaced plugin injections", () => {
+  const injected = pluginMessage("recalled context", { form: "recall" });
+  assert.equal(injected.source.kind, OPENVIKING_PLUGIN_KIND);
+  assert.equal(isOpenVikingPluginMessage(injected), true);
+
+  assert.equal(captureEvent({
+    type: "user/message",
+    data: injected,
+  }, CONFIG), null);
+  for (const kind of ["plugin:time-context", "time-context"]) {
+    assert.equal(captureEvent({
+      type: "user/message",
+      data: {
+        role: "user",
+        content: [{ type: "text", text: "Time sampled while preparing turn 3" }],
+        source: { kind, form: "snapshot" },
+      },
+    }, CONFIG), null, kind);
+  }
+});
 
 test("captures DSH message events without recapturing injected context", () => {
   const user = captureEvent({
@@ -25,6 +52,15 @@ test("captures DSH message events without recapturing injected context", () => {
     parts: [{ type: "text", text: "Remember that deployment uses blue." }],
     peer_id: "workspace-a",
   });
+
+  const legacyUser = captureEvent({
+    type: "user/message",
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "Legacy hosts may omit source metadata." }],
+    },
+  }, CONFIG);
+  assert.equal(legacyUser?.parts?.[0]?.text, "Legacy hosts may omit source metadata.");
 
   const injected = captureEvent({
     type: "user/message",
@@ -163,7 +199,20 @@ test("builds recall queries from current input while excluding its own context",
     {
       role: "user",
       content: [{ type: "text", text: "background job completed" }],
-      source: { kind: "plugin", plugin: "job-controller", form: "notice", summary: "done" },
+      source: { kind: "plugin:job-controller", form: "notice", summary: "done" },
     },
   ]), "Current question\n\nbackground job completed");
+
+  assert.equal(promptText([
+    {
+      role: "user",
+      content: [{ type: "text", text: "Current question" }],
+      source: { kind: "user" },
+    },
+    {
+      role: "user",
+      content: [{ type: "text", text: "new recall" }],
+      source: { kind: OPENVIKING_PLUGIN_KIND },
+    },
+  ]), "Current question");
 });

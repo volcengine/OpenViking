@@ -18,6 +18,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
+from openviking.storage.acl import AclSpec
 from openviking.storage.expr import And, Eq, In
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
@@ -249,6 +250,7 @@ class MkdirRequest(BaseModel):
 
     uri: str
     description: Optional[str] = None
+    acl: AclSpec | None = None
 
 
 @router.post("/mkdir")
@@ -261,7 +263,12 @@ async def mkdir(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
-        await service.fs.mkdir(uri, ctx=_ctx, description=request.description)
+        await service.fs.mkdir(
+            uri,
+            ctx=_ctx,
+            description=request.description,
+            **({"acl": request.acl} if request.acl is not None else {}),
+        )
     except AGFSClientError as e:
         mapped = map_exception(e, resource=uri, resource_type="file")
         if mapped is not None:

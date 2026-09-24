@@ -60,6 +60,14 @@ test("uri guard deny for Glob with viking URI", () => {
   assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
 });
 
+test("uri guard pass-through for Grep searching local files for a viking URI", () => {
+  const output = evaluateHostUriGuard("zcode", {
+    tool_name: "Grep",
+    tool_input: { pattern: "viking://user/", path: "/repo" },
+  });
+  assert.deepEqual(output, {});
+});
+
 test("uri guard handles alternative tool_input field names", () => {
   const output = evaluateHostUriGuard("zcode", {
     tool_name: "Read",
@@ -76,17 +84,25 @@ test("uri guard handles alternative tool_name field names", () => {
   assert.equal(output.hookSpecificOutput?.permissionDecision, "deny");
 });
 
-test("uri guard returns empty for unmatched tool name", () => {
+test("uri guard notice for a shell command carries only hookEventName and additionalContext", () => {
   const output = evaluateHostUriGuard("zcode", {
     tool_name: "Bash",
     tool_input: { command: "cat viking://user/test.md" },
   });
-  // Bash is not in the Read|Glob|Grep matcher — but evaluateUriGuard
-  // may still detect viking:// in certain fields. The important assertion is
-  // that the output shape is valid (either empty or correct deny).
-  if (Object.keys(output).length > 0) {
-    assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");
-  }
+  assert.deepEqual(Object.keys(output), ["hookSpecificOutput"]);
+  assert.deepEqual(Object.keys(output.hookSpecificOutput).sort(), ["additionalContext", "hookEventName"]);
+  assert.equal(output.hookSpecificOutput.hookEventName, "PreToolUse");
+  assert.match(output.hookSpecificOutput.additionalContext, /viking:\/\/user\/test\.md/);
+  assert.match(output.hookSpecificOutput.additionalContext, /ignore this notice/);
+});
+
+test("PreToolUse matcher names no shell tool", () => {
+  const hooks = JSON.parse(readFileSync(join(PLUGIN_ROOT, "hosts", "zcode", "hooks.json"), "utf8"));
+  assert.deepEqual(
+    hooks.hooks.PreToolUse.map((entry) => entry.matcher),
+    ["Read|Glob|Grep"],
+    "a shell tool here sends ZCode a PreToolUse additionalContext its strict schema is not verified to accept",
+  );
 });
 
 // ---------------------------------------------------------------------------

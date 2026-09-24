@@ -3,9 +3,7 @@
 """FastAPI application for OpenViking HTTP Server."""
 
 import asyncio
-import logging
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,13 +27,14 @@ from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
-from openviking.server.profile_middleware import create_profile_http_middleware
+from openviking.server.profile_middleware import ProfileMiddleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from openviking.server.routers import (
     acl_router,
     admin_router,
     agent_evolution_router,
     bot_router,
+    bot_studio_router,
     compile_router,
     console_router,
     content_router,
@@ -58,6 +57,7 @@ from openviking.server.routers import (
     watches_router,
     webdav_router,
 )
+from openviking.server.timing_middleware import RequestTimingMiddleware
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
@@ -160,16 +160,8 @@ async def _initialize_runtime_state(
 ) -> None:
     """Initialize service and auth dependencies before traffic is accepted."""
     await service.initialize()
+    await service.apply_agent_evolution_config()
     await _initialize_auth_plugin(app, service, config)
-    manager = app.state.api_key_manager
-    if manager is not None:
-        await service.load_acl_settings(
-            [
-                item["account_id"]
-                for item in manager.get_accounts()
-                if item["account_id"] != service.user.account_id
-            ]
-        )
     from openviking.service.deletion import setup_deletion
 
     app.state.deletion_service = await setup_deletion(
@@ -261,7 +253,7 @@ def create_app(
     Args:
         config: Server configuration. If None, loads from default location.
         service: Pre-initialized OpenVikingService (optional).
-        config_path: Resolved ov.conf path used for live configuration reload.
+        config_path: Resolved ov.conf path used for startup configuration.
 
     Returns:
         FastAPI application instance
@@ -299,7 +291,9 @@ def create_app(
         if callable(usage_reporter_setter):
             usage_reporter_setter(_get_usage_reporter())
 
-        agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
+        agent_evolution_setter = getattr(service_obj, "set_agent_evolution_config", None)
+        if not callable(agent_evolution_setter):
+            agent_evolution_setter = getattr(sessions, "set_agent_evolution_config", None)
         if callable(agent_evolution_setter):
             agent_evolution_setter(config.agent_evolution)
 
@@ -311,15 +305,9 @@ def create_app(
         if callable(user_memory_policy_setter):
             user_memory_policy_setter(config.user_config_defaults.memory_policy)
 
-        agent_evolution_path_setter = getattr(
-            sessions,
-            "set_agent_evolution_config_path",
-            None,
-        )
-        if callable(agent_evolution_path_setter):
-            agent_evolution_path_setter(
-                str(resolved_config_path) if resolved_config_path is not None else None
-            )
+        auto_commit_setter = getattr(sessions, "set_default_user_auto_commit_policy", None)
+        if callable(auto_commit_setter):
+            auto_commit_setter(config.user_config_defaults.auto_commit_policy)
 
     if service is not None:
         _configure_session_runtime(service)
@@ -331,6 +319,10 @@ def create_app(
         """Application lifespan handler."""
         nonlocal service
         _configure_default_executor(config)
+        if config.observability.metrics.enabled:
+            from openviking.metrics.core.runtime import install_executor_monitor
+
+            install_executor_monitor()
         owns_service = service is None
         if owns_service:
             service = OpenVikingService()
@@ -398,6 +390,10 @@ def create_app(
 
         await shutdown_usage_audit(app=app)
         await shutdown_metrics_async(app=app)
+        if config.observability.metrics.enabled:
+            from openviking.metrics.core.runtime import uninstall_executor_monitor
+
+            uninstall_executor_monitor()
         task_tracker.stop_cleanup_loop()
         auth_plugin_state = getattr(app.state, "auth_plugin", None)
         if auth_plugin_state is not None:
@@ -463,62 +459,16 @@ def create_app(
             config.observability.dump_body.max_bytes,
         )
 
-    # Add HTTP observability middleware (metrics, tracing).
-    # Note: In FastAPI/Starlette, middleware added later executes first (outer layer).
-    # We want timing to be the outermost layer to measure the full request duration.
+    # Later registrations wrap earlier ones: timing/header logging -> profile ->
+    # observability -> optional body dump -> routes. Native ASGI middleware keeps
+    # response streams and request execution on the downstream application's path.
     from openviking.observability.http_observability_middleware import (
-        create_http_observability_middleware,
+        HTTPObservabilityMiddleware,
     )
 
-    http_observability_middleware = create_http_observability_middleware()
-    profile_http_middleware = create_profile_http_middleware()
-
-    @app.middleware("http")
-    async def add_http_observability(request: Request, call_next: Callable):
-        return await http_observability_middleware(request, call_next)
-
-    @app.middleware("http")
-    async def add_profile_output(request: Request, call_next: Callable):
-        return await profile_http_middleware(request, call_next)
-
-    # Add request timing middleware last (so it executes first as the outermost layer)
-    # This ensures X-Process-Time includes the full request duration including
-    # observability middleware overhead.
-    # Add request header logging middleware (for debug)
-    @app.middleware("http")
-    async def log_request_headers(request: Request, call_next: Callable):
-        access_logger = logging.getLogger("uvicorn.access")
-        if access_logger.isEnabledFor(logging.DEBUG):
-            headers = dict(request.headers)
-            header_names = ", ".join(sorted(headers.keys()))
-            access_logger.debug(
-                f"Request headers for {request.method} {request.url.path}: {header_names}"
-            )
-        response = await call_next(request)
-        return response
-
-    # Add request timing middleware
-    @app.middleware("http")
-    async def add_timing(request: Request, call_next: Callable):
-        """
-        Middleware to measure request processing time.
-
-        This middleware is added last so it executes as the outermost layer,
-        ensuring X-Process-Time includes the full request duration including
-        all other middleware overhead.
-
-        Args:
-            request: The incoming HTTP request.
-            call_next: The next middleware/handler in the chain.
-
-        Returns:
-            The response with X-Process-Time header added.
-        """
-        start_time = time.perf_counter()
-        response = await call_next(request)
-        process_time = time.perf_counter() - start_time
-        response.headers["X-Process-Time"] = str(process_time)
-        return response
+    app.add_middleware(HTTPObservabilityMiddleware)
+    app.add_middleware(ProfileMiddleware)
+    app.add_middleware(RequestTimingMiddleware)
 
     # Add exception handler for OpenVikingError
     @app.exception_handler(OpenVikingError)
@@ -667,6 +617,7 @@ def create_app(
     app.include_router(watches_router)
     app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")
+    app.include_router(bot_studio_router)
 
     # OAuth 2.1: when enabled, mount the official MCP SDK auth routes
     # (DCR / authorize / token / metadata) plus our authorize page + consent /
@@ -834,9 +785,9 @@ def create_app(
     else:
         logger.info("Web Studio bundle not found at %s; skipping /studio mount", _studio_dir)
 
-    # MCP endpoint — serves 15 tools (find, search, read, write, edit,
-    # list, tree, remember, add_resource, list_watches, cancel_watch, grep,
-    # glob, forget, health) via streamable HTTP for MCP clients.
+    # MCP endpoint — serves 16 tools (find, search, read, write, edit,
+    # list, tree, remember, add_resource, add_skill, list_watches, cancel_watch,
+    # grep, glob, forget, health) via streamable HTTP for MCP clients.
     from starlette.routing import Match, Route
 
     from openviking.server.mcp_endpoint import create_mcp_app

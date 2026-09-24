@@ -51,6 +51,26 @@ test("TRAE URI guard follows the Claude Code PreToolUse response contract", () =
   }), {});
 });
 
+test("TRAE runs shell commands that carry a viking:// URI and attaches a notice", () => {
+  const hooks = JSON.parse(readFileSync(join(pluginRoot, "hosts", "trae", "hooks.json"), "utf8"));
+  const matcher = hooks.hooks.PreToolUse[0].matcher.split("|");
+  for (const toolName of ["Bash", "RunCommand"]) {
+    assert.ok(matcher.includes(toolName), `${toolName} must reach the URI guard`);
+    const output = evaluateHostUriGuard("trae", {
+      tool_name: toolName,
+      tool_input: { command: "ov read viking://resources/project/file.md" },
+    });
+    assert.equal(output.hookSpecificOutput?.hookEventName, "PreToolUse", toolName);
+    assert.equal(output.hookSpecificOutput?.permissionDecision, undefined, toolName);
+    assert.match(output.hookSpecificOutput?.additionalContext ?? "", /viking:\/\/resources\/project\/file\.md/, toolName);
+    assert.match(output.hookSpecificOutput?.additionalContext ?? "", /ignore this notice/, toolName);
+  }
+  assert.deepEqual(evaluateHostUriGuard("trae", {
+    tool_name: "Bash",
+    tool_input: { command: "cat /tmp/file.md" },
+  }), {});
+});
+
 async function runHook(event, client, input, env) {
   const run = expectExit(await runHookScript(hookEntry, { argv: [event, client], input, env }));
   return JSON.parse(run.stdout.trim() || "{}");

@@ -18,29 +18,15 @@ import { resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildProxyConnection } from "./shared/credentials.mjs";
 import { createLogger } from "./shared/debug-log.mjs";
-import { buildMcpProxyConfig, resolveMcpActorPeerId } from "./shared/mcp-proxy-config.mjs";
+import { toMcpProxyConfig } from "./shared/mcp-proxy-config.mjs";
 import { createOpenVikingMcpProxy } from "./shared/mcp-proxy-core.mjs";
 
-function readProxyConfig() {
+export function readProxyConfig(env = process.env) {
   const cfg = buildProxyConnection("agent-plugins", {
+    env,
     manifestUrl: new URL("../plugin.json", import.meta.url),
   });
-  return buildMcpProxyConfig({
-    baseUrl: cfg.baseUrl,
-    mcpUrl: cfg.mcpUrl,
-    apiKey: cfg.apiKey,
-    account: cfg.account,
-    user: cfg.user,
-    sendIdentityHeaders: cfg.sendIdentityHeaders,
-    peerId: resolveMcpActorPeerId(cfg),
-    userAgent: cfg.userAgent,
-    timeoutMs: cfg.timeoutMs,
-    debug: cfg.debug,
-    debugLogPath: cfg.debugLogPath,
-    credentialSource: cfg.credentialSource,
-    credentialPath: cfg.credentialPath,
-    watchedPaths: cfg.watchedPaths,
-  });
+  return toMcpProxyConfig(cfg, { env });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolvePath(process.argv[1])) {

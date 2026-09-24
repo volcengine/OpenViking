@@ -1,4 +1,3 @@
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
@@ -13,7 +12,8 @@ import { isRetryableFailure } from "./shared/retryable.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import {
   captureEvent,
-  OPENVIKING_PLUGIN_SOURCE,
+  isOpenVikingPluginMessage,
+  pluginMessage,
   promptText,
 } from "./capture.mjs";
 
@@ -102,6 +102,7 @@ export class OpenVikingRuntime {
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config.profileTokenBudget,
       state.config.peerId,
+      state.config,
     );
     state.profileBlock = profile?.block
       ? [
@@ -122,7 +123,7 @@ export class OpenVikingRuntime {
       return null;
     }
     state.profileDelivered = true;
-    return pluginMessage(state.profileBlock, "instructions");
+    return pluginMessage(state.profileBlock, { form: "instructions" });
   }
 
   async recallMessage(agent, messages) {
@@ -138,10 +139,11 @@ export class OpenVikingRuntime {
         actorPeerId: state.config.peerId,
         legacyPeerId: state.config.legacyPeerId,
         sessionId: state.ovSessionId,
+        excludeUris: state.config.recallExcludeUris,
         log: (stage, data) => this.log(stage, data),
       },
     );
-    return block ? pluginMessage(block, "recall") : null;
+    return block ? pluginMessage(block, { form: "recall" }) : null;
   }
 
   capture(session, event) {
@@ -404,19 +406,6 @@ export class OpenVikingRuntime {
   }
 }
 
-function pluginMessage(content, form) {
-  // dsh's own constructor: identity, normalization, and any future Message
-  // invariants come from the pinned peer instead of a hand-built object.
-  return createUserMessage({
-    content: [{ type: "text", text: content }],
-    source: {
-      kind: "plugin",
-      plugin: OPENVIKING_PLUGIN_SOURCE,
-      form,
-    },
-  });
-}
-
 function hasStartupProfile(agent) {
   const session = agent.session;
   const ownEvents = typeof session?.ownEvents === "function"
@@ -432,7 +421,6 @@ function hasStartupProfile(agent) {
 }
 
 function isStartupProfile(message) {
-  return message?.source?.kind === "plugin"
-    && message.source.plugin === OPENVIKING_PLUGIN_SOURCE
+  return isOpenVikingPluginMessage(message)
     && message.source.form === "instructions";
 }

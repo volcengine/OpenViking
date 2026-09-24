@@ -47,6 +47,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.tracer import get_trace_id
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import VikingURI, get_logger
@@ -622,7 +623,9 @@ class MessageRange:
             if not current_messages:
                 return
             content = self._format_merged_content(current_messages)
-            formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
+            # Tool-only messages have no chat text, but must keep their range indices.
+            if content.strip():
+                formatted.append(f"**{self._speaker_for(current_messages[0])}**: {content}")
             current_messages = []
 
         for msg in msg_group:
@@ -1411,6 +1414,7 @@ class MemoryUpdater:
             search_tags_by_uri: Transient search tags to attach while indexing each URI
             ingest_options: Write options for a single-file content write.
         """
+        ingest_options = IngestOptions.from_value(ingest_options)
         if not self._vikingdb:
             logger.debug("VikingDB not available, skipping vectorization")
             return 0
@@ -1500,7 +1504,9 @@ class MemoryUpdater:
                     if getattr(ingest_options, "search_tags", None) is not None:
                         embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags)
                         embedding_msg.context_data["_upsert_options"] = {
-                            "search_tag_mode": ingest_options.search_tag_mode
+                            "search_tag_mode": IngestOptions.vector_search_tag_mode(
+                                ingest_options.search_tag_mode
+                            )
                         }
                     else:
                         transient_tags = search_tags_by_uri.get(uri)

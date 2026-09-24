@@ -12,16 +12,25 @@
 
 <a href="https://www.openviking.ai">官网</a> · <a href="https://openviking.ai/studio">在线体验</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://docs.openviking.ai/">文档</a>
 
-[![](https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff\&labelColor=black\&logo=github\&style=flat-square)](https://github.com/volcengine/OpenViking/releases)
-[![](https://img.shields.io/github/stars/volcengine/OpenViking?labelColor\&style=flat-square\&color=ffcb47)](https://github.com/volcengine/OpenViking)
-[![](https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black\&style=flat-square\&color=ff80eb)](https://github.com/volcengine/OpenViking/issues)
-[![](https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/graphs/contributors)
-[![](https://img.shields.io/badge/license-AGPLv3-white?labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/blob/main/LICENSE)
-[![](https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042\&labelColor=black\&style=flat-square)](https://github.com/volcengine/OpenViking/commits/main)
+<p>
+  <a href="https://github.com/volcengine/OpenViking/releases"><img src="https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square" alt="release"></a>
+  <a href="https://github.com/volcengine/OpenViking"><img src="https://img.shields.io/github/stars/volcengine/OpenViking?labelColor&style=flat-square&color=ffcb47" alt="stars"></a>
+  <a href="https://github.com/volcengine/OpenViking/issues"><img src="https://img.shields.io/github/issues/volcengine/OpenViking?labelColor=black&style=flat-square&color=ff80eb" alt="issues"></a>
+  <a href="https://github.com/volcengine/OpenViking/graphs/contributors"><img src="https://img.shields.io/github/contributors/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square" alt="contributors"></a>
+  <a href="https://github.com/volcengine/OpenViking/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square" alt="license"></a>
+  <a href="https://github.com/volcengine/OpenViking/commits/main"><img src="https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square" alt="last commit"></a>
+</p>
 
-👋 加入我们的社区
+<p>
+  <a href="https://railway.com/deploy/openviking"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="30"></a>
+</p>
 
-📱 <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群">飞书群</a> · <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+<p>
+  <a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群"><img src="docs/images/community/lark.svg" width="18" height="18" alt="飞书">&nbsp;飞书</a> ·
+  <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群"><img src="docs/images/community/wechat.svg" width="18" height="18" alt="微信">&nbsp;微信</a> ·
+  <a href="https://discord.com/invite/eHvx8E9XF3"><img src="docs/images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> ·
+  <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/community/x-dark.svg"><img src="docs/images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
+</p>
 
 <a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
@@ -31,9 +40,9 @@
 
 ## OpenViking 是什么
 
-OpenViking 是面向 AI 智能体的开源上下文数据库，用来存储知识、记住用户，并在会话之间复用经验。
+OpenViking 是面向 AI 智能体的开源上下文数据库——用一个文件系统装下 Agent 所知道的一切：知识、记忆和技能。
 
-OpenViking 将上下文组织成 `viking://` 虚拟文件系统。Agent 可以像操作文件一样，通过 `ls`、`tree`、`read`、`write` 等操作浏览目录、读取、创建和编辑内容，也可以在目录内检索。目录摘要支持按需加载。
+大多数 Agent 记忆是个黑盒：文本进去，向量出来，没人看得到里面到底存了什么。OpenViking 换一种做法，把上下文组织成 `viking://` 虚拟文件系统。Agent 像操作文件一样用 `ls`、`tree`、`read`、`write`、`grep` 浏览和修改；你也可以随时打开目录，查看和编辑 Agent 记住的内容。每个目录都带有自动生成的摘要，Agent 先扫摘要，再决定读哪些内容。
 
 <a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
   <picture>
@@ -46,10 +55,10 @@ OpenViking 将上下文组织成 `viking://` 虚拟文件系统。Agent 可以�
 
 ## 为什么用 OpenViking
 
-- **用文件系统组织上下文。** 资源存放文档和代码，记忆保留用户偏好与经验，技能定义任务执行方式。每项上下文都有 `viking://` URI，供 Agent 浏览和检索。→ [Viking URI](https://docs.openviking.ai/zh/concepts/04-viking-uri) · [上下文类型](https://docs.openviking.ai/zh/concepts/02-context-types)
-- **按需加载上下文。** 目录摘要（L0）和概览（L1）帮助 Agent 判断何时读取完整内容（L2）。→ [上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)
-- **沿目录结构检索。** 向量检索先找到候选目录，再探索其中的内容。`find` 直接执行查询，`search` 可以结合会话上下文规划检索。→ [检索机制](https://docs.openviking.ai/zh/concepts/07-retrieval)
-- **从会话提取记忆。** 提交 Session 后，会话被归档，后台按记忆策略提取内容，与已有记忆比较后新建、合并或跳过。启用 VikingBot 后，还可用 `ov compile` 配合技能，将资料整理成 Wiki、知识图谱或报告。→ [会话管理](https://docs.openviking.ai/zh/concepts/08-session) · [上下文编译](https://docs.openviking.ai/zh/context-compilation/01-overview)
+- **一个文件系统，装下知识、记忆和技能。** 资源存放文档和代码，记忆保留用户偏好与经验，技能定义任务的执行方式——不只是抽取出来的"记忆条目"，而是完整上下文，每一项都有 `viking://` URI 供浏览和检索。→ [Viking URI](https://docs.openviking.ai/zh/concepts/04-viking-uri) · [上下文类型](https://docs.openviking.ai/zh/concepts/02-context-types)
+- **在目录里检索，而不是在整个索引里捞。** 把语义检索限定在某个项目或记忆子树内，而不是扫描一个扁平的向量池。`find` 直接执行查询，`search` 结合会话上下文规划检索。→ [检索机制](https://docs.openviking.ai/zh/concepts/07-retrieval)
+- **先看摘要，再读原文。** 自动生成的目录摘要（L0）和概览（L1）帮助 Agent 判断相关性，再决定是否读取全文（L2）。→ [上下文分层](https://docs.openviking.ai/zh/concepts/03-context-layers)
+- **会话沉淀为可读的文件。** 提交会话后，对话被归档，记忆被提取为可查看、可编辑、可合并的 Markdown。启用 VikingBot 后，`ov compile` 还能把资料整理成 Wiki、知识图谱或报告。→ [会话管理](https://docs.openviking.ai/zh/concepts/08-session) · [上下文编译](https://docs.openviking.ai/zh/context-compilation/01-overview)
 
 [架构](https://docs.openviking.ai/zh/concepts/01-architecture) · [设计思路](https://blog.openviking.ai/post/openviking-context-database/)
 
@@ -306,7 +315,7 @@ ov chat   # 在另一个终端运行
 - **文档**：[docs.openviking.ai](https://docs.openviking.ai/) · [FAQ](https://docs.openviking.ai/zh/faq/faq)
 - **博客**：[blog.openviking.ai](https://blog.openviking.ai/)
 - **团队**：[关于我们](https://docs.openviking.ai/zh/about/01-about-us)
-- **交流**：📱 [飞书群](https://docs.openviking.ai/zh/about/01-about-us#飞书群) · 💬 [微信群](https://docs.openviking.ai/zh/about/01-about-us#微信群) · 🎮 [Discord](https://discord.com/invite/eHvx8E9XF3) · 🐦 [X](https://x.com/openvikingai)
+- **交流**：<a href="https://docs.openviking.ai/zh/about/01-about-us#飞书群"><img src="docs/images/community/lark.svg" width="18" height="18" alt="飞书">&nbsp;飞书</a> · <a href="https://docs.openviking.ai/zh/about/01-about-us#微信群"><img src="docs/images/community/wechat.svg" width="18" height="18" alt="微信">&nbsp;微信</a> · <a href="https://discord.com/invite/eHvx8E9XF3"><img src="docs/images/community/discord.svg" width="18" height="18" alt="Discord">&nbsp;Discord</a> · <a href="https://x.com/openvikingai"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/community/x-dark.svg"><img src="docs/images/community/x.svg" width="16" height="16" alt="X"></picture>&nbsp;X</a>
 - **贡献**：修 bug、加新功能都欢迎——见 [CONTRIBUTING_CN.md](CONTRIBUTING_CN.md)
 
 <a href="https://github.com/volcengine/OpenViking/graphs/contributors">
@@ -323,5 +332,5 @@ OpenViking 各组件采用不同的许可证：
 
 - **主项目**：AGPLv3——详见 [LICENSE](./LICENSE)
 - **crates/ov\_cli**：Apache 2.0——详见 [LICENSE](./crates/LICENSE)
-- **examples**：Apache 2.0——详见 [LICENSE](./examples/LICENSE)
+- **examples**：Apache 2.0——详见 [LICENSE](./examples/LICENSE)。`examples/hermes-plugin` 中的 Hermes 插件保留其 [MIT 许可证](./examples/hermes-plugin/LICENSE)。
 - **third\_party**：各三方项目保留其原有协议

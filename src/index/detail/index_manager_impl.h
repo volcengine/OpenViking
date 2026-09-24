@@ -22,7 +22,7 @@ namespace vectordb {
 
 class IndexManagerImpl : public IndexManager {
  public:
-  IndexManagerImpl(const std::string& path_or_json);
+  IndexManagerImpl(const std::string& path_or_json, bool normalize_vector = false);
 
   ~IndexManagerImpl() {
     scalar_index_.reset();

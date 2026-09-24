@@ -15,13 +15,18 @@ from openviking.storage.vectordb.collection.volcengine_collection import (
     get_or_create_volcengine_collection,
 )
 
-from .base import VIKINGDB_TEXT_FIELD_BYTE_LIMIT, CollectionAdapter
+from .base import (
+    VIKINGDB_STRING_FIELD_BYTE_LIMIT,
+    VIKINGDB_TEXT_FIELD_BYTE_LIMIT,
+    CollectionAdapter,
+)
 
 
 class VolcengineCollectionAdapter(CollectionAdapter):
     """Adapter for Volcengine-hosted VikingDB."""
 
     _DATA_BATCH_SIZE = 100
+    _STRING_FIELD_BYTE_LIMIT = VIKINGDB_STRING_FIELD_BYTE_LIMIT
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
     USE_CONTENT_FIELD = True
 
@@ -181,6 +186,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         return super()._normalize_record_for_read(record)
 
     def update_data(self, data_list: List[Dict[str, Any]]):
+        data_list = [self._normalize_record_for_write(item) for item in data_list]
         collection = self.get_collection()
         result = collection.update_data(data_list)
         if isinstance(result, dict):

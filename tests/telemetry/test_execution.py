@@ -86,14 +86,21 @@ def test_operation_telemetry_summary_includes_resource_breakdown():
     from openviking.telemetry.operation import OperationTelemetry
 
     telemetry = OperationTelemetry(operation="resources.add_resource", enabled=True)
-    telemetry.set("resource.request.duration_ms", 152.3)
-    telemetry.set("resource.process.duration_ms", 101.7)
-    telemetry.set("resource.parse.duration_ms", 38.1)
-    telemetry.set("resource.parse.warnings_count", 1)
-    telemetry.set("resource.finalize.duration_ms", 22.4)
-    telemetry.set("resource.summarize.duration_ms", 31.8)
-    telemetry.set("resource.wait.duration_ms", 46.9)
-    telemetry.set("resource.watch.duration_ms", 0.8)
+    telemetry.set("resource.total.duration_ms", 152.3)
+    telemetry.set("resource.source_execute.duration_ms", 101.7)
+    telemetry.set("resource.source_prepare.duration_ms", 9.1)
+    telemetry.set("resource.parse_artifact.duration_ms", 38.1)
+    telemetry.set("resource.target_resolve.duration_ms", 22.4)
+    telemetry.set("resource.update_plan.duration_ms", 31.8)
+    telemetry.set("resource.update_plan.artifact_inventory.duration_ms", 4.0)
+    telemetry.set("resource.update_plan.rnfv_snapshot.duration_ms", 11.0)
+    telemetry.set("resource.update_plan.diff_and_compile.duration_ms", 16.8)
+    telemetry.set("resource.content_commit.duration_ms", 12.4)
+    telemetry.set("resource.derived_enqueue.duration_ms", 4.6)
+    telemetry.set("queue.semantic.queue_wait.duration_ms", 46.9)
+    telemetry.set("queue.semantic.execute.duration_ms", 70.0)
+    telemetry.set("queue.embedding.queue_wait.duration_ms", 0.8)
+    telemetry.set("queue.embedding.execute.duration_ms", 10.0)
     telemetry.set("resource.flags.wait", True)
     telemetry.set("resource.flags.build_index", True)
     telemetry.set("resource.flags.summarize", False)
@@ -102,15 +109,27 @@ def test_operation_telemetry_summary_includes_resource_breakdown():
     summary = telemetry.finish().summary
 
     assert summary["resource"] == {
-        "request": {"duration_ms": 152.3},
-        "process": {
-            "duration_ms": 101.7,
-            "parse": {"duration_ms": 38.1, "warnings_count": 1},
-            "finalize": {"duration_ms": 22.4},
-            "summarize": {"duration_ms": 31.8},
+        "total": {"duration_ms": 152.3},
+        "source_execute": {"duration_ms": 101.7},
+        "source_prepare": {"duration_ms": 9.1},
+        "parse_artifact": {"duration_ms": 38.1},
+        "target_resolve": {"duration_ms": 22.4},
+        "update_plan": {
+            "duration_ms": 31.8,
+            "artifact_inventory": {"duration_ms": 4.0},
+            "rnfv_snapshot": {"duration_ms": 11.0},
+            "diff_and_compile": {"duration_ms": 16.8},
         },
-        "wait": {"duration_ms": 46.9},
-        "watch": {"duration_ms": 0.8},
+        "content_commit": {"duration_ms": 12.4},
+        "derived_enqueue": {"duration_ms": 4.6},
+        "semantic": {
+            "queue_wait": {"duration_ms": 46.9},
+            "execute": {"duration_ms": 70.0},
+        },
+        "embedding": {
+            "queue_wait": {"duration_ms": 0.8},
+            "execute": {"duration_ms": 10.0},
+        },
         "flags": {
             "wait": True,
             "build_index": True,
@@ -153,9 +172,7 @@ def test_operation_telemetry_summary_omits_zero_valued_fields():
     telemetry.set("semantic_nodes.done", 8)
     telemetry.set("semantic_nodes.pending", 1)
     telemetry.set("semantic_nodes.running", 0)
-    telemetry.set("resource.process.duration_ms", 12.3)
-    telemetry.set("resource.parse.duration_ms", 0.0)
-    telemetry.set("resource.parse.warnings_count", 0)
+    telemetry.set("resource.source_execute.duration_ms", 12.3)
     telemetry.set("resource.flags.wait", False)
     telemetry.set("resource.flags.build_index", True)
 
@@ -166,7 +183,7 @@ def test_operation_telemetry_summary_omits_zero_valued_fields():
     assert summary["queue"]["embedding"] == {"processed": 4}
     assert "running" not in summary["semantic_nodes"]
     assert summary["resource"] == {
-        "process": {"duration_ms": 12.3},
+        "source_execute": {"duration_ms": 12.3},
         "flags": {"wait": False, "build_index": True, "summarize": False, "watch_enabled": False},
     }
 

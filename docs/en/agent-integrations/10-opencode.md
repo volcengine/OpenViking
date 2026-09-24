@@ -4,11 +4,11 @@ Give [OpenCode](https://opencode.ai/) cross-project and cross-session long-term 
 
 Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
-Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read_tool_result).
+Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
 
 ## Prerequisites
 
-- [OpenCode](https://opencode.ai/)
+- [OpenCode](https://opencode.ai/) 1.15.7+ or 2.0.15+
 - Node.js 18+
 - An OpenViking HTTP server
 - An OpenViking API key when your server requires authentication
@@ -60,6 +60,10 @@ opencode
 
 If `~/.config/opencode/opencode.json` already exists, do not overwrite it; only merge `"@openviking/opencode-plugin"` into the existing `plugin` array. OpenCode downloads the npm package at startup, and the plugin registers its MCP server automatically.
 
+OpenCode 2 uses the same package. It calls `setup()`, while OpenCode 1 calls `server()`. OpenCode 2 normalizes `"plugin"` to `"plugins"`, so the installer continues to write the v1/v2-compatible `"plugin"` key; do not rewrite an existing config just for v2. There is no OpenCode skill to install.
+
+On OpenCode 2, the plugin sets its MCP server to `codemode: false`, so tools remain directly available as `openviking_*` instead of being folded into Code Mode. OpenCode 2 has no plugin toast API, so service availability notices are written to the plugin log only.
+
 ### Source install
 
 If package installation is not available in your environment:
@@ -67,12 +71,15 @@ If package installation is not available in your environment:
 ```bash
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
+node examples/memory-plugin-shared/sync.mjs
 mkdir -p ~/.config/opencode/plugins/openviking
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
+
+`sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
 
 This source install creates the layout OpenCode can discover:
 
@@ -91,9 +98,10 @@ Use the `.js` wrapper for source installs; OpenCode's local plugin scanner disco
 
 ## Configure
 
-Credentials are shared with the Claude Code and Codex memory plugins. Run the setup wizard once, or set `OPENVIKING_*` environment variables:
+Credentials are shared with the Claude Code and Codex memory plugins. Run the setup wizard once from the repository root, or set `OPENVIKING_*` environment variables. The wizard imports `lib/shared/` too, so generate it first:
 
 ```bash
+node examples/memory-plugin-shared/sync.mjs
 node examples/opencode-plugin/scripts/setup.mjs
 ```
 
@@ -111,6 +119,8 @@ Behavior knobs live in the `plugin` section of `~/.openviking/ovcli.conf`, besid
     "commitTokenThreshold": 20000,
     "commitKeepRecentCount": 10,
     "profileTokenBudget": 10000,
+    "skillCatalog": true,
+    "skillCatalogTokenBudget": 1200,
     "resumeContextBudget": 32000,
     "opencode": {
       "timeoutMs": 30000,
@@ -122,6 +132,8 @@ Behavior knobs live in the `plugin` section of `~/.openviking/ovcli.conf`, besid
 ```
 
 Settings resolve highest priority first: `OPENVIKING_*` environment variables, the workspace's `.openviking/config.json` and `config.local.json`, `plugin.opencode`, `plugin`, then the built-in defaults. `autoRecall: false` turns automatic recall off, and `autoCapture: false` stops the plugin sending turns back.
+
+The first message of each session carries a hidden `<openviking-context source="session-start">` block with your `profile.md`, the `preferences/` and `entities/` memory indexes, and an `<available-skills>` catalog: your own skills first, then the account-shared ones under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours. The agent reads a skill's `SKILL.md` with `openviking_read` before following it, and creates or shares skills with `openviking_add_skill`. `profileTokenBudget` covers the profile and memory indexes; the catalog has its own budget, `skillCatalogTokenBudget` (default `1200`, env `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`). When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. `skillCatalog: false` (`OPENVIKING_SKILL_CATALOG=0`) or a budget of `0` turns the catalog off; with no skills, or on a server without `GET /api/v1/skills`, it is left out.
 
 Environment variables override `ovcli.conf`:
 
@@ -136,12 +148,16 @@ API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy
 
 ## Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (15 tools). OpenCode namespaces MCP tools as `openviking_*`:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (16 tools). OpenCode namespaces MCP tools as `openviking_*`:
 
 - `openviking_find`, `openviking_search` (`openviking_search` with `mode="context"` replaces the former recall tool)
 - `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
-- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`
+- `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
+
+OpenCode 2 captures the current turn's user message, assistant response, and tool results when each execution ends, and captures the transcript before compaction discards it. It commits at the token threshold, and forces a commit on compaction, session deletion, and plugin cleanup. OpenCode 2 runs cleanup after 60 minutes of inactivity, when the service stops, and when a local plugin is hot-reloaded.
+
+OpenCode 1.15.7 does not call plugin disposal hooks. A short-lived v1 CLI run can also exit before asynchronous capture finishes; this behavior predates v2 support. Keep the v1 service running to let idle capture finish. OpenCode 1.18.32 calls the disposal hook when its instance is disposed.
 
 Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are written to:
 
@@ -154,7 +170,8 @@ Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are
 
 | Issue | What to check |
 |-------|---------------|
-| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
+| Plugin does not load | Confirm the `plugin` array in `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
+| Load fails with a missing `lib/shared/*.mjs` module | The source copy was made without running `sync.mjs` first. Run `node examples/memory-plugin-shared/sync.mjs` from the repository root and copy `lib/` again |
 | MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars; `OPENVIKING_CLI_CONFIG_FILE` points the plugin at a different ovcli.conf |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Recall is empty | Confirm the OpenViking server has indexed memories/resources and that `autoRecall` is not set to `false` |

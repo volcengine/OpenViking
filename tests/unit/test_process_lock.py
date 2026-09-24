@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for PID-based process lock utility."""
+"""Workspace exclusivity and recovery contracts, exercised with real processes."""
 
+import errno
+import multiprocessing
 import os
+import subprocess
 import sys
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 
@@ -15,390 +15,156 @@ import openviking.utils.process_lock as process_lock_module
 from openviking.utils.process_lock import (
     LOCK_FILENAME,
     DataDirectoryLocked,
-    _is_pid_alive,
-    _read_pid_file,
     acquire_data_dir_lock,
     release_data_dir_lock,
 )
 
 
-class TestReadPidFile:
-    """Test _read_pid_file function."""
-
-    def test_read_valid_pid(self, tmp_path: Path):
-        """Test reading a valid PID from file."""
-        lock_file = tmp_path / LOCK_FILENAME
-        lock_file.write_text("12345")
-
-        pid = _read_pid_file(str(lock_file))
-        assert pid == 12345
-
-    def test_read_nonexistent_file(self, tmp_path: Path):
-        """Test reading from nonexistent file returns 0."""
-        lock_file = tmp_path / "nonexistent.pid"
-
-        pid = _read_pid_file(str(lock_file))
-        assert pid == 0
-
-    def test_read_invalid_pid(self, tmp_path: Path):
-        """Test reading invalid PID returns 0."""
-        lock_file = tmp_path / LOCK_FILENAME
-        lock_file.write_text("not_a_number")
-
-        pid = _read_pid_file(str(lock_file))
-        assert pid == 0
-
-    def test_read_empty_file(self, tmp_path: Path):
-        """Test reading empty file returns 0."""
-        lock_file = tmp_path / LOCK_FILENAME
-        lock_file.write_text("")
-
-        pid = _read_pid_file(str(lock_file))
-        assert pid == 0
-
-    def test_read_pid_with_whitespace(self, tmp_path: Path):
-        """Test reading PID with leading/trailing whitespace."""
-        lock_file = tmp_path / LOCK_FILENAME
-        lock_file.write_text("  12345  \n")
-
-        pid = _read_pid_file(str(lock_file))
-        assert pid == 12345
-
-    def test_read_pid_with_newline(self, tmp_path: Path):
-        """Test reading PID with newline."""
-        lock_file = tmp_path / LOCK_FILENAME
-        lock_file.write_text("12345\n")
-
-        pid = _read_pid_file(str(lock_file))
-        assert pid == 12345
-
-
-class TestIsPidAlive:
-    """Test _is_pid_alive function."""
-
-    def test_current_pid_is_alive(self):
-        """Test that current process PID is detected as alive."""
-        current_pid = os.getpid()
-        assert _is_pid_alive(current_pid) is True
-
-    def test_pid_1_is_alive(self):
-        """Test that PID 1 (init) is typically alive."""
-        # PID 1 is usually init process on Linux
-        assert _is_pid_alive(1) is True
-
-    def test_nonexistent_pid_not_alive(self):
-        """Test that nonexistent PID is not alive."""
-        # Use a very high PID that's unlikely to exist
-        assert _is_pid_alive(999999) is False
-
-    def test_pid_zero_not_alive(self):
-        """Test that PID 0 is not alive."""
-        assert _is_pid_alive(0) is False
-
-    def test_negative_pid_not_alive(self):
-        """Test that negative PID is not alive."""
-        assert _is_pid_alive(-1) is False
-
-    @pytest.mark.parametrize(
-        "open_error, wait_result, wait_error, expected",
+def _probe_lock(workspace):
+    return subprocess.run(
         [
-            (None, 258, None, True),  # WAIT_TIMEOUT: still running
-            (None, 0, None, False),  # WAIT_OBJECT_0: exited
-            (87, None, None, False),  # no such PID
-            (5, None, None, True),  # access denied
-            (6, None, None, True),  # unknown query failure
-            (None, None, OSError("wait failed"), True),
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "from openviking.utils.process_lock import (\n"
+            "    acquire_data_dir_lock, release_data_dir_lock, DataDirectoryLocked)\n"
+            "try:\n"
+            "    path = acquire_data_dir_lock(sys.argv[1])\n"
+            "except DataDirectoryLocked as exc:\n"
+            "    print(exc)\n"
+            "    sys.exit(2)\n"
+            "release_data_dir_lock(path)\n",
+            str(workspace),
         ],
+        capture_output=True,
+        text=True,
+        timeout=20,
     )
-    def test_windows_probe_never_signals(
-        self, monkeypatch, open_error, wait_result, wait_error, expected
-    ):
-        api = SimpleNamespace(
-            SYNCHRONIZE=0x100000,
-            WAIT_OBJECT_0=0,
-            OpenProcess=Mock(return_value=123),
-            WaitForSingleObject=Mock(return_value=wait_result, side_effect=wait_error),
-            CloseHandle=Mock(),
-        )
-        if open_error is not None:
-            error = OSError("open failed")
-            error.winerror = open_error
-            api.OpenProcess.side_effect = error
-        with monkeypatch.context() as patch:
-            patch.setattr(process_lock_module.sys, "platform", "win32")
-            patch.setitem(sys.modules, "_winapi", api)
-            patch.setattr(os, "kill", Mock(side_effect=AssertionError("must not signal")))
-            assert _is_pid_alive(os.getpid()) is expected
-        api.OpenProcess.assert_called_once_with(api.SYNCHRONIZE, False, os.getpid())
-        if open_error is None:
-            api.WaitForSingleObject.assert_called_once_with(123, 0)
-            api.CloseHandle.assert_called_once_with(123)
-        else:
-            api.WaitForSingleObject.assert_not_called()
-            api.CloseHandle.assert_not_called()
 
-    @pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows APIs")
-    def test_windows_native_current_pid_never_signals(self, monkeypatch):
-        monkeypatch.setattr(os, "kill", Mock(side_effect=AssertionError("must not signal")))
-        assert _is_pid_alive(os.getpid()) is True
 
-    def test_non_windows_system_error_bubbles_up(self, monkeypatch):
-        """Non-Windows should not downgrade unexpected SystemError values."""
-
-        def _raise_system_error(_pid: int, _sig: int) -> None:
-            raise SystemError("unexpected failure")
-
-        monkeypatch.setattr(process_lock_module.sys, "platform", "linux")
-        monkeypatch.setattr(process_lock_module.os, "kill", _raise_system_error)
-
-        with pytest.raises(SystemError):
-            _is_pid_alive(12345)
+def _contend_for_lock(workspace, start, release, results):
+    start.wait(timeout=20)
+    try:
+        lock_path = acquire_data_dir_lock(workspace)
+    except DataDirectoryLocked:
+        results.put((os.getpid(), "locked"))
+        return
+    try:
+        results.put((os.getpid(), "acquired"))
+        if not release.poll(30):
+            raise TimeoutError("lock owner was not released")
+        release.recv()
+    finally:
+        release.close()
+        release_data_dir_lock(lock_path)
 
 
 class TestAcquireDataDirLock:
-    """Test acquire_data_dir_lock function."""
+    @pytest.mark.parametrize("failure", ["open", "lock"])
+    def test_filesystem_errors_fail_acquisition(self, tmp_path, monkeypatch, failure):
+        """Filesystem permission and unsupported-lock errors must fail startup."""
+        error = PermissionError(errno.EACCES, "read-only workspace")
+        if failure == "open":
+            target, name = process_lock_module.os, "open"
+        else:
+            error = OSError(errno.ENOTSUP, "locking unsupported")
+            if sys.platform == "win32":
+                import msvcrt
 
-    def test_acquire_creates_lock_file(self, tmp_path: Path):
-        """Test acquiring lock creates lock file."""
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-
-        assert lock_path == str(tmp_path / LOCK_FILENAME)
-        assert (tmp_path / LOCK_FILENAME).exists()
-
-    def test_acquire_writes_current_pid(self, tmp_path: Path):
-        """Test lock file contains current PID."""
-        acquire_data_dir_lock(str(tmp_path))
-        my_pid = os.getpid()
-
-        stored_pid = int((tmp_path / LOCK_FILENAME).read_text().strip())
-        assert stored_pid == my_pid
-
-    def test_acquire_same_pid_succeeds(self, tmp_path: Path):
-        """Test acquiring lock with same PID succeeds."""
-        my_pid = os.getpid()
-        (tmp_path / LOCK_FILENAME).write_text(str(my_pid))
-
-        # Should succeed since it's our own PID
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-        assert lock_path == str(tmp_path / LOCK_FILENAME)
-
-    def test_acquire_with_stale_lock_succeeds(self, tmp_path: Path):
-        """Test acquiring lock with stale (dead process) lock succeeds."""
-        # Write a PID that doesn't exist
-        (tmp_path / LOCK_FILENAME).write_text("999999")
-
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-        assert lock_path == str(tmp_path / LOCK_FILENAME)
-
-    def test_acquire_with_live_process_raises(self, tmp_path: Path):
-        """Test acquiring lock with live process raises DataDirectoryLocked."""
-        # Use PID 1 (init) which is typically alive
-        (tmp_path / LOCK_FILENAME).write_text("1")
-
-        with pytest.raises(DataDirectoryLocked) as exc_info:
-            acquire_data_dir_lock(str(tmp_path))
-
-        assert "Another OpenViking process" in str(exc_info.value)
-        assert "PID 1" in str(exc_info.value)
-
-    def test_acquire_creates_directory(self, tmp_path: Path):
-        """Test acquiring lock creates directory if it doesn't exist."""
-        new_dir = tmp_path / "new_subdir"
-
-        acquire_data_dir_lock(str(new_dir))
-        assert new_dir.exists()
-        assert (new_dir / LOCK_FILENAME).exists()
-
-    def test_acquire_write_failure_is_not_reported_as_success(self, tmp_path: Path, monkeypatch):
-        """A failed PID-file write must fail closed instead of claiming exclusivity."""
-
-        def _deny_makedirs(*_args, **_kwargs) -> None:
-            raise PermissionError("read-only workspace")
-
-        workspace = tmp_path / "missing"
-        monkeypatch.setattr(process_lock_module.os, "makedirs", _deny_makedirs)
-
-        with pytest.raises(PermissionError, match="read-only workspace"):
-            acquire_data_dir_lock(str(workspace))
-
-        assert not (workspace / LOCK_FILENAME).exists()
-
-    def test_error_message_suggests_http_server(self, tmp_path: Path):
-        """Test error message suggests using one HTTP server."""
-        (tmp_path / LOCK_FILENAME).write_text("1")
-
-        with pytest.raises(DataDirectoryLocked) as exc_info:
-            acquire_data_dir_lock(str(tmp_path))
-
-        error_msg = str(exc_info.value)
-        assert "OpenViking server" in error_msg
-        assert "connect clients over HTTP" in error_msg
-
-    def test_error_message_shows_pid(self, tmp_path: Path):
-        """Test error message shows conflicting PID."""
-        (tmp_path / LOCK_FILENAME).write_text("1")
-
-        with pytest.raises(DataDirectoryLocked) as exc_info:
-            acquire_data_dir_lock(str(tmp_path))
-
-        error_msg = str(exc_info.value)
-        assert "PID 1" in error_msg
-
-    def test_error_message_shows_directory(self, tmp_path: Path):
-        """Test error message shows directory path."""
-        (tmp_path / LOCK_FILENAME).write_text("1")
-
-        with pytest.raises(DataDirectoryLocked) as exc_info:
-            acquire_data_dir_lock(str(tmp_path))
-
-        error_msg = str(exc_info.value)
-        assert str(tmp_path) in error_msg
-
-    @pytest.mark.parametrize("winerror", [87, 5])
-    def test_windows_lock_reclaimed_only_for_missing_pid(self, tmp_path, monkeypatch, winerror):
-        lock_file = tmp_path / LOCK_FILENAME
-        lock_file.write_text("12345")
-        error = OSError("process query failed")
-        error.winerror = winerror
-        api = SimpleNamespace(SYNCHRONIZE=0x100000, OpenProcess=Mock(side_effect=error))
-        with monkeypatch.context() as patch:
-            patch.setattr(process_lock_module.sys, "platform", "win32")
-            patch.setitem(sys.modules, "_winapi", api)
-            patch.setattr(os, "kill", Mock(side_effect=AssertionError("must not signal")))
-            if winerror == 87:
-                acquire_data_dir_lock(str(tmp_path))
-                assert int(lock_file.read_text()) == os.getpid()
+                target, name = msvcrt, "locking"
             else:
-                with pytest.raises(DataDirectoryLocked):
-                    acquire_data_dir_lock(str(tmp_path))
-                assert lock_file.read_text() == "12345"
+                import fcntl
 
+                target, name = fcntl, "flock"
 
-class TestAcquireDataDirLockEdgeCases:
-    """Test edge cases for acquire_data_dir_lock."""
+        def fail(*args, **kwargs):
+            raise error
 
-    def test_acquire_nested_directory(self, tmp_path: Path):
-        """Test acquiring lock in nested directory."""
-        nested = tmp_path / "a" / "b" / "c"
+        with monkeypatch.context() as patch:
+            patch.setattr(target, name, fail)
+            with pytest.raises(OSError) as raised:
+                acquire_data_dir_lock(str(tmp_path))
+            assert raised.value is error
 
-        acquire_data_dir_lock(str(nested))
-        assert nested.exists()
-        assert (nested / LOCK_FILENAME).exists()
-
-    def test_acquire_overwrites_stale_lock(self, tmp_path: Path):
-        """Test that acquiring overwrites stale lock with current PID."""
-        my_pid = os.getpid()
-        (tmp_path / LOCK_FILENAME).write_text("999999")
-
-        acquire_data_dir_lock(str(tmp_path))
-
-        stored_pid = int((tmp_path / LOCK_FILENAME).read_text().strip())
-        assert stored_pid == my_pid
-
-    def test_lock_filename_constant(self):
-        """Test LOCK_FILENAME constant is correct."""
-        assert LOCK_FILENAME == ".openviking.pid"
-
-    def test_acquire_with_pathlib_path(self, tmp_path: Path):
-        """Test acquiring with pathlib.Path instead of string."""
+        # Failed acquisition must not leave a process-local owner behind.
         lock_path = acquire_data_dir_lock(str(tmp_path))
-        assert lock_path == str(tmp_path / LOCK_FILENAME)
-
-    def test_acquire_permissions_on_readonly_parent(self, tmp_path: Path):
-        """Test handling when parent directory is read-only."""
-        # This test may not work on all systems
-        # Just verify it doesn't crash
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-        assert lock_path.endswith(LOCK_FILENAME)
+        try:
+            result = _probe_lock(tmp_path)
+            assert result.returncode == 2, result.stderr
+        finally:
+            release_data_dir_lock(lock_path)
+        assert _probe_lock(tmp_path).returncode == 0
 
 
 class TestReleaseDataDirLock:
-    """Test explicit process-lock release used by service shutdown."""
-
-    def test_release_removes_owned_lock(self, tmp_path: Path):
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-
-        release_data_dir_lock(lock_path)
-
-        assert not (tmp_path / LOCK_FILENAME).exists()
-
-    def test_release_preserves_replacement_owner(self, tmp_path: Path):
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-        (tmp_path / LOCK_FILENAME).write_text("999999")
-
-        release_data_dir_lock(lock_path)
-
-        assert (tmp_path / LOCK_FILENAME).read_text() == "999999"
-
-    def test_release_is_idempotent(self, tmp_path: Path):
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-
-        release_data_dir_lock(lock_path)
-        release_data_dir_lock(lock_path)
-
-        assert not (tmp_path / LOCK_FILENAME).exists()
-
-    def test_release_keeps_lock_until_last_same_process_holder(self, tmp_path: Path):
-        lock_path = acquire_data_dir_lock(str(tmp_path))
-        assert acquire_data_dir_lock(str(tmp_path)) == lock_path
-
-        release_data_dir_lock(lock_path)
-
-        assert (tmp_path / LOCK_FILENAME).read_text() == str(os.getpid())
-
-        release_data_dir_lock(lock_path)
-
-        assert not (tmp_path / LOCK_FILENAME).exists()
-
-    def test_symlink_alias_shares_the_same_process_local_refcount(self, tmp_path: Path):
-        """Workspace aliases must not let one service release another's PID lock."""
+    @pytest.mark.parametrize("use_alias", [False, True])
+    def test_symlink_alias_shares_the_same_process_local_refcount(self, tmp_path, use_alias):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        alias = tmp_path / "workspace-alias"
-        try:
-            alias.symlink_to(workspace, target_is_directory=True)
-        except OSError as exc:
-            pytest.skip(f"directory symlinks are unavailable: {exc}")
+        alias = workspace
+        if use_alias:
+            alias = tmp_path / "alias"
+            try:
+                alias.symlink_to(workspace, target_is_directory=True)
+            except OSError as exc:
+                pytest.skip(f"directory symlinks are unavailable: {exc}")
 
         lock_path = acquire_data_dir_lock(str(workspace))
-        assert acquire_data_dir_lock(str(alias)) == lock_path
+        try:
+            assert acquire_data_dir_lock(str(alias)) == lock_path
+            release_data_dir_lock(lock_path)
+            result = _probe_lock(workspace)
+            assert result.returncode == 2, result.stderr
+            assert "connect clients over HTTP" in result.stdout
+            assert str(workspace) in result.stdout
+        finally:
+            release_data_dir_lock(lock_path)
+            release_data_dir_lock(lock_path)
 
-        release_data_dir_lock(lock_path)
-        assert (workspace / LOCK_FILENAME).read_text() == str(os.getpid())
-
-        release_data_dir_lock(lock_path)
-        assert not (workspace / LOCK_FILENAME).exists()
+        assert (workspace / LOCK_FILENAME).exists()
+        assert _probe_lock(workspace).returncode == 0
 
 
 class TestProcessLockIntegration:
-    """Integration tests for process lock."""
-
-    def test_multiple_acquires_same_process(self, tmp_path: Path):
-        """Test multiple acquires from same process."""
-        lock_path1 = acquire_data_dir_lock(str(tmp_path))
-        lock_path2 = acquire_data_dir_lock(str(tmp_path))
-
-        assert lock_path1 == lock_path2
-
-    def test_lock_file_cleanup_on_exit_simulation(self, tmp_path: Path):
-        """Test that lock file would be cleaned up on exit."""
-        acquire_data_dir_lock(str(tmp_path))
-        assert (tmp_path / LOCK_FILENAME).exists()
-
-        # Note: Actual cleanup happens via atexit, which we can't easily test
-        # in unit tests without process termination
-
-    def test_reentrant_lock_same_pid(self, tmp_path: Path):
-        """Test that same PID can re-acquire lock."""
-        my_pid = os.getpid()
-
-        # First acquire
-        lock_path1 = acquire_data_dir_lock(str(tmp_path))
-
-        # Write PID again
-        (tmp_path / LOCK_FILENAME).write_text(str(my_pid))
-
-        # Second acquire should succeed
-        lock_path2 = acquire_data_dir_lock(str(tmp_path))
-
-        assert lock_path1 == lock_path2
+    @pytest.mark.parametrize("crash", [False, True])
+    def test_concurrent_start_and_exit_release_lock(self, tmp_path, crash):
+        """Only one simultaneous starter enters; graceful exit and kill release it."""
+        ctx = multiprocessing.get_context("spawn")
+        start, results = ctx.Barrier(4), ctx.Queue()
+        pipes = [ctx.Pipe(duplex=False) for _ in range(4)]
+        processes = [
+            ctx.Process(target=_contend_for_lock, args=(str(tmp_path), start, reader, results))
+            for reader, _ in pipes
+        ]
+        try:
+            for process in processes:
+                process.start()
+            outcomes = [results.get(timeout=20) for _ in processes]
+            owners = [pid for pid, status in outcomes if status == "acquired"]
+            assert len(owners) == 1, outcomes
+            assert sum(status == "locked" for _, status in outcomes) == 3
+            owner_index = next(i for i, process in enumerate(processes) if process.pid == owners[0])
+            owner = processes[owner_index]
+            if crash:
+                owner.kill()
+            else:
+                pipes[owner_index][1].send(None)
+            for process in processes:
+                process.join(timeout=20)
+                assert not process.is_alive()
+                if not crash or process is not owner:
+                    assert process.exitcode == 0
+            assert (tmp_path / LOCK_FILENAME).exists()
+            result = _probe_lock(tmp_path)
+            assert result.returncode == 0, result.stderr
+        finally:
+            for process in processes:
+                if process.pid is not None:
+                    if process.is_alive():
+                        process.kill()
+                    process.join(timeout=5)
+            for reader, writer in pipes:
+                reader.close()
+                writer.close()
+            results.close()
+            results.join_thread()

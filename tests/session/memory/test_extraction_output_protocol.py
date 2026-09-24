@@ -4,16 +4,26 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryFile,
+    MemoryTypeSchema,
+    ResolvedOperations,
+)
+from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.extraction_output_protocol import (
     ExtractionOutputContext,
     create_extraction_output_protocol,
 )
 from openviking.session.memory.memory_isolation_handler import RoleScope
+from openviking.session.memory.memory_type_registry import (
+    MemoryTypeRegistry,
+    resolve_memory_templates_dir,
+)
 from openviking.session.memory.merge_op import FieldType, MergeOp
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
@@ -90,12 +100,13 @@ def _context(
     link_enabled: bool = False,
     role_scope: RoleScope | None = None,
     available_tools: tuple[str, ...] = ("read",),
+    template_context: dict[str, str] | None = None,
 ) -> ExtractionOutputContext:
     config = SimpleNamespace(memory=SimpleNamespace(link_enabled=link_enabled))
     with patch("openviking_cli.utils.config.get_openviking_config", return_value=config):
-        operations_model = SchemaModelGenerator(schemas).create_structured_operations_model(
-            role_scope
-        )
+        operations_model = SchemaModelGenerator(
+            schemas, template_context=template_context
+        ).create_structured_operations_model(role_scope)
     page_id_map = PageIdMap()
     read_file_contents = {}
     for memory_file in files or []:
@@ -109,6 +120,7 @@ def _context(
         link_enabled=link_enabled,
         role_scope=role_scope,
         available_tools=available_tools,
+        template_context=dict(template_context or {}),
     )
 
 
@@ -177,6 +189,88 @@ def test_python_contract_includes_link_rules_when_enabled():
     assert "match_text" in contract
     assert "obj_a.link(" in contract
     assert "assign the create/set call to a variable first" in contract
+
+
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+@pytest.mark.parametrize(
+    ("memory_type", "field_name"),
+    [("preferences", "topic"), ("entities", "category"), ("events", "event_name")],
+)
+def test_python_contract_renders_builtin_field_descriptions_like_json(
+    language, memory_type, field_name
+):
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.load_from_yaml(str(resolve_memory_templates_dir() / f"{memory_type}.yaml"))
+    schema = registry.get(memory_type)
+    original = next(field.description for field in schema.fields if field.name == field_name)
+    assert "{{ language }}" in original
+    context = _context([schema], template_context={"language": language})
+
+    python_contract = create_extraction_output_protocol("python").render_contract(context)
+    json_contract = create_extraction_output_protocol("json").render_contract(context)
+    json_schema = json.loads(json_contract.split("```json\n", 1)[1].split("```", 1)[0])
+    model_ref = json_schema["properties"][memory_type]["items"]["$ref"].rsplit("/", 1)[1]
+    rendered = json_schema["$defs"][model_ref]["properties"][field_name]["description"]
+
+    assert " ".join(rendered.split()) in python_contract
+    assert language in rendered
+    assert "{{ language }}" not in python_contract
+    assert "{% if language" not in python_contract
+    assert ("Use lowercase with underscores" in rendered) == (language == "en")
+    assert (
+        next(field.description for field in schema.fields if field.name == field_name) == original
+    )
+
+
+def test_python_field_description_keeps_dsl_patch_instructions():
+    schema = _preference_schema()
+    schema.fields[1].description = "Write content in {{ language.upper() }}."
+    context = _context([schema], template_context={"language": "en"})
+
+    contract = create_extraction_output_protocol("python").render_contract(context)
+
+    assert "content [editable string: obj.field.edit/drop/update]: Write content in EN." in contract
+    assert "obj.content.edit(search=..., replace=...)" in contract
+    assert "PATCH operation for" not in contract
+    assert "Use a DELETE block" not in contract
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+async def test_default_python_extract_loop_passes_language_to_field_descriptions(language):
+    schema = _preference_schema()
+    schema.description = "Preferences in {{ language }}."
+    schema.fields[1].description = "Write content in {{ language }}."
+    provider = MagicMock()
+    provider.get_memory_schemas.return_value = [schema]
+    provider.get_output_language.return_value = language
+    provider.get_tools.return_value = []
+    provider.get_extract_context.return_value = SimpleNamespace(page_id_map=PageIdMap())
+    provider.read_file_contents = {}
+    provider.instruction.return_value = "Extract memory operations."
+    provider.prefetch = AsyncMock(return_value=[])
+    vlm = SimpleNamespace(
+        model="test-model", get_completion_async=AsyncMock(return_value="sdk.commit()")
+    )
+    loop = ExtractLoop(vlm=vlm, viking_fs=MagicMock(), context_provider=provider, max_iterations=1)
+    empty = ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
+    loop.resolve_operations = AsyncMock(return_value=(empty, []))
+    loop._check_unread_existing_files = AsyncMock(return_value={})
+    # Exercise the default protocol selection rather than explicitly choosing Python.
+    config = SimpleNamespace(memory=SimpleNamespace(link_enabled=False))
+    with (
+        patch("openviking.session.memory.extract_loop.get_openviking_config", return_value=config),
+        patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
+    ):
+        operations, _ = await loop.run()
+
+    assert operations is empty
+    prompt = vlm.get_completion_async.call_args.kwargs["messages"][0]["content"]
+    assert "restricted Python memory SDK" in prompt
+    assert f"Preferences in {language}." in prompt
+    assert f"Write content in {language}." in prompt
+    assert "{{ language }}" not in prompt
+
 
 def test_python_contract_omits_link_rules_when_disabled():
     context = _context([_preference_schema()], link_enabled=False)

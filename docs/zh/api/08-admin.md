@@ -113,11 +113,10 @@ curl http://localhost:1933/api/v1/admin/agent-evolution \
 }
 ```
 
-`enabled` 优先读取
-`/local/{account_id}/_system/setting.json` 中的 account 级覆盖值；未配置时使用
-`server.agent_evolution.enabled`。Session commit 会实时读取生效值，无需重启。
+`enabled` 依次解析 Account 运行时覆盖、Cluster 运行时覆盖，以及
+`server.agent_evolution.enabled` 提供的启动值。
 
-现有更新接口名保持不变：
+现有接口作为 deprecated 兼容适配器保留：
 
 ```http
 PUT /api/v1/admin/agent-evolution
@@ -128,9 +127,8 @@ Content-Type: application/json
 
 ### account_settings
 
-ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。通用配置接口仅允许
-显式列入白名单的字段；当前允许修改 `agent_evolution.enabled` 和
-`acl.enabled`。
+该接口已 deprecated。ROOT 可管理任意 account，ADMIN 仅可管理自己所属的 account。
+接口保留原有 ACL 与 Agent Evolution 请求和响应语义：
 
 ```http
 GET /api/v1/admin/accounts/{account_id}/settings
@@ -142,6 +140,9 @@ Content-Type: application/json
   "acl": {"enabled": true}
 }
 ```
+
+字段缺失或为 `null` 都表示不修改；传入对象则整体设置对应存量配置段，
+空 ACL 对象表示 `enabled=false`。新接入方应使用下述 configuration 接口。
 
 `acl.enabled` 默认为 `false`。关闭时，共享资源按原有规则完全共享，不执行 ACL
 鉴权。开启后，账号内新增共享资源会写入 ACL，并对带 ACL 的共享资源执行鉴权；
@@ -208,8 +209,12 @@ PUT 从**部署默认模板**补齐未传入的配置，不从上一次 Account 
 完整 GET `effective` 对象可以回传：锁定字段值与默认值相同则接受，任何锁定值变更、
 未知配置项、未知字段或重复字段名均返回 `INVALID_ARGUMENT`，当前生效文件不变。
 若仅调整一个 description 且需保留其他自定义内容，应先 GET，修改 `effective` 对象后
-整体 PUT。空对象会发布一份完整默认配置，状态仍为自定义；恢复系统默认应调用 DELETE。
-DELETE 幂等。
+整体 PUT。补齐并校验后的完整配置若与部署默认值完全一致（不含发布时间元数据），
+PUT 会移除该类型的自定义覆盖，返回 `status=system_default`、`updated_at=null`。
+这包括提交空对象、原样提交默认表单，以及在编辑页逐项恢复默认后保存；只要还有任意配置
+不同，就继续返回 `custom`。比较不忽略说明或正文中的空格、换行等内容差异。
+移除覆盖后，后续抽取跟随部署默认模板；此前已取得的抽取快照不变。
+DELETE 始终移除该类型的覆盖；重复 PUT 默认配置或 DELETE 都是幂等的。
 
 返回包含 `memory_type`、`status`（`system_default` / `custom`）、
 `updated_at`（UTC 发布时间，默认状态为 null），以及完整的 `defaults` / `effective`。
@@ -257,7 +262,7 @@ Registry；无关类型变更不会触发拆批。不同 Schema 分开合并、�
 
 白名单内提交的说明和正文模板必须是非空字符串；单文件序列化后不超过 1 MiB。
 `description`（类型说明及 `fields[].description`）统一支持受限 Jinja，不因来自部署默认值或账户覆盖而改变规则，不再记录或检查说明来源标志。
-仅开放已有上下文中的 `language`，不开放正文变量、`extract_context` 或任意对象。语法复用下节受限正文的条件、局部变量、有界字面量循环、安全字符串方法及测试；不支持过滤器或任意调用。
+仅开放已有上下文中的 `language`，不开放正文变量、`extract_context` 或任意对象。语法复用下节受限正文的条件、局部变量、有界字面量循环、安全字符串方法、白名单字符串过滤器及测试；不支持任意调用。
 例如已有 Schema 渲染上下文提供 `language=en` 时，<code v-pre>请使用 {{ language.upper() }}。</code> 会展开为 `请使用 EN。`，用户修改文字不会让变量停止展开。
 本次不新增语言传递链路，Python 协议原有的静态字段说明展示路径保持不变。缺失语言时保留原来的 undefined/空字符串行为，可用 `language or '中文'` 提供回退；上下文值中的 Jinja 不会被递归执行。
 越界的自定义表达式在保存前拒绝，已保存说明在抽取加载时重新校验；部署说明渲染也受同样限制，已有部署若使用白名单外语法，需要调整，不能凭来源绕过限制。
@@ -299,7 +304,10 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 - `get_event_content(ranges, summary[, ratio_threshold])`：按已有逻辑选择 ChatLog/摘要；省略阈值为 0.2，显式 0 表示存在原文时优先原文。
 - `get_year(ranges)`、`get_month(ranges)`、`get_day(ranges)`：来源日期分量。
 
-首个参数直接使用 `ranges`，不能自行构造消息范围；缺失字段会传入空字符串，无需过滤器兜底。
+首个参数可使用统一语法白名单内的表达式，包括局部变量、条件表达式及允许的过滤器链。
+每次实际调用方法前，参数求值结果必须是普通字符串，且与当前记忆原始 `ranges` 完全相等，或为空字符串（不读取来源消息）。
+例如 `ranges | default('') | trim` 在结果未改变时可用；也可先 `{% set selected = ranges %}`，再调用 `get_year(selected)`。
+比较范围时不做归一化；缺失字段本来就会传入空字符串。发布时仅校验语法，不执行方法；改变范围或传入非字符串会在实际渲染时返回 `content_template: invalid_ranges`，在方法读取消息前拒绝，并停止该次记忆文件写入。
 阈值只能为 0～1 的数字字面量。
 允许去掉 ChatLog 或资源事件分支，但去掉后不再自动展示这些正文/资源链接；原始 Session 仍保留。
 
@@ -309,12 +317,15 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 - `for` 遍历模板中显式写出的列表/元组，最多 32 项；支持标题/字段二元组和 `loop.index/index0/first/last/length`。不支持嵌套/递归循环、range() 或遍历消息/长字符串。
 - 字符串方法：`.upper()`、`.lower()`、`.strip()`，均不接受位置参数或关键字参数。可用于字符串字段、局部变量、字面量、Events 白名单方法返回的字符串，并支持链式调用，例如 `summary.strip().upper()`。
 - 方法语法与部署模板一致，但账户正文只开放上述少数方法；读取属性前先检查接收者必须是普通字符串，其他对象（包括字符串子类）的同名方法/属性不能借此被调用。也不允许只取出方法引用、保存后再调用。
-- 自定义正文不支持任何过滤器，包括 `| upper`、`| lower`、`| trim`、`| default(...)`、`| length`；该接口尚未上线，不为自定义正文保留过滤器兼容模式。空值回退使用 `summary or '待补充'` 或条件表达式。
+- 字符串过滤器：`| upper`、`| lower`、`| trim`，分别等价于 `.upper()`、`.lower()`、`.strip()`。同样只接受普通字符串，不接受位置参数或关键字参数。支持链式调用及与方法混用，例如 `summary | trim | upper` 或 `summary.strip() | upper`。
+- `default` 过滤器：支持无参数或一个字符串字面量，例如 `| default` / `| default()` / `| default('N/A')`。只替换未定义值，不替换空字符串或 `None`，与内置 Events 模板保持一致。接收者仅允许普通字符串、`None` 或未定义值，不转换任意对象；不支持第二个布尔参数、关键字参数或展开／动态参数。空值回退使用 `summary or '待补充'` 或条件表达式。
+- 其他过滤器仍不支持，包括 `| length`、`| d(...)`、`| attr(...)`。
 - 测试：`defined`、`undefined`、`none`、`string`。
 - 不支持模板导入/继承、宏、任意函数/对象属性访问、下标访问、算术或字符串倍增/拼接。不能注入系统保留的 `<!-- MEMORY_FIELDS ... -->` 元数据。
 
 模板 UTF-8 大小 ≤ 64 KiB，AST 节点 ≤ 2048，渲染正文 ≤ 1 MiB（不含系统追加元数据）。
 与部署默认值不同的 Account 正文在发布时和抽取加载时验证，运行时使用受限 Jinja 环境，只提供白名单字段/方法。
+内置 Events、Soul、Identity 正文也满足受限语法；仅修改标题、末尾换行或 CRLF 换行后仍可校验发布。这些改动不会绕过校验，也不会被标记为部署原样正文。
 受限路径渲染失败会报告错误并停止该次文件写入，不走旧的空正文 fallback。
 原样继承的正文继续使用部署渲染器，包括原有错误/fallback 语义，不受上述受限渲染器的源码、AST、正文输出上限约束；
 完整账户 YAML 仍受 1 MiB 上限约束。
@@ -341,6 +352,347 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 {% endif %}
 {% endfor %}
 ```
+
+### Runtime Configuration
+
+ROOT 可管理 Cluster 配置和任意 Account 配置；ADMIN 只能管理所属账号的 Account 层。
+
+```http
+GET /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+Content-Type: application/json
+
+{"settings": {"agent_evolution": {"enabled": true}}}
+```
+
+`settings` 始终表示目标层的显式设置值。PATCH 为三态语义：字段缺失表示不修改，
+`null` 表示删除当前层配置，具体值表示更新。
+
+当前 Cluster 运行时配置面仅包含 `agent_evolution`。Account 配置面包含
+`feishu`、`agent_evolution`、`github`、`acl`、`vlm` 和 `query_planner`，
+这些配置均可动态修改。Account 的
+`vlm`、`query_planner`、`embedding` 和 `vectordb` 仅 ROOT 可读写，ADMIN 的读取
+响应过滤这些配置，写入请求在读取配置前拒绝。每段已配置的 `vlm` 或
+`query_planner` 都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选。
+`memory` 不在当前 API 范围内。
+`vectordb` 只能随 Account 创建时的 `settings` 提交，创建后包括 ROOT 在内均不可
+新增、修改或重置。Cluster 的 `embedding`、`vlm`、`query_planner`、
+`memory`、`feishu`、存储、解析器和检索配置没有声明为运行时字段，因此仍然只能
+在启动配置中修改。
+
+Account `embedding` 和 `vectordb` 使用独立白名单模型。Account 与 Cluster
+配置分别发布，向量配置解析器按业务规则应用 Cluster 默认值。模型服务的连接字段
+只允许出现在 `credentials` 中，数组整体替换完整服务绑定，不能拼接 Cluster
+连接或鉴权字段。每组凭证必须独立提供 `provider` 和必需的连接、鉴权参数；
+凭证未设置 `model` 时可以使用有效外层 `model`。VectorDB 不开放本地路径、
+cuVS 调优和自定义适配器参数。
+
+存量 Account 可 PATCH 完整的模型凭证与部署绑定、重试、并发、故障回切和熔断参数。
+将 `max_retries` 等可选运行参数设为 `null`，会从 Account 配置删除该值，
+随后由向量配置解析器应用 Cluster 默认值；已配置模型模式中的必需凭证不能删除。
+外层模型身份、模式、`dimension`、`input`、`query_param`、`document_param`、
+`version`、`text_source` 和 `max_input_tokens` 为创建期字段。
+`credentials` 之外的 provider 字段、`batch_size`、`encoding_format`、`extra_body`、
+本地模型路径、融合/视频参数和 `allow_metadata_override` 不在 Account API 范围内。
+每次更新都在持久化前联合校验有效 Embedding 和 VectorDB，失败保留原配置。
+
+显式 `embedding: {}` 是合法配置，表示未声明 Account 模型模式或运行策略。
+作为 PATCH 提交时，`{}` 会与现有配置合并，不会清空已有值。未配置 Account
+模型模式时使用 Cluster 模型绑定。显式 Account VectorDB 配置会替换 Cluster
+的连接与鉴权字段，即使后端类型相同也不会拼接；仅支持 `http`、`volcengine`、
+`vikingdb` 远端后端。
+
+```json
+{"settings":{"embedding":{"dense":{"credentials":[{"provider":"openai","model":"compatible-deployment","api_base":"https://embedding.example/v1","api_key":"account-key"}]}}}}
+```
+
+查询、队列写入、Reindex 和 OVPack 都使用目标 Account 配置，ROOT 也遵守此规则。
+服务端点更新作用于后续 Embedding 调用，在途调用安全完成。调用方负责保证模型空间兼容：
+维度相同不能证明权重相同，本功能不会自动重建历史向量。远端集合、索引和授权由
+外部控制面创建，运行失败不会切换到其他 Account 或 Cluster 向量库。
+
+Account 与 Cluster 配置分别存储。Agent Evolution 仅为兼容旧行为保留已废弃的
+Cluster 整段回退。Feishu 默认值由 Feishu 业务代码解析：Account 未设置
+Feishu 时使用完整 Cluster 配置；一旦设置，`app_id`、`app_secret`、
+`max_rows_per_sheet`、`max_records_per_table`、`download_images` 和
+`request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
+Cluster 管理。GitHub 和 ACL 不回退到 Cluster。
+
+VLM 业务解析器在 Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
+模型身份、服务端点和凭证仅来自 Account，部分运行参数按业务规则使用 Cluster
+配置。Account 设置 `timeout` 时覆盖 Cluster 的值，未设置或重置后使用 Cluster
+的值。Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
+Cluster `query_planner`、Cluster `vlm`；这是 VLM 业务规则，不是配置框架的隐式继承。
+
+PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
+对象递归合并，数组整体替换；嵌套 null 只删除对应叶子。删除整个对象覆盖需要在父路径
+传 null，传空对象仍表示显式空对象。
+
+两个 GET 接口只返回目标作用域持久化的配置，不返回业务解析后的默认值。配置持久化后会发布新配置并等待
+匹配的进程内 Consumer；Consumer 失败会记录日志但不会回滚已持久化的配置，因此接口成功只表示
+配置层更新成功，不保证所有派生客户端都已完成切换。当前业务接入状态见[运行时配置设计](../../design/runtime-configuration-design.md)。
+
+#### Account Configuration 接口参考
+
+Account 配置通过创建接口的 `settings` 初始化，并通过 configuration 接口读取和更新：
+
+| 方法 | 路径 | 权限 | 返回值 |
+| --- | --- | --- | --- |
+| `POST` | `/api/v1/admin/accounts` | ROOT | 新 Account；可接受创建期 `settings` |
+| `GET` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 该 Account 显式持久化的 `settings` |
+| `PATCH` | `/api/v1/admin/accounts/{account_id}/configuration` | ROOT；或目标 Account 的 ADMIN | 合并后的显式 `settings` |
+
+`vlm`、`query_planner`、`embedding` 和 `vectordb` 是敏感基础设施配置：只有 ROOT
+可以创建、读取或修改。ADMIN 对自己的 Account 调用 GET 时，响应会移除这四段；若
+PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 也不能管理
+其他 Account。所有结构或业务校验错误返回 `400 INVALID_ARGUMENT`，不存在的 Account
+返回 `404 NOT_FOUND`。
+
+创建期字段只能随 `POST /api/v1/admin/accounts` 的 `settings` 写入。创建后 PATCH
+触及这些字段，包括把父对象设为 `null`，都会返回 `400 INVALID_ARGUMENT`，且不会
+持久化任何部分更新。创建请求会在创建账号目录前校验 `settings`；后续 PATCH 则先合并
+当前 Account 显式值，再校验完整有效配置。
+
+**其他 Account 配置段**
+
+除模型与向量配置外，以下 `settings` object 均为动态字段，ROOT 和目标 Account 的 ADMIN
+都可读写：
+
+| 路径 | 类型和约束 | 含义 |
+| --- | --- | --- |
+| `acl.enabled` | boolean，默认 `false` | 是否启用该 Account 的 ACL |
+| `agent_evolution.enabled` | boolean，默认 `false` | 是否启用 Agent Evolution；Account 未设置整个 section 时，为兼容旧行为使用完整 Cluster `agent_evolution` section |
+| `github.token` | string，默认空字符串 | GitHub 访问 token；空字符串表示该 Account 未提供 token |
+| `feishu.app_id` | string，可选 | Account Feishu App ID |
+| `feishu.app_secret` | string，可选 | Account Feishu App Secret |
+| `feishu.max_rows_per_sheet` | integer，`> 0`，可选 | 单个 Sheet 读取的最大行数 |
+| `feishu.max_records_per_table` | integer，`> 0`，可选 | 单个多维表格读取的最大记录数 |
+| `feishu.download_images` | boolean，可选 | 是否下载 Feishu 文档中的图片 |
+| `feishu.request_timeout` | number，`> 0`，可选 | Feishu 请求超时秒数 |
+
+`feishu.domain` 不在 Account API；它始终由 Cluster 管理。Account 未设置整个 `feishu`
+section 时使用完整 Cluster Feishu 配置；一旦设置，以上 Account 字段使用显式值或 Feishu
+默认值，只有 `domain` 仍来自 Cluster。`github` 和 `acl` 不回退到 Cluster。
+
+**读取 Account 显式配置**
+
+```bash
+curl http://localhost:1933/api/v1/admin/accounts/acme/configuration \
+  -H "X-API-Key: <root-key>"
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "acme",
+    "settings": {
+      "embedding": {
+        "max_retries": 5
+      }
+    }
+  }
+}
+```
+
+响应不会展开 Cluster 值、默认值或最终生效的 Embedding/VectorDB 组合。例如上例没有
+Account 模型 binding 时，实际调用仍会使用 Cluster 模型 binding。
+
+**修改动态 Account 配置**
+
+以下示例假定 Account 已在创建时声明了包含 `model` 与 `dimension` 的 `dense`
+binding；PATCH 只轮换其 credentials 并更新动态运行参数。
+
+```bash
+curl -X PATCH http://localhost:1933/api/v1/admin/accounts/acme/configuration \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "settings": {
+      "embedding": {
+        "max_retries": 5,
+        "dense": {
+          "credentials": [{
+            "id": "primary",
+            "provider": "openai",
+            "model": "embed-deployment-v2",
+            "api_key": "<new-api-key>",
+            "api_base": "https://embedding.example/v1"
+          }]
+        }
+      }
+    }
+  }'
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "account_id": "acme",
+    "settings": {
+      "embedding": {
+        "max_retries": 5,
+        "dense": {
+          "model": "text-embedding-3-large",
+          "dimension": 3072,
+          "credentials": [{
+            "id": "primary",
+            "provider": "openai",
+            "model": "embed-deployment-v2",
+            "api_key": "<new-api-key>",
+            "api_base": "https://embedding.example/v1"
+          }]
+        }
+      }
+    }
+  }
+}
+```
+
+对象递归合并，数组整体替换。因此上例会替换 `dense.credentials` 的全部 failover
+链，而不是按 `id` 合并。动态叶子设为 `null` 会删除该 Account 值，例如
+`{"settings":{"embedding":{"max_retries":null}}}`；之后由向量解析器采用 Cluster
+对应值。空对象不会清空已有对象。
+
+**Account VLM 与 Query Planner 字段**
+
+`vlm` 和 `query_planner` 使用相同 schema，均为动态段：
+
+| 路径 | 类型和约束 | 含义 |
+| --- | --- | --- |
+| `*.model` | 非空 string，必填 | 默认模型名 |
+| `*.credentials` | 非空 array，必填，整体替换 | 按数组顺序使用的 provider/failover binding |
+| `*.timeout` | number，`> 0`，可选 | Account 请求超时秒数；删除后使用 Cluster timeout |
+| `*.credentials[].id` | string，可选 | credential 标识 |
+| `*.credentials[].provider` | string，必填 | `volcengine`、`openai`、`azure`、`kimi`、`glm`、`litellm` 或 `openai-codex` |
+| `*.credentials[].model` | string，可选 | 覆盖外层 `model`，可用于 endpoint/deployment ID |
+| `*.credentials[].api_key` | string，可选 | provider API Key；除 `litellm` 外通常必需，`openai-codex` 可使用本机 Codex OAuth |
+| `*.credentials[].api_base` | string，可选 | API endpoint |
+| `*.credentials[].api_version` | string，可选 | Azure 等 API 的版本 |
+| `*.credentials[].forward_api_key` | boolean，可选 | 是否把 API Key 透传给 LiteLLM |
+| `*.credentials[].extra_headers` | `map<string, string>`，可选 | 请求附加 HTTP headers；map key 为 header 名，value 为 header 值 |
+| `*.credentials[].extra_request_body` | `map<string, JSON value>`，可选 | 原样追加到 OpenAI-compatible completion 请求 body 的 provider 扩展字段；顶层 `stream` 不允许 |
+| `*.credentials[].reasoning_effort` | string，可选 | OpenAI-compatible reasoning 强度 |
+| `*.credentials[].keepalive_expiry` | number，`>= 0`，可选 | HTTP 空闲连接存活秒数 |
+| `*.credentials[].max_tokens` | integer，`> 0`，可选 | 覆盖外层输出 token 上限 |
+
+Account 未配置 `vlm` 时使用 Cluster VLM。配置 Account `vlm` 后，模型、provider、
+endpoint 与凭据只取 Account 值；Cluster 仅提供未归属 Account 的通用运行行为。
+Query Planner 优先级为 Account `query_planner`、Account `vlm`、Cluster
+`query_planner`、Cluster `vlm`。
+
+`extra_headers` 与 `extra_request_body` 的 key 不由 OpenViking 枚举，必须遵循目标
+provider 的 API 契约。它们仅属于该 credential，不会与 Cluster 同名 object 或其他
+credential 合并；不能用 `extra_request_body` 设置 `stream`，因为 OpenViking VLM 接口
+只返回完整响应。
+
+**Account Embedding 字段**
+
+未设置的字段不写入 Account；向量解析器在运行时按需使用 Cluster 的相应值。若 Account
+创建时声明 `dense`、`sparse` 或 `hybrid`，该 mode 必须是完整的 Account binding。
+`hybrid` 不能与 `dense` 或 `sparse` 同时出现。
+
+| 路径 | 生命周期 | 类型和约束 | 含义 |
+| --- | --- | --- | --- |
+| `embedding.dense` / `sparse` / `hybrid` | mode 存在性创建期 | object/null | 三种模型输出模式；创建后不能新增、删除或切换 |
+| `embedding.max_concurrent` | 动态 | integer，`>= 1` | 该 Account 的 provider 调用并发上限 |
+| `embedding.max_retries` | 动态 | integer，`>= 0` | 瞬时 provider 错误重试次数 |
+| `embedding.circuit_breaker.failure_threshold` | 动态 | integer，`>= 1` | 熔断前的连续失败次数 |
+| `embedding.circuit_breaker.reset_timeout` | 动态 | number，`> 0` | 熔断恢复基础等待秒数 |
+| `embedding.circuit_breaker.max_reset_timeout` | 动态 | number，`> 0` | 熔断恢复等待上限秒数 |
+| `embedding.text_source` | 创建期 | `content_only` / `summary_first` | 写入向量使用的文本来源 |
+| `embedding.max_input_tokens` | 创建期 | integer，`>= 100` | 单次向量化的输入 token 上限 |
+| `embedding.*.model` | 创建期 | 非空 string，mode 首次声明时必填 | 模型身份 |
+| `embedding.*.dimension` | 创建期 | integer，`> 0`，mode 首次声明时必填 | 向量维度；必须与有效 VectorDB 一致 |
+| `embedding.*.input` | 创建期 | `text` / `multimodal`，可选 | 输入模式 |
+| `embedding.*.query_param` / `document_param` | 创建期 | string，可选 | 非对称检索的 query/document 参数 |
+| `embedding.*.version` | 创建期 | string，可选 | 模型版本 |
+| `embedding.*.credentials` | 动态 | 非空 array，整体替换 | Account provider/failover binding |
+| `embedding.*.failback_timeout_seconds` | 动态 | number，`> 0` | 回切主 credential 前的等待秒数 |
+| `embedding.*.failback_request_count` | 动态 | integer，`>= 1` | 使用备用 credential 后尝试回切的请求数 |
+
+`embedding.*.credentials` 是有序数组，数组首项优先；失败时按数组顺序尝试后续
+credential。每个元素的 schema 如下：
+
+| 字段 | 类型和约束 | 含义 |
+| --- | --- | --- |
+| `id` | string，可选 | credential 稳定标识；未设置时运行时生成按数组下标命名的标识 |
+| `provider` | string，必填 | 小写 provider 名：`openai`、`azure`、`volcengine`、`vikingdb`、`jina`、`ollama`、`gemini`、`voyage`、`dashscope`、`minimax`、`cohere`、`litellm` 或 `local` |
+| `model` | 非空 string，可选 | 覆盖该 mode 的外层 `model`；未设置时使用外层 `model`，常用于 endpoint/deployment ID |
+| `api_key` | string，可选 | API Key。具体 provider 是否必填见下表 |
+| `api_base` | string，可选 | OpenAI-compatible 或 Azure endpoint |
+| `api_version` | string，可选 | Azure 等 API 的版本参数 |
+| `ak` | string，可选 | VikingDB Embedding provider 的 Access Key |
+| `sk` | string，可选 | VikingDB Embedding provider 的 Secret Key |
+| `region` | string，可选 | VikingDB Embedding provider 的区域 |
+| `host` | string，可选 | provider endpoint 或路由 host |
+| `extra_headers` | `map<string, string>`，可选 | 发往 provider 的附加 HTTP headers |
+
+每个 credential 都必须独立完成 provider 所需的连接与鉴权，不能从 Cluster 或同一数组
+的其他 credential 借用字段：
+
+| provider | 必填或可替代字段 | 说明 |
+| --- | --- | --- |
+| `openai` | `api_key` 或 `api_base` | `api_base` 可用于不要求 API Key 的本地 OpenAI-compatible 服务 |
+| `azure` | `api_key` 和 `api_base` | `api_version` 可按 Azure endpoint 要求补充 |
+| `volcengine`、`jina`、`gemini`、`voyage`、`dashscope`、`minimax`、`cohere` | `api_key` | 其他连接字段按对应 provider 的调用方式选填 |
+| `vikingdb` | `ak`、`sk` 和 `region` | 三项必须同时提供 |
+| `ollama`、`litellm`、`local` | 无强制鉴权字段 | 仍必须有外层或 credential `model`；实际 endpoint、环境变量或本地模型要求由对应 provider 处理 |
+
+credential 的 `model` 可以省略并使用该 mode 的外层 `model`。凭据数组一旦提供，不会
+拼接 Cluster 的 provider、endpoint、鉴权或 provider-specific 字段。`batch_size`、
+`encoding_format`、`extra_body`、`model_path`、`cache_dir`、融合/视频参数、
+`allow_metadata_override` 及 credentials 外层 provider/auth 字段均不在 Account API
+范围内。
+
+存量 Account 可以更新动态运行参数；但不能借 PATCH 首次创建 model mode，因为 `model`、
+`dimension` 和 mode 组合都是创建期契约。`embedding: {}` 合法，表示没有 Account
+Embedding 覆盖；作为 PATCH 提交时只会合并，不会清空已有设置。
+
+**Account VectorDB 字段**
+
+`vectordb` 只能作为 Account 创建请求的 `settings.vectordb` 提交，所有字段均为创建期。
+未提交时该 Account 使用 Cluster VectorDB；已提交时 Account 连接与鉴权完整替换 Cluster
+连接与鉴权，即使 backend 类型相同也不会合并。
+
+| 路径 | 类型和约束 | 含义 |
+| --- | --- | --- |
+| `vectordb.backend` | 必填：`http`、`volcengine`、`vikingdb` | Account 仅支持远端 backend |
+| `vectordb.name` | 非空 string，必填 | collection 名 |
+| `vectordb.url` | string；`http` 时必填 | HTTP backend endpoint |
+| `vectordb.project` | 非空 string，默认 `default` | project 名；`project_name` 为内部字段名 |
+| `vectordb.index_name` | 非空 string，必填 | index 名 |
+| `vectordb.distance_metric` | `cosine`、`l2`、`ip`，默认 `cosine` | 距离度量 |
+| `vectordb.dimension` | integer，`> 0`，必填 | 必须与有效 Embedding dimension 一致 |
+| `vectordb.sparse_weight` | number，`>= 0`，默认 `0` | sparse/hybrid 检索权重 |
+
+VectorDB 子对象也全部为创建期字段：
+
+| 路径 | 类型和约束 | 含义 |
+| --- | --- | --- |
+| `vectordb.volcengine.ak` | string，可选 | AK/SK 鉴权模式的 Access Key；该模式必填 |
+| `vectordb.volcengine.sk` | string，可选 | AK/SK 鉴权模式的 Secret Key；该模式必填 |
+| `vectordb.volcengine.api_key` | string，可选 | Data API Key 鉴权模式；设置后不再要求 AK/SK |
+| `vectordb.volcengine.session_token` | string，可选 | AK/SK 模式可选的 STS 临时凭据 token |
+| `vectordb.volcengine.region` | string，可选 | AK/SK 模式必填；API Key 模式与 `host` 至少提供一个 |
+| `vectordb.volcengine.host` | string，可选 | API Key 模式的数据面 endpoint；API Key 模式与 `region` 至少提供一个 |
+| `vectordb.vikingdb.host` | 非空 string；`vikingdb` 时必填 | 私有部署 VikingDB endpoint |
+| `vectordb.vikingdb.headers` | `map<string, string>`，可选 | 私有部署请求 headers；map key 为 header 名，value 为 header 值 |
+
+不支持 Account `local`、`cuvs`、`path`、cuVS 调优或 `custom_params`。远端 collection、
+index、schema 和授权由外部控制面预先创建；接口只做本地配置与 Embedding/VectorDB 联合
+校验，不探测远端资源。配置有效后，查询、导入、队列写入、Reindex 和 OVPack 都按目标
+Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则。
+
+每次 Embedding 创建或更新都会校验有效 Embedding/VectorDB pair，包括向量维度、输出
+模式、稀疏权重、distance metric、provider 配置与鉴权完整性。校验失败不会发布新配置；
+运行时连接、鉴权、collection/index 不存在或 schema 漂移只会使当前 Account 操作失败，
+不会回退到其他 Account 或 Cluster VectorDB。凭据或 endpoint 动态更新仅影响后续调用，
+在途调用会完成；系统不会自动迁移或重建历史向量，调用方必须保证模型语义兼容。
 
 ### user_settings
 
@@ -401,10 +753,13 @@ User override 并重新继承上述默认值，请 PATCH `{"memory_policy": null
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
 | user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 省略 `seed` 时使用默认随机 API Key。seed 应视为密钥材料；过短的 seed 会让 key 更容易被猜测。
+- `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
+- Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
 - `user_config.add_targets.resource_uri` 必须是可写资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。
 - `user_config.add_targets.skill_uri` 只能是 `viking://~/skills` 或 `viking://agent/skills`。v1 不支持显式写成 `viking://user/{user_id}/skills`。
@@ -426,6 +781,39 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
     "account_id": "acme",
     "admin_user_id": "alice",
     "seed": "alice-seed"
+  }'
+```
+
+创建独立 Embedding 与 VectorDB 的 Account：
+
+```bash
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: <root-key>" \
+  -d '{
+    "account_id": "acme-isolated",
+    "admin_user_id": "alice",
+    "settings": {
+      "embedding": {
+        "dense": {
+          "model": "text-embedding-3-large",
+          "dimension": 3072,
+          "credentials": [{
+            "provider": "openai",
+            "api_key": "<embedding-api-key>"
+          }]
+        }
+      },
+      "vectordb": {
+        "backend": "vikingdb",
+        "name": "acme_context",
+        "index_name": "default",
+        "dimension": 3072,
+        "vikingdb": {
+          "host": "https://vikingdb.example"
+        }
+      }
+    }
   }'
 ```
 
@@ -468,7 +856,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -573,6 +961,7 @@ ov --sudo admin create-account acme-private --admin alice \
 | name | str | 否 | null | 按账户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
+| query | str | 否 | null | 对账户 ID 做不区分大小写的子串匹配 |
 
 结果按创建顺序返回。
 
@@ -593,6 +982,10 @@ curl -X GET http://localhost:1933/api/v1/admin/accounts \
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?name=*acme*" \
   -H "X-API-Key: <root-key>"
 
+# 不区分大小写的子串搜索
+curl -X GET "http://localhost:1933/api/v1/admin/accounts?query=acme" \
+  -H "X-API-Key: <root-key>"
+
 # 分页（每页 50，取第 2 页）
 curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
   -H "X-API-Key: <root-key>"
@@ -601,7 +994,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts?limit=50&page=2" \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -707,7 +1100,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -817,7 +1210,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -920,6 +1313,7 @@ ov admin register-user acme bob-private --role user \
 | account_id | str | 是 | - | 工作区 ID |
 | name | str | 否 | null | 按用户 ID 过滤（通配符 `*` 和 `?` 匹配） |
 | role | str | 否 | null | 按角色过滤 |
+| include_credentials | bool | 否 | true | 仅 HTTP。设为 false 时仅返回 `user_id`、`role` 和 `api_key_available`，不返回密钥或前缀；默认保持现有按鉴权模式返回字段的行为。 |
 | limit | int | 否 | null | 每页数量（≥1）。省略则返回所有匹配项 |
 | page | int | 否 | 1 | 从 1 开始的页码；仅在设置了 `limit` 时生效 |
 
@@ -928,6 +1322,14 @@ ov admin register-user acme bob-private --role user \
 - ADMIN 只能列出自己所属的 account 中的用户
 - 在 `trusted` 模式下，响应中不会包含 `user_key` 字段
 - 用户删除开始后，不再出现在该列表中
+
+**带统计的响应（HTTP）：** 设置 `include_summary=true` 后，`result` 返回对象：`users` 为当前页，`total` 为匹配人数，`account_total` 为账号总人数，`manager_count` 为 admin/root 人数，`key_count` 为具有可见密钥或前缀的用户数。账号统计不受搜索和角色过滤影响，并排除正在删除的用户；禁用密钥展示时 `key_count` 为零。默认仍返回用户数组，兼容现有调用。
+
+`query` 对用户 ID 做去除首尾空格、不区分大小写的字面包含匹配，可与已有的 `name` 通配符、`role` 过滤组合。例如：
+
+```text
+GET /api/v1/admin/accounts/acme/users?limit=20&page=1&query=alice&include_summary=true
+```
 
 #### 3. 使用示例
 
@@ -954,7 +1356,7 @@ curl -X GET "http://localhost:1933/api/v1/admin/accounts/acme/users?limit=50&pag
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1057,7 +1459,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/users/bob \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1157,7 +1559,7 @@ curl -X PUT http://localhost:1933/api/v1/admin/accounts/acme/users/bob/role \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-key>")
 client.initialize()
@@ -1255,7 +1657,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users/bob/key \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(api_key="<root-or-admin-key>")
 client.initialize()
@@ -1318,15 +1720,15 @@ ov --sudo admin regenerate-key acme bob
 
 #### 1. API 实现介绍
 
-将 0.3.x legacy `viking://agent/...` / `viking://session/...` 数据迁移到 0.4.0 的 user / peer namespace，或在确认迁移结果后清理旧 namespace。该接口仅 ROOT 可调用，并以后台 task 执行。
+将旧 `viking://session/...` 数据迁移到 `viking://user/<user_id>/sessions/...`，或在确认迁移结果后清理旧 Session 目录。该接口仅 ROOT 可调用，并以后台 task 执行。`agent` 是账号内公共目录，不参与迁移或 cleanup。
 
 **处理流程：**
 1. 验证请求者具有 ROOT 权限
 2. `action=migrate` 时执行 preflight，检查 account registry、session owner 等前置条件
 3. 创建 root 级后台 task
-4. 迁移时复制文件和已有向量记录；cleanup 时先删除旧向量记录，再删除旧 AGFS 目录
+4. 迁移时复制 Session 文件；cleanup 时先删除旧 Session 向量记录，再删除旧 Session AGFS 目录
 
-迁移不会自动调用 `reindex`。如果迁移后的检索结果不符合预期，需要用户对新路径手动执行 reindex。
+迁移保留目标路径中已有的文件。cleanup 不删除 `agent` 公共目录或已迁移的用户数据。
 
 **代码入口：**
 - `openviking/server/routers/admin.py:migrate_legacy_data` - HTTP 路由
@@ -1351,10 +1753,8 @@ POST /api/v1/admin/migrate
 | 字段 | 说明 |
 |------|------|
 | migrated.files / migrated.directories | 复制的文件和目录数量 |
-| migrated.vector_records | 复制的已有向量记录数量 |
-| migrated.skipped_vector_records | 因没有向量 payload 而跳过的旧记录数量 |
-| migrated.operations | 按迁移类别统计的操作数量 |
-| skipped / warnings / created_users | 跳过项、告警、自动创建的用户 |
+| migrated.operations | Session 迁移操作数量（`sessions`） |
+| skipped / created_users | 跳过的文件、自动创建的用户 |
 
 **Cleanup 结果字段**
 

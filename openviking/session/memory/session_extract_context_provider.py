@@ -39,6 +39,7 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle
     from openviking.session.memory.memory_updater import ExtractContext
 
 logger = get_logger(__name__)
@@ -67,6 +68,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         viking_fs: VikingFS = None,
         transaction_handle=None,
         memory_registry: MemoryTypeRegistry | None = None,
+        vlm_config: Optional["VLMHandle"] = None,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
@@ -83,6 +85,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._ctx = ctx
         self._viking_fs = viking_fs
         self._transaction_handle = transaction_handle
+        self._vlm_config = vlm_config
         self._link_enabled = config.memory.link_enabled if config.memory else False
         self._vision_messages_prepared = False
         self._vision_vlm = None
@@ -132,10 +135,15 @@ class SessionExtractContextProvider(ExtractContextProvider):
     def _get_vision_vlm(self):
         if self._vision_vlm is not None:
             return self._vision_vlm
-        vlm_config = get_openviking_config().vlm
+        vlm_config = self._vlm_config
+        if vlm_config is None:
+            raise RuntimeError(
+                "SessionExtractContextProvider requires an explicitly resolved "
+                "VLM for vision processing"
+            )
         if not (vlm_config and vlm_config.is_available()):
             return None
-        self._vision_vlm = vlm_config.get_vlm_instance()
+        self._vision_vlm = vlm_config
         return self._vision_vlm
 
     def _detect_language(self) -> str:

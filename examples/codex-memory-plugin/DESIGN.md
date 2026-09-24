@@ -117,7 +117,11 @@ load the shared OpenViking profile block unless
 `buildProfileBlock()` used by the other coding-agent integrations: full
 `profile.md` plus abstract-annotated URI indexes for `preferences/` and
 `entities/`, bounded by `OPENVIKING_PROFILE_TOKEN_BUDGET` with the shared
-CJK-aware estimator. Profile loading does not alter the commit decision tree.
+CJK-aware estimator, followed by an `<available-skills>` catalog from
+`GET /api/v1/skills` (the user's own skills, then `viking://agent/skills`)
+under its own `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` (default 1200; off
+with `OPENVIKING_SKILL_CATALOG=0`). Profile loading does not alter the
+commit decision tree.
 
 Resume may still need continuity after `PreCompact` or idle sweep already
 committed the live OV session. If local state has `ovSessionId = null`

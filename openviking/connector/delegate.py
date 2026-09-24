@@ -628,11 +628,15 @@ class ConnectorDelegate:
             account_id=ctx.account_id,
         )
         extra_params = None
-        if tags is not None:
-            extra_params = {
-                "tags": normalize_search_tags(tags),
-                "tag_mode": tag_mode,
-            }
+        if tag_mode == "clear":
+            extra_params = {"tag_mode": tag_mode}
+        elif tags is not None:
+            normalized_tags = normalize_search_tags(tags)
+            if normalized_tags:
+                extra_params = {
+                    "tags": normalized_tags,
+                    "tag_mode": tag_mode,
+                }
 
         task_tracker = get_task_tracker()
         task = await task_tracker.create(

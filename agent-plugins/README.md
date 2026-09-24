@@ -13,10 +13,16 @@ servers/mcp-proxy.mjs                # stdio -> streamable-HTTP proxy to the OV 
 servers/shared/                      # generated from examples/memory-plugin-shared/lib (do not edit)
 skills/openviking-memory/SKILL.md    # teaches the model the recall + persist loop
 skills/ov-memory-troubleshoot/       # read-only extraction troubleshooting
+skills/ov-experience-memory/         # retrieve and apply prior task Experience
+skills/openviking-skills/            # find, use, create, and share OpenViking skills
 plugin.test.mjs                      # node --test conformance checks
 ```
 
 Use `ov-memory-troubleshoot` to trace backward from a memory file to its archive diff and, when needed, session messages. Diagnosis is read-only.
+
+`ov-experience-memory` has the model search `viking://~/memories/experiences` with `find` or `search` before executable work and `read` the one to three Experience files that apply. In this package it is retrieval-only: without hooks nothing commits the conversation as a session, so its reads are not linked back to the Experience they used and produce no new trajectories. The Experience it retrieves comes from harnesses that do capture sessions, such as Claude Code and Codex.
+
+`openviking-skills` covers the skills stored in OpenViking itself: how to find one with `find(context_type="skill")`, read and follow its `SKILL.md`, create or replace one with the `add_skill` MCP tool, install one from Git or a local folder, share one with the account, and move local skill folders into OpenViking when you ask. This package has no session-start hook, so there is no `<available-skills>` catalog here and the skill has the model search for a skill instead.
 
 Zero npm dependencies; the proxy and tests run on the Node.js standard library (Node 18+ for global `fetch`).
 
@@ -25,8 +31,8 @@ Zero npm dependencies; the proxy and tests run on the Node.js standard library (
 1. Have an OpenViking server reachable (see the [quickstart](../docs/en/getting-started/02-quickstart.md)); default local endpoint is `http://127.0.0.1:1933`.
 2. Point your Agent-Plugins-conforming client at this directory (each client has its own install command or plugin directory; consult its docs). The client will:
    - register the `openviking` MCP server from `mcp.json` — it runs `node <plugin>/servers/mcp-proxy.mjs` over stdio;
-   - discover the `openviking-memory` and `ov-memory-troubleshoot` skills from `skills/`.
-3. Configure credentials (next section) and start a session. The model gains `find` / `search` / `read` / `remember` / `write` and the other OpenViking MCP tools. Use `search` with `mode="context"` for server-assembled context.
+   - discover the `openviking-memory`, `ov-memory-troubleshoot`, `ov-experience-memory`, and `openviking-skills` skills from `skills/`.
+3. Configure credentials (next section) and start a session. The model gains `find` / `search` / `read` / `remember` / `write` / `add_skill` and the other OpenViking MCP tools. Use `search` with `mode="context"` for server-assembled context.
 
 ## Why a stdio proxy instead of a `streamable-http` entry
 
@@ -37,8 +43,8 @@ OpenViking already speaks streamable HTTP at `/mcp`, but a `streamable-http` ent
 Highest to lowest priority (same chain as the `ov` CLI and the other OpenViking plugins):
 
 1. Environment variables: `OPENVIKING_URL` (or `OPENVIKING_BASE_URL`), `OPENVIKING_API_KEY` (or `OPENVIKING_BEARER_TOKEN`), `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`
-2. `~/.openviking/ovcli.conf` (`url`, `api_key`, `account`, `user`) — override the path with `OPENVIKING_CLI_CONFIG_FILE`
-3. `~/.openviking/ov.conf` `server` section (`url` or `host`/`port`, `root_api_key`) — override the path with `OPENVIKING_CONFIG_FILE`
+2. `~/.openviking/ovcli.conf` (`url`, `api_key`, `account`, `user`, then the `plugin.agent_plugins` and `plugin` keys) — override the path with `OPENVIKING_CLI_CONFIG_FILE`
+3. `~/.openviking/ov.conf` `agent_plugins` section, then its `server` section (`url` or `host`/`port`, `root_api_key`) — override the path with `OPENVIKING_CONFIG_FILE`
 4. Defaults: `http://127.0.0.1:1933`, no auth (local mode)
 
 Config file changes are picked up by the running proxy without a restart. Debugging: set `OPENVIKING_DEBUG=1` to log JSON lines to `~/.openviking/logs/agent-plugins.log` (path override: `OPENVIKING_DEBUG_LOG`).
@@ -76,6 +82,6 @@ node --test agent-plugins/plugin.test.mjs
 node examples/memory-plugin-shared/sync.mjs
 ```
 
-`examples/memory-plugin-shared/sync.test.mjs` fails if they drift, and pins this package to the connection half of the shared runtime: `servers/mcp-proxy.mjs` resolves everything through `buildProxyConnection()` in `shared/credentials.mjs`, so the hook-tuning knobs — which this spec has no hooks to run — never enter the bundle.
+`examples/memory-plugin-shared/sync.test.mjs` fails if they drift, and pins this package to the connection half of the shared runtime: `servers/mcp-proxy.mjs` resolves everything through `buildProxyConnection()` in `shared/credentials.mjs` — the same `resolveConnection()` every other plugin's hooks and proxy use — so the hook-tuning knobs — which this spec has no hooks to run — never enter the bundle.
 
 Both test files run in CI via `.github/workflows/pr.yml`.

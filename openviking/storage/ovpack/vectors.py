@@ -22,8 +22,8 @@ from openviking.storage.ovpack.format import (
     sha256_hex,
 )
 from openviking.storage.ovpack.manifest import manifest_dense_info, manifest_entry_target_uri
-from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.ovpack.validation import dense_record_count, record_dense_ref
+from openviking.storage.vector_ids import vector_record_id
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.logger import get_logger
@@ -41,34 +41,36 @@ def _index_meta_is_hybrid(index_meta: Any) -> bool:
     return "hybrid" in index_type
 
 
-def _vector_store_index_meta_is_hybrid(vector_store: Any) -> bool:
-    candidates = [vector_store, getattr(vector_store, "_manager", None)]
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        index_name = getattr(candidate, "_index_name", None)
-        try:
-            backend = candidate._get_default_backend()
-            index_name = index_name or getattr(backend, "_index_name", None)
-            collection = backend._get_collection()
-            if index_name and hasattr(collection, "get_index_meta_data"):
-                if _index_meta_is_hybrid(collection.get_index_meta_data(index_name)):
-                    return True
-        except Exception:
-            continue
-    return False
-
-
-def dense_snapshot_unsupported_reason(vector_store=None) -> str | None:
+async def dense_snapshot_unsupported_reason(
+    vector_store,
+    vector_config_resolver,
+    ctx: RequestContext,
+) -> str | None:
     """Return why dense vector snapshots are unsupported in the current runtime."""
-    if _vector_store_index_meta_is_hybrid(vector_store):
+    if vector_store is None:
+        return None
+    if vector_config_resolver is None:
+        raise RuntimeError("OVPack requires a vector config resolver")
+    settings = await vector_config_resolver.resolve(ctx.account_id)
+    if settings.embedding.sparse or settings.embedding.hybrid or settings.vectordb.sparse_weight:
         return "current vector index type is hybrid"
-
+    backend = await vector_store.get_account_backend(ctx.account_id)
+    meta = await backend.get_collection_meta()
+    if _index_meta_is_hybrid(meta):
+        return "current vector index type is hybrid"
     return None
 
 
-def ensure_dense_snapshot_supported(vector_store=None) -> None:
-    reason = dense_snapshot_unsupported_reason(vector_store)
+async def ensure_dense_snapshot_supported(
+    vector_store,
+    vector_config_resolver,
+    ctx: RequestContext,
+) -> None:
+    reason = await dense_snapshot_unsupported_reason(
+        vector_store,
+        vector_config_resolver,
+        ctx,
+    )
     if reason:
         raise InvalidArgumentError(
             "ovpack vector snapshots only support pure dense vector indexes",
@@ -76,25 +78,19 @@ def ensure_dense_snapshot_supported(vector_store=None) -> None:
         )
 
 
-def embedding_snapshot_metadata(dimensions: int | None) -> dict[str, Any]:
+def embedding_snapshot_metadata(dimensions: int | None, embedding_cfg) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
-    try:
-        from openviking_cli.utils.config import get_openviking_config
-
-        embedding_cfg = get_openviking_config().embedding
-        model_cfg = embedding_cfg.hybrid or embedding_cfg.dense
-        if model_cfg:
-            metadata = {
-                "provider": model_cfg.provider,
-                "model": model_cfg.model,
-                "input": model_cfg.input,
-                "query_param": model_cfg.query_param,
-                "document_param": model_cfg.document_param,
-            }
-            if dimensions is None:
-                dimensions = model_cfg.get_effective_dimension()
-    except Exception:
-        pass
+    model_cfg = embedding_cfg.hybrid or embedding_cfg.dense
+    if model_cfg:
+        metadata = {
+            "provider": model_cfg._effective_provider(),
+            "model": model_cfg._effective_model(),
+            "input": model_cfg.input,
+            "query_param": model_cfg.query_param,
+            "document_param": model_cfg.document_param,
+        }
+        if dimensions is None:
+            dimensions = model_cfg.get_effective_dimension()
 
     if dimensions is not None:
         metadata["dimensions"] = dimensions
@@ -104,6 +100,7 @@ def embedding_snapshot_metadata(dimensions: int | None) -> dict[str, Any]:
 def build_dense_snapshot_manifest(
     index_records: list[dict[str, Any]],
     dense_values: list[float],
+    embedding_cfg,
 ) -> tuple[bytes, dict[str, Any]] | None:
     if not dense_values:
         return None
@@ -130,7 +127,7 @@ def build_dense_snapshot_manifest(
         "byte_order": "little",
         "dimensions": dense_dimensions,
         "sha256": sha256_hex(dense_bytes),
-        "embedding": embedding_snapshot_metadata(dense_dimensions),
+        "embedding": embedding_snapshot_metadata(dense_dimensions, embedding_cfg),
     }
 
 
@@ -157,27 +154,11 @@ def read_dense_vectors(
     return vectors
 
 
-def current_embedding_metadata() -> dict[str, Any]:
-    try:
-        from openviking_cli.utils.config import get_openviking_config
-
-        embedding_cfg = get_openviking_config().embedding
-        model_cfg = embedding_cfg.hybrid or embedding_cfg.dense
-        if not model_cfg:
-            return {}
-        return {
-            "provider": model_cfg.provider,
-            "model": model_cfg.model,
-            "input": model_cfg.input,
-            "query_param": model_cfg.query_param,
-            "document_param": model_cfg.document_param,
-            "dimensions": model_cfg.get_effective_dimension(),
-        }
-    except Exception:
-        return {}
+def current_embedding_metadata(embedding_cfg) -> dict[str, Any]:
+    return embedding_snapshot_metadata(None, embedding_cfg)
 
 
-def _embedding_snapshot_compatible(manifest: dict[str, Any]) -> tuple[bool, str]:
+def _embedding_snapshot_compatible(manifest: dict[str, Any], embedding_cfg) -> tuple[bool, str]:
     dense_info = manifest_dense_info(manifest)
     if dense_info is None:
         return False, "missing dense vector snapshot"
@@ -186,7 +167,7 @@ def _embedding_snapshot_compatible(manifest: dict[str, Any]) -> tuple[bool, str]
     if not isinstance(package_embedding, dict):
         return False, "missing embedding metadata"
 
-    current_embedding = current_embedding_metadata()
+    current_embedding = current_embedding_metadata(embedding_cfg)
     if not current_embedding:
         return False, "current embedding metadata is unavailable"
 
@@ -199,28 +180,17 @@ def _embedding_snapshot_compatible(manifest: dict[str, Any]) -> tuple[bool, str]
     return True, ""
 
 
-def choose_vector_restore_action(
+async def choose_vector_restore_action(
     manifest: dict[str, Any],
     index_records: list[dict[str, Any]],
     dense_vectors: dict[str, list[float]],
     *,
     vector_store,
+    vector_config_resolver,
     vector_mode: str,
+    ctx: RequestContext,
 ) -> str:
     if vector_mode == "recompute":
-        return "recompute"
-
-    unsupported_reason = dense_snapshot_unsupported_reason(vector_store)
-    if unsupported_reason:
-        if vector_mode == "require":
-            raise InvalidArgumentError(
-                "ovpack dense vector snapshot cannot be restored into a sparse or hybrid index",
-                details={"reason": unsupported_reason},
-            )
-        logger.info(
-            "[ovpack] Recomputing vectors because dense snapshot restore is unsupported: "
-            f"{unsupported_reason}"
-        )
         return "recompute"
 
     dense_count = dense_record_count(index_records)
@@ -242,7 +212,25 @@ def choose_vector_restore_action(
             raise InvalidArgumentError("Vector restore requires a writable vector store")
         return "recompute"
 
-    compatible, reason = _embedding_snapshot_compatible(manifest)
+    unsupported_reason = await dense_snapshot_unsupported_reason(
+        vector_store,
+        vector_config_resolver,
+        ctx,
+    )
+    if unsupported_reason:
+        if vector_mode == "require":
+            raise InvalidArgumentError(
+                "ovpack dense vector snapshot cannot be restored into a sparse or hybrid index",
+                details={"reason": unsupported_reason},
+            )
+        logger.info(
+            "[ovpack] Recomputing vectors because dense snapshot restore is unsupported: "
+            f"{unsupported_reason}"
+        )
+        return "recompute"
+
+    settings = await vector_config_resolver.resolve(ctx.account_id)
+    compatible, reason = _embedding_snapshot_compatible(manifest, settings.embedding)
     if not compatible:
         if vector_mode == "require":
             raise InvalidArgumentError(

@@ -221,14 +221,21 @@ admission，所以其 `gpu_gate_queue` 为零；worker 侧等待仍计入 `batch
 
 | 字段 | 含义 |
 | --- | --- |
-| `summary.resource.request.duration_ms` | add-resource 请求主流程总耗时 |
-| `summary.resource.process.duration_ms` | 资源处理主流程耗时 |
-| `summary.resource.process.parse.duration_ms` | 资源解析阶段耗时 |
-| `summary.resource.process.parse.warnings_count` | 解析阶段 warning 数量 |
-| `summary.resource.process.finalize.duration_ms` | 资源树 finalize 阶段耗时 |
-| `summary.resource.process.summarize.duration_ms` | summarize 或 vectorize 阶段耗时 |
-| `summary.resource.wait.duration_ms` | `wait=true` 时等待下游处理完成的耗时 |
-| `summary.resource.watch.duration_ms` | 创建、更新或移除 watch 任务的耗时 |
+| `summary.resource.total.duration_ms` | add-resource 操作总耗时 |
+| `summary.resource.source_execute.duration_ms` | 执行源操作的耗时 |
+| `summary.resource.source_prepare.duration_ms` | 准备持久化 source 的耗时 |
+| `summary.resource.parse_artifact.duration_ms` | 生成 parser artifact 的耗时 |
+| `summary.resource.target_resolve.duration_ms` | 解析最终资源目标的耗时 |
+| `summary.resource.update_plan.duration_ms` | 构建增量更新计划的总耗时 |
+| `summary.resource.update_plan.artifact_inventory.duration_ms` | 扫描并归一化 parser artifact 的耗时 |
+| `summary.resource.update_plan.rnfv_snapshot.duration_ms` | 读取 R/N/F/V 快照的耗时 |
+| `summary.resource.update_plan.diff_and_compile.duration_ms` | 计算 diff 并编译动作的耗时 |
+| `summary.resource.content_commit.duration_ms` | 把内容动作应用到正式树的耗时 |
+| `summary.resource.derived_enqueue.duration_ms` | 将 semantic 和 index 工作入队的耗时 |
+| `summary.resource.semantic.queue_wait.duration_ms` | semantic 工作在 QueueFS 中等待的耗时 |
+| `summary.resource.semantic.execute.duration_ms` | semantic 工作执行耗时 |
+| `summary.resource.embedding.queue_wait.duration_ms` | embedding 工作在 QueueFS 中等待的耗时 |
+| `summary.resource.embedding.execute.duration_ms` | embedding 工作执行耗时 |
 | `summary.resource.flags.wait` | 本次请求是否使用了 `wait=true` |
 | `summary.resource.flags.build_index` | 本次请求是否启用了 `build_index` |
 | `summary.resource.flags.summarize` | 本次请求是否显式启用了 `summarize` |
@@ -241,15 +248,17 @@ admission，所以其 `gpu_gate_queue` 为零；worker 侧等待仍计入 `batch
 | 字段 | 含义 |
 | --- | --- |
 | `summary.queue.semantic.processed` | 已处理的 semantic queue 消息数 |
+| `summary.queue.semantic.requeue_count` | 为重试而重新入队的 semantic 消息数 |
 | `summary.queue.semantic.error_count` | semantic queue 错误数 |
 | `summary.queue.embedding.processed` | 已处理的 embedding queue 消息数 |
+| `summary.queue.embedding.requeue_count` | 为重试而重新入队的 embedding 消息数 |
 | `summary.queue.embedding.error_count` | embedding queue 错误数 |
 
 ### `summary.semantic_nodes`
 
 | 字段 | 含义 |
 | --- | --- |
-| `summary.semantic_nodes.total` | DAG 或语义节点总数 |
+| `summary.semantic_nodes.total` | 语义树节点总数 |
 | `summary.semantic_nodes.done` | 已完成节点数 |
 | `summary.semantic_nodes.pending` | 待处理节点数 |
 | `summary.semantic_nodes.running` | 正在处理中的节点数 |

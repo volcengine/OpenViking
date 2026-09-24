@@ -5,9 +5,10 @@ OpenViking 的 `cuvs` 后端保留本地后端的记录持久化、标量索引�
 ## 环境要求
 
 - Linux x86_64 或 aarch64
-- 可见的 NVIDIA GPU；cuVS 26.06 预编译包要求 Ampere 或更新架构
-- CUDA 12.2+；安装与本机 CUDA 大版本匹配的 Python 包
+- 受支持的 NVIDIA GPU，以及兼容的 CUDA driver
 - Python 3.11+（cuVS 26.06 的 Python wheel 要求）
+
+按所选版本核对 [cuVS 安装要求](https://docs.nvidia.com/cuvs/installation) 和 [Python 包安装指南](https://docs.nvidia.com/cuvs/installation/python)。当前 cuVS 源码构建要求 CUDA Toolkit 12.2+ 和 Ampere 或更新架构的 GPU；安装包要求取决于所选版本。
 
 CUDA 12：
 

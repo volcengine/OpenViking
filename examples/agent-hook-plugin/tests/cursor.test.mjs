@@ -31,6 +31,7 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "servers/mcp-proxy.mjs",
     "hosts/cursor/rules/openviking-memory.mdc",
     "hosts/cursor/skills/openviking-memory/SKILL.md",
+    "hosts/cursor/skills/openviking-skills/SKILL.md",
   ]) {
     assert.ok(existsSync(join(pluginRoot, file)), `${file} must exist`);
   }
@@ -42,7 +43,6 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "sessionStart",
     "beforeSubmitPrompt",
     "beforeReadFile",
-    "beforeShellExecution",
     "stop",
     "preCompact",
     "sessionEnd",
@@ -53,16 +53,18 @@ test("Cursor URI guard redirects virtual paths to OpenViking MCP tools", () => {
   const readDecision = evaluateHostUriGuard("cursor", {
     file_path: "viking://resources/project/file.md",
   });
+  assert.deepEqual(Object.keys(readDecision).sort(), ["permission", "user_message"]);
   assert.equal(readDecision.permission, "deny");
   assert.match(readDecision.user_message, /OpenViking MCP read/);
 
-  const shellDecision = evaluateHostUriGuard("cursor", {
-    command: "cat viking://resources/project/file.md",
-  });
-  assert.equal(shellDecision.permission, "deny");
-  assert.match(shellDecision.agent_message, /OpenViking MCP read or search/);
-
   assert.deepEqual(evaluateHostUriGuard("cursor", { file_path: "/tmp/file.md" }), {});
+});
+
+test("Cursor URI guard lets a shell command routed by an older install run", () => {
+  assert.deepEqual(evaluateHostUriGuard("cursor", {
+    command: "cat viking://resources/project/file.md",
+    cwd: "/workspace",
+  }), {});
 });
 
 test("Cursor transcript parser keeps only user and assistant text", () => {
@@ -132,9 +134,10 @@ test("Cursor injects recall before the request and Stop captures transcript delt
       runHook("stop", { ...base, transcript_path: transcript }, env),
       runHook("stop", { ...base, transcript_path: transcript }, env),
     ]);
+    // Session writes ignore the actor-peer header, so the peer rides in the body.
     assert.deepEqual(messages, [
-      { role: "user", content: "question" },
-      { role: "assistant", content: "answer" },
+      { role: "user", content: "question", peer_id: "github.com-acme-cursor-project" },
+      { role: "assistant", content: "answer", peer_id: "github.com-acme-cursor-project" },
     ]);
   } finally {
     server.close();

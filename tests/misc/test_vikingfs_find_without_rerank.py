@@ -150,6 +150,7 @@ async def test_find_accepts_image_url_without_text_query(monkeypatch) -> None:
         "",
         target_uri="viking://resources",
         image_url="data:image/png;base64,abc",
+        ctx=_ctx(),
     )
 
     assert result.total == 1
@@ -188,6 +189,7 @@ async def test_find_uses_quick_mode_with_rerank_config(monkeypatch) -> None:
     result = await fs.find(
         "guide",
         target_uri="viking://resources/docs",
+        ctx=_ctx(),
     )
 
     assert result.total == 0

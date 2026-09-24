@@ -9,8 +9,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
+from openviking.storage.abstract_overview import body_for_preview
+from openviking.storage.errors import LockAcquisitionError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -97,6 +101,76 @@ class _FakeMutationCoordinator:
         finally:
             if self.events is not None:
                 self.events.append(("mutation-exit", *uris))
+
+
+class _MkdirPathlockAGFS:
+    def __init__(self):
+        self._lock = asyncio.Lock()
+        self.held = False
+        self.acquire_count = 0
+
+    async def pathlock_acquire_exact(self, _path):
+        if self._lock.locked():
+            raise LockAcquisitionError("exact path is busy")
+        await self._lock.acquire()
+        self.held = True
+        self.acquire_count += 1
+        return {"lease_ref": f"mkdir-{self.acquire_count}"}
+
+    async def pathlock_release(self, _lease):
+        self.held = False
+        self._lock.release()
+
+
+class _MkdirVikingFS:
+    def __init__(self):
+        self.directory_exists = False
+        self.abstract_content = None
+        self._async_agfs = _MkdirPathlockAGFS()
+
+    def _uri_to_path(self, uri, ctx=None):
+        del ctx
+        return f"/local/default/{uri.removeprefix('viking://')}"
+
+    async def mkdir(self, _uri, ctx=None):
+        del ctx
+        if self.directory_exists:
+            raise AGFSAlreadyExistsError("directory already exists")
+        self.directory_exists = True
+
+    async def write_file(self, _uri, content, ctx=None, lease_ref=None):
+        del ctx
+        assert self._async_agfs.held
+        assert lease_ref is not None
+        self.abstract_content = content
+
+
+@pytest.mark.asyncio
+async def test_concurrent_default_mkdir_vectorizes_once(monkeypatch, request_context):
+    viking_fs = _MkdirVikingFS()
+    vectorized = []
+
+    async def record_vectorization(**kwargs):
+        assert viking_fs._async_agfs.held
+        vectorized.append(kwargs["abstract"])
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(
+        "openviking.service.fs_service.vectorize_directory_meta", record_vectorization
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    results = await asyncio.gather(
+        service.mkdir("viking://resources/shared", ctx=request_context),
+        service.mkdir("viking://resources/shared", ctx=request_context),
+        return_exceptions=True,
+    )
+
+    assert sum(result is None for result in results) == 1
+    assert sum(isinstance(result, AGFSAlreadyExistsError) for result in results) == 1
+
+    assert body_for_preview(viking_fs.abstract_content) == "# shared"
+    assert vectorized == ["# shared"]
 
 
 @pytest.mark.asyncio
@@ -303,6 +377,31 @@ async def test_grep_projects_memory_content_but_keeps_resource_fast_path(request
     viking_fs.grep.reset_mock()
     await service.grep("viking://resources", "secret", ctx=request_context)
     assert "content_transform" not in viking_fs.grep.await_args.kwargs
+
+    viking_fs.grep.reset_mock()
+    await service.grep(
+        "viking://user/ryoma/sessions/session-1",
+        "secret",
+        ctx=request_context,
+    )
+    assert "content_transform" not in viking_fs.grep.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_grep_forwards_context_to_viking_fs(request_context):
+    viking_fs = SimpleNamespace(grep=AsyncMock(return_value={"matches": []}))
+    service = FSService(viking_fs=viking_fs)
+
+    await service.grep(
+        "viking://resources",
+        "needle",
+        ctx=request_context,
+        before_context=2,
+        after_context=3,
+    )
+
+    assert viking_fs.grep.await_args.kwargs["before_context"] == 2
+    assert viking_fs.grep.await_args.kwargs["after_context"] == 3
 
 
 @pytest.mark.asyncio
@@ -911,6 +1010,37 @@ async def test_resource_mv_conflict_fails_before_resource_move(request_context):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".path.ovlock",
+        ".exact.ovlock.",
+        ".exact.ovlock.probe.md",
+        ".exact.ovlock.notes.md.0123abcd",
+        ".redirect.json",
+        ".sync_log.json",
+    ],
+)
+@pytest.mark.parametrize("suffix", ["", "/", "/child", "/child/notes.md"])
+async def test_mkdir_cp_mv_reject_storage_internal_names(request_context, name, suffix):
+    viking_fs = _FakeVikingFS(events=[])
+    service = FSService(viking_fs=viking_fs)
+    target = f"viking://resources/project/{name}{suffix}"
+    viking_fs.exists = AsyncMock()
+    viking_fs.mkdir = AsyncMock()
+
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.mkdir(target, ctx=request_context)
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.cp("viking://resources/project/a.md", target, False, ctx=request_context)
+    with pytest.raises(InvalidArgumentError, match="storage internal name"):
+        await service.mv("viking://resources/project/a.md", target, ctx=request_context)
+    assert viking_fs.mv_calls == []
+    assert viking_fs.cp_calls == []
+    viking_fs.exists.assert_not_called()
+    viking_fs.mkdir.assert_not_called()
+
+
 async def test_resource_mv_without_watch_scheduler_moves_resource_directly(request_context):
     events = []
     viking_fs = _FakeVikingFS(events=events)

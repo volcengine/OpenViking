@@ -536,9 +536,15 @@ class NewAPIKeyManager:
         name_filter: str | None = None,
         limit: int | None = None,
         page: int = 1,
+        query_filter: str | None = None,
     ) -> list:
         """List all accounts."""
-        return self._legacy.get_accounts(name_filter=name_filter, limit=limit, page=page)
+        return self._legacy.get_accounts(
+            name_filter=name_filter,
+            limit=limit,
+            page=page,
+            query_filter=query_filter,
+        )
 
     def get_users(
         self,
@@ -557,6 +563,26 @@ class NewAPIKeyManager:
             role_filter=role_filter,
             expose_key=expose_key,
             page=page,
+        )
+
+    def get_users_page(
+        self,
+        account_id: str,
+        limit: int | None = 100,
+        name_filter: str | None = None,
+        role_filter: str | None = None,
+        expose_key: bool = True,
+        page: int = 1,
+        query_filter: str | None = None,
+    ) -> dict:
+        return self._legacy.get_users_page(
+            account_id,
+            limit=limit,
+            name_filter=name_filter,
+            role_filter=role_filter,
+            expose_key=expose_key,
+            page=page,
+            query_filter=query_filter,
         )
 
     def has_user(self, account_id: str, user_id: str) -> bool:

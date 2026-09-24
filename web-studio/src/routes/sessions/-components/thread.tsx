@@ -4,7 +4,11 @@ import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/hooks/use-app-connection'
 import { useChat } from '#/lib/sessions/use-chat'
-import { useSession, useSessionMessages } from '#/lib/sessions/use-sessions'
+import {
+  useCreateSession,
+  useSession,
+  useSessionMessages,
+} from '#/lib/sessions/use-sessions'
 import { useSessionTitles } from '#/lib/sessions/use-session-titles'
 import { MessageList } from './message-list'
 import { MemoryImpact } from './memory-impact'
@@ -15,20 +19,41 @@ const PRODUCT_NAME = 'OpenViking'
 
 interface ThreadProps {
   sessionId: string
+  draft?: boolean
+  onPersisted?: () => void
 }
 
-export function Thread({ sessionId }: ThreadProps) {
+export function Thread(props: ThreadProps) {
+  const { identityScopeKey } = useAppConnection()
+  return (
+    <SessionThread key={`${identityScopeKey}:${props.sessionId}`} {...props} />
+  )
+}
+
+function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const { t } = useTranslation('sessions')
   const { identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 
-  const { data: session } = useSession(sessionId)
+  const [historyId] = useState(draft ? undefined : sessionId)
+  const persisted = useRef(!draft)
+  const creating = useRef(false)
+  const mounted = useRef(false)
+  const [creationError, setCreationError] = useState<string>()
+  const createSession = useCreateSession()
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const { data: session } = useSession(historyId)
   const {
     data: historyMessages,
     isPending: historyLoading,
     error: historyError,
-  } = useSessionMessages(sessionId)
+  } = useSessionMessages(historyId)
 
   const chat = useChat({
     identityScopeKey,
@@ -40,10 +65,30 @@ export function Thread({ sessionId }: ThreadProps) {
   const isStreaming = chat.status === 'streaming'
 
   const handleSend = useCallback(
-    (message: string) => {
-      if (message.trim()) chat.send(message)
+    async (message: string) => {
+      if (!message.trim() || creating.current) return false
+      if (!persisted.current) {
+        creating.current = true
+        setCreationError(undefined)
+        try {
+          await createSession.mutateAsync(sessionId)
+          onPersisted?.()
+          if (!mounted.current) return false
+          persisted.current = true
+        } catch (error) {
+          if (mounted.current)
+            setCreationError(
+              error instanceof Error ? error.message : String(error),
+            )
+          return false
+        } finally {
+          creating.current = false
+        }
+      }
+      void chat.send(message)
+      return true
     },
-    [chat],
+    [chat, createSession, sessionId, onPersisted],
   )
 
   // ---- Auto-scroll ----
@@ -102,7 +147,9 @@ export function Thread({ sessionId }: ThreadProps) {
 
       <div className="relative z-10 flex h-12 items-center justify-between gap-4 border-b border-border/50 bg-background/95 px-6">
         <h2 className="truncate text-sm font-medium text-foreground">
-          {title || sessionId}
+          {draft && title === sessionId
+            ? t('threadList.newSession')
+            : title || sessionId}
         </h2>
         <MemoryImpact session={session} />
       </div>
@@ -112,7 +159,7 @@ export function Thread({ sessionId }: ThreadProps) {
         onScroll={handleScroll}
         className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-6 pb-6"
       >
-        {historyLoading ? (
+        {historyId && historyLoading ? (
           <div role="status" className="py-6 text-sm text-muted-foreground">
             {t('threadList.loading')}
           </div>
@@ -138,12 +185,12 @@ export function Thread({ sessionId }: ThreadProps) {
         <div ref={bottomRef} />
       </div>
 
-      {chat.error && (
+      {(creationError || chat.error) && (
         <div
           role="alert"
           className="relative z-10 mx-auto w-full max-w-4xl px-4 py-2 text-sm text-destructive"
         >
-          {t('chat.sendFailed', { error: chat.error })}
+          {t('chat.sendFailed', { error: creationError || chat.error })}
         </div>
       )}
       <div className="relative z-10">

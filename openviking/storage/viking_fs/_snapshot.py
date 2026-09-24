@@ -49,6 +49,7 @@ class _SnapshotMixin:
     ) -> List[str]:
         """Return each requested snapshot scope and all current descendants."""
         result: List[str] = []
+        acl_enabled = await self._acl_enabled(ctx)
         for uri in uris:
             path = self._uri_to_path(uri, ctx=ctx)
             try:
@@ -67,7 +68,12 @@ class _SnapshotMixin:
                     result.extend(
                         self._path_to_uri(entry["path"], ctx=ctx)
                         for entry in entries
-                        if self._is_tree_entry_visible(entry, path, ctx)
+                        if self._is_tree_entry_visible(
+                            entry,
+                            path,
+                            ctx,
+                            acl_enabled=acl_enabled,
+                        )
                     )
             result.append(uri)
         return list(dict.fromkeys(result))
@@ -267,28 +273,65 @@ class _SnapshotMixin:
 
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        lock_paths: List[str] = []
+        # Lock by current state: Tree for a directory, Exact for a file. With
+        # the filesystem PathLock provider a missing target gets no lock: a
+        # Tree token there is stored as `{target}/.path.ovlock`, which creates
+        # the target as a directory, and an Exact sidecar creates a missing
+        # parent chain (#4966). Nothing is read under a missing name; the
+        # commit only records its deletion. If another writer recreates the
+        # name meanwhile the snapshot may miss it or read a partially written
+        # file; the next commit records the final content. The cache (Redis)
+        # provider keeps tokens off the filesystem, so it takes Tree as usual.
+        missing_kind = self._snapshot_missing_target_lock_kind()
+        lock_requests: List[Dict[str, str]] = []
+        tree_roots: List[str] = []
         for path in sorted(
             {self._uri_to_path(uri, ctx=real_ctx) for uri in paths},
             key=lambda value: (value.count("/"), value),
         ):
-            if not any(
-                path == root or path.startswith(f"{root.rstrip('/')}/") for root in lock_paths
-            ):
-                lock_paths.append(path)
-        try:
-            lease = await self._async_agfs.pathlock_acquire_tree_batch(lock_paths)
-        except LockAcquisitionError as exc:
-            raise ResourceBusyError(
-                "A snapshot path is being processed",
-                uri=paths[0],
-            ) from exc
+            if any(path == root or path.startswith(f"{root.rstrip('/')}/") for root in tree_roots):
+                continue
+            try:
+                stat = await self._async_agfs.stat(path)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+                if missing_kind is not None:
+                    tree_roots.append(path)
+                    lock_requests.append({"path": path, "kind": missing_kind})
+                continue
+            if isinstance(stat, dict) and stat.get("isDir", False):
+                tree_roots.append(path)
+                lock_requests.append({"path": path, "kind": "tree"})
+            else:
+                lock_requests.append({"path": path, "kind": "exact"})
+        lease = None
+        if lock_requests:
+            try:
+                lease = await self._async_agfs.pathlock_acquire_batch(lock_requests)
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    "A snapshot path is being processed",
+                    uri=paths[0],
+                ) from exc
         try:
             scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
             await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.WRITE)
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
-            await self._async_agfs.pathlock_release(lease)
+            if lease is not None:
+                await self._async_agfs.pathlock_release(lease)
+
+    @staticmethod
+    def _snapshot_missing_target_lock_kind() -> Optional[str]:
+        """Lock kind for a missing commit target: Tree on Redis, none on filesystem."""
+        try:
+            from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+            provider = get_openviking_config().storage.agfs.pathlock.provider
+        except Exception:
+            provider = "filesystem"
+        return "tree" if provider == "cache" else None
 
     async def restore(
         self,
@@ -787,7 +830,7 @@ class _SnapshotMixin:
         Failures are logged and never propagate.
         """
         try:
-            from openviking.service.reindex_executor import get_reindex_executor
+            from openviking.service.reindex_executor import ReindexExecutor
         except Exception:
             logger.exception("[VikingFS] ReindexExecutor import failed; skipping rebuild")
             return
@@ -802,7 +845,10 @@ class _SnapshotMixin:
         if not tasks:
             return
 
-        executor = get_reindex_executor()
+        executor = ReindexExecutor(
+            vlm_resolver=self._vlm_resolver,
+            vector_config_resolver=self._vector_config_resolver,
+        )
         for op, uri, level in tasks:
             loop.create_task(
                 self._run_vector_rebuild(executor, op, uri, level, ctx),
@@ -822,6 +868,7 @@ class _SnapshotMixin:
         swallowed (and logged) inside :py:meth:`_run_vector_rebuild`, preserving
         the "failures do not block" semantics.
         """
+        from openviking.service.reindex_executor import ReindexExecutor
         from openviking.service.task_tracker import get_task_tracker
         from openviking.service.task_work_index import bind_task_context
 
@@ -834,9 +881,10 @@ class _SnapshotMixin:
                 user_id=ctx.user.user_id,
                 stage="reindexing",
             )
-            from openviking.service.reindex_executor import get_reindex_executor
-
-            executor = get_reindex_executor()
+            executor = ReindexExecutor(
+                vlm_resolver=self._vlm_resolver,
+                vector_config_resolver=self._vector_config_resolver,
+            )
             reindex_ctx = self._restore_reindex_context(ctx)
             with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
                 await asyncio.gather(

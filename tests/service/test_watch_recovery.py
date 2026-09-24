@@ -6,13 +6,18 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 
-from openviking.resource.feishu_watch_auth import FeishuOAuthClient, FeishuRefreshedToken
+from openviking.resource.feishu_watch_auth import (
+    FeishuOAuthClient,
+    FeishuRefreshedToken,
+    FeishuTokenRefreshError,
+)
 from openviking.resource.git_watch_auth import create_git_http_auth_state
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
@@ -445,10 +450,25 @@ class TestResourceExistenceCheck:
         await scheduler.start()
         feishu_client = FakeFeishuOAuthClient()
 
-        def from_auth_state(_cls, auth_state):
+        def from_auth_state(_cls, auth_state, *, config=None):
             assert auth_state["app_id"] == "cli-test"
             assert auth_state["app_secret"] == "secret-test"
             return feishu_client
+
+        async def resolve_account(account_id, resolver):
+            from openviking_cli.utils.config.parser_config import FeishuConfig
+
+            assert account_id == task.account_id
+            return resolver(
+                SimpleNamespace(
+                    account=SimpleNamespace(feishu=None),
+                    cluster=SimpleNamespace(
+                        feishu=FeishuConfig(domain="https://open.feishu.cn")
+                    ),
+                )
+            )
+
+        scheduler._runtime_config_manager = SimpleNamespace(resolve_account=resolve_account)
 
         monkeypatch.setattr(
             FeishuOAuthClient,
@@ -476,12 +496,75 @@ class TestResourceExistenceCheck:
 
         assert feishu_client.calls == ["r-old"]
         assert resource_service.refresh_resource.await_args.kwargs["feishu_access_token"] == "u-new"
+        assert "feishu_auth_domain" not in resource_service.refresh_resource.await_args.kwargs
+        assert "feishu_config" not in resource_service.refresh_resource.await_args.kwargs
 
         updated_task = await watch_manager.get_task(task.task_id)
         assert updated_task is not None
         assert updated_task.auth_state["access_token"] == "u-new"
         assert updated_task.auth_state["refresh_token"] == "r-new"
         assert updated_task.auth_state["expires_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_feishu_permanent_refresh_failure_deactivates_watch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        temp_storage: Path,
+    ):
+        resource_service = ResourceService(
+            vikingdb=MockVikingDB(),
+            viking_fs=MockVikingFS(root_path=str(temp_storage)),
+            resource_processor=MockResourceProcessor(),
+            skill_processor=MockSkillProcessor(),
+            watch_scheduler=None,
+        )
+        resource_service.refresh_resource = AsyncMock()
+        scheduler = WatchScheduler(resource_service=resource_service, viking_fs=None)
+        await scheduler.start()
+
+        class FailingFeishuOAuthClient:
+            async def refresh_user_access_token(self, _refresh_token):
+                raise FeishuTokenRefreshError("invalid client credentials", permanent=True)
+
+        monkeypatch.setattr(
+            FeishuOAuthClient,
+            "from_auth_state",
+            classmethod(lambda _cls, _auth_state, *, config: FailingFeishuOAuthClient()),
+        )
+
+        async def resolve_account(_account_id, resolver):
+            from openviking_cli.utils.config.parser_config import FeishuConfig
+
+            return resolver(
+                SimpleNamespace(
+                    account=SimpleNamespace(feishu=None),
+                    cluster=SimpleNamespace(feishu=FeishuConfig()),
+                )
+            )
+
+        scheduler._runtime_config_manager = SimpleNamespace(resolve_account=resolve_account)
+        watch_manager = scheduler.watch_manager
+        task = await watch_manager.create_task(
+            path="https://example.feishu.cn/docx/doc_token",
+            to_uri="viking://resources/feishu-user-watch",
+            watch_interval=30.0,
+            auth_state={
+                "provider": "feishu",
+                "access_token": "u-old",
+                "refresh_token": "r-old",
+                "expires_at": None,
+                "app_id": "old-app",
+            },
+        )
+
+        await scheduler._execute_task(task)
+
+        updated_task = await watch_manager.get_task(task.task_id)
+        assert updated_task is not None
+        assert updated_task.is_active is False
+        assert updated_task.last_status == "failed"
+        assert updated_task.last_error == "invalid client credentials"
+        resource_service.refresh_resource.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_git_token_watch_restores_task_auth_for_refresh(

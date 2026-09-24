@@ -20,7 +20,7 @@ import { fetchUserMemorySettings, updateUserMemorySettings } from '#/lib/admin'
 import type { AdminConnection, AdminUser } from '#/lib/admin'
 import { identifyMemoryPreset } from '#/lib/user-memory-policy'
 import type { UserMemoryPolicy } from '#/lib/user-memory-policy'
-import { MemoryPolicyPicker } from './memory-policy-picker'
+import { MemoryPolicyDetails, MemoryPolicyPicker } from './memory-policy-picker'
 import { getErrorMessage } from '../-lib/error'
 
 export function UserMemoryPolicyCell({
@@ -100,7 +100,12 @@ export function UserMemoryPolicyCell({
           </span>
           <PencilIcon className="size-3.5 text-primary" />
         </TooltipTrigger>
-        <TooltipContent>{t('memoryPolicy.edit')}</TooltipContent>
+        <TooltipContent className="block w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border bg-popover p-0 text-sm text-popover-foreground shadow-lg [&>[aria-hidden=true]]:bg-popover">
+          <p className="border-b px-4 py-3 font-semibold">
+            {t(`memoryPolicy.${preset}.name`)}
+          </p>
+          <MemoryPolicyDetails value={query.data.memory_policy} />
+        </TooltipContent>
       </Tooltip>
       <Dialog
         open={open}

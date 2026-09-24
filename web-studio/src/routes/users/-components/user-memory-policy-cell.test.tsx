@@ -9,6 +9,7 @@ import {
 } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import type * as MemoryPolicyPickerModule from './memory-policy-picker'
 import { UserMemoryPolicyCell } from './user-memory-policy-cell'
 import type { UserMemoryPolicy } from '#/lib/user-memory-policy'
 
@@ -41,7 +42,8 @@ vi.mock('#/components/ui/dialog', () => {
     DialogDescription: Container,
   }
 })
-vi.mock('./memory-policy-picker', () => ({
+vi.mock('./memory-policy-picker', async (importOriginal) => ({
+  ...(await importOriginal<typeof MemoryPolicyPickerModule>()),
   MemoryPolicyPicker: ({
     value,
     onSelect,

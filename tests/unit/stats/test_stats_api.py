@@ -25,8 +25,6 @@ def mock_service():
     mock_stats = MagicMock()
     mock_stats.total_turns = 5
     mock_stats.memories_extracted = 3
-    mock_stats.contexts_used = 2
-    mock_stats.skills_used = 1
     mock_session.stats = mock_stats
     service.sessions.get = AsyncMock(return_value=mock_session)
 

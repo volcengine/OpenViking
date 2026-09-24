@@ -120,9 +120,7 @@ class TestVikingFSURITraversalGuard:
             "viking://agent/",
         ],
     )
-    async def test_rm_rejects_protected_namespace_roots_before_side_effects(
-        self, uri: str
-    ) -> None:
+    async def test_rm_rejects_protected_namespace_roots_before_side_effects(self, uri: str) -> None:
         fs = _make_viking_fs()
         fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
@@ -161,9 +159,7 @@ class TestVikingFSURITraversalGuard:
         fs.agfs.stat.assert_not_called()
         fs.agfs.rm.assert_not_called()
 
-    @pytest.mark.parametrize(
-        "uri", ["viking://user/alice", "viking://resources"]
-    )
+    @pytest.mark.parametrize("uri", ["viking://user/alice", "viking://resources"])
     @pytest.mark.asyncio
     async def test_rm_allows_maintenance_scope_roots_for_root(self, uri: str) -> None:
         fs = _make_viking_fs()
@@ -388,3 +384,21 @@ class TestVikingFSURITraversalGuard:
         entries = await fs._ls_entries("/local/default")
 
         assert [entry["name"] for entry in entries] == ["resources"]
+
+    @pytest.mark.asyncio
+    async def test_ls_entries_below_root_keeps_reserved_root_names(self) -> None:
+        """A directory a user created and can stat must also show up in ls."""
+        fs = _make_viking_fs()
+        fs.agfs.ls.return_value = [
+            {"name": "tasks", "isDir": True},
+            {"name": "_system", "isDir": True},
+            {"name": "notes.md", "isDir": False},
+            {"name": ".path.ovlock", "isDir": False},
+            {"name": ".exact.ovlock.notes.md.0123abcd", "isDir": False},
+            {"name": ".redirect.json", "isDir": False},
+            {"name": ".sync_log.json", "isDir": False},
+        ]
+
+        entries = await fs._ls_entries("/local/default/resources/project")
+
+        assert [entry["name"] for entry in entries] == ["tasks", "_system", "notes.md"]

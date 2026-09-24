@@ -242,7 +242,7 @@ export function createOpenVikingMcpProxy({
   }
 
   function headersForRequest(includeSession = true) {
-    return buildOvHeaders(proxyConfig, {
+    const built = buildOvHeaders(proxyConfig, {
       actorPeerId: proxyConfig.peerId,
       extraHeaders: {
         "Accept": "application/json, text/event-stream",
@@ -253,6 +253,16 @@ export function createOpenVikingMcpProxy({
         ...(includeSession && sessionId ? { "Mcp-Session-Id": sessionId } : {}),
       },
     });
+    // Operator-supplied extras (OPENVIKING_EXTRA_HEADERS) merged with the
+    // proxy's own headers winning — the env-only escape hatch fills gaps for
+    // strict private-gateway upstreams (tenant/vault names, region hints)
+    // without letting a stray env var override authentication or session
+    // negotiation.
+    const opExtras = proxyConfig.extraHeaders;
+    if (opExtras && typeof opExtras === "object") {
+      return { ...opExtras, ...built };
+    }
+    return built;
   }
 
   function writeMessage(obj) {

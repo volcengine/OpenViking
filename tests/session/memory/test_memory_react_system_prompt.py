@@ -4,9 +4,34 @@
 Test that provider instruction correctly instructs LLM.
 """
 
+from types import SimpleNamespace
+
+import pytest
+
 from openviking.message import ImagePart, Message, TextPart, ToolPart
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.vision_message_normalizer import IMAGE_DESCRIPTION_PROMPT
+
+
+@pytest.fixture(autouse=True)
+def _runtime_config(monkeypatch):
+    config = SimpleNamespace(
+        output_language_override="",
+        language_fallback="en",
+        memory=SimpleNamespace(
+            eager_prefetch=False,
+            prefetch_search_topn=5,
+            link_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.language.get_openviking_config",
+        lambda: config,
+    )
 
 
 class TestProviderInstruction:
@@ -261,6 +286,9 @@ class TestSessionConversationToolFiltering:
             def __init__(self):
                 self.messages = None
 
+            def is_available(self):
+                return True
+
             async def get_vision_completion_async(self, **kwargs):
                 self.messages = kwargs.get("messages")
                 return "A high level image description."
@@ -275,9 +303,11 @@ class TestSessionConversationToolFiltering:
                 ],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
         fake_vlm = FakeVisionVLM()
-        provider._vision_vlm = fake_vlm
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=fake_vlm,
+        )
 
         await provider.prepare_extraction_messages()
         prompt_message = provider._build_conversation_message()
@@ -313,8 +343,10 @@ class TestSessionConversationToolFiltering:
                 parts=[ImagePart(url="https://example.com/private-family-photo.png")],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=SimpleNamespace(is_available=lambda: False),
+        )
 
         await provider.prepare_extraction_messages()
         prompt_message = provider._build_conversation_message()
@@ -333,8 +365,10 @@ class TestSessionConversationToolFiltering:
                 ],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=SimpleNamespace(is_available=lambda: False),
+        )
 
         await provider.prepare_extraction_messages()
         prompt_message = provider._build_conversation_message()
@@ -354,8 +388,10 @@ class TestSessionConversationToolFiltering:
                 ],
             )
         ]
-        provider = SessionExtractContextProvider(messages=messages)
-        provider._vision_vlm = None
+        provider = SessionExtractContextProvider(
+            messages=messages,
+            vlm_config=SimpleNamespace(is_available=lambda: False),
+        )
 
         await provider.prepare_extraction_messages()
 

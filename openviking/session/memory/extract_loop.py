@@ -30,7 +30,7 @@ from openviking.session.memory.extraction_output_protocol import (
     create_extraction_output_protocol,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.merge_op import FieldType, MergeOp, PatchOp
+from openviking.session.memory.merge_op import FieldType, ImmutableOp, MergeOp, PatchOp
 from openviking.session.memory.page_id_map import ResponsePageIdAllocator
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
 from openviking.session.memory.tools import MEMORY_TOOLS_REGISTRY
@@ -229,7 +229,7 @@ class ExtractLoop:
         config = get_openviking_config()
         self._link_enabled = config.memory.link_enabled if config.memory else False
 
-        self._resolve_effective_max_output_tokens(config)
+        self._resolve_effective_max_output_tokens()
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
@@ -253,6 +253,7 @@ class ExtractLoop:
             link_enabled=self._link_enabled,
             role_scope=role_scope,
             available_tools=tuple(allowed_tools),
+            template_context={"language": output_language},
         )
         tracer.set("memory.extraction.output_format", output_format)
 
@@ -416,11 +417,11 @@ class ExtractLoop:
                 # not the console/log stream.
                 tracer.info(failure_message)
             else:
-                # ERROR: retries exhausted; this extraction will yield no operations.
+                # ERROR: no attempt remains to repair the invalid response.
                 tracer.error(failure_message)
 
-            # If no retry remains, treat unparseable response as "no memory
-            # operations" rather than failing hard.
+            # Preserve a valid first pass when only its resolution repair failed.
+            # Otherwise propagate failure so the archive is not marked completed.
             if not retry_remaining:
                 if pending_resolution_repair is not None:
                     final_operations, raw_links = pending_resolution_repair
@@ -431,16 +432,11 @@ class ExtractLoop:
                         console=True,
                     )
                     break
-                final_operations = ResolvedOperations(
-                    upsert_operations=[],
-                    delete_file_contents=[],
-                    errors=[
-                        "Final response could not be parsed as operations "
-                        f"after {max_iterations} iterations "
-                        f"(failure_kind={failure_kind})"
-                    ],
+                raise RuntimeError(
+                    "Final response could not be parsed as operations "
+                    f"after {max_iterations} iterations "
+                    f"(failure_kind={failure_kind})"
                 )
-                break
 
             self._disable_tools_for_iteration = (
                 not self._output_protocol.keep_tools_enabled_after_parse_error(
@@ -462,20 +458,18 @@ class ExtractLoop:
 
         return final_operations, tools_used
 
-    def _resolve_effective_max_output_tokens(self, config: Any = None) -> None:
+    def _resolve_effective_max_output_tokens(self) -> None:
         """Resolve the extraction output cap.
 
-        Priority: explicit per-loop value > configured vlm.max_tokens >
+        Priority: explicit per-loop value > resolved VLM max_tokens >
         _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS. The default is a functional floor
         that suits the primary Doubao models; a model with a lower max output
         (e.g. gpt-4o-mini) must set vlm.max_tokens in ov.conf to override it.
         """
-        if config is None:
-            config = get_openviking_config()
         if self.max_output_tokens is not None:
             self._effective_max_output_tokens = self.max_output_tokens
             return
-        configured = getattr(getattr(config, "vlm", None), "max_tokens", None)
+        configured = getattr(self.vlm, "max_tokens", None)
         self._effective_max_output_tokens = (
             configured if configured is not None else _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS
         )
@@ -870,7 +864,7 @@ class ExtractLoop:
                                 if field.merge_op == MergeOp.IMMUTABLE
                             }
                             for field_name in immutable_fields:
-                                if field_name in old_content.extra_fields:
+                                if ImmutableOp.is_set(old_content.extra_fields.get(field_name)):
                                     resolved_op.memory_fields[field_name] = (
                                         old_content.extra_fields[field_name]
                                     )

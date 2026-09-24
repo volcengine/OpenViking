@@ -6,7 +6,7 @@ The Watch API manages periodic resource checks, pausing, resuming, and manual tr
 
 ### Watch Management
 
-List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add_resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
+List, inspect, update, and trigger watch tasks created via [`add_resource`](02-resources.md#add-resource) with `watch_interval > 0`. The control plane is mirrored across REST (`/api/v1/watches`), the `ov task watch` CLI subcommand group, and a minimum-closure MCP surface (`list_watches` / `cancel_watch`) for agents.
 
 #### 1. API Implementation Overview
 
@@ -211,7 +211,7 @@ list_watches()                                            # one line per task; U
 cancel_watch(to_uri="viking://resources/guide.md")        # idempotent removal by URI
 ```
 
-Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](02-resources.md#add_resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
+Pause / resume / trigger / update are intentionally not exposed via MCP — those power-user operations live on the CLI/REST surface to keep the agent system prompt compact. Creating a watch or changing its cadence from the agent side still goes through [`add_resource`](02-resources.md#add-resource) with `watch_interval`; pass `to` explicitly or let the system bind to the `root_uri` returned by this import.
 
 ---
 

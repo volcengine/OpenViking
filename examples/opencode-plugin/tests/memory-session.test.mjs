@@ -65,6 +65,40 @@ function baseConfig(endpoint) {
   }
 }
 
+test("deferred startup loads local state without waiting for legacy migration", async () => {
+  await withTempDir("ov-oc-deferred-", async (dir) => {
+    let releaseCommit
+    let markCommitStarted
+    const commitStarted = new Promise((resolve) => { markCommitStarted = resolve })
+    const commitGate = new Promise((resolve) => { releaseCommit = resolve })
+    const server = createServer(async (req, res) => {
+      if (req.url?.endsWith("/commit")) {
+        markCommitStarted()
+        await commitGate
+      }
+      res.setHeader("Content-Type", "application/json")
+      res.end(JSON.stringify({ status: "ok", result: {} }))
+    })
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const legacyPath = join(dir, "openviking-session-map.json")
+    fs.writeFileSync(legacyPath, JSON.stringify({ sessions: { old: { ovSessionId: "legacy" } } }))
+    const manager = createMemorySessionManager({ config: baseConfig(`http://127.0.0.1:${server.address().port}`), pluginRoot: dir })
+    let initialized = false
+    const init = manager.init({ deferNetwork: true }).then(() => { initialized = true })
+    try {
+      await commitStarted
+      assert.equal(initialized, true, "activation must finish while legacy commit is still pending")
+      assert.equal(fs.existsSync(`${legacyPath}.migrated`), false)
+    } finally {
+      releaseCommit()
+      await init
+      await manager.waitForBackground()
+      await new Promise((resolve) => server.close(resolve))
+    }
+    assert.equal(fs.existsSync(`${legacyPath}.migrated`), true)
+  })
+})
+
 test("autoCapture=false prevents OpenCode messages from being captured", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
     await withTempDir("ov-oc-session-", async (dir) => {

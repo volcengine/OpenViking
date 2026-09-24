@@ -14,7 +14,7 @@ from openviking_cli.exceptions import InvalidURIError
     [
         "viking://resources/docs",
         "viking://session/s1",
-        "viking://agent/code-agent/memories/facts/project.md",
+        "viking://agent/skills/demo/SKILL.md",
         "viking://",
         "viking://~",
         "viking://~/memories/x",

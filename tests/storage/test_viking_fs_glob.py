@@ -19,6 +19,11 @@ class _DummyAgfs:
 
 class _RemoteGlobVectorStore:
     _backend_type = "vikingdb"
+    _mode = "vikingdb"
+
+    async def get_account_backend(self, account_id):
+        assert account_id
+        return self
 
     def __init__(self, records, count=1000, data_count=None):
         self.records = records
@@ -658,9 +663,17 @@ async def test_glob_delegates_to_agfs_with_paging_and_visibility(monkeypatch, fs
                     "is_dir": False,
                 },
                 {
-                    "path": "/local/test_account/resources/_system/secret.md",
-                    "rel_path": "_system/secret.md",
-                    "name": "secret.md",
+                    # Multi-write internal file: hidden at every level.
+                    "path": "/local/test_account/resources/group/.path.ovlock",
+                    "rel_path": "group/.path.ovlock",
+                    "name": ".path.ovlock",
+                    "is_dir": False,
+                },
+                {
+                    # A user directory named "_system" below the root stays visible.
+                    "path": "/local/test_account/resources/_system/notes.md",
+                    "rel_path": "_system/notes.md",
+                    "name": "notes.md",
                     "is_dir": False,
                 },
             ],
@@ -685,17 +698,18 @@ async def test_glob_delegates_to_agfs_with_paging_and_visibility(monkeypatch, fs
 
     monkeypatch.setattr(fs._async_agfs, "glob_directory", fake_glob_directory)
 
-    result = await fs.glob("**/*.md", uri="viking://resources", node_limit=2, ctx=_default_ctx())
+    result = await fs.glob("**/*.md", uri="viking://resources", node_limit=3, ctx=_default_ctx())
 
     assert result == {
         "matches": [
             "viking://resources/group/a.md",
+            "viking://resources/_system/notes.md",
             "viking://resources/group/b.md",
         ],
-        "count": 2,
+        "count": 3,
     }
     assert [call["continuation_token"] for call in calls] == [None, "tok-1"]
-    assert all(call["page_size"] == 2 for call in calls)
+    assert all(call["page_size"] == 3 for call in calls)
 
 
 @pytest.mark.asyncio

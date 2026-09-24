@@ -18,6 +18,11 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
 
 
+def _processor(**kwargs):
+    resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
+    return SemanticProcessor(vlm_resolver=resolver, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_memory_semantic_enqueue_deduped_within_window():
     mock_agfs = MagicMock()
@@ -155,7 +160,7 @@ def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
 async def test_stale_memory_semantic_write_is_success(monkeypatch):
     pathlock = _FakePathLock()
     viking_fs = _FakeVikingFS(pathlock)
-    processor = SemanticProcessor()
+    processor = _processor()
     coalesce_key = f"memory|acc|u|p|viking://user/default/memories/preferences/{uuid4().hex}"
 
     with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock):
@@ -210,7 +215,7 @@ async def test_stale_memory_semantic_write_is_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
-    processor = SemanticProcessor(max_concurrent_llm=4)
+    processor = _processor(max_concurrent_llm=4)
     summaries = []
 
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
@@ -218,8 +223,10 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, children_abstracts, llm_sem
+    async def generate_overview(
+        dir_uri, file_summaries, children_abstracts, llm_sem=None, **kwargs
+    ):
+        del dir_uri, children_abstracts, llm_sem, kwargs
         summaries.extend(file_summaries)
         return "overview"
 
@@ -256,7 +263,7 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_memory_directory_vectorizes_changed_files_with_generated_summary(monkeypatch):
-    processor = SemanticProcessor(max_concurrent_llm=4)
+    processor = _processor(max_concurrent_llm=4)
     dir_uri = "viking://user/default/memories/preferences"
     changed_uri = f"{dir_uri}/first.md"
     captured_file_vectorize = []
@@ -267,8 +274,10 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
         name = file_path.rsplit("/", 1)[-1]
         return {"name": name, "summary": f"summary:{name}", "content": "raw content"}
 
-    async def generate_overview(dir_uri, file_summaries, children_abstracts, llm_sem=None):
-        del dir_uri, children_abstracts, llm_sem
+    async def generate_overview(
+        dir_uri, file_summaries, children_abstracts, llm_sem=None, **kwargs
+    ):
+        del dir_uri, children_abstracts, llm_sem, kwargs
         assert len(captured_file_vectorize) == 1
         assert all("content" not in summary for summary in file_summaries)
         return "overview"
@@ -327,7 +336,7 @@ async def test_memory_directory_vectorizes_changed_files_with_generated_summary(
 async def test_memory_directory_skips_vectorization_when_visible_semantics_are_unchanged(
     monkeypatch,
 ):
-    processor = SemanticProcessor(max_concurrent_llm=4)
+    processor = _processor(max_concurrent_llm=4)
     vectorize_directory = AsyncMock()
     vectorize_file = AsyncMock()
 

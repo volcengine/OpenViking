@@ -11,7 +11,12 @@ from openviking.session.memory.account_templates import (
     _validate_template,
     memory_template_data,
 )
+from openviking.session.memory.extraction_output_protocol import (
+    ExtractionOutputContext,
+    create_extraction_output_protocol,
+)
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -37,9 +42,10 @@ def test_generators_render_description_strings(generator_type, plain_expected, t
 
     assert generator._render_description("  plain\n") == plain_expected
     assert generator._render_description("  {{ language.upper() }}  ") == template_expected
+    assert generator._render_description("  {{ language | trim | upper }}  ") == template_expected
     assert generator._render_description("") == ""
     with pytest.raises(DescriptionTemplateError):
-        generator._render_description("{{ language | upper }}")
+        generator._render_description("{{ language | length }}")
 
 
 @pytest.mark.parametrize("memory_type", EDITABLE_MEMORY_TEMPLATE_FIELDS)
@@ -54,6 +60,9 @@ def test_generators_render_description_strings(generator_type, plain_expected, t
             "English",
         ),
         ("{{ language.strip().upper().lower() }}", "en"),
+        ("{{ language | trim | upper | lower }}", "en"),
+        ("{% set label = language | upper %}{{ label }}", "EN"),
+        ("{{ language | default('en') | upper }}", "EN"),
         ("{% set label = language.upper() %}{{ label }}", "EN"),
         (
             "{% for title, value in [('Use', language), ('Also', 'dates')] %}{{ loop.index }} {{ title }} {{ value }};{% endfor %}",
@@ -88,8 +97,18 @@ def test_descriptions_render_identically_in_all_schema_prompts(memory_type, orig
     prompts = SchemaPromptGenerator([schema], template_context={"language": "en"})
     type_prompt = prompts.generate_type_descriptions()
     field_prompt = prompts.generate_field_descriptions(memory_type)
+    protocol_context = ExtractionOutputContext(
+        operations_model=operations,
+        schemas=(schema,),
+        page_id_map=PageIdMap(),
+        read_file_contents={},
+        link_enabled=False,
+        template_context={"language": "en"},
+    )
+    python_contract = create_extraction_output_protocol("python").render_contract(protocol_context)
     assert "TYPE: " + expected in operations.model_fields[memory_type].description
     assert "TYPE: " + expected in type_prompt
+    assert "TYPE: " + expected in python_contract
     for field in schema.fields:
         if field.name in editable:
             assert not hasattr(field, "_account_description")
@@ -97,6 +116,7 @@ def test_descriptions_render_identically_in_all_schema_prompts(memory_type, orig
             assert field.name + ": " + expected in model.model_fields[field.name].description
             assert field.name + ": " + expected in type_prompt
             assert field.name + ": " + expected in field_prompt
+            assert field.name + ": " + expected in python_contract
 
 
 @pytest.mark.parametrize("request_kind", ["empty", "roundtrip", "type_only", "field_only"])
@@ -131,7 +151,9 @@ def test_unchanged_deployment_descriptions_keep_existing_language_rendering(requ
         "{% for n in range(3) %}x{% endfor %}",
         "{% include 'not_a_file' %}",
         "literal {{ and {% unclosed",
-        "{{ language | upper }}",
+        "{{ language | length }}",
+        "{{ language | trim('x') }}",
+        "{{ language | attr('__class__') }}",
         "{{ summary }}",
         "{{ extract_context.get_year(ranges) }}",
         "{{ language[0] }}",
@@ -203,7 +225,13 @@ def test_deployment_change_does_not_change_old_description_rendering():
 
 def test_missing_context_keeps_existing_undefined_behavior_and_does_not_recurse():
     assert render_description_template("{{ language }}", {}) == ""
+    assert render_description_template("{{ language | default('en') }}", {}) == "en"
+    assert render_description_template("{{ language | default('en') }}", {"language": ""}) == ""
     assert render_description_template("{{ language or 'unspecified' }}", {}) == "unspecified"
+    assert (
+        render_description_template("{{ (language or 'unspecified') | upper }}", {})
+        == "UNSPECIFIED"
+    )
     assert (
         render_description_template("{% if language is undefined %}missing{% endif %}", {})
         == "missing"

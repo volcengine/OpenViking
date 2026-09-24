@@ -12,6 +12,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
     from openviking.storage.acl import AclManager
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import GlobConfig, GrepConfig, RerankConfig, RetrievalConfig
@@ -21,7 +22,7 @@ logger = get_logger(__name__)
 # Sentinel node_limit for internal callers that MUST enumerate an entire
 # directory. ``ls()`` defaults to ``node_limit=1000`` to protect agent-facing
 # context from being flooded, but internal system operations (parse merge,
-# temp->final sync, summary DAG, vectorization) must see every child or they
+# temp->final sync, semantic-tree execution, vectorization) must see every child or they
 # silently drop entries beyond the cap — e.g. a >1000-doc directory ingest only
 # materializes its first 1000 subdirectories. Pass this explicitly at those
 # call sites.
@@ -204,6 +205,9 @@ def init_viking_fs(
     timeout: int = 10,
     enable_recorder: bool = False,
     encryptor: Optional[Any] = None,
+    vlm_resolver: Optional["VLMResolver"] = None,
+    embedding_provider: Optional[Any] = None,
+    vector_config_resolver: Optional[Any] = None,
 ):
     """Initialize VikingFS singleton.
 
@@ -232,6 +236,9 @@ def init_viking_fs(
         grep_config=grep_config,
         glob_config=glob_config,
         encryptor=encryptor,
+        vlm_resolver=vlm_resolver,
+        embedding_provider=embedding_provider,
+        vector_config_resolver=vector_config_resolver,
     )
 
     if enable_recorder:

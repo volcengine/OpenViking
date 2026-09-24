@@ -22,7 +22,7 @@ import { copyTextToClipboard } from '#/lib/clipboard'
 import { EvolutionSettingsPopover } from './evolution-settings-popover'
 
 const INSTALL_COMMAND =
-  'npx skills add https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin/skills/ov-experience-memory'
+  'npx skills add https://github.com/volcengine/OpenViking/tree/main/examples/skills/ov-experience-memory'
 
 export function ExperienceSetupGuide() {
   const [expanded, setExpanded] = useState(false)
@@ -41,17 +41,17 @@ export function ExperienceSetupGuide() {
   return (
     <section
       aria-labelledby="experience-setup-title"
-      className="rounded-xl border border-primary/25 bg-gradient-to-br from-primary/5 to-background px-4 py-3 sm:px-5"
+      className="rounded-lg border border-border/60 bg-muted/10 px-3 py-1.5"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <SparklesIcon className="size-5 shrink-0 text-primary" />
-          <h2 id="experience-setup-title" className="font-semibold">
+          <SparklesIcon className="size-4 shrink-0 text-muted-foreground" />
+          <h2 id="experience-setup-title" className="text-sm font-medium">
             {t('setup.title')}
           </h2>
         </div>
         <Button
-          variant="outline"
+          variant="ghost"
           size="sm"
           aria-expanded={expanded}
           aria-controls="experience-setup-steps"

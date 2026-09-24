@@ -22,6 +22,7 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
+	ACL                 *ACLSpec
 	To                  string
 	Parent              string
 	CreateParent        *bool
@@ -154,6 +155,11 @@ type WaitProcessedOptions struct {
 	Timeout *float64 `json:"timeout,omitempty"`
 }
 
+// ObserverStatusOptions controls observer status formatting.
+type ObserverStatusOptions struct {
+	Format string
+}
+
 // ListWatchesOptions controls ListWatches.
 type ListWatchesOptions struct {
 	ActiveOnly bool
@@ -214,6 +220,7 @@ type RemoveOptions struct {
 
 // WriteOptions controls Write.
 type WriteOptions struct {
+	ACL            *ACLSpec
 	Mode           string
 	Wait           bool
 	Timeout        *float64

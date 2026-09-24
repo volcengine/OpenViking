@@ -322,10 +322,16 @@ async def update_account_memory_template(
             ) from exc
         except (ValueError, TypeError, KeyError, AttributeError, TemplateSyntaxError) as exc:
             raise InvalidArgumentError(f"Invalid memory template: {exc}") from exc
-        complete["_updated_at"] = datetime.now(timezone.utc).isoformat()
-        encoded = yaml.safe_dump(complete, allow_unicode=True, sort_keys=False).encode("utf-8")
-        if len(encoded) > _MAX_CONFIG_BYTES:
-            raise InvalidArgumentError("A memory template must not exceed 1 MiB")
+        # Saving an unchanged default form (including per-field resets) removes
+        # the override through the same locked path as DELETE. Compare before
+        # adding publication metadata; any remaining edit keeps it custom.
+        if complete == defaults:
+            complete = None
+        else:
+            complete["_updated_at"] = datetime.now(timezone.utc).isoformat()
+            encoded = yaml.safe_dump(complete, allow_unicode=True, sort_keys=False).encode("utf-8")
+            if len(encoded) > _MAX_CONFIG_BYTES:
+                raise InvalidArgumentError("A memory template must not exceed 1 MiB")
 
     path = account_memory_template_path(account_id, memory_type)
     staging_path = f"{path}.{uuid.uuid4().hex}.tmp" if complete is not None else None

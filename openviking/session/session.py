@@ -67,6 +67,7 @@ from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
     from openviking.session.compressor_v3 import SessionCompressorV3 as SessionCompressor
     from openviking.storage import VikingDBManager
     from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
@@ -453,8 +454,6 @@ class SessionStats:
     total_turns: int = 0
     total_tokens: int = 0
     compression_count: int = 0
-    contexts_used: int = 0
-    skills_used: int = 0
     memories_extracted: int = 0
 
 
@@ -631,19 +630,6 @@ class SessionMeta:
         )
 
 
-@dataclass
-class Usage:
-    """Usage record."""
-
-    uri: str
-    type: str  # "context" | "skill"
-    contribution: float = 0.0
-    input: str = ""
-    output: str = ""
-    success: bool = True
-    timestamp: str = field(default_factory=get_current_timestamp)
-
-
 class Session:
     """Session management class - Message = role + parts."""
 
@@ -662,6 +648,7 @@ class Session:
         usage_reporter: Optional["UsageReporter"] = None,
         agent_evolution_enabled_provider: Optional[Callable[[], bool | Awaitable[bool]]] = None,
         memory_policy_provider: Optional[MemoryPolicyProvider] = None,
+        vlm_resolver: Optional["VLMResolver"] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
@@ -676,7 +663,6 @@ class Session:
         self._session_uri = session_uri or canonical_session_uri(self.ctx, self.session_id)
 
         self._messages: List[Message] = []
-        self._usage_records: List[Usage] = []
         self._archive_meta_merge_lock = asyncio.Lock()
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
@@ -696,6 +682,12 @@ class Session:
         self._agent_evolution_enabled_provider = agent_evolution_enabled_provider
         self._memory_policy_provider = memory_policy_provider
         self._usage_reporter = usage_reporter
+        self._vlm_resolver = vlm_resolver
+
+    async def _get_vlm_config(self):
+        if self._vlm_resolver is None:
+            raise RuntimeError("Session requires a VLM resolver for account-owned work")
+        return await self._vlm_resolver.get_vlm(self.ctx.account_id)
 
     async def _resolve_memory_policy(
         self, override: Optional[Dict[str, Any]] = None
@@ -914,45 +906,6 @@ class Session:
 
     # ============= Core methods =============
 
-    def used(
-        self,
-        contexts: Optional[List[str]] = None,
-        skill: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Record actually used contexts and skills."""
-        if contexts:
-            for uri in contexts:
-                usage = Usage(uri=uri, type="context")
-                self._usage_records.append(usage)
-                self._stats.contexts_used += 1
-                logger.debug(f"Tracked context usage: {uri}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_contexts_used(
-                    action="context", delta=len(contexts)
-                )
-            except Exception:
-                pass
-
-        if skill:
-            usage = Usage(
-                uri=skill.get("uri", ""),
-                type="skill",
-                input=skill.get("input", ""),
-                output=skill.get("output", ""),
-                success=skill.get("success", True),
-            )
-            self._usage_records.append(usage)
-            self._stats.skills_used += 1
-            logger.debug(f"Tracked skill usage: {skill.get('uri')}")
-            try:
-                from openviking.metrics.datasources.session import SessionLifecycleDataSource
-
-                SessionLifecycleDataSource.record_contexts_used(action="skill", delta=1)
-            except Exception:
-                pass
-
     def _tool_result_store(self) -> Optional[ToolResultStore]:
         if not self._viking_fs:
             return None
@@ -1073,7 +1026,7 @@ class Session:
         part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
         return True
 
-    def _externalize_tool_part(
+    async def _externalize_tool_part(
         self,
         msg: Message,
         part: ToolPart,
@@ -1092,19 +1045,17 @@ class Session:
 
         digest = sha256_text(original_output)
         try:
-            stored = run_async(
-                store.write(
-                    content=original_output,
-                    tool_id=part.tool_id,
-                    tool_name=part.tool_name,
-                    message_id=msg.id,
-                    user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
-                    peer_id=msg.peer_id,
-                    created_at=msg.created_at,
-                    preview_chars=preview_chars,
-                    mime_type=part.tool_output_mime_type or "text/plain",
-                    synopsis=synopsis,
-                )
+            stored = await store.write(
+                content=original_output,
+                tool_id=part.tool_id,
+                tool_name=part.tool_name,
+                message_id=msg.id,
+                user_id=self.ctx.user.user_id if self.ctx and self.ctx.user else None,
+                peer_id=msg.peer_id,
+                created_at=msg.created_at,
+                preview_chars=preview_chars,
+                mime_type=part.tool_output_mime_type or "text/plain",
+                synopsis=synopsis,
             )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
@@ -1154,7 +1105,7 @@ class Session:
         part.tool_output_group_original_chars = group_original_chars
         part.tool_output_group_budget_chars = cfg.assistant_turn_inline_budget_chars
 
-    def _externalize_large_tool_output_group(self, messages: List[Message]) -> None:
+    async def _externalize_large_tool_output_group(self, messages: List[Message]) -> None:
         cfg = self._tool_output_externalization_config
         if not cfg.enabled:
             return
@@ -1274,7 +1225,7 @@ class Session:
                 else "turn_budget"
             )
             synopsis, _rendered_len = prepared_externalized_preview(idx, part, preview_chars)
-            self._externalize_tool_part(
+            await self._externalize_tool_part(
                 msg,
                 part,
                 cfg,
@@ -1285,17 +1236,10 @@ class Session:
                 synopsis=synopsis,
             )
 
-    def _externalize_large_tool_outputs(self, msg: Message) -> None:
-        self._externalize_large_tool_output_group([msg])
-
     def _is_tool_result_aggregate(self, role: str, parts: List[Part]) -> bool:
         return (
             role == "user" and len(parts) > 1 and all(isinstance(part, ToolPart) for part in parts)
         )
-
-    def _append_messages(self, messages: List[Message]) -> None:
-        """Append messages through the same authoritative lock as commit Phase 1."""
-        run_async(self._append_messages_authoritatively(messages))
 
     async def _append_messages_authoritatively(self, messages: List[Message]) -> None:
         """Reload and append under the session path lock.
@@ -1383,17 +1327,17 @@ class Session:
             # path lock as the counters above.
             self._meta.last_message_at = get_current_timestamp()
 
-    def _build_messages(
+    def _build_message_groups(
         self,
         messages_spec: List[dict],
-    ) -> List[Message]:
-        """Validate message specs and build their durable Message objects.
+    ) -> List[List[Message]]:
+        """Build messages grouped by input spec, preserving tool-output budgets.
 
         Args:
             messages_spec: List of dicts, each with keys:
                 role, parts, peer_id/created_at and optional semantic fields.
         """
-        all_messages = []
+        message_groups = []
         for i, spec in enumerate(messages_spec):
             if "role" not in spec:
                 raise ValueError(f"messages_spec[{i}]: missing required key 'role'")
@@ -1429,8 +1373,7 @@ class Session:
                     )
                     for part in parts
                 ]
-                self._externalize_large_tool_output_group(msgs)
-                all_messages.extend(msgs)
+                message_groups.append(msgs)
             else:
                 msg = Message(
                     id=f"msg_{uuid4().hex}",
@@ -1444,26 +1387,27 @@ class Session:
                         list(source_message_ids) if source_message_ids is not None else None
                     ),
                 )
-                self._externalize_large_tool_outputs(msg)
-                all_messages.append(msg)
+                message_groups.append([msg])
 
-        return all_messages
+        return message_groups
 
     def add_messages(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
         """Synchronously add multiple messages in one authoritative batch."""
-        messages = self._build_messages(messages_spec)
-        self._append_messages(messages)
-        return messages
+        return run_async(self.add_messages_async(messages_spec))
 
     async def add_messages_async(
         self,
         messages_spec: List[dict],
     ) -> List[Message]:
         """Asynchronously add multiple messages without blocking the caller loop."""
-        messages = self._build_messages(messages_spec)
+        message_groups = self._build_message_groups(messages_spec)
+        messages = []
+        for group in message_groups:
+            await self._externalize_large_tool_output_group(group)
+            messages.extend(group)
         await self._append_messages_authoritatively(messages)
         return messages
 
@@ -2060,7 +2004,7 @@ class Session:
                 # physical assistant message. This catches N small tool outputs
                 # whose aggregate exceeds the configured inline budget.
                 for turn in build_turns(self._messages):
-                    self._externalize_large_tool_output_group(turn.messages)
+                    await self._externalize_large_tool_output_group(turn.messages)
                 retention_plan = plan_retention(
                     self._messages,
                     keep_recent_turn_count=effective_keep_turns,
@@ -2112,7 +2056,6 @@ class Session:
                 f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
             )
             original_messages = list(self._messages)
-            usage_snapshot = self._usage_records.copy()
             task_id = str(uuid4())
             queue_msg = SessionCommitMsg(
                 task_id=task_id,
@@ -2121,7 +2064,6 @@ class Session:
                 archive_uri=archive_uri,
                 user=self.ctx.user.to_dict(),
                 memory_policy=effective_memory_policy,
-                usage_uris=list(dict.fromkeys(u.uri for u in usage_snapshot if u.uri)),
                 record_auto_commit_success=record_auto_commit_success,
                 event_search_tags=list(effective_event_tags),
                 auto_commit_policy=dict(self._meta.auto_commit_policy or {}),
@@ -2423,7 +2365,6 @@ class Session:
             task_id=msg.task_id,
             archive_uri=msg.archive_uri,
             messages=archive_messages,
-            usage_records=[Usage(uri=uri, type="context") for uri in msg.usage_uris],
             first_message_id=archive_messages[0].id,
             last_message_id=archive_messages[-1].id,
             memory_policy=msg.memory_policy,
@@ -2553,7 +2494,6 @@ class Session:
         task_id: str,
         archive_uri: str,
         messages: List[Message],
-        usage_records: List["Usage"],
         first_message_id: str,
         last_message_id: str,
         memory_policy: Optional[Dict[str, Any]],
@@ -2576,7 +2516,6 @@ class Session:
         usage_events_extracted = 0
         extracted_skill_results: list[dict] = []
         skipped_memory_operations: list[dict[str, Any]] = []
-        active_count_updated = 0
         memory_diff_uri: Optional[str] = None
         completed_memory_steps: Dict[str, set[str]] = {}
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
@@ -2943,20 +2882,6 @@ class Session:
                                     exc,
                                 )
 
-                    # Update active_count (using snapshot, not self._usage_records)
-                    if self._vikingdb_manager:
-                        uris = [u.uri for u in usage_records if u.uri]
-                        try:
-                            active_count_updated = (
-                                await self._vikingdb_manager.increment_active_count(self.ctx, uris)
-                            )
-                        except Exception as e:
-                            logger.debug(f"Could not update active_count for usage URIs: {e}")
-                        if active_count_updated > 0:
-                            logger.info(
-                                f"Updated active_count for {active_count_updated} contexts/skills"
-                            )
-
                 try:
                     await request_wait_tracker.wait_for_request(
                         telemetry.telemetry_id,
@@ -3017,7 +2942,6 @@ class Session:
                     "skipped_operations": skipped_memory_operations,
                 },
                 "usage_events_extracted": usage_events_extracted,
-                "active_count_updated": active_count_updated,
                 "effective_memory_types": sorted(
                     _effective_memory_types(MemoryPolicy.from_dict(memory_policy))
                 ),
@@ -4396,7 +4320,7 @@ class Session:
         limits: ExtractionBatchLimits,
     ) -> str:
         messages = [message for batch in batches for message in batch.messages]
-        vlm = get_openviking_config().vlm
+        vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             return await self._generate_archive_summary_async(
                 messages,
@@ -4474,7 +4398,7 @@ class Session:
         )
         checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
-        vlm = get_openviking_config().vlm
+        vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             if checkpoint_requests:
                 raise ValueError("A configured VLM is required to generate checkpoint summaries")
@@ -4751,7 +4675,8 @@ class Session:
                     "output_language": output_language,
                 },
             )
-            return await get_openviking_config().vlm.get_completion_async(prompt)
+            vlm = await self._get_vlm_config()
+            return await vlm.get_completion_async(prompt)
         except Exception as e:
             logger.warning(f"WM creation fallback failed: {e}")
             turn_count = len([m for m in messages if is_user_query(m)])
@@ -5620,11 +5545,6 @@ class Session:
     def compression(self) -> SessionCompression:
         """Get compression information."""
         return self._compression
-
-    @property
-    def usage_records(self) -> List[Usage]:
-        """Get usage records."""
-        return self._usage_records
 
     @property
     def stats(self) -> SessionStats:

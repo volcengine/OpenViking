@@ -43,11 +43,12 @@ export function stableHash(...values) {
  * file may not carry connection or credential keys, so the base URL and API key
  * cannot move under a logger or fetch helper already built from the first load.
  */
-export function loadAgentHookConfig(clientId, cwd = process.cwd()) {
+export function loadAgentHookConfig(clientId, cwd = process.cwd(), { env = process.env } = {}) {
   return {
     ...buildPluginConfig(clientId, {
       cwd,
-      version: process.env.OPENVIKING_INTEGRATION_VERSION,
+      env,
+      version: env.OPENVIKING_INTEGRATION_VERSION,
       logFile: `${clientId}-hooks.log`,
     }),
     clientId,
@@ -218,8 +219,16 @@ export async function addAgentMessage(fetchJSON, sessionId, payload) {
   return notePendingWrite("addMessage", sessionId, payload, result);
 }
 
-export async function addAgentMessages(fetchJSON, sessionId, payloads) {
-  return sendSessionMessages(fetchJSON, sessionId, payloads, { enqueueOnRetryable: true });
+/**
+ * Session routes attribute a message by its body `peer_id` alone: the
+ * actor-peer header scopes reads, not session writes. A payload that already
+ * names its peer keeps it; an empty `peerId` (peer mode off) stamps nothing.
+ */
+export async function addAgentMessages(fetchJSON, sessionId, payloads, peerId = "") {
+  const stamped = peerId
+    ? payloads.map((payload) => (payload.peer_id ? payload : { ...payload, peer_id: peerId }))
+    : payloads;
+  return sendSessionMessages(fetchJSON, sessionId, stamped, { enqueueOnRetryable: true });
 }
 
 export async function commitAgentSession(fetchJSON, sessionId, log = () => {}, payload = {}) {
@@ -274,7 +283,7 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
 
 export async function buildAgentProfile(fetchJSON, cfg, cwd) {
   const peer = resolveEffectivePeerId({ cfg, cwd });
-  const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId);
+  const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId, cfg);
   return profile?.block || null;
 }
 

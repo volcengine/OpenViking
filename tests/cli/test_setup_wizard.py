@@ -1420,22 +1420,29 @@ class TestRunInitExistingConfigMenu:
 
 
 class TestTwoStepWizard:
-    def test_mixed_local_embedding_cloud_vlm(self):
+    def test_mixed_local_embedding_codex_vlm(self):
         dense = {"provider": "ollama", "model": "qwen3-embedding:0.6b", "dimension": 1024}
-        vlm = {"provider": "openai", "model": "gpt-5.4", "api_base": "https://api.openai.com/v1"}
         with (
             patch(
                 "openviking_cli.setup_wizard._prompt_embedding_flow",
                 return_value=(dense, True),
             ),
-            patch("openviking_cli.setup_wizard._prompt_cloud_vlm", return_value=(vlm, None)),
+            patch("openviking_cli.setup_wizard._prompt_choice", return_value=4),
+            patch("openviking_cli.setup_wizard._ensure_codex_auth", return_value=True),
+            patch("builtins.input", return_value=""),
             patch("builtins.print"),
         ):
             config, ollama_running = _wizard_two_step()
 
         assert config is not None
         assert config["embedding"]["dense"] == dense
-        assert config["vlm"] == vlm
+        assert config["vlm"] == {
+            "provider": "openai-codex",
+            "model": "gpt-5.6-terra",
+            "api_base": "https://chatgpt.com/backend-api/codex",
+            "temperature": 0.0,
+            "max_retries": 2,
+        }
         assert config["storage"]["workspace"] == _workspace_path()
         # Ollama state from the embedding step survives a non-Ollama VLM step.
         assert ollama_running is True

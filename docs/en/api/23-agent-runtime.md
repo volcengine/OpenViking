@@ -107,6 +107,54 @@ task, err := client.Compile(
 
 :::
 
+### Check Compile availability
+
+```http
+GET /api/v1/compile/capabilities
+```
+
+Uses the current authentication context and takes no request parameters. Returns `200 OK`:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "configured": true,
+    "can_create": true,
+    "reason_code": null
+  }
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `configured` | Whether a Compile execution endpoint is configured |
+| `can_create` | Whether the current authentication context permits submission to that endpoint |
+| `reason_code` | `NOT_CONFIGURED` when no endpoint is configured; `API_KEY_REQUIRED` when a remote endpoint requires a forwardable OV API key; otherwise `null` |
+
+An unavailable configuration is reported in the result with `can_create: false`, not as an HTTP error. This checks configuration and credentials; it does not probe backend health or validate a particular Compile request.
+
+### Find a task by submission key
+
+```http
+GET /api/v1/compile/submissions/{key}
+```
+
+Use this endpoint when a task creation response was lost or timed out. Pass the same key that was sent in the optional `Idempotency-Key` header of `POST /api/v1/compile`.
+
+| Parameter | Location | Type | Required | Description |
+|-----------|----------|------|----------|-------------|
+| `key` | Path | string | Yes | 16–128 characters; only letters, digits, `:`, `.`, `_`, and `-` are allowed |
+
+```bash
+curl http://localhost:1933/api/v1/compile/submissions/studio-compile-001 \
+  -H "X-API-Key: your-key"
+```
+
+Returns `200 OK` with `status: "ok"` and the existing OV task record in `result`, using the same structure as the task creation response above. Lookup is scoped to the current account and user and does not create a task. A missing submission, including a key used only by another user, returns `404`; an invalid key returns `422`.
+
+To retry creation safely, reuse the same `Idempotency-Key` and request parameters. A key reused with different parameters returns `409`. Without this header, creation does not provide a submission key for this lookup.
+
 ### Get task status
 
 A task is visible only to the principal that created it. A missing task and a task owned by another principal both return `404`.

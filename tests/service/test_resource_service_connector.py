@@ -19,8 +19,9 @@ from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
+from openviking.storage.acl import AclSpec, AclUpdate
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg, AddResourcePhase
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 # Deterministic stand-in for the code-hosting predicate: routing tests must
@@ -39,6 +40,11 @@ class _FakeEncryptor:
 
     async def decrypt(self, _account_id, ciphertext):
         return ciphertext[4:][::-1]
+
+
+class _FakeResourceProcessor:
+    async def github_token_for(self, *_args, **_kwargs):
+        return None
 
 
 @pytest.fixture
@@ -94,7 +100,7 @@ def service():
     return ResourceService(
         vikingdb=object(),
         viking_fs=SimpleNamespace(exists=AsyncMock(return_value=True)),
-        resource_processor=object(),
+        resource_processor=_FakeResourceProcessor(),
         skill_processor=object(),
     )
 
@@ -421,14 +427,31 @@ async def test_connector_watch_releases_hold_when_submission_is_cancelled(
     service._connector.create_watch_auth_state = AsyncMock(return_value={"provider": "test"})
     service._connector.submit = AsyncMock(side_effect=asyncio.CancelledError)
     to_uri = "viking://resources/docs"
+    acl = AclSpec(acl_mode="inherit")
+    request = {
+        "path": "tos://bucket/docs/",
+        "ctx": ctx,
+        "to": to_uri,
+        "watch_interval": 5,
+        "acl": acl,
+    }
+    service._viking_fs.prepare_acl_update = AsyncMock(
+        side_effect=[
+            PermissionDeniedError("ACL management denied"),
+            AclUpdate(uri=to_uri, acl=acl),
+        ]
+    )
 
+    with pytest.raises(PermissionDeniedError, match="ACL management denied"):
+        await service.add_resource(**request)
+
+    assert await watch_manager.get_all_tasks("acct", "alice", str(Role.USER)) == []
+    assert scheduler._executing_tasks == set()
+    service._connector.submit.assert_not_awaited()
+
+    # Once authorized, cancellation after the Watch is created must release its hold.
     with pytest.raises(asyncio.CancelledError):
-        await service.add_resource(
-            path="tos://bucket/docs/",
-            ctx=ctx,
-            to=to_uri,
-            watch_interval=5,
-        )
+        await service.add_resource(**request)
 
     task = await watch_manager.get_task_by_uri(
         to_uri,
@@ -2284,6 +2307,80 @@ async def test_tos_connector_forwards_tags_and_mode(
         "tags": ["team=search", "env=test"],
         "tag_mode": "append",
     }
+
+
+@pytest.mark.asyncio
+async def test_tos_connector_forwards_clear_without_tags(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket/prefix",
+        ctx=ctx,
+        to="viking://resources/imports",
+        tag_mode="clear",
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["extra_params"] == {"tag_mode": "clear"}
+
+
+@pytest.mark.asyncio
+async def test_tos_connector_clear_ignores_invalid_tags(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket/prefix",
+        ctx=ctx,
+        to="viking://resources/imports",
+        tags=["invalid"],
+        tag_mode="clear",
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["extra_params"] == {"tag_mode": "clear"}
+
+
+@pytest.mark.asyncio
+async def test_tos_connector_ignores_empty_replace_tags(
+    monkeypatch,
+    connector_config,
+    ctx,
+    service,
+):
+    tracker = _task_tracker()
+    connector_client = SimpleNamespace(
+        submit_doc_add=AsyncMock(return_value={"task_key": "connector-1"})
+    )
+    _install_connector_dependencies(monkeypatch, tracker, connector_client)
+
+    await service.add_resource(
+        path="tos://bucket/prefix",
+        ctx=ctx,
+        to="viking://resources/imports",
+        tags=[],
+        tag_mode="replace",
+    )
+
+    submitted = connector_client.submit_doc_add.await_args.kwargs
+    assert submitted["extra_params"] is None
 
 
 @pytest.mark.asyncio

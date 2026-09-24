@@ -12,6 +12,7 @@ import pytest
 from openviking.pyagfs import AGFSNotFoundError
 from openviking.session.memory.account_templates import (
     account_memory_template_path,
+    default_memory_template,
     read_account_memory_template,
     resolve_account_memory_registry,
     update_account_memory_template,
@@ -367,6 +368,54 @@ def test_publication_failures_never_overwrite_the_active_file(monkeypatch, exist
         assert all(not held.locked() for held in agfs.locks.values())
         if existing:
             assert agfs.files[path + ".backup"] == old
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", [None, "backup", "remove"])
+def test_saving_defaults_uses_locked_reset_and_preserves_failed_writes(monkeypatch, failure):
+    agfs = LockingAGFS()
+    fs = SimpleNamespace(agfs=agfs)
+    registry = MemoryTypeRegistry()
+    path = account_memory_template_path("locking-test", "profile")
+
+    async def run():
+        await update_account_memory_template(
+            fs, "locking-test", "profile", {"description": "Custom"}, registry
+        )
+        previous = agfs.files[path]
+        write, remove = agfs.write, agfs.rm
+
+        def checked_write(target, data, **kwargs):
+            assert target == path + ".backup", "saving defaults must not publish another file"
+            assert path in agfs.leases
+            if failure == "backup":
+                raise OSError("backup failed")
+            return write(target, data, **kwargs)
+
+        def checked_remove(target, **kwargs):
+            assert target == path
+            assert agfs.files[path + ".backup"] == previous
+            if failure == "remove":
+                raise OSError("remove failed")
+            return remove(target, **kwargs)
+
+        monkeypatch.setattr(agfs, "write", checked_write)
+        monkeypatch.setattr(agfs, "rm", checked_remove)
+        update = update_account_memory_template(
+            fs, "locking-test", "profile", default_memory_template(registry, "profile"), registry
+        )
+        if failure:
+            with pytest.raises(OSError, match=f"{failure} failed"):
+                await update
+            assert agfs.files[path] == previous
+        else:
+            assert await update is None
+            assert path not in agfs.files
+            assert agfs.files[path + ".backup"] == previous
+        assert not agfs.leases
+        assert all(not lock.locked() for lock in agfs.locks.values())
+        assert not any(name.endswith(".tmp") for name in agfs.files)
 
     asyncio.run(run())
 

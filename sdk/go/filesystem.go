@@ -117,9 +117,12 @@ func (c *Client) Attrs(ctx context.Context, uri string) (map[string]any, error) 
 }
 
 // Mkdir creates a directory.
-func (c *Client) Mkdir(ctx context.Context, uri string, description string) error {
+func (c *Client) Mkdir(ctx context.Context, uri string, description string, acl ...ACLSpec) error {
 	payload := map[string]any{"uri": NormalizeURI(uri)}
 	setString(payload, "description", description)
+	if len(acl) > 0 {
+		payload["acl"] = acl[0]
+	}
 	return c.doJSON(ctx, http.MethodPost, "/api/v1/fs/mkdir", nil, payload, nil)
 }
 
@@ -224,8 +227,13 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	setFloatPtr(payload, "timeout", opts.Timeout)
 	setAny(payload, "telemetry", opts.Telemetry)
 	setString(payload, "processing_mode", opts.ProcessingMode)
-	if opts.Tags != nil {
-		payload["tags"] = opts.Tags
+	if opts.ACL != nil {
+		payload["acl"] = opts.ACL
+	}
+	if opts.Tags != nil || opts.TagMode == "clear" {
+		if opts.Tags != nil {
+			payload["tags"] = opts.Tags
+		}
 		tagMode := opts.TagMode
 		if tagMode == "" {
 			tagMode = "replace"
@@ -317,8 +325,10 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		"dry_run":   opts.DryRun,
 		"recursive": boolValue(opts.Recursive, true),
 	}
-	if opts.Tags != nil {
-		payload["tags"] = opts.Tags
+	if opts.Tags != nil || opts.TagMode == "clear" {
+		if opts.Tags != nil {
+			payload["tags"] = opts.Tags
+		}
 		tagMode := opts.TagMode
 		if tagMode == "" {
 			tagMode = "replace"

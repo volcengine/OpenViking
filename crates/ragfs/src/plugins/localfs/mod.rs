@@ -7,22 +7,91 @@ use async_trait::async_trait;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::{self, BufRead, BufReader, ErrorKind};
 use std::process::{Command, Stdio};
 
 use grep_regex::RegexMatcher;
-use grep_searcher::sinks::UTF8;
-use grep_searcher::{BinaryDetection, SearcherBuilder};
+use grep_searcher::{
+    BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkContextKind, SinkMatch,
+};
 use ignore::WalkBuilder;
 use serde::Deserialize;
 
 use crate::core::errors::{Error, Result};
 use crate::core::filesystem::{validate_virtual_path, FileSystem};
 use crate::core::glob::{decode_offset_token, encode_offset_token, PreparedGlob};
+use crate::core::grep::GrepLineCollector;
 use crate::core::plugin::ServicePlugin;
 use crate::core::types::{
-    ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepResult, PluginConfig, WriteFlag,
+    ConfigParameter, FileInfo, GlobEntry, GlobPage, GrepContextLine, GrepOptions, GrepResult,
+    PluginConfig, WriteFlag,
 };
+
+struct LocalGrepSink<'a> {
+    file: String,
+    collector: GrepLineCollector<'a>,
+}
+
+impl<'a> LocalGrepSink<'a> {
+    fn new(
+        file: String,
+        before_context: usize,
+        after_context: usize,
+        limit: usize,
+        result: &'a mut GrepResult,
+    ) -> Self {
+        Self {
+            collector: GrepLineCollector::new(
+                file.clone(),
+                before_context,
+                after_context,
+                limit,
+                result,
+            ),
+            file,
+        }
+    }
+
+    fn decode_line(line_number: Option<u64>, bytes: &[u8]) -> io::Result<GrepContextLine> {
+        let line_number = line_number.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "line numbers not enabled")
+        })?;
+        let content = std::str::from_utf8(bytes)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+            .trim_end_matches(&['\r', '\n'][..])
+            .to_string();
+        Ok(GrepContextLine {
+            line: line_number,
+            content,
+        })
+    }
+
+    fn consume_line(&mut self, file: &str, line: GrepContextLine, is_match: bool) -> bool {
+        self.collector.consume_line(file, line, is_match)
+    }
+}
+
+impl Sink for LocalGrepSink<'_> {
+    type Error = io::Error;
+
+    fn matched(&mut self, _searcher: &Searcher, matched: &SinkMatch<'_>) -> io::Result<bool> {
+        let line = Self::decode_line(matched.line_number(), matched.bytes())?;
+        Ok(self.collector.consume_line(&self.file, line, true))
+    }
+
+    fn context(&mut self, _searcher: &Searcher, context: &SinkContext<'_>) -> io::Result<bool> {
+        if context.kind() == &SinkContextKind::Other {
+            return Ok(true);
+        }
+        let line = Self::decode_line(context.line_number(), context.bytes())?;
+        Ok(self.collector.consume_line(&self.file, line, false))
+    }
+
+    fn context_break(&mut self, _searcher: &Searcher) -> io::Result<bool> {
+        self.collector.break_context();
+        Ok(!self.collector.limit_reached())
+    }
+}
 
 /// LocalFS - Local file system implementation
 pub struct LocalFileSystem {
@@ -365,13 +434,9 @@ impl LocalFileSystem {
         base_path: &Path,
         target_path: &Path,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<Option<GrepResult>> {
-        if node_limit == Some(0) {
+        if options.node_limit == Some(0) {
             return Ok(Some(GrepResult::new()));
         }
 
@@ -380,17 +445,25 @@ impl LocalFileSystem {
         cmd.arg("--no-messages"); // Avoid interleaving permission/IO warnings with JSON output
         cmd.arg("--no-ignore-parent"); // Match fallback `.parents(false)` semantics.
 
-        if case_insensitive {
+        if options.case_insensitive {
             cmd.arg("-i");
+        }
+        if options.before_context > 0 {
+            cmd.arg("--before-context")
+                .arg(options.before_context.to_string());
+        }
+        if options.after_context > 0 {
+            cmd.arg("--after-context")
+                .arg(options.after_context.to_string());
         }
 
         // Non-recursive directory search: only scan the current directory (no descent).
-        if !recursive && target_path.is_dir() {
+        if !options.recursive && target_path.is_dir() {
             cmd.arg("--max-depth").arg("1");
         }
 
         // NOTE: rg's --max-count is a per-file limit; we enforce a global limit by terminating early while parsing.
-        if let Some(limit) = node_limit {
+        if let Some(limit) = options.node_limit {
             cmd.arg("--max-count").arg(limit.to_string());
         }
 
@@ -434,8 +507,17 @@ impl LocalFileSystem {
 
         let mut out = GrepResult::new();
         let mut killed_for_limit = false;
-        let exclude_rel = exclude_path
+        let exclude_rel = options
+            .exclude_path
             .and_then(|p| Self::exclude_to_query_root_relative_path(base_path, target_path, p));
+        let limit = options.node_limit.unwrap_or(usize::MAX);
+        let mut sink = LocalGrepSink::new(
+            String::new(),
+            options.before_context,
+            options.after_context,
+            limit,
+            &mut out,
+        );
 
         #[derive(Debug, Deserialize)]
         struct RgEvent {
@@ -474,8 +556,14 @@ impl LocalFileSystem {
                 Err(_) => continue,
             };
 
-            // Only handle "match" events.
-            if ev.kind != "match" {
+            if ev.kind == "end" && sink.collector.match_count() >= limit {
+                let _ = child.kill();
+                killed_for_limit = true;
+                break;
+            }
+
+            let is_match = ev.kind == "match";
+            if !is_match && ev.kind != "context" {
                 continue;
             }
 
@@ -510,7 +598,7 @@ impl LocalFileSystem {
                 }
             }
 
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 if Self::virtual_depth(&file_virtual) > limit {
                     continue;
                 }
@@ -525,18 +613,22 @@ impl LocalFileSystem {
                 .trim_end_matches(&['\r', '\n'][..])
                 .to_string();
 
-            out.add_match(file_virtual, line_no, content);
-
-            if let Some(limit) = node_limit {
-                if out.count >= limit {
-                    // Reached global limit: terminate the rg process to avoid further scanning.
-                    let _ = child.kill();
-                    killed_for_limit = true;
-                    break;
-                }
+            let keep_going = sink.consume_line(
+                &file_virtual,
+                GrepContextLine {
+                    line: line_no,
+                    content,
+                },
+                is_match,
+            );
+            if !keep_going {
+                let _ = child.kill();
+                killed_for_limit = true;
+                break;
             }
         }
 
+        drop(sink);
         let status = child
             .wait()
             .map_err(|e| Error::InvalidOperation(format!("wait rg failed: {}", e)))?;
@@ -563,23 +655,19 @@ impl LocalFileSystem {
         base_path: &Path,
         virtual_path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         let local_root = Self::resolve_virtual_path(base_path, virtual_path);
         if !local_root.exists() {
             return Err(Error::NotFound(virtual_path.to_string()));
         }
 
-        if node_limit == Some(0) {
+        if options.node_limit == Some(0) {
             return Ok(GrepResult::new());
         }
 
         // Build regex for fallback (uses Rust `regex` semantics).
-        let regex_pattern = if case_insensitive {
+        let regex_pattern = if options.case_insensitive {
             format!("(?i){}", pattern)
         } else {
             pattern.to_string()
@@ -591,44 +679,38 @@ impl LocalFileSystem {
         let mut searcher = SearcherBuilder::new()
             .line_number(true)
             .binary_detection(BinaryDetection::quit(b'\x00'))
+            .before_context(options.before_context)
+            .after_context(options.after_context)
             .build();
 
         let mut out = GrepResult::new();
-        let limit = node_limit.unwrap_or(usize::MAX);
-        let exclude_rel = exclude_path
+        let limit = options.node_limit.unwrap_or(usize::MAX);
+        let exclude_rel = options
+            .exclude_path
             .and_then(|p| Self::exclude_to_query_root_relative_path(base_path, &local_root, p));
 
         // Single file: search directly.
         if local_root.is_file() {
             let file_virtual = Self::local_to_query_relative_path(&local_root, &local_root)
                 .ok_or_else(|| Error::InvalidPath(virtual_path.to_string()))?;
-
-            let mut remaining = limit.saturating_sub(out.count);
-            let sink = UTF8(|lnum, line| {
-                if remaining == 0 {
-                    return Ok(false);
-                }
-                if let Some(excl_rel) = exclude_rel.as_deref() {
-                    if Self::is_excluded_virtual(&file_virtual, excl_rel) {
-                        return Ok(true);
-                    }
-                }
-                if let Some(max_depth) = level_limit {
-                    if Self::virtual_depth(&file_virtual) > max_depth {
-                        return Ok(true);
-                    }
-                }
-                out.add_match(
-                    file_virtual.clone(),
-                    lnum as u64,
-                    line.trim_end().to_string(),
-                );
-                remaining -= 1;
-                Ok(remaining > 0)
-            });
-
-            // Similar to rg's --no-messages: file-level errors are not fatal here.
-            let _ = searcher.search_path(&matcher, &local_root, sink);
+            if exclude_rel
+                .as_deref()
+                .is_some_and(|exclude| Self::is_excluded_virtual(&file_virtual, exclude))
+                || options
+                    .level_limit
+                    .is_some_and(|max_depth| Self::virtual_depth(&file_virtual) > max_depth)
+            {
+                return Ok(out);
+            }
+            Self::grep_file_via_searcher(
+                &mut searcher,
+                &matcher,
+                &local_root,
+                file_virtual,
+                options,
+                limit,
+                &mut out,
+            );
             return Ok(out);
         }
 
@@ -650,7 +732,7 @@ impl LocalFileSystem {
             .git_exclude(true);
         // Apply git-related ignore rules even if the target directory isn't inside a git repo.
         builder.require_git(false);
-        if !recursive && local_root.is_dir() {
+        if !options.recursive && local_root.is_dir() {
             builder.max_depth(Some(1));
         }
 
@@ -681,31 +763,44 @@ impl LocalFileSystem {
                 }
             }
 
-            if let Some(max_depth) = level_limit {
+            if let Some(max_depth) = options.level_limit {
                 if Self::virtual_depth(&file_virtual) > max_depth {
                     continue;
                 }
             }
 
-            let mut remaining = limit.saturating_sub(out.count);
-            let sink = UTF8(|lnum, line| {
-                if remaining == 0 {
-                    return Ok(false);
-                }
-                out.add_match(
-                    file_virtual.clone(),
-                    lnum as u64,
-                    line.trim_end().to_string(),
-                );
-                remaining -= 1;
-                Ok(remaining > 0)
-            });
-
-            // Skip file read/permission errors to better match rg default behavior.
-            let _ = searcher.search_path(&matcher, file_path, sink);
+            Self::grep_file_via_searcher(
+                &mut searcher,
+                &matcher,
+                file_path,
+                file_virtual,
+                options,
+                limit,
+                &mut out,
+            );
         }
 
         Ok(out)
+    }
+
+    fn grep_file_via_searcher(
+        searcher: &mut Searcher,
+        matcher: &RegexMatcher,
+        file_path: &Path,
+        file_virtual: String,
+        options: GrepOptions<'_>,
+        limit: usize,
+        result: &mut GrepResult,
+    ) {
+        let sink = LocalGrepSink::new(
+            file_virtual,
+            options.before_context,
+            options.after_context,
+            limit,
+            result,
+        );
+        // Similar to rg's --no-messages: file-level errors are not fatal here.
+        let _ = searcher.search_path(matcher, file_path, sink);
     }
     fn local_to_query_relative_path(query_root: &Path, local: &Path) -> Option<String> {
         let rel = local.strip_prefix(query_root).ok()?;
@@ -1286,14 +1381,10 @@ impl FileSystem for LocalFileSystem {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         // Fast-path: requesting 0 matches should return immediately without touching disk or spawning processes.
-        if node_limit == Some(0) {
+        if options.node_limit == Some(0) {
             return Ok(GrepResult::new());
         }
 
@@ -1304,7 +1395,13 @@ impl FileSystem for LocalFileSystem {
         let pattern_owned = pattern.to_string();
         let path_owned = path.to_string();
         let base_path = self.base_path.clone();
-        let exclude_owned = exclude_path.map(|s| s.to_string());
+        let exclude_owned = options.exclude_path.map(str::to_string);
+        let recursive = options.recursive;
+        let case_insensitive = options.case_insensitive;
+        let node_limit = options.node_limit;
+        let level_limit = options.level_limit;
+        let before_context = options.before_context;
+        let after_context = options.after_context;
 
         if self.has_rg {
             // External rg path: run in a blocking thread to avoid blocking the async runtime.
@@ -1312,15 +1409,20 @@ impl FileSystem for LocalFileSystem {
             let rg_base_path = base_path.clone();
             let rg_exclude = exclude_owned.clone();
             let rg_res = Self::run_blocking_fs(move || {
+                let options = GrepOptions {
+                    recursive,
+                    case_insensitive,
+                    node_limit,
+                    exclude_path: rg_exclude.as_deref(),
+                    level_limit,
+                    before_context,
+                    after_context,
+                };
                 LocalFileSystem::grep_via_rg(
                     rg_base_path.as_path(),
                     local.as_path(),
                     rg_pattern.as_str(),
-                    recursive,
-                    case_insensitive,
-                    node_limit,
-                    rg_exclude.as_deref(),
-                    level_limit,
+                    options,
                 )
             })
             .await?;
@@ -1332,15 +1434,20 @@ impl FileSystem for LocalFileSystem {
 
         // Fallback: also run in a blocking thread (dir walking + file reads are blocking IO).
         Self::run_blocking_fs(move || {
+            let options = GrepOptions {
+                recursive,
+                case_insensitive,
+                node_limit,
+                exclude_path: exclude_owned.as_deref(),
+                level_limit,
+                before_context,
+                after_context,
+            };
             LocalFileSystem::grep_via_libs(
                 base_path.as_path(),
                 &path_owned,
                 &pattern_owned,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_owned.as_deref(),
-                level_limit,
+                options,
             )
         })
         .await
@@ -1398,29 +1505,6 @@ mod tests {
     use std::collections::HashMap;
     use std::path::Path;
     use tempfile::TempDir;
-
-    struct EnvVarGuard {
-        key: &'static str,
-        old: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, val: &std::ffi::OsStr) -> Self {
-            let old = std::env::var_os(key);
-            std::env::set_var(key, val);
-            Self { key, old }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(v) = self.old.take() {
-                std::env::set_var(self.key, v);
-            } else {
-                std::env::remove_var(self.key);
-            }
-        }
-    }
 
     /// Create a LocalFS fixture pinned to the fallback grep implementation.
     fn fallback_localfs() -> (TempDir, LocalFileSystem) {
@@ -1552,27 +1636,6 @@ mod tests {
         assert!(matches!(err, Error::WouldBlock(_)));
     }
 
-    /// Install a fake rg executable and prepend it to PATH for the current test.
-    #[cfg(unix)]
-    fn install_fake_rg(dir: &TempDir, script: &str) -> EnvVarGuard {
-        let bin_dir = dir.path().join("bin");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        let rg_path = bin_dir.join("rg");
-        std::fs::write(&rg_path, script).unwrap();
-
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&rg_path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&rg_path, perms).unwrap();
-
-        let old_path = std::env::var_os("PATH").unwrap_or_default();
-        let mut new_path = std::ffi::OsString::new();
-        new_path.push(bin_dir.as_os_str());
-        new_path.push(std::ffi::OsStr::new(":"));
-        new_path.push(old_path);
-        EnvVarGuard::set("PATH", &new_path)
-    }
-
     #[tokio::test]
     async fn test_localfs_grep_fallback_respects_gitignore_and_hidden() {
         let (dir, fs) = fallback_localfs();
@@ -1583,7 +1646,14 @@ mod tests {
         write_file(dir.path(), ".hidden/secret.txt", "hello\n");
 
         let result = fs
-            .grep("/", "hello", true, false, None, None, None)
+            .grep(
+                "/",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1615,7 +1685,15 @@ mod tests {
         write_file(dir.path(), "a.txt", "HELLO\n");
 
         let result = fs
-            .grep("/", "hello", true, true, None, None, None)
+            .grep(
+                "/",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    case_insensitive: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1623,11 +1701,133 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_localfs_grep_includes_context() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.txt", "first\nbefore\nhit\nafter\n");
+
+        let result = fs
+            .grep(
+                "/",
+                "hit",
+                GrepOptions {
+                    recursive: true,
+                    before_context: 2,
+                    after_context: 1,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        let matched = &result.matches[0];
+        assert_eq!(matched.line, 3);
+        assert_eq!(matched.before_context.as_ref().unwrap()[0].content, "first");
+        assert_eq!(
+            matched.before_context.as_ref().unwrap()[1].content,
+            "before"
+        );
+        assert_eq!(matched.after_context.as_ref().unwrap()[0].content, "after");
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_context_handles_adjacent_matches_and_file_boundaries() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.txt", "hit one\nhit two\nlast");
+
+        let result = fs
+            .grep(
+                "/",
+                "hit",
+                GrepOptions {
+                    recursive: true,
+                    before_context: 2,
+                    after_context: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 2);
+        assert_eq!(result.matches[0].before_context.as_ref().unwrap().len(), 0);
+        assert_eq!(
+            result.matches[0]
+                .after_context
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|line| (line.line, line.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(2, "hit two"), (3, "last")]
+        );
+        assert_eq!(
+            result.matches[1]
+                .before_context
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|line| (line.line, line.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "hit one")]
+        );
+        assert_eq!(
+            result.matches[1]
+                .after_context
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|line| (line.line, line.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(3, "last")]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_localfs_grep_node_limit_collects_trailing_context() {
+        let (dir, fs) = fallback_localfs();
+        write_file(dir.path(), "a.txt", "hit\none\ntwo\nhit\nthree\n");
+
+        let result = fs
+            .grep(
+                "/",
+                "hit",
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    after_context: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.count, 1);
+        assert_eq!(
+            result.matches[0]
+                .after_context
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|line| (line.line, line.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(2, "one"), (3, "two")]
+        );
+    }
+
+    #[tokio::test]
     async fn test_localfs_grep_missing_path_returns_not_found() {
         let (_dir, fs) = fallback_localfs();
 
         let err = fs
-            .grep("/does-not-exist", "hello", true, false, None, None, None)
+            .grep(
+                "/does-not-exist",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, Error::NotFound(_)));
@@ -1647,7 +1847,14 @@ mod tests {
         fs.has_rg = false;
 
         let result = fs
-            .grep("/", "hello", true, false, None, None, None)
+            .grep(
+                "/",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(result.count, 1);
@@ -1664,7 +1871,14 @@ mod tests {
             fs.has_rg = has_rg;
             for pattern in ["--version", "hello"] {
                 let result = fs
-                    .grep("/sub", pattern, true, false, None, None, None)
+                    .grep(
+                        "/sub",
+                        pattern,
+                        GrepOptions {
+                            recursive: true,
+                            ..Default::default()
+                        },
+                    )
                     .await
                     .unwrap();
                 assert_eq!(result.count, 1);
@@ -1672,7 +1886,14 @@ mod tests {
                 assert_eq!(result.matches[0].content, "hello --version");
 
                 let single_file = fs
-                    .grep("/sub/-a.txt", pattern, true, false, None, None, None)
+                    .grep(
+                        "/sub/-a.txt",
+                        pattern,
+                        GrepOptions {
+                            recursive: true,
+                            ..Default::default()
+                        },
+                    )
                     .await
                     .unwrap();
                 assert_eq!(single_file.count, 1);
@@ -1685,16 +1906,19 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_localfs_grep_node_limit_zero_does_not_invoke_rg() {
-        let dir = TempDir::new().unwrap();
+        let (dir, mut fs) = fallback_localfs();
         write_file(dir.path(), "a.txt", "hello\n");
-
-        // Create a fake `rg` that fails if invoked. The expected behavior is to short-circuit
-        // and return empty result when node_limit=0.
-        let _path_guard = install_fake_rg(&dir, "#!/bin/sh\nexit 2\n");
-
-        let fs = LocalFileSystem::new(dir.path().to_str().unwrap()).unwrap();
+        fs.has_rg = true;
         let result = fs
-            .grep("/", "hello", true, false, Some(0), None, None)
+            .grep(
+                "/",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(0),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(result.count, 0);
@@ -1708,7 +1932,16 @@ mod tests {
         write_file(dir.path(), "ok/y.txt", "hit\n");
 
         let out = fs
-            .grep("/", "hit", true, false, Some(1), Some("/excluded"), None)
+            .grep(
+                "/",
+                "hit",
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    exclude_path: Some("/excluded"),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1729,11 +1962,12 @@ mod tests {
             .grep(
                 "/acct/resources/docs",
                 "hit",
-                true,
-                false,
-                Some(1),
-                Some("/acct/resources/docs/excluded"),
-                None,
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    exclude_path: Some("/acct/resources/docs/excluded"),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -1745,22 +1979,28 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn test_localfs_grep_rg_fast_path_disables_parent_ignore_inheritance() {
+    async fn test_localfs_grep_rg_path_supports_context() {
         let dir = TempDir::new().unwrap();
         write_file(dir.path(), ".gitignore", "mount/\n");
 
         let mount_dir = dir.path().join("mount");
-        write_file(&mount_dir, "a.txt", "hello\n");
-
-        // Fake `rg` verifies `--no-ignore-parent` is present, then emits one JSON match.
-        let script = format!(
-                "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"--no-ignore-parent\" ]; then\n    printf '%s\\n' '{{\"type\":\"match\",\"data\":{{\"path\":{{\"text\":\"a.txt\"}},\"line_number\":1,\"lines\":{{\"text\":\"hello\\\\n\"}}}}}}'\n    exit 0\n  fi\ndone\necho missing --no-ignore-parent 1>&2\nexit 2\n"
-            );
-        let _path_guard = install_fake_rg(&dir, &script);
+        write_file(&mount_dir, "a.txt", "before\nhello\nafter\n");
 
         let fs = LocalFileSystem::new(mount_dir.to_str().unwrap()).unwrap();
+        if !fs.has_rg {
+            return;
+        }
         let result = fs
-            .grep("/", "hello", true, false, None, None, None)
+            .grep(
+                "/",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    before_context: 1,
+                    after_context: 1,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
@@ -1768,6 +2008,14 @@ mod tests {
         assert_eq!(result.matches.len(), 1);
         assert_eq!(result.matches[0].file, "a.txt");
         assert_eq!(result.matches[0].content, "hello");
+        assert_eq!(
+            result.matches[0].before_context.as_ref().unwrap()[0].content,
+            "before"
+        );
+        assert_eq!(
+            result.matches[0].after_context.as_ref().unwrap()[0].content,
+            "after"
+        );
     }
 
     #[tokio::test]

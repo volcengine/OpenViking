@@ -10,9 +10,10 @@ both at publication and when rendering the extraction snapshot.
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from functools import partial
+from typing import Any, Callable, Mapping
 
-from jinja2 import StrictUndefined, TemplateError, meta, nodes
+from jinja2 import StrictUndefined, TemplateError, Undefined, meta, nodes
 from jinja2.runtime import LoopContext
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -34,6 +35,7 @@ _EVENT_METHODS = {
     "get_day": (1,),
 }
 _STRING_METHODS = {"upper", "lower", "strip"}
+_STRING_FILTERS = {"upper": "upper", "lower": "lower", "trim": "strip"}
 _TESTS = {"defined", "undefined", "none", "string"}
 _LOOP_ATTRIBUTES = {"index", "index0", "first", "last", "length"}
 _RESERVED_METADATA = re.compile(r"<!--\s*MEMORY_FIELDS\b")
@@ -50,6 +52,7 @@ _NODES = (
     nodes.Tuple,
     nodes.Getattr,
     nodes.Call,
+    nodes.Filter,
     nodes.Test,
     nodes.Compare,
     nodes.Operand,
@@ -81,10 +84,31 @@ class _ContentEnvironment(ImmutableSandboxedEnvironment):
         )
 
 
+def _string_filter(method: str, value: Any) -> str:
+    # Unlike Jinja's built-ins, do not coerce arbitrary objects through __str__
+    # or invoke overridden methods on string subclasses.
+    if type(value) is not str:
+        raise TemplateError("String filters require a plain string")
+    return getattr(value, method)()
+
+
+def _default_filter(value: Any, default_value: str = "") -> str | None:
+    # Match Jinja's undefined-only fallback, including None/empty-string behavior.
+    # Do not test truthiness or coerce objects supplied by context helpers.
+    if isinstance(value, Undefined):
+        return default_value
+    if value is None or type(value) is str:
+        return value
+    raise TemplateError("Default filter requires a plain string, None or undefined")
+
+
 def _environment() -> _ContentEnvironment:
     env = _ContentEnvironment(autoescape=False, undefined=StrictUndefined)
     env.globals.clear()
-    env.filters.clear()
+    env.filters = {
+        name: partial(_string_filter, method) for name, method in _STRING_FILTERS.items()
+    }
+    env.filters["default"] = _default_filter
     env.tests = {name: env.tests[name] for name in _TESTS}
     return env
 
@@ -126,7 +150,18 @@ def _parse(
                 )
         for node in all_nodes:
             if isinstance(node, nodes.Filter):
-                raise ContentTemplateError("unsupported_filter", node.lineno)
+                if node.name not in {*_STRING_FILTERS, "default"}:
+                    raise ContentTemplateError("unsupported_filter", node.lineno)
+                if node.kwargs or node.dyn_args or node.dyn_kwargs:
+                    raise ContentTemplateError("invalid_arguments", node.lineno)
+                if node.name == "default":
+                    if len(node.args) > 1 or any(
+                        not isinstance(arg, nodes.Const) or type(arg.value) is not str
+                        for arg in node.args
+                    ):
+                        raise ContentTemplateError("invalid_arguments", node.lineno)
+                elif node.args:
+                    raise ContentTemplateError("invalid_arguments", node.lineno)
             if not isinstance(node, _NODES):
                 raise ContentTemplateError("unsupported_syntax", node.lineno)
             if isinstance(node, nodes.Name) and node.ctx == "store":
@@ -214,10 +249,8 @@ def _validate_call(node: nodes.Call, memory_type: str) -> None:
         or len(node.args) not in _EVENT_METHODS[target.attr]
     ):
         raise ContentTemplateError("invalid_arguments", node.lineno)
-    # Never allow a template to fabricate an unbounded message-index range.
-    ranges = node.args[0]
-    if not isinstance(ranges, nodes.Name) or ranges.name != "ranges":
-        raise ContentTemplateError("invalid_ranges", node.lineno)
+    # Range expressions follow the same syntax rules as other expressions.
+    # Their evaluated values are checked before calling an extraction helper.
     if len(node.args) == 3:
         ratio = node.args[2]
         if (
@@ -226,6 +259,28 @@ def _validate_call(node: nodes.Call, memory_type: str) -> None:
             or not 0 <= ratio.value <= 1
         ):
             raise ContentTemplateError("invalid_ratio", node.lineno)
+
+
+def _call_event_helper(
+    env: _ContentEnvironment,
+    helper: Callable[..., Any],
+    original_ranges: str,
+    ranges: Any,
+    *args: Any,
+) -> Any:
+    # Validate values, not a particular AST shape: aliases, conditions and
+    # filters are fine, but cannot change which source messages a helper reads.
+    # Check exact types before equality to avoid invoking user-defined methods.
+    if (
+        type(ranges) is not str
+        or type(original_ranges) is not str
+        or ranges not in ("", original_ranges)
+    ):
+        raise ContentTemplateError("invalid_ranges")
+    # Wrapping a helper must not bypass its original sandbox callable flags.
+    if not env.is_safe_callable(helper):
+        raise TemplateError("Unsafe event helper")
+    return helper(ranges, *args)
 
 
 def validate_content_template(template: str, memory_type: str) -> None:
@@ -248,7 +303,7 @@ def render_content_template(
         raise ContentTemplateError("invalid_field_value")
     if memory_type == "events":
         values["extract_context"] = {
-            name: getattr(extract_context, name)
+            name: partial(_call_event_helper, env, getattr(extract_context, name), values["ranges"])
             for name in _EVENT_METHODS
             if extract_context is not None and hasattr(extract_context, name)
         }

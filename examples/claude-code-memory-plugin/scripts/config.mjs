@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
-import { buildPluginConfig, normalizeRewriteMode } from "./shared/plugin-config.mjs";
+import { buildPluginConfig } from "./shared/plugin-config.mjs";
 
 const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
 const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
@@ -105,9 +105,10 @@ export function isPluginEnabled() {
  * baseUrl/apiKey cannot move — loggers and fetch helpers built from the first
  * load stay valid.
  */
-export function loadConfig(cwd = process.cwd()) {
+export function loadConfig(cwd = process.cwd(), { env = process.env } = {}) {
   const config = buildPluginConfig("claude-code", {
     cwd,
+    env,
     manifestUrl: MANIFEST_URL,
     logFile: "cc-hooks.log",
     rootKeyFallback: true,
@@ -120,17 +121,5 @@ export function loadConfig(cwd = process.cwd()) {
     configPath: config.ovPath || config.cliPath || null,
     credentialPath: config.credentialPath || null,
 
-    // Digest compression defaults to auto: prefer the local host CLI and fall
-    // back to the server when it is unavailable. A failed digest still falls
-    // back to the uncompressed context block. `recallRewrite` keeps the
-    // internal field name because the shared core maps this mode to the
-    // server's `rewrite` request field; OPENVIKING_RECALL_REWRITE is the older
-    // env spelling and still works.
-    recallRewrite: normalizeRewriteMode(
-      process.env.OPENVIKING_RECALL_COMPRESS
-        ?? process.env.OPENVIKING_RECALL_REWRITE
-        ?? config.recallCompress,
-      "auto",
-    ),
   };
 }

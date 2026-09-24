@@ -6,7 +6,7 @@ const workspace = {
       docs: 'Documentation',
       github: 'GitHub',
       sdkApi: 'SDK & API',
-      users: 'User Management',
+      users: 'Users & Permissions',
     },
     header: {
       currentUser: {
@@ -30,6 +30,7 @@ const workspace = {
       defaultTitle: 'OpenViking Studio',
     },
     navigation: {
+      compile: { title: 'Compile' },
       home: {
         title: 'Home',
       },
@@ -208,6 +209,8 @@ const workspace = {
     },
   },
   agentExperiencePage: {
+    pageCount: '{{count}} experiences on this page',
+    searchCount: '{{count}} search results shown',
     setup: {
       expand: 'Expand steps',
       collapse: 'Collapse',
@@ -228,11 +231,10 @@ const workspace = {
     description:
       'Track experiences distilled from committed sessions, along with the trajectories and outcomes produced after they are applied.',
     refresh: 'Refresh',
-    searchPlaceholder: 'Search this page by name or URI',
+    searchPlaceholder: 'Search experiences',
     searchClear: 'Clear',
-    searchNoResults: 'No matching experiences on this page',
-    searchNoResultsDescription:
-      'Clear the search or switch pages to continue browsing.',
+    searchNoResults: 'No matching experiences',
+    searchNoResultsDescription: 'Clear the search to continue browsing.',
     loading: 'Loading experiences...',
     loadFailed: 'Could not load experiences',
     networkError:
@@ -386,6 +388,43 @@ const workspace = {
     },
   },
   tasksPage: {
+    labels: {
+      timing: 'Duration',
+      totalDuration: 'Total Time',
+      processingNotStarted: 'Not started',
+      processingDurationHelp:
+        'Worker processing time, including model and I/O calls. Excludes queue and downstream waits; overlapping workers count once. Incomplete or legacy records are unavailable.',
+      processingDuration: 'Processing Time',
+      waitingDuration: 'Waiting Time',
+      timingUnavailable: 'Not recorded',
+
+      missingResource: 'Missing resource ID for task',
+      requeueFailed: 'Re-queue failed',
+      requeueSubmitted: 'Re-queue request submitted successfully!',
+      successRate: 'Success Rate',
+      avgDuration: 'Avg Total Duration',
+      avgProcessingTime: 'Finished tasks only, including queue time',
+      totalTasks: 'Total Tasks',
+      activePending: 'Active/Pending',
+      runningPending: 'Running / Pending Workloads',
+      taskQueueStatus: 'Task Queue Status',
+      processQueueStatus: 'Process Queue Status',
+      queuePipeline: 'Queue Pipeline',
+      duration: 'Total Duration (incl. queue)',
+      taskSummary: 'Total {{total}} ({{failed}} failed)',
+      taskCount: 'Tasks: {{count}}',
+      completedTasks: 'Completed: {{count}}',
+      serialFlow: 'Sequential process flow',
+      parallelBatch: 'Parallel process batch',
+      serialBatch: 'Sequential process batch',
+      latestPerResource: 'Latest per Resource',
+      individualTasks: 'Individual Tasks',
+    },
+    retry: {
+      noPendingMessages:
+        'No new task created: this session has no pending messages',
+      commitSkipped: 'No new task created: this session commit was skipped',
+    },
     title: 'Task Center',
     description:
       'Track background work such as resource processing, session commits, and reindexing.',
@@ -413,6 +452,15 @@ const workspace = {
       },
       error: 'Failure reason',
       result: 'Result',
+      noResultRunning: 'Task in progress',
+      noResultRunningDescription:
+        'No final result is available yet. See the reported stages and execution log above.',
+      noResultPending: 'Task queued',
+      noResultPendingDescription:
+        'The task has not started yet. Reported stages and execution events will appear when available.',
+      noResultCompleted: 'Task completed',
+      noResultCompletedDescription:
+        'This task did not return a displayable result.',
       noResult: 'No result yet',
       noResultDescription:
         'Results returned by the API will appear here when the task completes.',
@@ -450,6 +498,29 @@ const workspace = {
       allStatuses: 'All statuses',
       clear: 'Clear filters',
     },
+    actions: {
+      retrigger: 'Re-trigger Task',
+    },
+    pipeline: {
+      steps: 'Pipeline Steps',
+      duration: 'Duration',
+      count: '{{count}} items',
+      status: {
+        completed: 'Completed',
+        running: 'Running',
+        failed: 'Failed',
+        pending: 'Pending',
+      },
+      step: {
+        sessionPersistence: 'Session Persistence',
+        sessionCommit: 'Session Commit',
+        connectorAuth: 'Connector Auth',
+        resourceFetching: 'Resource Fetching',
+        externalParse: 'Document Parsing',
+        semantic: 'Semantic Processing',
+        embedding: 'Vector Embedding',
+      },
+    },
     pagination: {
       next: 'Next',
       page: 'Page {{page}}',
@@ -476,6 +547,7 @@ const workspace = {
       unknown: 'Unknown',
     },
     types: {
+      compile: 'Compile',
       session_commit: 'Session commit',
       add_resource: 'Resource processing',
       add_skill: 'Skill import',
@@ -622,6 +694,19 @@ const workspace = {
     unset: 'No account selected',
   },
   common: {
+    ui: {
+      close: 'Close',
+      loading: 'Loading',
+      pagination: 'Pagination',
+      previous: 'Previous',
+      next: 'Next',
+      previousPage: 'Go to previous page',
+      nextPage: 'Go to next page',
+      morePages: 'More pages',
+      sidebar: 'Sidebar',
+      mobileSidebar: 'Mobile navigation sidebar',
+      toggleSidebar: 'Toggle Sidebar',
+    },
     action: {
       cancel: 'Cancel',
       saveConnection: 'Save Connection',
@@ -694,6 +779,228 @@ const workspace = {
     },
   },
   settings: {
+    acl: {
+      page: {
+        advanced: 'Advanced settings',
+        aboutLevels: 'About permission levels',
+        title: 'Resource permissions',
+        description:
+          'Browse shared resource directories and manage access to each one.',
+        path: 'Current directory',
+        back: 'Go to parent directory',
+        listFailed: 'Could not load directory',
+        parentAclFailed:
+          'Could not load permissions for the current directory. Changes to subdirectory permissions are unavailable until you retry.',
+        emptyDirectory: 'No subdirectories here.',
+        nameColumn: 'Name',
+        ruleColumn: 'Permission rule',
+        granteesColumn: 'Grants on this directory',
+        actionsColumn: 'Actions',
+        unreadable: 'Unable to load',
+        noGrantees: 'No direct grants',
+        editAction: 'Edit permissions',
+        manageAction: 'Manage permissions',
+        limitFor: 'Restrict access to {{directory}}',
+        restoreInheritanceTitle: 'Inherit permissions from the parent again?',
+        restoreInheritanceWarning:
+          'Parent directory grants will apply again. Grants added on this directory will remain.',
+        disableLimitTitle: 'Clear direct grants and restore inheritance?',
+        disableLimitWarning:
+          'Direct grants on this directory will be cleared and parent permissions inherited again. Separate permissions on child directories remain.',
+        editDirectory: 'Who can access {{directory}}',
+        whoCanAccess: 'Grant access to these users or groups',
+        grantScope:
+          'Permissions set here apply to this directory and its descendants by default. A child directory can have different rules.',
+        advancedRules: 'Parent permissions and other settings',
+        parentAccess: 'Parent directory grants',
+        parentGrantsActive:
+          '{{count}} additional parent grants apply here. Open “Parent permissions and other settings” to review them.',
+        parentGrantsInactive:
+          '{{count}} parent grants exist, but this directory has stopped inheriting them.',
+        unavailable:
+          'This page requires account administrator or Root management credentials. Check connection settings.',
+      },
+      title: 'Access permissions',
+      accountTitle: 'Resource access control · {{account}}',
+      accountHint:
+        'Applies to shared resources in this Account. When disabled, ACL checks are skipped. When enabled, the shared root grants everyone management access. Descendants inherit by default and can restrict access separately.',
+      enableAction: 'Enable access control',
+      disableAction: 'Disable access control',
+      enabled: 'Enabled',
+      disabled: 'Disabled — resource ACL grants are not enforced',
+      enableTitle: 'Enable resource access control?',
+      disableTitle: 'Disable resource access control?',
+      enableWarning:
+        'Enable ACL for Account {{account}}? The shared root always grants everyone management access; these permissions cannot be changed. New resources inherit parent permissions by default, with no extra grants for their creator. Existing ACLs take effect.',
+      disableWarning:
+        'Disable ACL for Account {{account}}? All configured resource ACLs stop being enforced. Resources follow the original sharing rules, which may expand access. Stored grants are retained.',
+      saved: 'Permissions updated',
+      failed: 'Could not update permissions',
+      confirm: 'Confirm',
+      parentGrantsLabel: 'Parent directory grants',
+      parentIncluded: 'Includes parent grants',
+      parentExcluded: 'Excludes parent grants',
+      includeParent: 'Include parent grants',
+      excludeParent: 'Exclude parent grants',
+      limitAccess: 'Restrict access',
+      inheritParent: 'Inherit parent grants',
+      inheritHelpLabel: 'About inheriting parent grants',
+      inheritHelp:
+        'When enabled, parent grants and grants added here both apply. When disabled, only grants added here apply. Switching does not delete direct grants. Descendants inherit this directory’s effective permissions by default.',
+      limitTitle: 'Restrict access to this directory?',
+      limitWarning:
+        'This directory will stop inheriting parent grants. Existing direct grants, including Everyone grants, remain active. Review these grants after switching. Account administrators retain access.',
+      peopleWithAccess: 'People and groups with access',
+      grantSubjectColumn: 'User / group',
+      grantLevelColumn: 'Permission',
+      effectiveLevel: 'Effective: {{level}}',
+      grantSourceColumn: 'Source',
+      accountAdministrators: 'Account administrators',
+      administratorRole: 'System role',
+      administratorSource: 'Account administrator access',
+      removeFor: 'Remove direct grant for {{principal}}',
+      defaultRule: 'Inherits parent permissions by default',
+      onlyAdmins: 'No grants yet; account administrators can still access',
+      directSource: 'Direct grant',
+      inheritedSource: 'Inherited grant',
+      directAndInheritedSource: 'Inherited + direct grant',
+      adminCredentialIdentity:
+        'Permission management uses the account administrator credential for {{account}}. Resource browsing still uses the current user.',
+      identity:
+        'Resource operations use the current data identity: {{account}} / {{user}}.',
+      loadFailed: 'Could not load resource permissions',
+      accessHint:
+        'The current data identity needs resource management access. In API Key mode, use an Account Admin user key, not a Root key.',
+      retryHint:
+        'The request failed. Retry, or inspect the error details if it persists.',
+      recovery: {
+        loadFailed: 'Failed to load account administrators.',
+        switchFailed: 'Failed to switch user.',
+        title: 'Switch to a user with permission',
+        description:
+          'This panel manages access to the current resource. Your user cannot read its grants. Switch to an account administrator to add users or groups with read, write, or manage access.',
+        scope:
+          'Switching also changes the user identity used throughout Web Studio to browse and operate on resources.',
+        unsupported:
+          'This connection mode does not support switching users here. Check your connection settings.',
+        noAdmins:
+          'No account administrators are available. Check user roles in Users & Permissions, or ask someone with resource management access to grant permission.',
+        admin: 'Account administrator',
+        selectAdmin: 'Select an account administrator',
+        key: 'Administrator user API key',
+        keyHint:
+          'The server did not return a key for this user. Enter their existing API key. A Root key cannot be used here.',
+        switch: 'Switch user and load permissions',
+        switching: 'Switching…',
+        switched:
+          'User switched. Select a directory to continue managing permissions.',
+        retryAccess: 'Check access again',
+        details: 'Error details',
+        scopeTitle: 'About switching identity',
+        users: 'Go to Users & Permissions',
+      },
+      modes: {
+        none: 'Inherited by default',
+        inherit: 'Inherited permissions',
+        restricted: 'Custom permissions',
+      },
+      modeDescriptions: {
+        none: 'No permissions are configured on this directory. It inherits parent permissions by default.',
+        inherit:
+          'Parent grants and grants added here both apply, including to descendant directories and files by default. A descendant can stop inheritance.',
+        restricted:
+          'This directory does not use parent grants. Grants added here still apply to descendant directories and files unless a descendant stops inheritance.',
+      },
+      levels: {
+        read: 'View',
+        write: 'Edit',
+        manage: 'Manage',
+      },
+      levelHint:
+        'View: read and search. Edit: create, modify, delete or move files. Manage: edit permissions and delete or move directories; directory operations also check the entire subtree.',
+      direct: 'Grants added to this directory',
+      inherited: 'Grants from parent directories',
+      noDirect:
+        'No direct grants have been added. Users may still have access through parent grants when inheritance is enabled.',
+      noInherited: 'No inherited grants.',
+      inheritedHint:
+        'These grants apply here and to descendant directories and files by default. Edit them in the parent directory.',
+      inheritedInactive:
+        'These parent grants remain stored but do not apply here or to descendants through this directory.',
+      inactive: 'Inactive',
+      adminHint:
+        'Account administrators always retain management access, even when no grants are listed.',
+      indexHint:
+        'Changing permissions requires an indexed resource. Wait for indexing to finish before configuring newly created resources.',
+      levelFor: 'Permission for {{principal}}',
+      remove: 'Remove grant',
+      restoreInheritance: 'Restore parent permissions',
+      restrict: 'Stop inheriting parent permissions',
+      restrictTitle: 'Stop inheriting parent directory permissions?',
+      restoreTitle: 'Restore parent directory permissions?',
+      restrictWarning:
+        'Parent grants will stop applying to this directory and its contents. Only grants added here and account administrators will have access.',
+      restoreWarning:
+        'Parent grants will apply to this directory and its contents again.',
+      removeWarning:
+        'Remove the direct grant for {{principal}}? Access may remain through inherited grants, groups, or an Everyone grant. Removing a grant does not change the inheritance mode.',
+      subjectType: 'Grant to',
+      subjects: {
+        user: 'User',
+        group: 'User group',
+        everyoneShort: 'All users',
+        everyone: 'Everyone in this Account',
+      },
+      everyone: 'Everyone in this Account',
+      search: 'Search users or groups',
+      subject: 'User or group',
+      selectSubject: 'Select a user or group',
+      noCandidates: 'No matching users or groups.',
+      candidatesFailed: 'Could not load grant candidates',
+      level: 'Permission level',
+      addGrant: 'Add permission',
+      backToGrants: 'Back to permissions',
+      confirmGrant: 'Grant {{level}} access to {{count}} selected',
+      confirmEveryoneGrant: 'Grant {{level}} access to all users',
+    },
+    groups: {
+      navigation: 'Users & Permissions',
+      usersTab: 'Users',
+      title: 'User groups',
+      description: 'Manage groups and members in the current account.',
+      id: 'Group ID',
+      count: 'Members',
+      actions: 'Actions',
+      create: 'Create group',
+      idHint:
+        'A unique ID within this Account. It cannot be renamed after creation.',
+      manage: 'Manage members',
+      delete: 'Delete group',
+      deleteHint: 'Remove all members before deleting this group.',
+      deleteDescription:
+        'Delete {{group}}? Existing resource ACL references are not removed. Recreating this ID may reactivate those grants.',
+      empty: 'No user groups yet.',
+      notJoined: 'No groups',
+      search: 'Search groups',
+      members: 'Members of {{group}}',
+      memberHint:
+        'Membership changes affect subsequent requests. Other grants may still allow access after removal.',
+      add: 'Add',
+      remove: 'Remove',
+      searchUsers: 'Search existing users to add',
+      currentMembers: 'Current members',
+      candidates: 'Account users',
+      noMembers: 'This group has no members.',
+      noUsers: 'No matching users.',
+      created: 'User group created',
+      deleted: 'User group deleted',
+      updated: 'Group membership updated',
+      failed: 'Operation failed',
+      loadFailed: 'Could not load data',
+      previous: 'Previous',
+      next: 'Next',
+      page: 'Page {{page}} of {{pages}}',
+    },
     actions: {
       addAccount: 'Add account',
       addUser: 'Add user',
@@ -732,14 +1039,14 @@ const workspace = {
           primary:
             'The Root/Admin API Key is mainly for management. The Playground and tenant data APIs require a User API Key bound to a user identity.',
           secondary:
-            'Select or create a user in User Management, or regenerate its key, then use it as the User API Key.',
+            'Select or create a user in Users & Permissions, or regenerate its key, then use it as the User API Key.',
           title: 'A User API Key is still required',
         },
         empty: {
           primary:
             'Regular users should request a User API Key from their Account admin.',
           secondary:
-            'Deployment admins can find the Root API Key at server.root_api_key in the server-side ov.conf. Add it here, then create or regenerate a User Key in User Management.',
+            'Deployment admins can find the Root API Key at server.root_api_key in the server-side ov.conf. Add it here, then create or regenerate a User Key in Users & Permissions.',
           title: 'No OpenViking API Key yet?',
         },
         learnMore: 'Learn how to get an API Key',
@@ -848,13 +1155,26 @@ const workspace = {
       title: 'New API key',
     },
     loading: 'Loading identities...',
+    userList: {
+      search: 'Search all users by username',
+      noResults: 'No matching users',
+      noResultsDescription: 'Try another username or clear the search.',
+      pagination: 'User pagination',
+      summary: '{{total}} users · Page {{page}} of {{pageCount}}',
+      pageSize: 'Users per page',
+      pageSizeValue: '{{count}} per page',
+      first: 'First',
+      previous: 'Previous',
+      next: 'Next',
+      last: 'Last',
+    },
     management: {
       accountFilter: 'Accounts',
       accessDeniedDescription:
         'User management requires a validated Root or Account Admin API key.',
       accessDeniedTitle: 'User management unavailable',
       currentAccountDescription:
-        'Manage users and access credentials in the {{account}} workspace.',
+        'Manage users and access credentials in the current account.',
       description:
         'Review users and credentials for selected accounts, then add users or rotate keys from the web UI.',
       memberListDescription:
@@ -868,7 +1188,7 @@ const workspace = {
       noUsableKey:
         'This user has no plaintext API key available for data access.',
       openConnection: 'Open connection settings',
-      title: 'User management',
+      title: 'Users',
     },
     page: {
       adminDescription:
@@ -910,6 +1230,7 @@ const workspace = {
       actions: 'Actions',
       apiKey: 'API key',
       role: 'Role',
+      groups: 'Groups',
       user: 'User',
     },
     toast: {
@@ -1000,7 +1321,7 @@ const workspace = {
     usageDisabled:
       'Usage/Audit is not initialized, so live usage stats are unavailable.',
     usageAccessRequired:
-      'Current connection has no admin/root role. Configure an API key with Console Usage/Audit access in Connection & Identity.',
+      'Connection identity is unresolved. Check the server address, identity, and authentication settings in Connection Settings.',
   },
 } as const
 

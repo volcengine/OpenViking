@@ -686,6 +686,12 @@ class WebToolsConfig(BaseModel):
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
 
 
+class CronConfig(BaseModel):
+    """Scheduled task tool and scheduler configuration."""
+
+    enabled: bool = False
+
+
 class ExecToolConfig(BaseModel):
     """Shell exec tool configuration."""
 
@@ -714,6 +720,7 @@ class ToolsConfig(BaseModel):
     """Tools configuration."""
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
@@ -782,21 +789,22 @@ class OpenSandboxNetworkConfig(BaseModel):
 class OpenSandboxRuntimeConfig(BaseModel):
     """OpenSandbox runtime configuration."""
 
-    timeout: int = 300
+    timeout: int = Field(default=300, gt=0)
     cpu: str = "500m"
     memory: str = "1Gi"
 
 
 class OpenSandboxBackendConfig(BaseModel):
-    """OpenSandbox backend configuration.
-
-    Auto-detects runtime environment:
-    - Local: uses configured server_url (default http://localhost:18792)
-    - VKE: auto-detects KUBERNETES_SERVICE_HOST, uses http://opensandbox-server:8080
-    """
+    """Docker-backed OpenSandbox; manage a local server or connect to an external one."""
 
     server_url: str = "http://localhost:18792"
     api_key: str = ""
+    managed: bool = True
+    startup_timeout: int = Field(default=600, ge=10)
+    use_server_proxy: bool = True
+    execd_image: str = "opensandbox/execd:v1.0.6"
+    egress_image: str = "opensandbox/egress:v1.0.1"
+    pids_limit: int = Field(default=256, gt=0)
     default_image: str = "opensandbox/code-interpreter:v1.0.1"
     network: OpenSandboxNetworkConfig = Field(default_factory=OpenSandboxNetworkConfig)
     runtime: OpenSandboxRuntimeConfig = Field(default_factory=OpenSandboxRuntimeConfig)
@@ -923,6 +931,21 @@ class Config(BaseSettings):
     def workspace_path(self) -> Path:
         """Get expanded workspace path: {storage_workspace}/bot/workspace."""
         return self.bot_data_path / "workspace"
+
+    @property
+    def opensandbox_workspaces_path(self) -> Path:
+        """Dedicated host bind mounts, separate from Server credentials and logs."""
+        return self.bot_data_path / "runtime" / "opensandbox" / "workspaces"
+
+    @property
+    def uses_managed_opensandbox(self) -> bool:
+        return self.sandbox.backend == "opensandbox" and self.sandbox.backends.opensandbox.managed
+
+    @property
+    def sandbox_workspace_path(self) -> Path:
+        if self.uses_managed_opensandbox:
+            return self.opensandbox_workspaces_path
+        return self.workspace_path
 
     @property
     def ov_data_path(self) -> Path:

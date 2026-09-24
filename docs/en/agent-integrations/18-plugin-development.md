@@ -74,6 +74,7 @@ Mark each capability as verified, supported with a fallback, or unsupported, and
 | Hooks and MCP are installed through configuration files; the common dispatcher can express the lifecycle | Add an adapter and host configuration under `agent-hook-plugin/hosts/` | [agent-hook-plugin](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/README.md) |
 | A native plugin needs its own manifest, directory, and lifecycle entrypoints | A separate plugin directory whose entrypoints call the shared runtime | [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md), [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md) |
 | Host SDK callbacks require persistent state or dispose/idle callbacks | A host extension package using shared capabilities and explicit session scheduling | [OpenCode](https://github.com/volcengine/OpenViking/blob/main/examples/opencode-plugin/README.md), [DSH](https://github.com/volcengine/OpenViking/blob/main/examples/dsh-memory-plugin/README.md) |
+| The host registers native tools but has no MCP support | Use the official MCP client and register the server's `tools/list` as native host tools under an `openviking_` prefix; do not hand-maintain a tool catalogue | [pi](https://github.com/volcengine/OpenViking/blob/main/examples/pi-coding-agent-extension/README.md) |
 | MCP is available, but automatic injection or complete session records are not | An MCP-only integration with documented limits | [Agent Plugins](https://github.com/volcengine/OpenViking/blob/main/agent-plugins/README.md) |
 
 A new host name does not justify copying the Claude Code or Codex directory. Conversely, a host with a distinct session state machine should not be forced into the common dispatcher through accumulating `isFoo` or `specialStop` flags.
@@ -112,7 +113,7 @@ Authoritative capability sources live in [`examples/memory-plugin-shared/lib/`](
 | Batch sending, offline replay, retry classification | [batch-send.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/batch-send.mjs), [pending-queue.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/pending-queue.mjs), [retryable.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/retryable.mjs) | When to call them and how acknowledgements advance the host cursor |
 | Background writes | [async-writer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/async-writer.mjs) | Host-supported detach timing and recovery measures |
 | MCP configuration and protocol | [mcp-proxy-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-config.mjs), [mcp-proxy-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-core.mjs) | Configuration projection, logger factory, necessary local tools |
-| Virtual URI checks and diagnostics | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/uri-guard.mjs), [doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/doctor-core.mjs) | Tool names, denial format, host installation/state checks |
+| Virtual URI checks and diagnostics | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/uri-guard.mjs), [doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/doctor-core.mjs) | Tool names, deny and notice envelopes, host installation/state checks |
 
 Dependencies must point from host adapters to shared capabilities. Shared code must not import a host directory. Pass a small, explicit callback when a capability needs a host action. Do not introduce a plugin container, service locator, or inheritance hierarchy for a single file read. Shared runtime modules must not depend on installers, tests, or user interfaces.
 
@@ -164,7 +165,7 @@ Switches must govern actual behavior. Disabling recall prevents automatic recall
 
 ### 4.2 Credentials are not ordinary workspace settings
 
-Resolve connections and identity through `credentials.mjs` and `buildPluginConfig()`. The `auto`, `cli`, and `env` modes of `OPENVIKING_CREDENTIAL_SOURCE` select credential sources; they do not simply follow the behavior-setting precedence above. Verify custom configuration paths, `plugin.<harness>` overrides, and hook/MCP behavior after `ov config switch`. Comparing a few default loader fields is insufficient.
+Resolve connections and identity through `resolveConnection()` in `credentials.mjs`, which `buildPluginConfig()` calls. The `auto`, `cli`, and `env` modes of `OPENVIKING_CREDENTIAL_SOURCE` select credential sources; they do not simply follow the behavior-setting precedence above. An MCP proxy exports `readProxyConfig(env)`, resolves through the same loader as its hooks, and maps the result with `toMcpProxyConfig()`; it never picks fields by hand or calls `credentials.mjs` itself. If the host hands MCP servers an allowlisted environment, the allowlist must cover `MCP_PROXY_ENV_VARS`; if it hands them a closed one, forward the resolved connection with `forwardConnectionEnv()`. Add every new proxy to `mcp-hook-parity.test.mjs`, which fails until it has a row.
 
 Workspace files must not contain forbidden connection or credential fields such as URLs, API keys, and user credentials, and must not interpolate environment variables. [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) owns this rule; do not add a separate allowlist per host. Installers must not write resolved API keys into `.mcp.json` or replace the user's selected cloud connection.
 
@@ -192,7 +193,7 @@ A persistent MCP proxy cannot infer the active project from its startup cwd. Use
 | Before compaction | Ensure preceding messages were written, then commit as appropriate | `PreCompact` commits existing messages; this entrypoint does not catch up the transcript | `PreCompact` catches up the transcript and commits |
 | Session end | Finish outstanding writes and commit | `SessionEnd` commits existing messages; this entrypoint does not catch up the transcript | `SessionEnd` catches up and commits in a worker, with startup recovery retained |
 | Subagents | Preserve identity and parent relationships without duplicates | `SubagentStart`, `SubagentStop` | Neither event is registered in the current hook manifest |
-| Local tool checks | Prevent treating virtual URIs as local paths | `PreToolUse` URI guard | No URI guard is registered in the current hook manifest |
+| Local tool checks | Deny a file tool whose path is a virtual URI; attach a notice to a shell command that carries one | `PreToolUse` URI guard on Read, Glob, Grep, Edit, Write, and Bash | `PreToolUse` URI guard on Bash, notice only; file edits go through `apply_patch`, which has no path argument |
 
 Use [Claude Code hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/hooks/hooks.json) and [Codex hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/hooks/hooks.json) as the event registration references. Identical event names do not guarantee identical payloads or outputs. A host without an end event must choose and document an alternative commit point, such as ZCode's Stop commits, rather than register an unreachable SessionEnd handler.
 
@@ -207,6 +208,8 @@ Ordinary module imports must not read stdin, spawn processes, access the network
 ### 5.3 Recall and profile injection
 
 Use `buildProfileBlock()` for profiles and `buildRecallBlock()` / `buildRecallBlockDetailed()` for per-turn recall. Hosts may supply compressors, presentation, and statistics, but must not reimplement retrieval targets, ranking, token budgets, or server compatibility fallbacks. A status line should consume shared results and the final injected content, rather than issue another recall to calculate counts.
+
+The session-start skill catalog (`<available-skills>`) is part of `buildProfileBlock()`. Callers pass their resolved plugin config as its fourth argument, and the config's `skillCatalog` and `skillCatalogTokenBudget` knobs switch and size the block. Do not call `GET /api/v1/skills` or format a skill list in an adapter. A host that omits the argument gets the profile block without the catalog.
 
 Automatic recall must carry the correct session and peer, and honor input filters, bypass, and switches. Keep empty results empty instead of injecting a server's no-relevant-memory sentinel. Compression failure may fall back to the existing uncompressed result, but must not invent a digest. Compressed `viking://` URIs must remain readable. Capture must distinguish the user's input, recalled context, and host wrappers so injected old memories are not captured again.
 
@@ -276,9 +279,11 @@ Use direct remote MCP connections only when the host has suitable credential and
 
 ## 7. URI guards, skills, and diagnostics
 
-`viking://` is a virtual URI and must not be passed to local file or shell tools. Where the host supports checks before tool execution, use `evaluateUriGuard()` and keep only tool-parameter mapping and denial envelopes in the adapter. Do not expand the guard into a general command interceptor; ordinary file paths retain their behavior. Without the required event, document the limitation and guide models through a skill, without claiming equivalent interception.
+`viking://` is a virtual URI. A local file tool whose path argument is a `viking://` URI cannot succeed, so where the host supports checks before tool execution, deny the call with `evaluateUriGuard()`. A shell command that carries a `viking://` URI may be using it as data (an `ov` argument, an HTTP payload, a search pattern), so let it run and attach the notice from `evaluateUriNotice()` through the host's model-visible context channel; `PreToolUse` hosts use `preToolUseOutput()`, which returns the deny or the notice envelope. Keep only tool hints and envelopes in the adapter. Do not expand the guard into a general command interceptor; ordinary file paths retain their behavior. Without the required event, document the limitation and guide models through a skill, without claiming equivalent interception.
 
 Shared skill sources live in [`examples/skills/`](https://github.com/volcengine/OpenViking/tree/main/examples/skills/) and are shipped through `SKILL_TARGETS`. Do not edit the same guidance separately in several plugin copies. Skills must describe tools that can actually be called and capabilities that exist. Do not instruct the model to repeat capture or commits each turn when hooks already own them. Distinct tool surfaces may need distinct skills; explain why. Generated skill files must not receive a banner before their YAML frontmatter.
+
+Skills stored in OpenViking are created, installed, shared, and replaced through the server's `add_skill` MCP tool, which shares its install code with REST `POST /api/v1/skills`. Do not reimplement installation in a host: no adapter code that writes `SKILL.md` into the skills subtree, unpacks archives, or uploads skill directories on its own. The server's `write` and `edit` refuse the skills subtree under the user root, and the URI guard (`isSkillUri()`) points a denied local write or edit on a skill URI to `add_skill`. The `openviking-skills` skill teaches the model this flow, so `SKILL_TARGETS` ships it only to MCP hosts that bundle skills, where `add_skill` is a real tool.
 
 Use `runDoctor(hostSpec)` for diagnostics. Hosts supply installation paths, manifests, hook registrations, and state checks; `doctor-core.mjs` owns common configuration, credential, network, and output handling. Diagnostics must make it possible to inspect the installed version, configuration sources and effective values, peer, MCP entrypoint, hook budgets, and pending/session state. Prefer offline and JSON modes; offline checks must not silently access the network.
 
@@ -319,8 +324,8 @@ Use explicit relative imports. Where shared modules have TypeScript consumers, k
 
 | Distribution | Current examples | Requirement |
 | --- | --- | --- |
-| Host loads a plugin directory directly from Git | Claude Code, Codex, `agent-plugins` | Commit shared copies so a checkout is loadable |
-| npm package or installation archive | OpenCode, DSH, OpenClaw, Pi | Generate during prepack or staging; do not commit runtime copies |
+| Host loads a plugin directory directly from Git | Claude Code, Codex, `agent-plugins`, OpenClaw (`ov-install` GitHub source) | Commit shared copies so a checkout is loadable |
+| npm package or installation archive | OpenCode, DSH, Pi | Generate during prepack or staging; do not commit runtime copies |
 | Installer assembles an adjacent runtime directory | Cursor, TRAE, TRAE CN, ZCode | Derive `lib/MANIFEST` from `ASSEMBLED_ROOTS` and copy runtime modules from it |
 
 Register these targets in [`sync.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/sync.mjs). For separate plugins, add the source root, output directory, and `committed` policy to `TARGETS`. Extend `ASSEMBLED_ROOTS` only for a new assembled root; ordinary thin hosts are usually covered already. Register skill delivery separately in `SKILL_TARGETS`. Do not maintain a manual list of runtime modules to copy.
@@ -397,7 +402,7 @@ Put common helpers in [`testing/support.mjs`](https://github.com/volcengine/Open
 | Area | Behavior to verify | Existing entrypoints |
 | --- | --- | --- |
 | Configuration and switches | Layer precedence, alias conflicts, invalid values, configured flags, no new network effects when disabled | `plugin-config.test.mjs`, `plugin-known-keys.test.mjs`, host config tests |
-| Credentials and peers | Matching hook/MCP request identity; custom paths, profile switching, multiple workspaces | `credentials.test.mjs`, `wire-headers.test.mjs`, `mcp-proxy-config.test.mjs` |
+| Credentials and peers | Matching hook/MCP request identity; custom paths, profile switching, multiple workspaces | `credentials.test.mjs`, `mcp-hook-parity.test.mjs`, `wire-headers.test.mjs`, `mcp-proxy-config.test.mjs` |
 | Hook output | Real payloads, one valid response, empty results, missing/unknown fields, failures | `agent-hook-runtime.test.mjs`, host event tests |
 | Recall | Switches, bypass, empty results, server compatibility, compression failure, readable URIs | `recall-core.test.mjs`, host recall tests |
 | Capture | Complete text/tools, repeated events and text, nested tools, partial success, truncation recovery | `capture-utils.test.mjs`, `batch-send.test.mjs`, host transcript tests |

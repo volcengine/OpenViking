@@ -8,6 +8,7 @@ import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+from litellm.llms.ollama.chat.transformation import OllamaChatConfig
 from openai import OpenAI
 
 from openviking.models.vlm.backends.litellm_vlm import (
@@ -531,7 +532,10 @@ class TestVLMExtraRequestBody:
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
         # Ollama models also get a default num_ctx; the explicit think is kept.
-        assert kwargs["extra_body"] == {"think": False, "num_ctx": 16384}
+        # num_ctx must be top-level so LiteLLM maps it into Ollama's `options`;
+        # inside extra_body it is forwarded verbatim and silently ignored.
+        assert kwargs["num_ctx"] == 16384
+        assert kwargs["extra_body"] == {"think": False}
 
     def test_ollama_defaults_num_ctx_and_think(self):
         """Ollama models get a larger context window and thinking disabled by default."""
@@ -545,7 +549,8 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False}
+        assert kwargs["num_ctx"] == 16384
+        assert kwargs["extra_body"] == {"think": False}
 
     def test_ollama_extra_request_body_overrides_num_ctx(self):
         """An explicit num_ctx in extra_request_body is not overridden by the default."""
@@ -560,7 +565,40 @@ class TestVLMExtraRequestBody:
 
         kwargs = vlm._build_text_kwargs(prompt="hello")
 
-        assert kwargs["extra_body"] == {"num_ctx": 32768, "think": False}
+        assert kwargs["num_ctx"] == 32768
+        assert "num_ctx" not in kwargs["extra_body"]
+        assert kwargs["extra_body"] == {"think": False}
+
+    def test_ollama_num_ctx_lands_in_ollama_options_on_the_wire(self):
+        """The request LiteLLM actually sends must carry num_ctx under `options`.
+
+        Asserting the built kwargs only proves where OV puts the value; this
+        checks the field Ollama reads, which is what #5030 is about.
+        """
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "ollama/qwen3.5:4b",
+                "provider": "litellm",
+                "api_base": "http://127.0.0.1:11434",
+                "extra_request_body": {"num_ctx": 32768},
+            }
+        )
+        kwargs = vlm._build_text_kwargs(prompt="hello")
+
+        body = OllamaChatConfig().transform_request(
+            model="qwen3.5:4b",
+            messages=kwargs["messages"],
+            optional_params={
+                k: v
+                for k, v in kwargs.items()
+                if k not in ("model", "messages", "timeout", "api_key", "api_base")
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert body["options"]["num_ctx"] == 32768
+        assert "num_ctx" not in body
 
     def test_non_ollama_model_gets_no_num_ctx(self):
         """num_ctx is Ollama-specific and must not leak into other providers."""

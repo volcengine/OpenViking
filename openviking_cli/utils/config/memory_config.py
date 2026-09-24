@@ -18,8 +18,6 @@ class SessionAutoCommitConfig(BaseModel):
     scan_batch_size: int = Field(default=16, gt=0)
     scan_batch_pause_seconds: float = Field(default=0.0, ge=0)
 
-    model_config = {"extra": "forbid"}
-
 
 class MemoryConfig(BaseModel):
     """Memory configuration for OpenViking."""
@@ -101,8 +99,6 @@ class MemoryConfig(BaseModel):
         default_factory=SessionAutoCommitConfig,
         description="Server-wide controls for automatic session commits.",
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="before")
     @classmethod

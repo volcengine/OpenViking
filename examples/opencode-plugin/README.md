@@ -13,12 +13,14 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 ## What It Does
 
 - Injects indexed `viking://resources/` repositories into the system prompt.
+- On the first message of each session, injects your profile, memory indexes, and an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - Exposes the same OpenViking MCP tools used by the Claude Code and Codex memory plugins.
 - Maps each OpenCode session to an OpenViking session.
 - Captures user and assistant text messages into OpenViking.
+- On OpenCode v2, reads the structured session context at execution boundaries so tool calls and results are captured too.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
-- Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`.
+- Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
 
 ## Files
 
@@ -49,10 +51,12 @@ There is intentionally no `skills/openviking/SKILL.md`. The tool surface comes f
 
 ## Requirements
 
-- OpenCode
+- OpenCode 1.15.7+ or OpenCode 2.0.15+
 - OpenViking HTTP server
 - Node.js 18+
 - An OpenViking API key if your server requires authentication
+
+The same package serves both plugin APIs. OpenCode 1 calls `server()` (or the named `OpenVikingPlugin` export), while OpenCode 2 calls `setup()`. The v2 entrypoint does not import `@opencode/plugin`, so a source install on OpenCode 1 still loads. OpenCode 2 normalizes the installer's `"plugin"` key to `"plugins"`; keep `"plugin"` in shared v1/v2 configuration. On v2, the bundled MCP server uses `codemode: false`, preserving the documented `openviking_*` tool names.
 
 Start OpenViking first:
 
@@ -83,12 +87,15 @@ npm view @openviking/opencode-plugin version
 For development or PR testing, copy the package into OpenCode's plugin directory with a top-level wrapper:
 
 ```bash
+node examples/memory-plugin-shared/sync.mjs
 mkdir -p ~/.config/opencode/plugins/openviking
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
+
+`sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
 
 This creates a stable OpenCode plugin layout:
 
@@ -136,6 +143,8 @@ Behaviour knobs live in `~/.openviking/ovcli.conf` beside the connection fields,
       "commitTokenThreshold": 20000,
       "commitKeepRecentCount": 10,
       "profileTokenBudget": 10000,
+      "skillCatalog": true,
+      "skillCatalogTokenBudget": 1200,
       "resumeContextBudget": 32000
     }
   }
@@ -148,6 +157,8 @@ Keys in `plugin` apply to every harness; keys in `plugin.opencode` apply to this
 Explicit values from 1 through 5 produce an effective total quota of 6 because
 each coding category keeps one retrieval slot. Use Context `quotas` directly
 when exact category ceilings are required.
+
+`profileTokenBudget` covers the profile and memory indexes in the session-start block. The `<available-skills>` catalog comes from one `GET /api/v1/skills` and has its own budget, `skillCatalogTokenBudget` (default `1200`, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`). Your own skills are listed first, then the ones shared under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours; each description is cut to about 40 tokens. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. The agent reads a skill's `SKILL.md` with `openviking_read` before following it. `skillCatalog: false` (`OPENVIKING_SKILL_CATALOG=0`) or a budget of `0` turns the catalog off; with no skills, or on a server without `GET /api/v1/skills`, it is left out.
 
 API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. Recall goes through the server-side context face (`POST /api/v1/search/search` with `mode="context"`), falling back to the deprecated `/api/v1/search/recall` on older deployments. `account` and `user` are trusted-mode identity
 headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; an `api_key`
@@ -189,7 +200,12 @@ It does not add or overwrite OpenCode's `mcp.openviking` entry.
 
 OpenCode's local `read`, `glob`, and `grep` tools cannot read `viking://` URIs.
 When the agent accidentally tries that, the plugin blocks the filesystem tool
-call and points it to the OpenViking MCP tools.
+call and points it to the OpenViking MCP tools. A `bash` command that contains a
+`viking://` URI is not blocked, because the URI is often data (an `ov` argument,
+an HTTP payload); the command runs and the plugin appends a notice naming the
+MCP tools to its output.
+
+OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
 
 ## MCP Tools
 
@@ -206,6 +222,7 @@ OpenCode sees the OpenViking MCP server as `openviking`, so tool names are names
 - `openviking_write`: create, overwrite, or append to a `viking://` file.
 - `openviking_edit`: exact string replacement in a `viking://` file.
 - `openviking_add_resource`: add a URL, local file, sitemap, or feed.
+- `openviking_add_skill`: create or replace a skill from its full `SKILL.md` text (`data`), or install one from a Git URL or a local `SKILL.md`, skill directory, or `.zip` (`path`); `target_uri="viking://agent/skills"` shares it with the account.
 - `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
 - `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
 - `openviking_health`: check OpenViking server health.

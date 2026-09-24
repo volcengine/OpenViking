@@ -43,7 +43,9 @@ ZCode supports 7 events but NOT `PreCompact`/`SessionEnd`/`SubagentStart`/`Subag
 
 ### 4. Output schema: ZCode-canonical keys only
 
-ZCode's strict JSON schema rejects unrecognized keys. The adapter's envelope emits ONLY `{ hookSpecificOutput: { hookEventName, additionalContext } }` for context injection, and `{ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason } }` for URI guard. No `decision: "approve"` (Claude-Code-ism).
+ZCode's strict JSON schema rejects unrecognized keys. The adapter's envelope emits ONLY `{ hookSpecificOutput: { hookEventName, additionalContext } }` for context injection, `{ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason } }` when the URI guard denies a file tool, and `{ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext } }` when it notices a `viking://` URI in a shell command. No `decision: "approve"` (Claude-Code-ism).
+
+The shared guard produces that notice for any shell tool, but the `PreToolUse` matcher names only `Read|Glob|Grep`, so ZCode never sends one. Whether its schema accepts `additionalContext` on `PreToolUse` is unverified; add a shell tool to the matcher only after checking that against a live session.
 
 **Provenance**: Adversarial review R1-F1, R4-V1 — the #1 silent-failure mode.
 

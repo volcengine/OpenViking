@@ -29,17 +29,17 @@ from openviking.storage.expr import (
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME
 
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# VikingDB text field byte limit
+# VikingDB field byte limits
 # ---------------------------------------------------------------------------
-# VikingDB rejects upsert when any text field exceeds this byte length.
+# VikingDB string fields use a uint16 byte length, while text fields allow 1 MiB.
 # Truncation is applied at a valid UTF-8 character boundary so that
 # multi-byte sequences are never split in the middle.
+VIKINGDB_STRING_FIELD_BYTE_LIMIT: int = 64 * 1024
 VIKINGDB_TEXT_FIELD_BYTE_LIMIT: int = 1024 * 1024
 
 
@@ -102,11 +102,15 @@ class CollectionAdapter(ABC):
     mode: str
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
-    # Text fields subject to byte-limit truncation before upsert.
-    _TRUNCATABLE_TEXT_FIELDS: tuple[str, ...] = ("content", "abstract")
+    # Only derived fields may be shortened silently. An oversized abstract is
+    # stored as a prefix, so an exact-match filter using the original full
+    # abstract will not match the stored value.
+    _TRUNCATABLE_STRING_FIELDS: tuple[str, ...] = ("abstract",)
+    _TRUNCATABLE_TEXT_FIELDS: tuple[str, ...] = ("content",)
 
-    # Per-backend byte limit for text fields.  ``None`` means no truncation.
-    # Subclasses backed by VikingDB should set this to ``VIKINGDB_TEXT_FIELD_BYTE_LIMIT``.
+    # Per-backend byte limits. ``None`` means no truncation. VikingDB-backed
+    # adapters set both limits; local adapters keep the complete values.
+    _STRING_FIELD_BYTE_LIMIT: int | None = None
     _TEXT_FIELD_BYTE_LIMIT: int | None = None
 
     # Whether this backend actually stores the ``content`` (full text) field.
@@ -120,6 +124,7 @@ class CollectionAdapter(ABC):
         self._collection_name = collection_name
         self._index_name = index_name
         self._collection: Optional[Collection] = None
+        self._dimension = 0
 
     @property
     def collection_name(self) -> str:
@@ -281,6 +286,11 @@ class CollectionAdapter(ABC):
                 value = normalized.get(field)
                 if isinstance(value, str):
                     normalized[field] = _truncate_text_field(value, self._TEXT_FIELD_BYTE_LIMIT)
+        if self._STRING_FIELD_BYTE_LIMIT is not None:
+            for field in self._TRUNCATABLE_STRING_FIELDS:
+                value = normalized.get(field)
+                if isinstance(value, str):
+                    normalized[field] = _truncate_text_field(value, self._STRING_FIELD_BYTE_LIMIT)
         return normalized
 
     @staticmethod
@@ -501,7 +511,18 @@ class CollectionAdapter(ABC):
         else:
             # Approximate random sampling with a client-generated random
             # vector so every backend behaves consistently.
-            dim = get_openviking_config().embedding.dimension
+            dim = self._dimension
+            if dim <= 0:
+                dim = next(
+                    (
+                        field["Dim"]
+                        for field in coll.get_meta_data().get("Fields", [])
+                        if field.get("FieldName") == "vector"
+                    ),
+                    0,
+                )
+            if dim <= 0:
+                raise ValueError("Vector collection dimension is unavailable")
             random_vector = [random.uniform(-1, 1) for _ in range(dim)]
             result = coll.search_by_vector(
                 index_name=self._index_name,
@@ -624,6 +645,19 @@ class CollectionAdapter(ABC):
             return parsed_total
 
         raise RuntimeError("Vector backend returned an invalid count result")
+
+    def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
+        """Count records and reject responses without an explicit total."""
+        coll = self.get_collection()
+        result = coll.aggregate_data(
+            index_name=self._index_name,
+            op="count",
+            filters=self._compile_filter(filter),
+        )
+        parsed_total = self._extract_count_total(result.agg)
+        if parsed_total is None:
+            raise RuntimeError("Vector backend returned an invalid count response")
+        return parsed_total
 
     def search_by_keywords(
         self,

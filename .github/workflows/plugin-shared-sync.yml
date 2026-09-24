@@ -1,8 +1,8 @@
 name: Plugin Shared Runtime Sync
 
 # The plugins a host installs by pointing at a directory in this repository —
-# Claude Code, Codex, and the Agent Plugins package — can only load files git
-# holds, so their copies of the shared runtime have to be committed. Generating
+# Claude Code, Codex, the Agent Plugins package, and OpenClaw through
+# ov-install's GitHub source — can only load files git holds, so their copies of the shared runtime have to be committed. Generating
 # them by hand is what let a copy go stale on main while the pull request that
 # changed the library looked complete. This regenerates them after the merge.
 #
@@ -18,6 +18,7 @@ on:
       - "examples/skills/**"
       - "examples/claude-code-memory-plugin/**"
       - "examples/codex-memory-plugin/**"
+      - "examples/openclaw-plugin/**"
       - "agent-plugins/**"
   workflow_dispatch:
 

@@ -3,12 +3,12 @@ import { isBypassed } from "./shared/session-model.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
-  async function injectRelevantMemories(input, output) {
+  async function buildRelevantMemories(input, parts) {
     if (!isRecallEnabled(config)) return
-    const query = extractCurrentUserText(output.parts ?? [])
+    const query = extractCurrentUserText(parts ?? [])
     if (!query) return
     if (query.length < config.minQueryLength) return
-    const sessionID = input.sessionID ?? output.message?.sessionID
+    const sessionID = input.sessionID
     if (isBypassed(config, {
       sessionId: sessionID,
       cwd: input.directory ?? input.cwd,
@@ -34,14 +34,20 @@ export function createMemoryRecall({ config, sessionManager }) {
         log: (stage, data) => log("DEBUG", "recall", stage, data),
       },
     )
-    if (!block) return
+    return block || undefined
+  }
 
-    if (prependSyntheticRecallPart(input, output, block)) {
+  async function injectRelevantMemories(input, output) {
+    const block = await buildRelevantMemories({
+      ...input,
+      sessionID: input.sessionID ?? output.message?.sessionID,
+    }, output.parts)
+    if (block && prependSyntheticRecallPart(input, output, block)) {
       log("INFO", "recall", "Injected OpenViking context")
     }
   }
 
-  return { injectRelevantMemories }
+  return { buildRelevantMemories, injectRelevantMemories }
 }
 
 export function extractCurrentUserText(parts) {

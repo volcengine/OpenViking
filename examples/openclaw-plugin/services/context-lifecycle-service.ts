@@ -440,6 +440,7 @@ async function recallForAssemble(
     peerRole: cfg.peer_role ?? "none",
     senderPeerId: sanitizeOpenVikingPeerId(sender.senderId),
     assistantPeerId: agentId,
+    warn: (message) => logger.warn?.(message),
   });
   const queryConfig = await queryConfigStore?.getEffective({
     agentId,

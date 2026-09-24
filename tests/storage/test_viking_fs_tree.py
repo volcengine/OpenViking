@@ -220,15 +220,17 @@ def test_is_name_visible_at_account_root(fs, name, parent_path, expected):
     [
         ("my_dir", "/local/test_account/resources", True),
         ("normal_dir", "/local/test_account/resources/foo", True),
-        ("_system", "/local/test_account/resources", False),
-        ("tasks", "/local/test_account/resources/bar", False),
+        ("_system", "/local/test_account/resources", True),
+        ("tasks", "/local/test_account/resources/bar", True),
+        ("tasks", "/local/test_account/agent", True),
         (".path.ovlock", "/local/test_account/resources", False),
+        (".exact.ovlock.notes.md.0123abcd", "/local/test_account/resources", False),
         (".sync_log.json", "/local/test_account/resources", False),
         (".redirect.json", "/local/test_account/resources", False),
     ],
 )
 def test_is_name_visible_at_non_root(fs, name, parent_path, expected):
-    """PY-FLT-004: Non-root internal-name blacklist."""
+    """PY-FLT-004: Below the account root only multi-write internal files are hidden."""
     assert fs._is_name_visible_at_path(name, parent_path) == expected
 
 
@@ -238,7 +240,9 @@ def test_is_name_visible_at_non_root(fs, name, parent_path, expected):
         ("/local/test_account/resources/a", "/local/test_account", False),
         ("/local/test_account/tasks/foo", "/local/test_account", True),
         ("/local/test_account/tasks/foo/bar.txt", "/local/test_account", True),
-        ("/local/test_account/resources/_system/secret.txt", "/local/test_account", True),
+        ("/local/test_account/resources/_system/secret.txt", "/local/test_account", False),
+        ("/local/test_account/resources/tasks/demo/t.md", "/local/test_account", False),
+        ("/local/test_account/resources/.path.ovlock/x", "/local/test_account", True),
         ("/local/test_account/resources/normal/file.txt", "/local/test_account", False),
         ("/local/test_account/resources/a/b/c", "/local/test_account", False),
     ],
@@ -255,28 +259,60 @@ def test_is_tree_entry_visible_visible(monkeypatch, fs):
     """PY-FLT-005, PY-FLT-009: Normal visible entry."""
     patch_visibility(monkeypatch, fs, is_accessible=True)
     entry = make_entry("/local/test_account/resources/a", "a")
-    assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is True
+    assert (
+        fs._is_tree_entry_visible(
+            entry,
+            "/local/test_account",
+            _default_ctx(),
+            acl_enabled=False,
+        )
+        is True
+    )
 
 
 def test_is_tree_entry_visible_acl_filtered(monkeypatch, fs):
     """PY-FLT-008: ACL filtering."""
     patch_visibility(monkeypatch, fs, is_accessible=False)
     entry = make_entry("/local/test_account/resources/secret", "secret")
-    assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
+    assert (
+        fs._is_tree_entry_visible(
+            entry,
+            "/local/test_account",
+            _default_ctx(),
+            acl_enabled=False,
+        )
+        is False
+    )
 
 
 def test_is_tree_entry_visible_hidden_scope_filtered(monkeypatch, fs):
     """PY-FLT-007: tasks scope filtered at account root."""
     patch_visibility(monkeypatch, fs, is_accessible=True)
     entry = make_entry("/local/test_account/tasks/foo", "foo")
-    assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
+    assert (
+        fs._is_tree_entry_visible(
+            entry,
+            "/local/test_account",
+            _default_ctx(),
+            acl_enabled=False,
+        )
+        is False
+    )
 
 
 def test_is_tree_entry_visible_path_ovlock_filtered(monkeypatch, fs):
     """PY-FLT-011: .path.ovlock is filtered."""
     patch_visibility(monkeypatch, fs, is_accessible=True)
     entry = make_entry("/local/test_account/resources/.path.ovlock", ".path.ovlock", is_dir=False)
-    assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
+    assert (
+        fs._is_tree_entry_visible(
+            entry,
+            "/local/test_account",
+            _default_ctx(),
+            acl_enabled=False,
+        )
+        is False
+    )
 
 
 def test_is_tree_entry_visible_multiwrite_meta_filtered(monkeypatch, fs):
@@ -288,14 +324,30 @@ def test_is_tree_entry_visible_multiwrite_meta_filtered(monkeypatch, fs):
             hidden_name,
             is_dir=False,
         )
-        assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is False
+        assert (
+            fs._is_tree_entry_visible(
+                entry,
+                "/local/test_account",
+                _default_ctx(),
+                acl_enabled=False,
+            )
+            is False
+        )
 
 
 def test_is_tree_entry_visible_default_ctx(monkeypatch, fs):
     """PY-FLT-010: ctx=None uses default context."""
     patch_visibility(monkeypatch, fs, is_accessible=True)
     entry = make_entry("/local/test_account/resources/a", "a")
-    assert fs._is_tree_entry_visible(entry, "/local/test_account", _default_ctx()) is True
+    assert (
+        fs._is_tree_entry_visible(
+            entry,
+            "/local/test_account",
+            _default_ctx(),
+            acl_enabled=False,
+        )
+        is True
+    )
 
 
 # ── _iter_visible_tree_entries tests ──
@@ -542,7 +594,10 @@ async def test_tree_original_dfs_order(monkeypatch, fs):
         ),
     ]
     patch_tree_env(monkeypatch, fs, entries)
-    fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+    async def acl_enabled(_account_id):
+        return True
+
+    fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
     async def fake_can_access_many(uris, _ctx):
         return {uri: "/restricted" not in uri for uri in uris}
@@ -669,7 +724,10 @@ async def test_ls_agent_modtime_is_raw_utc_iso(monkeypatch, fs):
     monkeypatch.setattr(fs, "_is_accessible", lambda _uri, _ctx: True)
     monkeypatch.setattr(fs, "_batch_fetch_abstracts", default_batch_fetch)
     monkeypatch.setattr(viking_fs_module, "datetime", _FixedDatetime)
-    fs.acl_manager = SimpleNamespace(is_enabled=lambda _account_id: True)
+    async def acl_enabled(_account_id):
+        return True
+
+    fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
     async def fake_can_access_many(uris, _ctx):
         return {uri: not uri.endswith("/restricted") for uri in uris}
