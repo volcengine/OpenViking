@@ -45,7 +45,7 @@ import { cn } from '#/lib/utils'
 
 import { ExperienceSetupGuide } from './-components/experience-setup-guide'
 import { ExperiencePreviewSheet } from './-components/experience-preview-sheet'
-import { fetchExperiences } from './-lib/api'
+import { fetchExperiences, searchExperiences } from './-lib/api'
 import {
   buildExperiencesUri,
   formatTimestamp,
@@ -205,39 +205,39 @@ function AgentExperienceRoute() {
   const { t, i18n } = useTranslation('agentExperiencePage')
   const { connection, identityScopeKey } = useAppConnection()
   const [keyword, setKeyword] = React.useState('')
+  const [searchKeyword, setSearchKeyword] = React.useState('')
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(10)
   const [previewExperience, setPreviewExperience] =
     React.useState<ExperienceFileItem | null>(null)
 
   const experiencesUri = buildExperiencesUri(connection.userId)
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setSearchKeyword(keyword.trim())
+      setPage(1)
+    }, 300)
+    return () => window.clearTimeout(timeout)
+  }, [keyword])
   const experiencesQuery = useQuery({
     queryFn: ({ signal }) =>
-      fetchExperiences({
-        experiencesUri,
-        page,
-        pageSize,
-        signal,
-      }),
+      searchKeyword
+        ? searchExperiences({ experiencesUri, keyword: searchKeyword, signal })
+        : fetchExperiences({ experiencesUri, page, pageSize, signal }),
     queryKey: [
       'agent-experience-list',
       identityScopeKey,
       experiencesUri,
       page,
       pageSize,
+      searchKeyword,
     ],
     staleTime: 30_000,
   })
 
   const pageItems = experiencesQuery.data?.items ?? []
   const hasMore = experiencesQuery.data?.hasMore ?? false
-  const normalizedKeyword = keyword.trim().toLocaleLowerCase()
-  const experiences = pageItems.filter(
-    (item) =>
-      !normalizedKeyword ||
-      item.name.toLocaleLowerCase().includes(normalizedKeyword) ||
-      item.uri.toLocaleLowerCase().includes(normalizedKeyword),
-  )
+  const experiences = pageItems
 
   // Snapshot "updated since last visit" badges when the list settles, then
   // mark the whole list as seen. Comparing against the pre-visit snapshot
@@ -355,10 +355,7 @@ function AgentExperienceRoute() {
             )}
           </div>
         </Card>
-      ) : pageItems.length === 0 &&
-        page === 1 &&
-        !hasMore &&
-        !keyword.trim() ? (
+      ) : pageItems.length === 0 && page === 1 && !hasMore && !searchKeyword ? (
         <Card className="min-h-56 items-center justify-center px-6 text-center">
           <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <BrainCircuitIcon className="size-5" />
@@ -416,7 +413,9 @@ function AgentExperienceRoute() {
               ) : null}
             </div>
             <span className="text-xs tabular-nums text-muted-foreground">
-              {t('pageCount', { count: experiences.length })}
+              {t(searchKeyword ? 'searchCount' : 'pageCount', {
+                count: experiences.length,
+              })}
             </span>
           </div>
 
@@ -436,9 +435,11 @@ function AgentExperienceRoute() {
                   <TableHead className="h-10 pl-4 text-xs font-normal text-muted-foreground">
                     {t('columnFile')}
                   </TableHead>
-                  <TableHead className="hidden h-10 w-44 sm:table-cell text-xs font-normal text-muted-foreground">
-                    {t('columnUpdated')}
-                  </TableHead>
+                  {!searchKeyword && (
+                    <TableHead className="hidden h-10 w-44 sm:table-cell text-xs font-normal text-muted-foreground">
+                      {t('columnUpdated')}
+                    </TableHead>
+                  )}
                   <TableHead className="h-10 w-28 pr-4 text-right text-xs font-normal text-muted-foreground">
                     {t('columnActions')}
                   </TableHead>
@@ -475,7 +476,7 @@ function AgentExperienceRoute() {
                                 }}
                               >
                                 <HighlightedText
-                                  keyword={normalizedKeyword}
+                                  keyword={searchKeyword}
                                   text={experience.name}
                                 />
                               </button>
@@ -488,16 +489,16 @@ function AgentExperienceRoute() {
                                 </Badge>
                               ) : null}
                             </div>
-                            {normalizedKeyword &&
+                            {searchKeyword &&
                             !experience.name
                               .toLocaleLowerCase()
-                              .includes(normalizedKeyword) ? (
+                              .includes(searchKeyword.toLocaleLowerCase()) ? (
                               <span
                                 className="truncate font-mono text-[11px] text-muted-foreground"
                                 title={experience.uri}
                               >
                                 <HighlightedText
-                                  keyword={normalizedKeyword}
+                                  keyword={searchKeyword}
                                   text={experience.uri}
                                 />
                               </span>
@@ -505,9 +506,11 @@ function AgentExperienceRoute() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="hidden w-44 text-xs tabular-nums text-muted-foreground sm:table-cell">
-                        {updated ?? '-'}
-                      </TableCell>
+                      {!searchKeyword && (
+                        <TableCell className="hidden w-44 text-xs tabular-nums text-muted-foreground sm:table-cell">
+                          {updated ?? '-'}
+                        </TableCell>
+                      )}
                       <TableCell
                         className="w-28 pr-4 text-right"
                         onClick={(event) => event.stopPropagation()}
@@ -537,17 +540,19 @@ function AgentExperienceRoute() {
               </TableBody>
             </Table>
           )}
-          <ExperiencePagination
-            page={page}
-            hasMore={hasMore}
-            disabled={experiencesQuery.isFetching}
-            pageSize={pageSize}
-            onPageChange={setPage}
-            onPageSizeChange={(nextPageSize) => {
-              setPageSize(nextPageSize)
-              setPage(1)
-            }}
-          />
+          {!searchKeyword && (
+            <ExperiencePagination
+              page={page}
+              hasMore={hasMore}
+              disabled={experiencesQuery.isFetching}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(nextPageSize) => {
+                setPageSize(nextPageSize)
+                setPage(1)
+              }}
+            />
+          )}
         </Card>
       )}
 
