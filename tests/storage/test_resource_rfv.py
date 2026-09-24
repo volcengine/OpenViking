@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import ANY, AsyncMock
 
 import pytest
 
@@ -551,11 +552,19 @@ async def test_build_rfv_snapshot_reads_one_f_inventory_one_v_inventory_and_each
 
 
 @pytest.mark.asyncio
-async def test_build_rfv_snapshot_non_recursive_directory_does_not_walk_descendants():
+async def test_build_rfv_snapshot_non_recursive_directory_reads_only_direct_children():
     from openviking.storage.resource_rfv import build_rfv_snapshot
 
     root = "viking://resources/demo"
     fs = _SnapshotFS(root)
+    fs.ls = AsyncMock(
+        return_value=[
+            {"uri": f"{root}/docs", "name": "docs", "isDir": True},
+            {"uri": f"{root}/a.md", "name": "a.md", "isDir": False},
+            {"uri": f"{root}/.abstract.md", "name": ".abstract.md", "isDir": False},
+            {"uri": f"{root}/.overview.md", "name": ".overview.md", "isDir": False},
+        ]
+    )
     db = _SnapshotDB()
 
     snapshot = await build_rfv_snapshot(
@@ -568,8 +577,164 @@ async def test_build_rfv_snapshot_non_recursive_directory_does_not_walk_descenda
     )
 
     fs.tree.assert_not_awaited()
-    assert set(snapshot.formal.entries) == {""}
+    fs.ls.assert_awaited_once_with(root, node_limit=None, ctx=ANY)
+    assert set(snapshot.formal.entries) == {"", "docs", "a.md"}
+    assert snapshot.input_only_paths == frozenset({"docs", "a.md"})
     assert db.get_incremental_inventory_under_uri.await_args.kwargs["recursive"] is False
+    assert (
+        db.get_incremental_inventory_under_uri.await_args.kwargs["include_direct_children"] is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_semantic_plan_reuses_direct_child_summaries_without_rebuilding_them():
+    from openviking.storage.context_update_plan import (
+        SemanticAction,
+        build_rfv_context_update_plan,
+    )
+    from openviking.storage.resource_rfv import build_rfv_snapshot
+
+    root = "viking://resources/demo"
+
+    class _OneLevelFS:
+        stat = AsyncMock(return_value={"isDir": True})
+        tree = AsyncMock(side_effect=AssertionError("non-recursive plan must not walk descendants"))
+        ls = AsyncMock(
+            return_value=[
+                {"uri": f"{root}/a.md", "name": "a.md", "isDir": False},
+                {"uri": f"{root}/child", "name": "child", "isDir": True},
+                {"uri": f"{root}/.abstract.md", "name": ".abstract.md", "isDir": False},
+                {"uri": f"{root}/.overview.md", "name": ".overview.md", "isDir": False},
+            ]
+        )
+        read_file_bytes = AsyncMock(
+            side_effect=lambda uri, ctx=None: {
+                f"{root}/.abstract.md": b"root abstract",
+                f"{root}/.overview.md": b"root overview",
+            }[uri]
+        )
+
+    records = {
+        "root-l0": {
+            "id": "root-l0",
+            "uri": root,
+            "level": 0,
+            "md5": "root-a",
+            "abstract": "root abstract",
+        },
+        "root-l1": {
+            "id": "root-l1",
+            "uri": root,
+            "level": 1,
+            "md5": "root-o",
+            "abstract": "root overview",
+        },
+        "a-l2": {
+            "id": "a-l2",
+            "uri": f"{root}/a.md",
+            "level": 2,
+            "md5": "a-md5",
+            "abstract": "a summary",
+        },
+        "child-l0": {
+            "id": "child-l0",
+            "uri": f"{root}/child",
+            "level": 0,
+            "md5": "child-a",
+            "abstract": "child abstract",
+        },
+    }
+    db = SimpleNamespace(get_incremental_inventory_under_uri=AsyncMock(return_value=records))
+
+    snapshot = await build_rfv_snapshot(
+        viking_fs=_OneLevelFS(),
+        vikingdb=db,
+        target_uri=root,
+        ctx=object(),
+        request_intent=RequestIntent(root, "semantic_and_vectors", force=True),
+        recursive=False,
+    )
+    _, plan = build_rfv_context_update_plan(
+        snapshot=snapshot, context_type="resource", account_id="acc"
+    )
+
+    assert db.get_incremental_inventory_under_uri.await_args.kwargs == {
+        "ctx": ANY,
+        "output_fields": ["abstract", "id", "level", "md5", "uri"],
+        "recursive": False,
+        "include_direct_children": True,
+    }
+    entries = {entry.relative_path: entry for entry in plan.semantic_plan.tree.entries}
+    assert entries[""].semantic_action is SemanticAction.AGGREGATE
+    assert entries["a.md"].semantic_action is SemanticAction.REUSE
+    assert entries["child"].semantic_action is SemanticAction.REUSE
+    assert entries["a.md"].slot(2).record_id == "a-l2"
+    assert entries["child"].slot(0).record_id == "child-l0"
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_semantic_plan_rejects_direct_child_without_reusable_abstract():
+    from openviking.storage.context_update_plan import build_rfv_context_update_plan
+    from openviking.storage.resource_rfv import build_rfv_snapshot
+
+    root = "viking://resources/demo"
+
+    class _OneLevelFS:
+        stat = AsyncMock(return_value={"isDir": True})
+        ls = AsyncMock(
+            return_value=[
+                {"uri": f"{root}/child", "name": "child", "isDir": True},
+                {"uri": f"{root}/.abstract.md", "name": ".abstract.md", "isDir": False},
+                {"uri": f"{root}/.overview.md", "name": ".overview.md", "isDir": False},
+            ]
+        )
+        read_file_bytes = AsyncMock(
+            side_effect=lambda uri, ctx=None: {
+                f"{root}/.abstract.md": b"root abstract",
+                f"{root}/.overview.md": b"root overview",
+            }[uri]
+        )
+
+    db = SimpleNamespace(
+        get_incremental_inventory_under_uri=AsyncMock(
+            return_value={
+                "root-l0": {
+                    "id": "root-l0",
+                    "uri": root,
+                    "level": 0,
+                    "md5": "root-a",
+                    "abstract": "root abstract",
+                },
+                "root-l1": {
+                    "id": "root-l1",
+                    "uri": root,
+                    "level": 1,
+                    "md5": "root-o",
+                    "abstract": "root overview",
+                },
+                "child-l0": {
+                    "id": "child-l0",
+                    "uri": f"{root}/child",
+                    "level": 0,
+                    "md5": "child-a",
+                    "abstract": "",
+                },
+            }
+        )
+    )
+    snapshot = await build_rfv_snapshot(
+        viking_fs=_OneLevelFS(),
+        vikingdb=db,
+        target_uri=root,
+        ctx=object(),
+        request_intent=RequestIntent(root, "semantic_and_vectors", force=True),
+        recursive=False,
+    )
+
+    with pytest.raises(
+        ValueError, match="non-recursive semantic plan lacks reusable abstract for child"
+    ):
+        build_rfv_context_update_plan(snapshot=snapshot, context_type="resource", account_id="acc")
 
 
 @pytest.mark.asyncio

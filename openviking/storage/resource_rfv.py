@@ -60,6 +60,7 @@ class RFVSnapshot:
     source_contents: Mapping[tuple[str, int], str | bytes] = field(default_factory=dict)
     source_raw_contents: Mapping[tuple[str, int], str | bytes] = field(default_factory=dict)
     source_metadata: Mapping[str, Any] | None = None
+    input_only_paths: frozenset[str] = frozenset()
 
 
 def _relative_uri(root: str, uri: str) -> str | None:
@@ -99,15 +100,26 @@ async def build_rfv_snapshot(
     if target_uri.rstrip("/").startswith(("viking://user/", "viking://agent/skills/")):
         projection = projection | {"name", "description", "tags"}
 
+    resolved_root_is_dir = root_is_dir
+    if formal_inventory is not None:
+        resolved_root_is_dir = bool(formal_inventory[0])
+    if resolved_root_is_dir is None and not recursive:
+        stat = await viking_fs.stat(root, ctx=ctx, skip_count=True)
+        resolved_root_is_dir = bool(stat.get("isDir", stat.get("is_dir")))
+    include_direct_children = bool(resolved_root_is_dir) and not recursive
+
     async def read_formal_inventory() -> tuple[bool, list[Mapping[str, Any]], bool]:
         if formal_inventory is not None:
             return formal_inventory
-        is_dir = root_is_dir
+        is_dir = resolved_root_is_dir
         if is_dir is None:
             stat = await viking_fs.stat(root, ctx=ctx, skip_count=True)
             is_dir = bool(stat.get("isDir", stat.get("is_dir")))
-        if not is_dir or not recursive:
+        if not is_dir:
             return is_dir, [], True
+        if not recursive:
+            entries = await viking_fs.ls(root, node_limit=None, ctx=ctx)
+            return is_dir, list(entries), True
         raw_entries = await viking_fs.tree(
             root,
             output="original",
@@ -122,7 +134,11 @@ async def build_rfv_snapshot(
     formal_task = asyncio.create_task(read_formal_inventory())
     vector_task = asyncio.create_task(
         vikingdb.get_incremental_inventory_under_uri(
-            root, ctx=ctx, output_fields=sorted(projection), recursive=recursive
+            root,
+            ctx=ctx,
+            output_fields=sorted(projection),
+            recursive=recursive,
+            include_direct_children=include_direct_children,
         )
     )
     try:
@@ -184,6 +200,8 @@ async def build_rfv_snapshot(
     level_md5s: dict[str, dict[int, str]] = {path: {} for path in nodes}
     source_jobs: list[tuple[str, str, int, bool]] = []
     for path, (uri, is_dir) in nodes.items():
+        if include_direct_children and path:
+            continue
         if is_dir:
             for level in (0, 1):
                 source_uri = sidecars.get((path, level))
@@ -261,8 +279,6 @@ async def build_rfv_snapshot(
         relative_path = _relative_uri(root, uri)
         if relative_path is None:
             raise ValueError(f"RFV vector record is outside target: {uri}")
-        if not recursive and relative_path:
-            continue
         level = int(record.get("level", -1))
         fields = {
             name: record[name] for name in projection - {"id", "uri", "level"} if name in record
@@ -281,6 +297,9 @@ async def build_rfv_snapshot(
         source_contents=source_contents,
         source_raw_contents=source_raw_contents,
         source_metadata=source_metadata,
+        input_only_paths=frozenset(
+            path for path in nodes if include_direct_children and path and "/" not in path
+        ),
     )
 
 

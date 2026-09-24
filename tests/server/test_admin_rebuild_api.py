@@ -630,10 +630,11 @@ async def test_reindex_rfv_skips_complete_file_without_enqueue_or_second_read(mo
 
     class FakeDB:
         async def get_incremental_inventory_under_uri(
-            self, target, *, ctx, output_fields, recursive=True
+            self, target, *, ctx, output_fields, recursive=True, include_direct_children=False
         ):
             assert target == uri
             assert recursive is False
+            assert include_direct_children is False
             return {
                 "file-l2": {
                     "id": "file-l2",
@@ -686,8 +687,9 @@ async def test_reindex_rfv_deletes_orphans_synchronously_with_owner_context(monk
         strict_delete = AsyncMock(return_value=1)
 
         async def get_incremental_inventory_under_uri(
-            self, target, *, ctx, output_fields, recursive=True
+            self, target, *, ctx, output_fields, recursive=True, include_direct_children=False
         ):
+            assert include_direct_children is False
             return {
                 "orphan-l2": {
                     "id": "orphan-l2",

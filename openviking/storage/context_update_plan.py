@@ -586,6 +586,7 @@ def _semantic_closure(
     new_kinds: Mapping[str, str],
     *,
     repair_indexes: bool = True,
+    input_only_paths: frozenset[str] = frozenset(),
 ) -> tuple[set[str], set[str], set[str]]:
     """Return active nodes, membership-changing parents, and retained closure.
 
@@ -605,6 +606,8 @@ def _semantic_closure(
             parent = _parent(parent)
 
     for path, entry in diff.entries.items():
+        if path in input_only_paths:
+            continue
         content_state = ContentState(entry.content_state)
         index_state = IndexState(entry.index_state)
         content_requires_semantics = content_state in {
@@ -649,6 +652,7 @@ def _promote_missing_semantic_inputs(
     retained: set[str],
     new_kinds: Mapping[str, str],
     records_by_path: Mapping[str, Mapping[int, VectorRecordSnapshot]],
+    input_only_paths: frozenset[str] = frozenset(),
 ) -> None:
     """Promote retained inputs that cannot provide an abstract to a parent.
 
@@ -658,7 +662,7 @@ def _promote_missing_semantic_inputs(
     closure therefore tracks reusable abstracts independently from index MD5.
     """
     while True:
-        promoted = {
+        missing_inputs = {
             path
             for path in retained - active
             if new_kinds.get(path) in {"file", "directory"}
@@ -672,6 +676,13 @@ def _promote_missing_semantic_inputs(
                 or not str(record.fields.get("abstract") or "").strip()
             )
         }
+        blocked_inputs = missing_inputs & input_only_paths
+        if blocked_inputs:
+            raise ValueError(
+                "non-recursive semantic plan lacks reusable abstract for "
+                + ", ".join(sorted(blocked_inputs))
+            )
+        promoted = missing_inputs - input_only_paths
         if not promoted:
             return
         active.update(promoted)
@@ -796,6 +807,7 @@ def build_context_update_plan(
     ingest_options: IngestOptions | Mapping[str, Any] | None = None,
     source_metadata: Mapping[str, str] | None = None,
     closure: tuple[set[str], set[str], set[str]] | None = None,
+    input_only_paths: frozenset[str] = frozenset(),
 ) -> ContextUpdatePlan:
     """Compile resolved RNFV facts into synchronous and asynchronous actions.
 
@@ -814,6 +826,7 @@ def build_context_update_plan(
         diff,
         new_kinds,
         repair_indexes=request.vectorize and request.processing_mode != "vectors_only",
+        input_only_paths=input_only_paths,
     )
     semantic_enabled = request.processing_mode != "vectors_only"
     if not semantic_enabled:
@@ -959,6 +972,7 @@ def build_context_update_plan(
             retained=retained,
             new_kinds=new_kinds,
             records_by_path=records_by_path,
+            input_only_paths=input_only_paths,
         )
 
     semantic_entries: list[SemanticTreeEntry] = []
@@ -969,7 +983,9 @@ def build_context_update_plan(
         diff_entry = diff.entries.get(path)
         state = ContentState(diff_entry.content_state) if diff_entry else ContentState.UNCHANGED
         action = (
-            SemanticAction.GENERATE
+            SemanticAction.REUSE
+            if path in input_only_paths
+            else SemanticAction.GENERATE
             if kind == "file" and path in active
             else SemanticAction.AGGREGATE
             if kind == "directory" and path in active
@@ -1106,6 +1122,7 @@ def build_rfv_context_update_plan(
             is_code_repo=False,
             account_id=account_id,
             source_metadata=source_metadata or snapshot.source_metadata,
+            input_only_paths=snapshot.input_only_paths,
         )
         if plan.content_tree_actions:
             raise ValueError("RFV maintenance plan must not mutate formal content")
