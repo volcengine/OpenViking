@@ -173,12 +173,7 @@ describe("OpenVikingClient", () => {
       [{ role: "user", content: "hello" }],
       telemetry,
     );
-    await client.commitSession(
-      "session-1",
-      2,
-      telemetry,
-      ["team=platform"],
-    );
+    await client.commitSession("session-1", 2, telemetry, ["team=platform"]);
 
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       messages: [{ role: "user", content: "hello" }],
@@ -320,7 +315,7 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("sends dry_run for prune_orphans reindex requests", async () => {
+  it("sends force and recursive for reindex requests", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValue(ok({ status: "completed" }));
@@ -330,9 +325,9 @@ describe("OpenVikingClient", () => {
     });
 
     await client.reindex("resources", {
-      mode: "prune_orphans",
+      mode: "vectors_only",
       wait: true,
-      dryRun: true,
+      force: true,
       recursive: false,
     });
 
@@ -340,9 +335,9 @@ describe("OpenVikingClient", () => {
     expect(String(url)).toBe("https://example.com/api/v1/content/reindex");
     expect(JSON.parse(String(init?.body))).toEqual({
       uri: "viking://resources",
-      mode: "prune_orphans",
+      mode: "vectors_only",
       wait: true,
-      dry_run: true,
+      force: true,
       recursive: false,
     });
   });
@@ -436,20 +431,49 @@ describe("OpenVikingClient", () => {
   });
 
   it("sends explicit tags for write, list, tree, and grep", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => ok({}));
-    const client = new OpenVikingClient({ baseUrl: "https://example.com", fetch: fetcher });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
 
-    await client.write("resources/demo.md", "updated", { tags: [], tagMode: "replace" });
+    await client.write("resources/demo.md", "updated", {
+      tags: [],
+      tagMode: "replace",
+    });
     await client.list("resources", { tags: ["env=prod"], includeTags: true });
     await client.tree("resources", { tags: ["env=prod"], includeTags: true });
-    await client.grep("resources", "needle", { tags: ["env=prod"], includeTags: true });
+    await client.grep("resources", "needle", {
+      tags: ["env=prod"],
+      includeTags: true,
+    });
 
-    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({ tags: [], tag_mode: "replace" });
-    expect(new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("tags")).toBe("env=prod");
-    expect(new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("include_tags")).toBe("true");
-    expect(new URL(String(fetcher.mock.calls[2]![0])).searchParams.get("tags")).toBe("env=prod");
-    expect(new URL(String(fetcher.mock.calls[2]![0])).searchParams.get("include_tags")).toBe("true");
-    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toMatchObject({ tags: ["env=prod"], include_tags: true });
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+      tags: [],
+      tag_mode: "replace",
+    });
+    expect(
+      new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("tags"),
+    ).toBe("env=prod");
+    expect(
+      new URL(String(fetcher.mock.calls[1]![0])).searchParams.get(
+        "include_tags",
+      ),
+    ).toBe("true");
+    expect(
+      new URL(String(fetcher.mock.calls[2]![0])).searchParams.get("tags"),
+    ).toBe("env=prod");
+    expect(
+      new URL(String(fetcher.mock.calls[2]![0])).searchParams.get(
+        "include_tags",
+      ),
+    ).toBe("true");
+    expect(JSON.parse(String(fetcher.mock.calls[3]![1]?.body))).toMatchObject({
+      tags: ["env=prod"],
+      include_tags: true,
+    });
   });
 
   it("sends clear tag mode without tags", async () => {
@@ -1250,7 +1274,9 @@ describe("OpenVikingClient", () => {
     });
 
     await expect(client.getStatus()).resolves.toEqual({ is_healthy: true });
-    await expect(client.queueStatus("json")).resolves.toEqual({ name: "queue" });
+    await expect(client.queueStatus("json")).resolves.toEqual({
+      name: "queue",
+    });
     await expect(client.modelsStatus("table")).resolves.toEqual({
       name: "models",
     });

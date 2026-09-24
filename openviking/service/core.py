@@ -259,11 +259,7 @@ class OpenVikingService:
         if manager is None:
             return
         base_config = self._config.model_copy(
-            update={
-                "agent_evolution": self._agent_evolution_base_config.model_copy(
-                    deep=True
-                )
-            }
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)}
         )
         await manager.replace_base_config(base_config)
 
@@ -285,11 +281,7 @@ class OpenVikingService:
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
         base_config = self._config.model_copy(
-            update={
-                "agent_evolution": self._agent_evolution_base_config.model_copy(
-                    deep=True
-                )
-            },
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)},
         )
         manager = build_runtime_config_manager(
             AsyncAGFSClient(self._agfs_client),
@@ -756,8 +748,8 @@ class OpenVikingService:
         *,
         uri: str,
         mode: str = "vectors_only",
+        force: bool = False,
         wait: bool = True,
-        dry_run: bool = False,
         recursive: bool = True,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
@@ -778,9 +770,10 @@ class OpenVikingService:
             "uri": uri,
             "mode": mode,
             "wait": wait,
-            "dry_run": dry_run,
             "ctx": effective_ctx,
         }
+        if force:
+            execute_kwargs["force"] = True
         if not recursive:
             execute_kwargs["recursive"] = False
         if tags is not None or tag_mode == "clear":

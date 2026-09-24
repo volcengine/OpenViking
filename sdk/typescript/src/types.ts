@@ -137,7 +137,7 @@ export interface SetTagsOptions {
 export interface ReindexOptions {
   mode?: string;
   wait?: boolean;
-  dryRun?: boolean;
+  force?: boolean;
   recursive?: boolean;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";

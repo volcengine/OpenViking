@@ -38,7 +38,11 @@ from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry
 from openviking.utils import is_github_url
-from openviking.utils.embedding_utils import index_resource, vectorize_file
+from openviking.utils.embedding_utils import (
+    index_resource,
+    vectorize_directory_meta,
+    vectorize_file,
+)
 from openviking.utils.git_auth import is_git_https_url
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.log_correlation import log_correlation
@@ -1381,20 +1385,44 @@ class ResourceProcessor:
         return {"kind": kind, "uri": str(path)}
 
     async def _enqueue_index_actions(
-        self, actions: Any, *, ctx: RequestContext, ingest_options: IngestOptions | None = None
-    ) -> None:
+        self,
+        actions: Any,
+        *,
+        ctx: RequestContext,
+        ingest_options: IngestOptions | None = None,
+        source_contents: Optional[Dict[tuple[str, int], str | bytes]] = None,
+        source_metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
         from collections import Counter
 
+        from openviking.core.skill_loader import SkillLoader
         from openviking.storage.index_action import IndexAction
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
         from openviking.telemetry import get_current_telemetry
         from openviking.utils.embedding_utils import _enqueue_embedding_message
 
+        if source_contents is not None:
+            missing_sources = [
+                (action.uri, action.level)
+                for action in actions
+                if action.action in {IndexAction.UPSERT, IndexAction.MERGE}
+                and (action.uri, action.level) not in source_contents
+            ]
+            if missing_sources:
+                uri, level = missing_sources[0]
+                source_name = (
+                    f"directory L{level}"
+                    if level in {int(ContextLevel.ABSTRACT), int(ContextLevel.OVERVIEW)}
+                    else "file"
+                )
+                raise ValueError(f"{source_name} vector source is unavailable: {uri}")
+
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
         action_counts = Counter(action.action.value for action in actions)
+        completed_actions = 0
         delete_ids = [action.record_id for action in actions if action.action == IndexAction.DELETE]
         if delete_ids:
             message = EmbeddingMsg.for_delete(
@@ -1411,22 +1439,36 @@ class ResourceProcessor:
                 message,
                 failure_message="Failed to enqueue planned vector deletes",
             )
+            completed_actions += len(delete_ids)
+        directory_actions: dict[str, dict[int, Any]] = {}
         for action in actions:
             if action.action in {IndexAction.UPSERT, IndexAction.MERGE}:
-                if action.level != int(ContextLevel.DETAIL):
-                    raise ValueError("Direct index upsert only supports file detail records")
-                await self._vectorize_resource_file(
-                    action.uri,
-                    ctx=ctx,
-                    file_md5=action.md5,
-                    ingest_options=ingest_options,
-                    scalar_override={
+                if action.level in {
+                    int(ContextLevel.ABSTRACT),
+                    int(ContextLevel.OVERVIEW),
+                }:
+                    directory_actions.setdefault(action.uri, {})[action.level] = action
+                    continue
+                file_kwargs = {
+                    "ctx": ctx,
+                    "file_md5": action.md5,
+                    "ingest_options": ingest_options,
+                    "scalar_override": {
                         **dict(action.upsert_fields),
                         "_record_id": action.record_id,
                     },
-                    action=action.action.value,
-                    field_patch=action.field_patch,
-                )
+                    "action": action.action.value,
+                    "field_patch": action.field_patch,
+                }
+                source = (source_contents or {}).get((action.uri, action.level))
+                if source is not None:
+                    if not isinstance(source, bytes):
+                        raise ValueError(f"file vector source must be bytes: {action.uri}")
+                    file_kwargs["file_content"] = source
+                    if getattr(self.vikingdb, "uses_content_field", False):
+                        file_kwargs["materialize_content"] = True
+                if await self._vectorize_resource_file(action.uri, **file_kwargs):
+                    completed_actions += 1
                 continue
             if action.action != IndexAction.UPDATE_FIELDS:
                 continue
@@ -1442,11 +1484,73 @@ class ResourceProcessor:
                 },
                 telemetry_id=telemetry_id,
             )
-            await _enqueue_embedding_message(
+            if await _enqueue_embedding_message(
                 embedding_queue,
                 message,
                 failure_message=f"Failed to enqueue scalar update for {action.uri}",
+            ):
+                completed_actions += 1
+        for uri, levels in directory_actions.items():
+            abstract = (source_contents or {}).get((uri, int(ContextLevel.ABSTRACT)), "")
+            overview = (source_contents or {}).get((uri, int(ContextLevel.OVERVIEW)), "")
+            if isinstance(abstract, bytes):
+                abstract = abstract.decode("utf-8")
+            if isinstance(overview, bytes):
+                overview = overview.decode("utf-8")
+            if int(ContextLevel.ABSTRACT) in levels and not isinstance(abstract, str):
+                raise ValueError(f"directory L0 vector source is unavailable: {uri}")
+            if int(ContextLevel.OVERVIEW) in levels and not isinstance(overview, str):
+                raise ValueError(f"directory L1 vector source is unavailable: {uri}")
+            meta = None
+            if context_type_for_uri(uri) == "skill" and abstract:
+                try:
+                    skill = SkillLoader.parse(str(abstract))
+                except ValueError:
+                    skill = None
+                if skill is not None:
+                    meta = {
+                        "name": skill["name"],
+                        "description": skill.get("description", ""),
+                        "tags": skill.get("tags", []),
+                        "allowed_tools": skill.get("allowed_tools", []),
+                    }
+                else:
+                    try:
+                        import yaml
+
+                        parsed = yaml.safe_load(str(abstract))
+                    except Exception:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        meta = {
+                            key: parsed.get(key, [] if key in {"tags", "allowed_tools"} else "")
+                            for key in ("name", "description", "tags", "allowed_tools")
+                        }
+                if meta is not None and source_metadata is not None:
+                    meta["source_path"] = str(source_metadata.get("uri") or "")
+            enqueued_levels = await vectorize_directory_meta(
+                uri,
+                abstract,
+                overview,
+                context_type=context_type_for_uri(uri),
+                ctx=ctx,
+                include_abstract=int(ContextLevel.ABSTRACT) in levels,
+                include_overview=int(ContextLevel.OVERVIEW) in levels,
+                content_is_body=True,
+                actions={level: action.action.value for level, action in levels.items()},
+                scalar_overrides={
+                    level: {
+                        **dict(action.upsert_fields),
+                        "_record_id": action.record_id,
+                    }
+                    for level, action in levels.items()
+                },
+                md5s={
+                    level: action.md5 for level, action in levels.items() if action.md5 is not None
+                },
+                **({"meta": meta} if meta is not None else {}),
             )
+            completed_actions += len(enqueued_levels)
         logger.debug(
             "[DirectIndexActions] %s root=%s action_counts=%s action_count=%d",
             log_correlation(),
@@ -1454,6 +1558,7 @@ class ResourceProcessor:
             dict(action_counts),
             len(actions),
         )
+        return completed_actions
 
     async def _delete_removed_resource_vectors(
         self,
@@ -1581,12 +1686,14 @@ class ResourceProcessor:
         scalar_override: Optional[Dict[str, Any]] = None,
         field_patch: FieldPatch | None = None,
         action: str = "merge",
-    ) -> None:
+        file_content: bytes | None = None,
+        materialize_content: bool = False,
+    ) -> bool:
         parent = VikingURI(file_uri).parent
         if parent is None:
-            return
+            return False
         name = file_uri.rsplit("/", 1)[-1]
-        await vectorize_file(
+        return await vectorize_file(
             file_path=file_uri,
             summary_dict={"name": name, "summary": ""},
             parent_uri=parent.uri,
@@ -1597,6 +1704,8 @@ class ResourceProcessor:
             scalar_override=scalar_override,
             field_patch=field_patch,
             action=action,
+            file_content=file_content,
+            materialize_content=materialize_content,
         )
 
     async def reserve_unique_candidate(

@@ -322,8 +322,10 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		"uri":       NormalizeURI(uri),
 		"mode":      mode,
 		"wait":      opts.Wait,
-		"dry_run":   opts.DryRun,
 		"recursive": boolValue(opts.Recursive, true),
+	}
+	if opts.Force {
+		payload["force"] = true
 	}
 	if opts.Tags != nil || opts.TagMode == "clear" {
 		if opts.Tags != nil {
@@ -335,7 +337,7 @@ func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) 
 		}
 		payload["tag_mode"] = tagMode
 	}
-	if err := mergeExtraProtected(payload, opts.Extra, "tags", "tag_mode"); err != nil {
+	if err := mergeExtraProtected(payload, opts.Extra, "force", "tags", "tag_mode"); err != nil {
 		return nil, err
 	}
 	var result map[string]any

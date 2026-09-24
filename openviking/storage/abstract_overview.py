@@ -486,6 +486,7 @@ async def write_abstract_overview(
     consume_pending: Optional[int] = None,
     lock: Optional[Dict[str, Any]] = None,
     log_prefix: str = "[Semantic]",
+    existing_raw: Optional[Mapping[int, str | bytes]] = None,
 ) -> AbstractOverviewWriteResult:
     """Render and atomically write sidecars while preserving source metadata.
 
@@ -512,8 +513,20 @@ async def write_abstract_overview(
             logger.info("%s Skipping stale semantic write for %s", log_prefix, dir_uri)
             return AbstractOverviewWriteResult(wrote=False)
 
-        existing_overview = await _read_existing_document(viking_fs, overview_uri, ctx)
-        existing_abstract = await _read_existing_document(viking_fs, abstract_uri, ctx)
+        existing_overview = (
+            parse_abstract_overview(existing_raw[1])
+            if existing_raw is not None and 1 in existing_raw
+            else await _read_existing_document(viking_fs, overview_uri, ctx)
+            if existing_raw is None
+            else None
+        )
+        existing_abstract = (
+            parse_abstract_overview(existing_raw[0])
+            if existing_raw is not None and 0 in existing_raw
+            else await _read_existing_document(viking_fs, abstract_uri, ctx)
+            if existing_raw is None
+            else None
+        )
         merged_metadata = dict(metadata or {})
         for existing in (existing_overview, existing_abstract):
             if existing and "source" in existing.metadata and "source" not in merged_metadata:
@@ -549,8 +562,20 @@ async def write_abstract_overview(
         rendered_abstract = render_abstract_overview(
             ContextLevel.ABSTRACT, dir_uri, abstract, merged_metadata
         )
-        current_overview = await _raw_if_exists(viking_fs, overview_uri, ctx)
-        current_abstract = await _raw_if_exists(viking_fs, abstract_uri, ctx)
+        current_overview = (
+            existing_raw.get(1)
+            if existing_raw is not None
+            else await _raw_if_exists(viking_fs, overview_uri, ctx)
+        )
+        current_abstract = (
+            existing_raw.get(0)
+            if existing_raw is not None
+            else await _raw_if_exists(viking_fs, abstract_uri, ctx)
+        )
+        if isinstance(current_overview, bytes):
+            current_overview = current_overview.decode("utf-8")
+        if isinstance(current_abstract, bytes):
+            current_abstract = current_abstract.decode("utf-8")
 
         if current_overview != rendered_overview:
             await viking_fs.write_file(
@@ -704,6 +729,7 @@ async def read_abstract_overview_pending_snapshot(
     dir_uri: str,
     ctx: Optional[RequestContext],
     lock: Optional[Dict[str, Any]] = None,
+    existing_raw: Optional[Mapping[int, str | bytes]] = None,
 ) -> int:
     """Read the pending counter captured at the start of an aggregation."""
 
@@ -719,6 +745,14 @@ async def read_abstract_overview_pending_snapshot(
             if document is not None and not document.legacy and isinstance(freshness, Mapping):
                 pending_values.append(int(freshness["pending_child_changes"]))
         return max(pending_values, default=0)
+
+    if existing_raw is not None:
+        return _pending_of(
+            [
+                parse_abstract_overview(existing_raw[level]) if level in existing_raw else None
+                for level in (1, 0)
+            ]
+        )
 
     owns_lease = lock is None
     snapshot_lease = lock

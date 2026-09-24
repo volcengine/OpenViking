@@ -261,7 +261,7 @@ type SetTagsOptions struct {
 type ReindexOptions struct {
 	Mode      string
 	Wait      bool
-	DryRun    bool
+	Force     bool
 	Recursive *bool
 	Tags      []string
 	TagMode   string

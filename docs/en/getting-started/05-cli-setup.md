@@ -489,12 +489,11 @@ ov add-resource --help
 
 ## Rebuilding Indexes
 
-`ov reindex <uri>` rebuilds the indexes of already-imported content. Three modes are available:
+`ov reindex <uri>` validates and repairs indexes for already-imported content. Three modes are available. Resource and skill records whose MD5 fingerprints already match are skipped by default:
 
 - `--mode vectors_only` — refresh vectors only.
 - `--mode semantic_and_vectors` — regenerate semantic artifacts (`.abstract.md`, `.overview.md`) before refreshing vectors.
-- `--mode prune_orphans` — remove vector records whose source files no longer exist. Add `--dry-run` to preview the cleanup without applying it.
 
-`semantic_and_vectors` processes the full subtree by default. If child summaries already exist and only the target directory's `.abstract.md` / `.overview.md` need regeneration, add `--recursive=false`; this refreshes only the target directory semantics and its L0/L1 vectors.
+Both rebuild modes process the full subtree by default; add `--recursive=false` to process only the target itself. Add `--force` to bypass MD5 comparison and rebuild all resource/skill semantic and vector data in scope.
 
 There is no `semantic` or `full` mode alias.

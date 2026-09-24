@@ -307,9 +307,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
 
     result = await client.reindex(
         "viking://resources/demo",
-        mode="prune_orphans",
+        mode="vectors_only",
         wait=False,
-        dry_run=True,
+        force=True,
         options=None,
     )
 
@@ -318,9 +318,9 @@ async def test_async_http_client_reindex_posts_content_reindex():
         "/api/v1/content/reindex",
         json={
             "uri": "viking://resources/demo",
-            "mode": "prune_orphans",
+            "mode": "vectors_only",
             "wait": False,
-            "dry_run": True,
+            "force": True,
             "recursive": True,
         },
     )
@@ -471,18 +471,16 @@ def test_sync_http_client_reindex_forwards_to_async_client():
         ) as mock_run:
             result = client.reindex(
                 "viking://resources/demo",
-                mode="prune_orphans",
+                mode="vectors_only",
                 wait=False,
-                dry_run=True,
             )
 
     assert result == {"status": "accepted"}
     assert mock_run.called
     mock_reindex.assert_called_once_with(
         "viking://resources/demo",
-        mode="prune_orphans",
+        mode="vectors_only",
         wait=False,
-        dry_run=True,
         recursive=True,
         options=None,
     )

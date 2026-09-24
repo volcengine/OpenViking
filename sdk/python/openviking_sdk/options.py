@@ -109,6 +109,7 @@ class SetTagsOptions(_ExtraOptions, total=False):
 
 
 class ReindexOptions(_ExtraOptions, total=False):
+    force: bool
     tags: List[str]
     tag_mode: Literal["replace", "append", "clear"]
 

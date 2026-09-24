@@ -1000,6 +1000,32 @@ async def test_embedding_handler_materialize_content_keeps_inline(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_embedding_handler_materialize_content_uses_preloaded_source(monkeypatch):
+    class _DummyVikingDB:
+        is_closing = False
+
+    class _BrokenFS:
+        async def read_file(self, uri, *, ctx):
+            raise AssertionError(f"must not reread {uri}")
+
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: _BrokenFS())
+    handler = TextEmbeddingHandler(_DummyVikingDB())
+    msg = EmbeddingMsg(
+        "embedding text",
+        {
+            "uri": "viking://resources/current.txt",
+            "abstract": "abstract",
+            "is_leaf": True,
+            "context_type": "resource",
+            "_materialized_content": "current body",
+        },
+    )
+    ctx = RequestContext(user=UserIdentifier("default", "default"), role=Role.ROOT)
+
+    assert await handler._materialize_content(msg, ctx) == "current body"
+
+
+@pytest.mark.asyncio
 async def test_embedding_handler_propagates_account_id_on_error(monkeypatch):
     class _DummyVikingDB:
         is_closing = False

@@ -624,7 +624,12 @@ def _semantic_closure(
             or (
                 repair_indexes
                 and index_state
-                in {IndexState.MISSING, IndexState.PARTIAL, IndexState.LEVEL_CONFLICT}
+                in {
+                    IndexState.MISSING,
+                    IndexState.PARTIAL,
+                    IndexState.LEVEL_CONFLICT,
+                }
+                or (repair_indexes and index_state is IndexState.STALE and bool(entry.level_states))
             )
         ) and entry.new_kind in {"file", "directory"}:
             active.add(path)
@@ -959,6 +964,8 @@ def build_context_update_plan(
                 )
                 else IndexAction.UPSERT
             )
+            if diff_entry and diff_entry.level_states:
+                index_action = IndexAction.MERGE
             slots.append(
                 IndexSlot(
                     level,
@@ -992,7 +999,17 @@ def build_context_update_plan(
                     request.vectorize
                     and diff_entry
                     and IndexState(diff_entry.index_state)
-                    in {IndexState.MISSING, IndexState.PARTIAL, IndexState.LEVEL_CONFLICT}
+                    in {
+                        IndexState.MISSING,
+                        IndexState.PARTIAL,
+                        IndexState.LEVEL_CONFLICT,
+                    }
+                    or (
+                        request.vectorize
+                        and diff_entry
+                        and IndexState(diff_entry.index_state) is IndexState.STALE
+                        and bool(diff_entry.level_states)
+                    )
                 ),
             )
         )
@@ -1022,6 +1039,154 @@ def build_context_update_plan(
         tuple(content_actions),
         semantic_plan,
         tuple(direct_actions),
+    )
+
+
+def build_rfv_context_update_plan(
+    *,
+    snapshot: Any,
+    context_type: str,
+    account_id: str,
+    source_metadata: Mapping[str, str] | None = None,
+) -> tuple[Any, ContextUpdatePlan]:
+    """Compile an R/F/V maintenance snapshot without inventing content writes."""
+    from openviking.storage.resource_rfv import resolve_rfv_state
+
+    diff = resolve_rfv_state(snapshot)
+    if snapshot.request.processing_mode != "vectors_only":
+        root_entry = snapshot.formal.entries.get("")
+        if root_entry is not None and not root_entry.is_dir:
+            vectors_request = RequestIntent(
+                target_uri=snapshot.request.target_uri,
+                processing_mode="vectors_only",
+                vectorize=snapshot.request.vectorize,
+                scalar_intents=snapshot.request.scalar_intents,
+                force=snapshot.request.force,
+            )
+            vector_snapshot = type(snapshot)(
+                vectors_request,
+                snapshot.formal,
+                snapshot.vectors,
+                snapshot.source_contents,
+                snapshot.source_raw_contents,
+                snapshot.source_metadata,
+            )
+            diff, vector_plan = build_rfv_context_update_plan(
+                snapshot=vector_snapshot,
+                context_type=context_type,
+                account_id=account_id,
+            )
+            root_diff = diff.entries[""]
+            needs_refresh = snapshot.request.force or IndexState(root_diff.index_state) in {
+                IndexState.MISSING,
+                IndexState.PARTIAL,
+                IndexState.STALE,
+                IndexState.LEVEL_CONFLICT,
+            }
+            return diff, ContextUpdatePlan(
+                root_uri=snapshot.request.target_uri,
+                context_type=context_type,
+                direct_index_actions=tuple(
+                    action
+                    for action in vector_plan.direct_index_actions
+                    if action.action in {IndexAction.DELETE, IndexAction.UPDATE_FIELDS}
+                ),
+                file_refresh=FileRefreshIntent(
+                    snapshot.request.target_uri,
+                    diff.entries[""].md5,
+                )
+                if needs_refresh
+                else None,
+            )
+        plan = build_context_update_plan(
+            root_uri=snapshot.request.target_uri,
+            context_type=context_type,
+            request=snapshot.request,
+            diff=diff,
+            new_kinds={
+                path: "directory" if entry.is_dir else "file"
+                for path, entry in snapshot.formal.entries.items()
+            },
+            artifact_paths={},
+            records=snapshot.vectors.records_by_id,
+            is_code_repo=False,
+            account_id=account_id,
+            source_metadata=source_metadata or snapshot.source_metadata,
+        )
+        if plan.content_tree_actions:
+            raise ValueError("RFV maintenance plan must not mutate formal content")
+        return diff, plan
+    records_by_path, duplicate_records = _records_by_path(snapshot.vectors.records_by_id)
+    direct_actions: list[DirectIndexAction] = [
+        DirectIndexAction(IndexAction.DELETE, record.uri, record.level, record.record_id)
+        for record in duplicate_records
+    ]
+
+    for path, entry in sorted(diff.entries.items()):
+        existing = records_by_path.get(path, {})
+        if entry.new_kind is None and IndexState(entry.index_state) is IndexState.ORPHAN:
+            direct_actions.extend(
+                DirectIndexAction(IndexAction.DELETE, record.uri, level, record.record_id)
+                for level, record in sorted(existing.items())
+            )
+            continue
+
+        expected_levels = {2} if entry.new_kind == "file" else {0, 1}
+        for level, record in sorted(existing.items()):
+            if level not in expected_levels or (
+                snapshot.request.processing_mode == "vectors_only"
+                and IndexState(entry.level_states.get(level, IndexState.ABSENT))
+                is IndexState.ORPHAN
+            ):
+                direct_actions.append(
+                    DirectIndexAction(IndexAction.DELETE, record.uri, level, record.record_id)
+                )
+
+        for level in sorted(expected_levels):
+            record = existing.get(level)
+            level_state = IndexState(entry.level_states.get(level, IndexState.MISSING))
+            field_patch = _field_patch(snapshot.request, record)
+            if level_state in {IndexState.MISSING, IndexState.STALE}:
+                if level not in entry.level_md5s:
+                    continue
+                uri = _uri(snapshot.request.target_uri, path)
+                direct_actions.append(
+                    DirectIndexAction(
+                        IndexAction.MERGE,
+                        uri,
+                        level,
+                        (
+                            record.record_id
+                            if record is not None
+                            else vector_record_id(account_id, uri, level)
+                        ),
+                        field_patch=field_patch,
+                        md5=entry.level_md5s.get(level),
+                    )
+                )
+            elif field_patch is not None and record is not None:
+                direct_actions.append(
+                    DirectIndexAction(
+                        IndexAction.UPDATE_FIELDS,
+                        record.uri,
+                        level,
+                        record.record_id,
+                        field_patch=field_patch.with_seed(
+                            {
+                                "uri": record.uri,
+                                "account_id": account_id,
+                                "level": level,
+                                **(_portable_existing_fields(record) or {}),
+                                **field_patch.resolve(record.fields),
+                            }
+                        ),
+                    )
+                )
+
+    return diff, ContextUpdatePlan(
+        snapshot.request.target_uri,
+        context_type,
+        direct_index_actions=tuple(direct_actions),
     )
 
 
@@ -1207,6 +1372,7 @@ __all__ = [
     "SemanticTreeSnapshot",
     "build_context_update_plan",
     "build_context_update_plan_from_snapshot",
+    "build_rfv_context_update_plan",
     "execute_content_tree_actions",
     "hydrate_context_plan_records",
 ]

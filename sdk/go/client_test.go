@@ -338,7 +338,7 @@ func TestFindSendsImageQuery(t *testing.T) {
 	}
 }
 
-func TestReindexSendsDryRun(t *testing.T) {
+func TestReindexSendsForceAndRecursive(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/content/reindex" {
 			t.Fatalf("path = %s", r.URL.Path)
@@ -350,14 +350,14 @@ func TestReindexSendsDryRun(t *testing.T) {
 		if got := body["uri"]; got != "viking://resources/demo" {
 			t.Fatalf("uri = %#v", got)
 		}
-		if got := body["mode"]; got != "prune_orphans" {
+		if got := body["mode"]; got != "vectors_only" {
 			t.Fatalf("mode = %#v", got)
 		}
 		if got := body["wait"]; got != false {
 			t.Fatalf("wait = %#v", got)
 		}
-		if got := body["dry_run"]; got != true {
-			t.Fatalf("dry_run = %#v", got)
+		if got := body["force"]; got != true {
+			t.Fatalf("force = %#v", got)
 		}
 		if got := body["recursive"]; got != false {
 			t.Fatalf("recursive = %#v", got)
@@ -367,9 +367,9 @@ func TestReindexSendsDryRun(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
-		Mode:      "prune_orphans",
+		Mode:      "vectors_only",
 		Wait:      false,
-		DryRun:    true,
+		Force:     true,
 		Recursive: Bool(false),
 	}); err != nil {
 		t.Fatal(err)

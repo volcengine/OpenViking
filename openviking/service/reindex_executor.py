@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
@@ -23,7 +22,6 @@ from openviking.core.namespace import (
     content_owner_context_for_uri,
     context_type_for_uri,
     is_session_uri,
-    owner_fields_for_uri,
     owner_space_for_uri,
 )
 from openviking.server.dependencies import get_service
@@ -32,8 +30,6 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
-from openviking.storage.errors import ResourceBusyError
-from openviking.storage.expr import And, Eq, Or, PathScope
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
@@ -53,7 +49,6 @@ from openviking.utils.embedding_utils import (
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
-from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.embedding_config import SUMMARY_TEXT_SOURCES
@@ -61,8 +56,6 @@ from openviking_cli.utils.config.embedding_config import SUMMARY_TEXT_SOURCES
 logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "admin_reindex"
-PRUNE_ORPHAN_CANDIDATE_LIMIT = 100000
-PRUNE_OUTPUT_FIELDS = ["id", "uri", "level", "context_type", "account_id", "owner_user_id"]
 _MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 
 
@@ -105,7 +98,6 @@ class _ReindexCounters:
     scanned_records: int = 0
     rebuilt_records: int = 0
     deleted_records: int = 0
-    would_delete_records: int = 0
     unsupported_records: int = 0
     failed_records: int = 0
     warnings: list[str] = field(default_factory=list)
@@ -114,7 +106,6 @@ class _ReindexCounters:
         self.scanned_records += other.scanned_records
         self.rebuilt_records += other.rebuilt_records
         self.deleted_records += other.deleted_records
-        self.would_delete_records += other.would_delete_records
         self.unsupported_records += other.unsupported_records
         self.failed_records += other.failed_records
         self.warnings.extend(other.warnings)
@@ -126,10 +117,12 @@ class _ReindexRunContext:
     counters: _ReindexCounters
     lock: dict | None = None
     ingest_options: IngestOptions | None = None
+    force: bool = False
+    root_is_dir: bool | None = None
 
 
 @dataclass
-class _PruneSourceRead:
+class _SourceRead:
     exists: bool
     text: str = ""
     error: Exception | None = None
@@ -139,12 +132,12 @@ class ReindexExecutor:
     """Non-destructive reindex orchestration for admin maintenance flows."""
 
     SUPPORTED_MODES_BY_TYPE = {
-        "global_namespace": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
-        "user_namespace": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
-        "skill_namespace": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
-        "resource": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
-        "skill": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
-        "memory": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
+        "global_namespace": {"vectors_only", "semantic_and_vectors"},
+        "user_namespace": {"vectors_only", "semantic_and_vectors"},
+        "skill_namespace": {"vectors_only", "semantic_and_vectors"},
+        "resource": {"vectors_only", "semantic_and_vectors"},
+        "skill": {"vectors_only", "semantic_and_vectors"},
+        "memory": {"vectors_only", "semantic_and_vectors"},
     }
 
     def __init__(
@@ -205,7 +198,7 @@ class ReindexExecutor:
         uri: str,
         mode: str,
         wait: bool,
-        dry_run: bool = False,
+        force: bool = False,
         recursive: bool = True,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
@@ -213,8 +206,14 @@ class ReindexExecutor:
     ) -> dict[str, Any]:
         object_type = self._infer_target_type(uri)
         self._validate_mode(object_type, mode)
-        if dry_run and mode != "prune_orphans":
-            raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
+        if not recursive and object_type in {
+            "global_namespace",
+            "user_namespace",
+            "skill_namespace",
+        }:
+            raise InvalidArgumentError(
+                f"recursive=false is not supported for namespace reindex target {uri}"
+            )
         ingest_options = self._resolve_ingest_options(
             mode=mode,
             tags=tags,
@@ -238,7 +237,7 @@ class ReindexExecutor:
                 uri=uri,
                 object_type=object_type,
                 mode=mode,
-                dry_run=dry_run,
+                force=force,
                 recursive=recursive,
                 ingest_options=ingest_options,
                 ctx=ctx,
@@ -263,7 +262,7 @@ class ReindexExecutor:
                 uri=uri,
                 object_type=object_type,
                 mode=mode,
-                dry_run=dry_run,
+                force=force,
                 recursive=recursive,
                 ingest_options=ingest_options,
                 ctx=ctx,
@@ -284,7 +283,7 @@ class ReindexExecutor:
         tags: list[str] | None,
         tag_mode: str,
     ) -> IngestOptions | None:
-        if mode == "prune_orphans" or (tags is None and tag_mode != "clear"):
+        if tags is None and tag_mode != "clear":
             return None
         if tag_mode not in {"replace", "append", "clear"}:
             raise InvalidArgumentError(f"unsupported tag mode: {tag_mode}")
@@ -446,9 +445,12 @@ class ReindexExecutor:
         uri: str,
         mode: str,
         run: _ReindexRunContext,
+        recursive: bool = True,
     ) -> None:
         counters = run.counters
         ctx = run.ctx
+        if not recursive:
+            return
         viking_fs = get_viking_fs()
         try:
             entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
@@ -462,10 +464,19 @@ class ReindexExecutor:
                 skill_roots.append(entry_uri)
 
         for skill_root in sorted(set(skill_roots)):
-            await self._reindex_skill(
+            subtree = [
+                entry
+                for entry in entries
+                if str(entry.get("uri") or "").startswith(skill_root.rstrip("/") + "/")
+            ]
+            await self._reindex_rfv(
                 uri=skill_root,
                 mode=mode,
+                context_type="skill",
+                recursive=True,
                 run=run,
+                root_is_dir=True,
+                formal_entries=subtree,
             )
 
         if not skill_roots:
@@ -491,7 +502,7 @@ class ReindexExecutor:
         uri: str,
         object_type: str,
         mode: str,
-        dry_run: bool = False,
+        force: bool = False,
         recursive: bool = True,
         ingest_options: IngestOptions | None = None,
         ctx: RequestContext,
@@ -499,7 +510,7 @@ class ReindexExecutor:
         service = get_service()
         if service.viking_fs is None or service.vikingdb_manager is None:
             raise RuntimeError("OpenVikingService not initialized")
-        if mode != "prune_orphans" and not service.vikingdb_manager.has_queue_manager:
+        if not service.vikingdb_manager.has_queue_manager:
             raise OpenVikingError(
                 "Reindex requires embedding queue",
                 code="FAILED_PRECONDITION",
@@ -514,19 +525,12 @@ class ReindexExecutor:
         if telemetry_id:
             wait_tracker.register_request(telemetry_id)
 
-        # prune_orphans only touches the vector store. A missing target has
-        # nothing on disk to protect, and acquiring a lock there would create
-        # the directory just to hold lock metadata. Refuse only when another
-        # owner is mid-write at that name (e.g. add_resource reserving it).
-        lease = None
-        if mode != "prune_orphans" or await service.viking_fs.exists(uri, ctx=ctx):
-            acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
-            stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
-            if not stat.get("isDir", stat.get("is_dir")):
-                acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
-            lease = await acquire_lock(path)
-        elif await service.viking_fs._async_agfs.pathlock_is_locked(path):
-            raise ResourceBusyError(f"Resource is being processed: {uri}", uri=uri)
+        acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_tree
+        stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
+        root_is_dir = bool(stat.get("isDir", stat.get("is_dir")))
+        if not root_is_dir:
+            acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
+        lease = await acquire_lock(path)
         try:
             borrowed = (
                 await service.viking_fs._async_agfs.pathlock_as_borrowed(lease)
@@ -538,33 +542,24 @@ class ReindexExecutor:
                 counters=counters,
                 lock=borrowed,
                 ingest_options=ingest_options,
+                force=force,
+                root_is_dir=root_is_dir,
             )
-            if mode == "prune_orphans":
-                await self._prune_orphan_vectors(
-                    uri=uri,
-                    object_type=object_type,
-                    dry_run=dry_run,
-                    counters=counters,
-                    ctx=ctx,
-                )
-            elif object_type == "global_namespace":
-                await self._reindex_global_namespace(
-                    uri=uri,
-                    mode=mode,
-                    run=run,
-                )
+            if object_type == "global_namespace":
+                namespace_kwargs = {"uri": uri, "mode": mode, "run": run}
+                if not recursive:
+                    namespace_kwargs["recursive"] = False
+                await self._reindex_global_namespace(**namespace_kwargs)
             elif object_type == "user_namespace":
-                await self._reindex_user_namespace(
-                    uri=uri,
-                    mode=mode,
-                    run=run,
-                )
+                namespace_kwargs = {"uri": uri, "mode": mode, "run": run}
+                if not recursive:
+                    namespace_kwargs["recursive"] = False
+                await self._reindex_user_namespace(**namespace_kwargs)
             elif object_type == "skill_namespace":
-                await self._reindex_skill_namespace(
-                    uri=uri,
-                    mode=mode,
-                    run=run,
-                )
+                namespace_kwargs = {"uri": uri, "mode": mode, "run": run}
+                if not recursive:
+                    namespace_kwargs["recursive"] = False
+                await self._reindex_skill_namespace(**namespace_kwargs)
             elif object_type == "resource":
                 resource_kwargs = {"uri": uri, "mode": mode, "run": run}
                 if not recursive:
@@ -587,7 +582,7 @@ class ReindexExecutor:
                     details={"uri": uri},
                 )
 
-            if telemetry_id and mode != "prune_orphans":
+            if telemetry_id:
                 await wait_tracker.wait_for_request(telemetry_id)
                 self._apply_embedding_wait_status(
                     counters,
@@ -607,7 +602,6 @@ class ReindexExecutor:
             "scanned_records": counters.scanned_records,
             "rebuilt_records": counters.rebuilt_records,
             "deleted_records": counters.deleted_records,
-            "would_delete_records": counters.would_delete_records,
             "unsupported_records": counters.unsupported_records,
             "failed_records": counters.failed_records,
             "duration_ms": int((time.perf_counter() - started_at) * 1000),
@@ -621,7 +615,7 @@ class ReindexExecutor:
         uri: str,
         object_type: str,
         mode: str,
-        dry_run: bool = False,
+        force: bool = False,
         recursive: bool = True,
         ingest_options: IngestOptions | None = None,
         ctx: RequestContext,
@@ -635,7 +629,7 @@ class ReindexExecutor:
                     uri=uri,
                     object_type=object_type,
                     mode=mode,
-                    dry_run=dry_run,
+                    force=force,
                     recursive=recursive,
                     ingest_options=ingest_options,
                     ctx=ctx,
@@ -659,307 +653,6 @@ class ReindexExecutor:
         finally:
             await tracker.unregister_running_task(task_id)
 
-    async def _prune_orphan_vectors(
-        self,
-        *,
-        uri: str,
-        object_type: str,
-        dry_run: bool,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
-    ) -> None:
-        service = get_service()
-        vikingdb = service.vikingdb_manager
-        delete_groups: dict[tuple[str, str], tuple[RequestContext, list[str]]] = {}
-
-        for context_type in self._prune_context_types(uri=uri, object_type=object_type):
-            offset = 0
-            while True:
-                filter_kwargs: dict[str, Any] = {}
-                if offset:
-                    filter_kwargs["offset"] = offset
-                records = await vikingdb.filter(
-                    filter=And(
-                        [
-                            Eq("account_id", ctx.account_id),
-                            Eq("context_type", context_type),
-                            Or(
-                                [
-                                    PathScope("uri", uri, depth=0),
-                                    PathScope("uri", uri, depth=-1),
-                                ]
-                            ),
-                        ]
-                    ),
-                    limit=PRUNE_ORPHAN_CANDIDATE_LIMIT,
-                    output_fields=PRUNE_OUTPUT_FIELDS,
-                    ctx=ctx,
-                    **filter_kwargs,
-                )
-                if not records:
-                    break
-
-                for record in records:
-                    counters.scanned_records += 1
-                    if not self._is_supported_prune_record(record, counters):
-                        continue
-                    if not await self._is_orphan_vector_record(record, counters=counters, ctx=ctx):
-                        continue
-
-                    if dry_run:
-                        counters.would_delete_records += 1
-                        continue
-
-                    delete_ctx = self._delete_ctx_for_prune_record(record, ctx)
-                    key = (delete_ctx.account_id, delete_ctx.user.user_id)
-                    if key not in delete_groups:
-                        delete_groups[key] = (delete_ctx, [])
-                    delete_groups[key][1].append(str(record["id"]))
-
-                if len(records) < PRUNE_ORPHAN_CANDIDATE_LIMIT:
-                    break
-                offset += len(records)
-
-        if dry_run:
-            return
-
-        for delete_ctx, ids in delete_groups.values():
-            try:
-                deleted = await vikingdb.delete(ids, ctx=delete_ctx)
-                deleted_count = int(deleted if deleted is not None else len(ids))
-                counters.deleted_records += deleted_count
-                if deleted_count < len(ids):
-                    failed_count = len(ids) - max(deleted_count, 0)
-                    counters.failed_records += failed_count
-                    counters.warnings.append(
-                        f"Only deleted {deleted_count} of {len(ids)} orphan vectors for owner "
-                        f"{delete_ctx.user.user_id}"
-                    )
-            except Exception as exc:
-                counters.failed_records += len(ids)
-                counters.warnings.append(
-                    f"Failed to delete {len(ids)} orphan vectors for owner "
-                    f"{delete_ctx.user.user_id}: {exc}"
-                )
-
-    def _prune_context_types(self, *, uri: str, object_type: str) -> list[str]:
-        if object_type == "resource":
-            return [ContextType.RESOURCE.value]
-        if object_type == "memory":
-            return [ContextType.MEMORY.value]
-        if object_type in {"skill", "skill_namespace"}:
-            return [ContextType.SKILL.value]
-        if object_type in {"global_namespace", "user_namespace"}:
-            return [
-                ContextType.RESOURCE.value,
-                ContextType.MEMORY.value,
-                ContextType.SKILL.value,
-            ]
-        return [str(context_type_for_uri(uri))]
-
-    def _is_supported_prune_record(
-        self,
-        record: dict[str, Any],
-        counters: _ReindexCounters,
-    ) -> bool:
-        record_id = record.get("id")
-        uri = record.get("uri")
-        context_type = str(record.get("context_type") or "")
-        level = record.get("level")
-        if not record_id or not uri:
-            counters.unsupported_records += 1
-            counters.warnings.append(f"Skipping unknown prune record without id/uri: {record!r}")
-            return False
-        if context_type not in {
-            ContextType.RESOURCE.value,
-            ContextType.MEMORY.value,
-            ContextType.SKILL.value,
-        }:
-            counters.unsupported_records += 1
-            counters.warnings.append(f"Skipping unknown context_type for prune record {uri}")
-            return False
-        try:
-            normalized_level = int(level)
-        except (TypeError, ValueError):
-            counters.unsupported_records += 1
-            counters.warnings.append(f"Skipping unknown level for prune record {uri}: {level}")
-            return False
-        if normalized_level not in {
-            int(ContextLevel.ABSTRACT),
-            int(ContextLevel.OVERVIEW),
-            int(ContextLevel.DETAIL),
-        }:
-            counters.unsupported_records += 1
-            counters.warnings.append(f"Skipping unknown level for prune record {uri}: {level}")
-            return False
-        record["_prune_level"] = normalized_level
-        return True
-
-    async def _is_orphan_vector_record(
-        self,
-        record: dict[str, Any],
-        *,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
-    ) -> bool:
-        uri = str(record["uri"])
-        level = int(record.get("_prune_level", record["level"]))
-        context_type = str(record["context_type"])
-        owner_ctx = self._delete_ctx_for_prune_record(record, ctx)
-
-        if level == int(ContextLevel.ABSTRACT):
-            abstract = await self._read_prune_source(
-                f"{uri}/.abstract.md",
-                ctx=owner_ctx,
-            )
-            if abstract.error:
-                self._record_prune_source_error(
-                    counters=counters,
-                    uri=uri,
-                    source_uri=f"{uri}/.abstract.md",
-                    error=abstract.error,
-                )
-                return False
-            return (
-                not abstract.exists
-                or not abstract.text
-                or _is_not_ready_sentinel(abstract.text, _ABSTRACT_NOT_READY_SUFFIX)
-            )
-
-        if level == int(ContextLevel.OVERVIEW):
-            overview = await self._read_prune_source(
-                f"{uri}/.overview.md",
-                ctx=owner_ctx,
-            )
-            if overview.error:
-                self._record_prune_source_error(
-                    counters=counters,
-                    uri=uri,
-                    source_uri=f"{uri}/.overview.md",
-                    error=overview.error,
-                )
-                return False
-            if (
-                overview.exists
-                and overview.text
-                and not _is_not_ready_sentinel(overview.text, _OVERVIEW_NOT_READY_SUFFIX)
-            ):
-                return False
-            if context_type in {ContextType.RESOURCE.value, ContextType.SKILL.value}:
-                abstract = await self._read_prune_source(
-                    f"{uri}/.abstract.md",
-                    ctx=owner_ctx,
-                )
-                if abstract.error:
-                    self._record_prune_source_error(
-                        counters=counters,
-                        uri=uri,
-                        source_uri=f"{uri}/.abstract.md",
-                        error=abstract.error,
-                    )
-                    return False
-                return (
-                    not abstract.exists
-                    or not abstract.text
-                    or _is_not_ready_sentinel(abstract.text, _ABSTRACT_NOT_READY_SUFFIX)
-                )
-            return True
-
-        if self._is_hidden_meta_file(uri):
-            return False
-        exists = await self._prune_source_exists(uri, ctx=owner_ctx)
-        if exists.error:
-            self._record_prune_source_error(
-                counters=counters,
-                uri=uri,
-                source_uri=uri,
-                error=exists.error,
-            )
-            return False
-        # A real filename can have the same spelling as a virtual chunk URI.
-        if exists.exists:
-            return False
-
-        if "#" in uri:
-            # Generated chunks append a zero-padded index to the full base URI.
-            chunk_match = re.fullmatch(r"(.+)#chunk_[0-9]{4,}", uri)
-            if context_type == ContextType.MEMORY.value and chunk_match:
-                base_uri = chunk_match.group(1)
-                base = await self._read_prune_source(base_uri, ctx=owner_ctx)
-                if base.error:
-                    self._record_prune_source_error(
-                        counters=counters,
-                        uri=uri,
-                        source_uri=base_uri,
-                        error=base.error,
-                    )
-                    return False
-                if not base.exists:
-                    return True
-                expected = {
-                    chunk_uri for chunk_uri, _chunk in self._chunk_memory_body(base_uri, base.text)
-                }
-                return uri not in expected
-            return False
-
-        return True
-
-    async def _read_prune_source(self, uri: str, *, ctx: RequestContext) -> _PruneSourceRead:
-        viking_fs = get_viking_fs()
-        try:
-            exists = await viking_fs.exists(uri, ctx=ctx)
-        except Exception as exc:
-            return _PruneSourceRead(exists=False, error=exc)
-        if not exists:
-            return _PruneSourceRead(exists=False)
-        try:
-            content = await viking_fs.read_file(uri, ctx=ctx)
-        except Exception as exc:
-            return _PruneSourceRead(exists=True, error=exc)
-        if isinstance(content, bytes):
-            text = content.decode("utf-8", errors="replace")
-        else:
-            text = str(content or "")
-        return _PruneSourceRead(exists=True, text=text)
-
-    async def _prune_source_exists(self, uri: str, *, ctx: RequestContext) -> _PruneSourceRead:
-        try:
-            exists = await get_viking_fs().exists(uri, ctx=ctx)
-        except Exception as exc:
-            return _PruneSourceRead(exists=False, error=exc)
-        return _PruneSourceRead(exists=exists)
-
-    def _record_prune_source_error(
-        self,
-        *,
-        counters: _ReindexCounters | None,
-        uri: str,
-        source_uri: str,
-        error: Exception,
-    ) -> None:
-        if counters is None:
-            return
-        counters.failed_records += 1
-        counters.warnings.append(f"Skipped prune for {uri}: failed to read {source_uri}: {error}")
-
-    def _delete_ctx_for_prune_record(
-        self,
-        record: dict[str, Any],
-        ctx: RequestContext,
-    ) -> RequestContext:
-        uri = str(record.get("uri") or "")
-        owner = record.get("owner_user_id")
-        if not owner:
-            owner = owner_fields_for_uri(uri).get("owner_user_id")
-        if not owner or owner == ctx.user.user_id:
-            return ctx
-        return RequestContext(
-            user=UserIdentifier(ctx.account_id, str(owner)),
-            role=ctx.role,
-            actor_peer_id=ctx.actor_peer_id,
-            from_oauth=ctx.from_oauth,
-        )
-
     async def _reindex_resource(
         self,
         *,
@@ -968,34 +661,121 @@ class ReindexExecutor:
         run: _ReindexRunContext,
         recursive: bool = True,
     ) -> None:
-        counters = run.counters
-        ctx = run.ctx
-        if mode == "semantic_and_vectors":
-            semantic_kwargs = {
-                "uri": uri,
-                "context_type": "resource",
-                "ctx": ctx,
-                "lock": run.lock,
-            }
-            if not recursive:
-                semantic_kwargs["recursive"] = False
-            await self._run_semantic_processor(**semantic_kwargs)
-            vector_kwargs = {"uri": uri, "counters": counters, "ctx": ctx}
-            if not recursive:
-                vector_kwargs["recursive"] = False
-            await self._reindex_resource_vectors(
-                **self._with_ingest_options(
-                    vector_kwargs,
-                    run.ingest_options,
-                )
-            )
-            return
-        await self._reindex_resource_vectors(
-            **self._with_ingest_options(
-                {"uri": uri, "counters": counters, "ctx": ctx},
-                run.ingest_options,
-            )
+        await self._reindex_rfv(
+            uri=uri,
+            mode=mode,
+            context_type="resource",
+            recursive=recursive,
+            run=run,
         )
+
+    async def _reindex_rfv(
+        self,
+        *,
+        uri: str,
+        mode: str,
+        context_type: str,
+        recursive: bool,
+        run: _ReindexRunContext,
+        root_is_dir: bool | None = None,
+        formal_entries: list[dict[str, Any]] | None = None,
+    ) -> None:
+        from openviking.storage.context_update_plan import build_rfv_context_update_plan
+        from openviking.storage.resource_rfv import build_rfv_snapshot
+        from openviking.storage.resource_rnfv import RequestIntent
+        from openviking.utils.resource_processor import ResourceProcessor
+
+        service = get_service()
+        request = RequestIntent.from_ingest_options(
+            target_uri=uri,
+            processing_mode=mode,
+            ingest_options=run.ingest_options,
+            force=run.force,
+            scalar_target_levels=frozenset({0, 1, 2}),
+        )
+        snapshot = await build_rfv_snapshot(
+            viking_fs=service.viking_fs,
+            vikingdb=service.vikingdb_manager,
+            target_uri=uri,
+            ctx=run.ctx,
+            request_intent=request,
+            recursive=recursive,
+            source_read_concurrency=self._effective_file_vectorization_concurrency(),
+            root_is_dir=run.root_is_dir if root_is_dir is None else root_is_dir,
+            formal_inventory=(
+                (True if root_is_dir is None else root_is_dir, formal_entries, True)
+                if formal_entries is not None
+                else None
+            ),
+        )
+        diff, plan = build_rfv_context_update_plan(
+            snapshot=snapshot,
+            context_type=context_type,
+            account_id=run.ctx.account_id,
+            source_metadata=snapshot.source_metadata,
+        )
+        run.counters.scanned_records += len(snapshot.formal.entries)
+        if plan.direct_index_actions:
+            owner_ctx = self._content_owner_ctx(uri, run.ctx)
+            delete_actions = tuple(
+                action for action in plan.direct_index_actions if action.action.value == "delete"
+            )
+            enqueue_actions = tuple(
+                action for action in plan.direct_index_actions if action.action.value != "delete"
+            )
+            if delete_actions:
+                run.counters.deleted_records += await service.vikingdb_manager.strict_delete(
+                    [action.record_id for action in delete_actions],
+                    ctx=owner_ctx,
+                )
+            if enqueue_actions:
+                processor = getattr(service, "_resource_processor", None)
+                if processor is None:
+                    processor = ResourceProcessor(service.vikingdb_manager)
+                run.counters.rebuilt_records += await processor._enqueue_index_actions(
+                    enqueue_actions,
+                    ctx=owner_ctx,
+                    source_contents=dict(snapshot.source_contents),
+                    source_metadata=snapshot.source_metadata,
+                )
+        if plan.semantic_plan is not None:
+            owner_ctx = self._content_owner_ctx(uri, run.ctx)
+            processor = await self._semantic_processor_for(owner_ctx)
+            executor = SemanticTreeExecutor(
+                processor=processor,
+                context_type=context_type,
+                max_concurrent_llm=processor.max_concurrent_llm,
+                ctx=owner_ctx,
+                lock=run.lock,
+                generation_trigger="reindex",
+                semantic_plan=plan.semantic_plan,
+                telemetry_id=get_current_telemetry().telemetry_id,
+                source_contents=snapshot.source_contents,
+                source_raw_contents=snapshot.source_raw_contents,
+                materialize_content=bool(service.vikingdb_manager.uses_content_field),
+            )
+            try:
+                await executor.run(uri)
+            finally:
+                # Embedding work may already be in flight when semantic work
+                # fails. Settle it before the outer reindex lease is released.
+                await get_request_wait_tracker().wait_for_embeddings(
+                    get_current_telemetry().telemetry_id
+                )
+            stats = executor.get_stats()
+            run.counters.rebuilt_records += stats.indexed_records
+            run.counters.failed_records += len(stats.failures)
+            run.counters.warnings.extend(stats.failures)
+        elif plan.file_refresh is not None:
+            service_processor = getattr(service, "_resource_processor", None)
+            if service_processor is None:
+                service_processor = ResourceProcessor(service.vikingdb_manager)
+            await service_processor._get_summarizer().refresh_file_parent(
+                file_uri=plan.file_refresh.file_uri,
+                ctx=run.ctx,
+                ingest_options=run.ingest_options,
+                file_md5=plan.file_refresh.md5,
+            )
 
     async def _reindex_skill(
         self,
@@ -1004,56 +784,19 @@ class ReindexExecutor:
         mode: str,
         run: _ReindexRunContext,
         recursive: bool = True,
+        formal_entries: list[dict[str, Any]] | None = None,
     ) -> None:
-        counters = run.counters
-        ctx = run.ctx
-        if mode == "semantic_and_vectors":
-            if not recursive:
-                await self._regenerate_skill_semantics(uri=uri, ctx=ctx, lock=run.lock)
-                await self._reindex_skill_vectors(
-                    uri=uri,
-                    counters=counters,
-                    ctx=ctx,
-                    recursive=False,
-                    ingest_options=run.ingest_options,
-                )
-                return
-            owner_ctx = self._content_owner_ctx(uri, ctx)
-            processor = await self._semantic_processor_for(owner_ctx)
-            executor = SemanticTreeExecutor(
-                processor=processor,
-                context_type="skill",
-                max_concurrent_llm=processor.max_concurrent_llm,
-                ctx=owner_ctx,
-                lock=run.lock,
-                generation_trigger="reindex",
-                ingest_options=run.ingest_options,
-                source={
-                    "path": (await self._skill_meta(uri=uri, abstract="", ctx=ctx)).get(
-                        "source_path", ""
-                    )
-                },
-            )
-            try:
-                await executor.run(uri)
-            finally:
-                # Even a semantic error must settle already submitted Skill
-                # vectors before the caller releases its package lease.
-                await get_request_wait_tracker().wait_for_embeddings(
-                    get_current_telemetry().telemetry_id
-                )
-            stats = executor.get_stats()
-            counters.scanned_records += stats.total_nodes
-            counters.rebuilt_records += stats.indexed_records
-            counters.failed_records += len(stats.failures)
-            counters.warnings.extend(stats.failures)
-            return
-        await self._reindex_skill_vectors(
-            **self._with_ingest_options(
-                {"uri": uri, "counters": counters, "ctx": ctx},
-                run.ingest_options,
-            )
-        )
+        kwargs: dict[str, Any] = {
+            "uri": uri,
+            "mode": mode,
+            "context_type": "skill",
+            "recursive": recursive,
+            "run": run,
+        }
+        if formal_entries is not None:
+            kwargs["root_is_dir"] = True
+            kwargs["formal_entries"] = formal_entries
+        await self._reindex_rfv(**kwargs)
 
     async def _reindex_memory(
         self,
@@ -1066,7 +809,7 @@ class ReindexExecutor:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            stat = await get_viking_fs().stat(uri, ctx=ctx, skip_count=True)
+            stat = await get_viking_fs().stat(uri, ctx=ctx)
             if stat.get("isDir", stat.get("is_dir")):
                 semantic_kwargs = {
                     "uri": uri,
@@ -1089,7 +832,12 @@ class ReindexExecutor:
             return
         await self._reindex_memory_vectors(
             **self._with_ingest_options(
-                {"uri": uri, "counters": counters, "ctx": ctx},
+                {
+                    "uri": uri,
+                    "counters": counters,
+                    "ctx": ctx,
+                    "recursive": recursive,
+                },
                 run.ingest_options,
             )
         )
@@ -1133,7 +881,7 @@ class ReindexExecutor:
         try:
             if not await viking_fs.exists(uri, ctx=ctx):
                 raise NotFoundError(uri, "resource")
-            stat = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            stat = await viking_fs.stat(uri, ctx=ctx)
             is_dir = stat.get("isDir", stat.get("is_dir")) if isinstance(stat, dict) else False
             if is_dir and recursive:
                 entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
@@ -1371,11 +1119,13 @@ class ReindexExecutor:
         uri: str,
         mode: str,
         run: _ReindexRunContext,
+        recursive: bool = True,
     ) -> None:
-        counters = run.counters
         ctx = run.ctx
         normalized_uri = uri.rstrip("/")
         target_root = normalized_uri if normalized_uri else uri
+        if not recursive:
+            return
         viking_fs = get_viking_fs()
         try:
             entries = await self._tree_all(viking_fs, target_root, show_all_hidden=True, ctx=ctx)
@@ -1394,6 +1144,7 @@ class ReindexExecutor:
                         uri=user_root,
                         mode=mode,
                         run=run,
+                        recursive=True,
                     )
                 return
 
@@ -1442,31 +1193,53 @@ class ReindexExecutor:
                 uri=skill_root,
                 mode=skill_mode,
                 run=run,
+                recursive=True,
+                formal_entries=[
+                    entry
+                    for entry in entries
+                    if str(entry.get("uri") or "").startswith(skill_root.rstrip("/") + "/")
+                ],
             )
 
-        if mode == "semantic_and_vectors":
-            (
-                resource_directories,
-                resource_files,
-            ) = await self._refresh_namespace_resource_semantics(
-                target_root=target_root,
-                directories=resource_directories,
-                files=resource_files,
+        resource_roots = [
+            directory_uri
+            for directory_uri in resource_directories
+            if directory_uri.rstrip("/").endswith("/resources")
+        ]
+        covered_prefixes = tuple(root.rstrip("/") + "/" for root in resource_roots)
+        for resource_root in resource_roots:
+            await self._reindex_rfv(
+                uri=resource_root,
+                mode=mode,
+                context_type="resource",
+                recursive=True,
                 run=run,
+                root_is_dir=True,
+                formal_entries=[
+                    entry
+                    for entry in entries
+                    if str(entry.get("uri") or "").startswith(resource_root.rstrip("/") + "/")
+                ],
             )
-
-        await self._reindex_resource_vectors_from_entries(
-            **self._with_ingest_options(
-                {
-                    "root_uri": target_root,
-                    "directories": resource_directories,
-                    "files": resource_files,
-                    "counters": counters,
-                    "ctx": ctx,
-                },
-                run.ingest_options,
+        for file_uri in resource_files:
+            if any(file_uri.startswith(prefix) for prefix in covered_prefixes):
+                continue
+            if mode == "semantic_and_vectors":
+                run.counters.unsupported_records += 1
+                run.counters.warnings.append(
+                    f"Skipped {file_uri}: namespace semantic_and_vectors only refreshes "
+                    "resource directories"
+                )
+                continue
+            await self._reindex_rfv(
+                uri=file_uri,
+                mode=mode,
+                context_type="resource",
+                recursive=False,
+                run=run,
+                root_is_dir=False,
+                formal_entries=[],
             )
-        )
 
     async def _reindex_global_namespace(
         self,
@@ -1474,10 +1247,12 @@ class ReindexExecutor:
         uri: str,
         mode: str,
         run: _ReindexRunContext,
+        recursive: bool = True,
     ) -> None:
-        counters = run.counters
         ctx = run.ctx
         target_root = "viking://"
+        if not recursive:
+            return
         viking_fs = get_viking_fs()
         try:
             entries = await self._tree_all(viking_fs, target_root, show_all_hidden=True, ctx=ctx)
@@ -1515,29 +1290,39 @@ class ReindexExecutor:
                 run=run,
             )
 
-        if mode == "semantic_and_vectors":
-            (
-                resource_directories,
-                resource_files,
-            ) = await self._refresh_namespace_resource_semantics(
-                target_root=target_root,
-                directories=resource_directories,
-                files=resource_files,
+        if "viking://resources" in resource_directories:
+            await self._reindex_rfv(
+                uri="viking://resources",
+                mode=mode,
+                context_type="resource",
+                recursive=True,
                 run=run,
+                root_is_dir=True,
+                formal_entries=[
+                    entry
+                    for entry in entries
+                    if str(entry.get("uri") or "").startswith("viking://resources/")
+                ],
             )
-
-        await self._reindex_resource_vectors_from_entries(
-            **self._with_ingest_options(
-                {
-                    "root_uri": target_root,
-                    "directories": resource_directories,
-                    "files": resource_files,
-                    "counters": counters,
-                    "ctx": ctx,
-                },
-                run.ingest_options,
+        for file_uri in resource_files:
+            if file_uri.startswith("viking://resources/"):
+                continue
+            if mode == "semantic_and_vectors":
+                run.counters.unsupported_records += 1
+                run.counters.warnings.append(
+                    f"Skipped {file_uri}: namespace semantic_and_vectors only refreshes "
+                    "resource directories"
+                )
+                continue
+            await self._reindex_rfv(
+                uri=file_uri,
+                mode=mode,
+                context_type="resource",
+                recursive=False,
+                run=run,
+                root_is_dir=False,
+                formal_entries=[],
             )
-        )
 
     async def _reindex_skill_vectors(
         self,
@@ -2024,8 +1809,23 @@ class ReindexExecutor:
         except Exception:
             return ""
 
-    async def _read_memory_body(self, uri: str, *, ctx: RequestContext) -> _PruneSourceRead:
-        return await self._read_prune_source(uri, ctx=ctx)
+    async def _read_memory_body(self, uri: str, *, ctx: RequestContext) -> _SourceRead:
+        viking_fs = get_viking_fs()
+        try:
+            exists = await viking_fs.exists(uri, ctx=ctx)
+        except Exception as exc:
+            return _SourceRead(exists=False, error=exc)
+        if not exists:
+            return _SourceRead(exists=False)
+        try:
+            content = await viking_fs.read_file(uri, ctx=ctx)
+        except Exception as exc:
+            return _SourceRead(exists=True, error=exc)
+        if isinstance(content, bytes):
+            text = content.decode("utf-8", errors="replace")
+        else:
+            text = str(content or "")
+        return _SourceRead(exists=True, text=text)
 
     def _chunk_memory_body(self, uri: str, body: str) -> Iterable[tuple[str, str]]:
         semantic = get_openviking_config().semantic

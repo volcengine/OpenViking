@@ -583,7 +583,7 @@ ov set-tags viking://resources/project/ \
 
 ### reindex()
 
-对已经存储在 OpenViking 中的现有内容，重新构建语义产物和/或向量索引。这是一个运维维护接口，适用于 embedding 模型更换、VLM 更换、向量库重刷、版本升级后修复历史索引等场景。
+对已经存储在 OpenViking 中的现有内容，校验并修复语义产物和/或向量索引。resource 和 skill 默认使用 RFV（Request / Formal / Vector）增量收敛：文件内容指纹、目录 L0/L1 可见正文指纹和请求标量都未变化时直接跳过。需要无条件重建时使用 `force=true`。
 
 这个接口面向已有的 `viking://...` 内容，不负责导入新文件。常规导入请使用 [Resources](02-resources.md)。
 
@@ -597,10 +597,10 @@ ov set-tags viking://resources/project/ \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要重新索引的 Viking URI |
-| mode | str | 否 | `vectors_only` | 重建模式：`vectors_only`、`semantic_and_vectors` 或 `prune_orphans` |
+| mode | str | 否 | `vectors_only` | 重建模式：`vectors_only` 或 `semantic_and_vectors` |
 | wait | bool | 否 | `true` | 是否等待任务完成 |
-| dry_run | bool | 否 | `false` | 仅适用于 `mode="prune_orphans"`；只报告 orphan 向量记录，不实际删除 |
-| recursive | bool | 否 | `true` | 是否递归处理下级内容；`false` 仅对 `resource`、`memory` 或 `skill` 目录的 `semantic_and_vectors` 生效 |
+| force | bool | 否 | `false` | 是否跳过内容指纹比较并强制重新处理范围内全部 resource/skill 文件和目录 level |
+| recursive | bool | 否 | `true` | 是否递归处理下级内容；resource/skill 的两种重建模式都遵守该参数 |
 | tags | list[str] | 否 | `null` | 写入本次成功重建的全部向量记录。省略或空数组配合 `replace` 时保留已有 tags |
 | tag_mode | str | 否 | `replace` | 标签写入模式：`replace`、`append` 或 `clear`；`clear` 不要求传 `tags` 并清空已有标签 |
 
@@ -623,19 +623,18 @@ session 子树会被跳过。
 
 **模式说明**
 
-- `vectors_only`：基于当前仍可恢复的源数据重建向量库记录，不会重写 `.abstract.md` 和 `.overview.md`
-- `semantic_and_vectors`：先重新生成语义产物，再基于新的语义结果重建向量
-- `prune_orphans`：删除请求 URI 范围内源文件已不存在的向量库记录。设置 `dry_run=true` 时，只报告会删除多少记录，不实际删除。
+- `vectors_only`：通过 RFV 对比当前 source MD5 与向量记录 MD5，只重建缺失或过期的 L0/L1/L2；不会重写 `.abstract.md` 和 `.overview.md`
+- `semantic_and_vectors`：通过同一 RFV 状态和 `ContextUpdatePlan` 驱动语义修复及 L0/L1/L2 向量更新，不再执行第二次手工向量扫描
 
 对于 `resource` 和 `skill`，`semantic_and_vectors` 会刷新目录/文件语义产物，包括 `.abstract.md` 和 `.overview.md`。对于 `memory`，它会重建当前已持久化 memory 子树的语义和向量，但不会回放历史记忆抽取顺序。
 
-对于 `semantic_and_vectors`，语义刷新和向量重建由 reindex executor 串行编排。语义刷新阶段不会再额外向后台 embedding queue 投递自己的向量化任务；向量由 reindex 阶段统一重建，因此 `wait=true` 表示等待 reindex 操作本身完成。
+resource/skill 的 `vectors_only` 和 `semantic_and_vectors` 共用一次 F 遍历和一次窄字段 V inventory。每个 source 在状态解析时读取一次，实际处理复用本次读取结果，不会为了执行 Plan 再读取一次 F。`force=true` 会跳过 MD5 相等判断并重新处理作用域内全部可用 level；完整性检查仍然执行。
 
-对 `resource` 或 `memory` 目录设置 `recursive=false` 时，只重新生成目标目录的 `.abstract.md`、`.overview.md`，并重建该目录的 L0/L1 向量；下级目录不会重新生成语义产物，下级目录和文件也不会重新向量化。目标目录仍会读取本轮确定性采样命中的既有下级摘要；若采样命中直接文件，仍会为当前目录聚合准备这些文件的摘要。对 `skill` 目标设置 `recursive=false` 时，会根据 `SKILL.md` 重新生成 skill 目录的 L0/L1 语义产物及向量，但不会重建 `SKILL.md` 的 L2 向量。该参数不改变 `vectors_only`、`prune_orphans` 或 namespace 目标的既有行为。
+对 resource/skill 目录设置 `recursive=false` 时，两种模式都只处理目标目录自身的 L0/L1，不扫描或重建下级目录和文件。namespace 容器自身没有索引记录，因此 namespace 目标不接受 `recursive=false`，避免请求静默成为 no-op。memory 仍使用原有 reindex 链路。
 
-对于 `prune_orphans`，源文件是否存在以当前文件系统为准。如果整个目录已经不存在，该目录下的正文文件向量和语义 sidecar 向量（例如 `.abstract.md`、`.overview.md`）会一起清理。`dry_run` 用在其他模式时会被拒绝。
+F snapshot 完整时，RFV 差分会把 V 中存在但 F 中不存在的记录识别为 orphan，并在同一次 reindex 中清理；F snapshot 不完整时 fail-closed，不执行删除。
 
-传入非空 `tags` 时，标签会随 reindex 生成的向量记录在同一次 upsert 中写入，不会在完成后额外调用 `set_tags`。目录或 namespace reindex 会把标签应用到本次成功重建的目录 L0/L1 和叶子 L2 记录。`replace` 覆盖已有标签，`append` 按 key 合并；`replace` 配合空数组时不修改已有标签。`clear` 不要求传 `tags`，会清空已有标签；即使同时传入标签值也会忽略。`prune_orphans` 不生成向量，因此会忽略 `tags` 和 `tag_mode`。
+传入非空 `tags` 时，标签会随 reindex 生成的向量记录在同一次 upsert 中写入，不会在完成后额外调用 `set_tags`。目录或 namespace reindex 会把标签应用到本次成功重建的目录 L0/L1 和叶子 L2 记录。`replace` 覆盖已有标签，`append` 按 key 合并；`replace` 配合空数组时不修改已有标签。`clear` 不要求传 `tags`，会清空已有标签；即使同时传入标签值也会忽略。
 
 子树 reindex 不是事务性操作。如果部分记录因缺少语义来源或 embedding 失败而未重建，只有成功写入的记录会更新标签。
 
@@ -658,24 +657,17 @@ print(result)
 result = client.reindex(
     uri="viking://user/default/skills",
     mode="semantic_and_vectors",
+    force=True,
     wait=False,
 )
 print(result["status"])
-```
-
-```python
-result = client.reindex(
-    uri="viking://resources",
-    mode="prune_orphans",
-    dry_run=True,
-)
-print(result["would_delete_records"])
 ```
 
 **TypeScript SDK**
 
 ```typescript
 console.log(await client.reindex("viking://resources/docs/", {
+  force: true,
   tags: ["team=search"],
   tagMode: "append",
 }));
@@ -689,6 +681,7 @@ console.log(await client.reindex("viking://resources/docs/", {
 ```go
 result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
     Mode: "vectors_only",
+    Force: true,
     Tags: []string{"team=search"},
     TagMode: "replace",
 })
@@ -696,17 +689,6 @@ if err != nil {
     return err
 }
 fmt.Println(result["status"])
-```
-
-```go
-result, err := client.Reindex(ctx, "viking://resources", &openviking.ReindexOptions{
-    Mode: "prune_orphans",
-    DryRun: true,
-})
-if err != nil {
-    return err
-}
-fmt.Println(result["task_id"])
 ```
 
 **HTTP API**
@@ -726,6 +708,7 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
     "uri": "viking://resources",
     "mode": "vectors_only",
     "wait": false,
+    "force": true,
     "tags": ["team=search", "env=prod"],
     "tag_mode": "replace"
   }'
@@ -735,7 +718,7 @@ curl -X POST http://localhost:1933/api/v1/content/reindex \
 
 ```bash
 openviking reindex viking://resources --mode vectors_only \
-  --tags team=search,env=prod --tag-mode replace
+  --force --tags team=search,env=prod --tag-mode replace
 ```
 
 使用 `--tag-mode clear` 且无需传 `--tags` 即可清空已有标签：
@@ -746,10 +729,6 @@ openviking reindex viking://resources --mode vectors_only --tag-mode clear
 
 ```bash
 openviking reindex viking://user/default/skills --mode semantic_and_vectors --wait false
-```
-
-```bash
-openviking reindex viking://resources --mode prune_orphans --dry-run
 ```
 
 **异步响应（`wait=false`）**
@@ -794,8 +773,7 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 | mode | 实际执行的 reindex 模式 |
 | scanned_records | 被检查的记录或语义源数量 |
 | rebuilt_records | 成功重建的向量记录数量 |
-| deleted_records | `prune_orphans` 实际删除的向量记录数量；`dry_run=true` 时为 `0` |
-| would_delete_records | `prune_orphans` dry-run 模式下将会删除的向量记录数量 |
+| deleted_records | RFV 差分确认并删除的 orphan 向量记录数量 |
 | unsupported_records | 因没有可用向量来源而跳过的记录数量 |
 | failed_records | 重建失败的记录数量 |
 | duration_ms | 同步执行耗时，单位毫秒 |
@@ -805,12 +783,10 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 **行为说明**
 
 - `vectors_only` 和 `semantic_and_vectors` 是非破坏式的，采用重建/覆盖写入，不需要先 drop 向量集合。
-- `prune_orphans` 除非设置 `dry_run=true`，否则会删除源文件已经不存在的向量记录。
 - 对 `viking://` 发起 reindex 时，会向下分发到支持的顶层命名空间，并显式排除 `session`。
 - 命名空间级 reindex，例如 `viking://user`，会继续传播到其支持的子内容类型。
 - 如果只是 embedding 模型或向量索引需要刷新，应使用 `vectors_only`。
 - 如果语义产物本身也需要重建，再做重向量化，应使用 `semantic_and_vectors`。
-- 如果文件系统曾绕过正常 API 发生删除，向量库可能还残留已删除路径的记录，应使用 `prune_orphans`。
 - 同一个 URI 和 owner 同时只能运行一个 reindex 任务。对同一目标的并发请求会返回 conflict。
 - 对 resource 文件，文本文件在没有 summary 时可以使用文件正文；非文本文件需要已生成的 summary 或已有向量记录 fallback，否则会计为 unsupported。
 

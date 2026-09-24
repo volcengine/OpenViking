@@ -474,7 +474,7 @@ impl HttpClient {
         uri: &str,
         mode: &str,
         wait: bool,
-        dry_run: bool,
+        force: bool,
         tags: Vec<String>,
         tag_mode: &str,
         recursive: bool,
@@ -483,8 +483,10 @@ impl HttpClient {
             "uri": uri,
             "mode": mode,
             "wait": wait,
-            "dry_run": dry_run,
         });
+        if force {
+            body["force"] = serde_json::json!(true);
+        }
         if !recursive {
             body["recursive"] = serde_json::json!(false);
         }

@@ -30,7 +30,7 @@ from openviking.server.telemetry import run_operation
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -95,8 +95,8 @@ class ReindexRequest(BaseModel):
 
     uri: str
     mode: str = "vectors_only"
+    force: bool = False
     wait: bool = True
-    dry_run: bool = False
     recursive: bool = True
     tags: list[str] | None = None
     tag_mode: str = "replace"
@@ -324,8 +324,6 @@ async def reindex(
     ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN, Role.USER),
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
-    if body.dry_run and body.mode != "prune_orphans":
-        raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
     uri = validate_request_viking_uri(resolve_path_variables(body.uri), ctx)
     uri = _authorize_reindex_uri(uri, ctx)
     service = get_service()
@@ -333,9 +331,10 @@ async def reindex(
         "uri": uri,
         "mode": body.mode,
         "wait": body.wait,
-        "dry_run": body.dry_run,
         "ctx": ctx,
     }
+    if body.force:
+        reindex_kwargs["force"] = True
     if not body.recursive:
         reindex_kwargs["recursive"] = False
     if body.tags is not None or body.tag_mode == "clear":

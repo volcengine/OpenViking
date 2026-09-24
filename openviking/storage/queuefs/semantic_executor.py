@@ -7,7 +7,7 @@ import re
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
@@ -198,6 +198,9 @@ class SemanticTreeExecutor:
         file_abstracts: Optional[Dict[str, str]] = None,
         semantic_plan: Optional["SemanticPlan"] = None,
         telemetry_id: str | None = None,
+        source_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
+        source_raw_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
+        materialize_content: bool = False,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -216,6 +219,11 @@ class SemanticTreeExecutor:
         self._changes_provided = changes is not None
         self._changes = changes or {}
         self._semantic_plan = semantic_plan
+        self._source_contents = dict(source_contents or {})
+        self._source_raw_contents = (
+            dict(source_raw_contents) if source_raw_contents is not None else None
+        )
+        self._materialize_content = materialize_content
         self._semantic_resource_root = (
             semantic_plan.root_uri.rstrip("/") if semantic_plan is not None else None
         )
@@ -580,6 +588,16 @@ class SemanticTreeExecutor:
                         dir_uri=dir_uri,
                         ctx=self._ctx,
                         lock=self._lock,
+                        existing_raw=(
+                            {
+                                level: raw
+                                for level in (0, 1)
+                                if (raw := self._source_raw_contents.get((dir_uri, level)))
+                                is not None
+                            }
+                            if self._source_raw_contents is not None
+                            else None
+                        ),
                     )
                 except LockAcquisitionError:
                     if self._generation_trigger != "content_write":
@@ -1047,6 +1065,13 @@ class SemanticTreeExecutor:
         self, dir_uri: str
     ) -> tuple[Optional[str], Optional[str]]:
         if self._semantic_plan is not None:
+            snapshot_overview = self._source_contents.get((dir_uri.rstrip("/"), 1))
+            snapshot_abstract = self._source_contents.get((dir_uri.rstrip("/"), 0))
+            if snapshot_overview is not None or snapshot_abstract is not None:
+                return (
+                    str(snapshot_overview) if snapshot_overview is not None else None,
+                    str(snapshot_abstract) if snapshot_abstract is not None else None,
+                )
             entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
             if entry is None:
                 return None, None
@@ -1100,8 +1125,10 @@ class SemanticTreeExecutor:
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
-                file_content = None
-                if hasattr(self._viking_fs, "read_file_bytes"):
+                file_content = self._source_contents.get((file_path.rstrip("/"), 2))
+                if file_content is not None and not isinstance(file_content, bytes):
+                    raise ValueError(f"file vector source must be bytes: {file_path}")
+                if file_content is None and hasattr(self._viking_fs, "read_file_bytes"):
                     file_content = await self._viking_fs.read_file_bytes(file_path, ctx=self._ctx)
                 summary_kwargs: Dict[str, Any] = {
                     "llm_sem": self._llm_sem,
@@ -1149,6 +1176,8 @@ class SemanticTreeExecutor:
                     vectorize_kwargs["file_content"] = file_content
                 if self._telemetry_id is not None:
                     vectorize_kwargs["telemetry_id"] = self._telemetry_id
+                if self._materialize_content:
+                    vectorize_kwargs["materialize_content"] = True
                 manifest_md5 = self._file_md5s.get(file_path.rstrip("/")) or None
                 if file_content is not None and not manifest_md5:
                     file_md5 = content_md5(file_content)
@@ -1175,6 +1204,7 @@ class SemanticTreeExecutor:
                 )
                 if enqueued and slot is not None:
                     self._scheduled_vector_record_ids.add(slot.record_id)
+                    self._stats.indexed_records += 1
             except Exception as e:
                 logger.error(
                     "Failed to schedule vectorization for %s: %s",
@@ -1344,6 +1374,15 @@ class SemanticTreeExecutor:
                 consume_pending=consume_pending,
                 lock=self._lock,
                 log_prefix="[SemanticTree]",
+                existing_raw=(
+                    {
+                        level: raw
+                        for level in (0, 1)
+                        if (raw := self._source_raw_contents.get((dir_uri, level))) is not None
+                    }
+                    if self._source_raw_contents is not None
+                    else None
+                ),
             )
         )
         if not wrote.wrote:
@@ -1391,6 +1430,7 @@ class SemanticTreeExecutor:
                     ctx=self._ctx,
                     regenerate=self._generation_trigger == "reindex" or definition_changed,
                     lock=self._lock,
+                    skill_content=self._source_contents.get((f"{dir_uri}/SKILL.md", 2)),
                 )
                 should_write = False
                 need_vectorize = not self._incremental_update or definition_changed
@@ -1406,7 +1446,18 @@ class SemanticTreeExecutor:
                 if not children_changed:
                     overview, abstract = await self._read_existing_overview_abstract(dir_uri)
                     should_write = overview is None or abstract is None
-                    # Rebuilt sidecars must also replace their stale vectors.
+                    plan_entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
+                    if (
+                        self._semantic_plan is not None
+                        and plan_entry is not None
+                        and plan_entry.repair
+                    ):
+                        # RFV maintenance uses ``repair`` for both stale semantic
+                        # input and force rebuilds. Regenerate through the normal
+                        # semantic action before emitting its planned index slots.
+                        overview = None
+                        abstract = None
+                        should_write = True
                     need_vectorize = should_write
                     children_changed = should_write
             if should_write and (overview is None or abstract is None):
@@ -1499,7 +1550,7 @@ class SemanticTreeExecutor:
                                 return False
                             old_body = slot.abstract
                             new_body = abstract if level == 0 else overview
-                            return not old_body or old_body != new_body
+                            return entry.repair or not old_body or old_body != new_body
 
                         include_abstract = should_emit(0)
                         include_overview = should_emit(1)
@@ -1521,6 +1572,10 @@ class SemanticTreeExecutor:
                             },
                             "include_abstract": include_abstract,
                             "include_overview": include_overview,
+                            "md5s": {
+                                0: content_md5(abstract.encode("utf-8")),
+                                1: content_md5(overview.encode("utf-8")),
+                            },
                         }
                     if self._telemetry_id is not None:
                         directory_vector_kwargs["telemetry_id"] = self._telemetry_id
@@ -1592,6 +1647,7 @@ class SemanticTreeExecutor:
                 self._scheduled_vector_record_ids.update(
                     slot.record_id for slot in slots.values() if slot.level in enqueued_levels
                 )
+                self._stats.indexed_records += len(enqueued_levels)
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)

@@ -1775,8 +1775,8 @@ class AsyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
-        dry_run: bool = False,
         recursive: bool = True,
+        force: bool = False,
         options: Optional[ReindexOptions] = None,
     ) -> Dict[str, Any]:
         payload = self._build_options_payload(
@@ -1786,10 +1786,12 @@ class AsyncHTTPClient:
                 "uri": VikingURI.normalize(uri),
                 "mode": mode,
                 "wait": wait,
-                "dry_run": dry_run,
+                "force": force,
                 "recursive": recursive,
             },
         )
+        if not payload.get("force"):
+            payload.pop("force", None)
         response = await self._request(
             "POST",
             "/api/v1/content/reindex",
@@ -2074,24 +2076,16 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    def queue_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def queue_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return run_async(self._get_queue_status(format=format))
 
-    def vikingdb_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def vikingdb_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return run_async(self._get_vikingdb_status(format=format))
 
-    def models_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def models_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return run_async(self._get_models_status(format=format))
 
-    def get_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def get_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return run_async(self._get_system_status(format=format))
 
     def is_healthy(self) -> bool:
@@ -2859,20 +2853,19 @@ class SyncHTTPClient:
         uri: str,
         mode: str = "vectors_only",
         wait: bool = True,
-        dry_run: bool = False,
         recursive: bool = True,
+        force: bool = False,
         options: Optional[ReindexOptions] = None,
     ) -> Dict[str, Any]:
-        return run_async(
-            self._async_client.reindex(
-                uri,
-                mode=mode,
-                wait=wait,
-                dry_run=dry_run,
-                recursive=recursive,
-                options=options,
-            )
-        )
+        kwargs: Dict[str, Any] = {
+            "mode": mode,
+            "wait": wait,
+            "recursive": recursive,
+            "options": options,
+        }
+        if force:
+            kwargs["force"] = True
+        return run_async(self._async_client.reindex(uri, **kwargs))
 
     def admin_create_account(
         self,
@@ -3016,24 +3009,16 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.preflight_openviking_asset(name, repo_url, options))
 
-    def queue_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def queue_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return self._async_client.queue_status(format=format)
 
-    def vikingdb_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def vikingdb_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return self._async_client.vikingdb_status(format=format)
 
-    def models_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def models_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return self._async_client.models_status(format=format)
 
-    def get_status(
-        self, format: Optional[Literal["table", "json"]] = None
-    ) -> Dict[str, Any]:
+    def get_status(self, format: Optional[Literal["table", "json"]] = None) -> Dict[str, Any]:
         return self._async_client.get_status(format=format)
 
     def is_healthy(self) -> bool:

@@ -1232,6 +1232,7 @@ class SemanticProcessor(DequeueHandlerBase):
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
         file_content: Optional[bytes] = None,
+        materialize_content: bool = False,
     ) -> Dict[str, Any]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
@@ -1850,6 +1851,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: RequestContext,
         regenerate: bool = False,
         lock: Optional[Dict[str, Any]] = None,
+        skill_content: str | bytes | None = None,
     ) -> Tuple[str, str]:
         """Keep the package root tied only to its SKILL.md definition."""
         viking_fs = get_viking_fs()
@@ -1866,7 +1868,11 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.core.skill_loader import SkillLoader
         from openviking.utils.skill_processor import SkillProcessor
 
-        content = await viking_fs.read_file(f"{uri}/SKILL.md", ctx=ctx)
+        content = (
+            skill_content
+            if skill_content is not None
+            else await viking_fs.read_file(f"{uri}/SKILL.md", ctx=ctx)
+        )
         if isinstance(content, bytes):
             content = content.decode("utf-8")
         definition = SkillLoader.parse(content)
@@ -1907,6 +1913,7 @@ class SemanticProcessor(DequeueHandlerBase):
         include_abstract: bool = True,
         include_overview: bool = True,
         telemetry_id: str | None = None,
+        md5s: Optional[Dict[int, str]] = None,
     ) -> set[int]:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1939,6 +1946,7 @@ class SemanticProcessor(DequeueHandlerBase):
             include_abstract=include_abstract,
             include_overview=include_overview,
             telemetry_id=telemetry_id,
+            md5s=md5s,
         )
 
     async def _load_transfer_file_summaries(
@@ -2004,6 +2012,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ingest_options: IngestOptions | None = None,
         file_md5: Optional[str] = None,
         file_content: Optional[bytes] = None,
+        materialize_content: bool = False,
         scalar_override: Optional[Dict[str, Any]] = None,
         field_patch: FieldPatch | None = None,
         action: str = "merge",
@@ -2024,6 +2033,7 @@ class SemanticProcessor(DequeueHandlerBase):
             ingest_options=ingest_options,
             file_md5=file_md5,
             file_content=file_content,
+            materialize_content=materialize_content,
             scalar_override=scalar_override,
             field_patch=field_patch,
             action=action,

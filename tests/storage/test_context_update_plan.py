@@ -1137,12 +1137,8 @@ def test_healthy_directory_rnfv_clear_updates_all_vector_levels():
         ingest_options=IngestOptions.from_search_tags(None, mode="clear"),
     )
     records = {
-        "root-l0": VectorRecordSnapshot(
-            "root-l0", root, "", 0, {"search_tags": ["scope=old"]}
-        ),
-        "root-l1": VectorRecordSnapshot(
-            "root-l1", root, "", 1, {"search_tags": ["scope=old"]}
-        ),
+        "root-l0": VectorRecordSnapshot("root-l0", root, "", 0, {"search_tags": ["scope=old"]}),
+        "root-l1": VectorRecordSnapshot("root-l1", root, "", 1, {"search_tags": ["scope=old"]}),
         "a-l2": VectorRecordSnapshot(
             "a-l2",
             root + "/a.py",
@@ -1237,11 +1233,7 @@ def test_healthy_rnfv_clear_is_noop_when_vector_has_no_tags(existing_tags):
         ),
         new_kinds={"a.py": "file"},
         artifact_paths={"a.py": "repository/a.py"},
-        records={
-            "a-l2": VectorRecordSnapshot(
-                "a-l2", root + "/a.py", "a.py", 2, fields
-            )
-        },
+        records={"a-l2": VectorRecordSnapshot("a-l2", root + "/a.py", "a.py", 2, fields)},
         is_code_repo=False,
         account_id="acc",
     )
@@ -1297,11 +1289,7 @@ def test_healthy_rnfv_non_empty_replace_compares_against_vector_tags(
         ),
         new_kinds={"a.py": "file"},
         artifact_paths={"a.py": "repository/a.py"},
-        records={
-            "a-l2": VectorRecordSnapshot(
-                "a-l2", root + "/a.py", "a.py", 2, fields
-            )
-        },
+        records={"a-l2": VectorRecordSnapshot("a-l2", root + "/a.py", "a.py", 2, fields)},
         is_code_repo=False,
         account_id="acc",
     )
@@ -2583,6 +2571,11 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
     )
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
     monkeypatch.setattr("openviking.utils.embedding_utils._enqueue_embedding_message", enqueue)
+    vectorize_directory = AsyncMock(return_value={0, 1})
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.vectorize_directory_meta",
+        vectorize_directory,
+    )
     processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
     processor._vectorize_resource_file = AsyncMock()
     ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
@@ -2620,8 +2613,28 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
                 ),
                 md5="new-md5",
             ),
+            DirectIndexAction(
+                "upsert",
+                "viking://resources/repo",
+                0,
+                "repo-l0",
+                upsert_fields={"search_tags": ["scope=new"]},
+                md5="abstract-md5",
+            ),
+            DirectIndexAction(
+                "upsert",
+                "viking://resources/repo",
+                1,
+                "repo-l1",
+                md5="overview-md5",
+            ),
         ),
         ctx=ctx,
+        source_contents={
+            ("viking://resources/repo/c.py", 2): b"print('current')",
+            ("viking://resources/repo", 0): "current abstract",
+            ("viking://resources/repo", 1): "current overview",
+        },
     )
     assert [msg.action.value for msg in enqueued] == [
         "delete",
@@ -2644,7 +2657,86 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
             {"search_tags": ["scope=new"]},
             {"search_tags": "append"},
         ),
+        file_content=b"print('current')",
     )
+    vectorize_directory.assert_awaited_once_with(
+        "viking://resources/repo",
+        "current abstract",
+        "current overview",
+        context_type="resource",
+        ctx=ctx,
+        include_abstract=True,
+        include_overview=True,
+        content_is_body=True,
+        actions={0: "upsert", 1: "upsert"},
+        scalar_overrides={
+            0: {"search_tags": ["scope=new"], "_record_id": "repo-l0"},
+            1: {"_record_id": "repo-l1"},
+        },
+        md5s={0: "abstract-md5", 1: "overview-md5"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_rejects_direct_upsert_without_snapshot_source():
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.session.user_id import UserIdentifier
+
+    processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
+    ctx = RequestContext(UserIdentifier("acc", "user"), Role.USER)
+
+    with pytest.raises(ValueError, match="directory L0 vector source is unavailable"):
+        await processor._enqueue_index_actions(
+            (
+                DirectIndexAction(
+                    "upsert",
+                    "viking://resources/repo",
+                    0,
+                    "repo-l0",
+                    md5="abstract-md5",
+                ),
+            ),
+            ctx=ctx,
+            source_contents={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_resource_processor_preserves_skill_metadata_in_direct_directory_merge(monkeypatch):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.session.user_id import UserIdentifier
+
+    vectorize_directory = AsyncMock(return_value={0})
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.vectorize_directory_meta", vectorize_directory
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(EMBEDDING="embedding", get_queue=lambda *a, **k: object()),
+    )
+    processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
+    ctx = RequestContext(UserIdentifier("acc", "owner"), Role.USER)
+    uri = "viking://user/owner/skills/demo"
+
+    await processor._enqueue_index_actions(
+        (DirectIndexAction("merge", uri, 0, "skill-l0", md5="new"),),
+        ctx=ctx,
+        source_contents={
+            (uri, 0): "name: demo\ndescription: Demo\ntags: [tool]\nallowed_tools: [Read]",
+        },
+    )
+
+    meta = vectorize_directory.await_args.kwargs["meta"]
+    assert meta == {
+        "name": "demo",
+        "description": "Demo",
+        "tags": ["tool"],
+        "allowed_tools": ["Read"],
+    }
 
 
 def test_semantic_message_roundtrip_uses_explicit_plan():
