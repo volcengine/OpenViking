@@ -45,7 +45,7 @@ import { cn } from '#/lib/utils'
 
 import { ExperienceSetupGuide } from './-components/experience-setup-guide'
 import { ExperiencePreviewSheet } from './-components/experience-preview-sheet'
-import { fetchExperiences } from './-lib/api'
+import { fetchExperiences, searchExperiences } from './-lib/api'
 import {
   buildExperiencesUri,
   formatTimestamp,
@@ -205,39 +205,39 @@ function AgentExperienceRoute() {
   const { t, i18n } = useTranslation('agentExperiencePage')
   const { connection, identityScopeKey } = useAppConnection()
   const [keyword, setKeyword] = React.useState('')
+  const [searchKeyword, setSearchKeyword] = React.useState('')
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(10)
   const [previewExperience, setPreviewExperience] =
     React.useState<ExperienceFileItem | null>(null)
 
   const experiencesUri = buildExperiencesUri(connection.userId)
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setSearchKeyword(keyword.trim())
+      setPage(1)
+    }, 300)
+    return () => window.clearTimeout(timeout)
+  }, [keyword])
   const experiencesQuery = useQuery({
     queryFn: ({ signal }) =>
-      fetchExperiences({
-        experiencesUri,
-        page,
-        pageSize,
-        signal,
-      }),
+      searchKeyword
+        ? searchExperiences({ experiencesUri, keyword: searchKeyword, signal })
+        : fetchExperiences({ experiencesUri, page, pageSize, signal }),
     queryKey: [
       'agent-experience-list',
       identityScopeKey,
       experiencesUri,
       page,
       pageSize,
+      searchKeyword,
     ],
     staleTime: 30_000,
   })
 
   const pageItems = experiencesQuery.data?.items ?? []
   const hasMore = experiencesQuery.data?.hasMore ?? false
-  const normalizedKeyword = keyword.trim().toLocaleLowerCase()
-  const experiences = pageItems.filter(
-    (item) =>
-      !normalizedKeyword ||
-      item.name.toLocaleLowerCase().includes(normalizedKeyword) ||
-      item.uri.toLocaleLowerCase().includes(normalizedKeyword),
-  )
+  const experiences = pageItems
 
   // Snapshot "updated since last visit" badges when the list settles, then
   // mark the whole list as seen. Comparing against the pre-visit snapshot
@@ -310,6 +310,38 @@ function AgentExperienceRoute() {
 
       <ExperienceSetupGuide />
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 px-4 py-3">
+        <div className="relative w-full sm:max-w-md">
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            aria-label={t('searchPlaceholder')}
+            autoComplete="off"
+            className="h-9 bg-transparent pr-9 pl-8 shadow-none dark:bg-transparent"
+            name="agent-experience-search"
+            placeholder={t('searchPlaceholder')}
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+          />
+          {keyword ? (
+            <button
+              type="button"
+              aria-label={t('searchClear')}
+              className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={() => setKeyword('')}
+            >
+              <XIcon className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
+        {experiencesQuery.isSuccess && (
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {t(searchKeyword ? 'searchCount' : 'pageCount', {
+              count: experiences.length,
+            })}
+          </span>
+        )}
+      </div>
+
       {experiencesQuery.isLoading ? (
         <Card className="min-h-56 items-center justify-center">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -355,10 +387,7 @@ function AgentExperienceRoute() {
             )}
           </div>
         </Card>
-      ) : pageItems.length === 0 &&
-        page === 1 &&
-        !hasMore &&
-        !keyword.trim() ? (
+      ) : pageItems.length === 0 && page === 1 && !hasMore && !searchKeyword ? (
         <Card className="min-h-56 items-center justify-center px-6 text-center">
           <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <BrainCircuitIcon className="size-5" />
@@ -388,38 +417,6 @@ function AgentExperienceRoute() {
           size="sm"
           className="rounded-xl bg-background shadow-none ring-border/70 data-[size=sm]:gap-0 data-[size=sm]:py-0"
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
-            <div className="relative w-full sm:max-w-md">
-              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                aria-label={t('searchPlaceholder')}
-                autoComplete="off"
-                className="h-9 bg-transparent pr-9 pl-8 shadow-none dark:bg-transparent"
-                name="agent-experience-search"
-                placeholder={t('searchPlaceholder')}
-                value={keyword}
-                onChange={(event) => {
-                  setKeyword(event.target.value)
-                }}
-              />
-              {keyword ? (
-                <button
-                  type="button"
-                  aria-label={t('searchClear')}
-                  className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  onClick={() => {
-                    setKeyword('')
-                  }}
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              ) : null}
-            </div>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {t('pageCount', { count: experiences.length })}
-            </span>
-          </div>
-
           {experiences.length === 0 ? (
             <div className="grid min-h-40 place-items-center px-6 py-8 text-center">
               <div className="grid max-w-md gap-1">
@@ -436,9 +433,11 @@ function AgentExperienceRoute() {
                   <TableHead className="h-10 pl-4 text-xs font-normal text-muted-foreground">
                     {t('columnFile')}
                   </TableHead>
-                  <TableHead className="hidden h-10 w-44 sm:table-cell text-xs font-normal text-muted-foreground">
-                    {t('columnUpdated')}
-                  </TableHead>
+                  {!searchKeyword && (
+                    <TableHead className="hidden h-10 w-44 sm:table-cell text-xs font-normal text-muted-foreground">
+                      {t('columnUpdated')}
+                    </TableHead>
+                  )}
                   <TableHead className="h-10 w-28 pr-4 text-right text-xs font-normal text-muted-foreground">
                     {t('columnActions')}
                   </TableHead>
@@ -475,7 +474,7 @@ function AgentExperienceRoute() {
                                 }}
                               >
                                 <HighlightedText
-                                  keyword={normalizedKeyword}
+                                  keyword={searchKeyword}
                                   text={experience.name}
                                 />
                               </button>
@@ -488,16 +487,16 @@ function AgentExperienceRoute() {
                                 </Badge>
                               ) : null}
                             </div>
-                            {normalizedKeyword &&
+                            {searchKeyword &&
                             !experience.name
                               .toLocaleLowerCase()
-                              .includes(normalizedKeyword) ? (
+                              .includes(searchKeyword.toLocaleLowerCase()) ? (
                               <span
                                 className="truncate font-mono text-[11px] text-muted-foreground"
                                 title={experience.uri}
                               >
                                 <HighlightedText
-                                  keyword={normalizedKeyword}
+                                  keyword={searchKeyword}
                                   text={experience.uri}
                                 />
                               </span>
@@ -505,9 +504,11 @@ function AgentExperienceRoute() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="hidden w-44 text-xs tabular-nums text-muted-foreground sm:table-cell">
-                        {updated ?? '-'}
-                      </TableCell>
+                      {!searchKeyword && (
+                        <TableCell className="hidden w-44 text-xs tabular-nums text-muted-foreground sm:table-cell">
+                          {updated ?? '-'}
+                        </TableCell>
+                      )}
                       <TableCell
                         className="w-28 pr-4 text-right"
                         onClick={(event) => event.stopPropagation()}
@@ -537,17 +538,19 @@ function AgentExperienceRoute() {
               </TableBody>
             </Table>
           )}
-          <ExperiencePagination
-            page={page}
-            hasMore={hasMore}
-            disabled={experiencesQuery.isFetching}
-            pageSize={pageSize}
-            onPageChange={setPage}
-            onPageSizeChange={(nextPageSize) => {
-              setPageSize(nextPageSize)
-              setPage(1)
-            }}
-          />
+          {!searchKeyword && (
+            <ExperiencePagination
+              page={page}
+              hasMore={hasMore}
+              disabled={experiencesQuery.isFetching}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(nextPageSize) => {
+                setPageSize(nextPageSize)
+                setPage(1)
+              }}
+            />
+          )}
         </Card>
       )}
 

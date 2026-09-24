@@ -20,8 +20,13 @@ for (const locale of ['en', 'zh']) {
   test(`${locale} map preserves sidebar order and compilation hierarchy`, () => {
     const guides = data[locale].find(section => section.id === 'guides')!
     const deployment = guides.pages.findIndex(page => page.file === '03-deployment.md')
-    assert.equal(guides.pages[deployment + 1].file, '04-authentication.md')
-    assert.equal(guides.pages[deployment].group, guides.pages[deployment + 1].group)
+    const enterprise = guides.pages.slice(deployment + 1, deployment + 4)
+    assert.deepEqual(enterprise.map(page => page.file), [
+      '19-deployment-checklist.md', '20-private-deployment.md', '21-private-operations.md'
+    ])
+    assert.ok(enterprise.every(page => page.group.startsWith(`${guides.pages[deployment].group} / `)))
+    assert.equal(guides.pages[deployment + 4].file, '04-authentication.md')
+    assert.equal(guides.pages[deployment].group, guides.pages[deployment + 4].group)
     const compilation = guides.pages.filter(page => page.href.includes('/context-compilation/'))
     assert.ok(compilation.length > 0)
     assert.ok(compilation.every(page => page.group.includes(' / ')))

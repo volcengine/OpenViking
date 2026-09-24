@@ -12,7 +12,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Sequence, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import yaml
 
@@ -29,9 +29,14 @@ logger = get_logger(__name__)
 ABSTRACT_OVERVIEW_FILENAMES = frozenset({".abstract.md", ".overview.md"})
 EMBEDDING_METADATA_FIELDS = ("directory",)
 _METADATA_ORDER = ("directory", "source", "generated_by", "freshness")
+_MARKDOWN_URI_SAFE_ASCII = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/:"
+)
 _MAX_SOURCE_URI_CHARS = 4096
 _MAX_LABEL_CHARS = 128
 _T = TypeVar("_T")
+_VIKING_URI_BODY_DELIMITERS = frozenset(" \t\r\n)]}>,'\"`")
+_VIKING_URI_TRAILING_PUNCTUATION = frozenset(".,;:!?")
 
 
 class AbstractOverviewFormatError(ValueError):
@@ -250,6 +255,41 @@ def render_abstract_overview(
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
 
 
+def markdown_safe_viking_uri(uri: str) -> str:
+    """Encode ASCII-only URI syntax hazards while preserving Unicode path text."""
+
+    if not isinstance(uri, str):
+        raise TypeError("URI must be a string")
+    return "".join(
+        char if ord(char) > 127 or char in _MARKDOWN_URI_SAFE_ASCII else f"%{ord(char):02X}"
+        for char in uri
+    )
+
+
+def _normalize_markdown_viking_uris(text: str) -> str:
+    """Normalize embedded Viking URIs to the canonical Markdown-safe form."""
+
+    normalized: list[str] = []
+    cursor = 0
+    while True:
+        start = text.find("viking://", cursor)
+        if start < 0:
+            normalized.append(text[cursor:])
+            return "".join(normalized)
+        normalized.append(text[cursor:start])
+        end = start + len("viking://")
+        while end < len(text) and text[end] not in _VIKING_URI_BODY_DELIMITERS:
+            end += 1
+        raw_uri = text[start:end]
+        trailing = ""
+        while raw_uri and raw_uri[-1] in _VIKING_URI_TRAILING_PUNCTUATION:
+            trailing = raw_uri[-1] + trailing
+            raw_uri = raw_uri[:-1]
+        normalized.append(markdown_safe_viking_uri(unquote(raw_uri)))
+        normalized.append(trailing)
+        cursor = end
+
+
 def rewrite_viking_uri_references(text: str, source_uri: str, target_uri: str) -> str:
     """Rewrite generated raw or URL-encoded URI references within one transfer scope."""
 
@@ -260,9 +300,11 @@ def rewrite_viking_uri_references(text: str, source_uri: str, target_uri: str) -
     if not source or source == target:
         return text
 
+    markdown_safe_target = markdown_safe_viking_uri(target)
     variants = (
-        (quote(source, safe=":/"), quote(target, safe=":/")),
-        (source, target),
+        (quote(source, safe=":/"), markdown_safe_target),
+        (markdown_safe_viking_uri(source), markdown_safe_target),
+        (source, markdown_safe_target),
     )
     rewritten = text
     seen: set[str] = set()
@@ -278,7 +320,7 @@ def rewrite_viking_uri_references(text: str, source_uri: str, target_uri: str) -
             lambda _match, replacement=new: replacement,
             rewritten,
         )
-    return rewritten
+    return _normalize_markdown_viking_uris(rewritten)
 
 
 def rewrite_abstract_overview_for_transfer(

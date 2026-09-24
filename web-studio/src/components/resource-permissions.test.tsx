@@ -87,7 +87,10 @@ beforeEach(() => {
     acl_mode: 'inherit',
     direct_entries: [{ principal: 'user:bob', level: 'read' }],
     inherited_entries: [{ principal: 'group:engineering', level: 'write' }],
-    effective_entries: [],
+    effective_entries: [
+      { principal: 'user:bob', level: 'read' },
+      { principal: 'group:engineering', level: 'write' },
+    ],
   }
   mocks.get.mockImplementation(async () => report)
   mocks.change.mockImplementation(async (_uri, change) => {
@@ -97,6 +100,10 @@ beforeEach(() => {
         ? { acl_mode: change.mode }
         : { direct_entries: [] }),
     }
+    report.effective_entries =
+      report.acl_mode === 'restricted'
+        ? report.direct_entries
+        : [...report.direct_entries, ...report.inherited_entries]
     return report
   })
   mocks.users.mockResolvedValue({ users: [{ userId: 'bob' }], total: 1 })
@@ -137,6 +144,9 @@ it('keeps the no-admin recovery link inside the Studio base path', async () => {
 it('shows current access and source of each grant without explanatory panels', async () => {
   mount()
   await screen.findByText('bob')
+  expect(screen.getByText('acl.grantSubjectColumn')).toBeTruthy()
+  expect(screen.getByText('acl.grantLevelColumn')).toBeTruthy()
+  expect(screen.getByText('acl.grantSourceColumn')).toBeTruthy()
   expect(screen.getByText(/acl.subjects.user/)).toBeTruthy()
   expect(screen.getByText('acl.levels.read')).toBeTruthy()
   expect(screen.getByText('acl.peopleWithAccess')).toBeTruthy()
@@ -144,24 +154,62 @@ it('shows current access and source of each grant without explanatory panels', a
   expect(screen.getByText(/acl.inheritedSource/)).toBeTruthy()
   expect(screen.queryByText('acl.page.grantScope')).toBeNull()
 })
-it('shows default sharing as the effective access when no ACL is configured', async () => {
+it('shows the ancestor directory when an inherited grant can be traced', async () => {
+  mocks.get.mockImplementation(async (target: string) =>
+    target === 'viking://resources'
+      ? {
+          uri: target,
+          acl_mode: 'inherit',
+          direct_entries: [{ principal: 'group:engineering', level: 'write' }],
+          inherited_entries: [],
+          effective_entries: [],
+        }
+      : report,
+  )
+  mount()
+  expect(await screen.findByText('resources')).toBeTruthy()
+  expect(screen.getByText('acl.accountAdministrators')).toBeTruthy()
+  expect(screen.getByText('acl.administratorSource')).toBeTruthy()
+})
+it('shows one effective grant with both sources when a principal is also granted directly', async () => {
+  report = {
+    ...report,
+    direct_entries: [{ principal: 'group:engineering', level: 'read' }],
+    effective_entries: [{ principal: 'group:engineering', level: 'write' }],
+  }
+  mount()
+  const row = (await screen.findByText('engineering')).closest('tr')!
+  expect(screen.getAllByText('engineering')).toHaveLength(1)
+  expect(within(row).getByText('acl.directAndInheritedSource')).toBeTruthy()
+  expect(within(row).getByText('acl.effectiveLevel')).toBeTruthy()
+  expect(within(row).getByText('acl.levels.read')).toBeTruthy()
+  expect(
+    within(row).getByRole('button', { name: 'acl.removeFor' }),
+  ).toBeTruthy()
+})
+it('allows adding direct grants while inheritance is enabled by default', async () => {
   report = {
     ...report,
     acl_mode: 'none',
     direct_entries: [],
     inherited_entries: [],
+    effective_entries: [],
   }
   mount()
   await screen.findByText('acl.everyone')
   expect(screen.getByText('acl.defaultRule')).toBeTruthy()
   expect(screen.queryByText('acl.onlyAdmins')).toBeNull()
-  expect(screen.queryByRole('button', { name: 'acl.addGrant' })).toBeNull()
-  expect(screen.getByRole('button', { name: 'acl.limitAccess' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'acl.addGrant' })).toBeTruthy()
+  expect(
+    screen
+      .getByRole('switch', { name: 'acl.inheritParent' })
+      .getAttribute('aria-checked'),
+  ).toBe('true')
 })
 it('confirms direct removal and preserves inherited permissions in the display', async () => {
   const { user } = mount()
   await screen.findByText('bob')
-  await user.click(screen.getByRole('button', { name: 'acl.remove' }))
+  await user.click(screen.getByRole('button', { name: 'acl.removeFor' }))
   expect(mocks.change).not.toHaveBeenCalled()
   await user.click(
     within(screen.getByRole('alertdialog')).getByRole('button', {
@@ -176,26 +224,76 @@ it('confirms direct removal and preserves inherited permissions in the display',
   )
   expect(screen.getByText('engineering')).toBeTruthy()
 })
-it('keeps restricted grants without showing the parent-inheritance control', async () => {
-  report = { ...report, acl_mode: 'restricted' }
+it('keeps restricted grants and shows inheritance disabled', async () => {
+  report = {
+    ...report,
+    acl_mode: 'restricted',
+    effective_entries: report.direct_entries,
+  }
   mount()
   await screen.findByText('bob')
-  expect(screen.queryByText(/acl.parentGrantsLabel/)).toBeNull()
-  expect(screen.queryByRole('button', { name: 'acl.includeParent' })).toBeNull()
-  expect(screen.queryByRole('button', { name: 'acl.excludeParent' })).toBeNull()
+  expect(
+    screen
+      .getByRole('switch', { name: 'acl.inheritParent' })
+      .getAttribute('aria-checked'),
+  ).toBe('false')
   expect(screen.queryByText('engineering')).toBeNull()
+})
+it('explains inheritance and changes only the ACL mode, preserving direct grants', async () => {
+  const { user } = mount()
+  await screen.findByText('bob')
+  await user.click(screen.getByRole('button', { name: 'acl.inheritHelpLabel' }))
+  expect(screen.getByText('acl.inheritHelp')).toBeTruthy()
+  const toggle = screen.getByRole('switch', { name: 'acl.inheritParent' })
+  await user.click(toggle)
+  expect(screen.getByText('acl.restrictWarning')).toBeTruthy()
+  await user.click(
+    within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'acl.confirm',
+    }),
+  )
+  await waitFor(() =>
+    expect(mocks.change).toHaveBeenCalledWith(uri, {
+      kind: 'mode',
+      mode: 'restricted',
+    }),
+  )
+  expect(screen.getByText('bob')).toBeTruthy()
+  expect(screen.queryByText('engineering')).toBeNull()
+  await user.click(toggle)
+  expect(screen.getByText('acl.restoreWarning')).toBeTruthy()
+  await user.click(
+    within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'acl.confirm',
+    }),
+  )
+  await waitFor(() =>
+    expect(mocks.change).toHaveBeenCalledWith(uri, {
+      kind: 'mode',
+      mode: 'inherit',
+    }),
+  )
+  expect(screen.getByText('engineering')).toBeTruthy()
+  expect(screen.getByText('bob')).toBeTruthy()
 })
 it('does not permit editing when account ACL is disabled', async () => {
   mocks.enabled = false
   mount()
   await screen.findByText('bob')
   expect(
-    screen.getByRole('button', { name: 'acl.remove' }).hasAttribute('disabled'),
+    screen
+      .getByRole('button', { name: 'acl.removeFor' })
+      .hasAttribute('disabled'),
   ).toBe(true)
   expect(
     screen
       .getByRole('button', { name: 'acl.addGrant' })
       .hasAttribute('disabled'),
+  ).toBe(true)
+  expect(
+    screen
+      .getByRole('switch', { name: 'acl.inheritParent' })
+      .hasAttribute('data-disabled'),
   ).toBe(true)
   expect(mocks.users).not.toHaveBeenCalled()
 })

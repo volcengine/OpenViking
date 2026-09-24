@@ -1,29 +1,30 @@
-import {
-  FeatherIcon,
-  Gamepad2Icon,
-  HashIcon,
-  SendIcon,
-  ZapIcon,
-} from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
+import discordIcon from './brand-icons/discord.svg?url'
+import dingtalkIcon from './brand-icons/dingtalk.svg?url'
+import feishuIcon from './brand-icons/feishu.svg?url'
+import slackIcon from './brand-icons/slack.svg?url'
+import telegramIcon from './brand-icons/telegram.svg?url'
 
-const icons: Record<string, LucideIcon | undefined> = {
-  feishu: FeatherIcon,
-  slack: HashIcon,
-  dingtalk: ZapIcon,
-  discord: Gamepad2Icon,
-  telegram: SendIcon,
+// Feishu: Semi Icons (MIT); DingTalk: Ant Design Icons (MIT);
+// Slack, Discord, Telegram: Simple Icons (CC0).
+const icons: Record<string, string> = {
+  feishu: feishuIcon,
+  slack: slackIcon,
+  dingtalk: dingtalkIcon,
+  discord: discordIcon,
+  telegram: telegramIcon,
 }
 
 export function PlatformIcon({ platform }: { platform: string }) {
-  const Icon = icons[platform.toLowerCase()]
-  if (!Icon) return null
+  const icon = icons[platform.toLowerCase()]
+  if (!icon) return null
+  const mask = `url("${icon}") center / contain no-repeat`
+
   return (
     <span
       className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground"
       aria-hidden="true"
     >
-      <Icon className="size-5" />
+      <span className="size-5 bg-current" style={{ mask, WebkitMask: mask }} />
     </span>
   )
 }

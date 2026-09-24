@@ -30,6 +30,7 @@ from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_t
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import parse_code_hosting_url
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -92,6 +93,11 @@ class TreeBuilder:
         create_parent: bool = False,
     ) -> tuple[str, Optional[str]]:
         """Resolve the final target URI and optional unique-name candidate."""
+
+        if to_uri:
+            to_uri = normalize_storage_target_uri(to_uri)
+        if parent_uri:
+            parent_uri = normalize_storage_target_uri(parent_uri)
 
         final_doc_name = VikingURI.sanitize_segment(doc_name)
         if source_path and source_format == "repository":

@@ -1,5 +1,7 @@
 # Server Deployment
 
+Before provisioning a self-managed environment, review the [deployment checklist](19-deployment-checklist.md). If you have a VikingDB / OpenViking private deployment package, use [Enterprise Deployment](20-private-deployment.md) and [operations](21-private-operations.md).
+
 OpenViking runs as an HTTP service. Choose who operates it before installing a server:
 
 | Service | What you need |
@@ -404,12 +406,15 @@ To build the image yourself, pass an explicit OpenViking version:
 
 ### Kubernetes + Helm
 
-The project provides a Helm chart located at `examples/k8s-helm/`:
+This chart deploys the open-source service and is separate from the private delivery ovadmin / Operator workflow. See the [Helm README](https://github.com/volcengine/OpenViking/blob/main/deploy/helm/README.md) for chart parameters.
+
+The project provides a Helm chart located at `deploy/helm/openviking/`:
 
 ```bash
-helm install openviking ./examples/k8s-helm \
-  --set openviking.config.embedding.dense.api_key="YOUR_API_KEY" \
-  --set openviking.config.vlm.api_key="YOUR_API_KEY"
+helm install openviking ./deploy/helm/openviking \
+  --set-string config.server.root_api_key="YOUR_ROOT_API_KEY" \
+  --set-string config.embedding.dense.api_key="YOUR_API_KEY" \
+  --set-string config.vlm.api_key="YOUR_API_KEY"
 ```
 
 For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark configuration), see the [Cloud Deployment Guide](https://github.com/volcengine/OpenViking/blob/main/examples/cloud/GUIDE.md).

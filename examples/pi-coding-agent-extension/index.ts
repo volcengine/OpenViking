@@ -25,6 +25,7 @@ import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-gua
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
+import { HANDLER_BUDGET_MS } from "./lib/takeover-core.mjs";
 
 /** This extension's directory, published for the experimental fork's probe. */
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -172,18 +173,27 @@ export default async function (pi: ExtensionAPI) {
         }
         return;
       }
-      await sync.replayPending();
 
-      // Profile injection
-      profileBlock = await buildSessionProfileBlock(client, config);
-
+      // Restore takeover state — sync watermark, pending archive and capture
+      // gap — before replaying any queued messages, so recovery and replay
+      // cannot disagree about what has been delivered (plan §4).
       const branch = typeof ctx.sessionManager.getBranch === "function"
         ? ctx.sessionManager.getBranch()
         : [];
       if (config.takeoverEnabled) {
         takeover.restore(branch);
         sync.restoreWatermark(takeover.state.syncedEntryCount);
-      } else if (sync.sessionId) {
+      }
+
+      await sync.replayPending();
+      if (config.takeoverEnabled && sync.droppedCount > 0) {
+        takeover.recordCaptureGap();
+      }
+
+      // Profile injection
+      profileBlock = await buildSessionProfileBlock(client, config);
+
+      if (!config.takeoverEnabled && sync.sessionId) {
         // Resume rehydration — fetch archive overview if session was previously committed.
         archiveOverview = await fetchArchiveOverview(client, sync.sessionId, config);
       }
@@ -219,6 +229,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- before_agent_start ---
   pi.on("before_agent_start", async (event, ctx) => {
+    const deadline = Date.now() + HANDLER_BUDGET_MS;
     // Read before awaiting, because this is what separates the retry below
     // from the attempt start() makes: on the turn that runs the startup chain
     // this is false, and from the next turn on it is true. Testing `started`
@@ -244,6 +255,12 @@ export default async function (pi: ExtensionAPI) {
     }
 
     if (!connected || bypassed || closed) return;
+
+    // A summary that finished since the last turn — or in the last `pi -p`
+    // process — trims this prompt's request already.
+    if (config.takeoverEnabled) {
+      await takeover.resumePending(() => ctx.sessionManager.getBranch(), { deadline });
+    }
 
     // Queue recall for the context hook. Pi renders the user message before
     // that hook, so recall latency does not delay the message appearing.
@@ -310,8 +327,13 @@ export default async function (pi: ExtensionAPI) {
       }
     }
 
+    // Takeover's boundary is a branch entry id; it maps it onto these messages
+    // through pi's context projection of the branch.
     const afterTakeover = config.takeoverEnabled
-      ? takeover.transformContext(event.messages as any)
+      ? takeover.transformContext(
+          event.messages as any,
+          typeof sessionManager?.getBranch === "function" ? sessionManager.getBranch() : [],
+        )
       : event.messages;
     const messages = recall.injectRecall(
       afterTakeover,
@@ -338,23 +360,32 @@ export default async function (pi: ExtensionAPI) {
   pi.on("turn_end", async (event, ctx) => {
     if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
+    // The host's 30s cap covers this whole handler, sync included.
+    const deadline = Date.now() + HANDLER_BUDGET_MS;
     const branch = ctx.sessionManager.getBranch();
     const result = await sync.syncBranch(branch);
     logger.log("turn_end", { added: result.added, tokens: result.tokens });
-    await takeover.onTurnSynced(result.tokens);
+    if (result.permanentFailures > 0) takeover.recordCaptureGap();
+    // The branch is what the boundary is frozen against and re-confirmed on, so
+    // takeover needs it, not just the token delta.
+    await takeover.onTurnSynced(result.tokens, () => ctx.sessionManager.getBranch(), { deadline });
     updateStatus(ctx, connected, result.added, sync.sessionId, config, takeover.state, toolsReady);
   });
 
   // --- session_before_compact ---
-  pi.on("session_before_compact", async (event, _ctx) => {
+  pi.on("session_before_compact", async (event, ctx) => {
     if (!connected || bypassed) return;
 
     if (config.takeoverEnabled) {
+      const deadline = Date.now() + HANDLER_BUDGET_MS;
       const prep = (event as any)?.preparation ?? {};
+      // Native compaction syncs the latest branch, archives all captured
+      // history and reuses pi's own firstKeptEntryId, so hand it the branch.
       return await takeover.handleBeforeCompact({
         firstKeptEntryId: prep.firstKeptEntryId,
         tokensBefore: prep.tokensBefore ?? 0,
-      });
+        signal: (event as any)?.signal,
+      }, () => ctx.sessionManager.getBranch(), { deadline });
     }
 
     const archiveId = await sync.commit();
@@ -414,10 +445,17 @@ export default async function (pi: ExtensionAPI) {
       if (args?.trim() === "commit") {
         await sync.shutdown();
         const commitResult = config.takeoverEnabled ? null : await sync.commit();
+        // Manual commit freezes and confirms the boundary against the current
+        // branch, exactly like the automatic path.
         const ok = config.takeoverEnabled
-          ? await takeover.commitAndAdvance()
+          ? await takeover.commitAndAdvance(() => ctx.sessionManager.getBranch())
           : commitResult !== null;
-        if (ok) {
+        if (!ok && config.takeoverEnabled && takeover.state.pendingArchive) {
+          ctx.ui.notify(
+            "OpenViking: committed; the context is trimmed once the archive summary is ready",
+            "info",
+          );
+        } else if (ok) {
           ctx.ui.notify(
             "OpenViking: committed successfully" +
               (commitResult?.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),

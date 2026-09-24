@@ -440,7 +440,7 @@ Back to viking://resources/source/data.bin.
         "kind": "url",
         "uri": "https://example.com/original",
     }
-    assert "[chapter](viking://resources/target/%E7%AB%A0%E8%8A%82.md)" in overview_doc.body
+    assert "[chapter](viking://resources/target/章节.md)" in overview_doc.body
     assert "viking://resources/source" not in target_overview.decode()
 
     target_abstract = agfs.files["/local/acct/resources/target/.abstract.md"]

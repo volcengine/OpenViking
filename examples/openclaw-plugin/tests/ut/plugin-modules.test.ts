@@ -25,10 +25,28 @@ import { registerOpenVikingLifecycleHooks } from "../../plugin/openviking-lifecy
 import { registerOpenVikingMemoryTools } from "../../plugin/openviking-memory-tools.js";
 import { registerOpenVikingMemoryRecallTools } from "../../plugin/openviking-memory-recall-tools.js";
 import { registerOpenVikingQueryTools } from "../../plugin/openviking-query-tools.js";
+import { createOpenVikingSessionRoutingRuntime } from "../../plugin/openviking-session-routing-runtime.js";
 import { registerOpenVikingRecallTraceTools } from "../../plugin/openviking-recall-trace-tools.js";
 import { registerOpenVikingToolResultTools } from "../../plugin/openviking-tool-result-tools.js";
 
 describe("plugin module seams", () => {
+  it("routes tools without a sender-scoped peer under peer_role=sender when the sender is missing", () => {
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const { resolvePluginSessionRouting } = createOpenVikingSessionRoutingRuntime({
+      peerRole: "sender",
+      peerPrefix: "default",
+      logFindRequests: false,
+      logger,
+    });
+
+    expect(resolvePluginSessionRouting({ sessionId: "session-1" }).actorPeerId).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("no sender identity"));
+
+    logger.warn.mockClear();
+    expect(resolvePluginSessionRouting({ sessionId: "session-1", requesterSenderId: "ou_01:abc" }).actorPeerId).toBe("ou_01_abc");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("registers only enabled OpenViking tools through the tool-registration seam", () => {
     const api = { registerTool: vi.fn() };
     const logger = { debug: vi.fn() };

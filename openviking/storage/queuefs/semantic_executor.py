@@ -197,6 +197,7 @@ class SemanticTreeExecutor:
         artifact_files: Optional[List[str]] = None,
         file_abstracts: Optional[Dict[str, str]] = None,
         semantic_plan: Optional["SemanticPlan"] = None,
+        telemetry_id: str | None = None,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -233,6 +234,7 @@ class SemanticTreeExecutor:
         self._task_context = get_task_context()
         self._processing_index = None
         self._telemetry = get_current_telemetry()
+        self._telemetry_id = telemetry_id
         self._stale = False
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
@@ -1145,6 +1147,8 @@ class SemanticTreeExecutor:
                 vectorize_kwargs: Dict[str, Any] = {}
                 if file_content is not None:
                     vectorize_kwargs["file_content"] = file_content
+                if self._telemetry_id is not None:
+                    vectorize_kwargs["telemetry_id"] = self._telemetry_id
                 manifest_md5 = self._file_md5s.get(file_path.rstrip("/")) or None
                 if file_content is not None and not manifest_md5:
                     file_md5 = content_md5(file_content)
@@ -1517,6 +1521,8 @@ class SemanticTreeExecutor:
                             "include_abstract": include_abstract,
                             "include_overview": include_overview,
                         }
+                    if self._telemetry_id is not None:
+                        directory_vector_kwargs["telemetry_id"] = self._telemetry_id
                     if include_abstract or include_overview:
                         enqueued_levels = await self._processor._vectorize_directory(
                             dir_uri,
@@ -1572,6 +1578,11 @@ class SemanticTreeExecutor:
                         }
                     ),
                     ctx=self._ctx,
+                    **(
+                        {"telemetry_id": self._telemetry_id}
+                        if self._telemetry_id is not None
+                        else {}
+                    ),
                 )
                 if enqueued:
                     enqueued_levels.add(level)

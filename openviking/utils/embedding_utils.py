@@ -411,6 +411,7 @@ async def vectorize_directory_meta(
     content_is_body: bool = False,
     actions: Optional[Dict[int, IndexAction | str]] = None,
     field_patches: Optional[Dict[int, FieldPatch]] = None,
+    telemetry_id: str | None = None,
 ) -> set[int]:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -472,6 +473,7 @@ async def vectorize_directory_meta(
                         IndexAction.MERGE,
                     )
                 ),
+                telemetry_id=telemetry_id,
             )
             level_overrides = (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value))
             _apply_scalar_overrides(
@@ -532,6 +534,7 @@ async def vectorize_directory_meta(
                         IndexAction.MERGE,
                     )
                 ),
+                telemetry_id=telemetry_id,
             )
             level_overrides = (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value))
             _apply_scalar_overrides(
@@ -588,6 +591,7 @@ async def vectorize_file(
     file_md5: Optional[str] = None,
     file_content: Optional[bytes] = None,
     action: str = "merge",
+    telemetry_id: str | None = None,
 ) -> bool:
     """
     Vectorize a single file.
@@ -725,6 +729,7 @@ async def vectorize_file(
         embedding_msg = EmbeddingMsgConverter.from_context(
             context,
             action=resolved_action,
+            telemetry_id=telemetry_id,
         )
         if not embedding_msg:
             return False

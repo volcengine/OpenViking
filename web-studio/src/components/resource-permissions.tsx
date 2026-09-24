@@ -1,5 +1,17 @@
 import { useState } from 'react'
-import { ArrowLeftIcon, CheckIcon, PlusIcon, SearchIcon } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  CheckIcon,
+  CircleHelpIcon,
+  Globe2Icon,
+  LockKeyholeIcon,
+  PlusIcon,
+  SearchIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
+  UserRoundIcon,
+  UsersRoundIcon,
+} from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -7,7 +19,12 @@ import { useAclManagement } from '#/hooks/use-acl-management'
 import { ResourceAclIdentityRecovery } from './resource-acl-identity-recovery'
 import { isOvClientError } from '#/lib/ov-client'
 import { Button } from '#/components/ui/button'
-import { Badge } from '#/components/ui/badge'
+import { Switch } from '#/components/ui/switch'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '#/components/ui/popover'
 import { Input } from '#/components/ui/input'
 import { Field, FieldGroup, FieldLabel } from '#/components/ui/field'
 import {
@@ -30,7 +47,13 @@ import {
   AlertDialogAction,
 } from '#/components/ui/alert-dialog'
 import { isSharedAclTarget } from '#/lib/resource-acl'
-import type { AclChange, AclEntry, AclLevel } from '#/lib/resource-acl'
+import { normalizeFileUri, parentUri } from '#/lib/viking-uri'
+import type {
+  AclChange,
+  AclEntry,
+  AclLevel,
+  AclReport,
+} from '#/lib/resource-acl'
 import { fetchAdminGroups, fetchAdminUsersPage } from '#/lib/admin'
 import { getErrorMessage } from '#/routes/users/-lib/error'
 import { useDebouncedValue } from '#/routes/resources/-hooks/viking-fm'
@@ -50,6 +73,21 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
     queryKey: key,
     queryFn: () => state.api.get(uri),
     enabled: state.allowed && isSharedAclTarget(uri),
+    retry: false,
+  })
+  const sourceReports = useQuery({
+    queryKey: ['resource-acl-sources', state.aclIdentityScopeKey, uri],
+    queryFn: async () =>
+      Promise.allSettled(
+        aclParentUris(uri).map(async (ancestor) => ({
+          uri: ancestor,
+          report: await state.api.get(ancestor),
+        })),
+      ),
+    enabled:
+      report.isSuccess &&
+      report.data.acl_mode !== 'restricted' &&
+      report.data.inherited_entries.length > 0,
     retry: false,
   })
   const mutation = useMutation({
@@ -89,10 +127,46 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
       report.error.code === 'PERMISSION_DENIED')
   const restricted = report.data?.acl_mode === 'restricted'
   const defaultShared = report.data?.acl_mode === 'none'
-  const modeChange = confirm?.kind === 'mode'
+  const directGrants = new Map(
+    report.data?.direct_entries.map((entry) => [entry.principal, entry]) ?? [],
+  )
+  const inheritedGrants = new Map(
+    report.data?.inherited_entries.map((entry) => [entry.principal, entry]) ??
+      [],
+  )
   return (
     <section className="min-w-0">
       <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-end gap-2">
+          <label
+            htmlFor="inherit-parent-grants"
+            className="text-sm font-medium"
+          >
+            {t('acl.inheritParent')}
+          </label>
+          <Popover>
+            <PopoverTrigger
+              aria-label={t('acl.inheritHelpLabel')}
+              className="rounded-md p-1 text-muted-foreground hover:text-foreground"
+            >
+              <CircleHelpIcon className="size-4" />
+            </PopoverTrigger>
+            <PopoverContent className="max-w-80 text-sm">
+              {t('acl.inheritHelp')}
+            </PopoverContent>
+          </Popover>
+          <Switch
+            id="inherit-parent-grants"
+            checked={!restricted}
+            disabled={!writable}
+            onCheckedChange={(inherit) =>
+              setConfirm({
+                kind: 'mode',
+                mode: inherit ? 'inherit' : 'restricted',
+              })
+            }
+          />
+        </div>
         {report.isPending ? (
           <p role="status">{t('loading')}</p>
         ) : report.isError && permissionDenied ? (
@@ -142,106 +216,177 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
                 <h2 className="text-sm font-medium">
                   {t('acl.peopleWithAccess')}
                 </h2>
-                {!defaultShared && (
-                  <Button
-                    size="sm"
-                    disabled={!writable}
-                    onClick={() => setGrantOpen(true)}
-                  >
-                    <PlusIcon data-icon="inline-start" />
-                    {t('acl.addGrant')}
-                  </Button>
-                )}
-              </div>
-              {defaultShared && (
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b py-4">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">{t('acl.everyone')}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {t('acl.defaultRule')}
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!writable}
-                    onClick={() =>
-                      setConfirm({ kind: 'mode', mode: 'restricted' })
-                    }
-                  >
-                    {t('acl.limitAccess')}
-                  </Button>
-                </div>
-              )}
-              {!defaultShared &&
-                report.data.direct_entries.length === 0 &&
-                (restricted || report.data.inherited_entries.length === 0) && (
-                  <p className="py-6 text-sm text-muted-foreground">
-                    {t('acl.onlyAdmins')}
-                  </p>
-                )}
-              {report.data.direct_entries.map((entry) => (
-                <div
-                  key={entry.principal}
-                  className="flex flex-wrap items-center gap-3 border-b py-3 last:border-b-0"
+                <Button
+                  size="sm"
+                  disabled={!writable}
+                  onClick={() => setGrantOpen(true)}
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="break-all text-sm font-medium">
-                      {principalLabel(entry.principal, t('acl.everyone'))}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {t('acl.directSource')} ·{' '}
-                      {t(`acl.subjects.${principalType(entry.principal)}`)}
-                    </p>
-                  </div>
-                  <LevelSelect
-                    value={entry.level}
-                    disabled={!writable}
-                    label={t('acl.levelFor', { principal: entry.principal })}
-                    onChange={(level) =>
-                      mutation.mutate({
-                        kind: 'grant',
-                        principal: entry.principal,
-                        level,
-                      })
-                    }
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!writable}
-                    onClick={() =>
-                      setConfirm({
-                        kind: 'revoke',
-                        principal: entry.principal,
-                      })
-                    }
-                  >
-                    {t('acl.remove')}
-                  </Button>
-                </div>
-              ))}
-              {!restricted &&
-                !defaultShared &&
-                report.data.inherited_entries.map((entry) => (
-                  <div
-                    key={`parent:${entry.principal}`}
-                    className="flex items-center gap-3 border-b py-3 last:border-b-0"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="break-all text-sm font-medium">
-                        {principalLabel(entry.principal, t('acl.everyone'))}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {t('acl.inheritedSource')} ·{' '}
-                        {t(`acl.subjects.${principalType(entry.principal)}`)}
-                      </p>
-                    </div>
-                    <Badge variant="outline">
-                      {t(`acl.levels.${entry.level}`)}
-                    </Badge>
-                  </div>
-                ))}
+                  <PlusIcon data-icon="inline-start" />
+                  {t('acl.addGrant')}
+                </Button>
+              </div>
+              <div className="overflow-x-auto rounded-md border">
+                <table className="w-full min-w-[600px] table-fixed text-sm">
+                  <colgroup>
+                    <col className="w-[36%]" />
+                    <col className="w-[37%]" />
+                    <col className="w-[27%]" />
+                  </colgroup>
+                  <thead className="bg-muted/20 text-left text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-2.5 font-medium">
+                        {t('acl.grantSubjectColumn')}
+                      </th>
+                      <th className="px-4 py-2.5 font-medium">
+                        {t('acl.grantLevelColumn')}
+                      </th>
+                      <th className="px-4 py-2.5 font-medium">
+                        {t('acl.grantSourceColumn')}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    <tr>
+                      <td className="px-4 py-3">
+                        <GrantSubject
+                          label={t('acl.accountAdministrators')}
+                          kind="admin"
+                          description={t('acl.administratorRole')}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center gap-2">
+                          {t('acl.levels.manage')}
+                          <LockKeyholeIcon className="size-4 text-muted-foreground" />
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {t('acl.administratorSource')}
+                      </td>
+                    </tr>
+                    {defaultShared && (
+                      <tr>
+                        <td className="px-4 py-3">
+                          <GrantSubject
+                            label={t('acl.everyone')}
+                            kind="everyone"
+                            description={t('acl.subjects.everyone')}
+                          />
+                        </td>
+                        <td className="px-4 py-3">{t('acl.levels.manage')}</td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {t('acl.defaultRule')}
+                        </td>
+                      </tr>
+                    )}
+                    {report.data.effective_entries.map((entry) => {
+                      const direct = directGrants.get(entry.principal)
+                      const inherited = restricted
+                        ? undefined
+                        : inheritedGrants.get(entry.principal)
+                      const source = inherited
+                        ? findGrantSource(inherited, sourceReports.data)
+                        : null
+                      return (
+                        <tr key={entry.principal}>
+                          <td className="px-4 py-3">
+                            <GrantSubject
+                              label={principalLabel(
+                                entry.principal,
+                                t('acl.everyone'),
+                              )}
+                              kind={principalType(entry.principal)}
+                              description={t(
+                                `acl.subjects.${principalType(entry.principal)}`,
+                              )}
+                            />
+                          </td>
+                          <td className="px-4 py-3 align-middle">
+                            <div className="space-y-2">
+                              {(!direct || direct.level !== entry.level) && (
+                                <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                                  {direct
+                                    ? t('acl.effectiveLevel', {
+                                        level: t(`acl.levels.${entry.level}`),
+                                      })
+                                    : t(`acl.levels.${entry.level}`)}
+                                  {!direct && (
+                                    <LockKeyholeIcon className="size-4 text-muted-foreground" />
+                                  )}
+                                </span>
+                              )}
+                              {direct && (
+                                <div className="space-y-1">
+                                  {direct.level !== entry.level && (
+                                    <span className="block text-xs text-muted-foreground">
+                                      {t('acl.directSource')}
+                                    </span>
+                                  )}
+                                  <div className="flex items-center gap-1">
+                                    <LevelSelect
+                                      value={direct.level}
+                                      disabled={!writable}
+                                      label={t('acl.levelFor', {
+                                        principal: entry.principal,
+                                      })}
+                                      onChange={(level) =>
+                                        mutation.mutate({
+                                          kind: 'grant',
+                                          principal: entry.principal,
+                                          level,
+                                        })
+                                      }
+                                    />
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      disabled={!writable}
+                                      aria-label={t('acl.removeFor', {
+                                        principal: entry.principal,
+                                      })}
+                                      onClick={() =>
+                                        setConfirm({
+                                          kind: 'revoke',
+                                          principal: entry.principal,
+                                        })
+                                      }
+                                    >
+                                      <Trash2Icon />
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            <span
+                              className="block truncate"
+                              title={
+                                direct && inherited
+                                  ? t('acl.directAndInheritedSource')
+                                  : direct
+                                    ? t('acl.directSource')
+                                    : t('acl.inheritedSource')
+                              }
+                            >
+                              {direct && inherited
+                                ? t('acl.directAndInheritedSource')
+                                : direct
+                                  ? t('acl.directSource')
+                                  : t('acl.inheritedSource')}
+                            </span>
+                            {source && (
+                              <span className="block truncate" title={source}>
+                                {source}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </section>
           </div>
         )}
@@ -255,12 +400,26 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
         <AlertDialogContent onKeyDown={(event) => event.stopPropagation()}>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {t(modeChange ? 'acl.limitTitle' : 'acl.remove')}
+              {t(
+                confirm?.kind === 'mode'
+                  ? confirm.mode === 'restricted'
+                    ? 'acl.restrictTitle'
+                    : 'acl.restoreTitle'
+                  : 'acl.remove',
+              )}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {t(modeChange ? 'acl.limitWarning' : 'acl.removeWarning', {
-                principal: confirm?.kind === 'revoke' ? confirm.principal : '',
-              })}
+              {t(
+                confirm?.kind === 'mode'
+                  ? confirm.mode === 'restricted'
+                    ? 'acl.restrictWarning'
+                    : 'acl.restoreWarning'
+                  : 'acl.removeWarning',
+                {
+                  principal:
+                    confirm?.kind === 'revoke' ? confirm.principal : '',
+                },
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -287,6 +446,68 @@ function principalLabel(principal: string, everyone: string) {
   return principal === 'user:*'
     ? everyone
     : principal.replace(/^(user|group):/, '')
+}
+function aclParentUris(uri: string): string[] {
+  const parents: string[] = []
+  let current = normalizeFileUri(parentUri(uri))
+  while (current.startsWith('viking://resources')) {
+    parents.push(current)
+    if (current === 'viking://resources') break
+    current = normalizeFileUri(parentUri(current))
+  }
+  return parents
+}
+function findGrantSource(
+  entry: AclEntry,
+  reports?: PromiseSettledResult<{ uri: string; report: AclReport }>[],
+): string | null {
+  for (const result of reports ?? []) {
+    if (result.status === 'rejected') break
+    const { uri, report } = result.value
+    if (
+      report.direct_entries.some(
+        (grant) =>
+          grant.principal === entry.principal && grant.level === entry.level,
+      )
+    ) {
+      return uri.replace('viking://resources', 'resources')
+    }
+    if (report.acl_mode === 'restricted') break
+  }
+  return null
+}
+function GrantSubject({
+  label,
+  description,
+  kind,
+}: {
+  label: string
+  description: string
+  kind: 'user' | 'group' | 'everyone' | 'admin'
+}) {
+  const Icon =
+    kind === 'group'
+      ? UsersRoundIcon
+      : kind === 'everyone'
+        ? Globe2Icon
+        : kind === 'admin'
+          ? ShieldCheckIcon
+          : UserRoundIcon
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Icon className="size-4" />
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate font-medium" title={label}>
+          {label}
+        </span>
+        <span className="block text-xs text-muted-foreground">
+          {description}
+        </span>
+      </span>
+    </div>
+  )
 }
 function principalType(principal: string) {
   return principal === 'user:*'

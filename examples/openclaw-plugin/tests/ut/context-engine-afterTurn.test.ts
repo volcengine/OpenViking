@@ -221,6 +221,20 @@ describe("context-engine afterTurn()", () => {
     );
   });
 
+  it("captures without a peer_id under peer_role=sender when the sender is missing", async () => {
+    const { engine, client } = makeEngine({ cfgOverrides: { peer_role: "sender" } });
+
+    await engine.afterTurn!({
+      sessionId: "s1",
+      sessionFile: "",
+      messages: [{ role: "user", content: "hello world" }],
+      prePromptMessageCount: 0,
+    });
+
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
+    expect(client.addSessionMessage.mock.calls[0][5]).toBeUndefined();
+  });
+
   it("does not attribute user messages to the sender in assistant mode", async () => {
     const { engine, client } = makeEngine();
 

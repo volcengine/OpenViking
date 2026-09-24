@@ -33,7 +33,7 @@ async function captureTranscript(ctx, state) {
     }
     toSend.push({ hash, turn: kept[0] });
   }
-  const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.turn));
+  const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.turn), ctx.peerId);
   const captured = result.sent + result.queued;
   for (const item of toSend.slice(0, captured)) capturedHashes.add(item.hash);
   return {

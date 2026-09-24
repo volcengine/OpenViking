@@ -1434,6 +1434,12 @@ plugin_dir_on_disk() { # plugin_dir_on_disk <plugin-subdir>
 # sibling, the assembled runtime, and a marketplace or source root an earlier
 # step resolved. Never plugin_dir_on_disk: it would clone a repository, or exit
 # for want of git, just to remove hooks.
+#
+# REPO_DIR is in the list because ensure_checkout only ever runs inside a
+# command substitution (`plugin_dir="$(plugin_dir_on_disk ...)"`); its SRC_ROOT
+# assignment dies with that subshell while the checkout it wrote stays on disk.
+# OpenCode reads the installer's JavaScript from that checkout rather than a
+# vendored copy, so without this its remote install cannot find the runtime.
 install_lib_dir() {
   local src self candidate
   src="${BASH_SOURCE[0]:-}"
@@ -1445,6 +1451,7 @@ install_lib_dir() {
     "${self:+$self/lib/install}" \
     "$OV_HOME/agent-integrations/memory-plugin-shared/lib/install" \
     "${MKT_DIR:+$MKT_DIR/memory-plugin-shared/lib/install}" \
+    "${REPO_DIR:+$REPO_DIR/examples/memory-plugin-shared/lib/install}" \
     "${SRC_ROOT:+$SRC_ROOT/examples/memory-plugin-shared/lib/install}"; do
     [ -n "$candidate" ] && [ -d "$candidate" ] || continue
     printf '%s' "$candidate"

@@ -368,6 +368,53 @@ test("autoRecall false stops the recall request", async () => {
   assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]), null);
 });
 
+// recall-core reads options.excludeUris, but the DSH runtime built its options
+// without it, so nothing a user configured could stop a subtree from being
+// recalled: generated directory files came back as ordinary hits.
+test("recallExcludeUris reaches the search request", async () => {
+  const bodies = [];
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON(path, init) {
+      if (/\/search\/search$/.test(path)) bodies.push(JSON.parse(init.body));
+      return {
+        ok: true,
+        result: {
+          context: "<openviking-context>\nrecalled\n</openviking-context>",
+          stats: {},
+        },
+      };
+    },
+  }, { ...config(), recallExcludeUris: ["viking://user/default/skills", "viking://agent/skills"] }, { debug() {} });
+  runtime.initialize = async () => ({
+    ready: true,
+    config: { ...config(), recallExcludeUris: ["viking://user/default/skills", "viking://agent/skills"] },
+  });
+
+  await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]);
+
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(bodies[0].exclude_uris, ["viking://user/default/skills", "viking://agent/skills"]);
+});
+
+test("recall sends no exclude_uris when recallExcludeUris is unset", async () => {
+  const bodies = [];
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON(path, init) {
+      if (/\/search\/search$/.test(path)) bodies.push(JSON.parse(init.body));
+      return {
+        ok: true,
+        result: { context: "<openviking-context>\nrecalled\n</openviking-context>", stats: {} },
+      };
+    },
+  }, config(), { debug() {} });
+  runtime.initialize = async () => ({ ready: true, config: config() });
+
+  await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]);
+
+  assert.equal(bodies.length, 1);
+  assert.equal("exclude_uris" in bodies[0], false);
+});
+
 test("syncTurns false sends nothing: no capture, no commit, no dispose flush, no replay", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-sync-off-"));
   tempDirs.push(pendingDir);

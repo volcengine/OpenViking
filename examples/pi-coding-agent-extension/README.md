@@ -185,10 +185,25 @@ integrations should configure category `quotas` when they need exact ceilings.
 
 ### Context takeover
 
-Takeover is enabled by default. OpenViking commits archived history, polls the
-session overview, then the `context` hook replaces covered conversation turns
-with a synthetic `[OpenViking Session Context]` user message while keeping the
-recent live tail.
+Takeover is enabled by default. OpenViking commits archived history, reads the
+overview of that exact archive, then the `context` hook replaces covered
+conversation turns with a synthetic `[OpenViking Session Context]` user message
+while keeping the recent live tail. The boundary advances only after every
+captured message in the cut has reached the server and the new archive has a
+non-empty overview. Permanent capture gaps leave the local history with Pi.
+
+Takeover never waits for the summary inside a turn: pi hosts cap each extension
+event handler at 30s, so a summary that is not ready yet is checked once per
+later turn and before the next prompt. An archive the server marks finished
+or failed without a summary (for example with Working Memory disabled) is
+dropped instead of being checked forever.
+
+When `openviking_list` and `openviking_read` are active, the injected overview
+also includes the archive URI and a short recovery instruction. `openviking_list`
+locates the archive and `openviking_read` reads `messages.jsonl` in `offset` /
+`limit` chunks. This file contains captured historical messages; semantic search
+does not return the archive source verbatim, and capture may have sanitized,
+filtered or truncated the original Pi transcript.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
@@ -196,8 +211,8 @@ recent live tail.
 | `takeoverTokenThreshold` | `30000`    | Synced-token pressure that triggers commit and boundary advance           |
 | `takeoverKeepRecentTurns`| `3`        | Recent user turns retained in full fidelity                              |
 | `takeoverOverviewBudget` | `3000`     | Token budget for the injected archive overview                           |
-| `takeoverOverviewPollMs` | `2000`     | Delay between overview polling attempts after commit                     |
-| `takeoverOverviewPollMax`| `15`       | Max overview polling attempts before fail-open                           |
+| `takeoverOverviewPollMs` | `2000`     | Delay between overview reads while answering pi's compaction             |
+| `takeoverOverviewPollMax`| `15`       | Max overview reads for pi's compaction; capped by the 25s handler budget |
 
 ### Injection tuning
 
@@ -311,6 +326,14 @@ The canonical `/viking` command (type `/viking` in pi's chat) displays connectio
 
 ## Upgrading from 0.3.x
 
+0.4.2 makes context takeover conservative: it keeps Pi's system/tool state,
+anchors the trim boundary on a Pi entry id, waits for confirmed capture
+delivery, reads the overview belonging to the exact new archive without
+blocking a turn on it, and exposes a paginated archive-recovery hint when the
+required MCP tools are active. Sessions with a permanent capture gap stay on
+Pi's native compaction. A boundary saved by 0.4.1 or earlier is converted on
+the first request.
+
 0.4.0 replaces the seven hand-written `viking_*` REST tools with the server's own MCP tool surface. There is no alias period: the old names are gone.
 
 - **Tool names.** Every tool is now `openviking_` + the server's own name: `viking_search` → `openviking_search`, `viking_read` → `openviking_read`, `viking_remember` → `openviking_remember`, `viking_forget` → `openviking_forget`, `viking_add_resource` → `openviking_add_resource`. `viking_browse` is covered by `openviking_list`, `openviking_tree` and `openviking_glob`; its stat mode and `viking_archive_expand` have no successor.
@@ -385,7 +408,7 @@ TypeScript is loaded directly by pi's jiti transpiler. The official MCP client i
 | Tools not showing after `pi -c` resume  | Known pi issue (tools not re-registered on resume)   | Workaround built in — tools register in `before_agent_start`|
 | Extension crashes on load               | Wrong OV server URL or network issue                 | Check `logLevel` and server accessibility                   |
 | No memories extracted                   | Wrong embedding/extraction model in OV config        | Check OV's `embedding` / `vlm` configuration                |
-| Takeover never advances                  | Pending addMessage replay, commit, or overview polling failed | Set `OPENVIKING_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
+| Takeover never advances                  | Pending addMessage replay or commit failed, or the archive summary never arrives (Working Memory disabled on the server) | Set `OPENVIKING_DEBUG_LOG=/tmp/ov-pi.log` and retry `/viking commit` |
 
 ## License
 

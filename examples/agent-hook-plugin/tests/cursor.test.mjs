@@ -134,9 +134,10 @@ test("Cursor injects recall before the request and Stop captures transcript delt
       runHook("stop", { ...base, transcript_path: transcript }, env),
       runHook("stop", { ...base, transcript_path: transcript }, env),
     ]);
+    // Session writes ignore the actor-peer header, so the peer rides in the body.
     assert.deepEqual(messages, [
-      { role: "user", content: "question" },
-      { role: "assistant", content: "answer" },
+      { role: "user", content: "question", peer_id: "github.com-acme-cursor-project" },
+      { role: "assistant", content: "answer", peer_id: "github.com-acme-cursor-project" },
     ]);
   } finally {
     server.close();

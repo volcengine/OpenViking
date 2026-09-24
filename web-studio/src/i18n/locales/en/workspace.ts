@@ -210,6 +210,7 @@ const workspace = {
   },
   agentExperiencePage: {
     pageCount: '{{count}} experiences on this page',
+    searchCount: '{{count}} search results shown',
     setup: {
       expand: 'Expand steps',
       collapse: 'Collapse',
@@ -230,11 +231,10 @@ const workspace = {
     description:
       'Track experiences distilled from committed sessions, along with the trajectories and outcomes produced after they are applied.',
     refresh: 'Refresh',
-    searchPlaceholder: 'Search this page by name or URI',
+    searchPlaceholder: 'Search experiences',
     searchClear: 'Clear',
-    searchNoResults: 'No matching experiences on this page',
-    searchNoResultsDescription:
-      'Clear the search or switch pages to continue browsing.',
+    searchNoResults: 'No matching experiences',
+    searchNoResultsDescription: 'Clear the search to continue browsing.',
     loading: 'Loading experiences...',
     loadFailed: 'Could not load experiences',
     networkError:
@@ -843,14 +843,27 @@ const workspace = {
       includeParent: 'Include parent grants',
       excludeParent: 'Exclude parent grants',
       limitAccess: 'Restrict access',
+      inheritParent: 'Inherit parent grants',
+      inheritHelpLabel: 'About inheriting parent grants',
+      inheritHelp:
+        'When enabled, parent grants and grants added here both apply. When disabled, only grants added here apply. Switching does not delete direct grants. Descendants inherit this directory’s effective permissions by default.',
       limitTitle: 'Restrict access to this directory?',
       limitWarning:
         'This directory will stop inheriting parent grants. Existing direct grants, including Everyone grants, remain active. Review these grants after switching. Account administrators retain access.',
       peopleWithAccess: 'People and groups with access',
+      grantSubjectColumn: 'User / group',
+      grantLevelColumn: 'Permission',
+      effectiveLevel: 'Effective: {{level}}',
+      grantSourceColumn: 'Source',
+      accountAdministrators: 'Account administrators',
+      administratorRole: 'System role',
+      administratorSource: 'Account administrator access',
+      removeFor: 'Remove direct grant for {{principal}}',
       defaultRule: 'Inherits parent permissions by default',
       onlyAdmins: 'No grants yet; account administrators can still access',
-      directSource: 'Granted here',
-      inheritedSource: 'From parent',
+      directSource: 'Direct grant',
+      inheritedSource: 'Inherited grant',
+      directAndInheritedSource: 'Inherited + direct grant',
       adminCredentialIdentity:
         'Permission management uses the account administrator credential for {{account}}. Resource browsing still uses the current user.',
       identity:

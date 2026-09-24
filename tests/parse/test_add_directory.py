@@ -351,23 +351,25 @@ class TestDirectWriteFiles:
 
     @pytest.mark.asyncio
     async def test_local_store_merges_parsed_and_direct_files(self, tmp_path: Path) -> None:
-        source = tmp_path / "source"
+        source = tmp_path / "source folder"
         source.mkdir()
         (source / "guide.md").write_text("# Guide\n\nbody", encoding="utf-8")
-        (source / "main.py").write_text("print('ok')", encoding="utf-8")
+        nested = source / "team notes"
+        nested.mkdir()
+        (nested / "main file.py").write_text("print('ok')", encoding="utf-8")
         store = LocalParseOutputStore(str(tmp_path / "artifacts"))
 
         result = await DirectoryParser().parse(source, parse_output_store=store)
 
         assert result.artifact_ref is not None
         assert result.artifact_ref.backend == "local"
-        assert result.artifact_ref.resource_rel == "source"
-        root = Path(result.artifact_ref.root) / "source"
-        assert (root / "main.py").read_text() == "print('ok')"
+        assert result.artifact_ref.resource_rel == "source_folder"
+        root = Path(result.artifact_ref.root) / "source_folder"
+        assert (root / "team_notes" / "main_file.py").read_text() == "print('ok')"
         assert (root / "guide" / "guide.md").read_text() == "# Guide\n\nbody"
         assert set(await read_artifact_manifest(store, result.artifact_ref)) == {
-            "source/main.py",
-            "source/guide/guide.md",
+            "source_folder/team_notes/main_file.py",
+            "source_folder/guide/guide.md",
         }
 
 

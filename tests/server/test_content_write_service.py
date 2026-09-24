@@ -1231,8 +1231,8 @@ async def test_create_mode_memory_scope(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_mode_resource_scope(monkeypatch):
-    file_uri = "viking://resources/demo/test.md"
-    root_uri = "viking://resources/demo"
+    file_uri = "viking://resources/team_notes/final_draft.md"
+    root_uri = "viking://resources/team_notes"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=False)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
@@ -1254,10 +1254,15 @@ async def test_create_mode_resource_scope(monkeypatch):
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     result = await coordinator.write(
-        uri=file_uri, content="content", mode="create", ctx=ctx, wait=True
+        uri="viking://resources/team notes/final draft.md",
+        content="content",
+        mode="create",
+        ctx=ctx,
+        wait=True,
     )
     assert result["context_type"] == "resource"
-    assert viking_fs.content[file_uri] == "content"
+    assert result["uri"] == file_uri
+    assert viking_fs.content == {file_uri: "content"}
 
 
 class _AnyDirVikingFS:

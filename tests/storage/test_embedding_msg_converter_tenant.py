@@ -8,6 +8,7 @@ import pytest
 from openviking.core.context import Context, Vectorize
 from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -59,3 +60,14 @@ def test_embedding_msg_converter_keeps_only_embedding_input():
     assert msg.message == "bounded embedding text"
     assert "content" not in msg.context_data
     assert msg.action is IndexAction.MERGE
+
+
+def test_embedding_msg_converter_prefers_explicit_telemetry_id():
+    context = Context(uri="viking://resources/doc.md", abstract="summary")
+    ambient = OperationTelemetry(operation="ambient", enabled=False)
+
+    with bind_telemetry(ambient):
+        msg = EmbeddingMsgConverter.from_context(context, telemetry_id="request-telemetry-id")
+
+    assert msg is not None
+    assert msg.telemetry_id == "request-telemetry-id"

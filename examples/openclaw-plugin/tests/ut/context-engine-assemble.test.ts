@@ -117,6 +117,20 @@ describe("context-engine assemble()", () => {
       expect(result.estimatedTokens).toBeGreaterThan(systemPromptTokens(result.systemPromptAddition));
     });
 
+    it("still recalls under peer_role=sender when the host supplies no sender", async () => {
+      const { engine, client, logger } = makeEngine(undefined, { cfgOverrides: { autoRecall: true, peer_role: "sender" } });
+      mockRecall(client);
+      const result = await engine.assemble({ sessionId: "session", messages: [], prompt });
+      expect(client.searchContext).toHaveBeenCalledWith(prompt, expect.objectContaining({ actorPeerId: undefined }));
+      expect(result.systemPromptAddition).toContain(memory);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("no sender identity"));
+
+      logger.warn.mockClear();
+      await engine.assemble({ sessionId: "session", messages: [], prompt, runtimeContext: { senderId: "telegram:12345" } });
+      expect(client.searchContext).toHaveBeenLastCalledWith(prompt, expect.objectContaining({ actorPeerId: "telegram_12345" }));
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
     it("recalls another detail from the same memory on a follow-up turn", async () => {
       const { engine, client } = makeEngine(undefined, { cfgOverrides: { autoRecall: true } });
       const savedMemory = "Use Rust; deploy in eu-west.";

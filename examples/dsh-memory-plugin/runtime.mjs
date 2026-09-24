@@ -139,6 +139,7 @@ export class OpenVikingRuntime {
         actorPeerId: state.config.peerId,
         legacyPeerId: state.config.legacyPeerId,
         sessionId: state.ovSessionId,
+        excludeUris: state.config.recallExcludeUris,
         log: (stage, data) => this.log(stage, data),
       },
     );

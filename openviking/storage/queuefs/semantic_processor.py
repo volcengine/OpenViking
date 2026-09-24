@@ -8,7 +8,7 @@ import threading
 import time
 from contextlib import nullcontext
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import unquote, urlsplit
 
 from openviking.core.namespace import classify_uri
 from openviking.observability.context import (
@@ -44,6 +44,7 @@ from openviking.storage.abstract_overview import (
     body_for_preview,
     deterministic_sample,
     freshness_metadata,
+    markdown_safe_viking_uri,
     plan_abstract_overview_refresh,
     write_abstract_overview,
 )
@@ -529,6 +530,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                     lock=semantic_lock.lock,
                                     source=msg.plan.source_metadata,
                                     semantic_plan=msg.plan,
+                                    telemetry_id=msg.telemetry_id,
                                 )
                                 await executor.run(run_uri)
                                 self._cache_tree_stats(
@@ -649,6 +651,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 file_md5s=msg.file_md5s,
                                 artifact_files=msg.artifact_files,
                                 file_abstracts=msg.file_abstracts,
+                                telemetry_id=msg.telemetry_id,
                             )
                             await executor.run(run_uri)
                             dag_stats = executor.get_stats()
@@ -960,6 +963,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         summary_dict=summary_dict,
                         ctx=ctx,
                         preserve_existing_created_at=True,
+                        telemetry_id=msg.telemetry_id,
                     )
                 file_summaries[idx] = {
                     "name": str(summary_dict.get("name") or file_name),
@@ -1027,6 +1031,7 @@ class SemanticProcessor(DequeueHandlerBase):
             abstract=abstract,
             overview=overview,
             ctx=ctx,
+            telemetry_id=msg.telemetry_id,
         )
         logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
 
@@ -1334,7 +1339,7 @@ class SemanticProcessor(DequeueHandlerBase):
     def _markdown_link_target(dir_uri: str, entry_name: str) -> str:
         """Build a Markdown-safe target without changing the stored Viking URI."""
         entry_uri = VikingURI(dir_uri).join(entry_name).uri
-        return quote(entry_uri, safe=":/")
+        return markdown_safe_viking_uri(entry_uri)
 
     def _replace_link_references(self, generated_content: str, link_map: Dict[str, str]) -> str:
         """Resolve link placeholders (viking://input_sample_fN / cN) to real URIs.
@@ -1856,6 +1861,7 @@ class SemanticProcessor(DequeueHandlerBase):
         field_patches: Optional[Dict[int, FieldPatch]] = None,
         include_abstract: bool = True,
         include_overview: bool = True,
+        telemetry_id: str | None = None,
     ) -> set[int]:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1887,6 +1893,7 @@ class SemanticProcessor(DequeueHandlerBase):
             field_patches=field_patches,
             include_abstract=include_abstract,
             include_overview=include_overview,
+            telemetry_id=telemetry_id,
         )
 
     async def _load_transfer_file_summaries(
@@ -1912,6 +1919,7 @@ class SemanticProcessor(DequeueHandlerBase):
         level: int,
         field_patch: FieldPatch,
         ctx: RequestContext,
+        telemetry_id: str | None = None,
     ) -> bool:
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
@@ -1927,7 +1935,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 "account_id": ctx.account_id,
                 "owner_user_id": ctx.user.user_id,
             },
-            telemetry_id=get_current_telemetry().telemetry_id,
+            telemetry_id=(
+                get_current_telemetry().telemetry_id if telemetry_id is None else telemetry_id
+            ),
         )
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING, allow_create=True)
@@ -1952,6 +1962,7 @@ class SemanticProcessor(DequeueHandlerBase):
         scalar_override: Optional[Dict[str, Any]] = None,
         field_patch: FieldPatch | None = None,
         action: str = "merge",
+        telemetry_id: str | None = None,
     ) -> bool:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1971,4 +1982,5 @@ class SemanticProcessor(DequeueHandlerBase):
             scalar_override=scalar_override,
             field_patch=field_patch,
             action=action,
+            telemetry_id=telemetry_id,
         )
