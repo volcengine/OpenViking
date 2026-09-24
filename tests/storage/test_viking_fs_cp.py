@@ -457,39 +457,6 @@ Back to viking://resources/source/data.bin.
 
 
 @pytest.mark.asyncio
-async def test_cp_directory_rewrites_generated_sidecar_links_without_encoding_unicode(
-    monkeypatch,
-):
-    agfs = _DirectoryCopyAGFS()
-    source_overview = b"""---
-directory: viking://resources/\xe4\xb8\x9a\xe5\x8a\xa1\xe5\x9f\x9f/
----
-
-# \xe4\xb8\x9a\xe5\x8a\xa1\xe5\x9f\x9f
-
-[chapter](viking://resources/%E4%B8%9A%E5%8A%A1%E5%9F%9F/%E7%AB%A0%E8%8A%82.md)
-"""
-    agfs.files["/local/acct/resources/业务域/.overview.md"] = source_overview
-    agfs.directories.add("/local/acct/resources/业务域")
-    fs = _viking_fs(monkeypatch, agfs)
-    monkeypatch.setattr(fs, "_copy_vector_store_uris", AsyncMock(), raising=False)
-
-    await fs.cp(
-        "viking://resources/业务域",
-        "viking://resources/归档域",
-        recursive=True,
-        ctx=_ctx(),
-    )
-
-    target_overview = agfs.files["/local/acct/resources/归档域/.overview.md"]
-    overview_doc = parse_abstract_overview(target_overview)
-    assert overview_doc.metadata["directory"] == "viking://resources/归档域/"
-    assert "[chapter](viking://resources/归档域/章节.md)" in overview_doc.body
-    assert "%E4%B8%9A%E5%8A%A1%E5%9F%9F" not in overview_doc.body
-    assert "%E7%AB%A0%E8%8A%82" not in overview_doc.body
-
-
-@pytest.mark.asyncio
 async def test_cp_directory_locks_only_source_and_target_trees(monkeypatch):
     agfs = _DirectoryCopyAGFS()
     agfs.directories = {

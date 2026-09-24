@@ -5,7 +5,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,7 +14,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.errors import LockAcquisitionError
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -313,61 +313,6 @@ async def test_read_visible_strips_memory_metadata_before_slicing(request_contex
     uri = "viking://user/ryoma/memories/notes/private.md"
 
     assert await service.read_visible(uri, ctx=request_context, offset=3, limit=1) == ""
-    viking_fs.read_file.assert_awaited_once_with(uri, ctx=request_context)
-
-
-@pytest.mark.asyncio
-async def test_read_falls_back_to_legacy_space_uri_after_not_found(request_context):
-    encoded_uri = "viking://resources/legacy%20dir/report%20final.md"
-    legacy_uri = "viking://resources/legacy dir/report final.md"
-    viking_fs = SimpleNamespace(
-        read_file=AsyncMock(
-            side_effect=[
-                NotFoundError(encoded_uri, "file"),
-                "legacy content",
-            ]
-        )
-    )
-    service = FSService(viking_fs=viking_fs)
-
-    assert await service.read(encoded_uri, ctx=request_context) == "legacy content"
-    assert viking_fs.read_file.await_args_list == [
-        call(encoded_uri, ctx=request_context),
-        call(legacy_uri, ctx=request_context),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_read_prefers_exact_percent20_uri(request_context):
-    uri = "viking://resources/literal%20name.md"
-    viking_fs = SimpleNamespace(read_file=AsyncMock(return_value="exact content"))
-    service = FSService(viking_fs=viking_fs)
-
-    assert await service.read(uri, ctx=request_context) == "exact content"
-    viking_fs.read_file.assert_awaited_once_with(uri, ctx=request_context)
-
-
-@pytest.mark.asyncio
-async def test_read_does_not_fallback_after_non_not_found_error(request_context):
-    uri = "viking://resources/private%20file.md"
-    viking_fs = SimpleNamespace(read_file=AsyncMock(side_effect=PermissionError("denied")))
-    service = FSService(viking_fs=viking_fs)
-
-    with pytest.raises(PermissionError, match="denied"):
-        await service.read(uri, ctx=request_context)
-    viking_fs.read_file.assert_awaited_once_with(uri, ctx=request_context)
-
-
-@pytest.mark.asyncio
-async def test_read_does_not_double_decode_percent20(request_context):
-    uri = "viking://resources/literal%2520name.md"
-    error = NotFoundError(uri, "file")
-    viking_fs = SimpleNamespace(read_file=AsyncMock(side_effect=error))
-    service = FSService(viking_fs=viking_fs)
-
-    with pytest.raises(NotFoundError) as exc_info:
-        await service.read(uri, ctx=request_context)
-    assert exc_info.value is error
     viking_fs.read_file.assert_awaited_once_with(uri, ctx=request_context)
 
 

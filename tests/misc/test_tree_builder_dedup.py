@@ -112,7 +112,7 @@ class TestFinalizeFromTemp:
         assert tree._root_is_file is True
 
     @pytest.mark.asyncio
-    async def test_explicit_to_is_preserved_for_single_no_split_file(self):
+    async def test_explicit_to_is_normalized_for_single_no_split_file(self):
         from openviking.parse.tree_builder import TreeBuilder
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier
@@ -128,34 +128,13 @@ class TestFinalizeFromTemp:
             tree = await TreeBuilder().finalize_from_temp(
                 temp_dir_path="viking://temp/import",
                 ctx=ctx,
-                to_uri="viking://resources/custom-name",
+                to_uri="viking://resources/reports 2026/final draft",
                 flatten_single_file=True,
             )
 
-        assert tree.root.uri == "viking://resources/custom-name"
+        assert tree.root.uri == "viking://resources/reports_2026/final_draft"
         assert tree.root.temp_uri == "viking://temp/import/aa/aa.md"
         assert tree._root_is_file is True
-
-    @pytest.mark.asyncio
-    async def test_explicit_to_sanitizes_whitespace_segments(self):
-        from openviking.parse.tree_builder import TreeBuilder
-        from openviking.server.identity import RequestContext, Role
-        from openviking_cli.session.user_id import UserIdentifier
-
-        entries = {
-            "viking://temp/import": [{"name": "aa", "isDir": True}],
-        }
-        fs = self._make_fs(entries, {"viking://resources"})
-        ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-        with patch("openviking.parse.tree_builder.get_viking_fs", return_value=fs):
-            tree = await TreeBuilder().finalize_from_temp(
-                temp_dir_path="viking://temp/import",
-                ctx=ctx,
-                to_uri="viking://resources/reports 2026/final draft",
-            )
-
-        assert tree.root.uri == "viking://resources/reports_2026/final_draft"
 
     @pytest.mark.asyncio
     async def test_explicit_directory_to_keeps_single_no_split_wrapper(self):

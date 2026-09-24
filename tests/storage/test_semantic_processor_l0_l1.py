@@ -190,7 +190,7 @@ def test_parse_overview_keeps_plain_heading_cache_key(monkeypatch):
     assert processor._parse_overview_md(overview) == {"README.md": "Legacy summary."}
 
 
-def test_markdown_link_target_encodes_ascii_path_characters(monkeypatch):
+def test_markdown_link_target_percent_encodes_uri_path_characters(monkeypatch):
     _patch_semantic_limits(monkeypatch)
     processor = SemanticProcessor()
 
@@ -199,17 +199,6 @@ def test_markdown_link_target_encodes_ascii_path_characters(monkeypatch):
     )
 
     assert target == ("viking://resources/product%20docs/file%20%231%28approved%29.md")
-
-
-def test_markdown_link_target_preserves_unicode_path_characters(monkeypatch):
-    _patch_semantic_limits(monkeypatch)
-    processor = SemanticProcessor()
-
-    target = processor._markdown_link_target(
-        "viking://resources/业务域", "章节说明.md"
-    )
-
-    assert target == "viking://resources/业务域/章节说明.md"
 
 
 def test_abstract_truncation_prefers_complete_sentence(monkeypatch):

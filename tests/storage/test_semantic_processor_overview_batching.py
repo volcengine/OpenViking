@@ -133,55 +133,16 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
     )
 
     overview = await SemanticProcessor()._generate_overview(
-        "viking://resources/product docs",
+        "viking://resources/业务 docs",
         file_summaries=[
             {"name": "first file.md", "summary": "first summary"},
-            {"name": "second#file.md", "summary": "second summary"},
+            {"name": "第二章#file.md", "summary": "second summary"},
         ],
         children_abstracts=[],
     )
 
     assert overview == (
-        "[first](viking://resources/product%20docs/first%20file.md) and "
-        "[second](viking://resources/product%20docs/second%23file.md)"
+        "[first](viking://resources/业务%20docs/first%20file.md) and "
+        "[second](viking://resources/业务%20docs/第二章%23file.md)"
     )
     assert "viking://input_sample_" not in overview
-
-
-@pytest.mark.asyncio
-async def test_batched_merge_preserves_unicode_uri_segments(monkeypatch):
-    vlm = MergePlaceholderVLM()
-    config = SimpleNamespace(
-        vlm=vlm,
-        semantic=SimpleNamespace(
-            max_overview_prompt_chars=1,
-            overview_batch_size=1,
-        ),
-        output_language_override="zh-CN",
-    )
-    monkeypatch.setattr(
-        semantic_processor_module,
-        "get_openviking_config",
-        lambda: config,
-    )
-    monkeypatch.setattr(
-        semantic_processor_module,
-        "render_prompt",
-        lambda _name, values: values["file_summaries"],
-    )
-
-    overview = await SemanticProcessor()._generate_overview(
-        "viking://resources/业务域",
-        file_summaries=[
-            {"name": "第一章.md", "summary": "first summary"},
-            {"name": "第二章.md", "summary": "second summary"},
-        ],
-        children_abstracts=[],
-    )
-
-    assert overview == (
-        "[first](viking://resources/业务域/第一章.md) and "
-        "[second](viking://resources/业务域/第二章.md)"
-    )
-    assert "%E4%B8%9A%E5%8A%A1%E5%9F%9F" not in overview
-    assert "%E7%AC%AC%E4%B8%80%E7%AB%A0" not in overview

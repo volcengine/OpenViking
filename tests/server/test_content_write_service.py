@@ -1008,32 +1008,6 @@ async def test_replace_and_append_create_missing_file(monkeypatch, mode):
 
 
 @pytest.mark.asyncio
-async def test_write_normalizes_whitespace_before_storage_checks(monkeypatch):
-    requested_uri = "viking://resources/team notes/final draft.md"
-    canonical_uri = "viking://resources/team_notes/final_draft.md"
-    root_uri = "viking://resources/team_notes"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    viking_fs = _FakeVikingFSForCreate(
-        file_uri=canonical_uri,
-        root_uri=root_uri,
-        file_exists=False,
-    )
-    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", AsyncMock(return_value=None))
-
-    result = await coordinator.write(
-        uri=requested_uri,
-        content="content",
-        mode="create",
-        ctx=ctx,
-    )
-
-    assert result["uri"] == canonical_uri
-    assert viking_fs.content == {canonical_uri: "content"}
-
-
-@pytest.mark.asyncio
 async def test_create_mode_new_file_success(monkeypatch):
     file_uri = "viking://user/default/memories/new_file.md"
     root_uri = "viking://user/default/memories"
@@ -1255,8 +1229,8 @@ async def test_create_mode_memory_scope(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_mode_resource_scope(monkeypatch):
-    file_uri = "viking://resources/demo/test.md"
-    root_uri = "viking://resources/demo"
+    file_uri = "viking://resources/team_notes/final_draft.md"
+    root_uri = "viking://resources/team_notes"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     viking_fs = _FakeVikingFSForCreate(file_uri=file_uri, root_uri=root_uri, file_exists=False)
     coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
@@ -1278,10 +1252,15 @@ async def test_create_mode_resource_scope(monkeypatch):
     monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
 
     result = await coordinator.write(
-        uri=file_uri, content="content", mode="create", ctx=ctx, wait=True
+        uri="viking://resources/team notes/final draft.md",
+        content="content",
+        mode="create",
+        ctx=ctx,
+        wait=True,
     )
     assert result["context_type"] == "resource"
-    assert viking_fs.content[file_uri] == "content"
+    assert result["uri"] == file_uri
+    assert viking_fs.content == {file_uri: "content"}
 
 
 class _AnyDirVikingFS:

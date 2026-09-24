@@ -354,7 +354,9 @@ class TestDirectWriteFiles:
         source = tmp_path / "source folder"
         source.mkdir()
         (source / "guide.md").write_text("# Guide\n\nbody", encoding="utf-8")
-        (source / "main.py").write_text("print('ok')", encoding="utf-8")
+        nested = source / "team notes"
+        nested.mkdir()
+        (nested / "main file.py").write_text("print('ok')", encoding="utf-8")
         store = LocalParseOutputStore(str(tmp_path / "artifacts"))
 
         result = await DirectoryParser().parse(source, parse_output_store=store)
@@ -363,10 +365,10 @@ class TestDirectWriteFiles:
         assert result.artifact_ref.backend == "local"
         assert result.artifact_ref.resource_rel == "source_folder"
         root = Path(result.artifact_ref.root) / "source_folder"
-        assert (root / "main.py").read_text() == "print('ok')"
+        assert (root / "team_notes" / "main_file.py").read_text() == "print('ok')"
         assert (root / "guide" / "guide.md").read_text() == "# Guide\n\nbody"
         assert set(await read_artifact_manifest(store, result.artifact_ref)) == {
-            "source_folder/main.py",
+            "source_folder/team_notes/main_file.py",
             "source_folder/guide/guide.md",
         }
 
@@ -912,22 +914,6 @@ class TestPreserveStructure:
         assert "a/x.py" in rel_paths
         assert "a/b/c.py" in rel_paths
         assert "a/b/d.py" in rel_paths
-
-    @pytest.mark.asyncio
-    async def test_preserve_structure_normalizes_whitespace_segments(
-        self, tmp_path: Path, parser, fake_fs
-    ) -> None:
-        source = tmp_path / "source folder"
-        nested = source / "team notes"
-        nested.mkdir(parents=True)
-        (nested / "final draft.py").write_text("print('done')", encoding="utf-8")
-
-        await parser.parse(str(source), preserve_structure=True)
-
-        assert any(
-            uri.endswith("/source_folder/team_notes/final_draft.py") for uri in fake_fs.files
-        )
-        assert all(" " not in uri for uri in [*fake_fs.dirs, *fake_fs.files])
 
     @pytest.mark.asyncio
     async def test_preserve_structure_false_flattens(
