@@ -12,15 +12,20 @@ export const PROXY_PATH = fileURLToPath(new URL("./servers/mcp-proxy.mjs", impor
  * DSH scrubs credential-shaped names out of the environment a subprocess
  * inherits, and the Cordis patch is invisible to one, so the proxy cannot
  * resolve the connection the way this process did. It gets the answer instead:
- * the resolved connection and this session's peer, forwarded with the forced
- * `env` source so the child reads no file and lands on exactly this url, key,
- * identity, auth mode and peer — the empty ones included.
+ * the resolved connection, diagnostics, and this session's peer, forwarded
+ * with the forced `env` source so the child reads no file and lands on exactly
+ * these values — the empty ones included.
  */
 export function buildMcpConfig(config) {
   // In DSH Desktop, process.execPath is Electron's executable rather than a
   // standalone Node binary. This tells Electron to run the proxy script as
   // Node instead of attempting to launch a second Desktop instance.
-  const env = { ELECTRON_RUN_AS_NODE: "1", ...forwardConnectionEnv(config) };
+  const env = {
+    ELECTRON_RUN_AS_NODE: "1",
+    ...forwardConnectionEnv(config),
+    OPENVIKING_DEBUG: config.debug ? "1" : "0",
+    OPENVIKING_DEBUG_LOG: config.debugLogPath || "",
+  };
   if (config.timeoutMs) env.OPENVIKING_TIMEOUT_MS = String(config.timeoutMs);
   return {
     transport: "stdio",
