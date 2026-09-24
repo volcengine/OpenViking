@@ -4369,7 +4369,7 @@ class Session:
         * No prior WM -> call ``compression.ov_wm_v2`` with a plain completion
           and return the full 7-section markdown.
         * Has prior WM -> call ``compression.ov_wm_v2_update`` with the
-          ``update_working_memory`` tool forced on; parse per-section
+          ``update_working_memory`` tool available; parse per-section
           decisions and merge them against the previous WM. On any
           tool_call / JSON / schema anomaly, fall back to the creation
           prompt so we never persist malformed output as WM.
@@ -4443,10 +4443,7 @@ class Session:
                     response = await vlm.get_completion_async(
                         prompt=prompt,
                         tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
-                        tool_choice={
-                            "type": "function",
-                            "function": {"name": "create_working_memory"},
-                        },
+                        tool_choice="auto",
                     )
                     if not (
                         getattr(response, "has_tool_calls", False)
@@ -4501,10 +4498,9 @@ class Session:
             resp = await vlm.get_completion_async(
                 prompt=update_prompt,
                 tools=[WM_UPDATE_TOOL],
-                tool_choice={
-                    "type": "function",
-                    "function": {"name": "update_working_memory"},
-                },
+                # Thinking-mode providers may reject forced tool selection.
+                # Missing tool calls still take the validated fallback below.
+                tool_choice="auto",
             )
         except Exception as e:
             import traceback as _tb

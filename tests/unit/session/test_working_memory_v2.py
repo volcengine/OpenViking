@@ -2,7 +2,111 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for Working Memory v2 merge guardrails."""
 
-from openviking.session.session import Session
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from openviking.message import Message, TextPart
+from openviking.session.session import Session, _CheckpointRequest
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result_kind", ["tool", "text", "checkpoint_text"])
+async def test_wm_update_accepts_auto_only_provider(monkeypatch, result_kind):
+    session = Session(viking_fs=None)
+    prior = _wm()
+    fallback = AsyncMock(return_value="fallback working memory")
+    monkeypatch.setattr(session, "_fallback_generate_wm_creation", fallback)
+    ops = _keep_all()
+    ops["Current State"] = {"op": "UPDATE", "content": "Compatibility verified."}
+
+    async def complete(**kwargs):
+        if kwargs["tool_choice"] != "auto":
+            raise ValueError("Thinking mode does not support this tool_choice")
+        assert kwargs["tools"][0]["function"]["name"] == "update_working_memory"
+        return SimpleNamespace(
+            has_tool_calls=result_kind == "tool",
+            tool_calls=[SimpleNamespace(arguments={"sections": ops})]
+            if result_kind == "tool"
+            else [],
+        )
+
+    vlm = SimpleNamespace(is_available=lambda: True, get_completion_async=complete)
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm),
+    )
+    monkeypatch.setattr(
+        "openviking.session.session.resolve_output_language_from_conversation",
+        lambda *args, **kwargs: "English",
+    )
+    messages = [Message(id="u1", role="user", parts=[TextPart("Continue the task")])]
+    if result_kind == "checkpoint_text":
+        with pytest.raises(ValueError, match="no tool call for checkpoints"):
+            await session._generate_archive_summary_async(
+                messages, prior, [_CheckpointRequest("u1", ("u1",), 100, 200)]
+            )
+        fallback.assert_not_awaited()
+    else:
+        result = await session._generate_archive_summary_async(messages, prior)
+        if result_kind == "tool":
+            assert "Compatibility verified." in result
+            assert "Decision 1" in result
+            fallback.assert_not_awaited()
+        else:
+            assert result == "fallback working memory"
+            fallback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior", ["", "Legacy session summary"])
+@pytest.mark.parametrize("result_kind", ["tool", "text", "missing_checkpoint"])
+async def test_wm_creation_accepts_auto_only_provider(monkeypatch, prior, result_kind):
+    session = Session(viking_fs=None)
+    working_memory = _wm()
+
+    async def complete(**kwargs):
+        if kwargs["tool_choice"] != "auto":
+            raise ValueError("Thinking mode does not support this tool_choice")
+        assert kwargs["tools"][0]["function"]["name"] == "create_working_memory"
+        return SimpleNamespace(
+            has_tool_calls=result_kind != "text",
+            tool_calls=[
+                SimpleNamespace(
+                    arguments={
+                        "working_memory": working_memory,
+                        "checkpoint_summaries": []
+                        if result_kind == "missing_checkpoint"
+                        else ["Compatibility verified."],
+                    }
+                )
+            ]
+            if result_kind != "text"
+            else [],
+        )
+
+    vlm = SimpleNamespace(is_available=lambda: True, get_completion_async=complete)
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(vlm=vlm),
+    )
+    monkeypatch.setattr(
+        "openviking.session.session.resolve_output_language_from_conversation",
+        lambda *args, **kwargs: "English",
+    )
+    messages = [Message(id="u1", role="user", parts=[TextPart("Continue the task")])]
+    requests = [_CheckpointRequest("u1", ("u1",), 100, 200)]
+    if result_kind == "tool":
+        result = await session._generate_archive_summary_async(messages, prior, requests)
+        assert result.overview == working_memory
+        assert result.checkpoint_summaries == ("Compatibility verified.",)
+    else:
+        error = (
+            "no create_working_memory tool call" if result_kind == "text" else "exactly 1 strings"
+        )
+        with pytest.raises(ValueError, match=error):
+            await session._generate_archive_summary_async(messages, prior, requests)
 
 
 def _wm(
