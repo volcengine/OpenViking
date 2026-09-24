@@ -10,13 +10,13 @@ import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plu
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
-function runAutoCapture(input, env) {
+function runAutoCapture(input, env, script = "auto-capture.mjs") {
   return new Promise((resolve, reject) => {
     const cleanEnv = { ...process.env };
     for (const key of Object.keys(cleanEnv)) {
       if (key.startsWith("OPENVIKING_")) delete cleanEnv[key];
     }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, "auto-capture.mjs")], {
+    const child = spawn(process.execPath, [join(SCRIPT_DIR, script)], {
       env: { ...cleanEnv, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -105,14 +105,17 @@ test("failed non-retryable capture keeps the cursor for a later retry", async ()
       }
       writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
     }, async (baseUrl) => {
-      const input = { session_id: sessionId, transcript_path: transcriptPath, cwd: root };
+      const input = { session_id: sessionId, transcript_path: transcriptPath, cwd: root,
+        hook_event_name: "Stop", last_assistant_message: "The completed finding must survive the refused capture." };
       await runAutoCapture(input, hookEnv(root, baseUrl));
       rejectWrites = false;
       await runAutoCapture(input, hookEnv(root, baseUrl));
     });
 
     assert.equal(batches.length, 1);
-    assert.equal(batches[0].messages.length, 2);
+    assert.equal(batches[0].messages.length, 3);
+    assert.deepEqual(batches[0].messages.map((m) => m.role), ["user", "assistant", "assistant"]);
+    assert.equal(batches[0].messages[2].parts[0].text, "The completed finding must survive the refused capture.");
     const state = JSON.parse(
       await readFile(join(root, "openviking-cc-capture-state", `${sessionId}.json`), "utf-8"),
     );
@@ -402,3 +405,155 @@ test("capture filters rewrite and drop turns at the send site", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+for (const scenario of [
+  { name: "unflushed final", flushed: false, captureAssistant: true },
+  { name: "already flushed final", flushed: true, captureAssistant: true },
+  { name: "delayed multipart final with tool", flushed: false, captureAssistant: true, delayedTool: true },
+  { name: "assistant capture disabled", flushed: false, captureAssistant: false },
+]) {
+  test(`Stop captures completed findings in order: ${scenario.name}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "ov-cc-stop-final-"));
+    const transcriptPath = join(root, "transcript.jsonl");
+    const sessionId = "stop-final";
+    const question = "Which service owns the context store?";
+    const followup = "Does that ownership change after reconnecting?";
+    const final = "The cloud service owns the context store.\nReconnection does not move it.";
+    const messages = [];
+    const transcript = async (turns) => writeFile(transcriptPath,
+      turns.map(([role, text]) => JSON.stringify({
+        type: role, message: { role, content: [
+          ...text.split("\n").map((text) => ({ type: "text", text })),
+          ...(scenario.delayedTool && role === "assistant" ? [{ type: "tool_use",
+            id: "handback-delayed", name: "SubagentHandback", input: { message: "Source review completed." } }] : []),
+        ] },
+      })).join("\n"));
+    const received = () => messages.filter((message) => message.parts.some((part) => part.type === "text"))
+      .map((message) => [message.role,
+      message.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n")]);
+    const expected = (questions) => questions.flatMap((text) => scenario.captureAssistant
+      ? [["user", text], ["assistant", final]] : [["user", text]]);
+
+    try {
+      await transcript(scenario.flushed ? [["user", question], ["assistant", final]] : [["user", question]]);
+      await withMockOpenViking(async (req, res) => {
+        const url = new URL(req.url, "http://127.0.0.1");
+        if (req.method === "POST" && url.pathname === `/api/v1/sessions/cc-${sessionId}/messages/batch`) {
+          const body = await readRequestBody(req);
+          messages.push(...body.messages);
+          writeJson(res, { status: "ok", result: { added: body.messages.length } });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === `/api/v1/sessions/cc-${sessionId}`) {
+          writeJson(res, { status: "ok", result: {
+            message_count: messages.length, total_message_count: messages.length,
+            pending_tokens: 10, commit_count: 0,
+          } });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/health") {
+          writeJson(res, { status: "ok", result: { healthy: true } });
+          return;
+        }
+        writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
+      }, async (baseUrl) => {
+        // Claude Stop supplies the completed text even before the JSONL flush.
+        const input = {
+          session_id: sessionId, transcript_path: transcriptPath, cwd: root,
+          hook_event_name: "Stop", stop_hook_active: false,
+          last_assistant_message: final, background_tasks: [], session_crons: [],
+        };
+        const env = { ...hookEnv(root, baseUrl),
+          OPENVIKING_CAPTURE_ASSISTANT_TURNS: scenario.captureAssistant ? "1" : "0" };
+        await runAutoCapture(input, env);
+        assert.deepEqual(received(), expected([question]));
+        await runAutoCapture(input, env);
+        assert.deepEqual(received(), expected([question]), "repeated Stop is not another turn");
+
+        await transcript([["user", question], ["assistant", final]]);
+        await runAutoCapture(input, env);
+        assert.deepEqual(received(), expected([question]), "transcript catch-up is not another final");
+        if (scenario.delayedTool) {
+          assert.deepEqual(messages.map((m) => m.role), ["user", "assistant", "assistant"]);
+          const tools = messages[2].parts;
+          assert.equal(tools.length, 1);
+          assert.equal(tools[0].tool_name, "SubagentHandback");
+          assert.deepEqual(tools[0].tool_input, { message: "Source review completed." });
+        }
+
+        await transcript([["user", question], ["assistant", final], ["user", followup]]);
+        await runAutoCapture(input, env);
+        assert.deepEqual(received(), expected([question, followup]), "same text on a new turn is still a new final");
+        if (scenario.delayedTool) {
+          assert.deepEqual(messages.map((m) => m.role), ["user", "assistant", "assistant", "user", "assistant"]);
+          assert.equal(messages.flatMap((m) => m.parts).filter((p) => p.type === "tool").length, 1);
+        }
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const captureAssistant of [true, false]) {
+  test(`SubagentStop retains its own report and closing text: captureAssistant=${captureAssistant}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "ov-cc-subagent-final-"));
+    const parentPath = join(root, "parent.jsonl");
+    const childPath = join(root, "child.jsonl");
+    const question = "Review the context ownership finding.";
+    const report = "The source identifies the cloud service as the context owner.";
+    const closing = "Review handed back; live failover remains unverified.";
+    const messages = [];
+    let commits = 0;
+    try {
+      await writeFile(parentPath, JSON.stringify({ role: "user", content: "Parent-only task" }));
+      await writeFile(childPath, [
+        { role: "user", content: question },
+        { role: "assistant", content: [{ type: "tool_use", id: "handback-1",
+          name: "SubagentHandback", input: { message: report } }] },
+      ].map((row) => JSON.stringify(row)).join("\n"));
+      await withMockOpenViking(async (req, res) => {
+        const url = new URL(req.url, "http://127.0.0.1");
+        const sessionPath = "/api/v1/sessions/cc-parent__subagent-reviewer";
+        if (req.method === "POST" && url.pathname === `${sessionPath}/messages/batch`) {
+          const body = await readRequestBody(req);
+          messages.push(...body.messages);
+          writeJson(res, { status: "ok", result: { added: body.messages.length } });
+          return;
+        }
+        if (req.method === "POST" && url.pathname === `${sessionPath}/commit`) {
+          await readRequestBody(req);
+          commits++;
+          writeJson(res, { status: "ok", result: { task_id: "commit-child" } });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/health") {
+          writeJson(res, { status: "ok", result: { healthy: true } });
+          return;
+        }
+        writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
+      }, async (baseUrl) => {
+        await runAutoCapture({ session_id: "parent", transcript_path: parentPath,
+          agent_id: "reviewer", agent_type: "Explore", agent_transcript_path: childPath,
+          hook_event_name: "SubagentStop", cwd: root, stop_hook_active: false,
+          last_assistant_message: closing, background_tasks: [], session_crons: [],
+        }, { ...hookEnv(root, baseUrl),
+          OPENVIKING_CAPTURE_ASSISTANT_TURNS: captureAssistant ? "1" : "0",
+        }, "subagent-stop.mjs");
+      });
+      assert.deepEqual(messages.map((m) => m.role), captureAssistant
+        ? ["user", "assistant", "assistant"] : ["user"]);
+      assert.deepEqual(messages.flatMap((m) => m.parts).filter((p) => p.type === "text")
+        .map((p) => p.text), captureAssistant ? [question, closing] : [question]);
+      const tools = messages.flatMap((m) => m.parts).filter((p) => p.type === "tool");
+      assert.equal(tools.length, captureAssistant ? 1 : 0);
+      if (captureAssistant) {
+        assert.equal(tools[0].tool_name, "SubagentHandback");
+        assert.deepEqual(tools[0].tool_input, { message: report });
+      }
+      assert.equal(commits, 1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}

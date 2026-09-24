@@ -8,6 +8,7 @@
  * the block walking, the part building and the capture filter are shared.
  */
 
+import { createHash } from "node:crypto";
 import {
   collectToolNamesByIdFromEntries,
   extractPartsFromPayload,
@@ -143,4 +144,39 @@ export function extractCaptureTurns(messages, cfg = {}) {
     turns.push({ role, text: textFromParts(parts), parts });
   }
   return turns;
+}
+
+/**
+ * Stop can arrive before Claude flushes its final text to the transcript.
+ * Keep the cursor in transcript coordinates and retain only the hook final's
+ * digest, so its later transcript entry is not captured a second time.
+ */
+export function extractStopCaptureTurns(messages, cfg, lastAssistantMessage, state = {}) {
+  const allTurns = extractCaptureTurns(messages, cfg);
+  const digest = (text) => createHash("sha256").update(text).digest("hex");
+  // Claude projects visible text blocks with a newline separator and trims the
+  // result for last_assistant_message. Tool parts are not part of that text.
+  const matchesFinal = (turn, hash) => turn?.role === "assistant"
+    && digest(turn.parts.filter((part) => part.type === "text")
+      .map((part) => part.text).join("\n").trim()) === hash;
+  const text = typeof lastAssistantMessage === "string" ? lastAssistantMessage.trim() : "";
+  const hash = digest(text);
+  const finalInTranscript = matchesFinal(allTurns.at(-1), hash);
+  const pending = state.stopAssistant;
+  let cursor = state.capturedTurnCount || 0;
+  if (pending && pending.index === cursor && matchesFinal(allTurns[cursor], pending.digest)) {
+    const parts = allTurns[cursor].parts.filter((part) => part.type !== "text");
+    if (parts.length === 0) cursor++;
+    else allTurns[cursor] = { ...allTurns[cursor], parts, text: textFromParts(parts) };
+  }
+  const newTurns = allTurns.slice(cursor);
+  let stopAssistant = null;
+  if (cfg.captureLastAssistantOnStop !== false && text
+    && !finalInTranscript) {
+    stopAssistant = { index: allTurns.length, digest: hash };
+    if (pending?.index !== allTurns.length || pending.digest !== hash) {
+      newTurns.push({ role: "assistant", text, parts: [{ type: "text", text }] });
+    }
+  }
+  return { allTurns, newTurns, stopAssistant };
 }
