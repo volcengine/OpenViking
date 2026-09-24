@@ -121,6 +121,10 @@ _SESSION_START_SUFFIXES = ("memories/profile.md", "memories/preferences", "memor
 _SESSION_START_LIST_PARAMS = {"output": "agent", "recursive": True, "abs_limit": 512, "node_limit": 512}
 # Built-in memory tool `target` -> mirror subdir (user facts -> preferences, agent notes -> patterns).
 _MEMORY_WRITE_TARGET_SUBDIR_MAP = {"user": "preferences", "memory": "patterns"}
+# Host contexts that must not write into OpenViking. Fixed-prompt output from scheduled
+# jobs, delegated subagents, and flush forks has no memory value and would spend server-side
+# extraction budget. Hermes delivers the context to initialize(); recall/read paths are unchanged.
+_NON_PRIMARY_AGENT_CONTEXTS = frozenset({"cron", "subagent", "flush"})
 # OpenViking-generated summaries; non-.md sidecars are already rejected by the .md check.
 _GENERATED_MEMORY_SUMMARY_FILENAMES = {".abstract.md", ".overview.md"}
 _LOCAL_OPENVIKING_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -1312,6 +1316,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._runtime_start_thread: Optional[threading.Thread] = None
         self._runtime_start_pending = False
         self._shutting_down = False  # finalizers stop issuing network writes
+        # Non-primary contexts (cron/subagent/flush) skip OpenViking writes; resolved in
+        # initialize() from the host's agent_context.
+        self._agent_context = "primary"
+        self._writes_enabled = True
 
     @property
     def name(self) -> str:
@@ -1506,6 +1514,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._user_id = _gateway_peer_id(self._gateway_platform, self._gateway_user_id_alt or self._gateway_user_id)
         self._turn_peer.set(None)
         self._hermes_home = str(kwargs.get("hermes_home") or "").strip() or str(get_hermes_home())
+        self._agent_context = str(kwargs.get("agent_context") or "primary")
+        self._writes_enabled = self._agent_context not in _NON_PRIMARY_AGENT_CONTEXTS
+        if not self._writes_enabled:
+            logger.debug(
+                "OpenViking writes disabled for %s context (session %s)",
+                self._agent_context,
+                session_id,
+            )
         self._acquire_run_lock()
         self._profile_prefetched_sessions.clear()
 
@@ -2236,6 +2252,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
                   messages: Optional[List[Dict[str, Any]]] = None,
                   turn_author: Optional[Dict[str, Any]] = None) -> None:
         """Record the conversation turn in OpenViking's session (non-blocking)."""
+        if not self._writes_enabled:
+            return
         if not self._ensure_client():
             return
         user_content = _derive_openviking_user_text(user_content)
@@ -2624,6 +2642,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Commit the session (synchronously — it must land before process exit) to
         trigger extraction of profile/preferences/entities/events/cases/patterns."""
+        if not self._writes_enabled:
+            return
         if not self._ensure_client():
             return
         with self._session_state_lock:
@@ -2650,6 +2670,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         The new session never accumulates messages, and memory extraction never fires for it. See
         hermes-agent#28296.
         """
+        if not self._writes_enabled:
+            return
         new_id = str(new_session_id or "").strip()
         if not new_id or not self._ensure_client():
             return
@@ -2732,6 +2754,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Mirror successful built-in memory mutations to OpenViking."""
+        if not self._writes_enabled:
+            return
         if action not in {"add", "replace", "remove"} or not self._ensure_client():
             return
         if action in {"add", "replace"} and not content:

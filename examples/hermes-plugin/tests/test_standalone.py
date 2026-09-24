@@ -676,6 +676,35 @@ def test_session_switch_commits_below_live_threshold(external_provider, monkeypa
     assert provider._session_id == "new-sid"
 
 
+@pytest.mark.parametrize("agent_context", ["cron", "subagent", "flush"])
+def test_non_primary_contexts_skip_writes(external_provider, monkeypatch, agent_context):
+    """cron/subagent/flush contexts stay read-only: no turn uploads, commits, or mirroring."""
+    from unittest.mock import Mock
+
+    home, provider, module, _ = external_provider(f"non-primary-{agent_context}")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19531")
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+    provider.initialize("live-sid", hermes_home=str(home))
+    assert (provider._agent_context, provider._writes_enabled) == ("primary", True)
+    provider.initialize("live-sid", hermes_home=str(home), agent_context=agent_context)
+    assert (provider._agent_context, provider._writes_enabled) == (agent_context, False)
+
+    provider._client = Mock()
+    provider._client.get.return_value = {"pending_tokens": 20000}
+    provider._ensure_client = lambda: True
+    provider._new_client = lambda: provider._client
+    provider._acquire_run_lock()
+    _finish_turn(provider)
+    provider.on_session_switch("new-sid")
+    provider.on_session_end([])
+    provider.on_memory_write("add", "user", f"not mirrored ({agent_context})")
+    assert provider._drain_finalizers(timeout=5)
+
+    assert provider._client.method_calls == []
+    assert provider._pending_sessions() == []
+
+
 def test_live_commit_does_not_block_next_turn_or_lose_its_pending_marker(external_provider, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
 

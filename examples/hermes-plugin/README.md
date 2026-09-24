@@ -378,3 +378,12 @@ client commits do not use the server scheduler's interval or retention settings.
 The plugin retains the existing `keep_recent_count: 0` commit behavior.
 The threshold is not a hard limit on extraction input: one turn can
 exceed it, and the server may include other context during extraction.
+
+### Non-primary contexts
+
+Hermes passes an `agent_context` to `initialize()`. Sessions started for scheduled
+cron jobs, delegated subagents, or flush forks (`cron`, `subagent`, `flush`) are
+non-primary: recall and profile reads keep working, but the provider skips turn
+uploads, session commits, and memory mirroring, so fixed-prompt job output neither
+lands in the memory bank nor spends server-side extraction budget. Interactive
+sessions (and hosts that predate `agent_context`) keep the previous write behavior.
