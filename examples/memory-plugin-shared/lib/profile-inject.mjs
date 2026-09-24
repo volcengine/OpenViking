@@ -2,10 +2,13 @@
  * Session-start profile injection helper.
  *
  * Builds a <user-profile> + <available-memories> (+ <available-skills>) block from
- *   viking://user/<space>/memories/profile.md
- *   viking://user/<space>/memories/preferences/   (ls with abstracts)
- *   viking://user/<space>/memories/entities/      (ls with abstracts)
- *   GET /api/v1/skills                            (own + account-shared skills)
+ *   viking://user/<space>[/peers/<peer>]/memories/profile.md
+ *   viking://user/<space>[/peers/<peer>]/memories/preferences/   (ls with abstracts)
+ *   viking://user/<space>[/peers/<peer>]/memories/entities/      (ls with abstracts)
+ *   GET /api/v1/skills                                           (own + account-shared skills)
+ *
+ * The scope is the actor peer's when buildProfileBlock receives an actorPeerId,
+ * and the user's otherwise: the same rule capture writes by.
  *
  * Budget enforced via the CJK-aware estimateTokens() below — codepoint >=
  * 0x3000 counts at 1.5 tokens, else chars/4. The estimator is exported so
@@ -377,19 +380,35 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     : Infinity;
   const skillBudget = Math.min(skillCatalogTokenBudget, Math.floor(capTokens / 4));
   const space = await resolveUserSpace(fetchJSON, actorPeerId);
-  const profileUri = `viking://user/${space}/memories/profile.md`;
-  const prefUri = `viking://user/${space}/memories/preferences`;
-  const entUri = `viking://user/${space}/memories/entities`;
 
-  const [profile, prefs, ents, skillGroups] = await Promise.all([
+  // The skill catalog is account-wide, so it starts alongside the scope reads
+  // rather than after them.
+  const skillGroupsPromise = skillCatalog && skillBudget > 0
+    ? fetchSkillCatalog(fetchJSON, actorPeerId)
+    : [];
+
+  // One scope per session, the same rule capture writes by: a message carrying a
+  // peer_id lands in viking://user/<space>/peers/<peer>/memories, one without it
+  // in viking://user/<space>/memories. An empty peer directory means nothing has
+  // been extracted for this workspace yet, not that the memory lives elsewhere.
+  // Per-turn recall searches both scopes whenever an actor is set, so this block
+  // does not need a fallback to cover user scope.
+  const root = actorPeerId
+    ? `viking://user/${space}/peers/${actorPeerId}/memories`
+    : `viking://user/${space}/memories`;
+  const profileUri = `${root}/profile.md`;
+  const prefUri = `${root}/preferences`;
+  const entUri = `${root}/entities`;
+
+  // The three reads are independent, and a hook on the SessionStart path pays
+  // for every round trip.
+  const [profile, prefs, ents] = await Promise.all([
     readProfile(fetchJSON, profileUri, actorPeerId),
     lsDir(fetchJSON, prefUri, actorPeerId),
     lsDir(fetchJSON, entUri, actorPeerId),
-    skillCatalog && skillBudget > 0
-      ? fetchSkillCatalog(fetchJSON, actorPeerId)
-      : [],
   ]);
-  const skills = formatSkillCatalog(skillGroups, skillBudget);
+
+  const skills = formatSkillCatalog(await skillGroupsPromise, skillBudget);
 
   if (!profile && prefs.length === 0 && ents.length === 0 && skills.lines.length === 0) {
     return null;

@@ -295,7 +295,7 @@ On the server side, `session_id` handling diverges into two distinct execution p
 
 ### 3.2.3 Profile / opening injection
 
-- **Implementation**: `profile-inject.mjs` reads the full `viking://user/<space>/memories/profile.md`, alongside a recursive listing of the `preferences/` and `entities/` directories (`abs_limit=512`). The budget estimation logic is CJK-aware: characters ≥U+3000 count as 1.5 tokens per character, while all others are calculated as characters divided by 4. The profile consumes half of the available budget. If the limit is exceeded, the middle section is elided, preserving "the first 8 lines + the tail." If a directory listing exceeds the limit, it drops further entries until a `... +N more` note fits.
+- **Implementation**: `profile-inject.mjs` derives the scope from the actor peer: `viking://user/<space>/peers/<peer>/memories` when the session has a peer, `viking://user/<space>/memories` when it does not, the same rule capture writes by. It reads `profile.md` in full from that scope, alongside a recursive listing of the `preferences/` and `entities/` directories (`abs_limit=512`). The budget estimation logic is CJK-aware: characters ≥U+3000 count as 1.5 tokens per character, while all others are calculated as characters divided by 4. The profile consumes half of the available budget. If the limit is exceeded, the middle section is elided, preserving "the first 8 lines + the tail." If a directory listing exceeds the limit, it drops further entries until a `... +N more` note fits.
 - **Who injects, when, and with what budget**:
   - **claude-code**: On `SessionStart` (all sources, 10000 budget).
   - **codex**: On `SessionStart` (startup/clear/resume, 10000 budget).
@@ -311,7 +311,7 @@ On the server side, `session_id` handling diverges into two distinct execution p
   - **Example** (claude-code, `source="startup"`):
     ```text
     <openviking-context source="startup">
-    <user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
+    <user-profile uri="viking://user/default/peers/github.com-volcengine-openviking/memories/profile.md">...</user-profile>
     <available-memories>...</available-memories>
     <available-skills>
       OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.
