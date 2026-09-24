@@ -928,7 +928,17 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 ### pdf
 
-PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+PDF 解析配置。支持四种策略：`auto`（默认，pdf-inspector，处理不了的按信号分流 MinerU）、`local`（本地 pdfplumber）、`anydoc`（本地 anydoc）、`mineru`（远程 MinerU API，全程使用）。
+
+`auto` 用 pdf-inspector 提取，普通散文和论文直接采用其结果；当文档出现 pdf-inspector 处理不了的信号时升级到 MinerU：分类器标记需要 OCR 的页面、分类器认为正常但结果几乎为空、幻灯片版式、代码密集内容。
+
+被 `scan_detection` 拒收的 PDF 不会走到这个判断：扫描件、图片件，以及 OCR 页占比达到 `scan_mixed_ratio`（默认 `0.5`）的 mixed 文档，全部直接不入库。路由看到的是剩下的部分，其中就包括低于该比例的部分扫描文档——pdf-inspector 会为被标记的页面输出空白页，而且什么也不报。
+
+`mineru_endpoint` 服务于两类文件：被路由分流的，以及 pdf-inspector 转换失败的。未配置时，被分流的文件保留 pdf-inspector 的结果并打印警告，因此缺少 endpoint 不会丢掉已经成功提取的文本；而 pdf-inspector 失败时没有兜底，会以解析警告的形式暴露出来。
+
+`local` 已退出这条决策路径——pdf-inspector 的正文提取与它一致，却快约 30 倍——但当你确实需要书签、表格和图片时仍可显式选用。
+
+`anydoc` 比 `local` 快很多，但只抽取文本——不提取图片和表格，因此适合纯文本书籍，不适合幻灯片或图表密集的文档。此外只要有任意一页需要 OCR 就会直接报错，因此没有完整文本层的 PDF 应改用 `local`（或走离线 OCR）。
 
 ```json
 {
@@ -947,7 +957,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
+| `strategy` | str | 解析策略：`auto` / `local` / `anydoc` / `mineru`（默认 `auto`） |
 | `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
 | `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
 | `mineru_bodys` | dict | MinerU API multipart form 参数 |
@@ -1649,7 +1659,7 @@ OpenViking 使用两个配置文件：
 ### 配置重载边界
 
 服务端只在进程启动时读取 `ov.conf`，不会监听文件变化。修改 `embedding`、
-`vlm`、`rerank`、`retrieval`、`storage` 或 `server` 配置后，需要重启
+`vlm`、`rerank`、`retrieval`、`storage`、`parsers` 或 `server` 配置后，需要重启
 OpenViking 服务。已经运行中的队列任务不会自动迁移到新配置；请使用部署环境
 原有的服务管理方式重启，并在服务恢复后运行 `openviking-server doctor` 验证。
 
