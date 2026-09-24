@@ -480,6 +480,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/tasks/{task_id}` | 获取后台任务 |
 | POST | `/api/v1/tasks/{task_id}/cancel` | 取消后台任务 |
 | GET | `/api/v1/tasks` | 列出后台任务 |
+| GET | `/api/v1/tasks/summary` | 汇总近 24 小时成功和失败的任务尝试 |
 | GET | `/api/v1/observer/queue` | 队列状态 |
 | GET | `/api/v1/observer/vikingdb` | VikingDB 状态 |
 | GET | `/api/v1/observer/models` | 模型状态 |

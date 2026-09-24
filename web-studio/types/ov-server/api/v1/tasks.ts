@@ -19,3 +19,13 @@ export type TaskRecord = {
 }
 
 export type TaskListResult = TaskRecord[]
+
+export type TaskSummary = {
+  window_seconds: number
+  since: number
+  until: number
+  completed: number
+  failed: number
+  total: number
+  success_rate: number | null
+}

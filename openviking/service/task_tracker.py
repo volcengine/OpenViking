@@ -1040,7 +1040,7 @@ class TaskTracker:
         user_id: Optional[str] = None,
         include_internal: bool = True,
     ) -> List[TaskRecord]:
-        """List tasks with optional filters. Most-recent first. Returns snapshot copies."""
+        """List snapshot copies, most-recent first. ``limit=None`` returns all matches."""
         if account_id is not None:
             self._merge_loaded_tasks(await self._load_all_from_store(account_id, user_id))
         source = self._cache_snapshot()
