@@ -65,6 +65,9 @@ _MD_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\(([^)]+)\)")
 _MD_FRAGMENT_RE = re.compile(r"^([^#?]*)([#?].*)?$")
 # Extensions whose targets become directories on ingest (see _rewrite_single_link).
 _MD_DIR_EXTS = {".md", ".markdown", ".mdown", ".mkd"}
+# Opening line of a CommonMark fenced code block: up to three spaces, then a run
+# of at least three backticks or tildes, then an optional info string.
+_MD_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _smart_stem(path_or_name: str | Path) -> str:
@@ -216,7 +219,6 @@ class MarkdownParser(BaseParser):
 
         # Compile regex patterns for better performance
         self._heading_pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-        self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
         self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
@@ -614,6 +616,40 @@ class MarkdownParser(BaseParser):
 
         return content_without_frontmatter, frontmatter
 
+    @staticmethod
+    def _fenced_code_ranges(content: str) -> List[Tuple[int, int]]:
+        """
+        Find fenced code blocks the way CommonMark does.
+
+        A block opens on ``` or ~~~ (any info string; a backtick fence's info string
+        cannot contain a backtick) and closes on a line holding only a run of the same
+        character that is at least as long. An unclosed block runs to the end.
+
+        Args:
+            content: Markdown content
+
+        Returns:
+            List of (start_pos, end_pos) ranges covering each block, fences included
+        """
+        ranges = []
+        fence = None
+        closing = None
+        start = pos = 0
+        for line in content.split("\n"):
+            text = line.rstrip("\r")
+            if fence is None:
+                match = _MD_FENCE_OPEN_RE.match(text)
+                if match and not (match.group(1)[0] == "`" and "`" in match.group(2)):
+                    fence, start = match.group(1), pos
+                    closing = re.compile(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$")
+            elif closing.match(text):
+                ranges.append((start, pos + len(line)))
+                fence = None
+            pos += len(line) + 1
+        if fence is not None:
+            ranges.append((start, len(content)))
+        return ranges
+
     def _find_headings(self, content: str) -> List[Tuple[int, int, str, int]]:
         """
         Find all headings, excluding code blocks, HTML comments, and escaped characters.
@@ -627,9 +663,8 @@ class MarkdownParser(BaseParser):
         # Collect all excluded ranges
         excluded_ranges = []
 
-        # Triple backtick code blocks
-        for match in self._code_block_pattern.finditer(content):
-            excluded_ranges.append((match.start(), match.end()))
+        # Fenced code blocks
+        excluded_ranges.extend(self._fenced_code_ranges(content))
 
         # HTML comments <!-- ... -->
         for match in self._html_comment_pattern.finditer(content):
