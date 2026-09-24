@@ -42,14 +42,13 @@ parse_result.temp_dir_path  # viking://temp/abc123
 
 ### 智能分割
 
-```
-如果 document_tokens <= 1024:
-    → 保存为单文件
-否则:
-    → 按标题分割
-    → 小节 < 512 tokens → 合并
-    → 大节 > 1024 tokens → 创建子目录
-```
+智能分割由阈值触发，并不是每个标题都生成一个文件。在默认解析模式下：
+
+- Markdown 不超过约 `2048` 个估算 token 且不超过 `6000` 个字符时，即使包含多个标题，也会保存为单文件。
+- 任一限制被超过后，标题才会成为章节边界。小于 `512` 个 token 的小节会尽可能与相邻内容合并，避免产生低价值碎片。
+- 超大的叶子章节或没有标题的文档会按段落切分，并同时以 token 和字符限制为目标。为保持 Markdown 表格结构，单行表格内容可能超过目标限制。
+
+以上数值分别是 `ParserConfig.max_section_size` 和 `ParserConfig.max_section_chars` 的默认值。若希望转换后的每篇 Markdown 正文保持完整，可将 `args.parse_mode` 设为 `no_split`。该选项只改变存储布局；语义处理、向量化和内部 embedding 分块仍会正常执行。
 
 ### 返回结果
 
