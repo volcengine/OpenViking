@@ -226,16 +226,21 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
                 </Button>
               </div>
               <div className="overflow-x-auto rounded-md border">
-                <table className="w-full min-w-[560px] text-sm">
-                  <thead className="bg-muted/40 text-left text-muted-foreground">
+                <table className="w-full min-w-[600px] table-fixed text-sm">
+                  <colgroup>
+                    <col className="w-[36%]" />
+                    <col className="w-[37%]" />
+                    <col className="w-[27%]" />
+                  </colgroup>
+                  <thead className="bg-muted/20 text-left text-muted-foreground">
                     <tr>
-                      <th className="px-4 py-3 font-medium">
+                      <th className="px-4 py-2.5 font-medium">
                         {t('acl.grantSubjectColumn')}
                       </th>
-                      <th className="w-52 px-4 py-3 font-medium">
+                      <th className="px-4 py-2.5 font-medium">
                         {t('acl.grantLevelColumn')}
                       </th>
-                      <th className="w-44 px-4 py-3 font-medium">
+                      <th className="px-4 py-2.5 font-medium">
                         {t('acl.grantSourceColumn')}
                       </th>
                     </tr>
@@ -296,10 +301,10 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
                               )}
                             />
                           </td>
-                          <td className="px-4 py-3">
-                            <div className="space-y-1">
+                          <td className="px-4 py-3 align-middle">
+                            <div className="space-y-2">
                               {(!direct || direct.level !== entry.level) && (
-                                <span className="inline-flex items-center gap-2">
+                                <span className="inline-flex items-center gap-2 whitespace-nowrap">
                                   {direct
                                     ? t('acl.effectiveLevel', {
                                         level: t(`acl.levels.${entry.level}`),
@@ -311,48 +316,59 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
                                 </span>
                               )}
                               {direct && (
-                                <div className="flex items-center gap-1">
+                                <div className="space-y-1">
                                   {direct.level !== entry.level && (
-                                    <span className="text-xs text-muted-foreground">
+                                    <span className="block text-xs text-muted-foreground">
                                       {t('acl.directSource')}
                                     </span>
                                   )}
-                                  <LevelSelect
-                                    value={direct.level}
-                                    disabled={!writable}
-                                    label={t('acl.levelFor', {
-                                      principal: entry.principal,
-                                    })}
-                                    onChange={(level) =>
-                                      mutation.mutate({
-                                        kind: 'grant',
+                                  <div className="flex items-center gap-1">
+                                    <LevelSelect
+                                      value={direct.level}
+                                      disabled={!writable}
+                                      label={t('acl.levelFor', {
                                         principal: entry.principal,
-                                        level,
-                                      })
-                                    }
-                                  />
-                                  <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    disabled={!writable}
-                                    aria-label={t('acl.removeFor', {
-                                      principal: entry.principal,
-                                    })}
-                                    onClick={() =>
-                                      setConfirm({
-                                        kind: 'revoke',
+                                      })}
+                                      onChange={(level) =>
+                                        mutation.mutate({
+                                          kind: 'grant',
+                                          principal: entry.principal,
+                                          level,
+                                        })
+                                      }
+                                    />
+                                    <Button
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      disabled={!writable}
+                                      aria-label={t('acl.removeFor', {
                                         principal: entry.principal,
-                                      })
-                                    }
-                                  >
-                                    <Trash2Icon />
-                                  </Button>
+                                      })}
+                                      onClick={() =>
+                                        setConfirm({
+                                          kind: 'revoke',
+                                          principal: entry.principal,
+                                        })
+                                      }
+                                    >
+                                      <Trash2Icon />
+                                    </Button>
+                                  </div>
                                 </div>
                               )}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-muted-foreground">
-                            <span className="block">
+                            <span
+                              className="block truncate"
+                              title={
+                                direct && inherited
+                                  ? t('acl.directAndInheritedSource')
+                                  : direct
+                                    ? t('acl.directSource')
+                                    : t('acl.inheritedSource')
+                              }
+                            >
                               {direct && inherited
                                 ? t('acl.directAndInheritedSource')
                                 : direct

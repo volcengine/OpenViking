@@ -230,7 +230,7 @@ function DirectoryPermissions() {
         open={Boolean(editingUri)}
         onOpenChange={(open) => !open && setEditingUri('')}
       >
-        <SheetContent className="gap-0 data-[side=right]:sm:max-w-2xl">
+        <SheetContent className="gap-0 data-[side=right]:sm:max-w-3xl">
           <SheetHeader className="border-b px-6 py-5">
             <SheetTitle className="pr-10 text-lg">
               {t('acl.page.editDirectory', {

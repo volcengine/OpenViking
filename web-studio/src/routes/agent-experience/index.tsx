@@ -310,6 +310,38 @@ function AgentExperienceRoute() {
 
       <ExperienceSetupGuide />
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 px-4 py-3">
+        <div className="relative w-full sm:max-w-md">
+          <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            aria-label={t('searchPlaceholder')}
+            autoComplete="off"
+            className="h-9 bg-transparent pr-9 pl-8 shadow-none dark:bg-transparent"
+            name="agent-experience-search"
+            placeholder={t('searchPlaceholder')}
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+          />
+          {keyword ? (
+            <button
+              type="button"
+              aria-label={t('searchClear')}
+              className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              onClick={() => setKeyword('')}
+            >
+              <XIcon className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
+        {experiencesQuery.isSuccess && (
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {t(searchKeyword ? 'searchCount' : 'pageCount', {
+              count: experiences.length,
+            })}
+          </span>
+        )}
+      </div>
+
       {experiencesQuery.isLoading ? (
         <Card className="min-h-56 items-center justify-center">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -385,40 +417,6 @@ function AgentExperienceRoute() {
           size="sm"
           className="rounded-xl bg-background shadow-none ring-border/70 data-[size=sm]:gap-0 data-[size=sm]:py-0"
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
-            <div className="relative w-full sm:max-w-md">
-              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                aria-label={t('searchPlaceholder')}
-                autoComplete="off"
-                className="h-9 bg-transparent pr-9 pl-8 shadow-none dark:bg-transparent"
-                name="agent-experience-search"
-                placeholder={t('searchPlaceholder')}
-                value={keyword}
-                onChange={(event) => {
-                  setKeyword(event.target.value)
-                }}
-              />
-              {keyword ? (
-                <button
-                  type="button"
-                  aria-label={t('searchClear')}
-                  className="absolute top-1/2 right-2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  onClick={() => {
-                    setKeyword('')
-                  }}
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              ) : null}
-            </div>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {t(searchKeyword ? 'searchCount' : 'pageCount', {
-                count: experiences.length,
-              })}
-            </span>
-          </div>
-
           {experiences.length === 0 ? (
             <div className="grid min-h-40 place-items-center px-6 py-8 text-center">
               <div className="grid max-w-md gap-1">
