@@ -446,6 +446,25 @@ const guidesSidebar = {
   }
 } as const
 
+const privateDeploymentSidebar = {
+  en: {
+    text: 'Enterprise Deployment',
+    items: [
+      ['19-deployment-checklist.md', 'Deployment Checklist'],
+      ['20-private-deployment.md', 'Install & Verify'],
+      ['21-private-operations.md', 'Upgrades & Troubleshooting']
+    ]
+  },
+  zh: {
+    text: '企业私有化部署',
+    items: [
+      ['19-deployment-checklist.md', '部署前检查'],
+      ['20-private-deployment.md', '安装与验收'],
+      ['21-private-operations.md', '升级与排障']
+    ]
+  }
+} as const
+
 type StructuredSidebarCopy = {
   readonly overview: string
   readonly topItems?: ReadonlyArray<readonly [string, string]>
@@ -570,6 +589,19 @@ function guidesSection(
   collapsed = true
 ): DefaultTheme.SidebarItem {
   const section = groupedSidebarSection(locale, 'guides', title, guidesSidebar[locale], collapsed)
+  const deploymentGroupTitle = locale === 'zh' ? '配置与部署' : 'Configuration & Deployment'
+  const deploymentGroup = section.items?.find((item) => item.text === deploymentGroupTitle)
+  if (deploymentGroup?.items) {
+    const serverIndex = deploymentGroup.items.findIndex((item) =>
+      item.link === `/${locale}/guides/03-deployment`
+    )
+    const copy = privateDeploymentSidebar[locale]
+    deploymentGroup.items.splice(serverIndex + 1, 0, {
+      text: copy.text,
+      collapsed: false,
+      items: copy.items.map((item) => configuredSidebarItem(locale, 'guides', item))
+    })
+  }
   // Nest the Context Compilation pages under the "Integration & Extension" group.
   const integrationGroupTitle = locale === 'zh' ? '集成与扩展' : 'Integration & Extension'
   const integrationGroup = section.items?.find((item) => item.text === integrationGroupTitle)

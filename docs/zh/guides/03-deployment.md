@@ -1,5 +1,7 @@
 # 服务端部署
 
+准备自建环境前，先查看[部署前检查](19-deployment-checklist.md)。已取得 VikingDB / OpenViking 私有交付包的用户，请使用[企业私有化部署](20-private-deployment.md)及[升级与排障](21-private-operations.md)流程。
+
 OpenViking 以 HTTP 服务运行。安装服务端之前，先选择由谁运行服务：
 
 | 服务方式 | 你需要准备什么 |
@@ -399,12 +401,15 @@ docker compose up -d
 
 ### Kubernetes + Helm
 
-项目提供了 Helm chart，位于 `examples/k8s-helm/`：
+这是开源服务的 Helm chart，与私有交付包的 ovadmin / Operator 流程不同。chart 参数见 [Helm README](https://github.com/volcengine/OpenViking/blob/main/deploy/helm/README.md)。
+
+项目提供了 Helm chart，位于 `deploy/helm/openviking/`：
 
 ```bash
-helm install openviking ./examples/k8s-helm \
-  --set openviking.config.embedding.dense.api_key="YOUR_API_KEY" \
-  --set openviking.config.vlm.api_key="YOUR_API_KEY"
+helm install openviking ./deploy/helm/openviking \
+  --set-string config.server.root_api_key="YOUR_ROOT_API_KEY" \
+  --set-string config.embedding.dense.api_key="YOUR_API_KEY" \
+  --set-string config.vlm.api_key="YOUR_API_KEY"
 ```
 
 详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](https://github.com/volcengine/OpenViking/blob/main/examples/cloud/GUIDE.md)。

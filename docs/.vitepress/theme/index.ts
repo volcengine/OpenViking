@@ -1,5 +1,5 @@
 import { h, defineAsyncComponent } from 'vue'
-import DefaultTheme from 'vitepress/theme'
+import DefaultTheme, { VPButton } from 'vitepress/theme'
 import DocBreadcrumb from './components/DocBreadcrumb.vue'
 import LocaleSwitch from './components/LocaleSwitch.vue'
 import { useData, withBase } from 'vitepress'
@@ -321,6 +321,7 @@ export default {
     })
   },
   enhanceApp({ app, router }: EnhanceAppContext) {
+    app.component('VPButton', VPButton)
     app.component('DocsHome', defineAsyncComponent(() => import('./components/DocsHome.vue')))
     if (import.meta.env.SSR || typeof window === 'undefined') return
 

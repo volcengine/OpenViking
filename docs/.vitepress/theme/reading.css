@@ -78,3 +78,5 @@
   .VPNav .VPNavBar .content-body { gap: 5px; }
   .VPNav .ov-docs-search-trigger { width: 43px; min-width: 43px; padding: 0 4px; }
 }
+
+.vp-doc a.VPButton { text-decoration: none; }
