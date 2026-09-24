@@ -11,6 +11,10 @@ import threading
 from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
+from openviking.connector.auth import (
+    is_external_feishu_auth,
+    restore_feishu_request,
+)
 from openviking.connector.delegate import ConnectorDelegate
 from openviking.resource.feishu_watch_auth import (
     FeishuOAuthClient,
@@ -28,6 +32,7 @@ from openviking.resource.watch_manager import WatchManager, WatchTask
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
+from openviking.utils.git_auth import GIT_AUTH_FAILED
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -54,6 +59,7 @@ class WatchScheduler:
         max_concurrency: int = 4,
         task_timeout: float = DEFAULT_TASK_TIMEOUT,
         uri_mutation_coordinator: Optional[UriMutationCoordinator] = None,
+        runtime_config_manager: Optional[Any] = None,
     ):
         """Initialize WatchScheduler.
 
@@ -65,6 +71,7 @@ class WatchScheduler:
         self._resource_service = resource_service
         self._viking_fs = viking_fs
         self._uri_mutation_coordinator = uri_mutation_coordinator or UriMutationCoordinator()
+        self._runtime_config_manager = runtime_config_manager
         if check_interval <= 0:
             raise ValueError("check_interval must be > 0")
         if max_concurrency <= 0:
@@ -318,19 +325,19 @@ class WatchScheduler:
 
         cancelled = False
         should_deactivate = False
-        deactivation_reason = ""
         execution_task_id = None
         execution_status = None
         execution_error = None
+        execution_code = None
 
         try:
             auth_state = getattr(task, "auth_state", None)
             connector_watch = ConnectorDelegate.is_watch_auth_state(auth_state)
             if not connector_watch and not self._check_resource_exists(task.path):
                 should_deactivate = True
-                deactivation_reason = f"Resource path does not exist: {task.path}"
+                execution_error = f"Resource path does not exist: {task.path}"
                 logger.warning(
-                    f"[WatchScheduler] Task {task.task_id}: {deactivation_reason}. "
+                    f"[WatchScheduler] Task {task.task_id}: {execution_error}. "
                     "Deactivating task."
                 )
             else:
@@ -358,9 +365,9 @@ class WatchScheduler:
                     target_exists = await self._check_target_uri_exists(task.to_uri, ctx)
                     if target_exists is False:
                         should_deactivate = True
-                        deactivation_reason = f"Watched target URI does not exist: {task.to_uri}"
+                        execution_error = f"Watched target URI does not exist: {task.to_uri}"
                         logger.warning(
-                            f"[WatchScheduler] Task {task.task_id}: {deactivation_reason}. "
+                            f"[WatchScheduler] Task {task.task_id}: {execution_error}. "
                             "Deactivating task."
                         )
 
@@ -368,14 +375,18 @@ class WatchScheduler:
                     processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
                     processor_kwargs.pop("build_index", None)
                     processor_kwargs.pop("summarize", None)
-                    if is_feishu_auth_state(auth_state):
+                    if is_external_feishu_auth(auth_state):
+                        ctx.api_key, processor_kwargs["args"] = await restore_feishu_request(
+                            self._resource_service._connector, auth_state, path=task.path, ctx=ctx
+                        )
+                    elif is_feishu_auth_state(auth_state):
                         try:
                             auth_state = await self._prepare_feishu_auth_state(task, auth_state)
                             processor_kwargs["feishu_access_token"] = auth_state["access_token"]
                         except FeishuTokenRefreshError as e:
                             if e.permanent:
                                 should_deactivate = True
-                                deactivation_reason = str(e)
+                                execution_error = str(e)
                                 logger.error(
                                     f"[WatchScheduler] Task {task.task_id} permanent Feishu "
                                     f"token refresh failure: {e}. Deactivating task."
@@ -422,6 +433,7 @@ class WatchScheduler:
                         **processor_kwargs,
                     )
 
+                    execution_code = result.get("code")
                     execution_task_id = result.get("task_id")
                     result_status = str(result.get("status") or "").lower()
                     if execution_task_id and result_status not in {
@@ -460,6 +472,9 @@ class WatchScheduler:
                         else:
                             result_status = ingestion_task.status.value
                             execution_error = ingestion_task.error
+                            execution_code = (getattr(ingestion_task, "result", None) or {}).get(
+                                "code"
+                            )
 
                     if result_status in {"failed", "error"}:
                         execution_status = "failed"
@@ -493,15 +508,15 @@ class WatchScheduler:
             raise
         except FileNotFoundError as e:
             should_deactivate = True
-            deactivation_reason = f"Resource not found: {e}"
+            execution_error = f"Resource not found: {e}"
             execution_status = "failed"
-            execution_error = deactivation_reason
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} resource not found: {e}. Deactivating task."
             )
         except Exception as e:
             execution_status = "failed"
             execution_error = str(e) or type(e).__name__
+            execution_code = getattr(e, "code", None)
             logger.error(
                 f"[WatchScheduler] Task {task.task_id} execution failed, "
                 f"error_type={type(e).__name__}"
@@ -510,9 +525,10 @@ class WatchScheduler:
         finally:
             try:
                 if not cancelled:
+                    if execution_status == "failed" and execution_code == GIT_AUTH_FAILED:
+                        should_deactivate = True
                     if should_deactivate:
                         execution_status = "failed"
-                        execution_error = deactivation_reason
                     await asyncio.shield(
                         self._watch_manager.record_execution(
                             task.task_id,
@@ -532,7 +548,7 @@ class WatchScheduler:
                             )
                         )
                         logger.info(
-                            f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
+                            f"[WatchScheduler] Deactivated task {task.task_id}: {execution_error}"
                         )
                     else:
                         logger.info(
@@ -578,9 +594,17 @@ class WatchScheduler:
             return auth_state
 
         refresh_token = auth_state.get("refresh_token")
-        refreshed = await FeishuOAuthClient.from_auth_state(auth_state).refresh_user_access_token(
-            refresh_token
+        if self._runtime_config_manager is None:
+            raise RuntimeError("Runtime config manager is not initialized")
+        from openviking.config.feishu import get_effective_feishu_config
+
+        config = await get_effective_feishu_config(
+            self._runtime_config_manager,
+            task.account_id,
         )
+        refreshed = await FeishuOAuthClient.from_auth_state(
+            auth_state, config=config
+        ).refresh_user_access_token(refresh_token)
         updated = apply_feishu_refreshed_token(auth_state, refreshed)
         if self._watch_manager is not None:
             await self._watch_manager.update_auth_state(task.task_id, updated)

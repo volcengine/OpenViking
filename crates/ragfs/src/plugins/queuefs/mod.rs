@@ -79,6 +79,17 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
 struct QueueMessage {
     id: String,
     data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<f64>,
+}
+
+fn queue_message_timestamp(msg: &Message) -> Option<f64> {
+    msg.timestamp_valid.then(|| {
+        msg.timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64()
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -374,9 +385,11 @@ impl FileSystem for QueueFileSystem {
                 };
                 // Return in Go libagfsbinding format: {"id": "...", "data": "..."}
                 let data_str = String::from_utf8_lossy(&msg.data).to_string();
+                let timestamp = queue_message_timestamp(&msg);
                 let response = QueueMessage {
                     id: msg.id,
                     data: data_str,
+                    timestamp,
                 };
                 Ok(serde_json::to_vec(&response)?)
             }
@@ -389,6 +402,7 @@ impl FileSystem for QueueFileSystem {
                 let response = QueueMessage {
                     id: msg.id.clone(),
                     data: data_str,
+                    timestamp: queue_message_timestamp(&msg),
                 };
                 Ok(serde_json::to_vec(&response)?)
             }
@@ -406,9 +420,13 @@ impl FileSystem for QueueFileSystem {
                     .list_unacked(&queue_name)
                     .await?
                     .into_iter()
-                    .map(|msg| QueueMessage {
+                .map(|msg| {
+                    let timestamp = queue_message_timestamp(&msg);
+                    QueueMessage {
                         id: msg.id,
                         data: String::from_utf8_lossy(&msg.data).to_string(),
+                        timestamp,
+                    }
                     })
                     .collect::<Vec<_>>();
                 Ok(serde_json::to_vec(&messages)?)
@@ -898,6 +916,18 @@ mod tests {
     struct TestQueueMessage {
         id: String,
         data: String,
+        timestamp: Option<f64>,
+    }
+
+    #[test]
+    fn test_queue_message_omits_missing_timestamp() {
+        let response = QueueMessage {
+            id: "legacy".to_string(),
+            data: "payload".to_string(),
+            timestamp: None,
+        };
+        let value = serde_json::to_value(response).unwrap();
+        assert!(value.get("timestamp").is_none());
     }
 
     /// Create a queue filesystem with one initialized queue.
@@ -940,10 +970,12 @@ mod tests {
         let msg1 = dequeue_msg(&fs, "test").await;
         assert!(!msg1.id.is_empty());
         assert_eq!(msg1.data.as_bytes(), data1);
+        assert!(msg1.timestamp.is_some_and(|value| value > 0.0));
 
         let msg2 = dequeue_msg(&fs, "test").await;
         assert!(!msg2.id.is_empty());
         assert_eq!(msg2.data.as_bytes(), data2);
+        assert!(msg2.timestamp.is_some_and(|value| value > 0.0));
 
         // Queue should be empty
         let result = fs.read("/test/dequeue", 0, 0).await.unwrap();

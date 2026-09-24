@@ -6,7 +6,7 @@ import asyncio
 import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -329,6 +329,8 @@ class GrepRequest(BaseModel):
     level_limit: int = 10
     tags: Optional[List[str]] = None
     include_tags: bool = False
+    before_context: int = Field(default=0, ge=0)
+    after_context: int = Field(default=0, ge=0)
 
 
 class GlobRequest(BaseModel):
@@ -345,6 +347,7 @@ class GlobRequest(BaseModel):
 @router.post("/find")
 async def find(
     request: FindRequest,
+    http_request: Request,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Semantic search without session context."""
@@ -380,6 +383,7 @@ async def find(
     if request.read_content:
         result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
+    http_request.state.retrieval_result_count = result.get("total", 0)
     return Response(
         status="ok",
         result=result,
@@ -404,6 +408,7 @@ async def _search_context(
     service: Any,
     ctx: RequestContext,
     request: SearchRequest,
+    http_request: Request,
     effective_filter: Optional[Dict[str, Any]],
     actual_limit: int,
 ):
@@ -436,6 +441,7 @@ async def _search_context(
     ignored = _context_ignored_fields(request)
     if ignored:
         result.stats["ignored"] = ignored
+    http_request.state.retrieval_result_count = len(result.entries)
     return Response(
         status="ok",
         result=_sanitize_floats(result.to_dict()),
@@ -446,6 +452,7 @@ async def _search_context(
 @router.post("/search")
 async def search(
     request: SearchRequest,
+    http_request: Request,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Semantic search with optional session context."""
@@ -464,6 +471,7 @@ async def search(
             service=service,
             ctx=_ctx,
             request=request,
+            http_request=http_request,
             effective_filter=effective_filter,
             actual_limit=actual_limit,
         )
@@ -499,6 +507,7 @@ async def search(
     if request.read_content:
         result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
+    http_request.state.retrieval_result_count = result.get("total", 0)
     return Response(
         status="ok",
         result=result,
@@ -557,6 +566,8 @@ async def grep(
             level_limit=request.level_limit,
             tags=request.tags,
             include_tags=request.include_tags,
+            before_context=request.before_context,
+            after_context=request.after_context,
         )
     except AGFSNotFoundError:
         raise NotFoundError(resolved_uri, "file")

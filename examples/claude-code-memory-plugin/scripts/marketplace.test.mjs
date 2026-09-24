@@ -55,6 +55,16 @@ test("marketplace package ships the canonical Experience skill", () => {
   );
 });
 
+test("marketplace package ships the canonical OpenViking skills skill", () => {
+  const packaged = join(pluginDir, "skills", "openviking-skills", "SKILL.md");
+  assert.ok(existsSync(packaged), "Claude plugin must package the openviking-skills skill");
+  assert.equal(
+    readFileSync(packaged, "utf-8"),
+    readFileSync(join(repoRoot, "examples", "skills", "openviking-skills", "SKILL.md"), "utf-8"),
+    "packaged skill must stay byte-identical to examples/skills/openviking-skills",
+  );
+});
+
 test("Claude .mcp.json starts the stdio MCP proxy", () => {
   const mcp = readJson(join(pluginDir, ".mcp.json"));
   const server = mcp.openviking;

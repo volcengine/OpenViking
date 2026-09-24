@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { OPENVIKING_PLUGIN_KIND } from "./capture.mjs";
 import { guardVikingUri, noticeVikingUri } from "./uri-guard.mjs";
 
 test("uri guard blocks every DSH filesystem tool that accepts paths", async () => {
@@ -130,7 +131,7 @@ test("shell commands carrying a viking URI run and get a notice", async () => {
   assert.equal(decision.additionalContexts.length, 1);
   const [context] = decision.additionalContexts;
   assert.equal(context.role, "user");
-  assert.equal(context.source.kind, "plugin");
+  assert.equal(context.source.kind, OPENVIKING_PLUGIN_KIND);
   assert.equal(context.source.plugin, "openviking-memory");
   assert.equal(context.source.form, "notice");
   assert.match(context.source.summary, /viking:\/\/user\/default\/memories\/profile\.md/);
@@ -187,3 +188,14 @@ test("the notice leaves file tools, plain shell commands, and denied reads alone
 function okResult() {
   return { isError: false, value: "", content: [{ type: "text", text: "" }] };
 }
+
+test("a write or edit aimed at a skill names the bridged add_skill tool", async () => {
+  for (const name of ["write", "edit"]) {
+    const decision = await guardVikingUri({
+      name,
+      arguments: { file_path: "viking://agent/skills/deploy-runbook/SKILL.md" },
+    }, async () => ({ kind: "allow" }));
+    assert.equal(decision.kind, "deny", name);
+    assert.match(decision.reason, /Use mcp__openviking__add_skill instead\./, name);
+  }
+});

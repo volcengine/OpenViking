@@ -3,7 +3,9 @@
 import abc
 import asyncio
 import json
+import math
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
@@ -263,6 +265,7 @@ class NamedQueue:
         handler = self._dequeue_handler
         if handler is None:
             return ProcessResult.success(data)
+        process_started = time.perf_counter()
 
         async def process(ctx: ProcessContext) -> ProcessResult:
             return self._validate_result(await handler.on_dequeue(ctx.message))
@@ -273,11 +276,43 @@ class NamedQueue:
         ctx = ProcessContext(self.name, data, cancel=cancel)
         try:
             result = self._validate_result(await self._run_middleware("process", ctx, process))
+        except asyncio.CancelledError:
+            self._publish_duration(data, process_started, "exception")
+            raise
         except Exception as exc:
             self._record_error(str(exc), data)
+            self._publish_duration(data, process_started, "exception")
             raise
         self._record_result(result, data)
+        self._publish_duration(data, process_started, result.outcome.value)
         return result
+
+    def _publish_duration(self, data: Dict[str, Any], process_started: float, outcome: str) -> None:
+        """Publish best-effort processing and end-to-end timings for one delivery."""
+        from openviking.observability.events import try_publish_event
+
+        payload: Dict[str, Any] = {
+            "queue": self.name,
+            "outcome": str(outcome),
+            "process_duration_seconds": max(0.0, time.perf_counter() - process_started),
+        }
+        enqueued_at = self._extract_enqueued_at(data)
+        if enqueued_at is not None:
+            end_to_end = time.time() - enqueued_at
+            if end_to_end >= 0:
+                payload["end_to_end_duration_seconds"] = end_to_end
+        try_publish_event("queue.processed", payload)
+
+    @staticmethod
+    def _extract_enqueued_at(data: Dict[str, Any]) -> Optional[float]:
+        """Read the QueueFS enqueue timestamp from a dequeued message envelope."""
+        if not isinstance(data, dict) or "id" not in data or "data" not in data:
+            return None
+        try:
+            value = float(data.get("timestamp"))
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
 
     @staticmethod
     def _validate_result(result: ProcessResult) -> ProcessResult:

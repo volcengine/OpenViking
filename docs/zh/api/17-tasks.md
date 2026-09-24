@@ -173,7 +173,6 @@ ov task status uuid-xxx
         "entities": 1,
         "cases": 1
       },
-      "active_count_updated": 2,
       "token_usage": {
         "llm": {
           "prompt_tokens": 5200,

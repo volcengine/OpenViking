@@ -44,6 +44,8 @@
  * injection and systemMessage for commit status at the same time.
  */
 
+import { join } from "node:path";
+
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { catchUpTurns, commitOvSession, makeFetchJSON } from "./ov-session.mjs";
@@ -52,6 +54,7 @@ import {
   clearEnded,
   clearState,
   deriveOvSessionId,
+  getStateDir,
   listStates,
   loadState,
   readEndedAt,
@@ -60,7 +63,7 @@ import {
 } from "./session-state.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { replayPending } from "./shared/pending-queue.mjs";
-import { buildProfileBlock } from "./shared/profile-inject.mjs";
+import { buildProfileBlock, isRepeatInjection, truncateToBytes } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 let cfg = loadConfig();
@@ -131,14 +134,21 @@ function formatResumeArchiveContext(ovSessionId, context) {
   const overview = String(context?.latest_archive_overview || "").trim();
   if (!overview) return "";
   const archiveUri = `viking://~/sessions/${ovSessionId}/history/`;
-  const body = truncateText(overview, cfg.resumeArchiveMaxChars);
-  return [
+  const head = [
     "OpenViking session archive digest:",
     `Latest committed archive for resumed Codex session ${ovSessionId}:`,
-    body,
+  ];
+  const tail = [
     "",
     `More detail: use the OpenViking MCP read/search tools with ${archiveUri} if you need exact prior commands, files, tool outputs, or messages.`,
-  ].join("\n");
+  ];
+  // Under a byte cap the archive takes at most half of the SessionStart context.
+  const maxBytes = cfg.sessionStartMaxBytes > 0
+    ? Math.max(1, Math.floor(cfg.sessionStartMaxBytes / 2) - ENVELOPE_BYTES
+      - Buffer.byteLength([...head, ...tail].join("\n"), "utf8"))
+    : 0;
+  const body = truncateToBytes(truncateText(overview, cfg.resumeArchiveMaxChars), maxBytes);
+  return [...head, body, ...tail].join("\n");
 }
 
 function wrapResumeContext(additionalContext) {
@@ -162,7 +172,10 @@ function wrapProfileContext(profileBlock) {
   ].join("\n");
 }
 
-async function buildSessionProfileContext() {
+// Leaves room for the envelope lines and the separator between contexts.
+const ENVELOPE_BYTES = 100;
+
+async function buildSessionProfileContext({ sessionId = "", source = "", maxBytes = cfg.sessionStartMaxBytes } = {}) {
   if (cfg.noAutoInject) {
     log("skip", { stage: "profile_inject", reason: "disabled" });
     return "";
@@ -172,9 +185,16 @@ async function buildSessionProfileContext() {
       fetchJSONRes,
       cfg.profileTokenBudget,
       activePeerId,
+      { ...cfg, sessionStartMaxBytes: maxBytes > 0 ? Math.max(1, maxBytes - ENVELOPE_BYTES) : 0 },
     );
     if (!profile?.block) {
       log("skip", { stage: "profile_inject", reason: "no profile content" });
+      return "";
+    }
+    // A resumed thread already holds the earlier block; skip it when unchanged.
+    const statePath = join(getStateDir(), "profile-injections.json");
+    if (sessionId && isRepeatInjection(statePath, sessionId, profile.block) && source === "resume") {
+      log("skip", { stage: "profile_inject", reason: "unchanged since last injection" });
       return "";
     }
     log("profile_inject", {
@@ -185,6 +205,9 @@ async function buildSessionProfileContext() {
       entCount: profile.entCount,
       droppedPref: profile.droppedPref,
       droppedEnt: profile.droppedEnt,
+      skillCount: profile.skillCount,
+      droppedSkill: profile.droppedSkill,
+      skillTokens: profile.skillTokens,
     });
     return wrapProfileContext(profile.block);
   } catch (error) {
@@ -351,10 +374,11 @@ runHookStage({
       log("skip", { stage: "inject", reason: "bypass_session_pattern" });
       return;
     }
-    const [profileContext, archiveContext] = await Promise.all([
-      buildSessionProfileContext(),
-      buildResumeArchiveContext(newSessionId),
-    ]);
+    const archiveContext = await buildResumeArchiveContext(newSessionId);
+    const maxBytes = cfg.sessionStartMaxBytes > 0
+      ? Math.max(1, cfg.sessionStartMaxBytes - Buffer.byteLength(archiveContext, "utf8"))
+      : 0;
+    const profileContext = await buildSessionProfileContext({ sessionId: newSessionId, source, maxBytes });
     return { contexts: [profileContext, archiveContext] };
   }
 
@@ -374,7 +398,9 @@ runHookStage({
 
   await replayPendingWrites();
 
-  const profileContext = bypassed ? null : await buildSessionProfileContext();
+  const profileContext = bypassed
+    ? null
+    : await buildSessionProfileContext({ sessionId: newSessionId, source });
   const now = Date.now();
   const commits = [];
   let retired = 0;

@@ -1005,18 +1005,24 @@ class LegacyAPIKeyManager:
         name_filter: str | None = None,
         limit: int | None = None,
         page: int = 1,
+        query_filter: str | None = None,
     ) -> list:
         """List accounts in creation (insertion) order.
 
-        ``name_filter`` uses wildcard (``*`` and ``?``) matching. Pagination is
-        opt-in: ``limit=None`` returns every matching account so internal
-        callers that rely on the full account set are unaffected; when ``limit``
-        is set, ``page`` (1-based) selects the slice.
+        ``name_filter`` uses wildcard (``*`` and ``?``) matching. ``query_filter``
+        is a case-insensitive substring match on the account id, mirroring the
+        user listing search. Pagination is opt-in: ``limit=None`` returns every
+        matching account so internal callers that rely on the full account set
+        are unaffected; when ``limit`` is set, ``page`` (1-based) selects the
+        slice.
         """
         result = []
+        query = (query_filter or "").strip().casefold()
         for account_id, info in self._accounts.items():
             # Apply name filter if provided (fnmatch wildcard matching)
             if name_filter and not fnmatch.fnmatch(account_id, name_filter):
+                continue
+            if query and query not in account_id.casefold():
                 continue
 
             result.append(

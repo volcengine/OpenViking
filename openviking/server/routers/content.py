@@ -27,6 +27,7 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
+from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
@@ -48,7 +49,8 @@ class WriteContentRequest(BaseModel):
     telemetry: TelemetryRequest = False
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: list[str] | None = None
-    tag_mode: Literal["replace", "append"] = "replace"
+    tag_mode: Literal["replace", "append", "clear"] = "replace"
+    acl: AclSpec | None = None
 
 
 class BatchWriteOperation(BaseModel):
@@ -249,6 +251,7 @@ async def write(
             processing_mode=request.processing_mode,
             tags=request.tags,
             tag_mode=request.tag_mode,
+            acl=request.acl,
         ),
     )
     return Response(
@@ -335,7 +338,7 @@ async def reindex(
     }
     if not body.recursive:
         reindex_kwargs["recursive"] = False
-    if body.tags is not None:
+    if body.tags is not None or body.tag_mode == "clear":
         reindex_kwargs["tags"] = body.tags
         reindex_kwargs["tag_mode"] = body.tag_mode
     result = await service.reindex(

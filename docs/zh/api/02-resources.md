@@ -44,7 +44,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret` |
+| 飞书/Lark | URL 方式，支持 doc/docx、wiki、sheets、bitable、mindnote/mindnotes、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret`。Mindnote 及 Wiki 中的 Mindnote 要求本次使用的 token 具备 `mindnote:node:read` |
 
 网页类（递归网页爬虫）
 | 类型 | 资源名 | 说明 |
@@ -183,7 +183,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | is_active | bool | 否 | True | Watch 初始调度状态。设为 `false` 时要求 `watch_interval > 0`，并在 `to`、`parent` 中二选一。`parent` 支持原生飞书 URL 和 Git 导入；Connector 仍要求精确的 `to`。首次导入仍执行一次，随后保持暂停 |
 | processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
 | tags | string[] | 否 | None | 导入时写入向量检索记录的显式检索标签，格式必须是 `k=v`，例如 `["team=search", "env=test"]`。搜索接口可用同名 `tags` 参数过滤召回 |
-| tag_mode | string | 否 | `"replace"` | `tags` 的写入模式，可选 `replace` 或 `append`。导入新资源时会随本次生成的每条向量记录写入；不会在完成后额外调用 `set_tags`，响应也不返回 `tags_result` |
+| tag_mode | string | 否 | `"replace"` | 标签写入模式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空。`clear` 不要求传 `tags`；`replace` 配合空数组不会修改已有标签。导入时标签会随本次生成的每条向量记录写入；不会在完成后额外调用 `set_tags`，响应也不返回 `tags_result` |
+| acl | object | 否 | None | 设置最终导入根节点的直接 ACL，要求 manage；省略时保留已有权限。见 [ACL API](12-acl.md)。 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
@@ -206,6 +207,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - Connector 导入设置 `is_active=false` 时会在提交前创建暂停状态的 Watch；原生飞书和 Git 导入会通过资源队列透传 `is_active`，解析出最终资源 URI 后再创建 Watch。两种情况下首次导入均执行一次，周期调度保持关闭。
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
+- 飞书/Lark Mindnote URL 支持 `/mindnote/{token}` 和 `/mindnotes/{token}`；Wiki URL 若解析为 `obj_type=mindnote` 也走同一读取流程。Mindnote 使用与其他飞书导入一致的认证选择：传入 `args.feishu_access_token` 时使用用户 token，否则回退到配置的 app/tenant token。本次使用的 token 需具备 `mindnote:node:read`。
+- Mindnote 节点图片通过飞书 Drive 素材接口下载，并沿用本次 Mindnote 导入的 token 类型。用户 token 导入会向媒体下载透传用户 token；app-token 导入使用配置的应用凭证。本次使用的 token 需具备 `docs:document.media:download`。媒体下载不可用时，正文仍会成功导入并保留原始图片引用。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
 - 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。还可同时传入 `feishu_app_id` 和 `feishu_app_secret`；OpenViking 会将其保存在 watch task 私有状态中，并用于刷新该 watch 的用户 token。
 - 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
@@ -323,6 +326,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
     }
   }'
 
+# 添加飞书 Mindnote（也可传底层类型为 Mindnote 的 Wiki URL）
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/mindnote/mindnote_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
 # 使用用户 token 自动刷新添加飞书文档
 curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
@@ -414,6 +428,12 @@ client.add_resource(
 # 使用一次性用户 access token 添加飞书文档
 client.add_resource(
     path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
+)
+
+# 使用显式用户 token 添加飞书 Mindnote
+client.add_resource(
+    path="https://example.feishu.cn/mindnote/mindnote_token",
     options={"args": {"feishu_access_token": "u-..."}},
 )
 

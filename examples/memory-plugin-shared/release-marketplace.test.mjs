@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import test from "node:test";
@@ -19,7 +19,7 @@ function run(command, args, options = {}) {
   });
 }
 
-test("release marketplace archive supports a ZCode TOS install", () => {
+test("release marketplace archive supports ZCode and pi TOS installs", () => {
   const tmp = mkdtempSync(join(tmpdir(), "openviking-zcode-release-"));
   try {
     const stage = join(tmp, "memory-plugin-marketplace");
@@ -97,6 +97,58 @@ test("release marketplace archive supports a ZCode TOS install", () => {
       assert.ok(script, `${command} names no script`);
       assert.ok(existsSync(script), `${script} is missing after install`);
     }
+
+    const bin = join(tmp, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "kimi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const kimiInstalled = run("bash", [
+      installer,
+      "--harness", "kimicode",
+      "--dist", "tos",
+      "--source", "archive",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:1933",
+      "--api-key", "",
+      "--yes",
+    ], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH}`,
+        OPENVIKING_HOME: join(home, ".openviking"),
+        OPENVIKING_MARKETPLACE_ARCHIVE_URL: `file://${join(tmp, "memory-plugin-marketplace.zip")}`,
+      },
+    });
+    assert.equal(kimiInstalled.status, 0, kimiInstalled.stdout + kimiInstalled.stderr);
+    const kimiRoot = join(home, ".kimi-code", "plugins", "managed", "openviking-memory");
+    assert.ok(existsSync(join(kimiRoot, "kimi.plugin.json")));
+    assert.ok(existsSync(join(kimiRoot, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
+    assert.ok(existsSync(join(kimiRoot, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+
+    writeFileSync(join(bin, "pi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const piArgs = [installer, "--harness", "pi", "--dist", "tos", "--source", "archive",
+      "--lang", "en", "--url", "http://127.0.0.1:1933", "--api-key", "", "--yes"];
+    const piEnv = { ...process.env, HOME: home, PATH: bin + ":" + process.env.PATH,
+      OPENVIKING_HOME: join(home, ".openviking"),
+      OPENVIKING_MARKETPLACE_ARCHIVE_URL: "file://" + join(tmp, "memory-plugin-marketplace.zip") };
+    const piInstalled = run("bash", piArgs, { env: piEnv });
+    assert.equal(piInstalled.status, 0, piInstalled.stdout + piInstalled.stderr);
+    const piRoot = join(home, ".pi", "agent", "extensions", "openviking");
+    const imported = run("node", ["--input-type=module", "-e", 'await import("./lib/mcp-bridge.mjs"); await import("./tools.ts")'], { cwd: piRoot });
+    assert.equal(imported.status, 0, imported.stdout + imported.stderr);
+    assert.ok(existsSync(join(piRoot, "package-lock.json")));
+    assert.equal(existsSync(join(piRoot, "shared", "mcp-proxy-core.mjs")), false);
+
+    // Both an npm failure and a false-success npm must leave the old install usable.
+    writeFileSync(join(piRoot, "installed-before-upgrade"), "keep");
+    for (const exitCode of [1, 0]) {
+      writeFileSync(join(bin, "npm"), "#!/bin/sh\nexit " + exitCode + "\n", { mode: 0o755 });
+      const failed = run("bash", piArgs, { env: piEnv });
+      assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
+      assert.equal(readFileSync(join(piRoot, "installed-before-upgrade"), "utf8"), "keep");
+      assert.equal(existsSync(piRoot + ".tmp"), false);
+      assert.match(failed.stdout + failed.stderr, /existing extension was kept/);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -123,6 +175,16 @@ test("staging rejects an archive missing a generated shared copy", () => {
     for (const file of generated) {
       assert.ok(existsSync(join(stage, file)), `${file} is not in the staged tree`);
     }
+
+    const piPackage = JSON.parse(readFileSync(join(stage, "pi-coding-agent-extension", "package.json")));
+    const lockPath = join(stage, "pi-coding-agent-extension", "package-lock.json");
+    const lock = readFileSync(lockPath);
+    assert.deepEqual(JSON.parse(lock).packages[""].dependencies, piPackage.dependencies);
+    rmSync(lockPath);
+    const missingLock = run("node", [archiveCheck, stage, ...stagedDirs]);
+    assert.equal(missingLock.status, 1);
+    assert.match(missingLock.stderr, /pi-coding-agent-extension\/package-lock.json/);
+    writeFileSync(lockPath, lock);
 
     rmSync(join(stage, generated[0]));
     const rechecked = run("node", [archiveCheck, stage, ...stagedDirs]);

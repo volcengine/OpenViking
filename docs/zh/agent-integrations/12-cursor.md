@@ -25,8 +25,8 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 ## 安装内容
 
 - 生命周期 Hook：自动加载画像、按问题召回、捕获对话、提交会话并保护 `viking://` URI。
-- OpenViking MCP Server：提供 `search`、`read`、`remember` 等工具；`search` 的 `mode="context"` 可返回组装后的上下文。
-- always-on Rule 和记忆 Skill：告诉 Agent 如何使用已注入的上下文和记忆工具。
+- OpenViking MCP Server：提供 `search`、`read`、`remember`、`add_skill` 等工具；`search` 的 `mode="context"` 可返回组装后的上下文。
+- always-on Rule 和 `openviking-memory` Skill：告诉 Agent 如何使用已注入的上下文和记忆工具；另有 `openviking-skills` Skill，讲如何查找、使用、创建（`add_skill`）、共享和迁移存放在 OpenViking 里的 skill。
 
 ## 验证
 
@@ -38,11 +38,13 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ## 工作原理
 
-- `sessionStart`：加载用户画像和当前项目的记忆索引。
-- `beforeSubmitPrompt`：根据当前问题召回记忆并通过 `additional_context` 注入。
+- `sessionStart`：加载用户画像、当前项目的记忆索引，以及 OpenViking skill 清单 `<available-skills>`。
+- `beforeSubmitPrompt`：根据当前问题召回上下文并通过 `additional_context` 注入，召回范围包括你自己的 skill 和账号内共享在 `viking://agent/skills` 下的 skill。
 - `beforeReadFile`：阻止把 `viking://` 虚拟路径当作本地文件读取，并提示改用 OpenViking MCP 工具；shell 命令不做检查。
 - `stop`：增量捕获本轮新增的用户与助手消息。
 - `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取。
+
+skill 清单先列你自己的 skill，再列账号内共享的 skill；共享 skill 与你自己的 skill 重名时不列出。每条描述截到约 40 token。清单有独立的 token 预算 `skillCatalogTokenBudget`（默认 `1200`），不占用画像预算。描述放不下时只列名称，名称也列不全时末尾附 `... +N more`；连一个名称都放不下时，只写一行 skill 数量。把 `skillCatalog` 设为 `false` 或把预算设为 `0` 即可关闭，既可以写在 `~/.openviking/ovcli.conf` 的 `plugin` 或 `plugin.cursor` 段（见[插件配置](../configuration/02-client.md#插件配置)），也可以用环境变量 `OPENVIKING_SKILL_CATALOG` 和 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`。没有任何 skill，或服务端不提供 `GET /api/v1/skills` 时，不注入这份清单。
 
 项目身份优先使用 Cursor 提供的 `workspace_roots`，因此不同项目会使用不同的 workspace peer。连接信息统一读取 `~/.openviking/ovcli.conf`。
 

@@ -18,6 +18,10 @@ const FILESYSTEM_TOOL_HINTS = {
     tool: "openviking_read or openviking_search",
     example: (uri) => `openviking_read(uris=["${uri}"])`,
   },
+  shell: {
+    tool: "openviking_read or openviking_search",
+    example: (uri) => `openviking_read(uris=["${uri}"])`,
+  },
 }
 
 export function createVikingUriGuard() {

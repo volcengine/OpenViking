@@ -53,3 +53,23 @@ describe('task pipeline labels', () => {
     expect(namesOf(taskOf('session_commit'))).toContain('sessionCommit')
   })
 })
+
+describe('task pipeline queue status', () => {
+  it('keeps missing queue entries optional', () => {
+    const steps = getTaskPipelineSteps({
+      result: {
+        queue_status: {
+          Semantic: { processed: 3 },
+        },
+      },
+      status: 'running',
+      task_type: 'add_resource',
+    })
+
+    expect(steps).toEqual([
+      { name: 'externalParse', state: 'completed' },
+      { count: 3, name: 'semantic', state: 'completed' },
+      { count: undefined, name: 'embedding', state: 'running' },
+    ])
+  })
+})

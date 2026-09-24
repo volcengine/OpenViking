@@ -662,10 +662,11 @@ Injecting context every turn used to mean searching per type, reading each hit b
   |----------|--------------|---------------------------|-----|
   | `events` | overview | full | The one memory type whose body is long enough for `# Summary` extraction to be a real compression |
   | `entities` / `preferences` / `experiences` | abstract | abstract | Short bodies, and the writer stores the whole body in the abstract scalar, so abstract already is the complete file |
-  | `resources` / `skills` | abstract | abstract | The 256-char abstract from semantic processing; bodies can be large or carry credentials, so deepening is opt-in |
+  | `resources` / `skills` | abstract | abstract | A resource shows the 256-char abstract from semantic processing, a skill the name/description generated from its `SKILL.md` frontmatter; bodies can be large or carry credentials, so deepening is opt-in |
   | `memories` | abstract | abstract | Built-in memory types outside the four named ones — `cases`, `patterns`, `tools`, `trajectories`, skill-usage memories. Only quota-free retrieval reaches them; they own no bucket, so `quotas` cannot name them, but `detail` and `other_peer_penalty` can |
-  | Directory hits | overview | overview | A directory has no abstract, so it reads the `.overview.md` sidecar; a full tier is meaningless for a subtree |
+  | Directory hits | overview | overview | A directory has no abstract, so it reads the `.overview.md` sidecar; a full tier is meaningless for a subtree. Skill package hits are the exception: they normalize onto `<package root>/SKILL.md` and follow the file rules above |
 
+- **Skill packages**: a package stores one vector per file and per directory level, and they all collapse into a single entry before the quotas apply — one entry per package, one quota slot, whichever file inside it matched. That entry's `uri` is `<package root>/SKILL.md`, the same path `/skills/find` reports as `skill_md_uri`, and its text is the package's own abstract; a package whose abstract has not been generated yet degrades to a bare `uri` rather than borrowing the summary of the file that matched. `dedup_turns` therefore cools a whole package: once one is served at `abstract` or deeper, a hit on any file inside it is skipped for the rest of the window
 - **Floor**: every result carries at least its `uri`. When a memory abstract is unavailable or busts the per-entry cap, the entry falls back to overview: the memory writer stores the whole body in that scalar, so for memory categories overview sits *below* abstract on the content ladder and the substitute discloses less. A `resources` or `skills` abstract is the short generated summary instead, so the same substitution would read a body the caller never asked for — those two degrade to a bare `uri` rather than deepen
 - **Explicit `detail`**: sets that tier as both the requested start and ceiling; entries that do not fit still step down a tier rather than being truncated. The memory overview substitute above is the one case where the served `detail` can outrank the pin, and only because it carries less content than the pinned tier would
 - **Overview by source type**: memory files use the leading `# Summary` section, code files use class and function signatures (reusing `code_outline`), long documents use the heading tree plus first paragraph
@@ -786,7 +787,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 **Processing Pipeline**:
 1. Traverse file system starting from specified URI
 2. Perform regex matching on each file content
-3. Collect matching lines and position information
+3. Collect matching lines, position information, and optional surrounding context
 4. Return matching results list
 
 **Code Entry Points**:
@@ -808,6 +809,8 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | level_limit | int | No | Python SDK: 5; HTTP API / CLI / Go SDK: 10 | Maximum directory depth to traverse. The Go SDK currently uses the HTTP API default. |
 | tags | string[] | No | Unset | Search only files matching every supplied `k=v` retrieval tag |
 | include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
+| before_context | int | No | 0 | Number of context lines returned before each match; supported by the HTTP API and CLI |
+| after_context | int | No | 0 | Number of context lines returned after each match; supported by the HTTP API and CLI |
 
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 
@@ -829,6 +832,8 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
         "uri": "viking://resources",
         "pattern": "authentication",
         "case_insensitive": true,
+        "before_context": 1,
+        "after_context": 1,
         "tags": ["team=search", "env=prod"]
     }'
 ```
@@ -890,6 +895,9 @@ openviking grep "authentication" --uri viking://resources --ignore-case
 # Specify depth limit
 openviking grep "TODO" --uri viking://resources --level-limit 3
 
+# Return two context lines before and after each match
+openviking grep "authentication" --uri viking://resources -b 2 -a 2
+
 # Search only files carrying every tag
 openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
 
@@ -910,6 +918,12 @@ For HTTP `POST /api/v1/search/grep`, set `include_tags: true` to include tags wi
                 "uri": "viking://resources/docs/auth.md",
                 "line": 15,
                 "content": "User authentication is handled by...",
+                "before_context": [
+                    {"line": 14, "content": "## Authentication"}
+                ],
+                "after_context": [
+                    {"line": 16, "content": "Configure an API key before sending requests."}
+                ],
                 "tags": ["team=search", "env=prod"]
             }
         ],

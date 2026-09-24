@@ -554,6 +554,9 @@ class FeishuConfig(ParserConfig):
         30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
     )
 
+    def __post_init__(self) -> None:
+        self.validate()
+
     def validate(self) -> None:
         """
         Validate configuration.
@@ -563,16 +566,29 @@ class FeishuConfig(ParserConfig):
         """
         super().validate()
 
-        if not self.domain:
+        if not isinstance(self.domain, str) or not self.domain.strip():
             raise ValueError("domain cannot be empty")
+        self.domain = self.domain.strip()
 
-        if self.max_rows_per_sheet <= 0:
+        if (
+            isinstance(self.max_rows_per_sheet, bool)
+            or not isinstance(self.max_rows_per_sheet, int)
+            or self.max_rows_per_sheet <= 0
+        ):
             raise ValueError("max_rows_per_sheet must be positive")
 
-        if self.max_records_per_table <= 0:
+        if (
+            isinstance(self.max_records_per_table, bool)
+            or not isinstance(self.max_records_per_table, int)
+            or self.max_records_per_table <= 0
+        ):
             raise ValueError("max_records_per_table must be positive")
 
-        if self.request_timeout <= 0:
+        if (
+            isinstance(self.request_timeout, bool)
+            or not isinstance(self.request_timeout, (int, float))
+            or self.request_timeout <= 0
+        ):
             raise ValueError("request_timeout must be positive")
 
 
@@ -586,8 +602,8 @@ class DirectoryConfig(ParserConfig):
             adding directory resources. When True (default), files maintain their
             relative path hierarchy. When False, all files are flattened to a
             single level under the resource root.
-        max_files: Maximum number of selected files admitted by one Understanding
-            directory import.
+        max_files: Optional maximum number of selected files admitted by one
+            Understanding or Feishu directory import. None (default) means unlimited.
         max_depth: Maximum nested directory depth below an Understanding directory
             import root.
         max_concurrent: Maximum concurrent Understanding jobs shared by all
@@ -595,7 +611,7 @@ class DirectoryConfig(ParserConfig):
     """
 
     preserve_structure: bool = True
-    max_files: int = 1000
+    max_files: Optional[int] = None
     max_depth: int = 10
     max_concurrent: int = 4
 
@@ -609,6 +625,8 @@ class DirectoryConfig(ParserConfig):
             "max_concurrent",
         ):
             value = getattr(self, name)
+            if name == "max_files" and value is None:
+                continue
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
 

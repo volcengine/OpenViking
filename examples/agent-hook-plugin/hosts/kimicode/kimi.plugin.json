@@ -1,0 +1,66 @@
+{
+  "name": "openviking-memory",
+  "version": "0.5.0",
+  "description": "Long-term semantic memory for Kimi Code CLI, powered by OpenViking.",
+  "author": {
+    "name": "OpenViking",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
+  "homepage": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "openviking", "kimi-code", "long-term-memory"],
+  "interface": {
+    "displayName": "OpenViking Memory",
+    "shortDescription": "Recall and capture long-term memory through OpenViking"
+  },
+  "mcpServers": {
+    "openviking": {
+      "command": "node",
+      "args": ["./agent-integrations/kimicode/servers/mcp-proxy.mjs"],
+      "env": {
+        "OPENVIKING_HOOK_SOURCE": "kimicode"
+      }
+    }
+  },
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "node ./agent-integrations/kimicode/scripts/hook.mjs session-start kimicode",
+      "timeout": 30,
+      "env": {
+        "OPENVIKING_PENDING_REPLAY_LIMIT": "2"
+      }
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "node ./agent-integrations/kimicode/scripts/hook.mjs user-prompt-submit kimicode",
+      "timeout": 20
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Read|Glob|Grep",
+      "command": "node ./agent-integrations/kimicode/scripts/uri-guard.mjs kimicode",
+      "timeout": 5
+    },
+    {
+      "event": "Stop",
+      "command": "node ./agent-integrations/kimicode/scripts/hook.mjs stop kimicode",
+      "timeout": 30
+    },
+    {
+      "event": "PreCompact",
+      "command": "node ./agent-integrations/kimicode/scripts/hook.mjs pre-compact kimicode",
+      "timeout": 30
+    },
+    {
+      "event": "SessionEnd",
+      "command": "node ./agent-integrations/kimicode/scripts/hook.mjs session-end kimicode",
+      "timeout": 30
+    },
+    {
+      "event": "Interrupt",
+      "command": "node ./agent-integrations/kimicode/scripts/hook.mjs interrupt kimicode",
+      "timeout": 10
+    }
+  ]
+}

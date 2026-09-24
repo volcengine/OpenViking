@@ -49,7 +49,7 @@ Audio/video parsers validate and store the original files. Content understanding
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair |
+| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable, and mindnote/mindnotes. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair. Mindnote and wiki-wrapped Mindnote require `mindnote:node:read` on the token used for import |
 
 **Web Pages (recursive web crawler)**
 
@@ -189,6 +189,9 @@ This endpoint is the core entry point for resource management. It supports vario
 | watch_interval | float | No | 0 | Scheduled update interval (minutes). >0 creates a new Watch for a re-readable source, subject to target ownership rules; uploaded `temp_file_id` snapshots cannot be watched. <=0 creates no Watch: native imports with explicit `to` pause a single accessible task (409 if ambiguous), while Connector imports leave Watches untouched. Explicit `to` wins, otherwise the Watch binds to the imported `root_uri`. |
 | is_active | bool | No | True | Initial Watch scheduling state. `false` requires `watch_interval > 0` and either `to` or `parent`. `parent` is supported for native Feishu URL and Git imports; Connector imports still require an exact `to`. The initial import still runs once and the Watch remains paused afterward |
 | processing_mode | string | No | `semantic_and_vectors` | Post-ingest processing mode. `semantic_and_vectors` is the normal flow: generate semantic artifacts (`.abstract.md`, `.overview.md`) and vectors. `vectors_only` skips semantic understanding/VLM summarization and only vectorizes current resource files |
+| tags | string[] | No | None | Explicit `k=v` retrieval tags written with generated vector records. An empty list with `replace` does not change existing tags |
+| tag_mode | string | No | `replace` | Tag write mode: `replace`, `append`, or `clear`; `clear` removes existing tags without requiring `tags` and ignores supplied tag values |
+| acl | object | No | None | Direct ACL for the final import root; requires manage. Omission preserves existing permissions. See [ACL API](12-acl.md). |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
@@ -211,6 +214,8 @@ This endpoint is the core entry point for resource management. It supports vario
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For Connector imports, `is_active=false` creates the paused Watch before submission. Native Feishu and Git imports carry `is_active` through the resource queue and create the Watch after resolving the imported resource URI. In both cases, the initial import still runs once and periodic scheduling remains disabled.
 - Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
+- Feishu/Lark Mindnote URLs may use `/mindnote/{token}` or `/mindnotes/{token}`. Wiki URLs that resolve to `obj_type=mindnote` use the same reader. Mindnote uses the same authentication selection as other Feishu imports: `args.feishu_access_token` selects a user token, otherwise OpenViking falls back to the configured app/tenant token. The selected token must have `mindnote:node:read`.
+- Mindnote node images use Feishu's Drive media API and the same token type as the Mindnote import. User-token imports forward the user token to media download; app-token imports use the configured app credentials. The selected token must allow `docs:document.media:download`. If media download is unavailable, the text import still succeeds and keeps the original image reference.
 - Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
 - Feishu/Lark user-token watches pass `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` with `watch_interval > 0`. They may also pass `feishu_app_id` and `feishu_app_secret` together; OpenViking stores the pair in the private watch task state and uses it to refresh that watch's user token.
 - If the request omits the app pair, user-token watches use `FEISHU_APP_ID` and `FEISHU_APP_SECRET`, or `feishu.app_id` and `feishu.app_secret` in `ov.conf`. Feishu refresh tokens are bound to their issuing app, so whichever app credentials are used must match the supplied user token.
@@ -318,6 +323,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
     }
   }'
 
+# Add a Feishu Mindnote (a wiki URL backed by Mindnote is also supported)
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/mindnote/mindnote_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
 # Add a Feishu document with scheduled user-token refresh
 curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
@@ -409,6 +425,12 @@ client.add_resource(
 # Add a Feishu document with a one-time user access token
 client.add_resource(
     path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
+)
+
+# Add a Feishu Mindnote with an explicit user token
+client.add_resource(
+    path="https://example.feishu.cn/mindnote/mindnote_token",
     options={"args": {"feishu_access_token": "u-..."}},
 )
 

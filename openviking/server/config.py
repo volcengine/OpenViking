@@ -13,11 +13,15 @@ from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
 )
-from openviking_cli.utils.config.config_utils import format_validation_error
+from openviking_cli.utils.config.config_utils import (
+    format_validation_error,
+    warn_unknown_config_fields,
+)
 from openviking_cli.utils.config.consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -124,12 +128,6 @@ class AddTargetsConfig(BaseModel):
         )
 
 
-class AgentEvolutionConfig(BaseModel):
-    """Default Agent Evolution setting for accounts without an override."""
-
-    enabled: bool = False
-
-
 class DeprecatedUserAgentEvolutionConfig(BaseModel):
     """Parse-only compatibility for legacy per-user configuration files."""
 
@@ -154,6 +152,19 @@ class UserConfig(BaseModel):
         from openviking.session.memory_policy import MemoryPolicy
 
         return MemoryPolicy.from_dict(value).to_dict()
+
+
+class UserConfigDefaults(UserConfig):
+    """Deployment defaults for users without persisted overrides."""
+
+    auto_commit_policy: Optional[Dict[str, Any]] = None
+
+    @field_validator("auto_commit_policy", mode="before")
+    @classmethod
+    def validate_auto_commit_policy(cls, value: Any) -> Optional[Dict[str, Any]]:
+        from openviking.session.auto_commit_policy import AutoCommitPolicy
+
+        return None if value is None else AutoCommitPolicy.from_dict(value).to_dict()
 
 
 class MetricsAccountDimensionConfig(BaseModel):
@@ -340,11 +351,16 @@ class ServerConfig(BaseModel):
     public_base_url: Optional[str] = None
     upload_signed_ttl_seconds: int = 600
     temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
-    user_config_defaults: UserConfig = Field(default_factory=UserConfig)
+    user_config_defaults: UserConfigDefaults = Field(default_factory=UserConfigDefaults)
     agent_evolution: AgentEvolutionConfig = Field(default_factory=AgentEvolutionConfig)
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+
+    @field_validator("user_config_defaults", mode="before")
+    @classmethod
+    def normalize_user_config_defaults(cls, value: Any) -> Any:
+        return value.model_dump() if isinstance(value, UserConfig) else value
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.
@@ -465,6 +481,13 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
             "To maintain the previous behavior, set encryption.api_key_hashing.enabled=true. "
             "See documentation for more details."
         )
+
+    warn_unknown_config_fields(
+        data=server_data,
+        model=ServerConfig,
+        path_prefix="server",
+        logger=logger,
+    )
 
     try:
         config = ServerConfig.model_validate(server_data)

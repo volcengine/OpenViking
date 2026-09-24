@@ -12,6 +12,13 @@ type ACLEntry struct {
 	Level     string `json:"level"`
 }
 
+// ACLSpec updates only the supplied ACL fields. Nil Entries preserves direct grants;
+// an empty non-nil slice clears them.
+type ACLSpec struct {
+	ACLMode string     `json:"acl_mode,omitempty"`
+	Entries []ACLEntry `json:"entries"`
+}
+
 // SetACLOptions controls optional ACL properties updated together with direct entries.
 type SetACLOptions struct {
 	ACLMode string

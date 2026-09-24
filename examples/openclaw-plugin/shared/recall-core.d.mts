@@ -52,6 +52,10 @@ export type RecallOptions = {
   legacyPeerId?: string;
   sessionId?: string;
   log?: (stage: string, data?: any) => void;
+  localCompressorAvailable?: boolean;
+  runCompressor?: ((prompt: string) => Promise<string | null>) | null;
+  digestCachePath?: string;
+  legacyCachePath?: string;
 };
 
 export type DetailedRecall = {
@@ -79,3 +83,5 @@ export function buildRecallBlock(
 export function buildRecallEndpointBody(cfg?: Record<string, any>): Record<string, any>;
 export function estimateTokens(text: string): number;
 export function isRecallEnabled(cfg?: Record<string, any>): boolean;
+
+export function selectRecallContent(result?: { rendered?: string; digest?: string; stats?: Record<string, unknown> }): string;

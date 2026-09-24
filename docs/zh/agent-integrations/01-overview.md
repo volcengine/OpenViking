@@ -14,7 +14,7 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 | **DeepSeek Harness（`dsh`）** | [DeepSeek Harness 记忆插件](./17-dsh.md) — 进程内 Cordis 插件，pre-step 召回、事件捕获与 OpenViking MCP 工具 |
 | **Hermes Agent** | [Hermes Agent](./05-hermes.md) — 内置 OpenViking 记忆提供方，无需安装插件 |
 | **OpenCode** | [OpenCode 插件](./10-opencode.md) — MCP 工具 + 生命周期 hooks，覆盖仓库上下文、自动召回与捕获 |
-| **pi** | [pi Coding Agent 扩展](./11-pi.md) — 原生扩展，自动召回、逐轮捕获与阈值 commit |
+| **pi** | [pi Coding Agent 扩展](./11-pi.md) — 原生扩展，自动召回、逐轮捕获、阈值 commit，并把服务端的 MCP 工具注册为 pi 原生工具 |
 | **LangChain / LangGraph** | [LangChain 和 LangGraph](./07-langchain-langgraph.md) — retriever、tools、context backend、store 和 middleware |
 | **多个本地开发 Agent / 希望使用桌面界面** | [OpenViking Helper](./14-openviking-helper.md) — 可视化完成 Agent 接入、会话分析和记忆管理 |
 | **任意支持 Agent Plugins 1.0 的客户端** | [Agent Plugins 1.0 插件包](./15-agent-plugins.md) — 一个可移植的包：`openviking-memory` 技能 + OpenViking MCP 工具 |
@@ -66,6 +66,6 @@ export OPENVIKING_RECALL_COMPRESS=off
 
 环境变量优先于 `ovcli.conf`。修改后重启对应的 Agent，让 hook 进程重新加载配置。上述设置属于插件客户端，不需要修改服务端的 `ov.conf`。
 
-`plugin` 段由每个记忆插件读取——claude-code、codex、cursor、trae、trae-cn、zcode、opencode、dsh 和 pi；`plugin.<harness>` 对象只覆盖其中某一个 harness 的共享键，两种写法都认（`claude_code` 或 `claude-code`、`trae_cn` 或 `trae-cn`）。压缩是例外：其余 harness 认 `recallQueryExpansion`，但忽略 `recallCompress` 及其配套项——它们都不会请求服务端 digest。
+`plugin` 段由每个记忆插件读取——claude-code、codex、cursor、trae、trae-cn、zcode、kimicode、opencode、dsh 和 pi；`plugin.<harness>` 对象只覆盖其中某一个 harness 的共享键，两种写法都认（`claude_code` 或 `claude-code`、`trae_cn` 或 `trae-cn`）。压缩是例外：其余 harness 认 `recallQueryExpansion`，但忽略 `recallCompress` 及其配套项——它们都不会请求服务端 digest。
 
 context 请求的等待时间比普通请求更长，因为客户端提前中断会丢掉整个响应，而不只是超时的那一段。服务端流水线是串行的，每个可选阶段各有保险丝：先是查询扩展（`retrieval.recall_intent_timeout_s`，5 秒），然后是检索、正文读取和预算规划，最后才是 digest 重写（`retrieval.recall_rewrite_timeout_s`，30 秒）。因此这个上限按请求实际启用的阶段决定——带 session、会走查询扩展时取 15 秒，同时还要 digest 时取 45 秒，两者都不涉及时沿用插件自身的普通超时。可以用 `OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS`（或 `plugin.recallContextTimeoutMs`）指定这个上限，取值应高于该请求会用到的保险丝、低于 Agent 自身的 hook 超时。

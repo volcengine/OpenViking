@@ -664,10 +664,11 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
   |------|--------|------------------|------|
   | `events` | 概览档 | 全文档 | 唯一正文足够长、`# Summary` 抽取能真正压缩的类型 |
   | `entities` / `preferences` / `experiences` | 摘要档 | 摘要档 | 正文本身很短，且写入侧把整篇正文存进了摘要标量，摘要档即完整内容 |
-  | `resources` / `skills` | 摘要档 | 摘要档 | 语义处理生成的 256 字符摘要；正文可能很大或含凭据，加深需显式指定 |
+  | `resources` / `skills` | 摘要档 | 摘要档 | 资源取语义处理生成的 256 字符摘要，skill 取 `SKILL.md` frontmatter 生成的 name/description；正文可能很大或含凭据，加深需显式指定 |
   | `memories` | 摘要档 | 摘要档 | 四个具名类型之外的内置记忆类型——`cases`、`patterns`、`tools`、`trajectories`、技能使用记忆。只有 quota-free 检索会命中它们；它们没有自己的检索桶，`quotas` 不能指定，但 `detail` 和 `other_peer_penalty` 可以 |
-  | 目录命中 | 概览档 | 概览档 | 目录没有摘要，读 `.overview.md` 侧车；全文档对目录无意义 |
+  | 目录命中 | 概览档 | 概览档 | 目录没有摘要，读 `.overview.md` 侧车；全文档对目录无意义。skill 包命中除外：它们归一到 `<包根>/SKILL.md`，按上面的文件档位处理 |
 
+- **Skill 包**：一个包的每个文件、每层目录各存一条向量记录，它们在配额生效之前先合并成一条——不管命中的是包里哪个文件，每个包只出一条 entry、只占一个名额。这条 entry 的 `uri` 是 `<包根>/SKILL.md`，和 `/skills/find` 返回的 `skill_md_uri` 是同一条路径，正文是包自己的摘要；包的摘要还没生成时退成裸 `uri`，不拿命中的那个文件的摘要顶替。因此 `dedup_turns` 是按包冷却的：某个包以摘要档或更深的档位注入过之后，冷却窗口内命中包里任何文件都会被排除
 - **保底**：每条结果至少给出 `uri`。记忆类摘要缺失或超出单条上限时回落到概览档：写入侧把整篇正文存进了摘要标量，所以对记忆类别而言概览档在内容阶梯上位于摘要档*之下*，这次替换披露得更少。而 `resources` / `skills` 的摘要是语义处理生成的短摘要，同样的替换会去读调用方没有请求的正文，因此这两类直接退成裸 `uri`，不向上加深
 - **显式 `detail`**：把该档作为全部结果请求的起点和上限；装不下的条目仍逐档退档而不截断。上述记忆类概览档替换是实际档位唯一可能高于指定档的情况，且仅因为它比指定档携带的内容更少
 - **概览档按来源取骨架**：记忆文件取开头的 `# Summary` 段，代码文件取函数与类签名（复用 `code_outline`），长文档取标题树加首段
@@ -787,7 +788,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 **处理流程**：
 1. 从指定 URI 开始遍历文件系统
 2. 对每个文件内容进行正则表达式匹配
-3. 收集匹配的行和位置信息
+3. 收集匹配行、位置信息及可选的前后文
 4. 返回匹配结果列表
 
 **代码入口**：
@@ -809,6 +810,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | level_limit | int | 否 | Python SDK: 5；HTTP API / CLI / Go SDK: 10 | 最大目录遍历深度。Go SDK 当前使用 HTTP API 默认值。 |
 | tags | string[] | 否 | 未设置 | 仅搜索同时匹配全部 `k=v` 检索标签的文件 |
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
+| before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |
+| after_context | int | 否 | 0 | 每条匹配行之后返回的上下文行数；仅 HTTP API 和 CLI 支持 |
 
 `tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
 
@@ -830,6 +833,8 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
         "uri": "viking://resources",
         "pattern": "authentication",
         "case_insensitive": true,
+        "before_context": 1,
+        "after_context": 1,
         "tags": ["team=search", "env=prod"]
     }'
 ```
@@ -891,6 +896,9 @@ openviking grep "authentication" --uri viking://resources --ignore-case
 # 指定深度限制
 openviking grep "TODO" --uri viking://resources --level-limit 3
 
+# 返回匹配行前后各 2 行上下文
+openviking grep "authentication" --uri viking://resources -b 2 -a 2
+
 # 只搜索同时匹配所有 tags 的文件
 openviking grep "TODO" --uri viking://resources --tags team=search,env=prod
 
@@ -911,6 +919,12 @@ HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` �
                 "uri": "viking://resources/docs/auth.md",
                 "line": 15,
                 "content": "User authentication is handled by...",
+                "before_context": [
+                    {"line": 14, "content": "## Authentication"}
+                ],
+                "after_context": [
+                    {"line": 16, "content": "Configure an API key before sending requests."}
+                ],
                 "tags": ["team=search", "env=prod"]
             }
         ],

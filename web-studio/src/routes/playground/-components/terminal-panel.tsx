@@ -52,7 +52,6 @@ import {
   fetchSessions,
   fetchSessionToolResult,
   fetchSessionToolResults,
-  recordSessionUsed,
   searchSessionToolResult,
 } from '#/lib/sessions/api'
 import { cn } from '#/lib/utils'
@@ -191,13 +190,6 @@ const SESSION_SUBCOMMANDS: SessionSubcommandHelp[] = [
     key: 'message',
     parameters: ['sessionId', 'messageRole', 'messageContent'],
     usage: '/session message [session_id] user hello',
-  },
-  {
-    examples: ['session.used'],
-    insertText: '/session used ',
-    key: 'used',
-    parameters: ['sessionId', 'contexts', 'skillJson'],
-    usage: '/session used [session_id] --context viking://resources/...',
   },
   {
     examples: ['session.toolResults'],
@@ -1270,22 +1262,6 @@ export function TerminalPanel({
                   kind: 'success',
                   refs: [sessionRef(id)],
                   title: `/session message ${id}`,
-                })
-                return
-              }
-              case 'used': {
-                const id = resolveSessionId()
-                const contexts = flags.get('context')
-                const skillJson = getLastFlag(flags, 'skill-json')
-                const result = await recordSessionUsed(id, {
-                  contexts,
-                  skill: skillJson ? JSON.parse(skillJson) : undefined,
-                })
-                append({
-                  body: formatJson(result),
-                  kind: 'success',
-                  refs: [sessionRef(id)],
-                  title: `/session used ${id}`,
                 })
                 return
               }

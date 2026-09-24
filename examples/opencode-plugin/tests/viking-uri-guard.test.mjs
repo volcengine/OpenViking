@@ -49,6 +49,15 @@ test("viking uri notice fills empty shell output", async () => {
   assert.match(output.output, /ignore this notice/)
 })
 
+test("viking uri notice recognizes the OpenCode v2 shell tool", async () => {
+  const notice = createVikingUriNotice()
+  const output = { output: "No such file" }
+
+  await notice({ tool: "shell", args: { command: "cat viking://resources/project/file.md" } }, output)
+
+  assert.match(output.output, /openviking_read/)
+})
+
 test("viking uri notice leaves file tools and plain shell commands alone", async () => {
   const notice = createVikingUriNotice()
   const cases = [

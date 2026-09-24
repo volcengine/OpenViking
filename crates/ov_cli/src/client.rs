@@ -39,13 +39,15 @@ fn compact_request_body(body: &mut Value) {
 }
 
 fn add_resource_tag_fields(body: &mut Value, tags: &[String], tag_mode: &str) {
-    if tags.is_empty() {
+    if tags.is_empty() && tag_mode != "clear" {
         return;
     }
     let obj = body
         .as_object_mut()
         .expect("add_resource request body must be an object");
-    obj.insert("tags".to_string(), serde_json::json!(tags));
+    if !tags.is_empty() {
+        obj.insert("tags".to_string(), serde_json::json!(tags));
+    }
     obj.insert("tag_mode".to_string(), serde_json::json!(tag_mode));
 }
 
@@ -379,9 +381,13 @@ impl HttpClient {
         processing_mode: &str,
         tags: Vec<String>,
         tag_mode: &str,
+        acl: Option<Value>,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, timeout, processing_mode);
         add_resource_tag_fields(&mut body, &tags, tag_mode);
+        if let Some(acl) = acl {
+            body["acl"] = acl;
+        }
         self.post("/api/v1/content/write", &body).await
     }
 
@@ -482,13 +488,7 @@ impl HttpClient {
         if !recursive {
             body["recursive"] = serde_json::json!(false);
         }
-        if !tags.is_empty() {
-            let obj = body
-                .as_object_mut()
-                .expect("reindex request body must be an object");
-            obj.insert("tags".to_string(), serde_json::json!(tags));
-            obj.insert("tag_mode".to_string(), serde_json::json!(tag_mode));
-        }
+        add_resource_tag_fields(&mut body, &tags, tag_mode);
         self.post("/api/v1/content/reindex", &body).await
     }
 
@@ -641,11 +641,19 @@ impl HttpClient {
         self.get("/api/v1/fs/tree", &params).await
     }
 
-    pub async fn mkdir(&self, uri: &str, description: Option<&str>) -> Result<serde_json::Value> {
-        let body = match description {
+    pub async fn mkdir(
+        &self,
+        uri: &str,
+        description: Option<&str>,
+        acl: Option<Value>,
+    ) -> Result<serde_json::Value> {
+        let mut body = match description {
             Some(description) => serde_json::json!({ "uri": uri, "description": description }),
             None => serde_json::json!({ "uri": uri }),
         };
+        if let Some(acl) = acl {
+            body["acl"] = acl;
+        }
         self.post("/api/v1/fs/mkdir", &body).await
     }
 
@@ -777,6 +785,8 @@ impl HttpClient {
         exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
+        after_context: i32,
+        before_context: i32,
         node_limit: i32,
         level_limit: i32,
         tags: &[String],
@@ -787,6 +797,8 @@ impl HttpClient {
             "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
+            "after_context": (after_context > 0).then_some(after_context),
+            "before_context": (before_context > 0).then_some(before_context),
             "node_limit": node_limit,
             "level_limit": level_limit,
             "tags": (!tags.is_empty()).then(|| tags),
@@ -842,6 +854,7 @@ impl HttpClient {
         resource_args: Option<Map<String, Value>>,
         tags: Vec<String>,
         tag_mode: String,
+        acl: Option<Value>,
         show_progress: bool,
         verbose: bool,
     ) -> Result<serde_json::Value> {
@@ -861,6 +874,9 @@ impl HttpClient {
 
         let build_body = |base: serde_json::Value| {
             let mut body = base;
+            if let Some(acl) = &acl {
+                body["acl"] = acl.clone();
+            }
             add_resource_tag_fields(&mut body, &tags, &tag_mode);
             if create_parent {
                 body.as_object_mut()
@@ -2034,6 +2050,7 @@ mod tests {
                 None,
                 Vec::new(),
                 "replace".to_string(),
+                None,
                 false,
                 false,
             )
@@ -2070,6 +2087,7 @@ mod tests {
                 Some(no_split_args),
                 Vec::new(),
                 "replace".to_string(),
+                None,
                 false,
                 false,
             )
@@ -2121,6 +2139,17 @@ mod tests {
         let obj = body.as_object().unwrap();
         assert!(!obj.contains_key("tags"));
         assert!(!obj.contains_key("tag_mode"));
+    }
+
+    #[test]
+    fn add_resource_tag_fields_sends_clear_without_tags() {
+        let mut body = json!({"path": "https://example.com/demo.md"});
+
+        super::add_resource_tag_fields(&mut body, &[], "clear");
+
+        let obj = body.as_object().unwrap();
+        assert!(!obj.contains_key("tags"));
+        assert_eq!(body["tag_mode"], json!("clear"));
     }
 
     #[test]
@@ -2504,6 +2533,8 @@ mod tests {
                 None,
                 "needle",
                 false,
+                0,
+                0,
                 10,
                 3,
                 &[],
@@ -2516,6 +2547,8 @@ mod tests {
         assert!(request.starts_with("POST /api/v1/search/grep "));
         assert!(!request.contains(r#""tags""#));
         assert!(!request.contains(r#""include_tags""#));
+        assert!(!request.contains(r#""after_context""#));
+        assert!(!request.contains(r#""before_context""#));
     }
 
     #[tokio::test]
@@ -2529,6 +2562,8 @@ mod tests {
                 None,
                 "needle",
                 false,
+                2,
+                3,
                 10,
                 3,
                 &[],
@@ -2539,6 +2574,8 @@ mod tests {
 
         let request = request_rx.await.expect("request should be captured");
         assert!(request.contains(r#""include_tags":true"#));
+        assert!(request.contains(r#""after_context":2"#));
+        assert!(request.contains(r#""before_context":3"#));
     }
 
     #[tokio::test]

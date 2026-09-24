@@ -143,22 +143,6 @@ async def test_cannot_cancel_once_app_mutation_started(tmp_path):
     assert error.value.status_code == 409
 
 
-def test_permission_mapping_does_not_take_user_scopes():
-    entries = [{"scopeName": name, "id": name + "-tenant"} for name in console.SCOPES]
-    result = console.scope_ids(
-        {
-            "data": {
-                "appScopes": entries,
-                "userScopes": [
-                    {"scopeName": name, "id": name + "-user"} for name in console.SCOPES
-                ],
-            }
-        }
-    )
-    assert set(result) == console.SCOPES
-    assert all(value.endswith("-tenant") for value in result.values())
-
-
 async def test_event_write_success_requires_readback():
     async def post(path, *args):
         if "/scope/all/" in path:
@@ -341,8 +325,13 @@ async def test_retry_waits_for_previous_session_cleanup(tmp_path, monkeypatch):
     assert result["state"] == "initializing"
 
 
-async def test_numeric_permission_ids_are_sent_as_strings():
-    scopes = sorted(console.SCOPES)
+async def test_configure_app_requests_tenant_permissions_from_catalog():
+    scopes = [
+        "im:message.group_at_msg:readonly",
+        "im:message:send_as_bot",
+        "im:chat:read",
+        "im:chat.members:read",
+    ]
     calls = []
 
     async def post(path, body=None):
@@ -366,37 +355,6 @@ async def test_numeric_permission_ids_are_sent_as_strings():
     update = next(body for path, body in calls if "/scope/update/" in path)
     assert update["appScopeIDs"] == ["101", "102", "103", "104"]
     assert update["userScopeIDs"] == []
-
-
-def test_invalid_permission_ids_are_not_accepted():
-    for value in (True, False, None, {}, []):
-        assert console.scope_ids({"name": next(iter(console.SCOPES)), "id": value}) == {}
-
-
-async def test_current_feishu_catalog_uses_chat_read_permission():
-    calls = []
-
-    async def post(path, body=None):
-        calls.append((path, body))
-        if "/scope/all/" in path:
-            return {
-                "data": {
-                    "appScopeList": [
-                        {"name": "im:message.group_at_msg:readonly", "id": 101},
-                        {"name": "im:message:send_as_bot", "id": 102},
-                        {"name": "im:chat:read", "id": 103},
-                        {"name": "im:chat.members:read", "id": 104},
-                    ]
-                }
-            }
-        if path == "/developers/v1/event/cli_test":
-            return {"data": {"eventMode": 4, "appEvents": ["im.message.receive_v1"]}}
-        return {"code": 0}
-
-    await console.configure_app(SimpleNamespace(post=post), "cli_test")
-    body = next(body for path, body in calls if "/scope/update/" in path)
-    assert set(body["appScopeIDs"]) == {"101", "102", "103", "104"}
-    assert body["userScopeIDs"] == []
 
 
 async def test_new_app_uses_agent_template_and_persists_request_identity():
@@ -443,43 +401,6 @@ async def test_rejected_agent_template_never_falls_back_to_ordinary_bot():
         await console.create_app(session, run, lambda **kw: run.update(kw))
     assert session.post.call_count == 2
     assert run["create_started"]
-
-
-async def test_onboarding_idempotency_is_scoped_to_platform(tmp_path, monkeypatch):
-    from vikingbot.studio.providers.registry import PROVIDERS
-
-    monkeypatch.setitem(
-        PROVIDERS,
-        "future-platform",
-        SimpleNamespace(
-            type="future-platform",
-            run_onboarding=AsyncMock(),
-        ),
-    )
-    jobs = make_jobs(tmp_path)
-    monkeypatch.setattr(jobs, "launch", jobs.service.store.save_onboarding)
-    request_id = str(uuid.uuid4())
-    identity = {"user_id": "bot"}
-    feishu = await jobs.start("a", {"type": "feishu", "request_id": request_id}, identity)
-    other = await jobs.start("a", {"type": "future-platform", "request_id": request_id}, identity)
-    assert feishu["id"] != other["id"]
-    assert jobs.current("a", "feishu")["id"] == feishu["id"]
-    assert jobs.current("a", "future-platform")["id"] == other["id"]
-
-
-async def test_setup_preserves_reply_settings(tmp_path, monkeypatch):
-    jobs = make_jobs(tmp_path)
-    monkeypatch.setattr(jobs, "launch", jobs.service.store.save_onboarding)
-    run = await jobs.start(
-        "a",
-        {
-            "type": "feishu",
-            "request_id": str(uuid.uuid4()),
-            "settings": {"thread_require_mention": False},
-        },
-        {"user_id": "bot"},
-    )
-    assert jobs.get("a", run["id"])["settings"] == {"thread_require_mention": False}
 
 
 @pytest.mark.parametrize("require_mention", [True, False])

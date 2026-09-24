@@ -110,6 +110,25 @@ def test_data_dir(temp_dir: Path) -> Path:
     return data_dir
 
 
+@pytest.fixture
+def vector_backend_factory():
+    """Construct local storage with an explicit account configuration boundary."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+
+    def create(config):
+        backend = VikingVectorIndexBackend(config)
+        settings = SimpleNamespace(vectordb=config, dedicated_vectordb=False)
+        backend.set_vector_config_resolver(
+            SimpleNamespace(resolve=AsyncMock(return_value=settings))
+        )
+        return backend
+
+    return create
+
+
 # ============ Service Fixtures ============
 
 

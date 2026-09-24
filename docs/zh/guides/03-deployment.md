@@ -1,5 +1,7 @@
 # 服务端部署
 
+准备自建环境前，先查看[部署前检查](19-deployment-checklist.md)。已取得 VikingDB / OpenViking 私有交付包的用户，请使用[企业私有化部署](20-private-deployment.md)及[升级与排障](21-private-operations.md)流程。
+
 OpenViking 以 HTTP 服务运行。安装服务端之前，先选择由谁运行服务：
 
 | 服务方式 | 你需要准备什么 |
@@ -296,6 +298,38 @@ docker compose up -d
 - Web Studio：`http://localhost:1933/studio`（与 API 同源）
 - 兼容入口：`http://localhost:1934`（Caddy 反代到 1933，仅为已有部署保留）
 
+### 部署到 Railway
+
+点击下方按钮一键部署到 Railway：
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/openviking)
+
+#### 预置资源与环境
+
+- **服务镜像**：拉取官方镜像 `ghcr.io/volcengine/openviking:latest`，监听 1933 端口，Railway 自动分配 HTTPS 域名。
+- **持久化存储**：挂载持久卷至 `/app/.openviking`，`storage.workspace` 位于该卷上，保证重新部署后数据与配置不丢失。
+- **默认配置**：默认采用 OpenAI 预设。部署时仅需填写 `OPENAI_API_KEY`；管理员密钥 `OPENVIKING_ROOT_API_KEY` 自动生成，部署完成后可在 Railway 的 **Variables** 标签页查看。
+
+#### 快速初始化（Web Studio）
+
+部署完成后，在浏览器中即可完成首次初始化：
+
+1. **配置管理员密钥**：从 Railway 服务变量中复制 `OPENVIKING_ROOT_API_KEY`，访问 `https://<你的域名>/studio/settings` 并保存。
+2. **创建用户**：进入 `https://<你的域名>/studio/users` 创建首个账户与用户，系统将展示该用户的 API Key。
+3. **开始使用**：后续访问 Web Studio、`ov` CLI 或 SDK 时，均使用上述用户的 API Key。
+
+#### 配置管理
+
+- **首次生成配置**：模板在 `OPENVIKING_CONF_CONTENT` 中预置了完整配置并引用 `${OPENAI_API_KEY}`。该变量仅在首次启动且 `ov.conf` 尚不存在时生效。
+- **后续修改配置**：首次启动后，请通过 `railway ssh` 或 `railway service files upload --overwrite` 直接修改持久卷上的 `ov.conf`；也可以删除 `ov.conf` 后重新部署，让服务按当前 `OPENVIKING_CONF_CONTENT` 重新生成配置文件。
+
+#### 资源与费用参考
+
+- **推荐配置**：长期运行建议选择 **Hobby** 计划（$5/月，包含 $5 用量抵扣）。以 ~0.5 GB 常驻内存估算，月均成本通常在 $5–$7 左右。
+- **免费额度说明**：Railway Free 计划（$1/月额度）不足以支持服务常驻运行；Trial 赠金适合短期体验评估，额度到期 30 天后持久卷将被清理，请注意按需备份数据。
+
+> **安全提示**：服务部署后默认监听并暴露于公网。请妥善保管 `OPENVIKING_ROOT_API_KEY`，在对外开放前请阅读[公网访问安全指南](12-public-access.md)。
+
 ### 多实例部署注意事项
 
 使用本地向量后端（`local` 或 `cuvs`）时，OpenViking 默认通过操作系统文件锁独占 `storage.workspace`。`.openviking.lock` 文件会保留在磁盘上，文件存在不代表服务正在运行；正常关闭或进程终止后，操作系统会释放锁。不要手动删除运行中服务的锁文件。
@@ -367,12 +401,15 @@ docker compose up -d
 
 ### Kubernetes + Helm
 
-项目提供了 Helm chart，位于 `examples/k8s-helm/`：
+这是开源服务的 Helm chart，与私有交付包的 ovadmin / Operator 流程不同。chart 参数见 [Helm README](https://github.com/volcengine/OpenViking/blob/main/deploy/helm/README.md)。
+
+项目提供了 Helm chart，位于 `deploy/helm/openviking/`：
 
 ```bash
-helm install openviking ./examples/k8s-helm \
-  --set openviking.config.embedding.dense.api_key="YOUR_API_KEY" \
-  --set openviking.config.vlm.api_key="YOUR_API_KEY"
+helm install openviking ./deploy/helm/openviking \
+  --set-string config.server.root_api_key="YOUR_ROOT_API_KEY" \
+  --set-string config.embedding.dense.api_key="YOUR_API_KEY" \
+  --set-string config.vlm.api_key="YOUR_API_KEY"
 ```
 
 详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](https://github.com/volcengine/OpenViking/blob/main/examples/cloud/GUIDE.md)。

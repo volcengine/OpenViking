@@ -693,6 +693,7 @@ def apply_http_metrics_finalize(
             request_id=root_attrs.request_id,
             user_id=root_attrs.user_id,
             url_path=root_attrs.url_path,
+            result_count=getattr(request.state, "retrieval_result_count", None),
             error_code=captured_error.code if include_error and captured_error else None,
             error_message=captured_error.message if include_error and captured_error else None,
             error_details=captured_error.details if include_error and captured_error else None,

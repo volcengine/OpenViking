@@ -1367,20 +1367,13 @@ class TestExtractionMaxOutputTokens:
 
     def _loop(self, *, vlm_max_tokens, per_loop=None):
         loop = ExtractLoop(
-            vlm=Mock(model="test-model"),
+            vlm=Mock(model="test-model", max_tokens=vlm_max_tokens),
             viking_fs=Mock(),
             context_provider=Mock(),
             isolation_handler=Mock(),
             max_output_tokens=per_loop,
         )
-        with patch(
-            "openviking.session.memory.extract_loop.get_openviking_config"
-        ) as mock_config:
-            mock_config.return_value = SimpleNamespace(
-                memory=SimpleNamespace(link_enabled=False, extraction_output_format="python"),
-                vlm=SimpleNamespace(max_tokens=vlm_max_tokens),
-            )
-            loop._resolve_effective_max_output_tokens()
+        loop._resolve_effective_max_output_tokens()
         return loop
 
     def test_default_floor_used_when_unconfigured(self):

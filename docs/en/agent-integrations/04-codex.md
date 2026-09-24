@@ -1,6 +1,6 @@
 # Codex Memory Plugin
 
-Equip [Codex](https://developers.openai.com/codex) with persistent memory across sessions. Install it once, and your OpenViking profile and memory index are loaded at session start, relevant memories are recalled with every prompt, new turns are captured after each response, and sessions are committed before compaction. The plugin also connects Codex to OpenViking's `/mcp` endpoint, enabling the model to call tools such as `find`, `search`, `read`, and `remember` directly.
+Equip [Codex](https://developers.openai.com/codex) with persistent memory across sessions. Install it once, and your OpenViking profile, memory index, and skill catalog are loaded at session start, relevant memories are recalled with every prompt, new turns are captured after each response, and sessions are committed before compaction. The plugin also connects Codex to OpenViking's `/mcp` endpoint, enabling the model to call tools such as `find`, `search`, `read`, and `remember` directly.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [Blog: Motivation & demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
@@ -26,11 +26,34 @@ In regions where GitHub is hard to reach, run the same installer from the Volcen
 bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh)
 ```
 
-No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks. After installing:
+No shell wrapper is needed anymore — the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks. After installing, launch Codex (`trae-cli` for TraeCode CLI 2.0):
 
 ```bash
-codex              # First run: approve hooks once when prompted via /hooks
+codex
 ```
+
+### First launch: trust the hooks
+
+The plugin's hooks are new to Codex, so startup stops on a trust prompt. Pick **Trust all and continue**, or Review hooks first if you want to read the commands:
+
+```text
+Hooks need review
+6 hooks are new or changed.
+Hooks can run outside the sandbox after you trust them.
+
+  1. Review hooks
+> 2. Trust all and continue
+  3. Continue without trusting (hooks won't run)
+```
+
+A fresh install lists all 6 hooks the plugin registers. After that, any plugin update that touches a hook stops startup again, with the count of what changed this time (`1 hook is new or changed`, say) — pick Trust all and continue there too.
+
+Pick the third option, or skip past the prompt, and the hooks never run: MCP tools still work, but automatic recall and capture are both dead. Recovering means switching on two independent things:
+
+- `/hooks` — hook trust and on/off state. Trust and enable the entries marked *New hook - review required* or *Modified since last trusted*.
+- `/plugins` — the plugin's own enabled state. Confirm `openviking-memory` is enabled.
+
+If either side is off, nothing is recalled or captured.
 
 <details>
 <summary><b>Manual setup</b></summary>
@@ -57,9 +80,11 @@ For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confir
 
 ## How it works
 
-The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md` plus URI and abstract indexes for `preferences/` and `entities/` through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), commits the full transcript before compaction (`PreCompact`), and commits the session when the thread shuts down (`SessionEnd`) so memory extraction processes the entire conversation. Before a shell command runs (`PreToolUse` on `Bash`), it looks for a `viking://` URI in the command: the command still runs, and the model gets a notice suggesting the OpenViking MCP tools, which it can ignore when the URI is intentional data such as an `ov` argument. Upon starting a fresh session, it also sweeps any orphaned sessions left by previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
+The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md`, URI and abstract indexes for `preferences/` and `entities/`, and an `<available-skills>` catalog of your OpenViking skills, all through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), commits the full transcript before compaction (`PreCompact`), and commits the session when the thread shuts down (`SessionEnd`) so memory extraction processes the entire conversation. Before a shell command runs (`PreToolUse` on `Bash`), it looks for a `viking://` URI in the command: the command still runs, and the model gets a notice suggesting the OpenViking MCP tools, which it can ignore when the URI is intentional data such as an `ov` argument. Upon starting a fresh session, it also sweeps any orphaned sessions left by previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
 
 > **Known limitation**: `SessionEnd` requires Codex 0.145 or newer, and it only fires on a graceful exit (`/quit`, `/exit`, double `Ctrl-C`, EOF, end of a `codex exec` run). It does not fire on `SIGTERM`, a closed terminal, `kill -9`, or a crash, and it is deferred when the TUI runs against a `codex app-server` daemon. Those sessions — and every session on Codex older than 0.145, and any TraeCode CLI build without it — are recovered by the idle-TTL sweep (30 minutes) at the next `SessionStart`.
+
+The `<available-skills>` catalog lists your own skills first, then the skills shared with the account under `viking://agent/skills`; a shared skill with the same name as one of yours is left out. It has its own token budget, separate from the profile budget: when the descriptions do not fit, it lists names only, and when not even one name fits, it shrinks to a one-line count. Its first line tells the model to read a skill's `SKILL.md` with the OpenViking `read` tool before following it. The bundled `openviking-skills` skill, next to `openviking-memory` and `ov-experience-memory`, tells the model how to find skills, create or replace one with the MCP `add_skill` tool, install one from Git or a local folder, share one with the account, and move local skills into OpenViking when you ask.
 
 Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
 
@@ -74,8 +99,11 @@ Credential source: env vars win by default — when any `OPENVIKING_*` credentia
 | `OPENVIKING_API_KEY` | — | API key (sent as `Authorization: Bearer`) |
 | `OPENVIKING_CLI_CONFIG_FILE` | `~/.openviking/ovcli.conf` | Active CLI config to use for hooks, MCP, and child `ov` commands |
 | `OPENVIKING_CREDENTIAL_SOURCE` | `auto` | `auto` prefers env-var credentials when any are set; `cli` forces the active ovcli config; `env` reads env vars only, and neither config file |
-| `OPENVIKING_NO_AUTO_INJECT` | `false` | Disable fixed session-start profile/background injection without disabling per-prompt recall |
+| `OPENVIKING_NO_AUTO_INJECT` | `false` | Disable fixed session-start profile/background injection, including the skill catalog, without disabling per-prompt recall |
 | `OPENVIKING_PROFILE_TOKEN_BUDGET` | `10000` | CJK-aware token budget for `profile.md` plus `preferences/` and `entities/` indexes |
+| `OPENVIKING_SKILL_CATALOG` | `true` | Add the `<available-skills>` catalog to the session-start block; `false` leaves it out |
+| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | CJK-aware token budget for the `<available-skills>` catalog, separate from `OPENVIKING_PROFILE_TOKEN_BUDGET`; `0` also leaves the catalog out |
+| `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | Byte cap on the whole SessionStart context, kept under Codex's default hook-output limit (about 10,000 bytes) so the model sees it in full rather than a truncated preview; on resume the session archive takes up to half. `0` removes the cap |
 | `OPENVIKING_CODEX_IDLE_TTL_MS` | `1800000` | SessionStart idle-TTL sweep threshold |
 | `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000` (SessionEnd), `40000` (PreCompact) | How long a capture hook waits for the per-session state lock |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | How long a committed session's transcript cursor is kept before its state file is retired |
@@ -103,7 +131,7 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 |---------|-------|-----|
 | MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Fix `~/.openviking/ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`) and restart Codex; the stdio proxy re-reads it on launch and after auth failures. |
 | MCP tool calls fail with a connection error | Server unreachable or the URL is wrong | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| `6 hooks need review` | Security review on first launch; after an upgrade that adds a hook, Codex asks again for the new one | Run `/hooks` within Codex and approve the hooks. |
+| `6 hooks need review`, or the plugin is installed but no hook fires | A fresh install trusts all 6 hooks at once, and every later update that touches a hook asks again; choosing *Continue without trusting* or skipping it leaves the hooks off for good | Trust and enable the entries in `/hooks`, and confirm `openviking-memory` is enabled in `/plugins` — two independent switches, both have to be on. |
 | Plugin still targets an old server after `ov config switch` | Codex keeps the proxy process from the previous session | Restart Codex; the proxy resolves credentials at startup. |
 | Hooks use one server, MCP another | Stale `OPENVIKING_*` credential env vars in one context (env vars override ovcli.conf by default) | Unset the stale env vars (ovcli.conf then drives both), set `OPENVIKING_CREDENTIAL_SOURCE=cli`, or make the env vars consistent. |
 
@@ -115,3 +143,9 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 - [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/DESIGN.md) — Commit decision tree.
 - [MCP Clients](./06-mcp-clients.md) — MCP protocol, tools, and other clients.
 - [Deployment Guide → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` setup instructions.
+
+### Recall compression
+
+Set `OPENVIKING_RECALL_COMPRESS=server` to compress recalled context on the OpenViking server without launching a local Codex compressor. `client` uses local compression only; `auto` (the default) uses the server when the local compressor is unavailable; `off` disables compression. Existing server digests are used directly, and an explicit no-relevant result injects nothing.
+
+Codex calls the shared `buildRecallBlockDetailed()` pipeline for retrieval, ranking, budgets and old-server fallback. Only session mapping, model execution and hook output remain host-specific. Local compression failures preserve bounded retrieved context. Without local compression, raw fallback now honors `recallPreferAbstract` instead of always reading every leaf in full. Budgets include body text, URIs and wrapper text. See the [shared plugin configuration](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression).

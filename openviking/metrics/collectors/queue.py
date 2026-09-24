@@ -3,13 +3,91 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import ClassVar
 
 from openviking.metrics.core.base import MetricCollector
 from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
 
-from .base import CollectorConfig, StateMetricCollector
+from .base import CollectorConfig, EventMetricCollector, StateMetricCollector
+
+QUEUE_DURATION_BUCKETS: tuple[float, ...] = (
+    0.01,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    30.0,
+    60.0,
+    120.0,
+    300.0,
+    600.0,
+    1800.0,
+    3600.0,
+    21600.0,
+    86400.0,
+)
+_QUEUE_OUTCOMES = frozenset({"success", "failed", "requeued", "cancelled", "exception"})
+
+
+@dataclass
+class QueueDurationCollector(EventMetricCollector):
+    """Export processing and end-to-end latency for completed queue deliveries."""
+
+    DOMAIN: ClassVar[str] = "queue"
+    PROCESS_DURATION_SECONDS: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "process_duration", unit="seconds"
+    )
+    END_TO_END_DURATION_SECONDS: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "end_to_end_duration", unit="seconds"
+    )
+    SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"queue.processed"})
+
+    def collect(self, registry=None) -> None:
+        return None
+
+    def receive_hook(self, event_name: str, payload: dict, registry) -> None:
+        queue = str(payload.get("queue") or "").strip()
+        outcome = str(payload.get("outcome") or "").strip()
+        if not queue or outcome not in _QUEUE_OUTCOMES:
+            return
+        try:
+            process_duration = float(payload["process_duration_seconds"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not math.isfinite(process_duration) or process_duration < 0:
+            return
+
+        labels = {"queue": queue, "outcome": outcome}
+        registry.observe_histogram(
+            self.PROCESS_DURATION_SECONDS,
+            process_duration,
+            labels=labels,
+            label_names=("queue", "outcome"),
+            buckets=QUEUE_DURATION_BUCKETS,
+        )
+
+        raw_end_to_end = payload.get("end_to_end_duration_seconds")
+        if raw_end_to_end is None:
+            return
+        try:
+            end_to_end_duration = float(raw_end_to_end)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(end_to_end_duration) or end_to_end_duration < 0:
+            return
+        registry.observe_histogram(
+            self.END_TO_END_DURATION_SECONDS,
+            end_to_end_duration,
+            labels=labels,
+            label_names=("queue", "outcome"),
+            buckets=QUEUE_DURATION_BUCKETS,
+        )
 
 
 @dataclass

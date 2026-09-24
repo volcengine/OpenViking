@@ -11,6 +11,27 @@ openviking-server doctor
 
 `openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
 
+## Account Embedding and VectorDB
+
+ROOT can configure `settings.embedding` and `settings.vectordb` when creating an
+Account. These sections use Account-specific allowlist schemas. Account and
+Cluster settings remain independent; the vector resolver applies Cluster defaults
+for omitted Account values. Provider connections can only be supplied through a
+complete `credentials` binding. Configuration reads return only Account values.
+
+VectorDB is immutable after Account creation. Existing Accounts may rotate complete
+Embedding credential/deployment bindings and update retry, concurrency, failback, and
+circuit-breaker settings. Outer model identity and other vector-space fields remain
+create-only. Compatible endpoint updates do not interrupt in-flight calls or rebuild
+historical vectors.
+
+Account-owned VectorDB configurations use remote backends only. Account
+configuration cannot select local/cuvs backends, local paths, cuVS tuning, or
+custom adapter parameters. Accounts with no VectorDB settings continue sharing
+the Cluster connection with Account data filtering. Remote resources must
+already exist.
+See [Admin configuration API](../api/08-admin.md#runtime-configuration) for permissions and PATCH rules.
+
 ## Configuration File
 
 Create `~/.openviking/ov.conf` in your home configuration directory:
@@ -46,6 +67,72 @@ Create `~/.openviking/ov.conf` in your home configuration directory:
 ```
 
 For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
+
+## Configuration Scope and Update Lifecycle
+
+OpenViking configuration has two layers:
+
+- **Startup configuration** is read from `ov.conf`. It defines the process baseline and the runtime configuration source. Changing it requires a service restart; the runtime configuration API never rewrites `ov.conf`.
+- **Runtime settings** are stored independently at Cluster and Account scope by the configured runtime configuration source. They can be read and updated through the Admin API.
+
+Only fields explicitly declared as runtime fields are exposed by the runtime configuration API. The current update surface is:
+
+| Scope | Configuration | Lifecycle | Effective behavior |
+| --- | --- | --- | --- |
+| Cluster | `agent_evolution` | Dynamic | ROOT can update it through the Admin API; it is used as the cluster default. |
+| Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
+| Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
+| Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
+| Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
+| Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
+
+Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` is not on the current Account configuration API surface.
+
+Account and Cluster configurations are independently stored and published.
+Any use of Cluster settings when Account settings are absent is a business
+default, not implicit configuration inheritance. The VLM resolver implements
+that policy: without an Account VLM section it uses Cluster VLM; with an Account
+section, model-service identity comes from Account while selected runtime
+behavior is composed with Cluster. Account `timeout` overrides Cluster `timeout`
+when set; omitting or resetting it uses Cluster `timeout`. Query Planner selection
+is Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
+
+The vector resolver validates effective Embedding and VectorDB settings together.
+Account `embedding: {}` is valid; without Account model modes, Cluster model
+bindings are used. Account credentials and explicit VectorDB connections supply
+their own connection and authentication fields. Remote collections, indexes and
+authorization must be provisioned externally. Changing embedding credentials does
+not migrate existing vectors; the caller must preserve model compatibility.
+
+Account-owned business code must resolve model configuration through
+`VLMResolver` and pass the resulting `VLMConfig` to lower-level helpers.
+`ClusterVLMResolver` is restricted to startup, diagnostics, and offline
+evaluation composition roots. A CI architecture test rejects new direct reads
+of Cluster VLM or Query Planner configuration from other production modules.
+
+For runtime changes, use the following endpoints:
+
+```http
+GET   /api/v1/admin/configuration
+PATCH /api/v1/admin/configuration
+
+GET   /api/v1/admin/accounts/{account_id}/configuration
+PATCH /api/v1/admin/accounts/{account_id}/configuration
+```
+
+The request body wraps a PATCH document in `settings`:
+
+```json
+{
+  "settings": {
+    "agent_evolution": {
+      "enabled": true
+    }
+  }
+}
+```
+
+PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains settings from that scope, not a business-effective Account/Cluster composition. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
 
 ## Configuration Examples
 
@@ -641,11 +728,12 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
 | `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
-| `credentials` | array | Ordered VLM credential/model list, with index 0 having the highest priority. Each item can override `provider`, `model`, `api_key`, `api_base`, `api_version`, `extra_headers`, `extra_request_body`, and `reasoning_effort` |
+| `credentials` | array | Ordered VLM credential/model list, with index 0 having the highest priority. Each item can override `provider`, `model`, `api_key`, `api_base`, `api_version`, `extra_headers`, `extra_request_body`, `reasoning_effort`, and `keepalive_expiry` |
 | `failback_timeout_seconds` | float | Time threshold for attempting a step back toward a higher-priority credential after failover (default: `600`) |
 | `failback_request_count` | int | Successful requests on a lower-priority credential before attempting a step back (default: `50`) |
 | `backup` | object | Optional backup VLM configuration (same shape as `vlm`) for automatic failover when the primary fails with retryable errors such as rate limits, `5xx` responses, or connection/timeout failures. Only one level of failover is supported &mdash; the backup itself cannot define a nested `backup` |
 | `timeout` | float | Per-request HTTP timeout in seconds passed to the underlying OpenAI/LiteLLM client. Increase for slow endpoints (e.g., DashScope, local inference). Must be `> 0` (default: `600.0`) |
+| `keepalive_expiry` | float | Idle connection lifetime in seconds for OpenAI-compatible VLM clients. Set to `0` to disable idle connection reuse; unset uses the OpenAI SDK default. Must be `>= 0` |
 | `extra_headers` | object | Custom HTTP headers for compatible HTTP providers. `kimi` also accepts header overrides, but already injects the required subscription headers by default |
 | `extra_request_body` | object | Extra JSON body fields for OpenAI-compatible completion requests, useful for provider-specific options such as Ollama `{"think": false}` |
 | `reasoning_effort` | str | Reasoning effort for `openai`, `azure`, `kimi`, `glm`, and `openai-codex`; explicit values are forwarded, and accepted values depend on the model. When unset, GPT-5/o-series names retain `low`; other models omit the field. For Chat Completions, `extra_request_body.reasoning_effort` takes precedence |
@@ -710,6 +798,7 @@ For OpenAI-compatible providers (e.g., OpenRouter), you can add custom HTTP head
 Common use cases:
 - **OpenRouter**: Requires `HTTP-Referer` and `X-Title` to identify your application
 - **Kimi Coding**: Override or extend the default subscription headers when you need a custom user agent
+- **OpenCode Go** (`https://opencode.ai/zen/go/v1`): Requests without `x-opencode-session` fail with HTTP 400 `MissingSessionID`. Set a fixed id, e.g. `"extra_headers": {"x-opencode-session": "openviking-<your-host>"}`. A fixed id works; OpenCode Go only uses it for routing and prompt-cache hints
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
 
@@ -902,7 +991,8 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 
 ### rerank
 
-Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, and OpenAI-compatible APIs.
+Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere,
+OpenAI-compatible APIs, LiteLLM, and Jev.
 
 **Volcengine (VikingDB):**
 
@@ -934,19 +1024,67 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 }
 ```
 
+**Jev (TypeSafe System One) provider:**
+
+```json
+{
+  "rerank": {
+    "provider": "jev",
+    "api_key": "your-typesafe-api-key",
+    "model": "jev-latest",
+    "timeout": 120,
+    "log_payloads": false,
+    "threshold": 0.1
+  }
+}
+```
+
+To use Jev through Vercel AI Gateway, point `api_base` at Vercel's
+[TypeSafe-compatible endpoint](https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe)
+and use Vercel's model ID. The request and response formats are identical to
+TypeSafe direct access; the adapter does not special-case Vercel:
+
+```json
+{
+  "rerank": {
+    "provider": "jev",
+    "api_key": "your-vercel-ai-gateway-api-key",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "model": "typesafe-ai/jev",
+    "threshold": 0.1
+  }
+}
+```
+
+Notes for Vercel:
+
+- Use a long-lived AI Gateway API key created with
+  `vercel ai-gateway api-keys create`, not the OIDC token from `vercel env pull`,
+  which expires after 12 hours.
+- The Vercel team must have a credit card on file for AI Gateway; otherwise
+  requests fail with 403 `customer_verification_required`.
+- `api_base` must include the `/typesafe` suffix. `https://ai-gateway.vercel.sh/v1`
+  is Vercel's own evaluate protocol and is not supported by the adapter.
+
+The Jev adapter sends the query and candidate documents as structured System One
+`state`, then asks one independent Noul relevance question per candidate. Each returned
+yes probability becomes that document's rerank score. All questions are evaluated in
+parallel in one request, and scores do not compete or have to sum to 1.
+
 **Parameters**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"vikingdb"`, `"cohere"`, or `"openai"`. Auto-detected if omitted. |
+| `provider` | str | `"vikingdb"`, `"cohere"`, `"openai"`, `"litellm"`, or `"jev"`. Auto-detected if omitted. |
 | `ak` | str | VikingDB Access Key (vikingdb provider only) |
 | `sk` | str | VikingDB Secret Key (vikingdb provider only) |
 | `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
-| `api_key` | str | API key (for `openai` or `cohere` providers) |
-| `api_base` | str | Endpoint URL (for `openai` provider) |
-| `model` | str | Model name (for `openai` providers) |
-| `timeout` | float | HTTP request timeout in seconds for OpenAI-compatible providers. Increase for slow or cold-starting local rerank servers. Default: `30.0` |
-| `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables truncation. Default: `0` |
+| `api_key` | str | API key (for `openai`, `cohere`, or `jev` providers) |
+| `api_base` | str | Endpoint URL (for `openai` or `jev`; Jev defaults to `https://api.typesafe.ai`, Vercel uses `https://ai-gateway.vercel.sh/typesafe`) |
+| `model` | str | Model name for OpenAI-compatible, LiteLLM, or Jev providers |
+| `timeout` | float | HTTP request timeout in seconds for HTTP rerank providers, including Jev. Default: `30.0` |
+| `max_input_tokens` | int | Maximum estimated raw-text tokens in each query-document pair sent to the reranker. Oversized inputs retain their beginning and end. `0` disables. Default: `0` |
+| `log_payloads` | bool | Log complete rerank request and response payloads. May expose query and document content. Default: `false` |
 | `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
@@ -954,6 +1092,8 @@ Reranking model for search result refinement. Supports VikingDB (Volcengine), Co
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
 - `cohere`: Cohere Rerank API
 - `openai`: OpenAI-compatible Rerank API
+- `litellm`: LiteLLM Rerank API
+- `jev`: Jev (TypeSafe System One) structured-decision API; each document receives an independent Noul relevance score
 
 If rerank is not configured, search uses vector similarity only.
 
@@ -1318,8 +1458,8 @@ Notes:
 
 - `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
 - Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). Set it when creating a session with `POST /api/v1/sessions`, or partially update it through `PATCH /api/v1/sessions/{session_id}/config`. Omitting `auto_commit_policy` from a PATCH preserves it; sending `null` disables automatic commits. Use `GET /api/v1/sessions/{session_id}` to inspect the effective policy.
-- When `default_enabled=false`, sessions created without `auto_commit_policy` keep auto commit disabled and return `auto_commit_policy: null`. Providing `{}` or any policy field explicitly enables auto commit for that session and fills missing fields from the defaults below.
-- When `default_enabled=true`, sessions created without `auto_commit_policy` get the default policy below.
+- When `default_enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`. Providing either policy enables auto commit and fills missing fields from the defaults below.
+- When `default_enabled=true`, sessions without an explicit or deployment-default policy get the built-in policy below.
 - When `idle_enabled=false`:
   - `SessionAutoCommitScheduler` is not started
 - When `idle_enabled=true`:
@@ -1681,20 +1821,21 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 | `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |
-| `upload_signed_ttl_seconds` | int | TTL in seconds for the one-shot tokens minted by the MCP `add_resource` tool for local-file uploads via `POST /api/v1/resources/temp_upload?token=...`. | `600` (10 minutes) |
+| `upload_signed_ttl_seconds` | int | TTL in seconds for the one-shot tokens minted by the MCP `add_resource` and `add_skill` tools for local-file uploads via `POST /api/v1/resources/temp_upload?token=...`. | `600` (10 minutes) |
 | `temp_upload.default_mode` | str | Server-side default for `POST /api/v1/resources/temp_upload` when the client does not send `upload_mode`: `"local"` (per-instance disk, current single-node behavior) or `"shared"` (distributed shared store usable across replicas). New shared uploads are stored in internal `viking://upload/<created_at_ms>-<uuid>/content` and `meta` objects, and can be consumed repeatedly for `ttl_seconds`. | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | Maximum size accepted in `shared` mode, in bytes. Requests above this size are rejected before object-store write. | `536870912` (512 MiB) |
 | `temp_upload.ttl_seconds` | int | Retention time shared by local and shared temporary uploads, in seconds. Each upload cleans files older than this for its mode; shared cleanup uses one upload-root listing, parses creation time from each first-level directory name, and recursively removes expired directories without filesystem modification times. Set to `0` to disable automatic cleanup. | `43200` (12 hours) |
 | `user_config_defaults.add_targets.resource_uri` | str | Deployment default resource add directory used when `add_resource` omits both `to` and `parent`. `viking://~/...` resolves per request user. | `null` |
 | `user_config_defaults.add_targets.skill_uri` | str | Deployment default skill add root used when `add_skill` omits `target_uri`. Only `viking://~/skills` and `viking://agent/skills` are accepted. | `null` |
 | `user_config_defaults.memory_policy` | object | Deployment default memory extraction policy used when neither the Session nor the User has an explicit policy. | `null` |
-| `agent_evolution.enabled` | bool | Instance-wide Agent Evolution switch. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. When disabled, production of these memory types stops for every account and user. Existing memories remain readable and searchable. | `false` |
+| `user_config_defaults.auto_commit_policy` | object | Deployment default auto-commit policy for newly created sessions without an explicit policy. | `null` |
+| `agent_evolution.enabled` | bool | Startup cluster default for Agent Evolution. Account and Cluster Admin settings may override it at runtime. When enabled, session commits may generate or update cases, trajectories, and experiences according to the session `memory_policy`. Existing memories remain readable and searchable when disabled. | `false` |
 
 Omitting `auth_mode` (or setting it to `null`) selects `api_key` when a non-empty `root_api_key` is configured, and `dev` otherwise. `dev` is allowed only on localhost and accepts requests without authentication. An empty-string `root_api_key` is invalid.
 
 Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including on localhost; without it, startup fails instead of falling back to development mode. Use the root key with the Admin API to create accounts and user/admin keys; use those tenant-bound keys for data access. `trusted` mode accepts account/user identity headers from a trusted gateway and does not require user-key provisioning first. Its root key is optional only on localhost and required for non-localhost binds. For role resolution, OIDC/LDAP setup, and gateway requirements, see [Authentication](04-authentication.md).
 
-`user_config_defaults` provides deployment defaults for add targets and memory extraction. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Memory policy precedence is Session policy > User `settings/user_config.json` policy > `server.user_config_defaults.memory_policy` > kernel default. `agent_evolution.enabled` is shared by the entire OpenViking instance and has no per-user override. Running HTTP server workers read the current Agent Evolution value from the resolved `ov.conf` when a session commits, so a valid file update applies without restarting the server.
+`user_config_defaults` provides deployment defaults for add targets and memory extraction. For add operations, explicit request targets still win: `add_resource.to` / `add_resource.parent` take precedence over user defaults, and `add_skill.target_uri` takes precedence over user defaults. Memory policy precedence is Session policy > User `settings/user_config.json` policy > `server.user_config_defaults.memory_policy` > kernel default. `server.agent_evolution.enabled` supplies the startup default. Runtime resolution is Account override > Cluster runtime override > that startup value. Use the Admin settings APIs for changes without restarting; editing `ov.conf` directly takes effect after restart.
 
 ### Usage Reporter
 
@@ -1921,7 +2062,7 @@ For detailed encryption explanations, see [Data Encryption](../concepts/10-encry
     "extra_request_body": {}
   },
   "rerank": {
-    "provider": "vikingdb|cohere|openai|litellm",
+    "provider": "vikingdb|cohere|openai|litellm|jev",
     "api_key": "string",
     "model": "string",
     "api_base": "string",

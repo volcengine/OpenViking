@@ -81,9 +81,10 @@ export const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared
 // here is.
 export const SKILLS_DIR = join(ROOT, "examples", "skills");
 export const SKILL_TARGETS = [
-  // Not shipped to openclaw-plugin: its REST tool surface has its own operator
-  // skill (openviking-context-database) with different tool names. Nor to
-  // agent-plugins, whose copy is a deliberately different hook-free variant.
+  // openviking-memory is not shipped to openclaw-plugin: its REST tool surface
+  // has its own operator skill (openviking-context-database) with different
+  // tool names. Nor to agent-plugins, whose copy of this one skill is a
+  // deliberately different hook-free variant.
   {
     skill: "openviking-memory",
     dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
@@ -102,6 +103,34 @@ export const SKILL_TARGETS = [
   {
     skill: "openviking-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
+    committed: true,
+  },
+  // The harnesses that bundle skills. agent-plugins has no hooks, so no
+  // session-start catalog: there the skill is the only way the model learns
+  // that the skills in OpenViking exist.
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "agent-plugins", "skills"),
     committed: true,
   },
   // The harnesses that ship the experience workflow today. agent-plugins has

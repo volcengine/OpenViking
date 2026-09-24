@@ -440,7 +440,7 @@ Back to viking://resources/source/data.bin.
         "kind": "url",
         "uri": "https://example.com/original",
     }
-    assert "[chapter](viking://resources/target/%E7%AB%A0%E8%8A%82.md)" in overview_doc.body
+    assert "[chapter](viking://resources/target/章节.md)" in overview_doc.body
     assert "viking://resources/source" not in target_overview.decode()
 
     target_abstract = agfs.files["/local/acct/resources/target/.abstract.md"]
@@ -649,8 +649,11 @@ async def test_mv_restores_vectors_before_removing_target_when_acl_refresh_fails
         agfs.events.append(("move-vectors", old_uri, new_uri))
         return SimpleNamespace(scanned=1, written=1, deleted=1, restored=0, batches=1)
 
+    async def acl_enabled(account_id):
+        return account_id == "acct"
+
     fs.acl_manager = SimpleNamespace(
-        is_enabled=lambda account_id: account_id == "acct",
+        is_enabled=acl_enabled,
         refresh_context_subtree=AsyncMock(side_effect=RuntimeError("ACL refresh failed")),
     )
     monkeypatch.setattr(fs, "_update_vector_store_uris", move_vectors)
@@ -686,8 +689,11 @@ async def test_mv_still_cleans_target_when_vector_restore_after_acl_refresh_fail
         vector_uris.add(new_uri)
         return SimpleNamespace(scanned=1, written=1, deleted=1, restored=0, batches=1)
 
+    async def acl_enabled(account_id):
+        return account_id == "acct"
+
     fs.acl_manager = SimpleNamespace(
-        is_enabled=lambda account_id: account_id == "acct",
+        is_enabled=acl_enabled,
         refresh_context_subtree=AsyncMock(side_effect=RuntimeError("ACL refresh failed")),
     )
     monkeypatch.setattr(fs, "_update_vector_store_uris", move_vectors)

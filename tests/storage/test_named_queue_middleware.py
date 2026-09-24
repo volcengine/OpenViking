@@ -109,6 +109,104 @@ async def test_enqueue_middleware_rewrites_payload(transport):
     assert json.loads(transport.write.await_args.args[1]) == {"input": "input", "middleware": True}
 
 
+async def test_process_dequeued_publishes_processing_and_end_to_end_durations(
+    transport, monkeypatch
+):
+    events = []
+    wall_times = iter((105.0,))
+    perf_times = iter((10.0, 12.5))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.named_queue.time.time", lambda: next(wall_times)
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.named_queue.time.perf_counter",
+        lambda: next(perf_times),
+    )
+    monkeypatch.setattr(
+        "openviking.observability.events.try_publish_event",
+        lambda event_name, payload: events.append((event_name, payload)),
+    )
+    queue = NamedQueue(object(), "/queue", "Semantic", dequeue_handler=Handler())
+    message = {
+        "id": "m",
+        "data": "{}",
+        "timestamp": 100.0,
+    }
+
+    result = await queue.process_dequeued(message)
+
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert events == [
+        (
+            "queue.processed",
+            {
+                "queue": "Semantic",
+                "outcome": "success",
+                "process_duration_seconds": 2.5,
+                "end_to_end_duration_seconds": 5.0,
+            },
+        )
+    ]
+
+
+async def test_process_dequeued_old_message_only_publishes_processing_duration(
+    transport, monkeypatch
+):
+    events = []
+    perf_times = iter((20.0, 20.25))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.named_queue.time.perf_counter",
+        lambda: next(perf_times),
+    )
+    monkeypatch.setattr(
+        "openviking.observability.events.try_publish_event",
+        lambda event_name, payload: events.append((event_name, payload)),
+    )
+    queue = NamedQueue(object(), "/queue", "Embedding", dequeue_handler=Handler())
+
+    await queue.process_dequeued({"id": "legacy", "data": "{}"})
+
+    assert events == [
+        (
+            "queue.processed",
+            {
+                "queue": "Embedding",
+                "outcome": "success",
+                "process_duration_seconds": 0.25,
+            },
+        )
+    ]
+
+
+async def test_process_dequeued_exception_publishes_exception_outcome(transport, monkeypatch):
+    events = []
+    perf_times = iter((30.0, 31.0))
+
+    class FailingHandler(DequeueHandlerBase):
+        async def on_dequeue(self, data):
+            raise RuntimeError("failed")
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.named_queue.time.perf_counter",
+        lambda: next(perf_times),
+    )
+    monkeypatch.setattr(
+        "openviking.observability.events.try_publish_event",
+        lambda event_name, payload: events.append((event_name, payload)),
+    )
+    queue = NamedQueue(object(), "/queue", "AddResource", dequeue_handler=FailingHandler())
+
+    with pytest.raises(RuntimeError, match="failed"):
+        await queue.process_dequeued({"id": "m", "data": "{}"})
+
+    assert events[0][0] == "queue.processed"
+    assert events[0][1] == {
+        "queue": "AddResource",
+        "outcome": "exception",
+        "process_duration_seconds": 1.0,
+    }
+
+
 @pytest.mark.parametrize("failure", [RuntimeError("handler failed"), asyncio.CancelledError()])
 async def test_handler_exception_still_skips_ack(transport, failure):
     class FailingHandler(DequeueHandlerBase):
@@ -178,7 +276,13 @@ async def test_queue_without_middleware_remains_generic(transport):
         ProcessResult.cancelled(),
     ],
 )
-async def test_process_short_circuit_settles_once_without_acking(transport, result):
+async def test_process_short_circuit_settles_once_without_acking(transport, result, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "openviking.observability.events.try_publish_event",
+        lambda event_name, payload: events.append((event_name, payload)),
+    )
+
     class ShortCircuit(QueueMiddleware):
         async def process(self, ctx, call_next):
             return result
@@ -195,6 +299,8 @@ async def test_process_short_circuit_settles_once_without_acking(transport, resu
     assert queue._error_count == (result.outcome is ProcessOutcome.FAILED)
     assert queue._processed == (result.outcome is not ProcessOutcome.FAILED)
     assert queue._requeue_count == (result.outcome is ProcessOutcome.REQUEUED)
+    assert events[0][0] == "queue.processed"
+    assert events[0][1]["outcome"] == result.outcome.value
     transport.write.assert_not_awaited()
 
 

@@ -159,56 +159,17 @@ export function CurrentUserMenu() {
             <dt className="w-16 shrink-0 text-xs text-muted-foreground">
               {t('header.currentUser.user')}
             </dt>
-            <dd className="min-w-0 flex-1 text-right text-xs font-medium">
-              {canSwitchUser ? (
+            <dd className="min-w-0 flex-1 truncate text-right text-xs font-medium">
+              {canSwitchUser && canListUsers ? (
                 <div>
-                  {!canListUsers ? (
-                    <form
-                      className="grid gap-2"
-                      onSubmit={(event) => {
-                        event.preventDefault()
-                        void selectUser(manualTargetUserId)
-                      }}
-                    >
-                      <label className="sr-only" htmlFor="trusted-user-id">
-                        {t('header.currentUser.userId')}
-                      </label>
-                      <input
-                        id="trusted-user-id"
-                        type="text"
-                        autoComplete="off"
-                        value={manualUserId}
-                        className="h-9 rounded-md border bg-background px-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                        placeholder={t('header.currentUser.userIdPlaceholder')}
-                        onChange={(event) =>
-                          setManualUserId(event.target.value)
-                        }
-                      />
-                      <button
-                        type="submit"
-                        disabled={
-                          !manualTargetUserId ||
-                          manualTargetUserId === userId ||
-                          Boolean(switchingUserId)
-                        }
-                        className="flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {switchingUserId ? (
-                          <LoaderCircleIcon className="size-3.5 animate-spin" />
-                        ) : null}
-                        {t('header.currentUser.switchAction')}
-                      </button>
-                    </form>
-                  ) : usersQuery.isLoading ? (
-                    <div className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-muted-foreground">
+                  {usersQuery.isLoading ? (
+                    <div className="flex items-center justify-end gap-1.5 text-xs text-muted-foreground">
                       <LoaderCircleIcon className="size-3.5 animate-spin" />
-                      {t('header.currentUser.loadingUsers')}
+                      <span className="truncate">{userLabel}</span>
                     </div>
                   ) : usersQuery.isError ? (
-                    <div className="grid gap-2 px-2.5 py-3 text-center">
-                      <p className="text-xs text-destructive">
-                        {t('header.currentUser.loadUsersFailed')}
-                      </p>
+                    <div className="flex items-center justify-end gap-1.5 text-xs text-muted-foreground">
+                      <span className="truncate">{userLabel}</span>
                       <button
                         type="button"
                         className="text-xs font-medium text-primary hover:underline"
@@ -262,17 +223,59 @@ export function CurrentUserMenu() {
                       </Select>
                     </div>
                   ) : (
-                    <p className="px-2.5 py-4 text-center text-xs text-muted-foreground">
-                      {t('header.currentUser.noUsers')}
-                    </p>
+                    <span className="truncate">{userLabel}</span>
                   )}
                 </div>
               ) : (
-                userLabel
+                <span className="truncate">{userLabel}</span>
               )}
             </dd>
           </div>
         </dl>
+
+        {canSwitchUser && !canListUsers ? (
+          <div className="border-t border-border/80 bg-muted/20 p-2.5">
+            <form
+              className="grid gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void selectUser(manualTargetUserId)
+              }}
+            >
+              <label
+                className="text-xs font-medium text-muted-foreground"
+                htmlFor="trusted-user-id"
+              >
+                {t('header.currentUser.switchUser')}
+              </label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  id="trusted-user-id"
+                  type="text"
+                  autoComplete="off"
+                  value={manualUserId}
+                  className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2.5 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder={t('header.currentUser.userIdPlaceholder')}
+                  onChange={(event) => setManualUserId(event.target.value)}
+                />
+                <button
+                  type="submit"
+                  disabled={
+                    !manualTargetUserId ||
+                    manualTargetUserId === userId ||
+                    Boolean(switchingUserId)
+                  }
+                  className="flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {switchingUserId ? (
+                    <LoaderCircleIcon className="size-3.5 animate-spin" />
+                  ) : null}
+                  {t('header.currentUser.switchAction')}
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   )

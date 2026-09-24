@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Awaitable, Callable, TypeVar
 
+from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.utils.exceptions import AllCredentialsFailedError
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,7 @@ def extract_metric_error_code(error: BaseException) -> str:
         return "connection_error"
     return "unknown"
 
+
 INPUT_TOO_LARGE_PATTERNS = (
     "413",
     "payload too large",
@@ -82,6 +84,7 @@ INPUT_TOO_LARGE_PATTERNS = (
     "contextwindowexceeded",
     "context window exceeded",
     "maximum context length",
+    "exceed max message tokens",
     "max input tokens",
     "too many input tokens",
     "input length exceeds",
@@ -130,7 +133,13 @@ QUOTA_EXCEEDED_PATTERNS = (
     "usage quota",
 )
 
-_PERMANENT_IO_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
+_PERMANENT_IO_ERRORS = (
+    FileNotFoundError,
+    PermissionError,
+    IsADirectoryError,
+    NotADirectoryError,
+    AGFSNotADirectoryError,
+)
 
 TRANSIENT_API_ERROR_PATTERNS = (
     "429",

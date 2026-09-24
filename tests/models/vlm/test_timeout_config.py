@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for ``vlm.timeout`` configuration propagation.
+"""Tests for VLM HTTP client configuration.
 
 Before this was wired through, ``_build_openai_client_kwargs`` exposed a
 ``timeout`` parameter (#1208) but callers never passed it, so the default
@@ -9,6 +9,7 @@ These tests lock in that the config value flows through to the underlying
 OpenAI and LiteLLM clients.
 """
 
+import asyncio
 from unittest import mock
 
 import pytest
@@ -53,21 +54,62 @@ def test_build_openai_client_kwargs_custom_timeout():
     assert kwargs["timeout"] == 120.0
 
 
-def test_openai_vlm_propagates_config_timeout():
-    vlm = OpenAIVLM(
-        {
-            "provider": "openai",
-            "model": "gpt-4o-mini",
-            "api_key": "sk-x",
-            "api_base": "https://example.invalid",
-            "timeout": 120.0,
-        }
-    )
-    assert vlm.timeout == 120.0
+@pytest.mark.asyncio
+async def test_openai_vlm_applies_http_config_and_closes_clients(monkeypatch):
+    connections = 0
+    payload = b'{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
 
-    with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
-        vlm.get_client()
-    assert fake.call_args.kwargs.get("timeout") == 120.0
+    async def respond(reader, writer):
+        nonlocal connections
+        connections += 1
+        try:
+            while True:
+                headers = await reader.readuntil(b"\r\n\r\n")
+                content_length = next(
+                    int(line.split(b":", 1)[1])
+                    for line in headers.split(b"\r\n")
+                    if line.lower().startswith(b"content-length:")
+                )
+                await reader.readexactly(content_length)
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                    + f"Content-Length: {len(payload)}\r\n\r\n".encode()
+                    + payload
+                )
+                await writer.drain()
+        except asyncio.IncompleteReadError:
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    async with await asyncio.start_server(respond, "127.0.0.1", 0) as server:
+        config = VLMConfig(
+            provider="openai",
+            model="gpt-4o-mini",
+            api_key="sk-x",
+            api_base=f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1",
+            timeout=1.0,
+            keepalive_expiry=0,
+            max_retries=0,
+        )
+        vlm = config.get_vlm_instance()
+        sync_client = vlm.get_client()
+        async_client = vlm.get_async_client()
+        try:
+            assert sync_client.timeout == 1.0
+            assert async_client.timeout == 1.0
+            assert await asyncio.to_thread(vlm.get_completion, "first") == "ok"
+            assert await asyncio.to_thread(vlm.get_completion, "second") == "ok"
+            assert await vlm.get_completion_async("first") == "ok"
+            assert await vlm.get_completion_async("second") == "ok"
+            assert connections == 4
+        finally:
+            config.close()
+            await asyncio.sleep(0)
+        assert sync_client.is_closed()
+        assert async_client.is_closed()
 
 
 def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
@@ -84,6 +126,7 @@ def test_openai_vlm_defaults_to_600_timeout_when_config_omits_it():
     with mock.patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI") as fake:
         vlm.get_client()
     assert fake.call_args.kwargs.get("timeout") == 600.0
+    assert "http_client" not in fake.call_args.kwargs
 
 
 def test_litellm_build_kwargs_includes_timeout():

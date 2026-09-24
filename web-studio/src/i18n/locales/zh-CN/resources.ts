@@ -7,8 +7,8 @@ const resources = {
   requestLogs: {
     accessRequired: {
       description:
-        '当前连接没有管理员或 Root 权限，无法显示请求日志。请在“连接设置”中配置具备控制台用量和审计权限的 API 密钥。',
-      title: '需要管理员权限',
+        '当前连接身份尚未确认。请在“连接设置”中检查服务地址、身份和认证配置。',
+      title: '需要确认连接身份',
     },
     clear: '清空',
     description:
@@ -60,9 +60,8 @@ const resources = {
     reset: '重置',
     searchPlaceholder: '筛选方法、路径或状态码',
     scope: {
-      currentIdentity: '当前范围：当前 API 密钥对应的身份',
-      currentIdentityWithName:
-        '当前范围：当前 API 密钥对应的身份（{{identity}}）',
+      currentIdentity: '当前范围：当前连接身份',
+      currentIdentityWithName: '当前范围：当前连接身份（{{identity}}）',
     },
     status: {
       error: '错误',
@@ -297,6 +296,7 @@ const resources = {
     tagMode: '标签写入方式',
     'tagMode.replace': '替换',
     'tagMode.append': '追加',
+    'tagMode.clear': '清空',
     reason: '添加原因',
     'reason.placeholder': '为什么要添加这个资源？',
     instruction: '处理指令',
@@ -419,6 +419,14 @@ const resources = {
       loadingEditor: '加载编辑器...',
       markdownPreview: '预览',
       markdownSource: '源码',
+      mermaid: {
+        diagramLabel: 'Mermaid 图表',
+        errorDetails: '错误详情',
+        loading: '正在渲染 Mermaid 图表...',
+        renderFailed: '无法渲染 Mermaid 图表。',
+        showSource: '查看 Mermaid 源码',
+        unknownError: '未知的 Mermaid 渲染错误。',
+      },
       noDirectoryContext: '这个目录暂无摘要或概览。',
       save: '保存',
       selectDirectoryContext: '选择一个标签查看目录上下文。',

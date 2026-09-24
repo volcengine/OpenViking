@@ -53,7 +53,7 @@ ov-install --base-url http://your-server:1933
 | `--plugin-version=VER` | 插件版本：npm 版本、dist-tag 或 Git ref |
 | `--base-url URL` | OpenViking 服务地址 |
 | `--api-key KEY` | OpenViking API Key |
-| `--peer-role ROLE` | 记忆归属：`none`、`assistant` 或 `sender`（`person` 是旧别名） |
+| `--peer-role ROLE` | 记忆归属：`none`、`assistant` 或 `sender` |
 | `--uninstall` | 卸载插件 |
 
 完整参数列表见 [安装指南](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL.md)。
@@ -80,7 +80,7 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role sender --json
 ```
 
-新配置请使用 `sender`；已有的 `peer_role=person` 配置仍兼容，并按 `sender` 处理。OpenViking 会为每个用户初始化受管的 `peers/` 容器，因此 `none` 的含义是不使用具体的 `peers/<peer_id>/memories` 子树。Actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换 scope 不会搬迁已有记忆。
+安装和 setup 只接受 `sender`；已有的 `peer_role=person` 配置仍兼容，并按 `sender` 处理。OpenViking 会为每个用户初始化受管的 `peers/` 容器，因此 `none` 的含义是不使用具体的 `peers/<peer_id>/memories` 子树。Actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换 scope 不会搬迁已有记忆。
 
 ## assemble 如何组装上下文
 

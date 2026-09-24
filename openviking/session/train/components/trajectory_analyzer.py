@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from openviking.config.vlm import VLMResolver
 from openviking.core.context import Context
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext
@@ -42,7 +43,6 @@ from openviking.session.train.interfaces import RolloutEvaluator
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -75,6 +75,7 @@ class TrajectoryRolloutAnalyzer:
     vikingdb: Any = None
     vlm: Any = None
     evaluator: RolloutEvaluator | None = None
+    vlm_resolver: VLMResolver | None = None
 
     @tracer("train.rollout_analyzer.trajectory.analyze", ignore_result=True, ignore_args=True)
     async def analyze(
@@ -163,11 +164,21 @@ class TrajectoryRolloutAnalyzer:
         if not messages or ctx is None:
             return empty_result
 
+        vlm_config = None
+        if self.vlm is None:
+            if self.vlm_resolver is None:
+                raise RuntimeError(
+                    "TrajectoryRolloutAnalyzer requires a VLM resolver "
+                    "for account-owned work"
+                )
+            vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
+
         provider = AgentTrajectoryContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
             include_trajectories=include_trajectories,
             include_session_skills=include_session_skills,
+            vlm_config=vlm_config,
         )
         consumed_experience_uris = collect_read_experience_uris(messages, ctx=ctx)
         phase_result = await self._run_trajectory_extract_phase(
@@ -200,8 +211,13 @@ class TrajectoryRolloutAnalyzer:
         source_archive_uri: str = "",
         consumed_experience_uris: list[str] | None = None,
     ) -> tuple[list[str], list[str], list[Context], list[PatchSemanticGradient]] | None:
-        config = get_openviking_config()
-        vlm = self.vlm or config.vlm.get_vlm_instance()
+        if self.vlm is None:
+            vlm_config = provider._vlm_config
+            if vlm_config is None:
+                raise RuntimeError("Trajectory provider is missing its resolved VLM config")
+            vlm = vlm_config
+        else:
+            vlm = self.vlm
         viking_fs = self.viking_fs or get_viking_fs()
         if viking_fs is None:
             raise RuntimeError("VikingFS is required to extract trajectory memories")

@@ -35,10 +35,11 @@ describe("openviking setup agent prefix validation", () => {
     },
   );
 
-  it("uses sender as the canonical setup value and accepts legacy person input", () => {
+  it("reads legacy person from existing config but rejects it as setup input", () => {
     expect(setupCommandTest.normalizePeerRole("sender")).toBe("sender");
     expect(setupCommandTest.normalizePeerRole("person")).toBe("sender");
-    expect(setupCommandTest.resolveSetupPeerRole("person")).toBe("sender");
+    expect(setupCommandTest.resolveSetupPeerRole("sender")).toBe("sender");
+    expect(() => setupCommandTest.resolveSetupPeerRole("person")).toThrow('"person" was renamed to "sender"');
   });
 
   it("interactive reconfiguration preserves the selected retention policy", async () => {

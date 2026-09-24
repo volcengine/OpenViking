@@ -114,7 +114,12 @@ async def test_webdav_rejects_direct_access_to_multiwrite_internal_files(client_
 
 
 def test_webdav_unit_rejects_direct_access_to_multiwrite_internal_files():
-    for hidden_name in (".path.ovlock", ".sync_log.json", ".redirect.json"):
+    for hidden_name in (
+        ".path.ovlock",
+        ".exact.ovlock.notes.md.0123abcd",
+        ".sync_log.json",
+        ".redirect.json",
+    ):
         try:
             _ensure_exposed_path(f"workspace/{hidden_name}")
         except NotFoundError:
@@ -126,6 +131,7 @@ def test_webdav_unit_filters_multiwrite_internal_files_from_children():
     entries = [
         {"name": ".obsidian"},
         {"name": ".path.ovlock"},
+        {"name": ".exact.ovlock.notes.md.0123abcd"},
         {"name": ".sync_log.json"},
         {"name": ".redirect.json"},
         {"name": "notes.md"},

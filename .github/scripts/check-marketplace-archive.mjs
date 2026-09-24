@@ -178,6 +178,10 @@ export async function requiredArchiveFiles(stagedNames) {
       continue;
     }
     for (const file of await pluginRequirements(root)) addIfStaged(file);
+    if (name === "pi-coding-agent-extension") {
+      addIfStaged(join(root, "package.json"));
+      addIfStaged(join(root, "package-lock.json"));
+    }
   }
 
   // The plugins that vendor a copy of the shared runtime ship what the sync put

@@ -93,7 +93,7 @@ _CONTRACT_PREAMBLE = (
     'single- or double-quoted literals. Inside triple quotes, escape any literal """ and '
     "backslash; never put a real newline inside a single- or double-quoted string.",
     "Only keyword arguments are accepted by create, set, and obj.update(); a field's update() takes one positional string. Unknown business fields are ignored.",
-    "You may end the program with sdk.commit(); when present it must be the final call. Return an empty program when there are no changes.",
+    "You may end the program with sdk.commit(); when present it must be the final call. If there are no changes, return only sdk.commit().",
     "Use the system-provided existing-object variable names exactly as shown. When a newly "
     "created memory must be referenced by delete(replacement=...) or link(...), assign the "
     "create call to a variable first, for example: canonical = sdk.create_<type>(...); "
@@ -289,7 +289,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         return (
             "You have reached the maximum number of tool call iterations. Do not call any more "
             "tools. Return the complete restricted Python memory SDK program now. Output only "
-            "Python code. If there are no changes, return an empty program."
+            "Python code. If there are no changes, return only sdk.commit()."
         )
 
     def render_format_retry(self, error: str | None = None) -> str:

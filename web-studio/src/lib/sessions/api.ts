@@ -10,7 +10,6 @@ import {
   postSessionIdCommit,
   postSessionIdExtract,
   postSessionIdMessages,
-  postSessionIdUsed,
 } from '#/gen/ov-client/sdk.gen'
 import {
   getOvResult,
@@ -34,7 +33,6 @@ import type {
   SessionListItem,
   SessionMeta,
 } from '@ov-server/api/v1/sessions'
-import type { UsedRequest } from '#/gen/ov-client/types.gen'
 
 // ---------------------------------------------------------------------------
 // Session CRUD
@@ -334,18 +332,6 @@ export async function commitSession(
 export async function extractSession(sessionId: string): Promise<unknown> {
   return getOvResult<unknown>(
     postSessionIdExtract({
-      path: { session_id: sessionId },
-    }),
-  )
-}
-
-export async function recordSessionUsed(
-  sessionId: string,
-  body: UsedRequest,
-): Promise<unknown> {
-  return getOvResult<unknown>(
-    postSessionIdUsed({
-      body,
       path: { session_id: sessionId },
     }),
   )

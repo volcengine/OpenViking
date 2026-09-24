@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import pytest
 import pytest_asyncio
 
+from openviking.parse.mode import ParseMode
 from openviking.resource.feishu_watch_auth import FeishuAppCredentials
 from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
@@ -108,6 +109,22 @@ def disable_task_tracker(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture
+def runtime_config_manager():
+    from openviking_cli.utils.config.parser_config import FeishuConfig
+
+    async def resolve_account(account_id, resolver):
+        assert account_id
+        return resolver(
+            SimpleNamespace(
+                account=SimpleNamespace(feishu=None),
+                cluster=SimpleNamespace(feishu=FeishuConfig()),
+            )
+        )
+
+    return SimpleNamespace(resolve_account=resolve_account)
+
+
 @pytest.fixture(autouse=True)
 def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     task_tracker = NoopTaskTracker()
@@ -117,6 +134,10 @@ def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
     monkeypatch.setattr("openviking.connector.routing.is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        "openviking.connector.delegate.ConnectorDelegate.supported_args",
+        Mock(return_value=set()),
+    )
 
 
 @pytest_asyncio.fixture
@@ -127,7 +148,9 @@ async def watch_manager() -> AsyncGenerator[WatchManager, None]:
 
 
 @pytest_asyncio.fixture
-async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[ResourceService, None]:
+async def resource_service(
+    watch_manager: WatchManager, runtime_config_manager
+) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
     scheduler = MagicMock()
     scheduler.watch_manager = watch_manager
@@ -139,6 +162,7 @@ async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[Resour
         resource_processor=MockResourceProcessor(),
         skill_processor=MockSkillProcessor(),
         watch_scheduler=scheduler,
+        runtime_config_manager=runtime_config_manager,
     )
     service._enqueue_add_resource_job = AsyncMock(return_value=SimpleNamespace(task_id="test-task"))
     yield service
@@ -279,10 +303,8 @@ class TestWatchTaskCreation:
         )
 
         assert "tags_result" not in result
-        assert resource_service._resource_processor.calls[-1]["ingest_options"] == IngestOptions(
-            search_tags=["team=search"],
-            search_tag_mode="append",
-        )
+        assert resource_service._resource_processor.calls[-1]["tags"] == ["team=search"]
+        assert resource_service._resource_processor.calls[-1]["tag_mode"] == "append"
 
     @pytest.mark.asyncio
     async def test_add_resource_rejects_invalid_tag_mode_before_processing(
@@ -381,6 +403,27 @@ class TestWatchTaskCreation:
             search_tag_mode="append",
         )
 
+    def test_watch_persists_clear_without_tags(self, resource_service: ResourceService):
+        assert resource_service._watch_processor_kwargs({}, None, "clear") == {
+            "tag_mode": "clear"
+        }
+
+    def test_add_resource_message_round_trip_preserves_clear_without_tags(self):
+        message = AddResourceMsg(
+            task_id="task-clear",
+            path="https://example.com/demo.md",
+            root_uri="viking://resources/demo",
+            account_id="acct",
+            user_id="user",
+            role="user",
+            tag_mode="clear",
+        )
+
+        restored = AddResourceMsg.from_dict(message.to_dict())
+
+        assert restored.tags is None
+        assert restored.tag_mode == "clear"
+
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(
         self, resource_service: ResourceService, request_context: RequestContext
@@ -462,15 +505,27 @@ class TestAddResourceArgs:
         resource_service: ResourceService,
         request_context: RequestContext,
     ):
+        from openviking.resource.feishu_watch_auth import FeishuRefreshedToken
+        from openviking.resource.watch_scheduler import WatchScheduler
+        from openviking_cli.utils.config import open_viking_config as config_module
+
+        config = config_module.ConnectorConfig(auth="https://connector.example/oauth/access_token")
+        monkeypatch.setattr(
+            config_module, "get_openviking_config", lambda: SimpleNamespace(connector=config)
+        )
         monkeypatch.setattr(
             resource_service_module,
             "load_feishu_app_credentials",
-            lambda app_id=None, app_secret=None: FeishuAppCredentials(
+            lambda config=None, app_id=None, app_secret=None: FeishuAppCredentials(
                 app_id=app_id or "configured-app",
                 app_secret=app_secret or "configured-secret",
                 domain="https://open.feishu.cn",
                 request_timeout=30,
             ),
+        )
+        monkeypatch.setattr(
+            "openviking.resource.feishu_watch_auth.load_feishu_app_credentials",
+            resource_service_module.load_feishu_app_credentials,
         )
         disable_task_tracker(monkeypatch)
         to_uri = "viking://resources/feishu_user_watch"
@@ -478,8 +533,11 @@ class TestAddResourceArgs:
             return_value=(to_uri, None, False, False)
         )
 
-        async def preflight(_self, _source, *, feishu_access_token=None):
-            assert feishu_access_token == "u-test"
+        expected_token = "u-test"
+
+        async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
+            assert feishu_access_token == expected_token
+            assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
             return SimpleNamespace(source_name=None, source_format="file")
 
         monkeypatch.setattr(
@@ -541,6 +599,204 @@ class TestAddResourceArgs:
         }
         assert "auth_state" not in task.to_dict()
 
+        # A stored local watch still refreshes and queues work with connector.auth enabled.
+        refresh = Mock(return_value=FeishuRefreshedToken("u-new", "r-new", 7200))
+        monkeypatch.setattr(
+            "openviking.resource.feishu_watch_auth.FeishuOAuthClient._refresh_user_access_token_sync",
+            refresh,
+        )
+        expected_token = "u-new"
+        scheduler = WatchScheduler(
+            resource_service, runtime_config_manager=resource_service._runtime_config_manager
+        )
+        scheduler._watch_manager = resource_service._get_watch_manager()
+        await scheduler._execute_task(task)
+        refresh.assert_called_once_with("r-test")
+        updated = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert updated.task_id == task.task_id
+        assert updated.is_active is True
+        assert updated.auth_state["provider"] == "feishu"
+        assert updated.auth_state["refresh_token"] == "r-new"
+        queued_auth = resource_service._enqueue_add_resource_job.await_args.kwargs["task_auth"]
+        assert queued_auth["access_token"] == "u-new"
+
+    @pytest.mark.asyncio
+    async def test_feishu_account_default_watch_does_not_store_app_secret(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        monkeypatch.setattr(
+            resource_service_module,
+            "load_feishu_app_credentials",
+            lambda config=None, app_id=None, app_secret=None: FeishuAppCredentials(
+                app_id="account-app",
+                app_secret="account-secret",
+                domain="https://open.feishu.cn",
+                request_timeout=30,
+            ),
+        )
+
+        normalized = await resource_service._normalize_add_resource_args(
+            {
+                "feishu_access_token": "u-test",
+                "feishu_refresh_token": "r-test",
+            },
+            ctx=request_context,
+            watch_interval=30,
+        )
+
+        assert normalized.watch_auth_state == {
+            "provider": "feishu",
+            "access_token": "u-test",
+            "refresh_token": "r-test",
+            "expires_at": None,
+            "app_id": "account-app",
+        }
+
+    def test_feishu_watch_refresh_restores_access_token_without_refresh_token(
+        self,
+        resource_service: ResourceService,
+    ):
+        msg = SimpleNamespace(
+            path="https://example.feishu.cn/docx/doc_token",
+            watch_interval=30.0,
+            skip_watch_management=True,
+            understanding_response_id=None,
+            understanding_file_id=None,
+        )
+
+        auth_kwargs, watch_auth_state = resource_service._restore_source_task_auth(
+            msg,
+            {
+                "provider": "feishu",
+                "access_token": "u-refreshed",
+                "domain": "https://open.feishu.cn",
+            },
+        )
+
+        assert auth_kwargs == {"feishu_access_token": "u-refreshed"}
+        assert watch_auth_state is None
+
+    @pytest.mark.asyncio
+    async def test_feishu_watch_refresh_preflight_uses_cluster_domain(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        from openviking_cli.utils.config.parser_config import FeishuConfig
+
+        async def resolve_account(account_id, resolver):
+            assert account_id == request_context.account_id
+            return resolver(
+                SimpleNamespace(
+                    account=SimpleNamespace(feishu=None),
+                    cluster=SimpleNamespace(
+                        feishu=FeishuConfig(domain="https://open.feishu.cn")
+                    ),
+                )
+            )
+
+        seen = {}
+
+        async def preflight(
+            _self,
+            _source,
+            *,
+            feishu_access_token=None,
+            feishu_config=None,
+            **_kwargs,
+        ):
+            seen["access_token"] = feishu_access_token
+            seen["config_domain"] = feishu_config.domain
+            return SimpleNamespace(source_name=None, source_format="file")
+
+        resource_service._runtime_config_manager = SimpleNamespace(
+            resolve_account=resolve_account
+        )
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            preflight,
+        )
+
+        plan = await resource_service._prepare_standard_source_plan(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            mode=ParseMode.DEFAULT,
+            allow_local_path_resolution=False,
+            processor_kwargs={
+                "feishu_access_token": "u-refreshed",
+            },
+            watch_auth_state={
+                "provider": "feishu",
+                "access_token": "u-refreshed",
+                "domain": "https://open.larksuite.com",
+            },
+        )
+
+        assert seen == {
+            "access_token": "u-refreshed",
+            "config_domain": "https://open.feishu.cn",
+        }
+        assert "domain" not in plan.task_auth
+
+    @pytest.mark.asyncio
+    async def test_feishu_watch_binds_account_app_identity_without_secret(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        resource_service: ResourceService,
+        request_context: RequestContext,
+    ):
+        from openviking_cli.utils.config.parser_config import FeishuConfig
+
+        async def resolve_account(account_id, resolver):
+            assert account_id == request_context.account_id
+            return resolver(
+                SimpleNamespace(
+                    account=SimpleNamespace(
+                        feishu=SimpleNamespace(
+                            app_id="account-app",
+                            app_secret="account-secret",
+                            max_rows_per_sheet=None,
+                            max_records_per_table=None,
+                            download_images=None,
+                            request_timeout=None,
+                        )
+                    ),
+                    cluster=SimpleNamespace(feishu=FeishuConfig()),
+                )
+            )
+
+        resource_service._runtime_config_manager = SimpleNamespace(
+            resolve_account=resolve_account
+        )
+        disable_task_tracker(monkeypatch)
+        to_uri = "viking://resources/feishu-account-watch"
+        resource_service._plan_source_job_target = AsyncMock(
+            return_value=(to_uri, None, False, False)
+        )
+        monkeypatch.setattr(
+            "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source",
+            AsyncMock(return_value=SimpleNamespace(source_name=None, source_format="file")),
+        )
+
+        await resource_service.add_resource(
+            path="https://example.feishu.cn/docx/doc_token",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30,
+            args={
+                "feishu_access_token": "user-token",
+                "feishu_refresh_token": "refresh-token",
+            },
+        )
+
+        auth_state = resource_service._enqueue_add_resource_job.await_args.kwargs["task_auth"]
+        assert auth_state["app_id"] == "account-app"
+        assert "app_secret" not in auth_state
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("target", "is_active"),
@@ -563,7 +819,7 @@ class TestAddResourceArgs:
             return_value=(to_uri, None, False, False)
         )
 
-        async def preflight(_self, _source, *, feishu_access_token=None):
+        async def preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
             return SimpleNamespace(source_name="Feishu", source_format="file")
 
         monkeypatch.setattr(
@@ -611,7 +867,7 @@ class TestAddResourceArgs:
     ):
         to_uri = "viking://resources/failed_feishu"
 
-        async def fail_preflight(_self, _source, *, feishu_access_token=None):
+        async def fail_preflight(_self, _source, *, feishu_access_token=None, **_kwargs):
             raise RuntimeError("preflight unavailable")
 
         monkeypatch.setattr(
@@ -1373,3 +1629,135 @@ class TestResourceProcessingIndependence:
 
         assert result is not None
         assert "root_uri" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encrypted", [False, True])
+async def test_external_feishu_auth_survives_queue_and_multiple_watches(
+    monkeypatch, resource_service, request_context, encrypted
+):
+    from openviking.connector import auth
+    from openviking.connector.client import ConnectorClient
+    from openviking.resource.watch_scheduler import WatchScheduler
+    from openviking_cli.exceptions import InternalError
+    from openviking_cli.utils.config import open_viking_config as config_module
+
+    config = config_module.ConnectorConfig(auth="https://connector.example/oauth/access_token")
+    monkeypatch.setattr(
+        config_module, "get_openviking_config", lambda: SimpleNamespace(connector=config)
+    )
+    request_context.api_key = "external-api-key"
+    if encrypted:
+        resource_service._viking_fs._encryptor = SimpleNamespace(
+            encrypt=AsyncMock(side_effect=lambda _account, data: b"OVE1" + data[::-1]),
+            decrypt=AsyncMock(side_effect=lambda _account, data: data[4:][::-1]),
+        )
+    worker_context = RequestContext(user=request_context.user, role=request_context.role)
+    reference = {
+        "account_id": "cloud-account",
+        "user_id": "cloud-user",
+        "ov_user_id": request_context.user.user_id,
+        "platform": "feishu_doc",
+        "type": "oauth",
+    }
+    local_refresh = AsyncMock(
+        side_effect=AssertionError("external watches must not refresh locally")
+    )
+    monkeypatch.setattr(
+        "openviking.resource.feishu_watch_auth.FeishuOAuthClient.refresh_user_access_token",
+        local_refresh,
+    )
+    fetched = []
+
+    def fetch(_client, _url, api_key, ref):
+        assert api_key == "external-api-key"
+        assert ref == reference
+        token = f"external-token-{len(fetched)}"
+        fetched.append(token)
+        return {"access_token": token, "expires_at": 4102444800}
+
+    monkeypatch.setattr(ConnectorClient, "get_oauth_access_token", fetch)
+
+    async def preflight(_self, _source, *, feishu_access_token=None, **kwargs):
+        assert feishu_access_token == fetched[-1]
+        assert kwargs["feishu_config"].domain == "https://open.feishu.cn"
+        assert auth.current_feishu_token.get() is not None
+        return SimpleNamespace(source_name=None, source_format="file")
+
+    monkeypatch.setattr(
+        "openviking.parse.accessors.feishu_accessor.FeishuAccessor.preflight_source", preflight
+    )
+    tasks = []
+    for index in range(2):
+        to = f"viking://resources/external-{index}"
+        resource_service._plan_source_job_target = AsyncMock(return_value=(to, None, False, False))
+        await resource_service.add_resource(
+            path=f"https://example.feishu.cn/docx/doc-{index}",
+            ctx=request_context,
+            to=to,
+            watch_interval=30,
+            args={auth.OAUTH_REF_ARG: reference},
+        )
+        assert len(fetched) == 2 * index + 1
+        call = resource_service._enqueue_add_resource_job.await_args
+        message, state = call.args[0], call.kwargs["task_auth"]
+        assert auth.is_external_feishu_auth(state)
+        assert "external-api-key" not in str(message.to_dict())
+        assert "external-token" not in str(message.to_dict())
+        assert "external-token" not in str(state)
+        assert "refresh_token" not in str(state)
+        if encrypted:
+            assert "external-api-key" not in str(state)
+        await resource_service.execute_add_resource_job(
+            message,
+            ctx=worker_context,
+            resource_lock=None,
+            stage_callback=AsyncMock(),
+            task_auth=state,
+        )
+        assert len(fetched) == 2 * index + 2
+        assert resource_service._resource_processor.calls[-1]["feishu_access_token"] == fetched[-1]
+        task = await get_task_by_uri(resource_service, to, request_context)
+        assert task.auth_state == state
+        assert task.processor_kwargs == {}
+        assert "external-api-key" not in str(task.to_dict())
+        tasks.append(task)
+    assert auth.current_feishu_token.get() is None
+
+    scheduler = WatchScheduler(resource_service)
+    scheduler._watch_manager = resource_service._get_watch_manager()
+    await scheduler._execute_task(tasks[0])
+    assert len(fetched) == 5
+    next_call = resource_service._enqueue_add_resource_job.await_args
+    assert auth.is_external_feishu_auth(next_call.kwargs["task_auth"])
+    assert next_call.args[0].skip_watch_management is True
+
+    monkeypatch.setattr(
+        ConnectorClient, "get_oauth_access_token", Mock(side_effect=InternalError("unavailable"))
+    )
+    await scheduler._execute_task(tasks[0])
+    task = await get_task_by_uri(resource_service, tasks[0].to_uri, request_context)
+    assert task.is_active is True
+    assert task.last_status == "failed"
+    local_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_external_feishu_requires_endpoint(monkeypatch, resource_service, request_context):
+    from openviking.connector import auth
+
+    reference = {
+        "account_id": "account",
+        "user_id": "user",
+        "ov_user_id": request_context.user.user_id,
+        "platform": "feishu_doc",
+        "type": "oauth",
+    }
+    monkeypatch.setattr(auth, "external_auth_url", lambda: "")
+    with pytest.raises(InvalidArgumentError, match="connector.auth is required"):
+        await resource_service.add_resource(
+            path="https://example.feishu.cn/docx/doc",
+            ctx=request_context,
+            to="viking://resources/test",
+            args={auth.OAUTH_REF_ARG: reference},
+        )

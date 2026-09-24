@@ -231,6 +231,15 @@ scrape_configs:
 | `openviking_queue_errors_total` | Counter | `queue` | 队列累计错误量 |
 | `openviking_queue_pending` | Gauge | `queue` | 队列待处理数 |
 | `openviking_queue_in_progress` | Gauge | `queue` | 队列执行中数量 |
+| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome` | 消息被 worker 取出后到 handler 结束的处理耗时 |
+| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome` | 消息从入队到 handler 结束的端到端耗时，包含排队时间 |
+| `openviking_executor_max_workers` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 最大 worker 数 |
+| `openviking_executor_threads` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 已创建线程数 |
+| `openviking_executor_active_tasks` | Gauge | `pool, process_role, worker` | 默认 executor 当前执行中的任务数 |
+| `openviking_executor_pending_tasks` | Gauge | `pool, process_role, worker` | 默认 executor 当前等待执行的任务数 |
+| `openviking_executor_submitted_total` | Counter | `pool, process_role, worker` | 默认 executor 累计提交任务数 |
+| `openviking_executor_completed_total` | Counter | `pool, process_role, worker` | 默认 executor 累计执行结束任务数，失败也计入 |
+| `openviking_executor_failed_total` | Counter | `pool, process_role, worker` | 默认 executor callable 抛异常次数 |
 | `openviking_lock_active` | Gauge | 无 | 当前已发布的锁租约数 |
 | `openviking_lock_waiting` | Gauge | 无 | 当前等待锁的请求数 |
 | `openviking_lock_stale` | Gauge | 无 | 累计已清理的过期锁 token 数 |
@@ -239,10 +248,19 @@ scrape_configs:
 | `openviking_lock_descendant_scans_total` | Counter | 无 | 已完成的后代锁扫描次数 |
 | `openviking_lock_descendant_scan_duration_seconds_total` | Counter | 无 | 后代锁扫描累计耗时 |
 
+队列耗时指标中的 `outcome` 可取 `success`、`failed`、`requeued`、`cancelled`、`exception`。其中 `failed` 表示 handler 返回了可确认的失败结果，`exception` 表示处理过程抛出异常，当前消息不会 ACK。
+
 这些指标适合回答：
 
 - 是否有队列堆积？
+- 哪个队列处理慢，以及耗时是否主要来自排队？
 - 是否有锁竞争或 stale lock？
+- 默认 executor 是否接近线程上限或出现排队？
+
+executor 指标只统计 `loop.run_in_executor(None, ...)` 和 `asyncio.to_thread(...)`。
+显式传入自定义 executor 的调用、Rust / RAGFS 内部 runtime 或线程不计入。
+`failed_total` 统计 callable 抛异常的次数。如果异常被上层捕获并作为正常分支处理，
+也会计入该指标，因此它不等同于业务请求失败数。
 
 
 ### RAGFS
@@ -294,7 +312,6 @@ Python `get_stats()` 保留原有微秒字段。
 | 指标族 | 类型 | 常见标签 | 含义 |
 |--------|------|----------|------|
 | `openviking_session_lifecycle_total` | Counter | `account_id, action, status` | session 生命周期事件次数 |
-| `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used 累计量 |
 | `openviking_session_archive_total` | Counter | `account_id, status` | session archive 次数 |
 
 ### Feedback

@@ -74,6 +74,54 @@ function runUninstall(home, harnesses = "cursor,trae,trae-cn,zcode") {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
+test("Kimi installs a self-contained native bundle without legacy config edits", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-kimi-hooks-"));
+  try {
+    writeJson(join(home, ".kimi-code", "plugins", "installed.json"), {
+      version: 1,
+      plugins: [{ id: "third-party", root: "/third-party", enabled: false }],
+    });
+
+    const result = runInstaller(home, [
+      "--harness", "kimicode",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:1933",
+      "--api-key", "",
+      "--yes",
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+    const root = join(home, ".kimi-code", "plugins", "managed", "openviking-memory");
+    const manifest = JSON.parse(readFileSync(join(root, "kimi.plugin.json"), "utf8"));
+    assert.deepEqual(manifest.hooks.map((hook) => hook.event), [
+      "SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "PreCompact", "SessionEnd", "Interrupt",
+    ]);
+    assert.equal(manifest.hooks[0].env.OPENVIKING_PENDING_REPLAY_LIMIT, "2");
+    assert.match(manifest.mcpServers.openviking.args[0], /agent-integrations\/kimicode\/servers\/mcp-proxy\.mjs$/);
+    assert.ok(existsSync(join(root, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
+    assert.ok(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+    assert.equal(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "install")), false);
+    assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "tests")), false);
+    assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "hosts", "cursor.mjs")), false);
+    assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "hosts", "zcode.mjs")), false);
+    assert.equal(existsSync(join(home, ".kimi-code", "config.toml")), false);
+    assert.equal(existsSync(join(home, ".kimi-code", "mcp.json")), false);
+
+    const registry = JSON.parse(readFileSync(join(home, ".kimi-code", "plugins", "installed.json"), "utf8"));
+    assert.deepEqual(registry.plugins.map((plugin) => plugin.id).sort(), ["openviking-memory", "third-party"]);
+    assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "kimicode", "lib", "install", "kimicode-plugin.mjs")));
+
+    const removed = runInstaller(home, ["--harness", "kimicode", "--uninstall", "--yes"]);
+    assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
+    assert.equal(existsSync(root), false);
+    const after = JSON.parse(readFileSync(join(home, ".kimi-code", "plugins", "installed.json"), "utf8"));
+    assert.deepEqual(after.plugins.map((plugin) => plugin.id), ["third-party"]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("TraeCode CLI 2.0 installs the Codex plugin alias and removes the deprecated integration", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-trae-cli-hooks-"));
   try {
@@ -363,7 +411,8 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
       [join(home, ".openviking", "agent-integrations", "cursor", "scripts", "ov-memory-doctor.mjs"), "cursor", "--offline", "--no-color"],
       { env: { ...process.env, HOME: home }, encoding: "utf8" },
     );
-    assert.match(doctor.stdout, /version 0\.3\.2, client cursor/);
+    const version = JSON.parse(readFileSync(join(checkout, "examples", "agent-hook-plugin", "plugin.json"), "utf8")).version;
+    assert.ok(doctor.stdout.includes(`version ${version}, client cursor`));
     // A hooks.json entry that names a script the install did not put on disk
     // fails only when the host first runs it, so the rendered commands are
     // checked against the tree they were rendered for.

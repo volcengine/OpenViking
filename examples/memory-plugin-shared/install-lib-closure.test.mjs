@@ -18,7 +18,7 @@ import test from "node:test";
 
 import { MANIFEST_PATH, ROOT, assembledClosure, resolveTargets } from "./sync.mjs";
 
-test("lib/MANIFEST holds the closure of what cursor, trae and zcode import", async () => {
+test("lib/MANIFEST holds the closure of what the thin hook hosts import", async () => {
   const manifest = readFileSync(MANIFEST_PATH, "utf8");
   assert.ok(manifest.endsWith("\n"), "the installer reads the manifest a line at a time");
   assert.deepEqual(

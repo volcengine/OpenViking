@@ -34,11 +34,13 @@ test("the bundled skill stays readable without watching the installed package", 
   }, buildSkillsConfig());
   try {
     const candidates = await provider.list({ cwd: "/workspace" });
-    assert.equal(candidates.length, 1);
-    assert.equal(candidates[0].name, "openviking-memory");
-    assert.equal(candidates[0].source, "bundled");
-    assert.equal(candidates[0].provider, "openviking");
-    const skill = await provider.get(candidates[0], {});
+    assert.deepEqual(candidates.map(candidate => candidate.name).sort(), ["openviking-memory", "openviking-skills"]);
+    for (const candidate of candidates) {
+      assert.equal(candidate.source, "bundled", candidate.name);
+      assert.equal(candidate.provider, "openviking", candidate.name);
+    }
+    const memory = candidates.find(candidate => candidate.name === "openviking-memory");
+    const skill = await provider.get(memory, {});
     assert.match(skill.content, /mcp__openviking__/);
     assert.equal(watch.mock.callCount(), 0, "bundled skills must not hold directory watchers");
   } finally {

@@ -8,7 +8,7 @@
 
 ## 前置条件
 
-- [OpenCode](https://opencode.ai/)
+- [OpenCode](https://opencode.ai/) 1.15.7+ 或 2.0.15+
 - Node.js 18+
 - OpenViking HTTP server
 - 如果服务端启用了鉴权，需要一个可用的 OpenViking API key
@@ -59,6 +59,10 @@ opencode
 ```
 
 已有 `~/.config/opencode/opencode.json` 时，不要覆盖原文件；只把 `"@openviking/opencode-plugin"` 合并到已有的 `plugin` 数组。OpenCode 启动时会自动下载这个 npm 包，插件会自动注册它的 MCP server。
+
+OpenCode 2 使用同一个包：v2 调用 `setup()`，OpenCode 1 调用 `server()`。OpenCode 2 会把 `"plugin"` 规范化为 `"plugins"`，因此安装器继续写兼容 v1/v2 的 `"plugin"`；不要为了 v2 手工改写现有配置。不需要安装 OpenCode skill。
+
+在 OpenCode 2 中，插件把 MCP server 设为 `codemode: false`，所以工具仍以 `openviking_*` 直接暴露，不会收进 Code Mode。OpenCode 2 没有插件 toast API，服务不可用等信息只写入插件日志。
 
 ### 源码安装
 
@@ -115,6 +119,8 @@ node examples/opencode-plugin/scripts/setup.mjs
     "commitTokenThreshold": 20000,
     "commitKeepRecentCount": 10,
     "profileTokenBudget": 10000,
+    "skillCatalog": true,
+    "skillCatalogTokenBudget": 1200,
     "resumeContextBudget": 32000,
     "opencode": {
       "timeoutMs": 30000,
@@ -126,6 +132,8 @@ node examples/opencode-plugin/scripts/setup.mjs
 ```
 
 配置项按优先级从高到低解析：`OPENVIKING_*` 环境变量、工作区的 `.openviking/config.json` 与 `config.local.json`、`plugin.opencode`、`plugin`，最后是内置默认值。`autoRecall: false` 关闭自动召回，`autoCapture: false` 让插件不再回写对话。
+
+每个 session 的第一条消息会带上一个隐藏的 `<openviking-context source="session-start">` 块，里面有你的 `profile.md`、`preferences/` 和 `entities/` 记忆索引，以及 `<available-skills>` skill 清单：先列你自己的 skill，再列 `viking://agent/skills` 下账号共享的 skill；共享 skill 与你自己的 skill 同名时不再列出。agent 照某个 skill 做事之前，先用 `openviking_read` 读它的 `SKILL.md`；创建或共享 skill 用 `openviking_add_skill`。`profileTokenBudget` 只管 profile 和记忆索引，skill 清单有独立的预算 `skillCatalogTokenBudget`（默认 `1200`，环境变量 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）。放不下描述时只列 skill 名，名字也列不全时末尾注明 `... +N more`；连一个名字都放不下时，只写一行 skill 总数。设置 `skillCatalog: false`（`OPENVIKING_SKILL_CATALOG=0`）或把预算设为 `0` 即可关闭 skill 清单；没有 skill，或服务端没有 `GET /api/v1/skills` 接口时，这一块会直接省略。
 
 环境变量优先级高于 `ovcli.conf`：
 
@@ -140,12 +148,16 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 
 ## 验证
 
-安装后重启 OpenCode。进入 OpenCode session 后，插件应暴露 `openviking` MCP server，透传服务端完整 MCP 工具集（15 个工具）。OpenCode 会给 MCP 工具加 `openviking_` 前缀：
+安装后重启 OpenCode。进入 OpenCode session 后，插件应暴露 `openviking` MCP server，透传服务端完整 MCP 工具集（16 个工具）。OpenCode 会给 MCP 工具加 `openviking_` 前缀：
 
 - `openviking_find`、`openviking_search`（`openviking_search` 的 `mode="context"` 替代原 recall 工具）
 - `openviking_read`、`openviking_list`、`openviking_tree`、`openviking_grep`、`openviking_glob`
-- `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`
+- `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
+
+OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction、session 删除和插件 cleanup 会强制提交。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
+
+OpenCode 1.15.7 不会调用插件 dispose。v1 的短时 CLI 运行也可能在异步捕获完成前退出，这一行为在 v2 适配前已存在。使用常驻 v1 服务可以让 idle 捕获完成；OpenCode 1.18.32 会在 instance dispose 时调用插件的 dispose。
 
 可以让 OpenCode 搜索或浏览 OpenViking memory。运行时状态和错误日志会写入：
 
@@ -158,7 +170,7 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 
 | 问题 | 排查方向 |
 |------|----------|
-| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 引用了 `@openviking/opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
+| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 的 `plugin` 数组引用了 `@openviking/opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
 | 加载时报找不到 `lib/shared/*.mjs` | 源码复制前没有运行 `sync.mjs`。在仓库根目录运行 `node examples/memory-plugin-shared/sync.mjs` 后重新复制 `lib/` |
 | MCP tools 连到了错误的 server | 检查 `~/.openviking/ovcli.conf`，或用 `OPENVIKING_*` 环境变量；`OPENVIKING_CLI_CONFIG_FILE` 可让插件改读另一份 ovcli.conf |
 | OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |

@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping, Optional
 
+from openviking.storage.acl import AclUpdate
 from openviking.utils.tags import normalize_search_tags
 
 
@@ -22,6 +23,12 @@ class IngestOptions:
 
     search_tags: Optional[list[str]] = None
     search_tag_mode: str = "replace"
+    acl_update: AclUpdate | None = None
+
+    @staticmethod
+    def vector_search_tag_mode(mode: str) -> str:
+        """Map request intent to the modes understood by vector backends."""
+        return "replace" if mode == "clear" else mode
 
     @classmethod
     def from_search_tags(
@@ -30,10 +37,15 @@ class IngestOptions:
         *,
         mode: str = "replace",
     ) -> "IngestOptions":
+        if mode == "clear":
+            return cls(search_tags=[], search_tag_mode="clear")
         if tags is None:
             return cls()
+        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        if mode == "replace" and not normalized_tags:
+            return cls()
         return cls(
-            search_tags=normalize_search_tags(tags, discard_invalid=True),
+            search_tags=normalized_tags,
             search_tag_mode=mode,
         )
 
@@ -42,18 +54,25 @@ class IngestOptions:
         if value is None:
             return cls()
         if isinstance(value, IngestOptions):
-            return value
-        return cls(
-            search_tags=(
-                list(value.get("search_tags") or [])
-                if value.get("search_tags") is not None
+            return replace(
+                cls.from_search_tags(value.search_tags, mode=value.search_tag_mode),
+                acl_update=value.acl_update,
+            )
+        return replace(
+            cls.from_search_tags(
+                value.get("search_tags"),
+                mode=str(value.get("search_tag_mode", "replace")),
+            ),
+            acl_update=(
+                AclUpdate.model_validate(value["acl_update"])
+                if value.get("acl_update") is not None
                 else None
             ),
-            search_tag_mode=str(value.get("search_tag_mode", "replace")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "search_tags": list(self.search_tags) if self.search_tags is not None else None,
             "search_tag_mode": self.search_tag_mode,
+            "acl_update": self.acl_update.model_dump(mode="json") if self.acl_update else None,
         }

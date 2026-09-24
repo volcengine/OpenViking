@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 )
 
 // WaitProcessed waits until all queued processing completes.
@@ -48,28 +49,33 @@ func (c *Client) Health(ctx context.Context) (bool, error) {
 }
 
 // QueueStatus returns queue observer status.
-func (c *Client) QueueStatus(ctx context.Context) (map[string]any, error) {
-	return c.observerStatus(ctx, "/api/v1/observer/queue")
+func (c *Client) QueueStatus(ctx context.Context, options ...ObserverStatusOptions) (map[string]any, error) {
+	return c.observerStatus(ctx, "/api/v1/observer/queue", options...)
 }
 
 // VikingDBStatus returns vector DB observer status.
-func (c *Client) VikingDBStatus(ctx context.Context) (map[string]any, error) {
-	return c.observerStatus(ctx, "/api/v1/observer/vikingdb")
+func (c *Client) VikingDBStatus(ctx context.Context, options ...ObserverStatusOptions) (map[string]any, error) {
+	return c.observerStatus(ctx, "/api/v1/observer/vikingdb", options...)
 }
 
 // ModelsStatus returns model observer status.
-func (c *Client) ModelsStatus(ctx context.Context) (map[string]any, error) {
-	return c.observerStatus(ctx, "/api/v1/observer/models")
+func (c *Client) ModelsStatus(ctx context.Context, options ...ObserverStatusOptions) (map[string]any, error) {
+	return c.observerStatus(ctx, "/api/v1/observer/models", options...)
 }
 
 // GetStatus returns overall observer status.
-func (c *Client) GetStatus(ctx context.Context) (map[string]any, error) {
-	return c.observerStatus(ctx, "/api/v1/observer/system")
+func (c *Client) GetStatus(ctx context.Context, options ...ObserverStatusOptions) (map[string]any, error) {
+	return c.observerStatus(ctx, "/api/v1/observer/system", options...)
 }
 
-func (c *Client) observerStatus(ctx context.Context, path string) (map[string]any, error) {
+func (c *Client) observerStatus(ctx context.Context, path string, options ...ObserverStatusOptions) (map[string]any, error) {
+	var query url.Values
+	if len(options) > 0 && options[0].Format != "" {
+		query = url.Values{}
+		query.Set("format", options[0].Format)
+	}
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &result)
+	err := c.doJSON(ctx, http.MethodGet, path, query, nil, &result)
 	return result, err
 }
 

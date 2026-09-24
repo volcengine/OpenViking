@@ -174,6 +174,8 @@ Skills are a special type of resource that define actions or tools agents can pe
 - `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_skill` - Python SDK entry point
 - `openviking_cli/client/http.py` - Compatibility import forwarding to the Python SDK
 - `openviking/server/routers/resources.py:add_skill` - HTTP router
+- `openviking/server/mcp_endpoint.py:add_skill` - MCP tool
+- `openviking/server/skill_ingest.py:install_skills` - Install implementation shared by the HTTP router, the MCP tool, and signed skill uploads
 - `openviking/service/resource_service.py:ResourceService.add_skill` - Core service implementation
 - `openviking/server/routers/skills.py` - List, find, read, validate, update, and delete endpoints
 - `crates/ov_cli/src/commands/skills.rs` - CLI Skill command handlers
@@ -206,6 +208,7 @@ Supply at least one of `data` or `temp_file_id`. The current server gives upload
     - First call `POST /api/v1/resources/temp_upload` to upload a local `SKILL.md` or directory ZIP, then call `POST /api/v1/skills` with `temp_file_id`
   - `temp_upload` defaults to local temporary storage; pass `upload_mode=shared` only when you explicitly need distributed shared temporary uploads. Python HTTP clients can set `upload.mode = "shared"` in `ovcli.conf`; the Rust `ov` CLI instead uses `OPENVIKING_UPLOAD_MODE=shared`.
   - `POST /api/v1/skills` does not accept direct host filesystem paths in `data`.
+  - MCP clients use the `add_skill` tool: `data` takes SKILL.md text, and `path` takes a Git URL or a local path. For a local path the tool returns a one-time signed `temp_upload` URL; after the client POSTs the SKILL.md or ZIP there, the server installs it with the token-bound `target_uri`, `skills`, and `list_only`, and the upload response carries the install result.
 
 - **Targeting**:
   - Add requests use `target_uri` for the skills root; `to`, `parent`, and `root_uri` are not HTTP request fields. CLI `-p/--parent-auto-create` maps to `target_uri`.
@@ -604,7 +607,7 @@ The HTTP equivalent is `GET /api/v1/skills/search-web?include_content=true&inclu
 
 The manifest includes `SKILL.md`, summaries, and auxiliary files/directories, but excludes `.source.json`. Integrity limits are **512 entries (including directories), 16 MiB per file, and 64 MiB total file bytes**, with read concurrency 8. Exceeding a limit returns `RESOURCE_EXHAUSTED`. Content, manifest, and revision are obtained under one tree lock, but later downloads can encounter updates; consumers should verify file hashes and recheck revision.
 
-Search and `get_skill` return content and manifests without executing scripts or installing files in an Agent sandbox. A Harness can read text remotely and download resources when a tool requires local paths. See [VikingBot Skills](../../../bot/docs/en/concepts/06-skills.md) for the complete consumer workflow.
+Search and `get_skill` return content and manifests without executing scripts or installing files in an Agent sandbox. A Harness can read text remotely and download resources when a tool requires local paths. See [VikingBot Skills](../../../bot/docs/en/concepts/06-skills.md) for the complete consumer workflow. MCP clients reach the same package-level behavior through the `find` tool with `context_type="skill"`; see [MCP Integration](../guides/06-mcp-integration.md).
 
 ### Search Skills
 
@@ -621,7 +624,7 @@ Search and `get_skill` return content and manifests without executing scripts or
 
 Package hits are grouped by their full Skill root URI, ranked by their highest final score, then limited to `limit` Skills. Same-named Skills in different scopes remain distinct. `total` is the returned array length, not a count of all possible matches.
 
-Each Skill is represented by its highest-scoring package hit. The existing `uri`, `level`, `score`, and `abstract` fields come directly from that hit, without additional response fields. Package grouping and pagination apply only to dedicated `skills/find`; general `find/search` continues to return individual hits.
+Each Skill is represented by its highest-scoring package hit. The existing `uri`, `level`, `score`, and `abstract` fields come directly from that hit, without additional response fields. Package grouping and pagination apply to the dedicated `skills/find` endpoint and to the MCP `find` tool called with `context_type="skill"` alone; REST `find` / `search` continue to return individual hits. MCP `search` retrieves individual hits too, and only collapses them per package when rendering its answer.
 
 | Response field | Meaning |
 | --- | --- |
@@ -631,11 +634,11 @@ Each Skill is represented by its highest-scoring package hit. The existing `uri`
 | `name` / `description` / `tags` / `allowed_tools` | Metadata read separately from the Skill root by the dedicated `skills/find` endpoint |
 | `root_uri` / `skill_md_uri` | The Skill root and main `SKILL.md` addresses returned by the dedicated `skills/find` endpoint |
 
-The dedicated `skills/find` endpoint now returns the actual hit URI instead of replacing it with the package root. List and get-by-name responses are unchanged. `level=[2]` restricts matching to files and returns `level=2` with the URI of the highest-scoring file in each package.
+The dedicated `skills/find` endpoint now returns the actual hit URI instead of replacing it with the package root; the MCP `find` tool differs and rewrites every Skill hit to `<package root>/SKILL.md`. List and get-by-name responses are unchanged. `level=[2]` restricts matching to files and returns `level=2` with the URI of the highest-scoring file in each package.
 
-General search with `read_content=true` continues to read the returned URI. The dedicated `skills/find` endpoint does not accept this option.
+General search with `read_content=true` continues to read the returned URI — for MCP `find` with `context_type="skill"` that URI is the package's `SKILL.md`, not the file that matched. The dedicated `skills/find` endpoint does not accept this option.
 
-The URI rules above apply to semantic search. Filter-only general `find` retains the stored record URI and returns `score=0`, without adding summary-file suffixes for L0 or L1.
+The URI rules above apply to semantic search. A filter-only general `find` retains the stored record URI and returns `score=0`, without adding summary-file suffixes for L0 or L1; MCP `find` keeps such a query on that generic path, since package retrieval requires query text, but still rewrites each skill hit to its `SKILL.md`.
 
 Scope, level, and permission filters apply before grouping; the Skill root must also be accessible.
 

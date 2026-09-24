@@ -42,7 +42,7 @@ Before setup, determine:
 | --- | --- | --- |
 | OpenViking base URL | Yes | Ask user or read `OPENVIKING_BASE_URL` |
 | API key | Usually | Ask user or read `OPENVIKING_API_KEY` |
-| Memory scope | Optional; default `none` | Ask whether memory is shared, separated by assistant, or separated by sender. Use `sender`; accept legacy `person` as an alias. |
+| Memory scope | Optional; default `none` | Ask whether memory is shared, separated by assistant, or separated by sender. Use `sender`. |
 | Account ID | Only for root API keys | Ask user if setup reports root-key tenant context is needed |
 | User ID | Only for root API keys | Ask user if setup reports root-key tenant context is needed |
 | Slot replacement approval | Only if another context engine owns the slot | Ask user before using `--force-slot` |
@@ -82,7 +82,7 @@ Choose memory scope before building that command:
 | `assistant` | Assistant-attributed peer memory under `.../peers/<assistant_id>/memories/...` | A human is the OpenViking user and uses multiple OpenClaw assistants |
 | `sender` | Sender-attributed peer memory under `.../peers/<sender_id>/memories/...` | An agent is the OpenViking user and receives messages from multiple humans |
 
-`person` is a legacy alias for `sender`. Accept it from existing config or user input, but write `sender` in new setup commands. OpenViking initializes the managed `peers/` container for every user; `none` only means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
+Setup rejects `person`; always pass `sender`. An existing config that still says `person` keeps working as `sender`. OpenViking initializes the managed `peers/` container for every user; `none` only means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
 
 Examples:
 

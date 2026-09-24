@@ -539,3 +539,13 @@ describe("memoryOpenVikingConfigSchema.parse() — apiKey SecretRef (#3522)", ()
     expect(cfg2.apiKey).toBe("fallback-key");
   });
 });
+
+describe("cloud compression configuration", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("accepts server configuration and environment override", () => {
+    vi.stubEnv('OPENVIKING_RECALL_COMPRESS', undefined);
+    expect(memoryOpenVikingConfigSchema.parse({ recallCompress: 'server' }).recallCompress).toBe('server');
+    vi.stubEnv('OPENVIKING_RECALL_COMPRESS', 'auto');
+    expect(memoryOpenVikingConfigSchema.parse({ recallCompress: 'server' }).recallCompress).toBe('auto');
+  });
+});

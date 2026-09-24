@@ -248,6 +248,64 @@ async def test_legacy_session_scope_merges_new_and_unmigrated_sessions(fs, actor
 
 
 @pytest.mark.asyncio
+async def test_session_grep_preserves_legacy_merge_and_primary_shadow(fs, actor_ctx):
+    session_root = "viking://user/support_bot/sessions"
+
+    result = await fs.grep(
+        session_root,
+        pattern="new|legacy|nested|other",
+        ctx=actor_ctx,
+    )
+
+    assert result["matches"] == [
+        {
+            "uri": f"{session_root}/duplicate/messages.jsonl",
+            "line": 1,
+            "content": '{"role":"user","content":"new"}',
+        },
+        {
+            "uri": f"{session_root}/new-session/messages.jsonl",
+            "line": 1,
+            "content": '{"role":"user","content":"new only"}',
+        },
+        {
+            "uri": f"{session_root}/legacy-session/messages.jsonl",
+            "line": 1,
+            "content": '{"role":"user","content":"legacy"}',
+        },
+        {
+            "uri": f"{session_root}/nested-session/messages.jsonl",
+            "line": 1,
+            "content": '{"role":"user","content":"nested"}',
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_session_native_grep_gate_allows_primary_only_session(fs, actor_ctx):
+    assert await fs._session_native_grep_safe(
+        "viking://user/support_bot/sessions/new-session", actor_ctx
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_native_grep_gate_rejects_visible_legacy_layouts(fs, actor_ctx):
+    assert not await fs._session_native_grep_safe(
+        "viking://user/support_bot/sessions/legacy-session", actor_ctx
+    )
+    assert not await fs._session_native_grep_safe(
+        "viking://user/support_bot/sessions/nested-session", actor_ctx
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_native_grep_gate_ignores_other_owner_legacy_data(fs, actor_ctx):
+    assert await fs._session_native_grep_safe(
+        "viking://user/support_bot/sessions/other-owned", actor_ctx
+    )
+
+
+@pytest.mark.asyncio
 async def test_actor_peer_view_filters_tree_from_user_root(fs, actor_ctx):
     entries = await fs.tree(
         "viking://user/support_bot",

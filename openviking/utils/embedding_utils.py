@@ -27,9 +27,10 @@ from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
-from openviking.storage.acl import CreatorAclGrant
+from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
@@ -62,25 +63,44 @@ def _truncate_abstract_bytes(abstract: str) -> str:
     return encoded[:_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
 
 
-_PORTABLE_SCALAR_FIELDS = frozenset(
-    {
-        "type",
-        "level",
-        "name",
-        "description",
-        "tags",
-        "abstract",
-    }
-)
-
-
 def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) -> None:
     if not embedding_msg or not overrides:
         return
-    for field in _PORTABLE_SCALAR_FIELDS:
-        value = overrides.get(field)
-        if value is not None:
-            embedding_msg.context_data[field] = value
+    record_id = overrides.get("_record_id")
+    if record_id:
+        # Internal queue metadata, removed by TextEmbeddingHandler before upsert.
+        embedding_msg.context_data["_upsert_record_id"] = str(record_id)
+    for field, value in overrides.items():
+        if field.startswith("_") or field in NON_PORTABLE_VECTOR_RECORD_FIELDS or value is None:
+            continue
+        embedding_msg.context_data[field] = value
+
+
+def _apply_planned_field_patch(
+    embedding_msg,
+    field_patch: FieldPatch | None,
+) -> None:
+    """Attach a MERGE patch without overwriting the exact-get base prematurely."""
+
+    if not embedding_msg or embedding_msg.action is not IndexAction.MERGE:
+        return
+    patch_values = {
+        field: value
+        for field, value in (field_patch.values if field_patch is not None else {}).items()
+        if not field.startswith("_")
+        and field not in NON_PORTABLE_VECTOR_RECORD_FIELDS
+        and value is not None
+    }
+    for field in patch_values:
+        embedding_msg.context_data.pop(field, None)
+    embedding_msg.payload.field_patch = (
+        FieldPatch(
+            values=patch_values,
+            modes=field_patch.modes if field_patch is not None else {},
+        )
+        if patch_values
+        else None
+    )
 
 
 def _apply_ingest_options(
@@ -88,12 +108,29 @@ def _apply_ingest_options(
     ingest_options: IngestOptions | None,
 ) -> None:
     ingest_options = IngestOptions.from_value(ingest_options)
-    if not embedding_msg or ingest_options.search_tags is None:
+    if not embedding_msg:
         return
-    embedding_msg.context_data["search_tags"] = list(ingest_options.search_tags or [])
-    embedding_msg.context_data["_upsert_options"] = {
-        "search_tag_mode": ingest_options.search_tag_mode
-    }
+    if ingest_options.acl_update is not None:
+        embedding_msg.context_data.setdefault("_upsert_options", {})["acl_update"] = (
+            ingest_options.acl_update.model_dump(mode="json")
+        )
+    if ingest_options.search_tags is None:
+        return
+    tag_mode = IngestOptions.vector_search_tag_mode(ingest_options.search_tag_mode)
+    incoming_tags = list(ingest_options.search_tags or [])
+    if tag_mode == "append" and (
+        embedding_msg.action is IndexAction.MERGE
+        or embedding_msg.context_data.get("_upsert_options", {}).get("partial_update") is False
+    ):
+        from openviking.utils.tags import merge_search_tags
+
+        incoming_tags = merge_search_tags(
+            embedding_msg.context_data.get("search_tags"), incoming_tags
+        )
+    embedding_msg.context_data["search_tags"] = incoming_tags
+    embedding_msg.context_data.setdefault("_upsert_options", {})["search_tag_mode"] = (
+        tag_mode
+    )
 
 
 async def _enqueue_embedding_message(
@@ -292,16 +329,21 @@ async def _resolve_resource_content_type(
     file_name: str,
     viking_fs: Any,
     ctx: Optional[RequestContext],
+    file_content: Optional[bytes] = None,
 ) -> Optional[ResourceContentType]:
     content_type = get_resource_content_type(file_name)
     if Path(file_name).suffix.lower() != ".ts":
         return content_type
     try:
-        prefix = await viking_fs.read(
-            file_path,
-            offset=0,
-            size=MPEG_TS_PROBE_BYTES,
-            ctx=ctx,
+        prefix = (
+            file_content[:MPEG_TS_PROBE_BYTES]
+            if file_content is not None
+            else await viking_fs.read(
+                file_path,
+                offset=0,
+                size=MPEG_TS_PROBE_BYTES,
+                ctx=ctx,
+            )
         )
     except Exception:
         return content_type
@@ -363,12 +405,14 @@ async def vectorize_directory_meta(
     include_overview: bool = True,
     scalar_overrides: Optional[Dict[int, Dict[str, Any]]] = None,
     ingest_options: IngestOptions | None = None,
-    creator_acl_grant: CreatorAclGrant | None = None,
     include_abstract: bool = True,
     meta: Optional[Dict[str, Any]] = None,
     *,
     content_is_body: bool = False,
-) -> None:
+    actions: Optional[Dict[int, IndexAction | str]] = None,
+    field_patches: Optional[Dict[int, FieldPatch]] = None,
+    telemetry_id: str | None = None,
+) -> set[int]:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
 
@@ -383,10 +427,11 @@ async def vectorize_directory_meta(
         abstract = body_for_preview(abstract)
         overview = body_for_preview(overview)
     first_enqueue_error: Optional[Exception] = None
+    enqueued_levels: set[int] = set()
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
-            return
+            return enqueued_levels
 
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
@@ -420,10 +465,24 @@ async def vectorize_directory_meta(
             context_abstract.set_vectorize(
                 Vectorize(text=embedding_text_for_body(ContextLevel.ABSTRACT, uri, abstract))
             )
-            msg_abstract = EmbeddingMsgConverter.from_context(context_abstract, creator_acl_grant)
+            msg_abstract = EmbeddingMsgConverter.from_context(
+                context_abstract,
+                action=IndexAction(
+                    (actions or {}).get(
+                        int(ContextLevel.ABSTRACT.value),
+                        IndexAction.MERGE,
+                    )
+                ),
+                telemetry_id=telemetry_id,
+            )
+            level_overrides = (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value))
             _apply_scalar_overrides(
                 msg_abstract,
-                (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value)),
+                level_overrides,
+            )
+            _apply_planned_field_patch(
+                msg_abstract,
+                (field_patches or {}).get(int(ContextLevel.ABSTRACT.value)),
             )
             _apply_ingest_options(msg_abstract, ingest_options)
             if msg_abstract:
@@ -434,10 +493,11 @@ async def vectorize_directory_meta(
                         failure_message=f"Failed to enqueue directory L0 vector for {uri}",
                     )
                     if enqueued:
+                        enqueued_levels.add(int(ContextLevel.ABSTRACT.value))
                         logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
                 except TaskWorkRejected:
                     logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
-                    return
+                    return enqueued_levels
                 except Exception as e:
                     logger.error(
                         f"Failed to enqueue directory L0 (abstract) for vectorization: {uri}: {e}",
@@ -466,10 +526,24 @@ async def vectorize_directory_meta(
             context_overview.set_vectorize(
                 Vectorize(text=embedding_text_for_body(ContextLevel.OVERVIEW, uri, overview))
             )
-            msg_overview = EmbeddingMsgConverter.from_context(context_overview, creator_acl_grant)
+            msg_overview = EmbeddingMsgConverter.from_context(
+                context_overview,
+                action=IndexAction(
+                    (actions or {}).get(
+                        int(ContextLevel.OVERVIEW.value),
+                        IndexAction.MERGE,
+                    )
+                ),
+                telemetry_id=telemetry_id,
+            )
+            level_overrides = (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value))
             _apply_scalar_overrides(
                 msg_overview,
-                (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value)),
+                level_overrides,
+            )
+            _apply_planned_field_patch(
+                msg_overview,
+                (field_patches or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
             _apply_ingest_options(msg_overview, ingest_options)
             if msg_overview:
@@ -480,10 +554,11 @@ async def vectorize_directory_meta(
                         failure_message=f"Failed to enqueue directory L1 vector for {uri}",
                     )
                     if enqueued:
+                        enqueued_levels.add(int(ContextLevel.OVERVIEW.value))
                         logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
                 except TaskWorkRejected:
                     logger.debug("Skipped directory vectorization for cancelling task: %s", uri)
-                    return
+                    return enqueued_levels
                 except Exception as e:
                     logger.error(
                         f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
@@ -499,6 +574,7 @@ async def vectorize_directory_meta(
             exc_info=True,
         )
         raise
+    return enqueued_levels
 
 
 async def vectorize_file(
@@ -510,8 +586,12 @@ async def vectorize_file(
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
     scalar_override: Optional[Dict[str, Any]] = None,
+    field_patch: FieldPatch | None = None,
     ingest_options: IngestOptions | None = None,
-    creator_acl_grant: CreatorAclGrant | None = None,
+    file_md5: Optional[str] = None,
+    file_content: Optional[bytes] = None,
+    action: str = "merge",
+    telemetry_id: str | None = None,
 ) -> bool:
     """
     Vectorize a single file.
@@ -553,8 +633,13 @@ async def vectorize_file(
             owner_space=owner_space_for_uri(file_path),
         )
 
-        content_type = await _resolve_resource_content_type(file_path, file_name, viking_fs, ctx)
-        embedding_cfg = get_openviking_config().embedding
+        content_type = await _resolve_resource_content_type(
+            file_path, file_name, viking_fs, ctx, file_content=file_content
+        )
+        resolver = getattr(viking_fs, "_vector_config_resolver", None)
+        if resolver is None:
+            raise RuntimeError("Vectorization requires a vector config resolver")
+        embedding_cfg = (await resolver.resolve(ctx.account_id)).embedding
         configured_text_source = embedding_cfg.text_source
         effective_text_source = TEXT_SOURCE_SUMMARY_FIRST if use_summary else configured_text_source
         embed_summary = bool(summary and effective_text_source in SUMMARY_TEXT_SOURCES)
@@ -570,7 +655,11 @@ async def vectorize_file(
                 )
                 context.set_vectorize(Vectorize(text=summary))
             elif is_text_file(file_name):
-                content = _coerce_text_file_content(await viking_fs.read_file(file_path, ctx=ctx))
+                content = _coerce_text_file_content(
+                    file_content
+                    if file_content is not None
+                    else await viking_fs.read_file(file_path, ctx=ctx)
+                )
                 embedding_text = truncate_embedding_input(
                     content,
                     embedding_cfg.max_input_tokens,
@@ -588,7 +677,9 @@ async def vectorize_file(
             else:
                 try:
                     content = _coerce_text_file_content(
-                        await viking_fs.read_file(file_path, ctx=ctx)
+                        file_content
+                        if file_content is not None
+                        else await viking_fs.read_file(file_path, ctx=ctx)
                     )
                 except Exception as e:
                     logger.warning(
@@ -627,12 +718,28 @@ async def vectorize_file(
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
             return False
 
-        embedding_msg = EmbeddingMsgConverter.from_context(context, creator_acl_grant)
+        # md5 fingerprints the final stored bytes so incremental diff can skip
+        # unchanged files. It is supplied by the upload site that already holds
+        # those bytes (parser output store / diff apply); vectorize_file never
+        # reads the file back just to hash it. Unknown (None) leaves md5 empty and
+        # diff falls back to comparing bytes.
+        if file_md5:
+            context.md5 = file_md5
+
+        resolved_action = IndexAction(action)
+        if resolved_action not in {IndexAction.UPSERT, IndexAction.MERGE}:
+            raise ValueError(f"vectorize_file only supports upsert or merge actions: {action}")
+        embedding_msg = EmbeddingMsgConverter.from_context(
+            context,
+            action=resolved_action,
+            telemetry_id=telemetry_id,
+        )
         if not embedding_msg:
             return False
 
-        _apply_scalar_overrides(embedding_msg, scalar_override)
         _apply_ingest_options(embedding_msg, ingest_options)
+        _apply_scalar_overrides(embedding_msg, scalar_override)
+        _apply_planned_field_patch(embedding_msg, field_patch)
         enqueued = await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,

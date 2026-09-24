@@ -626,6 +626,21 @@ class _SpyExecutor:
         return 0
 
 
+def _patch_reindex_executor(monkeypatch, vfs, spy):
+    import openviking.service.reindex_executor as reindex_mod
+
+    vlm_resolver, vector_resolver = object(), object()
+    monkeypatch.setattr(vfs, "_vlm_resolver", vlm_resolver)
+    monkeypatch.setattr(vfs, "_vector_config_resolver", vector_resolver)
+
+    def factory(*, vlm_resolver, vector_config_resolver):
+        assert vlm_resolver is vfs._vlm_resolver
+        assert vector_config_resolver is vfs._vector_config_resolver
+        return spy
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
+
+
 @pytest.mark.asyncio
 async def test_restore_schedules_reindex_for_derived_only_change(vfs, monkeypatch):
     """When a restore only changes a directory `.abstract.md` (source file
@@ -634,9 +649,7 @@ async def test_restore_schedules_reindex_for_derived_only_change(vfs, monkeypatc
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_derived_only")
     await vfs.write_file("viking://resources/proj/x.md", b"body", ctx=ctx)
@@ -677,9 +690,7 @@ async def test_restore_schedules_marker_and_files_independently(vfs, monkeypatch
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_dedup")
     await vfs.write_file("viking://resources/proj/x.md", b"v1", ctx=ctx)
@@ -717,9 +728,7 @@ async def test_restore_schedules_siblings_independently(vfs, monkeypatch):
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_subsume_sibling")
     # proj_a: source file + directory marker
@@ -760,9 +769,7 @@ async def test_restore_deletes_marker_and_source_vectors(vfs, monkeypatch):
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_del_marker")
     await vfs.write_file("viking://resources/keep/k.md", b"keep", ctx=ctx)
@@ -798,9 +805,7 @@ async def test_restore_relations_json_has_no_vector_side_effect(vfs, monkeypatch
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_relations")
     await vfs.write_file("viking://resources/proj/.relations.json", b'{"v":1}', ctx=ctx)
@@ -835,9 +840,7 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     from openviking.service.task_tracker import (
         TaskTracker,
@@ -907,9 +910,8 @@ async def test_restore_concurrent_same_dir_is_rejected(vfs, monkeypatch):
     from openviking.storage.errors import ResourceBusyError
 
     spy = _SpyExecutor()
-    import openviking.service.reindex_executor as reindex_mod
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_lock_same")
     await vfs.write_file("viking://resources/proj/a.md", b"v1", ctx=ctx)
@@ -968,9 +970,8 @@ async def test_restore_concurrent_sibling_dirs_do_not_block(vfs, monkeypatch):
     concurrently — neither blocks the other.
     """
     spy = _SpyExecutor()
-    import openviking.service.reindex_executor as reindex_mod
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_lock_sibling")
     await vfs.write_file("viking://resources/proj_a/x.md", b"v1", ctx=ctx)

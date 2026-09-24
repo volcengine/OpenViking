@@ -130,6 +130,7 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
 
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.add_resource.file_operation_concurrency == 16
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
     assert config.queue_workers.session_commit.max_concurrent == 8
     assert config.queue_workers.external_task.max_concurrent == 10
@@ -150,6 +151,7 @@ def test_runtime_concurrency_accepts_separate_values():
                 "external_parse": {"max_concurrent": 9},
                 "add_resource": {
                     "max_concurrent": 7,
+                    "file_operation_concurrency": 20,
                     "file_vectorization_concurrency": 12,
                 },
                 "session_commit": {"max_concurrent": 50},
@@ -161,6 +163,7 @@ def test_runtime_concurrency_accepts_separate_values():
 
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.add_resource.file_operation_concurrency == 20
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
     assert config.queue_workers.session_commit.max_concurrent == 50
     assert config.queue_workers.external_task.max_concurrent == 11
@@ -195,10 +198,10 @@ def test_parser_api_upload_defaults():
     assert config.upload_part_size_bytes == 8 * 1024 * 1024
 
 
-def test_directory_safety_limits_have_bounded_defaults():
+def test_directory_safety_limit_defaults():
     config = DirectoryConfig()
 
-    assert config.max_files == 1000
+    assert config.max_files is None
     assert config.max_depth == 10
     assert config.max_concurrent == 4
 
@@ -208,7 +211,7 @@ def test_directory_safety_limits_load_from_parser_config():
         {
             "parsers": {
                 "directory": {
-                    "max_files": 20,
+                    "max_files": None,
                     "max_depth": 5,
                     "max_concurrent": 2,
                 }
@@ -216,7 +219,7 @@ def test_directory_safety_limits_load_from_parser_config():
         }
     )
 
-    assert config.directory.max_files == 20
+    assert config.directory.max_files is None
     assert config.directory.max_depth == 5
     assert config.directory.max_concurrent == 2
 
@@ -306,11 +309,14 @@ def test_openviking_config_handles_nested_parser_compatibility(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
 
 
-def test_openviking_config_ignores_unknown_fields(monkeypatch):
+def test_openviking_config_ignores_unknown_fields(monkeypatch, caplog):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+    logger = logging.getLogger("openviking_cli.utils.config.open_viking_config")
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
+    caplog.set_level(logging.WARNING, logger=logger.name)
     config = OpenVikingConfig.from_dict(
         {
-            "retired_section": {"enabled": True},
+            "retired_section": {"api_key": "test-secret"},
             "default_user": "alice",
             "glob": {"retired_field": True, "engine": "fs"},
             "memory": {"unknown_memory_field": "value", "session_skill_extraction_enabled": True},
@@ -336,6 +342,9 @@ def test_openviking_config_ignores_unknown_fields(monkeypatch):
     assert "retired_field" not in dumped["glob"]
     assert "unknown_memory_field" not in dumped["memory"]
     assert "cache" not in dumped["storage"]["agfs"]
+    assert "Ignoring unknown config field 'storage.agfs.cache'" in caplog.text
+    assert "Ignoring unknown config field 'parsers.markdown.unknown_field'" in caplog.text
+    assert "test-secret" not in caplog.text
 
 
 def test_memory_extraction_output_format_defaults_to_python_and_accepts_json(monkeypatch):

@@ -437,7 +437,6 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/sessions/{session_id}/extract` | Extract memory |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
-| POST | `/api/v1/sessions/{session_id}/used` | Record context or skills actually used |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
@@ -499,10 +498,14 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/admin/agent-evolution` | Get the caller account's Agent Evolution status |
-| PUT | `/api/v1/admin/agent-evolution` | Update the caller account's Agent Evolution status |
-| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get effective account settings |
-| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update allowlisted account settings |
+| GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
+| PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
+| PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
+| GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |
+| PUT | `/api/v1/admin/agent-evolution` | Update Agent Evolution status (deprecated) |
+| GET | `/api/v1/admin/accounts/{account_id}/settings` | Get legacy account settings (deprecated) |
+| PATCH | `/api/v1/admin/accounts/{account_id}/settings` | Update legacy account settings (deprecated) |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List editable memory templates, defaults and effective values |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one memory template |
 | PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one memory template |

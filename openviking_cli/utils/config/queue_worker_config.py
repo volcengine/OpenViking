@@ -18,6 +18,12 @@ class QueueWorkerConfig(BaseModel):
 class AddResourceQueueWorkerConfig(QueueWorkerConfig):
     """Runtime limits for add-resource queue workers."""
 
+    file_operation_concurrency: int = Field(
+        default=16,
+        gt=0,
+        description="Maximum concurrent file-level commit and comparison operations within one add-resource job",
+    )
+
     file_vectorization_concurrency: int = Field(
         default=8,
         gt=0,

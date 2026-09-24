@@ -29,7 +29,6 @@ from openviking.storage.expr import (
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME
 
 logger = get_logger(__name__)
@@ -125,6 +124,7 @@ class CollectionAdapter(ABC):
         self._collection_name = collection_name
         self._index_name = index_name
         self._collection: Optional[Collection] = None
+        self._dimension = 0
 
     @property
     def collection_name(self) -> str:
@@ -511,7 +511,18 @@ class CollectionAdapter(ABC):
         else:
             # Approximate random sampling with a client-generated random
             # vector so every backend behaves consistently.
-            dim = get_openviking_config().embedding.dimension
+            dim = self._dimension
+            if dim <= 0:
+                dim = next(
+                    (
+                        field["Dim"]
+                        for field in coll.get_meta_data().get("Fields", [])
+                        if field.get("FieldName") == "vector"
+                    ),
+                    0,
+                )
+            if dim <= 0:
+                raise ValueError("Vector collection dimension is unavailable")
             random_vector = [random.uniform(-1, 1) for _ in range(dim)]
             result = coll.search_by_vector(
                 index_name=self._index_name,
@@ -634,6 +645,19 @@ class CollectionAdapter(ABC):
             return parsed_total
 
         raise RuntimeError("Vector backend returned an invalid count result")
+
+    def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
+        """Count records and reject responses without an explicit total."""
+        coll = self.get_collection()
+        result = coll.aggregate_data(
+            index_name=self._index_name,
+            op="count",
+            filters=self._compile_filter(filter),
+        )
+        parsed_total = self._extract_count_total(result.agg)
+        if parsed_total is None:
+            raise RuntimeError("Vector backend returned an invalid count response")
+        return parsed_total
 
     def search_by_keywords(
         self,

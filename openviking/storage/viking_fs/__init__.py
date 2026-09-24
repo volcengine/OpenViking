@@ -52,7 +52,6 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
 
 # Import mixins
 from openviking.storage.viking_fs import _base as _base_mod
@@ -99,6 +98,7 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
     from openviking.storage.acl import AclManager
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import GlobConfig, GrepConfig, RerankConfig, RetrievalConfig
@@ -137,6 +137,9 @@ class VikingFS(
         glob_config: Optional["GlobConfig"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
+        vlm_resolver: Optional["VLMResolver"] = None,
+        embedding_provider: Optional[Any] = None,
+        vector_config_resolver: Optional[Any] = None,
     ):
         self.agfs = agfs
         self._async_agfs = AsyncAGFSClient(agfs)
@@ -148,14 +151,21 @@ class VikingFS(
         self.grep_config = grep_config
         self.glob_config = glob_config
         self._encryptor = encryptor
+        self._vlm_resolver = vlm_resolver
+        self._embedding_provider = embedding_provider
+        self._vector_config_resolver = vector_config_resolver
         self._count_cache: Dict[str, tuple] = {}  # cache_key → (count, timestamp)
         self._count_cache_max_size = 1024
-        self._fulltext_available: Optional[bool] = None  # cached result of _collection_has_fulltext
+        self._fulltext_available: Dict[tuple[str, str, str, str], bool] = {}
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
         self._background_tasks: set = set()
         self._deletion_guard: Optional[Callable[[str, str], bool]] = None
+
+    def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
+        """Set the VLM resolver supplied by the owning service."""
+        self._vlm_resolver = resolver
 
 
 VikingFS.__module__ = __name__

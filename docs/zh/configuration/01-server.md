@@ -36,7 +36,7 @@ openviking-server --config /path/to/ov.conf
 }
 ```
 
-未配置的可选模块使用默认值。`ov.conf` 及账户配置会忽略未知字段，兼容旧版本遗留配置；已知字段仍校验类型和取值。字段名拼写错误也会被忽略。
+未配置的可选模块使用默认值。`ov.conf` 及账户配置会忽略未知字段，兼容旧版本遗留配置；已知字段仍校验类型和取值。字段名拼写错误也会被忽略，但服务端会输出 WARNING，逐项列出未被采用的字段。
 
 ## 顶层配置
 
@@ -142,14 +142,15 @@ API 型 `embedding`、`vlm`、`query_planner` 和 `rerank` 配置会复用部分
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
-| `provider` | `vikingdb`、`cohere`、`openai`、`litellm` / `null` | `null` | Rerank 服务类型；省略时根据凭证字段推断 |
-| `model` | string / `null` | `null` | OpenAI 兼容或 LiteLLM Rerank 模型 |
+| `provider` | `vikingdb`、`cohere`、`openai`、`litellm`、`jev` / `null` | `null` | Rerank 服务类型；省略时根据凭证字段推断 |
+| `model` | string / `null` | `null` | OpenAI 兼容、LiteLLM 或 Jev Rerank 模型 |
 | `threshold` | number | `0.1` | 判定结果相关的最低分数 |
 | `max_input_tokens` | integer；`0` 或 `>= 128` | `0` | 每个 query-document pair 的最大估算 token；`0` 表示不截断 |
+| `log_payloads` | boolean | `false` | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容 |
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
-显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
+`jev` 通过现有 `api_base` 和 `model` 字段同时支持 TypeSafe 直连（`https://api.typesafe.ai`，模型 `jev-latest`）和 Vercel AI Gateway 的 TypeSafe 兼容端点（`https://ai-gateway.vercel.sh/typesafe`，模型 `typesafe-ai/jev`），两者协议相同。它将 query 和候选文档作为结构化 `state`，为每个候选提出一个独立的相关性问题，并将各自的 yes 概率作为 rerank 分数。显式指定 `provider` 时必须提供该 provider 所需的凭证：`vikingdb` 需要 `ak` 和 `sk`，`cohere` 和 `jev` 需要 `api_key`，`openai` 需要 `api_key` 和 `api_base`，`litellm` 需要 `model`。凭证不全的配置在加载时即被拒绝。
 
 ## 检索配置
 
@@ -185,6 +186,9 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
     },
     "vectordb": {
       "backend": "local"
+    },
+    "parse_output": {
+      "mode": "agfs"
     }
   }
 }
@@ -198,9 +202,15 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
+| `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
+| `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
 
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
+
+`parse_output.mode=local` 可避免把 parser 中间产物写入共享 AGFS。当前 worker
+必须在下游任务入队前把所需字节提交到正式资源树。产物会在内容提交后清理；
+请为 `local_root` 预留足够空间以容纳并发导入。
 
 ## 队列 Worker 配置
 
@@ -217,9 +227,10 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | 同时消费的完整 AddResource 作业数，必须大于 `0`；修改后需重启服务 |
+| `file_operation_concurrency` | integer | `16` | 单个 AddResource 作业内文件级提交和 fallback 比较操作的最大并发数，必须大于 `0`；修改后需重启服务 |
 | `file_vectorization_concurrency` | integer | `8` | 当目录 AddResource 使用 `processing_mode="vectors_only"` 时，单个作业内并发读取、准备并入队的文件数，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
-`max_concurrent` 控制相互独立的 AddResource 作业并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。该配置不影响单文件资源或 `semantic_and_vectors` 处理。
+`max_concurrent` 控制相互独立的 AddResource 作业并发，`file_operation_concurrency` 控制单个 AddResource 作业内文件提交和 fallback 比较操作的并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。
 
 ### `queue_workers.session_commit`
 
@@ -373,7 +384,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "text": {},
     "directory": {
       "preserve_structure": true,
-      "max_files": 1000,
+      "max_files": null,
       "max_depth": 10,
       "max_concurrent": 4
     },
@@ -387,6 +398,9 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
   }
 }
 ```
+
+`parsers.directory.max_files` 默认是 `null`，表示不限文件数；
+设为正整数可限制单次目录导入的文件数。
 
 `parsers.directory.max_concurrent` 由服务事件循环中的所有目录导入共享。默认值为
 `4` 时，单个目录可以并发执行 4 个 Understanding 任务；多个目录同时导入时，合计仍最多

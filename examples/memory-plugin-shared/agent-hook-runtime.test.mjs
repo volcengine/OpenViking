@@ -9,6 +9,7 @@ import { filterCaptureTurns } from "./lib/capture-utils.mjs";
 import { expectExit, runHookScript, withMockOpenViking, writeJson } from "./testing/support.mjs";
 
 import {
+  addAgentMessages,
   commitAgentSession,
   loadAgentHookConfig,
   makeAgentFetchJSON,
@@ -432,4 +433,24 @@ test("the envelope is written once when the callback answers early", async () =>
   );
 
   assert.deepEqual(seen.envelopes, ["detached"]);
+});
+
+test("captured messages carry the effective peer in the body, and none when peer mode is off", async () => {
+  const sent = [];
+  const fetchJSON = async (_path, init) => {
+    sent.push(JSON.parse(init.body).messages);
+    return { ok: true, status: 200, result: { added: -1 } };
+  };
+  await addAgentMessages(fetchJSON, "s1", [
+    { role: "user", content: "a" },
+    { role: "assistant", content: "b", peer_id: "explicit" },
+  ], "workspace-peer");
+  await addAgentMessages(fetchJSON, "s1", [{ role: "user", content: "c" }], "");
+  assert.deepEqual(sent, [
+    [
+      { role: "user", content: "a", peer_id: "workspace-peer" },
+      { role: "assistant", content: "b", peer_id: "explicit" },
+    ],
+    [{ role: "user", content: "c" }],
+  ]);
 });

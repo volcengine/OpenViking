@@ -3,9 +3,9 @@
 """Regression tests for bounded local and remote sandbox file access."""
 
 import json
-import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from vikingbot.sandbox.backends.aiosandbox import AioSandboxBackend
@@ -48,23 +48,9 @@ async def test_local_workspace_listing_and_reads_are_bounded(tmp_path: Path):
 
 class _AioFileClient:
     def __init__(self, *, truncated=False):
-        self.list_calls = []
         self.glob_calls = []
         self.download_calls = []
         self.truncated = truncated
-        self.entries = {
-            "/home/gem": [
-                SimpleNamespace(name="artifact.bin", is_directory=False, size=6),
-                SimpleNamespace(name="nested", is_directory=True, size=0),
-            ],
-            "/home/gem/nested": [
-                SimpleNamespace(name="page.md", is_directory=False, size=4),
-            ],
-        }
-
-    async def list_path(self, **kwargs):
-        self.list_calls.append(kwargs)
-        return SimpleNamespace(data=SimpleNamespace(files=self.entries[kwargs["path"]]))
 
     async def glob_files(self, **kwargs):
         self.glob_calls.append(kwargs)
@@ -189,27 +175,11 @@ class _OpenSandboxCommands:
         )
 
 
-class _RunCommandOpts(SimpleNamespace):
-    pass
-
-
 def _opensandbox_vke_backend(
     tmp_path: Path,
     file_client: _OpenSandboxFiles,
     commands: _OpenSandboxCommands,
 ) -> OpenSandboxBackend:
-    if "opensandbox.models.execd" not in sys.modules:
-        opensandbox_module = sys.modules.setdefault("opensandbox", ModuleType("opensandbox"))
-        models_module = sys.modules.setdefault(
-            "opensandbox.models",
-            ModuleType("opensandbox.models"),
-        )
-        execd_module = ModuleType("opensandbox.models.execd")
-        execd_module.RunCommandOpts = _RunCommandOpts
-        opensandbox_module.models = models_module
-        models_module.execd = execd_module
-        sys.modules["opensandbox.models.execd"] = execd_module
-
     backend = object.__new__(OpenSandboxBackend)
     backend._workspace = tmp_path
     backend._is_vke = True
@@ -256,3 +226,46 @@ async def test_opensandbox_vke_inventory_stops_at_the_remote_limit(tmp_path: Pat
     with pytest.raises(ValueError, match="inventory exceeds 1 entries"):
         await backend.list_files(max_entries=1)
     assert "limit = 1" in commands.calls[0][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,chunk_size", [(0, 10000), (500, 20000), (500, 257)])
+async def test_opensandbox_directory_json_is_never_display_truncated(tmp_path, count, chunk_size):
+    expected = [(f"document-{index:04d}.txt", False) for index in range(count)]
+    payload = json.dumps(expected)
+    if count == 500:
+        assert len(payload) == 15000
+    execution = SimpleNamespace(
+        error=None,
+        logs=SimpleNamespace(
+            stdout=[
+                SimpleNamespace(text=payload[offset : offset + chunk_size])
+                for offset in range(0, len(payload), chunk_size)
+            ],
+            stderr=[SimpleNamespace(text="unrelated diagnostic")],
+        ),
+    )
+    commands = SimpleNamespace(run=AsyncMock(return_value=execution))
+    backend = _opensandbox_vke_backend(tmp_path, _OpenSandboxFiles(), commands)
+    assert await backend.list_dir(".") == expected
+
+
+@pytest.mark.asyncio
+async def test_opensandbox_directory_command_error_is_reported_before_json_parsing(tmp_path):
+    execution = SimpleNamespace(error=SimpleNamespace(value="Permission denied"))
+    commands = SimpleNamespace(run=AsyncMock(return_value=execution))
+    backend = _opensandbox_vke_backend(tmp_path, _OpenSandboxFiles(), commands)
+    with pytest.raises(IOError, match="directory listing failed: Permission denied"):
+        await backend.list_dir("private")
+
+
+@pytest.mark.asyncio
+async def test_opensandbox_exec_retains_display_output_limit(tmp_path):
+    execution = SimpleNamespace(
+        error=None,
+        logs=SimpleNamespace(stdout=[SimpleNamespace(text="x" * 15000)], stderr=[]),
+    )
+    commands = SimpleNamespace(run=AsyncMock(return_value=execution))
+    backend = _opensandbox_vke_backend(tmp_path, _OpenSandboxFiles(), commands)
+    output = await backend.execute("generate-long-output")
+    assert output == "x" * 10000 + "\n... (truncated, 5000 more chars)"

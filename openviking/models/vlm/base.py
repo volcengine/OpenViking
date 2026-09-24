@@ -333,6 +333,9 @@ class VLMBase(ABC):
         """Reset token usage"""
         self._token_tracker.reset()
 
+    def close(self) -> None:
+        """Release provider resources, if any."""
+
     def _extract_content_from_response(self, response) -> str:
         if isinstance(response, str):
             return response
@@ -752,8 +755,12 @@ class FailoverVLM(VLMBase):
         """Get combined token usage from both primary and backup instances."""
         from openviking.models.vlm.token_usage import TokenUsageTracker
 
+        primary_tracker = self.primary.token_tracker
+        backup_tracker = self.backup.token_tracker
+        if primary_tracker is backup_tracker:
+            return primary_tracker.to_dict()
         merged_tracker = TokenUsageTracker.merge(
-            self.primary.token_tracker, self.backup.token_tracker
+            primary_tracker, backup_tracker
         )
         return merged_tracker.to_dict()
 
@@ -761,6 +768,11 @@ class FailoverVLM(VLMBase):
         """Reset token usage for both primary and backup instances."""
         self.primary.reset_token_usage()
         self.backup.reset_token_usage()
+
+    def close(self) -> None:
+        """Close both provider instances."""
+        self.primary.close()
+        self.backup.close()
 
 
 class MultiCredentialVLM(VLMBase):
@@ -793,11 +805,24 @@ class MultiCredentialVLM(VLMBase):
         if len(vlm_instances) != len(credential_ids):
             raise ValueError("vlm_instances and credential_ids must have the same length")
 
-        # Use the first instance's config as base
+        # Expose the common runtime behavior expected by callers that inspect
+        # the wrapper as a VLMBase. Provider-specific identity remains on each
+        # credential instance.
         first = vlm_instances[0]
+        configured_token_limits = [
+            instance.max_tokens
+            for instance in vlm_instances
+            if isinstance(instance.max_tokens, int)
+        ]
         config = {
             "model": first.model,
             "provider": first.provider,
+            "temperature": first.temperature,
+            "max_retries": first.max_retries,
+            "timeout": first.timeout,
+            "max_tokens": (
+                min(configured_token_limits) if configured_token_limits else None
+            ),
             "thinking": first.thinking,
         }
         super().__init__(config)
@@ -1118,9 +1143,11 @@ class MultiCredentialVLM(VLMBase):
         if not self._vlm_instances:
             return {}
 
-        merged_tracker = self._vlm_instances[0].token_tracker
-        for instance in self._vlm_instances[1:]:
-            merged_tracker = TokenUsageTracker.merge(merged_tracker, instance.token_tracker)
+        trackers = [instance.token_tracker for instance in self._vlm_instances]
+        if all(tracker is trackers[0] for tracker in trackers[1:]):
+            return trackers[0].to_dict()
+
+        merged_tracker = TokenUsageTracker.merge(*trackers)
 
         return merged_tracker.to_dict()
 
@@ -1128,3 +1155,8 @@ class MultiCredentialVLM(VLMBase):
         """Reset token usage for all credential instances."""
         for instance in self._vlm_instances:
             instance.reset_token_usage()
+
+    def close(self) -> None:
+        """Close all credential provider instances."""
+        for instance in self._vlm_instances:
+            instance.close()

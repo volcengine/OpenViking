@@ -15,7 +15,6 @@ from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOpera
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
 from openviking.storage.abstract_overview import body_for_preview
-from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import NotFoundError
@@ -105,41 +104,24 @@ class SkillOperationUpdater:
         existing_skill = await self._load_existing_skill(skill_md_uri, ctx)
         merged_skill = await self._merge_skill(operation, existing_skill)
 
-        if existing_skill is None:
-            processor_result = await self._skill_processor.process_skill(
-                data=merged_skill,
-                viking_fs=self._viking_fs,
-                ctx=ctx,
-                allow_local_path_resolution=False,
-                lease_ref=transaction_handle,
-            )
-            created_root_uri = (
-                processor_result.get("root_uri") or processor_result.get("uri") or root_uri
-            )
-            return {
-                "status": "success",
-                "action": "create",
-                "root_uri": created_root_uri,
-                "uri": created_root_uri,
-                "skill_md_uri": f"{created_root_uri.rstrip('/')}/SKILL.md",
-                "name": merged_skill["name"],
-            }
-
-        merged_skill = await self._skill_processor.sanitize_skill_privacy(merged_skill, ctx)
-        serialized = SkillLoader.to_skill_md(merged_skill)
-        write_result = await ContentWriteCoordinator(self._viking_fs).write(
-            uri=skill_md_uri,
-            content=serialized,
+        processor_result = await self._skill_processor.process_skill(
+            data=merged_skill,
+            viking_fs=self._viking_fs,
             ctx=ctx,
-            mode="replace",
+            allow_local_path_resolution=False,
+            # The skills root the package sits in, so the skill stays in its own scope.
+            target_uri=root_uri.rsplit("/", 1)[0],
+            lease_ref=transaction_handle,
         )
-        updated_root_uri = write_result.get("root_uri") or root_uri
+        new_root_uri = processor_result.get("root_uri") or root_uri
         return {
             "status": "success",
-            "action": "update",
-            "root_uri": updated_root_uri,
-            "uri": updated_root_uri,
-            "skill_md_uri": skill_md_uri,
+            "action": "create" if existing_skill is None else "update",
+            "root_uri": new_root_uri,
+            "uri": new_root_uri,
+            # The installer names the package after the skill, so report where
+            # it actually wrote rather than the URI the operation named.
+            "skill_md_uri": f"{new_root_uri}/SKILL.md",
             "name": merged_skill["name"],
         }
 

@@ -53,7 +53,7 @@ Key parameters:
 | `--plugin-version=VER` | Plugin version: npm version, dist-tag, or Git ref |
 | `--base-url URL` | OpenViking server URL |
 | `--api-key KEY` | OpenViking API key |
-| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender` (`person` is a legacy alias) |
+| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender` |
 | `--uninstall` | Uninstall the plugin |
 
 Full parameter list in the [install guide](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL.md).
@@ -80,7 +80,7 @@ openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --
 openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role sender --json
 ```
 
-New configuration should use `sender`; existing `peer_role=person` configurations remain compatible and are treated as `sender`. OpenViking initializes the managed `peers/` container for every user, so `none` means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
+Setup and the installer accept only `sender`; existing `peer_role=person` configurations remain compatible and are treated as `sender`. OpenViking initializes the managed `peers/` container for every user, so `none` means that no concrete `peers/<peer_id>/memories` subtree is used. Actor-peer recall includes shared user memory plus the current peer memory, and changing the scope does not move existing memories.
 
 ## How assemble builds context
 

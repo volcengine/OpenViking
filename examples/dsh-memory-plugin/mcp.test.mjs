@@ -78,6 +78,7 @@ test("credentials resolved by the plugin reach the proxy through the child env",
       OPENVIKING_USER: "casey",
       OPENVIKING_PEER_ID: "workspace-peer",
       OPENVIKING_AUTH_MODE: "trusted",
+      OPENVIKING_RECALL_PEER_SCOPE: "all",
       OPENVIKING_TIMEOUT_MS: "10000",
     });
 
@@ -90,7 +91,23 @@ test("credentials resolved by the plugin reach the proxy through the child env",
     assert.equal(proxy.account, "acme");
     assert.equal(proxy.user, "casey");
     assert.equal(proxy.sendIdentityHeaders, true);
-    assert.equal(proxy.peerId, "workspace-peer");
+    // The default is broad recall: the child still receives the runtime peer
+    // for possible actor-scoped use, but the shared mapper must not put it on
+    // the wire and hide memories from other workspaces.
+    assert.equal(proxy.peerId, "");
+
+    const actorConfig = resolveConfig({
+      endpoint: "http://ov.example.com/",
+      apiKey: "secret",
+      account: "acme",
+      user: "casey",
+      peerId: "workspace-peer",
+      recallPeerScope: "actor",
+    }, files, dir);
+    const actorEnv = buildMcpConfig(actorConfig).env;
+    assert.equal(actorEnv.OPENVIKING_RECALL_PEER_SCOPE, "actor");
+    const actorProxy = readProxyConfig(actorEnv, dir);
+    assert.equal(actorProxy.peerId, "workspace-peer");
   });
 });
 
@@ -176,6 +193,7 @@ test("an anonymous local server forwards no key or identity", () => {
       OPENVIKING_USER: "",
       OPENVIKING_PEER_ID: "",
       OPENVIKING_AUTH_MODE: "api_key",
+      OPENVIKING_RECALL_PEER_SCOPE: "all",
       OPENVIKING_TIMEOUT_MS: "10000",
     });
   });

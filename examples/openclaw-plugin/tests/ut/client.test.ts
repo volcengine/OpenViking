@@ -826,3 +826,15 @@ it("does not report reset success when an older server ignores reset_context", a
   const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "", "", undefined, false, true, { transport });
   await expect(client.commitSession("s", { resetContext: true })).rejects.toThrow("did not confirm reset_context");
 });
+
+describe("cloud recall compression", () => {
+  it.each([['server', true], ['auto', 'auto'], ['off', undefined]] as const)(
+    "forwards %s and preserves server digest", async (mode, rewrite) => {
+      const transport = vi.fn().mockResolvedValue(okResponse({ entries: [], rendered: 'raw', digest: 'compressed', stats: {} }));
+      const client = new OpenVikingClient('http://127.0.0.1:1933', '', 'agent', 5000, '', '', undefined, false, true, { transport });
+      const result = await client.searchContext('deployment preferences', { recallCompress: mode });
+      expect(JSON.parse(String(transport.mock.calls[0][1].body)).rewrite).toBe(rewrite);
+      expect(result.digest).toBe('compressed');
+    },
+  );
+});

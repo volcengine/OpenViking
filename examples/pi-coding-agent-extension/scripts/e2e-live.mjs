@@ -109,7 +109,7 @@ function copyExtension() {
   for (const name of readdirSync(EXT_SRC)) {
     const src = join(EXT_SRC, name);
     const dst = join(extDir, basename(name));
-    if (name.endsWith(".ts") || name === "README.md" || name === "DESIGN.md") {
+    if (name.endsWith(".ts") || ["README.md", "DESIGN.md", "package.json", "package-lock.json"].includes(name)) {
       copyFileSync(src, dst);
     } else if (["lib", "shared", "scripts"].includes(name)) {
       cpSync(src, dst, { recursive: true });
@@ -117,6 +117,15 @@ function copyExtension() {
   }
 }
 copyExtension();
+const install = spawnSync("npm", ["ci", "--omit=dev", "--ignore-scripts"], {
+  cwd: extDir,
+  timeout: 120_000,
+  encoding: "utf8",
+});
+if (install.status !== 0) {
+  console.error(`e2e: dependency install failed\n${install.stderr || install.stdout}`);
+  process.exit(2);
+}
 
 // The extension has no config file of its own; its knobs live in ovcli.conf's
 // plugin section like every other harness's.
@@ -199,9 +208,32 @@ function payloadsFor(turn) {
     .map((f) => readFileSync(join(outDir, f), "utf8"));
 }
 
+function toolUses(payloads) {
+  const uses = [];
+  for (const raw of payloads) {
+    try {
+      const payload = JSON.parse(raw);
+      for (const message of payload.messages ?? []) {
+        for (const part of Array.isArray(message.content) ? message.content : []) {
+          if (part?.type === "tool_use" && typeof part.name === "string") uses.push(part);
+        }
+      }
+    } catch {
+      // A malformed probe payload is caught by the missing-tool assertions.
+    }
+  }
+  return uses;
+}
+
 const t1 = runTurn(1, `Please remember: the release codename is ZEPHYR-9942. Just acknowledge briefly. ${PAD1}`);
 const t2 = runTurn(2, `Second note: the deploy window is Friday 03:00 UTC. Acknowledge briefly. ${PAD2}`, ["-c"]);
-const t3 = runTurn(3, "What is the release codename I told you earlier? Answer with just the codename.", ["-c"]);
+const t3 = runTurn(3, [
+  "Recover the release codename from the archived capture.",
+  "You must first call the built-in bash tool with pwd.",
+  "Then follow the recovery hint in [OpenViking Session Context]: call openviking_list on the history URI,",
+  "then call openviking_read on the archive messages.jsonl with explicit offset and limit.",
+  "After those tool calls, answer with just the codename.",
+].join(" "), ["-c"]);
 
 console.log("\ne2e: --- assertions ---");
 check(t1.status === 0 && t2.status === 0 && t3.status === 0, "all three pi runs exited 0");
@@ -210,11 +242,21 @@ const p3 = payloadsFor(3);
 check(p3.length > 0, `probe captured T3 provider payload (${p3.length} request(s))`);
 if (p3.length > 0) {
   const last = p3[p3.length - 1];
+  const uses = toolUses(p3);
   check(last.includes("[OpenViking Session Context]"), "T3 request contains the OV overview block");
   // Match the full padded turn body, not the PADDING-T1 marker: the archive
   // overview and recalled memories may legitimately quote the marker.
   check(!last.includes(PAD1), "T3 request no longer contains the raw T1 turn body");
   check(last.includes("PADDING-T2") || last.includes("codename"), "T3 request keeps recent live context");
+  check(uses.some((part) => part.name === "bash"), "T3 executed a built-in tool");
+  check(uses.some((part) => part.name === "openviking_list"), "T3 listed the archive history");
+  const reads = uses.filter((part) => part.name === "openviking_read");
+  check(reads.length > 0, "T3 read the archived capture");
+  check(reads.some((part) =>
+    Array.isArray(part.input?.uris) &&
+    Number.isFinite(part.input?.offset) &&
+    Number.isFinite(part.input?.limit)
+  ), "T3 used paginated archive read arguments");
 }
 
 if (t3.out.includes("ZEPHYR-9942")) pass("model recovered the archived fact from the OV overview");
@@ -222,23 +264,31 @@ else warn("model answer did not contain ZEPHYR-9942; inspect overview quality");
 
 const sessionIdFile = join(outDir, "session-id.txt");
 let ovSessionId = null;
+let archiveUri = null;
+const logPath = join(outDir, "takeover.log");
+let takeoverLog = "";
+if (existsSync(logPath)) {
+  takeoverLog = readFileSync(logPath, "utf8");
+  archiveUri = /boundary advanced[^\n]* via (viking:\/\/[^"\s]+)/.exec(takeoverLog)?.[1] ?? null;
+}
 if (existsSync(sessionIdFile)) {
   ovSessionId = `pi-${readFileSync(sessionIdFile, "utf8").trim()}`;
   const ctx = await ovFetch(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/context?token_budget=4000`);
   check(ctx.ok, `OV session ${ovSessionId} readable`);
   const result = ctx.body?.result ?? {};
-  const overview = (result.latest_archive_overview ?? "").trim();
-  check(overview.length > 0, "OV session has a non-empty archive overview");
   check((result.stats?.totalArchives ?? 0) >= 1, `OV session has >=1 archive (got ${result.stats?.totalArchives})`);
+  check(Boolean(archiveUri), "takeover log identifies the exact archive URI");
+  if (archiveUri) {
+    const overview = await ovFetch(`/api/v1/content/read?uri=${encodeURIComponent(`${archiveUri}/.overview.md`)}`);
+    check(overview.ok && String(overview.body?.result ?? "").trim().length > 0, "exact archive has a non-empty overview");
+  }
 } else {
   fail("probe did not record a pi session id");
 }
 
-const logPath = join(outDir, "takeover.log");
-if (existsSync(logPath)) {
-  const log = readFileSync(logPath, "utf8");
-  check(log.includes("boundary advanced"), "takeover log shows a boundary advance");
-  console.log(`\ne2e: takeover.log:\n${log.trim()}`);
+if (takeoverLog) {
+  check(takeoverLog.includes("boundary advanced"), "takeover log shows a boundary advance");
+  console.log(`\ne2e: takeover.log:\n${takeoverLog.trim()}`);
 } else {
   warn("no takeover debug log written");
 }

@@ -5,25 +5,28 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from functools import wraps
 from typing import Any, AsyncIterator, Awaitable, Callable, Container, Dict, List, Mapping, Optional
 
 from openviking.core.namespace import (
-    canonical_user_root,
     resolve_uri,
     uri_parts,
     visible_roots,
 )
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.acl import (
     ACL_CONTEXT_FIELDS,
+    ACL_GRANT_FIELDS,
     ACL_MODE_FIELD,
     AclAction,
     AclManager,
     AclMode,
+    AclUpdate,
     acl_grant_tokens,
     acl_principals,
     is_acl_uri,
@@ -80,6 +83,40 @@ FETCH_BY_URI_OUTPUT_FIELDS = [
     "owner_user_id",
 ]
 
+# Fields an incremental diff needs from existing target records. md5 is listed
+# explicitly because the default lookup projection omits it; a missing value
+# means "unknown" and the caller falls back to reading file bytes.
+INCREMENTAL_DIFF_OUTPUT_FIELDS = [
+    "id",
+    "uri",
+    "level",
+    "abstract",
+    "md5",
+]
+
+INCREMENTAL_INVENTORY_OUTPUT_FIELDS = ["id", "uri", "level", "md5"]
+
+INCREMENTAL_HYDRATION_OUTPUT_FIELDS = [
+    "id",
+    "uri",
+    "type",
+    "context_type",
+    "created_at",
+    "updated_at",
+    "active_count",
+    "level",
+    "name",
+    "description",
+    "tags",
+    "search_tags",
+    "abstract",
+    "md5",
+    "account_id",
+    "owner_user_id",
+    ACL_MODE_FIELD,
+    *ACL_GRANT_FIELDS,
+]
+
 VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 
 
@@ -87,6 +124,7 @@ VIKINGDB_CONTENT_MAX_SIZE = 1024 * 1024
 class UpsertOptions:
     partial_update: bool = False
     search_tag_mode: str = "replace"
+    acl_update: AclUpdate | None = None
 
 
 @dataclass
@@ -119,6 +157,11 @@ def normalize_upsert_options(
     return UpsertOptions(
         partial_update=bool(options.get("partial_update", False)),
         search_tag_mode=str(options.get("search_tag_mode", "replace")),
+        acl_update=(
+            AclUpdate.model_validate(options["acl_update"])
+            if options.get("acl_update") is not None
+            else None
+        ),
     )
 
 
@@ -149,14 +192,36 @@ class _AsyncVectorAdapter:
 
     def __init__(self, adapter: Any):
         self._adapter = adapter
+        self._condition = threading.Condition()
+        self._active = 0
+        self._closing = False
+        self._closed = False
 
     async def call(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
-        return await run_to_completion(
-            lambda: asyncio.to_thread(getattr(self._adapter, method_name), *args, **kwargs)
-        )
+        if method_name == "close":
+            return await run_to_completion(lambda: asyncio.to_thread(self._close))
+        return await self.run(getattr(self._adapter, method_name), *args, **kwargs)
 
     async def run(self, func: Any, /, *args: Any, **kwargs: Any) -> Any:
-        return await asyncio.to_thread(func, *args, **kwargs)
+        with self._condition:
+            if self._closing:
+                raise RuntimeError("Vector adapter is closing")
+            self._active += 1
+        try:
+            return await run_to_completion(lambda: asyncio.to_thread(func, *args, **kwargs))
+        finally:
+            with self._condition:
+                self._active -= 1
+                self._condition.notify_all()
+
+    def _close(self) -> None:
+        with self._condition:
+            self._closing = True
+            while self._active:
+                self._condition.wait()
+            if not self._closed:
+                self._closed = True
+                self._adapter.close()
 
     async def collection_meta(self, index_name: str) -> Dict[str, Any]:
         def _get() -> Dict[str, Any]:
@@ -168,12 +233,10 @@ class _AsyncVectorAdapter:
                     meta["ScalarIndex"] = index_meta["ScalarIndex"]
             return meta
 
-        return await asyncio.to_thread(_get)
+        return await self.run(_get)
 
     async def update_collection_description(self, description: str) -> None:
-        await asyncio.to_thread(
-            lambda: self._adapter.get_collection().update(description=description)
-        )
+        await self.run(lambda: self._adapter.get_collection().update(description=description))
 
     async def update_collection_schema(
         self, fields: List[Dict[str, Any]], scalar_index: List[str], index_name: str
@@ -199,7 +262,16 @@ class _AsyncVectorAdapter:
                     scalar_index=[*current_scalar_index, *missing_scalar_fields],
                 )
 
-        await asyncio.to_thread(_update)
+        await self.run(_update)
+
+
+def _backend_operation(method):
+    @wraps(method)
+    async def call(self, *args, **kwargs):
+        async with self.operation():
+            return await method(self, *args, **kwargs)
+
+    return call
 
 
 class _SingleAccountBackend:
@@ -224,14 +296,18 @@ class _SingleAccountBackend:
                 to the same storage path.
         """
         self._bound_account_id = bound_account_id
+        self._operation_condition = threading.Condition()
+        self._operations: dict[asyncio.Task, int] = {}
+        self._retired = False
+        self.vector_dim = config.dimension
         self._adapter = shared_adapter or create_collection_adapter(config)
         self._async_adapter = _AsyncVectorAdapter(self._adapter)
         self._collection_config: Dict[str, Any] = {}
         self._meta_data_cache: Dict[str, Any] = {}
         self._mode = self._adapter.mode
-        self._distance_metric = "cosine"
-        self._sparse_weight = 0.0
-        self._collection_name = "context"
+        self._distance_metric = config.distance_metric
+        self._sparse_weight = config.sparse_weight
+        self._collection_name = config.name or "context"
         self._index_name = config.index_name or DEFAULT_INDEX_NAME
 
         logger.info(
@@ -240,8 +316,34 @@ class _SingleAccountBackend:
             self._mode,
         )
 
+    @asynccontextmanager
+    async def operation(self):
+        """Borrow across every I/O step, including nested backend operations."""
+        task = asyncio.current_task()
+        with self._operation_condition:
+            if self._retired and task not in self._operations:
+                raise RuntimeError("Account vector backend is closing")
+            self._operations[task] = self._operations.get(task, 0) + 1
+        try:
+            yield
+        finally:
+            with self._operation_condition:
+                self._operations[task] -= 1
+                if not self._operations[task]:
+                    del self._operations[task]
+                self._operation_condition.notify_all()
+
+    def _wait_for_operations(self):
+        with self._operation_condition:
+            while self._operations:
+                self._operation_condition.wait()
+
     def _get_collection(self) -> Collection:
         return self._adapter.get_collection()
+
+    @property
+    def collection_name(self) -> str:
+        return self._collection_name
 
     def _get_meta_data(self, coll: Collection) -> Dict[str, Any]:
         if not self._meta_data_cache:
@@ -259,6 +361,7 @@ class _SingleAccountBackend:
 
     def _prepare_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
+        self._validate_vector_dimension(data.get("vector"))
         payload = {k: v for k, v in data.items() if v is not None}
         filtered = self._filter_known_fields(payload)
         result = {k: v for k, v in filtered.items() if v is not None}
@@ -291,6 +394,26 @@ class _SingleAccountBackend:
     def _prepare_upsert_payloads(self, data_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Prepare a batch in one worker-thread handoff."""
         return [self._prepare_upsert_payload(data) for data in data_list]
+
+    def _prepare_update_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Prepare a strict partial update without inventing omitted fields."""
+        self._validate_vector_dimension(data.get("vector"))
+        payload = self._filter_known_fields(
+            {key: value for key, value in data.items() if value is not None}
+        )
+        if self._adapter.USE_CONTENT_FIELD:
+            content = payload.get("content")
+            if isinstance(content, (str, bytes)):
+                payload["content"] = content[:VIKINGDB_CONTENT_MAX_SIZE]
+        else:
+            payload.pop("content", None)
+        return payload
+
+    def _validate_vector_dimension(self, vector) -> None:
+        if vector is not None and self.vector_dim and len(vector) != self.vector_dim:
+            raise ValueError(
+                f"Dense vector dimension mismatch: expected {self.vector_dim}, got {len(vector)}"
+            )
 
     def _bind_upsert_payload(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Copy a record, enforce its bound account, and apply write defaults."""
@@ -326,6 +449,7 @@ class _SingleAccountBackend:
     # Collection Management
     # =========================================================================
 
+    @_backend_operation
     async def create_collection(self, name: str, schema: Dict[str, Any]) -> bool:
         try:
             collection_meta = dict(schema)
@@ -358,6 +482,7 @@ class _SingleAccountBackend:
             logger.error("Error creating collection %s: %s", name, e)
             return False
 
+    @_backend_operation
     async def drop_collection(self) -> bool:
         try:
             dropped = await self._async_adapter.call("drop_collection")
@@ -369,9 +494,11 @@ class _SingleAccountBackend:
             logger.error("Error dropping collection: %s", e)
             return False
 
+    @_backend_operation
     async def collection_exists(self) -> bool:
         return await self._async_adapter.call("collection_exists")
 
+    @_backend_operation
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
         if not await self.collection_exists():
             return None
@@ -383,11 +510,13 @@ class _SingleAccountBackend:
             "status": "active",
         }
 
+    @_backend_operation
     async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
         if not await self.collection_exists():
             return None
         return await self._async_adapter.collection_meta(self._index_name)
 
+    @_backend_operation
     async def update_collection_description(self, description: str) -> bool:
         if not await self.collection_exists():
             return False
@@ -395,6 +524,7 @@ class _SingleAccountBackend:
         await self._refresh_meta_data_async()
         return True
 
+    @_backend_operation
     async def update_collection_schema(
         self, fields: List[Dict[str, Any]], scalar_index: List[str]
     ) -> None:
@@ -405,6 +535,7 @@ class _SingleAccountBackend:
     # Data Operations (with tenant enforcement)
     # =========================================================================
 
+    @_backend_operation
     async def upsert(
         self,
         data: Dict[str, Any],
@@ -444,6 +575,7 @@ class _SingleAccountBackend:
         ids = await self._async_adapter.call("upsert", payload)
         return ids[0] if ids else ""
 
+    @_backend_operation
     async def upsert_many(self, data_list: List[Dict[str, Any]]) -> List[str]:
         """Bulk full-record upsert through one adapter call.
 
@@ -487,6 +619,7 @@ class _SingleAccountBackend:
     async def end_bulk_ingest(self) -> None:
         await self._async_adapter.call("end_bulk_ingest")
 
+    @_backend_operation
     async def update(self, data: Dict[str, Any]) -> UpdateResult:
         """Strict update path. The target record must already exist."""
         try:
@@ -506,7 +639,7 @@ class _SingleAccountBackend:
                 allowed = sorted(VikingVectorIndexBackend.ALLOWED_CONTEXT_TYPES)
                 raise ValueError(f"Invalid context_type: {context_type}. Must be one of {allowed}")
 
-            payload = await self._async_adapter.run(self._prepare_upsert_payload, payload)
+            payload = await self._async_adapter.run(self._prepare_update_payload, payload)
             ids = await self._async_adapter.call("update_data", [payload])
             normalized_ids = [str(item) for item in (ids or []) if item is not None]
             return UpdateResult(
@@ -538,6 +671,7 @@ class _SingleAccountBackend:
                 error_message=str(e),
             )
 
+    @_backend_operation
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
             records = await self._async_adapter.call("get", ids)
@@ -546,7 +680,7 @@ class _SingleAccountBackend:
             return records
         except Exception as e:
             logger.error("Error getting records: %s", e)
-            return []
+            raise
 
     def _with_account_filter(
         self, filter: Optional[Dict[str, Any] | FilterExpr]
@@ -562,6 +696,7 @@ class _SingleAccountBackend:
             filter = RawDSL(filter)
         return And([account_filter, filter])
 
+    @_backend_operation
     async def get_strict(self, ids: List[str]) -> List[Dict[str, Any]]:
         """Fetch records without converting backend errors to misses."""
         records = await self._async_adapter.call("get", ids)
@@ -569,10 +704,12 @@ class _SingleAccountBackend:
             records = [r for r in records if r.get("account_id") == self._bound_account_id]
         return records
 
+    @_backend_operation
     async def strict_get(self, ids: List[str]) -> List[Dict[str, Any]]:
         """Transaction alias for strict record reads."""
         return await self.get_strict(ids)
 
+    @_backend_operation
     async def strict_delete(self, ids: List[str]) -> int:
         """Delete transaction records and propagate every backend failure."""
         if self._bound_account_id:
@@ -583,6 +720,7 @@ class _SingleAccountBackend:
             return 0
         return int(await self._async_adapter.call("delete", ids=ids) or 0)
 
+    @_backend_operation
     async def strict_query(
         self,
         *,
@@ -606,12 +744,14 @@ class _SingleAccountBackend:
             order_desc=order_desc,
         )
 
+    @_backend_operation
     async def strict_count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         """Count transaction records without converting backend errors to zero."""
         return int(
-            await self._async_adapter.call("count", filter=self._with_account_filter(filter)) or 0
+            await self._async_adapter.call("strict_count", filter=self._with_account_filter(filter))
         )
 
+    @_backend_operation
     async def delete(self, ids: List[str]) -> int:
         try:
             if self._bound_account_id:
@@ -624,8 +764,9 @@ class _SingleAccountBackend:
             return await self._async_adapter.call("delete", ids=ids)
         except Exception as e:
             logger.error("Error deleting records: %s", e)
-            return 0
+            raise
 
+    @_backend_operation
     async def delete_by_filter(self, filter: FilterExpr) -> int:
         """Root-only: 直接通过 filter 删除"""
         try:
@@ -634,12 +775,11 @@ class _SingleAccountBackend:
             logger.error("Error deleting by filter: %s", e)
             raise
 
+    @_backend_operation
     async def exists(self, id: str) -> bool:
-        try:
-            return len(await self.get([id])) > 0
-        except Exception:
-            return False
+        return len(await self.get([id])) > 0
 
+    @_backend_operation
     async def fetch_by_uri(self, uri: str) -> Optional[Dict[str, Any]]:
         try:
             records = await self.query(
@@ -652,8 +792,9 @@ class _SingleAccountBackend:
             return None
         except Exception as e:
             logger.error("Error fetching record by URI %s: %s", uri, e)
-            return None
+            raise
 
+    @_backend_operation
     async def query(
         self,
         query_vector: Optional[List[float]] = None,
@@ -665,6 +806,7 @@ class _SingleAccountBackend:
         order_by: Optional[str] = None,
         order_desc: bool = False,
     ) -> List[Dict[str, Any]]:
+        self._validate_vector_dimension(query_vector)
         try:
             logger.debug(
                 f"[_SingleAccountBackend.query] Called with bound_account_id={self._bound_account_id}, filter={filter}"
@@ -694,8 +836,9 @@ class _SingleAccountBackend:
             )
         except Exception as e:
             logger.error("Error querying collection: %s", e, exc_info=True)
-            return []
+            raise
 
+    @_backend_operation
     async def search_by_random(
         self,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
@@ -717,6 +860,7 @@ class _SingleAccountBackend:
             logger.error("Error searching collection by random: %s", e, exc_info=True)
             raise
 
+    @_backend_operation
     async def search(
         self,
         query_vector: Optional[List[float]] = None,
@@ -735,6 +879,7 @@ class _SingleAccountBackend:
             output_fields=output_fields,
         )
 
+    @_backend_operation
     async def filter(
         self,
         filter: Dict[str, Any] | FilterExpr,
@@ -753,6 +898,7 @@ class _SingleAccountBackend:
             order_desc=order_desc,
         )
 
+    @_backend_operation
     async def remove_by_uri(self, uri: str) -> int:
         try:
             target_records = await self.filter(
@@ -773,7 +919,7 @@ class _SingleAccountBackend:
             return total_deleted
         except Exception as e:
             logger.error("Error removing URI %s: %s", uri, e)
-            return 0
+            raise
 
     async def _remove_descendants(self, parent_uri: str) -> int:
         total_deleted = 0
@@ -793,6 +939,7 @@ class _SingleAccountBackend:
                 total_deleted += 1
         return total_deleted
 
+    @_backend_operation
     async def scroll(
         self,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
@@ -816,6 +963,7 @@ class _SingleAccountBackend:
         next_cursor = str(offset + len(records)) if len(records) == limit else None
         return records, next_cursor
 
+    @_backend_operation
     async def count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         try:
             if self._bound_account_id:
@@ -832,6 +980,7 @@ class _SingleAccountBackend:
             logger.error("Error counting records: %s", e)
             raise
 
+    @_backend_operation
     async def clear(self) -> bool:
         try:
             if self._bound_account_id:
@@ -839,12 +988,14 @@ class _SingleAccountBackend:
             return await self._async_adapter.call("clear")
         except Exception as e:
             logger.error("Error clearing collection: %s", e)
-            return False
+            raise
 
+    @_backend_operation
     async def optimize(self) -> bool:
         logger.info("Optimization requested")
         return True
 
+    @_backend_operation
     async def search_by_keywords(
         self,
         keywords: Optional[List[str]] = None,
@@ -864,7 +1015,7 @@ class _SingleAccountBackend:
                 else:
                     filter = account_filter
 
-            return await asyncio.to_thread(
+            return await self._async_adapter.run(
                 self._adapter.search_by_keywords,
                 keywords=keywords,
                 query=query,
@@ -878,7 +1029,13 @@ class _SingleAccountBackend:
             raise
 
     async def close(self) -> None:
+        with self._operation_condition:
+            self._retired = True
+        await run_to_completion(self._close_after_operations)
+
+    async def _close_after_operations(self) -> None:
         try:
+            await asyncio.to_thread(self._wait_for_operations)
             await self._async_adapter.call("close")
             self._collection_config = {}
             self._meta_data_cache = {}
@@ -886,6 +1043,7 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.error("Error closing backend: %s", e)
 
+    @_backend_operation
     async def health_check(self) -> bool:
         try:
             await self.collection_exists()
@@ -893,6 +1051,7 @@ class _SingleAccountBackend:
         except Exception:
             return False
 
+    @_backend_operation
     async def get_stats(self) -> Dict[str, Any]:
         try:
             exists = await self.collection_exists()
@@ -915,7 +1074,7 @@ class _SingleAccountBackend:
 
     @property
     def is_closing(self) -> bool:
-        return False
+        return self._retired
 
 
 class VikingVectorIndexBackend:
@@ -939,10 +1098,17 @@ class VikingVectorIndexBackend:
         self.acl_manager: Optional[AclManager] = None
 
         self._account_backends: Dict[str, _SingleAccountBackend] = {}
+        self._vector_config_resolver = None
+        self._account_backend_locks = KeyedAsyncLockPool[str]()
+        self._resolved_backends: Dict[str, _SingleAccountBackend] = {}
+        self._retiring_backends: set[_SingleAccountBackend] = set()
+        self._initializing_accounts: set[str] = set()
         self._root_backend: Optional[_SingleAccountBackend] = None
         # Share a single adapter (and its underlying PersistStore/RocksDB instance)
         # across all account backends to avoid LOCK contention.
         self._shared_adapter = create_collection_adapter(config)
+        self._shared_async_adapter = _AsyncVectorAdapter(self._shared_adapter)
+        self._closing = False
 
         logger.info(
             "VikingVectorIndexBackend facade initialized",
@@ -978,12 +1144,65 @@ class VikingVectorIndexBackend:
             backend._sparse_weight = self.sparse_weight
             backend._collection_name = self._collection_name
             backend._index_name = self._index_name
+            backend._async_adapter = self._shared_async_adapter
             self._account_backends[account_id] = backend
         return self._account_backends[account_id]
 
-    def _get_backend_for_context(self, ctx: RequestContext) -> _SingleAccountBackend:
+    async def _get_backend_for_context(self, ctx: RequestContext) -> _SingleAccountBackend:
         """根据上下文获取 backend"""
-        return self._get_backend_for_account(ctx.account_id)
+        return await self.get_account_backend(ctx.account_id)
+
+    def set_vector_config_resolver(self, resolver) -> None:
+        self._vector_config_resolver = resolver
+
+    async def _resolve_vector_settings(self, account_id: str):
+        if self._vector_config_resolver is None:
+            raise RuntimeError("Account vector configuration resolver is not initialized")
+        return await self._vector_config_resolver.resolve(account_id)
+
+    async def get_account_backend(self, account_id: str) -> _SingleAccountBackend:
+        if not account_id:
+            raise ValueError("account_id is required")
+        if self._vector_config_resolver is None:
+            raise RuntimeError("Account vector configuration resolver is not initialized")
+        async with self._account_backend_locks.acquire(account_id):
+            if self._closing:
+                raise RuntimeError("Vector backend is closing")
+            self._initializing_accounts.add(account_id)
+            try:
+                return await self._load_account_backend(account_id)
+            finally:
+                self._initializing_accounts.discard(account_id)
+
+    async def _load_account_backend(self, account_id: str) -> _SingleAccountBackend:
+        if account_id in self._resolved_backends:
+            return self._resolved_backends[account_id]
+        settings = await self._resolve_vector_settings(account_id)
+        if not settings.dedicated_vectordb:
+            backend = self._get_backend_for_account(account_id)
+            backend.vector_dim = settings.vectordb.dimension
+        else:
+            backend = _SingleAccountBackend(
+                settings.vectordb.model_copy(deep=True),
+                bound_account_id=account_id,
+            )
+        self._resolved_backends[account_id] = backend
+        return backend
+
+    async def account_uses_content_field(self, account_id: str) -> bool:
+        return (await self.get_account_backend(account_id))._adapter.USE_CONTENT_FIELD
+
+    async def release_account(self, account_id: str) -> None:
+        """Release derived resources after account data cleanup; never drop a collection."""
+        async with self._account_backend_locks.acquire(account_id):
+            backend = self._resolved_backends.pop(account_id, None)
+            self._account_backends.pop(account_id, None)
+        if backend and backend._adapter is not self._shared_adapter:
+            self._retiring_backends.add(backend)
+            try:
+                await backend.close()
+            finally:
+                self._retiring_backends.discard(backend)
 
     def _get_root_backend(self) -> _SingleAccountBackend:
         """获取 root 特权 backend"""
@@ -995,6 +1214,7 @@ class VikingVectorIndexBackend:
             self._root_backend._sparse_weight = self.sparse_weight
             self._root_backend._collection_name = self._collection_name
             self._root_backend._index_name = self._index_name
+            self._root_backend._async_adapter = self._shared_async_adapter
         return self._root_backend
 
     def _check_root_role(self, ctx: RequestContext) -> None:
@@ -1027,7 +1247,7 @@ class VikingVectorIndexBackend:
         ctx: Optional[RequestContext] = None,
     ) -> Optional[Dict[str, Any]]:
         if ctx:
-            backend = self._get_backend_for_context(ctx)
+            backend = await self._get_backend_for_context(ctx)
         else:
             backend = self._get_default_backend()
         return await backend.get_collection_meta()
@@ -1070,8 +1290,14 @@ class VikingVectorIndexBackend:
             options.search_tag_mode,
         )
         data = {key: value for key, value in data.items() if key not in ACL_CONTEXT_FIELDS}
-        data = (await self._materialize_acl_fields([data], ctx))[0]
-        backend = self._get_backend_for_context(ctx)
+        data = (
+            await self._materialize_acl_fields(
+                [data],
+                ctx,
+                update=options.acl_update,
+            )
+        )[0]
+        backend = await self._get_backend_for_context(ctx)
         logger.debug(
             "[VikingVectorIndexBackend.upsert] Using backend for account_id=%s",
             ctx.account_id,
@@ -1080,6 +1306,10 @@ class VikingVectorIndexBackend:
             data,
             options=options,
         )
+        if result and options.acl_update and data.get("uri") == options.acl_update.uri:
+            # Import descendants can reach the index before their root. Once its
+            # own record exists, converge all stored inherited grants as well.
+            await self.acl_manager.refresh_context_subtree(options.acl_update.uri, ctx)
         logger.debug(
             "[VikingVectorIndexBackend.upsert] Completed with partial_update=%s, "
             "search_tag_mode=%s, result=%s",
@@ -1123,14 +1353,18 @@ class VikingVectorIndexBackend:
         self, data_list: List[Dict[str, Any]], *, ctx: RequestContext
     ) -> List[str]:
         """Write records whose ACL fields have already been materialized."""
-        return await self._get_backend_for_context(ctx).upsert_many(data_list)
+        return await (await self._get_backend_for_context(ctx)).upsert_many(data_list)
 
     async def _materialize_acl_fields(
-        self, records: List[Dict[str, Any]], ctx: RequestContext
+        self,
+        records: List[Dict[str, Any]],
+        ctx: RequestContext,
+        *,
+        update: AclUpdate | None = None,
     ) -> List[Dict[str, Any]]:
         if not self.acl_manager or not records:
             return records
-        return await self.acl_manager.materialize_context_records(records, ctx)
+        return await self.acl_manager.materialize_context_records(records, ctx, update=update)
 
     async def update(self, data: Dict[str, Any], *, ctx: RequestContext) -> UpdateResult:
         """Strict update path. The target record must already exist."""
@@ -1139,7 +1373,7 @@ class VikingVectorIndexBackend:
             "[VikingVectorIndexBackend.update] uri=%s",
             data.get("uri", ""),
         )
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         logger.debug(
             f"[VikingVectorIndexBackend.update] Using backend for account_id={ctx.account_id}"
         )
@@ -1155,7 +1389,13 @@ class VikingVectorIndexBackend:
         writes transactional or atomic, and adapters that do not maintain a
         derived local index treat it as a no-op.
         """
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
+        async with backend.operation():
+            async with self._bulk_ingest_backend(backend):
+                yield
+
+    @asynccontextmanager
+    async def _bulk_ingest_backend(self, backend) -> AsyncIterator[None]:
         begin_task = asyncio.create_task(backend.begin_bulk_ingest())
         entry_cancellation = await _wait_for_task_completion_despite_cancellation(begin_task)
         # A failed or self-cancelled begin did not acquire the scope, so it
@@ -1178,22 +1418,26 @@ class VikingVectorIndexBackend:
                 raise exit_cancellation
 
     async def get(self, ids: List[str], *, ctx: RequestContext) -> List[Dict[str, Any]]:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.get(ids)
 
     async def get_strict(self, ids: List[str], *, ctx: RequestContext) -> List[Dict[str, Any]]:
-        return await self._get_backend_for_context(ctx).get_strict(ids)
+        return await (await self._get_backend_for_context(ctx)).get_strict(ids)
 
     async def delete(self, ids: List[str], *, ctx: RequestContext) -> int:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.delete(ids)
 
+    async def strict_delete(self, ids: List[str], *, ctx: RequestContext) -> int:
+        """Delete exact record IDs without converting backend failures to success."""
+        return await (await self._get_backend_for_context(ctx)).strict_delete(ids)
+
     async def exists(self, id: str, *, ctx: RequestContext) -> bool:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.exists(id)
 
     async def fetch_by_uri(self, uri: str, *, ctx: RequestContext) -> Optional[Dict[str, Any]]:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.fetch_by_uri(uri)
 
     async def update_search_tags(
@@ -1318,7 +1562,7 @@ class VikingVectorIndexBackend:
         *,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.query(
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
@@ -1340,8 +1584,12 @@ class VikingVectorIndexBackend:
         *,
         ctx: RequestContext,
     ) -> List[Dict[str, Any]]:
-        backend = self._get_backend_for_context(ctx)
-        filter = self._merge_filters(filter, self._tenant_filter(ctx))
+        backend = await self._get_backend_for_context(ctx)
+        acl_enabled = await self._acl_enabled(ctx)
+        filter = self._merge_filters(
+            filter,
+            self._tenant_filter(ctx, acl_enabled=acl_enabled),
+        )
         return await backend.search_by_random(
             filter=filter,
             limit=limit,
@@ -1393,7 +1641,7 @@ class VikingVectorIndexBackend:
         )
 
     async def remove_by_uri(self, uri: str, *, ctx: RequestContext) -> int:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.remove_by_uri(uri)
 
     async def scroll(
@@ -1405,7 +1653,7 @@ class VikingVectorIndexBackend:
         *,
         ctx: RequestContext,
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.scroll(
             filter=filter,
             limit=limit,
@@ -1422,7 +1670,7 @@ class VikingVectorIndexBackend:
         cursor: Optional[str],
         output_fields: List[str],
     ) -> tuple[List[Dict[str, Any]], Optional[str]]:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.scroll(
             filter=filter,
             limit=limit,
@@ -1431,17 +1679,71 @@ class VikingVectorIndexBackend:
         )
 
     async def _strict_transfer_count(self, ctx: RequestContext, filter: FilterExpr) -> int:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.strict_count(filter=filter)
+
+    async def _strict_scan(
+        self,
+        ctx: RequestContext,
+        scope: FilterExpr,
+        *,
+        output_fields: List[str],
+        batch_size: int,
+        what: str,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Yield every record under ``scope`` with strict count/cursor guarantees.
+
+        Consolidates the paginated scan skeleton shared by the incremental
+        readers: it pins the expected total up front, then walks cursor pages,
+        raising if a page ends early, overshoots the count, or the cursor repeats
+        or dies before the total is reached — so a truncated scan can never look
+        like "records absent". Per-record parsing/validation stays with the
+        caller; this only guarantees the traversal is complete.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        expected_count = await self._strict_transfer_count(ctx, scope)
+        cursor: Optional[str] = None
+        scanned_count = 0
+        seen_cursors: set[str] = set()
+        while True:
+            page, next_cursor = await self._strict_transfer_page(
+                ctx,
+                scope,
+                limit=batch_size,
+                cursor=cursor,
+                output_fields=output_fields,
+            )
+            if not page and scanned_count < expected_count:
+                raise RuntimeError(
+                    f"{what} ended after {scanned_count} of {expected_count} records"
+                )
+            scanned_count += len(page)
+            if scanned_count > expected_count:
+                raise RuntimeError(
+                    f"{what} returned {scanned_count} records but count was {expected_count}"
+                )
+            for record in page:
+                yield record
+            if next_cursor is None:
+                if scanned_count == expected_count:
+                    return
+                raise RuntimeError(
+                    f"{what} cursor ended after {scanned_count} of {expected_count} records"
+                )
+            if next_cursor in seen_cursors:
+                raise RuntimeError(f"{what} cursor repeated: {next_cursor}")
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
 
     async def _strict_transfer_get(
         self, ctx: RequestContext, ids: List[str]
     ) -> List[Dict[str, Any]]:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.strict_get(ids)
 
     async def _strict_transfer_delete(self, ctx: RequestContext, ids: List[str]) -> int:
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.strict_delete(ids)
 
     async def count(
@@ -1451,7 +1753,7 @@ class VikingVectorIndexBackend:
         ctx: Optional[RequestContext] = None,
     ) -> int:
         if ctx:
-            backend = self._get_backend_for_context(ctx)
+            backend = await self._get_backend_for_context(ctx)
         else:
             backend = self._get_default_backend()
         return await backend.count(filter=filter)
@@ -1468,8 +1770,12 @@ class VikingVectorIndexBackend:
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         if ctx:
-            backend = self._get_backend_for_context(ctx)
-            filter = self._merge_filters(filter, self._tenant_filter(ctx))
+            backend = await self._get_backend_for_context(ctx)
+            acl_enabled = await self._acl_enabled(ctx)
+            filter = self._merge_filters(
+                filter,
+                self._tenant_filter(ctx, acl_enabled=acl_enabled),
+            )
         else:
             backend = self._get_default_backend()
         return await backend.search_by_keywords(
@@ -1483,7 +1789,7 @@ class VikingVectorIndexBackend:
 
     async def clear(self, *, ctx: Optional[RequestContext] = None) -> bool:
         if ctx:
-            backend = self._get_backend_for_context(ctx)
+            backend = await self._get_backend_for_context(ctx)
         else:
             backend = self._get_default_backend()
         return await backend.clear()
@@ -1492,16 +1798,44 @@ class VikingVectorIndexBackend:
         return await self._get_default_backend().optimize()
 
     async def close(self) -> None:
+        self._closing = True
+        await run_to_completion(self._close_backends)
+
+    async def _close_backends(self) -> None:
+        adapters: dict[int, _AsyncVectorAdapter] = {
+            id(self._shared_adapter): self._shared_async_adapter
+        }
+        backends: set[_SingleAccountBackend] = set()
         try:
-            for backend in self._account_backends.values():
-                await backend.close()
-            if self._root_backend:
-                await self._root_backend.close()
+            backends.update(self._account_backends.values())
+            backends.update(self._retiring_backends)
+            if self._root_backend is not None:
+                backends.add(self._root_backend)
+            for account_id in set(self._resolved_backends) | self._initializing_accounts:
+                async with self._account_backend_locks.acquire(account_id):
+                    backend = self._resolved_backends.get(account_id)
+                    if backend is not None:
+                        backends.add(backend)
+            for backend in backends:
+                with backend._operation_condition:
+                    backend._retired = True
+                adapters[id(backend._adapter)] = backend._async_adapter
+            for backend in backends:
+                await asyncio.to_thread(backend._wait_for_operations)
+        except Exception as e:
+            logger.error("Error preparing vector facade close: %s", e)
+        finally:
+            for adapter in adapters.values():
+                try:
+                    await adapter.call("close")
+                except Exception as e:
+                    logger.error("Error closing vector adapter: %s", e)
             self._account_backends.clear()
+            self._resolved_backends.clear()
+            self._retiring_backends.clear()
+            self._initializing_accounts.clear()
             self._root_backend = None
             logger.info("VikingVectorIndexBackend facade closed")
-        except Exception as e:
-            logger.error("Error closing facade: %s", e)
 
     async def health_check(self) -> bool:
         return await self._get_default_backend().health_check()
@@ -1511,7 +1845,7 @@ class VikingVectorIndexBackend:
 
     @property
     def is_closing(self) -> bool:
-        return False
+        return self._closing
 
     @property
     def has_queue_manager(self) -> bool:
@@ -1536,12 +1870,14 @@ class VikingVectorIndexBackend:
         limit: int = 10,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
+        acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
             level=level,
+            acl_enabled=acl_enabled,
         )
         return await self.search(
             query_vector=query_vector,
@@ -1571,12 +1907,14 @@ class VikingVectorIndexBackend:
         identical between the two — a separately hand-built filter would be one
         refactor away from silently losing them.
         """
+        acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
             extra_filter=extra_filter,
             level=level,
+            acl_enabled=acl_enabled,
         )
         if scope_filter is None:
             raise InvalidArgumentError(
@@ -1617,6 +1955,7 @@ class VikingVectorIndexBackend:
                     effective_target_directories = None
                     break
 
+        acl_enabled = await self._acl_enabled(ctx)
         merged_filter = self._merge_filters(
             PathScope("uri", parent_uri, depth=1),
             self._build_scope_filter(
@@ -1624,6 +1963,7 @@ class VikingVectorIndexBackend:
                 context_type=context_type,
                 target_directories=effective_target_directories,
                 extra_filter=extra_filter,
+                acl_enabled=acl_enabled,
             ),
         )
         return await self.search(
@@ -1651,7 +1991,7 @@ class VikingVectorIndexBackend:
         if level is not None:
             conds.append(Eq("level", level))
 
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         return await backend.filter(
             filter=And(conds),
             limit=limit,
@@ -1698,10 +2038,269 @@ class VikingVectorIndexBackend:
             if uri in requested_by_canonical
         }
 
+    async def get_l2_diff_records_by_uris(
+        self,
+        uris: List[str],
+        *,
+        ctx: RequestContext,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Load existing L2 diff metadata (md5 + abstract) for a bounded URI set.
+
+        Returns a map keyed by the caller's original URI to
+        ``{"md5": str, "abstract": str}``. ``md5`` is empty when the record
+        predates the field, in which case incremental diff must fall back to
+        comparing file bytes rather than assuming equality. Uses full strict
+        pagination so a truncated page never masquerades as "record absent".
+        """
+        requested_by_canonical: Dict[str, str] = {}
+        for uri in uris:
+            requested_by_canonical.setdefault(resolve_uri(uri).uri, uri)
+        canonical_uris = list(requested_by_canonical)
+        if not canonical_uris:
+            return {}
+
+        records_by_uri: Dict[str, Dict[str, Any]] = {}
+        chunk_size = 100
+        for start in range(0, len(canonical_uris), chunk_size):
+            chunk = canonical_uris[start : start + chunk_size]
+            cursor: Optional[str] = None
+            while True:
+                records, cursor = await self._strict_transfer_page(
+                    ctx,
+                    And([In("uri", chunk), Eq("level", 2)]),
+                    limit=100,
+                    cursor=cursor,
+                    output_fields=["uri", "md5", "abstract"],
+                )
+                for record in records:
+                    uri = str(record.get("uri") or "")
+                    if uri and uri not in records_by_uri:
+                        records_by_uri[uri] = {
+                            "md5": str(record.get("md5") or ""),
+                            "abstract": str(record.get("abstract") or ""),
+                        }
+                if cursor is None:
+                    break
+        return {
+            requested_by_canonical[uri]: record
+            for uri, record in records_by_uri.items()
+            if uri in requested_by_canonical
+        }
+
+    async def get_l2_diff_records_under_uri(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        batch_size: int = 100,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Strictly load every L2 diff record below one target directory."""
+        canonical_uri = resolve_uri(uri).uri.rstrip("/")
+        scope = And(
+            [
+                Eq("account_id", ctx.account_id),
+                PathScope("uri", canonical_uri, depth=-1),
+                Eq("level", 2),
+            ]
+        )
+        records: Dict[str, Dict[str, Any]] = {}
+        what = f"Vector scan under {canonical_uri}"
+        async for record in self._strict_scan(
+            ctx,
+            scope,
+            output_fields=INCREMENTAL_DIFF_OUTPUT_FIELDS,
+            batch_size=batch_size,
+            what=what,
+        ):
+            record_uri = str(record.get("uri") or "")
+            if not record_uri or not uri_in_transfer_scope(
+                record_uri, canonical_uri, recursive=True
+            ):
+                raise RuntimeError(f"{what} returned invalid L2 URI: {record_uri or '<missing>'}")
+            if record_uri in records:
+                raise RuntimeError(f"{what} returned duplicate L2 URI: {record_uri}")
+            records[record_uri] = {
+                "md5": str(record.get("md5") or ""),
+                "abstract": str(record.get("abstract") or ""),
+            }
+        return records
+
+    async def get_incremental_inventory_under_uri(
+        self,
+        uri: str,
+        *,
+        ctx: RequestContext,
+        batch_size: int = 100,
+        output_fields: Optional[List[str]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Strictly load lightweight L0/L1/L2 metadata below a resource root."""
+        projection = list(
+            dict.fromkeys(
+                [
+                    *INCREMENTAL_INVENTORY_OUTPUT_FIELDS,
+                    *(output_fields or []),
+                ]
+            )
+        )
+        canonical_uri = resolve_uri(uri).uri.rstrip("/")
+        scope = And(
+            [
+                Eq("account_id", ctx.account_id),
+                PathScope("uri", canonical_uri, depth=-1),
+                In("level", [0, 1, 2]),
+            ]
+        )
+        what = f"Incremental inventory under {canonical_uri}"
+        retry_delays = (0.0, 0.25, 1.0)
+        last_error: Exception | None = None
+        for attempt, delay in enumerate(retry_delays, start=1):
+            if delay:
+                await asyncio.sleep(delay)
+            records: Dict[str, Dict[str, Any]] = {}
+            try:
+                async for record in self._strict_scan(
+                    ctx,
+                    scope,
+                    output_fields=projection,
+                    batch_size=batch_size,
+                    what=what,
+                ):
+                    record_id = str(record.get("id") or "")
+                    record_uri = str(record.get("uri") or "")
+                    try:
+                        level = int(record.get("level"))
+                    except (TypeError, ValueError):
+                        level = -1
+                    if (
+                        not record_id
+                        or level not in {0, 1, 2}
+                        or not uri_in_transfer_scope(record_uri, canonical_uri, recursive=True)
+                    ):
+                        raise RuntimeError(
+                            f"{what} returned an invalid record: id={record_id or '<missing>'} "
+                            f"uri={record_uri or '<missing>'} level={level}"
+                        )
+                    if record_id in records:
+                        raise RuntimeError(f"{what} returned duplicate record id: {record_id}")
+                    records[record_id] = {
+                        field: record[field] for field in projection if field in record
+                    }
+                    records[record_id].update(
+                        {
+                            "id": record_id,
+                            "uri": record_uri,
+                            "level": level,
+                            "md5": str(record.get("md5") or ""),
+                        }
+                    )
+                return records
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt == len(retry_delays) or not any(
+                    marker in str(exc)
+                    for marker in (
+                        "cursor ended after",
+                        "ended after",
+                        "records but count was",
+                    )
+                ):
+                    raise
+                logger.warning(
+                    "%s was incomplete; retrying full inventory attempt=%d/%d error=%s",
+                    what,
+                    attempt,
+                    len(retry_delays),
+                    exc,
+                )
+        assert last_error is not None
+        raise last_error
+
+    async def hydrate_incremental_records(
+        self,
+        expected: Mapping[str, Mapping[str, Any]],
+        *,
+        ctx: RequestContext,
+        batch_size: int = 100,
+        output_fields: Optional[Container[str]] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Load requested non-vector fields by primary-key point-get.
+
+        ``expected`` maps each known record id to its ``{uri, level}`` identity.
+        Records are fetched by primary key (never filtered on ``id``), and the
+        selected non-vector fields are projected on the client side, so the
+        returned rows never carry ``vector``/``sparse_vector``/``content``.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
+        requested_ids = list(expected)
+        if output_fields is None:
+            selected_fields = list(INCREMENTAL_HYDRATION_OUTPUT_FIELDS)
+            try:
+                collection_meta = await self.get_collection_meta(ctx=ctx)
+                schema_fields = [
+                    str(item.get("FieldName") or "")
+                    for item in (collection_meta or {}).get("Fields", [])
+                ]
+                dynamic_fields = [
+                    field
+                    for field in schema_fields
+                    if field and field not in {"vector", "sparse_vector", "content"}
+                ]
+                if dynamic_fields:
+                    selected_fields = list(dict.fromkeys(dynamic_fields))
+            except Exception:
+                # Backends without collection metadata retain the known portable
+                # projection; correctness remains fail-closed at identity checks.
+                pass
+        else:
+            selected_fields = list(dict.fromkeys(["id", "uri", "level", *sorted(output_fields)]))
+        hydrated: Dict[str, Dict[str, Any]] = {}
+
+        def _accept(record: Mapping[str, Any]) -> None:
+            record_id = str(record.get("id") or "")
+            wanted = expected.get(record_id)
+            if wanted is None:
+                raise RuntimeError(
+                    f"Incremental hydration returned unexpected record id: {record_id or '<missing>'}"
+                )
+            record_uri = str(record.get("uri") or "")
+            try:
+                level = int(record.get("level"))
+            except (TypeError, ValueError):
+                level = -1
+            if (
+                record_uri != str(wanted.get("uri") or "")
+                or level != int(wanted.get("level", -1))
+                or (record.get("account_id") not in {None, ctx.account_id})
+            ):
+                raise RuntimeError(
+                    f"Incremental hydration identity mismatch for record: {record_id}"
+                )
+            if record_id in hydrated:
+                raise RuntimeError(
+                    f"Incremental hydration returned duplicate record id: {record_id}"
+                )
+            hydrated[record_id] = {
+                field: record[field] for field in selected_fields if field in record
+            }
+
+        for start in range(0, len(requested_ids), batch_size):
+            chunk = requested_ids[start : start + batch_size]
+            # ``id`` is the collection primary key. VikingDB only accepts ``must``
+            # filters on ScalarIndex fields, and a primary key is intentionally not
+            # indexed as a scalar (it is addressed by point-get). Filtering on it
+            # (In("id", ...)) is rejected by strict backends, so fetch the records
+            # by primary key directly: no scalar index, no ordering, no offset
+            # pagination. Records that no longer exist are simply absent, and the
+            # planner promotes those dependencies separately.
+            for record in await self._strict_transfer_get(ctx, chunk):
+                _accept(record)
+        return hydrated
+
     async def delete_account_data(self, account_id: str, *, ctx: RequestContext) -> int:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
         self._check_root_role(ctx)
-        root_backend = self._get_root_backend()
+        root_backend = await self.get_account_backend(account_id)
         return await root_backend.delete_by_filter(Eq("account_id", account_id))
 
     async def delete_user_data(
@@ -1713,7 +2312,7 @@ class VikingVectorIndexBackend:
     ) -> int:
         """Delete every vector record owned by one user as ROOT."""
         self._check_root_role(ctx)
-        root_backend = self._get_root_backend()
+        root_backend = await self.get_account_backend(account_id)
         return await root_backend.delete_by_filter(
             And([Eq("account_id", account_id), Eq("owner_user_id", user_id)])
         )
@@ -1725,7 +2324,7 @@ class VikingVectorIndexBackend:
                 Or([Eq("uri", uri), In("uri", [f"{uri}/"])]),
             ]
 
-            backend = self._get_backend_for_context(ctx)
+            backend = await self._get_backend_for_context(ctx)
             await backend.delete_by_filter(And(conds))
 
     def _uri_transfer_filter(self, ctx: RequestContext, uri: str, *, recursive: bool) -> FilterExpr:
@@ -1749,7 +2348,7 @@ class VikingVectorIndexBackend:
         sort: separate aggregate and search requests need not share a snapshot.
         Backend failures still propagate, unlike the legacy fail-open query API.
         """
-        backend = self._get_backend_for_context(ctx)
+        backend = await self._get_backend_for_context(ctx)
         records: Dict[str, Dict[str, Any]] = {}
         entries = sorted(set(entry_uris))
         for uri in entries:
@@ -1976,8 +2575,9 @@ class VikingVectorIndexBackend:
                 )
         # A chunk cannot carry ACL for its base file URI. Keep the old main record
         # when copy has no main record to replace it, accepting its stale content.
+        acl_enabled = await self._acl_enabled(ctx)
         preserved_acl_uris: set[str] = set()
-        if preserve_target_acl and self._acl_enabled(ctx):
+        if preserve_target_acl and acl_enabled:
             written_uris = {
                 rewrite_transfer_uri(str(record["uri"]), source_uri, target_uri)
                 for record in source_records
@@ -2009,7 +2609,7 @@ class VikingVectorIndexBackend:
             ):
                 affected_target_ids.append(str(record["id"]))
         target_acl_fields: Dict[str, Dict[str, Any]] = {}
-        if preserve_target_acl and self._acl_enabled(ctx) and replacement_target_uris:
+        if preserve_target_acl and acl_enabled and replacement_target_uris:
             assert self.acl_manager is not None
             acl_target_uris = {uri for uri in replacement_target_uris if is_acl_uri(uri)}
             target_acl_fields = {
@@ -2130,7 +2730,7 @@ class VikingVectorIndexBackend:
             return result
 
         timestamp = get_current_timestamp()
-        acl_enabled = self._acl_enabled(ctx)
+        acl_enabled = await self._acl_enabled(ctx)
         moved_acl_by_uri: Dict[str, Dict[str, Any]] = {}
         target_payloads: List[Dict[str, Any]] = []
         for record in source_records:
@@ -2224,27 +2824,6 @@ class VikingVectorIndexBackend:
             raise
         return result
 
-    async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
-        updated = 0
-        for uri in uris:
-            records = await self.get_context_by_uri(uri=uri, limit=100, ctx=ctx)
-            if not records:
-                continue
-            record_ids = [r["id"] for r in records if r.get("id")]
-            if not record_ids:
-                continue
-            # Re-fetch by ID to get full records including vectors
-            full_records = await self.get(record_ids, ctx=ctx)
-            uri_updated = False
-            for record in full_records:
-                current = int(record.get("active_count", 0) or 0)
-                result = await self.upsert(record | {"active_count": current + 1}, ctx=ctx)
-                if result:
-                    uri_updated = True
-            if uri_updated:
-                updated += 1
-        return updated
-
     def _build_scope_filter(
         self,
         ctx: RequestContext,
@@ -2252,18 +2831,16 @@ class VikingVectorIndexBackend:
         target_directories: Optional[List[str]],
         extra_filter: Optional[FilterExpr | Dict[str, Any]],
         level: Optional[List[int]] = None,
+        *,
+        acl_enabled: bool,
     ) -> Optional[FilterExpr]:
         filters: List[FilterExpr] = []
         if context_type:
             filters.append(Eq("context_type", context_type))
 
         targets = [target_dir for target_dir in target_directories or [] if target_dir]
-        tenant_filter = self._tenant_filter(ctx)
-        if (
-            tenant_filter
-            and not self._acl_enabled(ctx)
-            and self._targets_within_visible_roots(ctx, targets)
-        ):
+        tenant_filter = self._tenant_filter(ctx, acl_enabled=acl_enabled)
+        if tenant_filter and not acl_enabled and self._targets_within_visible_roots(ctx, targets):
             # The target scopes are already narrower than the tenant-visible
             # roots. Keep account isolation, but avoid recursively evaluating
             # the broader path scopes as an additional filter.
@@ -2301,14 +2878,19 @@ class VikingVectorIndexBackend:
             for target_parts in (tuple(uri_parts(target)) for target in targets)
         )
 
-    def _tenant_filter(self, ctx: RequestContext) -> Optional[FilterExpr]:
+    def _tenant_filter(
+        self,
+        ctx: RequestContext,
+        *,
+        acl_enabled: bool,
+    ) -> Optional[FilterExpr]:
         if ctx.bypass_acl:
             return Eq("account_id", ctx.account_id)
         if ctx.role == Role.ROOT:
             return None
 
         account_filter = Eq("account_id", ctx.account_id)
-        if not self._acl_enabled(ctx):
+        if not acl_enabled:
             return And(
                 [
                     account_filter,
@@ -2317,31 +2899,33 @@ class VikingVectorIndexBackend:
             )
 
         controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
-        uncontrolled_filter = And(
-            [
-                RawDSL(
-                    {
-                        "op": "must_not",
-                        "field": ACL_MODE_FIELD,
-                        # Exclude controlled modes so absent/null fields stay visible.
-                        "conds": controlled_modes,
-                    }
-                ),
-                Or([PathScope("uri", root, depth=-1) for root in visible_roots(ctx)]),
-            ]
+        # Shared records written while ACL was disabled retain the root's
+        # default user:* manage access. Controlled descendants must match their
+        # own grants, including inherit nodes below a restricted boundary.
+        default_shared_filter = RawDSL(
+            {"op": "must_not", "field": ACL_MODE_FIELD, "conds": controlled_modes}
         )
         read_grants = acl_grant_tokens(acl_principals(ctx), AclAction.READ)
         shared_acl_filter = And(
             [
                 PathScope("uri", "viking://resources", depth=-1),
-                In(ACL_MODE_FIELD, controlled_modes),
                 Or(
                     [
-                        In("acl_direct_grants", read_grants),
+                        default_shared_filter,
                         And(
                             [
-                                Eq(ACL_MODE_FIELD, AclMode.INHERIT.value),
-                                In("acl_inherited_grants", read_grants),
+                                In(ACL_MODE_FIELD, controlled_modes),
+                                Or(
+                                    [
+                                        In("acl_direct_grants", read_grants),
+                                        And(
+                                            [
+                                                Eq(ACL_MODE_FIELD, AclMode.INHERIT.value),
+                                                In("acl_inherited_grants", read_grants),
+                                            ]
+                                        ),
+                                    ]
+                                ),
                             ]
                         ),
                     ]
@@ -2349,16 +2933,19 @@ class VikingVectorIndexBackend:
             ]
         )
         access_filters: List[FilterExpr] = [
-            uncontrolled_filter,
+            *(
+                PathScope("uri", root, depth=-1)
+                for root in visible_roots(ctx)
+                if not is_acl_uri(root)
+            ),
             shared_acl_filter,
-            PathScope("uri", f"{canonical_user_root(ctx)}/resources", depth=-1),
         ]
         if ctx.role == Role.ADMIN:
             access_filters.append(PathScope("uri", "viking://resources", depth=-1))
         return And([account_filter, Or(access_filters)])
 
-    def _acl_enabled(self, ctx: RequestContext) -> bool:
-        return self.acl_manager is not None and self.acl_manager.is_enabled(ctx.account_id)
+    async def _acl_enabled(self, ctx: RequestContext) -> bool:
+        return self.acl_manager is not None and await self.acl_manager.is_enabled(ctx.account_id)
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr]) -> Optional[FilterExpr]:

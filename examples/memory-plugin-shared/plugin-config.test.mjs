@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { HARNESS_KEYS, KNOBS } from "./lib/config-schema.mjs";
+import { buildContextSearchBody } from "./lib/recall-core.mjs";
 import { buildPluginConfig } from "./lib/plugin-config.mjs";
 import { loadAgentHookConfig } from "./lib/agent-hook-runtime.mjs";
 import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
@@ -29,7 +30,7 @@ const LOADERS = {
     harness: "codex",
     load: (cwd) => loadCodex(cwd),
     options: { manifestUrl: new URL("../codex-memory-plugin/.codex-plugin/plugin.json", import.meta.url), logFile: "codex-hooks.log" },
-    owns: ["recallCompress"],
+    owns: [],
   },
   opencode: {
     harness: "opencode",
@@ -54,6 +55,7 @@ const LOADERS = {
   trae: { harness: "trae", load: (cwd) => loadAgentHookConfig("trae", cwd), options: { logFile: "trae-hooks.log" }, owns: [] },
   trae_cn: { harness: "trae-cn", load: (cwd) => loadAgentHookConfig("trae-cn", cwd), options: { logFile: "trae-cn-hooks.log" }, owns: [] },
   zcode: { harness: "zcode", load: (cwd) => loadAgentHookConfig("zcode", cwd), options: { logFile: "zcode-hooks.log" }, owns: [] },
+  kimicode: { harness: "kimicode", load: (cwd) => loadAgentHookConfig("kimicode", cwd), options: { logFile: "kimicode-hooks.log" }, owns: [] },
 };
 
 // openclaw declares its own settings in TypeScript and still resolves them
@@ -349,3 +351,32 @@ test("ovcli.conf's plugin section outranks ov.conf, under ovcli.conf's own key",
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the skill catalog is on by default and its budget clamps to the declared range", () => {
+  withFixture({}, ({ otherDir }) => {
+    const defaults = buildPluginConfig("codex", { cwd: otherDir });
+    assert.equal(defaults.skillCatalog, true);
+    assert.equal(defaults.skillCatalogTokenBudget, 1200);
+
+    process.env.OPENVIKING_SKILL_CATALOG = "false";
+    process.env.OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET = "999999";
+    const overridden = buildPluginConfig("codex", { cwd: otherDir });
+    assert.equal(overridden.skillCatalog, false);
+    assert.equal(overridden.skillCatalogTokenBudget, 20000);
+  });
+});
+
+for (const [name, loader] of Object.entries(LOADERS)) {
+  test(`${name} explicit cloud compression reaches the shared HTTP contract`, () => {
+    withFixture({}, ({otherDir}) => {
+      process.env.OPENVIKING_RECALL_COMPRESS = "server";
+      const cfg = loader.load(otherDir);
+      assert.equal(cfg.recallRewrite, "server");
+      assert.equal(buildContextSearchBody(cfg).rewrite, true);
+      process.env.OPENVIKING_RECALL_COMPRESS = "auto";
+      assert.equal(buildContextSearchBody(loader.load(otherDir), { localCompressorAvailable: false }).rewrite, "auto");
+      process.env.OPENVIKING_RECALL_COMPRESS = "off";
+      assert.equal(buildContextSearchBody(loader.load(otherDir)).rewrite, undefined);
+    });
+  });
+}

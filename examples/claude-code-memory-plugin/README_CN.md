@@ -156,6 +156,8 @@ claude
 | `OPENVIKING_RECALL_COMPRESS`           | `auto`        | digest 压缩：`off`、`client`（本地宿主 CLI）、`server`、`auto`（本地优先、失败回落服务端） |
 | `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`         | digest 条数上限                                                     |
 
+召回的不只是记忆，也包括 skill：服务端组装的上下文块可能带有 skill 条目（`type="skills"`），既有你自己的 skill，也有账号内共享的 skill。
+
 #### 捕获调优
 
 | 环境变量                                | 默认值        | 说明                                                                |
@@ -167,6 +169,36 @@ claude
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`       | client-driven commit 的 pending-token 阈值                         |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`       | resume 时拉取 archive overview 的 token 预算                       |
 | `OPENVIKING_CAPTURE_FILTERS`           | `""`          | 逗号分隔的正则规则，作用于每个被捕获的回合 —— 见[输入过滤器](#输入过滤器) |
+
+#### 会话启动注入
+
+| 环境变量                                  | 默认值    | 说明                                                                |
+|------------------------------------------|-----------|--------------------------------------------------------------------|
+| `OPENVIKING_NO_AUTO_INJECT`              | `false`   | 会话启动时不注入用户画像、记忆索引和 skill 清单；resume/compact 的 archive overview 和逐轮召回照常进行 |
+| `OPENVIKING_PROFILE_TOKEN_BUDGET`        | `10000`   | `profile.md` 及 `preferences/`、`entities/` 索引共用的 CJK-aware token 预算 |
+| `OPENVIKING_SKILL_CATALOG`               | `true`    | 在会话启动块里加入 `<available-skills>` skill 清单                 |
+| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`  | `1200`    | `<available-skills>` 的 token 预算（0–20000），不占用户画像的预算；设为 `0` 即不注入清单 |
+| `OPENVIKING_SESSION_START_MAX_BYTES`    | `9500`    | SessionStart 注入的总字节上限，保证低于 Claude Code 10,000 字符的内联限制；resume/compact 时归档最多占一半；`0` 取消上限 |
+
+在 `ovcli.conf` 里，这几项对应 `plugin` 或 `plugin.claude_code` 下的 `noAutoInject`、`profileTokenBudget`、`skillCatalog` 和 `skillCatalogTokenBudget`。
+
+每次 `SessionStart`（`startup`、`clear`、`resume`、`compact`）都会注入一个 `<openviking-context>` 块，依次包含 `<user-profile>`、`<available-memories>` 和 `<available-skills>`；`resume`/`compact` 时后面还会接上最新的 archive overview。skill 清单来自一次 `GET /api/v1/skills?node_limit=200` 调用：先列你自己的 skill，再列账号内共享在 `viking://agent/skills` 下的 skill，与你自己某个 skill 同名的共享 skill 不再列出。每条描述截到约 40 个 token，描述里出现的 `<openviking-context>` 等注入块标签会被转义。完整清单超出预算时只列名称，名称也放不全时以 `... +N more, search OpenViking skills to find the rest` 收尾；连一个名称都放不下时，整块缩成一行 `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`。没有任何 skill，或服务端不支持 `GET /api/v1/skills` 时，不注入清单。
+
+```text
+<openviking-context source="startup">
+<user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
+<available-memories>...</available-memories>
+<available-skills>
+  OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.
+  viking://user/default/skills/
+    - pr-review — Review a pull request against the team checklist.
+  viking://agent/skills/
+    - deploy-runbook — Shared deployment runbook for the payments service.
+</available-skills>
+</openviking-context>
+```
+
+插件自带的 `openviking-skills` skill 告诉 Claude 拿到清单后怎么做：查找和使用 skill，用 MCP `add_skill` 工具创建、安装或共享 skill，删除 skill，以及在你要求时把 `~/.claude/skills` 或 `<repo>/.claude/skills` 下的本地 skill 迁入 OpenViking。依赖本机环境的 skill（由插件分发、由 CLI 安装器软链接进来，或需要本地二进制）留在本地，每个 skill 都要经你确认后才会上传。
 
 #### 生命周期 / 行为 / 杂项
 
@@ -358,7 +390,7 @@ node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claud
 | 插件没激活                                    | 找不到 `ov.conf` / `ovcli.conf`                       | 创建一个；或设 `OPENVIKING_MEMORY_ENABLED=1` 加上 URL/API_KEY 等环境变量                       |
 | Hook 触发但召回为空                           | OpenViking 服务器没起 / URL 不对                      | `curl http://localhost:1933/health`（或你的远程 URL）                                          |
 | 自动捕获抽取出 0 条记忆                        | `ov.conf` 里 embedding/extraction 模型配错            | 检查 `embedding` / `vlm` 配置；看服务器日志                                                    |
-| MCP 工具命中本地 `127.0.0.1` 而不是远程       | `.mcp.json` 仅解析 `${VAR}`，不读 ovcli.conf          | 见 [配置 MCP](#配置-mcp) — export 环境变量或编辑 `.mcp.json`                                    |
+| MCP 工具命中了错误的服务器                    | `ovcli.conf` / 环境变量过期，或改完配置没有重启 Claude Code | 见 [配置 MCP](#配置-mcp)，核对 `~/.openviking/ovcli.conf` 后重启 Claude Code                    |
 | 远程鉴权 401 / 403                            | API key / account / user 头错配                      | 核对 `OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`（或 `ov.conf` 对应字段）    |
 | `Stop` hook 超时                              | 服务器慢 + 同步写路径                                 | 保持 `writePathAsync: true`（默认），或调大 `hooks/hooks.json` 里的 `Stop` 超时               |
 | 旧上下文反复出现在 OV 里                      | 早期版本把召回块当成用户消息回写了                    | 升级到当前版本——`auto-capture` 现在推送前会剥离 `<openviking-context>`                      |
@@ -413,12 +445,12 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 |-----------------------|--------------------------------------|--------------------------------------------------------------------------------------------------|
 | `UserPromptSubmit`    | 每个用户回合                          | 搜 OV → 排序 → 在 token 预算内注入 `<openviking-context>` 块                                      |
 | `Stop`                | Claude 完成一次响应                   | 解析 transcript → 把新的用户回合推到 OV session → pending tokens 超阈值时 commit                  |
-| `SessionStart`        | 新建 / resume / compact 后的会话      | `resume`/`compact` 时拉取最新 archive overview 注入                                              |
+| `SessionStart`        | 新建 / resume / compact 后的会话      | 注入 `profile.md`、记忆索引和 `<available-skills>`；`resume`/`compact` 时再注入最新的 archive overview |
 | `PreCompact`          | Claude Code 重写 transcript 之前      | 在 CC 改 transcript 之前先把 pending 提交为归档                                                  |
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
-| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` / `Edit` / `Write` 的路径是 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具 |
+| `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` / `Edit` / `Write` 的路径是 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具；对 skill URI（`viking://~/skills/...`、`viking://user/<id>/skills/...`、`viking://agent/skills/...`）的 `Write` / `Edit` 会被引导到 `add_skill` |
 | `PreToolUse`          | `Bash` 命令里带 `viking://` URI | 照常执行命令，并附一条提醒：如果本意是访问 OpenViking 内容，应改用 OpenViking MCP 工具 |
 | `PostToolUse`         | `Read` 读到 `SKILL.md` 文件           | 可选（默认关闭）：OV 有相关 skill 经验记忆时注入经验块                                           |
 
@@ -434,7 +466,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 ### 服务器暴露的 MCP 工具
 
-插件的 `.mcp.json` 启动本地 stdio 代理，代理再连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`。Claude 可按需调用服务器提供的检索、记忆、资源、watch 和文件系统工具。
+插件的 `.mcp.json` 启动本地 stdio 代理，代理再连到 OpenViking 服务器原生 HTTP MCP endpoint `/mcp`。Claude 可按需调用服务器提供的检索、记忆、资源、skill、watch 和文件系统工具。创建或替换 skill 用 `add_skill`：`write` 和 `edit` 会拒绝你自己的 `skills/` 子树，`add_resource` 也不接受 skill 目标路径。
 
 完整工具清单和参数详见 [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)。
 
@@ -450,6 +482,7 @@ claude-code-memory-plugin/
 │   └── ov.md                # /ov 状态命令
 ├── skills/
 │   ├── openviking-memory/   # 记忆工具使用指南
+│   ├── openviking-skills/   # 查找、添加、共享和迁移 OpenViking skill
 │   ├── ov-experience-memory/
 │   └── ov-memory-doctor/    # 安装 / 配置 / 连接 / 本机 server 排障
 ├── servers/
