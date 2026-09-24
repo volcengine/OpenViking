@@ -848,20 +848,25 @@ def test_cuvs_registrar_failure_consumes_candidate_without_marking_clean():
     assert index.search([1.0, 0.0], 1, None)[0] == [1]
 
 
-def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild():
+@pytest.mark.parametrize("micro_batching_enabled", [False, True])
+def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild(micro_batching_enabled):
     runtime = FakeCuVSRuntime()
     index = CuVSDenseIndex(
         dimension=2,
         distance="ip",
         normalize_vectors=True,
         field_types={"account_id": "string", "uri": "path"},
-        config={"algorithm": "brute_force"},
+        config={
+            "algorithm": "brute_force",
+            "micro_batching_enabled": micro_batching_enabled,
+            "micro_batching_max_wait_ms": 0.1,
+        },
         runtime=runtime,
     )
     index.add_candidates(
         [
             candidate(10, [1.0, 0.0], account_id="a", uri="/docs/one"),
-            candidate(20, [0.8, 0.2], account_id="a", uri="/docs/deep/two"),
+            candidate(20, [-3.0, 4.0], account_id="a", uri="/docs/deep/two"),
             candidate(30, [0.0, 1.0], account_id="b", uri="/other/three"),
         ]
     )
@@ -881,6 +886,13 @@ def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild():
     assert scores == [1.0]
     assert runtime.build_count == 1
 
+    labels, scores = index.search([1.0, 0.0], 3, None)
+    assert labels == [10, 30, 20]
+    assert scores == pytest.approx([1.0, 0.5, 0.2])
+    labels, scores = index.search([-1.0, 0.0], 3, None)
+    assert labels == [20, 30, 10]
+    assert scores == pytest.approx([0.8, 0.5, 0.0])
+
     # Repeated reads reuse the GPU index; a mutation invalidates it exactly once.
     assert index.search([1.0, 0.0], 1, None)[0] == [10]
     assert runtime.build_count == 1
@@ -890,6 +902,7 @@ def test_cuvs_dense_search_handles_filter_upsert_delete_and_lazy_rebuild():
     index.delete([DeltaRecord(label=10)])
     assert index.search([1.0, 0.0], 3, None)[0] == [30, 20]
     assert runtime.build_count == 3
+    index.close()
 
 
 def test_empty_filter_does_not_allocate_a_device_bitset():

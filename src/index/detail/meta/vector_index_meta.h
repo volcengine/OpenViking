@@ -9,6 +9,8 @@ namespace vectordb {
 class VectorIndexMeta {
  public:
   std::string distance_type = "ip";
+  // Runtime configuration from the caller; not serialized in native snapshots.
+  bool normalize_vector = false;
   std::string index_type;
   std::string quantization_type = "float";  // "float" | "int8"
   uint64_t element_count = 0;

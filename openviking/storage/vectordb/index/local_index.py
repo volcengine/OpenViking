@@ -129,7 +129,9 @@ class IndexEngineProxy:
             normalize_vector_flag (bool): If True, all vectors will be L2-normalized
                 before being added to the index or used for search. Defaults to False.
         """
-        self.index_engine: Optional[engine.IndexEngine] = engine.IndexEngine(index_path_or_json)
+        self.index_engine: Optional[engine.IndexEngine] = engine.IndexEngine(
+            index_path_or_json, normalize_vector_flag
+        )
         self.normalize_vector_flag = normalize_vector_flag
 
     def search(
