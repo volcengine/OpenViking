@@ -135,6 +135,7 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
     assert config.queue_workers.session_commit.max_concurrent == 8
     assert config.queue_workers.external_task.max_concurrent == 10
     assert config.reindex.file_vectorization_concurrency == 8
+    assert config.reindex.directory_vectorization_concurrency == 8
 
 
 def test_glob_uses_safe_defaults():
@@ -157,7 +158,10 @@ def test_runtime_concurrency_accepts_separate_values():
                 "session_commit": {"max_concurrent": 50},
                 "external_task": {"max_concurrent": 11},
             },
-            "reindex": {"file_vectorization_concurrency": 16},
+            "reindex": {
+                "file_vectorization_concurrency": 16,
+                "directory_vectorization_concurrency": 3,
+            },
         }
     )
 
@@ -168,6 +172,13 @@ def test_runtime_concurrency_accepts_separate_values():
     assert config.queue_workers.session_commit.max_concurrent == 50
     assert config.queue_workers.external_task.max_concurrent == 11
     assert config.reindex.file_vectorization_concurrency == 16
+    assert config.reindex.directory_vectorization_concurrency == 3
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_reindex_directory_concurrency_rejects_non_positive_value(value):
+    with pytest.raises(ValueError, match="reindex.directory_vectorization_concurrency"):
+        OpenVikingConfig.from_dict({"reindex": {"directory_vectorization_concurrency": value}})
 
 
 @pytest.mark.parametrize("value", [0, -1])

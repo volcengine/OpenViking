@@ -120,7 +120,8 @@
         "poll_interval_ms": 3000,
     },
     "reindex": {
-        "file_vectorization_concurrency": 8
+        "file_vectorization_concurrency": 8,
+        "directory_vectorization_concurrency": 8
     },
     "embedding": {
         "dense": {
