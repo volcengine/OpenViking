@@ -1015,6 +1015,14 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 - `ContextPart`: Context reference pointing to resources or memories
 - `ToolPart`: Tool call and result
 
+`ImagePart.url` must be an HTTP(S) URL reachable by the VLM provider or an image
+data URI such as `data:image/png;base64,...`. Encode local files on the writing
+client before sending them; session extraction does not read client-supplied
+filesystem paths (including `file://` URLs). If any image source in a message is
+unsupported, extraction logs a warning and skips that message's image description
+without calling the VLM. Original text is retained; an image-only message is omitted
+from extraction. Stored session messages are unchanged.
+
 **Code Entries:**
 - `openviking/session/session.py:Session.add_message()` - Core implementation
 - `openviking/server/routers/sessions.py:add_message()` - HTTP route
