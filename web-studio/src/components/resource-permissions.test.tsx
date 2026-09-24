@@ -87,7 +87,10 @@ beforeEach(() => {
     acl_mode: 'inherit',
     direct_entries: [{ principal: 'user:bob', level: 'read' }],
     inherited_entries: [{ principal: 'group:engineering', level: 'write' }],
-    effective_entries: [],
+    effective_entries: [
+      { principal: 'user:bob', level: 'read' },
+      { principal: 'group:engineering', level: 'write' },
+    ],
   }
   mocks.get.mockImplementation(async () => report)
   mocks.change.mockImplementation(async (_uri, change) => {
@@ -97,6 +100,10 @@ beforeEach(() => {
         ? { acl_mode: change.mode }
         : { direct_entries: [] }),
     }
+    report.effective_entries =
+      report.acl_mode === 'restricted'
+        ? report.direct_entries
+        : [...report.direct_entries, ...report.inherited_entries]
     return report
   })
   mocks.users.mockResolvedValue({ users: [{ userId: 'bob' }], total: 1 })
@@ -164,12 +171,29 @@ it('shows the ancestor directory when an inherited grant can be traced', async (
   expect(screen.getByText('acl.accountAdministrators')).toBeTruthy()
   expect(screen.getByText('acl.administratorSource')).toBeTruthy()
 })
+it('shows one effective grant with both sources when a principal is also granted directly', async () => {
+  report = {
+    ...report,
+    direct_entries: [{ principal: 'group:engineering', level: 'read' }],
+    effective_entries: [{ principal: 'group:engineering', level: 'write' }],
+  }
+  mount()
+  const row = (await screen.findByText('engineering')).closest('tr')!
+  expect(screen.getAllByText('engineering')).toHaveLength(1)
+  expect(within(row).getByText('acl.directAndInheritedSource')).toBeTruthy()
+  expect(within(row).getByText('acl.effectiveLevel')).toBeTruthy()
+  expect(within(row).getByText('acl.levels.read')).toBeTruthy()
+  expect(
+    within(row).getByRole('button', { name: 'acl.removeFor' }),
+  ).toBeTruthy()
+})
 it('allows adding direct grants while inheritance is enabled by default', async () => {
   report = {
     ...report,
     acl_mode: 'none',
     direct_entries: [],
     inherited_entries: [],
+    effective_entries: [],
   }
   mount()
   await screen.findByText('acl.everyone')
@@ -201,7 +225,11 @@ it('confirms direct removal and preserves inherited permissions in the display',
   expect(screen.getByText('engineering')).toBeTruthy()
 })
 it('keeps restricted grants and shows inheritance disabled', async () => {
-  report = { ...report, acl_mode: 'restricted' }
+  report = {
+    ...report,
+    acl_mode: 'restricted',
+    effective_entries: report.direct_entries,
+  }
   mount()
   await screen.findByText('bob')
   expect(

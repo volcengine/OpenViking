@@ -853,6 +853,7 @@ const workspace = {
       peopleWithAccess: 'People and groups with access',
       grantSubjectColumn: 'User / group',
       grantLevelColumn: 'Permission',
+      effectiveLevel: 'Effective: {{level}}',
       grantSourceColumn: 'Source',
       accountAdministrators: 'Account administrators',
       administratorRole: 'System role',
@@ -862,6 +863,7 @@ const workspace = {
       onlyAdmins: 'No grants yet; account administrators can still access',
       directSource: 'Direct grant',
       inheritedSource: 'Inherited grant',
+      directAndInheritedSource: 'Inherited + direct grant',
       adminCredentialIdentity:
         'Permission management uses the account administrator credential for {{account}}. Resource browsing still uses the current user.',
       identity:

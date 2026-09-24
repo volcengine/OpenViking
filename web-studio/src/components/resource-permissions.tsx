@@ -47,6 +47,7 @@ import {
   AlertDialogAction,
 } from '#/components/ui/alert-dialog'
 import { isSharedAclTarget } from '#/lib/resource-acl'
+import { normalizeFileUri, parentUri } from '#/lib/viking-uri'
 import type {
   AclChange,
   AclEntry,
@@ -126,6 +127,13 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
       report.error.code === 'PERMISSION_DENIED')
   const restricted = report.data?.acl_mode === 'restricted'
   const defaultShared = report.data?.acl_mode === 'none'
+  const directGrants = new Map(
+    report.data?.direct_entries.map((entry) => [entry.principal, entry]) ?? [],
+  )
+  const inheritedGrants = new Map(
+    report.data?.inherited_entries.map((entry) => [entry.principal, entry]) ??
+      [],
+  )
   return (
     <section className="min-w-0">
       <div className="flex flex-col gap-4">
@@ -266,98 +274,100 @@ export function ResourcePermissionsPanel({ uri }: { uri: string }) {
                         </td>
                       </tr>
                     )}
-                    {report.data.direct_entries.map((entry) => (
-                      <tr key={`direct:${entry.principal}`}>
-                        <td className="px-4 py-3">
-                          <GrantSubject
-                            label={principalLabel(
-                              entry.principal,
-                              t('acl.everyone'),
-                            )}
-                            kind={principalType(entry.principal)}
-                            description={t(
-                              `acl.subjects.${principalType(entry.principal)}`,
-                            )}
-                          />
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1">
-                            <LevelSelect
-                              value={entry.level}
-                              disabled={!writable}
-                              label={t('acl.levelFor', {
-                                principal: entry.principal,
-                              })}
-                              onChange={(level) =>
-                                mutation.mutate({
-                                  kind: 'grant',
-                                  principal: entry.principal,
-                                  level,
-                                })
-                              }
+                    {report.data.effective_entries.map((entry) => {
+                      const direct = directGrants.get(entry.principal)
+                      const inherited = restricted
+                        ? undefined
+                        : inheritedGrants.get(entry.principal)
+                      const source = inherited
+                        ? findGrantSource(inherited, sourceReports.data)
+                        : null
+                      return (
+                        <tr key={entry.principal}>
+                          <td className="px-4 py-3">
+                            <GrantSubject
+                              label={principalLabel(
+                                entry.principal,
+                                t('acl.everyone'),
+                              )}
+                              kind={principalType(entry.principal)}
+                              description={t(
+                                `acl.subjects.${principalType(entry.principal)}`,
+                              )}
                             />
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              disabled={!writable}
-                              aria-label={t('acl.removeFor', {
-                                principal: entry.principal,
-                              })}
-                              onClick={() =>
-                                setConfirm({
-                                  kind: 'revoke',
-                                  principal: entry.principal,
-                                })
-                              }
-                            >
-                              <Trash2Icon />
-                            </Button>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">
-                          {t('acl.directSource')}
-                        </td>
-                      </tr>
-                    ))}
-                    {!restricted &&
-                      report.data.inherited_entries.map((entry) => {
-                        const source = findGrantSource(
-                          entry,
-                          sourceReports.data,
-                        )
-                        return (
-                          <tr key={`inherited:${entry.principal}`}>
-                            <td className="px-4 py-3">
-                              <GrantSubject
-                                label={principalLabel(
-                                  entry.principal,
-                                  t('acl.everyone'),
-                                )}
-                                kind={principalType(entry.principal)}
-                                description={t(
-                                  `acl.subjects.${principalType(entry.principal)}`,
-                                )}
-                              />
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className="inline-flex items-center gap-2">
-                                {t(`acl.levels.${entry.level}`)}
-                                <LockKeyholeIcon className="size-4 text-muted-foreground" />
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-muted-foreground">
-                              <span className="block">
-                                {t('acl.inheritedSource')}
-                              </span>
-                              {source && (
-                                <span className="block truncate" title={source}>
-                                  {source}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="space-y-1">
+                              {(!direct || direct.level !== entry.level) && (
+                                <span className="inline-flex items-center gap-2">
+                                  {direct
+                                    ? t('acl.effectiveLevel', {
+                                        level: t(`acl.levels.${entry.level}`),
+                                      })
+                                    : t(`acl.levels.${entry.level}`)}
+                                  {!direct && (
+                                    <LockKeyholeIcon className="size-4 text-muted-foreground" />
+                                  )}
                                 </span>
                               )}
-                            </td>
-                          </tr>
-                        )
-                      })}
+                              {direct && (
+                                <div className="flex items-center gap-1">
+                                  {direct.level !== entry.level && (
+                                    <span className="text-xs text-muted-foreground">
+                                      {t('acl.directSource')}
+                                    </span>
+                                  )}
+                                  <LevelSelect
+                                    value={direct.level}
+                                    disabled={!writable}
+                                    label={t('acl.levelFor', {
+                                      principal: entry.principal,
+                                    })}
+                                    onChange={(level) =>
+                                      mutation.mutate({
+                                        kind: 'grant',
+                                        principal: entry.principal,
+                                        level,
+                                      })
+                                    }
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    disabled={!writable}
+                                    aria-label={t('acl.removeFor', {
+                                      principal: entry.principal,
+                                    })}
+                                    onClick={() =>
+                                      setConfirm({
+                                        kind: 'revoke',
+                                        principal: entry.principal,
+                                      })
+                                    }
+                                  >
+                                    <Trash2Icon />
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            <span className="block">
+                              {direct && inherited
+                                ? t('acl.directAndInheritedSource')
+                                : direct
+                                  ? t('acl.directSource')
+                                  : t('acl.inheritedSource')}
+                            </span>
+                            {source && (
+                              <span className="block truncate" title={source}>
+                                {source}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -422,19 +432,14 @@ function principalLabel(principal: string, everyone: string) {
     : principal.replace(/^(user|group):/, '')
 }
 function aclParentUris(uri: string): string[] {
-  const parts = uri
-    .replace(/\/+$/, '')
-    .slice('viking://resources'.length)
-    .split('/')
-    .filter(Boolean)
-  return Array.from(
-    { length: parts.length },
-    (_, index) =>
-      `viking://resources${parts
-        .slice(0, parts.length - index - 1)
-        .map((part) => `/${part}`)
-        .join('')}`,
-  )
+  const parents: string[] = []
+  let current = normalizeFileUri(parentUri(uri))
+  while (current.startsWith('viking://resources')) {
+    parents.push(current)
+    if (current === 'viking://resources') break
+    current = normalizeFileUri(parentUri(current))
+  }
+  return parents
 }
 function findGrantSource(
   entry: AclEntry,

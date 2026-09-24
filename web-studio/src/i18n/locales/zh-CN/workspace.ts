@@ -819,6 +819,7 @@ const workspace = {
       peopleWithAccess: '有权限的用户和用户组',
       grantSubjectColumn: '用户 / 用户组',
       grantLevelColumn: '权限',
+      effectiveLevel: '生效权限：{{level}}',
       grantSourceColumn: '来源',
       accountAdministrators: '账号管理员',
       administratorRole: '系统角色',
@@ -828,6 +829,7 @@ const workspace = {
       onlyAdmins: '暂无授权对象，仅账号管理员可访问',
       directSource: '直接授权',
       inheritedSource: '来自继承',
+      directAndInheritedSource: '继承 + 直接授权',
       adminCredentialIdentity:
         '权限管理使用 {{account}} 的账号管理员凭证；资源浏览仍使用当前用户。',
       identity: '资源操作使用当前数据身份：{{account}} / {{user}}。',
