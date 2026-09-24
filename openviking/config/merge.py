@@ -2,13 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Three-state PATCH merge and copy-on-write helpers.
 
-The same three-state semantics apply to every config layer (cluster and account):
+The same three-state PATCH semantics apply to each independent config scope:
 
 - field absent: keep current value.
 - field is a concrete value: set/replace.
-- field is ``None``: delete this layer's override, inheriting the next layer.
+- field is ``None``: remove the value from this scope.
 
 Objects merge recursively, arrays replace wholesale.
+
+What an absent value means is deliberately outside this helper. A business
+resolver may supply a default, reject the operation, or consult Cluster
+configuration. Legacy ``RuntimeField.fallback`` is a separate compatibility
+mechanism and is not implemented by this merge function.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from typing import Any, Optional
 
 
 def apply_three_state_patch(current: Optional[dict], patch: dict) -> dict:
-    """Return a new sparse override with ``patch`` applied to ``current``.
+    """Return a new settings document with ``patch`` applied to ``current``.
 
     Never mutates the inputs (pure function; safe for conflict retries).
     """
@@ -30,7 +35,7 @@ def apply_three_state_patch(current: Optional[dict], patch: dict) -> dict:
 def _merge_into(base: dict, patch: dict) -> None:
     for key, value in patch.items():
         if value is None:
-            # Delete this layer's override, restoring inheritance.
+            # Remove the value from this scope; consumers decide the default.
             base.pop(key, None)
             continue
         if isinstance(value, dict):

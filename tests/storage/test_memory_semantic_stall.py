@@ -21,6 +21,11 @@ from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import CircuitBreakerOpen
 
 
+def _processor():
+    resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
+    return SemanticProcessor(vlm_resolver=resolver)
+
+
 def _make_msg(uri="viking://user/usr1/memories", context_type="memory", **kwargs):
     """Build a minimal SemanticMsg for testing."""
     defaults = {
@@ -48,7 +53,7 @@ def _build_data(msg: SemanticMsg) -> dict:
 
 @pytest.mark.parametrize("context_type", ["resource", "memory", "skill"])
 async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context_type):
-    processor = SemanticProcessor()
+    processor = _processor()
     processor._circuit_breaker = SimpleNamespace(
         check=MagicMock(side_effect=CircuitBreakerOpen), retry_after=0
     )
@@ -88,7 +93,7 @@ async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context
 
 @pytest.mark.asyncio
 async def test_root_semantic_message_is_acknowledged_without_processing():
-    processor = SemanticProcessor()
+    processor = _processor()
 
     result = await processor.on_dequeue(
         _build_data(_make_msg(uri="viking://", context_type="resource"))
@@ -102,7 +107,7 @@ async def test_root_semantic_message_is_acknowledged_without_processing():
 @pytest.mark.asyncio
 async def test_memory_empty_dir_still_returns_success():
     """An empty memory directory must return a successful processing result."""
-    processor = SemanticProcessor()
+    processor = _processor()
 
     fake_fs = MagicMock()
     fake_fs.exists = AsyncMock(return_value=True)
@@ -135,7 +140,7 @@ async def test_memory_ls_error_returns_failed():
     Uses a real classify_api_error (no mock): FileNotFoundError is classified
     as permanent by the real classifier, so the processor returns FAILED.
     """
-    processor = SemanticProcessor()
+    processor = _processor()
 
     fake_fs = MagicMock()
     fake_fs.exists = AsyncMock(return_value=True)
@@ -170,7 +175,7 @@ async def test_memory_ls_transient_error_requeues():
     _reenqueue_semantic_msg(), bump requeue_count, and return REQUEUED without
     a terminal error.
     """
-    processor = SemanticProcessor()
+    processor = _processor()
 
     fake_fs = MagicMock()
     fake_fs.exists = AsyncMock(return_value=True)
@@ -207,7 +212,7 @@ async def test_memory_write_error_returns_failed():
     Exercises the write failure path with real classify_api_error: PermissionError
     is classified as permanent, so the processor returns FAILED.
     """
-    processor = SemanticProcessor()
+    processor = _processor()
 
     fake_fs = MagicMock()
     fake_fs.exists = AsyncMock(return_value=True)

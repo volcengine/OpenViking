@@ -17,7 +17,6 @@ from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb import engine as vectordb_engine
 from openviking.storage.viking_fs import VikingFS
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.utils.agfs_utils import RagfsBindingConfig, mount_agfs_backend
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -47,10 +46,10 @@ def root_ctx():
 
 
 @pytest_asyncio.fixture
-async def indexed_fs(binding_fs, tmp_path):
+async def indexed_fs(vector_backend_factory, binding_fs, tmp_path):
     if not getattr(vectordb_engine, "PersistStore", None):
         pytest.skip("local persistent vectordb engine is unavailable")
-    backend = VikingVectorIndexBackend(
+    backend = vector_backend_factory(
         config=VectorDBBackendConfig(
             backend="local", name="context", dimension=4, path=str(tmp_path / "vectors")
         )
@@ -95,7 +94,7 @@ async def test_transfer_uses_queries_without_count_or_sort(
     await fs.write_file_bytes(target_file, b"old", ctx=ctx)
     await seed_vector(backend, source_file, "new")
     await seed_vector(backend, target_file, "old")
-    adapter = backend._get_backend_for_context(ctx)._adapter
+    adapter = (await backend._get_backend_for_context(ctx))._adapter
     original_count, original_query = adapter.count, adapter.query
     count_calls, queries = [], []
 
@@ -144,7 +143,7 @@ async def test_transfer_skips_source_record_disappearing_before_fetch(
     async def get_after_delete(ctx, ids):
         missing = [uri for uri in ids if uri == b or (disappear_all and uri == a)]
         if missing:
-            await backend._get_backend_for_context(ctx).strict_delete(missing)
+            await (await backend._get_backend_for_context(ctx)).strict_delete(missing)
         return await original_get(ctx, ids)
 
     monkeypatch.setattr(backend, "_strict_transfer_get", get_after_delete)
@@ -171,7 +170,7 @@ async def test_transfer_propagates_legacy_read_errors(indexed_fs, monkeypatch, o
     await fs.write_file_bytes(target, b"old", ctx=ctx)
     await seed_vector(backend, source, "new")
     await seed_vector(backend, target, "old")
-    adapter = backend._get_backend_for_context(ctx)._adapter
+    adapter = (await backend._get_backend_for_context(ctx))._adapter
     original_query, original_get = adapter.query, adapter.get
 
     def query(**kwargs):
@@ -219,7 +218,7 @@ async def test_transfer_ignores_concurrent_sibling_index_changes(
         await fs.write_file_bytes(sibling, b"unrelated", ctx=ctx)
         await seed_vector(backend, sibling, "unrelated")
 
-    account_backend = backend._get_backend_for_context(ctx)
+    account_backend = await backend._get_backend_for_context(ctx)
     original_query = account_backend.strict_query
     trigger_uri = source_file if phase == "source" else target_file
     changed = False
@@ -312,7 +311,7 @@ async def test_directory_transfer_reads_all_exact_entries_with_native_storage(
         ctx=ctx,
     )
     read_ids: set[str] = set()
-    account_backend = backend._get_backend_for_context(ctx)
+    account_backend = await backend._get_backend_for_context(ctx)
     original_query = account_backend.strict_query
 
     async def tracked_query(*args, **kwargs):

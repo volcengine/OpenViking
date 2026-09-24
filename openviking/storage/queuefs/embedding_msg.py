@@ -144,6 +144,13 @@ class EmbeddingMsg:
                 initial_fields=dict(initial_fields or {}),
             )
         self._validate_payload()
+        self._validate_account_context()
+
+    def _validate_account_context(self) -> None:
+        context_data = getattr(self.payload, "context_data", {})
+        account_id = context_data.get("account_id") if isinstance(context_data, dict) else None
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise ValueError("Embedding message requires account_id")
 
     def _legacy_payload(
         self,

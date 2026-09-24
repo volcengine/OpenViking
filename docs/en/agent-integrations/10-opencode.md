@@ -8,7 +8,7 @@ Tool calls and results are captured as dedicated `tool` parts, and `tool_output`
 
 ## Prerequisites
 
-- [OpenCode](https://opencode.ai/)
+- [OpenCode](https://opencode.ai/) 1.15.7+ or 2.0.15+
 - Node.js 18+
 - An OpenViking HTTP server
 - An OpenViking API key when your server requires authentication
@@ -59,6 +59,10 @@ opencode
 ```
 
 If `~/.config/opencode/opencode.json` already exists, do not overwrite it; only merge `"@openviking/opencode-plugin"` into the existing `plugin` array. OpenCode downloads the npm package at startup, and the plugin registers its MCP server automatically.
+
+OpenCode 2 uses the same package. It calls `setup()`, while OpenCode 1 calls `server()`. OpenCode 2 normalizes `"plugin"` to `"plugins"`, so the installer continues to write the v1/v2-compatible `"plugin"` key; do not rewrite an existing config just for v2. There is no OpenCode skill to install.
+
+On OpenCode 2, the plugin sets its MCP server to `codemode: false`, so tools remain directly available as `openviking_*` instead of being folded into Code Mode. OpenCode 2 has no plugin toast API, so service availability notices are written to the plugin log only.
 
 ### Source install
 
@@ -151,6 +155,10 @@ Restart OpenCode after installation. In an OpenCode session, the plugin should e
 - `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 
+OpenCode 2 captures the current turn's user message, assistant response, and tool results when each execution ends, and captures the transcript before compaction discards it. It commits at the token threshold, and forces a commit on compaction, session deletion, and plugin cleanup. OpenCode 2 runs cleanup after 60 minutes of inactivity, when the service stops, and when a local plugin is hot-reloaded.
+
+OpenCode 1.15.7 does not call plugin disposal hooks. A short-lived v1 CLI run can also exit before asynchronous capture finishes; this behavior predates v2 support. Keep the v1 service running to let idle capture finish. OpenCode 1.18.32 calls the disposal hook when its instance is disposed.
+
 Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are written to:
 
 ```bash
@@ -162,7 +170,7 @@ Ask OpenCode to search or browse OpenViking memory. Runtime state and errors are
 
 | Issue | What to check |
 |-------|---------------|
-| Plugin does not load | Confirm `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
+| Plugin does not load | Confirm the `plugin` array in `~/.config/opencode/opencode.json` references `@openviking/opencode-plugin`, or that `~/.config/opencode/plugins/openviking.js` exists for source installs |
 | Load fails with a missing `lib/shared/*.mjs` module | The source copy was made without running `sync.mjs` first. Run `node examples/memory-plugin-shared/sync.mjs` from the repository root and copy `lib/` again |
 | MCP tools call the wrong server | Check `~/.openviking/ovcli.conf`, or set `OPENVIKING_*` env vars; `OPENVIKING_CLI_CONFIG_FILE` points the plugin at a different ovcli.conf |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments, also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |

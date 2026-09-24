@@ -1409,7 +1409,7 @@ class _OpsMixin:
         if vector_store is None:
             return False
 
-        backend_type = getattr(vector_store, "_backend_type", "unknown")
+        backend_type = (await vector_store.get_account_backend(ctx.account_id))._mode
         if backend_type not in ("volcengine", "vikingdb"):
             return False
 

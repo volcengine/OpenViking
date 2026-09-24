@@ -43,10 +43,12 @@ class EmbeddingMsgConverter:
 
         context_data = context.to_dict()
 
-        # Backfill tenant fields for legacy writers that only set user/uri.
-        if not context_data.get("account_id"):
-            user = context_data.get("user") or {}
-            context_data["account_id"] = user.get("account_id", "default")
+        # Account identity is required at the queue boundary. Do not silently
+        # route a malformed or legacy message to the default Account.
+        if not isinstance(context_data.get("account_id"), str) or not context_data[
+            "account_id"
+        ].strip():
+            raise ValueError("Embedding context requires account_id")
         uri = context_data.get("uri", "")
         owner_fields = None
         if uri:

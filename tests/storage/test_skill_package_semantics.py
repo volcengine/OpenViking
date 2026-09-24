@@ -60,7 +60,10 @@ async def test_skill_worker_keeps_package_locked_until_embeddings_finish(monkeyp
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: SimpleNamespace(exists=AsyncMock(return_value=True)),
     )
-    worker = asyncio.create_task(SemanticProcessor().on_dequeue({"data": msg.to_json()}))
+    resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
+    worker = asyncio.create_task(
+        SemanticProcessor(vlm_resolver=resolver).on_dequeue({"data": msg.to_json()})
+    )
     await asyncio.wait_for(emitted.wait(), 1)
     assert locked and not worker.done() and not tracker.is_complete(msg.telemetry_id)
     # The HTTP timeout cleanup must not release the package while embedding runs.

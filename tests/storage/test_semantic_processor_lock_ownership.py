@@ -3,11 +3,19 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+
+def _processor():
+    resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
+    return SemanticProcessor(vlm_resolver=resolver)
 
 
 class _FakePathLock:
@@ -39,7 +47,7 @@ class _FakeVikingFS:
 
 @pytest.mark.asyncio
 async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypatch):
-    processor = SemanticProcessor()
+    processor = _processor()
     pathlock = _FakePathLock()
     borrowed_lease = {"id": "borrowed-lock", "owned": False}
 
@@ -64,7 +72,7 @@ async def test_memory_semantic_directory_does_not_release_borrowed_lock(monkeypa
 @pytest.mark.parametrize("context_type", ["resource", "memory", "skill"])
 async def test_missing_root_is_acked_before_lock_scope_is_resolved(monkeypatch, context_type):
     """Resolving the lock for a deleted root would recreate it to hold lock metadata."""
-    processor = SemanticProcessor()
+    processor = _processor()
     fs = _FakeVikingFS()
 
     async def adopt(handoff):

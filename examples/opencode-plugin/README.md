@@ -17,6 +17,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - Exposes the same OpenViking MCP tools used by the Claude Code and Codex memory plugins.
 - Maps each OpenCode session to an OpenViking session.
 - Captures user and assistant text messages into OpenViking.
+- On OpenCode v2, reads the structured session context at execution boundaries so tool calls and results are captured too.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
 - Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
@@ -50,10 +51,12 @@ There is intentionally no `skills/openviking/SKILL.md`. The tool surface comes f
 
 ## Requirements
 
-- OpenCode
+- OpenCode 1.15.7+ or OpenCode 2.0.15+
 - OpenViking HTTP server
 - Node.js 18+
 - An OpenViking API key if your server requires authentication
+
+The same package serves both plugin APIs. OpenCode 1 calls `server()` (or the named `OpenVikingPlugin` export), while OpenCode 2 calls `setup()`. The v2 entrypoint does not import `@opencode/plugin`, so a source install on OpenCode 1 still loads. OpenCode 2 normalizes the installer's `"plugin"` key to `"plugins"`; keep `"plugin"` in shared v1/v2 configuration. On v2, the bundled MCP server uses `codemode: false`, preserving the documented `openviking_*` tool names.
 
 Start OpenViking first:
 
@@ -201,6 +204,8 @@ call and points it to the OpenViking MCP tools. A `bash` command that contains a
 `viking://` URI is not blocked, because the URI is often data (an `ov` argument,
 an HTTP payload); the command runs and the plugin appends a notice naming the
 MCP tools to its output.
+
+OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
 
 ## MCP Tools
 

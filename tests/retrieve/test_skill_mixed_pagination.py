@@ -26,7 +26,7 @@ async def test_general_search_preserves_multiple_hits_from_one_skill(route):
         matches = result.skills
     else:
         # Thinking obtains files through the ACL-aware global leaf query.
-        store._acl_enabled = lambda ctx: True
+        store._acl_enabled = AsyncMock(return_value=True)
         result = await HierarchicalRetriever(store, None).retrieve(
             TypedQuery("hello", None, ""),
             ctx(),

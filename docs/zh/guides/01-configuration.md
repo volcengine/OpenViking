@@ -11,6 +11,24 @@ openviking-server doctor
 
 `openviking-server init` 会分别引导你填写 Embedding 和 VLM 的配置。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
 
+## Account Embedding 与 VectorDB
+
+ROOT 可在创建 Account 时配置 `settings.embedding` 和 `settings.vectordb`，
+两者使用 Account 专用白名单模型。Account 与 Cluster 配置分别保存，向量业务
+resolver 为 Account 未设置的值应用 Cluster 默认。Provider 连接只能通过完整
+`credentials` binding 提交，不能跨 Account/Cluster 拼接。配置查询只返回
+Account 配置。
+
+VectorDB 创建后不可修改。新旧 Account 均可轮换完整 Embedding
+credentials/deployment binding，并更新重试、并发、failback 和熔断参数；
+外层 model 身份及其他向量空间字段仅创建时可设。兼容 endpoint 更新不打断
+在途调用，也不会自动重建历史向量。
+
+Account 独立配置的 VectorDB 仅支持远端 backend；Account 不能选择 local/cuvs，
+也不能设置本地路径、cuVS 调优或自定义 adapter 参数。未设置 VectorDB 的
+Account 复用 Cluster 连接并保留数据过滤。远端资源由外部控制面提前创建。权限与 PATCH 规则见
+[Admin 配置 API](../api/08-admin.md#runtime-configuration)。
+
 ## 快速开始
 
 在用户配置目录 `~/.openviking/` 下创建 `ov.conf`：
@@ -53,17 +71,38 @@ openviking-server doctor
 OpenViking 的配置分为两个层级：
 
 - **启动配置**从 `ov.conf` 读取，用于定义进程基线和运行时配置源。修改后需要重启服务；运行时配置接口不会改写 `ov.conf`。
-- **运行时覆盖配置**由配置源持久化保存，可以通过 Admin API 在 Cluster 或 Account 层修改。
+- **运行时配置**由配置源按 Cluster 和 Account 作用域分别持久化，可以通过 Admin API 修改。
 
 只有显式声明为运行时字段的配置，才会暴露在运行时配置 API 中。当前可修改范围如下：
 
 | 范围 | 配置 | 生命周期 | 生效说明 |
 | --- | --- | --- | --- |
 | Cluster | `agent_evolution` | 动态配置 | ROOT 可通过 Admin API 修改，作为集群默认值使用。 |
-| Account | `feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。Agent Evolution 整段回落到 Cluster 配置。Account 未设置 Feishu 时也整段使用 Cluster 配置；一旦设置，则仅 `domain` 来自 Cluster，省略的 Account 字段使用 Feishu 默认值。两者都已通过运行时管理器接入业务读取。 |
-| Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；没有 Cluster fallback。 |
+| Account | `feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。Agent Evolution 为兼容旧行为保留已废弃的 Cluster 整段回退。Feishu 默认值由业务解析器处理：Account 未设置时使用 Cluster；设置后仅 `domain` 来自 Cluster。 |
+| Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
+| Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
+| Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
+| Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
-Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `vlm`、`memory`、`embedding` 和 `vectordb` 不在当前 Account 配置 API 范围内，包含这些字段的请求会被拒绝。
+Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 不在当前 Account 配置 API 范围内。
+
+Account 与 Cluster 配置分别存储和发布。Account 未配置时是否使用 Cluster
+属于业务默认行为，不是配置框架中的隐式继承。VLM 业务解析器负责这项策略：
+Account 未配置 VLM 时使用 Cluster VLM；Account 已配置时，模型服务身份来自
+Account，并按 VLM 业务规则组合部分 Cluster 运行参数。Account 设置 `timeout`
+时覆盖 Cluster 的值，未设置或重置后使用 Cluster 的值。Query Planner 的选择顺序为
+Account `query_planner`、Account `vlm`、Cluster `query_planner`、Cluster `vlm`。
+
+向量配置解析器会联合校验有效的 Embedding 和 VectorDB 配置。Account
+`embedding: {}` 是合法配置；未声明 Account 模型模式时使用 Cluster 模型绑定。
+Account 凭证和显式 VectorDB 连接必须独立提供连接与鉴权字段。远端集合、索引和
+访问授权需要由外部预先创建。修改 embedding 凭证不会迁移历史向量，调用方需要
+保证模型兼容。
+
+处理 Account 业务的代码必须通过 `VLMResolver` 解析模型配置，并把得到的
+`VLMConfig` 显式传给下层函数。`ClusterVLMResolver` 仅限启动、诊断和离线评测
+等依赖组装入口使用。CI 架构测试会拒绝其他生产模块新增对 Cluster VLM
+或 Query Planner 配置的直接读取。
 
 修改运行时配置使用以下接口：
 
@@ -75,7 +114,7 @@ GET   /api/v1/admin/accounts/{account_id}/configuration
 PATCH /api/v1/admin/accounts/{account_id}/configuration
 ```
 
-请求体使用 `settings` 包装稀疏补丁：
+请求体使用 `settings` 包装 PATCH 文档：
 
 ```json
 {
@@ -87,7 +126,11 @@ PATCH /api/v1/admin/accounts/{account_id}/configuration
 }
 ```
 
-PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置或替换，`null` 表示删除当前层的覆盖。对象递归合并，数组整体替换。响应返回目标层的显式值，不返回继承值或最终生效值。权限、校验、fallback 和兼容接口详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)；实现设计见 [运行时配置设计](../../design/runtime-configuration-design.md)。
+PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置或替换，`null`
+表示从当前作用域删除该值。对象递归合并，数组整体替换。响应只返回该作用域
+的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
+配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
+详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
 
 ## 配置示例
 

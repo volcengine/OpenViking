@@ -504,3 +504,6 @@ html.ov-assistant-pill .VPContent {
     padding-bottom: calc(86px + env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* The custom menu includes browser-following mode on desktop and mobile. */
+.VPNavBarTranslations, .VPNavScreenTranslations { display: none !important; }

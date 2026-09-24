@@ -6,9 +6,9 @@ import asyncio
 import pytest
 
 from openviking.core.namespace import canonical_user_root
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.skill_extractor import extract_skill_privacy_values
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
-from openviking.privacy.service import UserPrivacyConfigService
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError
@@ -212,10 +212,15 @@ async def test_skill_read_restores_placeholder_for_agent_segment_name(service):
 @pytest.mark.asyncio
 async def test_skill_privacy_extraction_returns_content_blocks():
     content = 'api_key: "secret-xyz"\nbase_url: "https://example.com"\n'
+
+    async def fake_completion_async(_prompt):
+        return '{"values": {"api_key": "secret-xyz", "base_url": "https://example.com"}}'
+
     result = await extract_skill_privacy_values(
         skill_name="extract-block-skill",
         skill_description="skill with secret",
         content=content,
+        vlm=type("VLM", (), {"get_completion_async": staticmethod(fake_completion_async)})(),
     )
 
     assert result.values["api_key"] == "secret-xyz"
@@ -337,24 +342,12 @@ async def test_placeholderization_only_replaces_structured_values(monkeypatch):
     async def fake_completion_async(_prompt):
         return '{"values": {"api_key": "different-secret"}}'
 
-    monkeypatch.setattr(
-        "openviking.privacy.skill_extractor.get_openviking_config",
-        lambda: type(
-            "Cfg",
-            (),
-            {
-                "vlm": type(
-                    "VLM", (), {"get_completion_async": staticmethod(fake_completion_async)}
-                )()
-            },
-        )(),
-    )
-
     content = 'api_key: "secret-xyz"\n'
     result = await extract_skill_privacy_values(
         skill_name="unmatched-skill",
         skill_description="skill with secret",
         content=content,
+        vlm=type("VLM", (), {"get_completion_async": staticmethod(fake_completion_async)})(),
     )
 
     assert result.values == {}

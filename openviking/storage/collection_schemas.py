@@ -44,7 +44,6 @@ from openviking.storage.viking_vector_index_backend import (
 from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import (
-    CircuitBreaker,
     CircuitBreakerOpen,
     classify_api_error,
 )
@@ -338,6 +337,19 @@ async def init_context_collection(storage) -> bool:
             "Existing collection metadata is unavailable; cannot validate embedding compatibility"
         )
 
+    actual_dimension = next(
+        (
+            field.get("Dim")
+            for field in existing_meta.get("Fields", [])
+            if field.get("FieldName") == "vector"
+        ),
+        None,
+    )
+    if actual_dimension is not None and actual_dimension != vector_dim:
+        raise EmbeddingRebuildRequiredError(
+            f"Existing collection dimension {actual_dimension} differs from {vector_dim}"
+        )
+
     expected_fields = {field.get("FieldName") for field in schema["Fields"]}
     existing_fields = {field.get("FieldName") for field in existing_meta.get("Fields", [])}
     missing_fields = sorted(expected_fields - existing_fields)
@@ -483,47 +495,27 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     _request_stats_order: List[str] = []
     _max_cached_stats = 1024
 
-    def __init__(self, vikingdb: VikingVectorIndexBackend):
+    def __init__(self, vikingdb: VikingVectorIndexBackend, embedding_provider=None):
         """Initialize the text embedding handler.
 
         Args:
             vikingdb: VikingVectorIndexBackend instance for writing to vector database
         """
-        from openviking_cli.utils.config import get_openviking_config
-
         self._vikingdb = vikingdb
-        self._embedder = None
-        config = get_openviking_config()
-        self._collection_name = config.storage.vectordb.name
-        self._vector_dim = config.embedding.dimension
-        breaker_cfg = config.embedding.circuit_breaker
-        self._circuit_breaker = CircuitBreaker(
-            failure_threshold=breaker_cfg.failure_threshold,
-            reset_timeout=breaker_cfg.reset_timeout,
-            max_reset_timeout=breaker_cfg.max_reset_timeout,
-        )
-        self._breaker_open_last_log_at = 0.0
-        self._breaker_open_suppressed_count = 0
+        self._embedding_provider = embedding_provider
+        self._breaker_open_last_log_at: Dict[str, float] = {}
         self._breaker_open_log_interval = 30.0
 
-    def _initialize_embedder(self, config: "OpenVikingConfig"):
-        """Initialize the embedder instance from config."""
-        self._embedder = config.embedding.get_embedder()
-
-    def _log_breaker_open_reenqueue_summary(self) -> None:
+    def _log_breaker_open_reenqueue_summary(self, account_id: str) -> None:
         """Log a throttled warning when embeddings are re-enqueued due to an open circuit breaker."""
         now = time.monotonic()
-        if self._breaker_open_last_log_at == 0.0:
-            logger.warning("Embedding circuit breaker is open; re-enqueueing messages")
-            self._breaker_open_last_log_at = now
-            self._breaker_open_suppressed_count = 0
-            return
-
-        self._breaker_open_suppressed_count += 1
-        if now - self._breaker_open_last_log_at >= self._breaker_open_log_interval:
-            logger.warning("Embedding circuit breaker is open; re-enqueueing messages")
-            self._breaker_open_last_log_at = now
-            self._breaker_open_suppressed_count = 0
+        last = self._breaker_open_last_log_at.get(account_id)
+        if last is None or now - last >= self._breaker_open_log_interval:
+            logger.warning(
+                "Embedding circuit breaker is open; re-enqueueing messages account=%s",
+                account_id,
+            )
+            self._breaker_open_last_log_at[account_id] = now
 
     @classmethod
     def _merge_request_stats(
@@ -698,7 +690,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self._embedding_delivery_log_context(embedding_msg),
                 embedding_msg.action.value,
             )
-            account_id = inserted_data.get("account_id", "default")
+            account_id = inserted_data.get("account_id")
+            if not isinstance(account_id, str) or not account_id.strip():
+                raise ValueError("Embedding message requires account_id")
             context_user = inserted_data.get("user") or {}
             user_id = context_user.get("user_id") or inserted_data.get("owner_user_id") or "default"
             user = UserIdentifier(account_id=account_id, user_id=user_id)
@@ -734,53 +728,23 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     return ProcessResult.success(data)
 
                 # Circuit breaker: if API is known-broken, re-enqueue and wait
-                try:
-                    self._circuit_breaker.check()
-                    self._breaker_open_last_log_at = 0.0
-                    self._breaker_open_suppressed_count = 0
-                except CircuitBreakerOpen:
-                    self._log_breaker_open_reenqueue_summary()
-                    if self._vikingdb.has_queue_manager:
-                        execute_status = "requeued"
-                        wait = self._circuit_breaker.retry_after
-                        if wait > 0:
-                            await asyncio.sleep(wait)
-                        await self._reenqueue_embedding_msg(embedding_msg)
-                        self._merge_request_stats(
-                            embedding_msg.telemetry_id,
-                            requeue_count=1,
-                        )
-                        get_request_wait_tracker().record_embedding_requeue(
-                            embedding_msg.telemetry_id
-                        )
-                        return ProcessResult.requeued()
-                    # No queue manager — cannot re-enqueue, drop with error
-                    execute_status = "error"
-                    error_msg = self._embedding_error_msg(
-                        embedding_msg,
-                        "Circuit breaker open and no queue manager",
-                    )
-                    request_failed_message = error_msg
-                    return ProcessResult.failed(error_msg)
-
-                # Initialize embedder if not already initialized
-                if not self._embedder:
-                    from openviking_cli.utils.config import get_openviking_config
-
-                    config = get_openviking_config()
-                    self._initialize_embedder(config)
+                provider = self._embedding_provider
+                if provider is None:
+                    raise RuntimeError("Account embedding provider is not initialized")
+                embedder = provider.bind(account_id)
 
                 # Generate embedding vector(s)
-                if self._embedder:
+                if embedder:
                     try:
                         import time as _time
 
                         _embed_t0 = _time.monotonic()
                         result = await embed_compat(
-                            self._embedder,
+                            embedder,
                             embedding_msg.message,
                             is_query=False,
                         )
+                        self._breaker_open_last_log_at.pop(account_id, None)
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
                             from openviking.metrics.datasources import EmbeddingEventDataSource
@@ -791,6 +755,24 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             )
                         except Exception:
                             pass
+                    except CircuitBreakerOpen as embed_err:
+                        self._log_breaker_open_reenqueue_summary(account_id)
+                        if self._vikingdb.has_queue_manager:
+                            execute_status = "requeued"
+                            wait = getattr(embed_err, "retry_after", 0)
+                            if wait > 0:
+                                await asyncio.sleep(wait)
+                            await self._reenqueue_embedding_msg(embedding_msg)
+                            self._merge_request_stats(embedding_msg.telemetry_id, requeue_count=1)
+                            get_request_wait_tracker().record_embedding_requeue(
+                                embedding_msg.telemetry_id
+                            )
+                            return ProcessResult.requeued()
+                        execute_status = "error"
+                        request_failed_message = self._embedding_error_msg(
+                            embedding_msg, "Circuit breaker open and no queue manager"
+                        )
+                        return ProcessResult.failed(request_failed_message)
                     except Exception as embed_err:
                         error_msg = self._embedding_error_msg(
                             embedding_msg,
@@ -817,7 +799,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         if error_class == ERROR_CLASS_PERMANENT:
                             execute_status = "error"
                             self._log_embedding_error(logging.CRITICAL, error_msg, embedding_msg)
-                            self._circuit_breaker.record_failure(embed_err)
                             self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                             request_failed_message = error_msg
                             return ProcessResult.failed(error_msg)
@@ -838,7 +819,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         # Transient or unknown — re-enqueue for retry
                         self._log_embedding_error(logging.WARNING, error_msg, embedding_msg)
                         execute_status = "requeued"
-                        self._circuit_breaker.record_failure(embed_err)
                         if self._vikingdb.has_queue_manager:
                             try:
                                 await self._reenqueue_embedding_msg(embedding_msg)
@@ -870,18 +850,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     # Add dense vector
                     if result.dense_vector:
                         inserted_data["vector"] = result.dense_vector
-                        # Validate vector dimension
-                        if len(result.dense_vector) != self._vector_dim:
-                            execute_status = "error"
-                            error_msg = self._embedding_error_msg(
-                                embedding_msg,
-                                "Dense vector dimension mismatch: "
-                                f"expected {self._vector_dim}, got {len(result.dense_vector)}",
-                            )
-                            self._log_embedding_error(logging.ERROR, error_msg, embedding_msg)
-                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
-                            request_failed_message = error_msg
-                            return ProcessResult.failed(error_msg)
 
                     # Add sparse vector if present
                     if result.sparse_vector:
@@ -921,7 +889,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             account_id, uri, inserted_data.get("level", 2)
                         )
 
-                    if self._vikingdb.uses_content_field:
+                    if await self._vikingdb.account_uses_content_field(account_id):
                         inserted_data["content"] = await self._materialize_content(
                             embedding_msg,
                             ctx,
@@ -1025,7 +993,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     embedding_msg,
                     vector_written=bool(record_id),
                 )
-                self._circuit_breaker.record_success()
                 return ProcessResult.success(inserted_data)
 
         except asyncio.CancelledError:

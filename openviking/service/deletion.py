@@ -332,6 +332,9 @@ class DeletionService:
                     )
                 )
             if user_id is None:
+                await run_to_completion(
+                    lambda: self._service.release_account_vector_resources(account_id)
+                )
                 runtime_config = self._service.runtime_config_manager
                 if runtime_config is not None:
                     await run_to_completion(lambda: runtime_config.delete_account(account_id))

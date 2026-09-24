@@ -196,7 +196,7 @@ class SearchService:
         targets = resolve_retrieval_targets(target_uri, ctx).target_directories
         for target in targets:
             await fs._ensure_retrieval_scope(target, ctx)
-        storage, embedder = fs._get_vector_store(), fs._get_embedder()
+        storage, embedder = fs._get_vector_store(), fs._get_embedder(ctx)
         if not storage:
             raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
         if not embedder:

@@ -173,6 +173,7 @@ class SemanticMsg:
 
         uri = data.get("uri")
         context_type = data.get("context_type")
+        account_id = data.get("account_id")
 
         if not uri or not context_type:
             missing = []
@@ -181,12 +182,14 @@ class SemanticMsg:
             if not context_type:
                 missing.append("context_type")
             raise ValueError(f"Missing required fields: {missing}")
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise ValueError("Missing required fields: ['account_id']")
 
         obj = cls(
             uri=uri,
             context_type=context_type,
             recursive=data.get("recursive", True),
-            account_id=data.get("account_id", "default"),
+            account_id=account_id,
             user_id=data.get("user_id", "default"),
             group_ids=data.get("group_ids") if isinstance(data.get("group_ids"), list) else None,
             peer_id=data.get("peer_id", "default"),

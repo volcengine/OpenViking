@@ -125,7 +125,7 @@ class FilesystemObserver(BaseObserver):
 
         return "\n".join(result)
 
-    def get_status_table(self) -> str:
+    async def get_status_table_async(self) -> str:
         """
         Format filesystem statistics as a string table.
 
@@ -134,20 +134,28 @@ class FilesystemObserver(BaseObserver):
         """
         try:
             observer_service = self._get_collector()
-            stats_data = run_async(observer_service.get_filesystem_stats(self.mount_path))
+            stats_data = await observer_service.get_filesystem_stats(self.mount_path)
             return self._format_stats_table(stats_data)
         except Exception as e:
             logger.error(f"Error getting filesystem stats: {e}")
             return f"Error retrieving filesystem statistics: {e}"
 
-    def get_status_json(self) -> dict:
+    async def get_status_json_async(self) -> dict:
         """Return filesystem statistics as structured JSON."""
         try:
             observer_service = self._get_collector()
-            return run_async(observer_service.get_filesystem_stats(self.mount_path))
+            return await observer_service.get_filesystem_stats(self.mount_path)
         except Exception as e:
             logger.error(f"Error getting filesystem stats: {e}")
             return {"error": str(e), "mounts": []}
+
+    def get_status_table(self) -> str:
+        """Synchronous compatibility wrapper for non-async callers."""
+        return run_async(self.get_status_table_async())
+
+    def get_status_json(self) -> dict:
+        """Synchronous compatibility wrapper for non-async callers."""
+        return run_async(self.get_status_json_async())
 
     def __str__(self) -> str:
         return self.get_status_table()

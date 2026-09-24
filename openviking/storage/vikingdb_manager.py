@@ -158,23 +158,6 @@ class VikingDBManager(VikingVectorIndexBackend):
             logger.error(f"Error getting embedding queue size: {e}")
             return 0
 
-    def get_embedder(self):
-        """
-        Get the embedder instance from configuration.
-
-        Returns:
-            Embedder instance or None if not configured
-        """
-        try:
-            from openviking_cli.utils.config import get_openviking_config
-
-            config = get_openviking_config()
-            return config.embedding.get_embedder()
-        except Exception as e:
-            logger.warning(f"Failed to get embedder from configuration: {e}")
-            return None
-
-
 class VikingDBManagerProxy:
     """
     租户绑定的 VikingDBManager 代理。
@@ -259,33 +242,35 @@ class VikingDBManagerProxy:
     async def get_embedding_queue_size(self) -> int:
         return await self._manager.get_embedding_queue_size()
 
-    def get_embedder(self):
-        return self._manager.get_embedder()
-
     # =========================================================================
     # Collection Management（透传）
     # =========================================================================
 
     async def create_collection(self, name: str, schema: Dict[str, Any]) -> bool:
-        return await self._manager.create_collection(name, schema)
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.create_collection(name, schema)
 
     async def drop_collection(self) -> bool:
-        return await self._manager.drop_collection()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.drop_collection()
 
     async def collection_exists(self) -> bool:
-        return await self._manager.collection_exists()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.collection_exists()
 
     async def collection_exists_bound(self) -> bool:
-        return await self._manager.collection_exists_bound()
+        return await self.collection_exists()
 
     async def get_collection_info(self) -> Optional[Dict[str, Any]]:
-        return await self._manager.get_collection_info()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.get_collection_info()
 
     async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
-        return await self._manager.get_collection_meta()
+        return await self._manager.get_collection_meta(ctx=self._ctx)
 
     async def update_collection_description(self, description: str) -> bool:
-        return await self._manager.update_collection_description(description)
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.update_collection_description(description)
 
     # =========================================================================
     # 数据操作 API（自动携带 ctx）
@@ -420,16 +405,19 @@ class VikingDBManagerProxy:
         return await self._manager.clear(ctx=self._ctx)
 
     async def optimize(self) -> bool:
-        return await self._manager.optimize()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.optimize()
 
     async def close(self) -> None:
         return await self._manager.close()
 
     async def health_check(self) -> bool:
-        return await self._manager.health_check()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.health_check()
 
     async def get_stats(self) -> Dict[str, Any]:
-        return await self._manager.get_stats()
+        backend = await self._manager.get_account_backend(self._ctx.account_id)
+        return await backend.get_stats()
 
     # =========================================================================
     # Tenant-Aware 方法（自动携带 ctx）

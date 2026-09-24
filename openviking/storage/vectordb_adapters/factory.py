@@ -45,4 +45,6 @@ def create_collection_adapter(config) -> CollectionAdapter:
             f"Vector backend {backend} is not supported. "
             f"Available backends: {sorted(_ADAPTER_REGISTRY)}"
         )
-    return adapter_cls.from_config(config)
+    adapter = adapter_cls.from_config(config)
+    adapter._dimension = config.dimension
+    return adapter

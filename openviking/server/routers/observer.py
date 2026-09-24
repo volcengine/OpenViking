@@ -53,7 +53,7 @@ async def observer_queue(
 ):
     """Get queue system status."""
     service = get_service()
-    component = service.debug.observer.get_queue_status(format=format)
+    component = await service.debug.observer.get_queue_status_async(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -66,20 +66,20 @@ async def observer_vikingdb(
 ):
     """Get VikingDB status."""
     service = get_service()
-    component = service.debug.observer.get_vikingdb_status(ctx=ctx, format=format)
+    component = await service.debug.observer.account_vikingdb(ctx, format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/models")
 async def observer_models(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
     format: Literal["table", "json"] = Query(
         "table", description="Observer status representation format"
     ),
 ):
     """Get models status (VLM, Embedding, Rerank)."""
     service = get_service()
-    component = service.debug.observer.get_models_status(format=format)
+    component = await service.debug.observer.account_models(ctx, format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -92,7 +92,7 @@ async def observer_lock(
 ):
     """Get lock system status."""
     service = get_service()
-    component = service.debug.observer.get_lock_status(format=format)
+    component = await service.debug.observer.get_lock_status_async(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -118,7 +118,7 @@ async def observer_filesystem(
 ):
     """Get filesystem operation metrics."""
     service = get_service()
-    component = service.debug.observer.get_filesystem_status(format=format)
+    component = await service.debug.observer.get_filesystem_status_async(format=format)
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -131,5 +131,5 @@ async def observer_system(
 ):
     """Get system overall status (includes all components)."""
     service = get_service()
-    status = service.debug.observer.system(ctx=ctx, format=format)
+    status = await service.debug.observer.account_system(ctx, format=format)
     return Response(status="ok", result=_system_to_dict(status))

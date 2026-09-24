@@ -7,6 +7,7 @@ Main service class that composes all sub-services and manages infrastructure lif
 """
 
 import asyncio
+import inspect
 import os
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -57,6 +58,7 @@ from openviking_cli.utils.config.storage_config import StorageConfig
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
     from openviking.session.compressor_v3 import SessionCompressorV3
 
 
@@ -103,6 +105,9 @@ class OpenVikingService:
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._runtime_config_manager: Optional[Any] = None
+        self._vlm_resolver: Optional["VLMResolver"] = None
+        self._vector_config_resolver: Optional[Any] = None
+        self._embedding_provider: Optional[Any] = None
         self._data_dir_lock_acquired = False
         self._data_dir_lock_path: Optional[str] = None
 
@@ -137,22 +142,19 @@ class OpenVikingService:
         binding_config = self._build_ragfs_binding_config()
 
         # Initialize storage
+        from openviking.config.vlm import ClusterVLMResolver
+
+        cluster_vlm = ClusterVLMResolver(lambda: config).get_vlm_sync()
         self._init_storage(
             config.storage,
             max_concurrent_embedding=config.embedding.max_concurrent,
-            max_concurrent_semantic=config.vlm.max_concurrent,
+            max_concurrent_semantic=cluster_vlm.max_concurrent,
             max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
             max_concurrent_add_resource=config.queue_workers.add_resource.max_concurrent,
             max_concurrent_session_commit=config.queue_workers.session_commit.max_concurrent,
             max_concurrent_external_task=config.queue_workers.external_task.max_concurrent,
             binding_config=binding_config,
             git_config=config.git,
-        )
-
-        # Initialize embedder
-        self._embedder = config.embedding.get_embedder()
-        logger.info(
-            f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
         )
 
     def _init_storage(
@@ -198,12 +200,6 @@ class OpenVikingService:
         )
         self._vikingdb_manager.acl_manager = AclManager(self._vikingdb_manager)
 
-        # Configure queues if QueueManager is available.
-        # Workers are NOT started here — start() is called after VikingFS is initialized
-        # in initialize(), so that recovered tasks don't race against VikingFS init.
-        if self._queue_manager:
-            self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
-
         # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client))
 
@@ -216,6 +212,41 @@ class OpenVikingService:
     def runtime_config_manager(self) -> Optional[Any]:
         """The runtime config manager bound to the cluster + account models."""
         return self._runtime_config_manager
+
+    @property
+    def vector_config_resolver(self) -> Optional[Any]:
+        """The account-aware vector configuration resolver."""
+        return self._vector_config_resolver
+
+    @property
+    def embedding_provider(self) -> Optional[Any]:
+        """The account-aware embedding resource provider."""
+        return self._embedding_provider
+
+    async def release_account_vector_resources(self, account_id: str) -> None:
+        """Release derived vector resources without deleting remote collections."""
+        if self._vikingdb_manager is not None:
+            await self._vikingdb_manager.release_account(account_id)
+        if self._embedding_provider is not None:
+            await self._embedding_provider.invalidate(account_id)
+
+    async def _on_account_vector_config_change(self, event: Any) -> None:
+        """Retire cached resources after eviction or a VectorDB source refresh."""
+        from openviking.config.manager import ConfigChangeReason
+
+        if (
+            event.reason is not ConfigChangeReason.EVICT
+            and "vectordb" not in event.changed_sections
+        ):
+            return
+        account_id = event.scope.key
+        if account_id:
+            await self.release_account_vector_resources(account_id)
+
+    @property
+    def vlm_resolver(self) -> Optional["VLMResolver"]:
+        """The account-aware VLM resolver owned by this service instance."""
+        return self._vlm_resolver
 
     def set_agent_evolution_config(self, config: AgentEvolutionConfig) -> None:
         """Set the legacy server value used as the cluster startup baseline."""
@@ -245,6 +276,10 @@ class OpenVikingService:
         per account and loaded on demand by field.
         """
         from openviking.config.binding import build_runtime_config_manager
+        from openviking.config.embedding import AccountEmbeddingProvider
+        from openviking.config.scope import ScopeKind
+        from openviking.config.vector import AccountVectorConfigResolver
+        from openviking.config.vlm import AccountVLMProvider
         from openviking.pyagfs import AsyncAGFSClient
 
         if self._agfs_client is None:
@@ -266,7 +301,30 @@ class OpenVikingService:
         if self._vikingdb_manager is None or self._vikingdb_manager.acl_manager is None:
             raise NotInitializedError("ACL")
         self._vikingdb_manager.acl_manager.set_runtime_config_manager(manager)
+        self._vector_config_resolver = AccountVectorConfigResolver(manager)
+        self._embedding_provider = AccountEmbeddingProvider(
+            self._vector_config_resolver,
+            manager,
+        )
+        self._vikingdb_manager.set_vector_config_resolver(self._vector_config_resolver)
+        # Release the account's derived VectorDB backend when its config
+        # publication is evicted (idle TTL) or deleted, so a cold account does
+        # not keep its adapter/collection handles alive until process exit and a
+        # later access re-resolves through the resolver instead of a stale cache.
+        manager.add_update_consumer(
+            scope=ScopeKind.ACCOUNT,
+            sections={"vectordb", "embedding"},
+            consumer=self._on_account_vector_config_change,
+        )
         self._session_service.set_runtime_config_manager(manager)
+        self._vlm_resolver = AccountVLMProvider(manager)
+        if self._queue_manager is not None:
+            self._queue_manager.set_vlm_resolver(self._vlm_resolver)
+            self._queue_manager.setup_standard_queues(
+                self._vikingdb_manager,
+                start=False,
+                embedding_provider=self._embedding_provider,
+            )
 
     def _ensure_data_dir_lock_acquired(self) -> None:
         """Protect embedded vector storage from concurrent processes in one workspace."""
@@ -403,9 +461,6 @@ class OpenVikingService:
                 git_config=self._config.git,
             )
 
-        if self._embedder is None:
-            self._embedder = self._config.embedding.get_embedder()
-
         config = get_openviking_config()
 
         if self._encryptor:
@@ -423,12 +478,12 @@ class OpenVikingService:
 
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
-        if self._embedder is None:
-            raise RuntimeError("Embedder not initialized")
-
+        await self._init_runtime_config_manager()
+        if self._vlm_resolver is None:
+            raise RuntimeError("VLM resolver not initialized")
         self._viking_fs = init_viking_fs(
             agfs=self._agfs_client,
-            query_embedder=self._embedder,
+            query_embedder=None,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
             acl_manager=self._vikingdb_manager.acl_manager,
@@ -437,14 +492,16 @@ class OpenVikingService:
             glob_config=config.glob,
             enable_recorder=enable_recorder,
             encryptor=self._encryptor,
+            vlm_resolver=self._vlm_resolver,
+            embedding_provider=self._embedding_provider,
+            vector_config_resolver=self._vector_config_resolver,
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
-        await self._init_runtime_config_manager()
-
         self._resource_processor = ResourceProcessor(
             vikingdb=self._vikingdb_manager,
             runtime_config_manager=self._runtime_config_manager,
+            vlm_resolver=self._vlm_resolver,
         )
 
         # Initialize directories
@@ -468,10 +525,12 @@ class OpenVikingService:
         self._skill_processor = SkillProcessor(
             vikingdb=self._vikingdb_manager,
             privacy_config_service=self._privacy_config_service,
+            vlm_resolver=self._vlm_resolver,
         )
         self._session_compressor = create_session_compressor(
             vikingdb=self._vikingdb_manager,
             skill_processor=self._skill_processor,
+            vlm_resolver=self._vlm_resolver,
         )
 
         self._watch_scheduler = WatchScheduler(
@@ -493,6 +552,7 @@ class OpenVikingService:
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
             vector_store=self._vikingdb_manager,
+            vector_config_resolver=self._vector_config_resolver,
         )
         self._search_service.set_viking_fs(self._viking_fs)
         self._resource_service.set_dependencies(
@@ -508,6 +568,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
             session_compressor=self._session_compressor,
+            vlm_resolver=self._vlm_resolver,
         )
         self._resource_memory_link_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -532,6 +593,8 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             config=self._config,
             agfs_client=self._agfs_client,
+            embedding_provider=self._embedding_provider,
+            vlm_resolver=self._vlm_resolver,
         )
         self._agent_evolution_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -610,6 +673,7 @@ class OpenVikingService:
     async def close(self) -> None:
         """Close OpenViking and release resources."""
         await self._resource_service.close_background_tasks()
+        vlm_resolver = getattr(self, "_vlm_resolver", None)
 
         if self._runtime_config_manager:
             await self._runtime_config_manager.stop_refresh_loop()
@@ -631,15 +695,27 @@ class OpenVikingService:
             self._queue_manager = None
             logger.info("Queue manager stopped")
 
+        close_vlm_resolver = getattr(vlm_resolver, "close", None)
+        if callable(close_vlm_resolver):
+            result = close_vlm_resolver()
+            if inspect.isawaitable(result):
+                await result
+        self._vlm_resolver = None
         self._config.vlm.close()
         await asyncio.sleep(0)
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()
 
+        embedding_provider = getattr(self, "_embedding_provider", None)
+        if embedding_provider:
+            await embedding_provider.close()
+            self._embedding_provider = None
+
         if self._vikingdb_manager:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
+        self._vector_config_resolver = None
 
         if self._agfs_client:
             close_agfs = getattr(self._agfs_client, "close", None)
@@ -692,8 +768,12 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        from openviking.service.reindex_executor import get_reindex_executor
+        from openviking.service.reindex_executor import ReindexExecutor
 
+        executor = ReindexExecutor(
+            vlm_resolver=self._vlm_resolver,
+            vector_config_resolver=self._vector_config_resolver,
+        )
         execute_kwargs = {
             "uri": uri,
             "mode": mode,
@@ -706,7 +786,7 @@ class OpenVikingService:
         if tags is not None or tag_mode == "clear":
             execute_kwargs["tags"] = tags
             execute_kwargs["tag_mode"] = tag_mode
-        return await get_reindex_executor().execute(**execute_kwargs)
+        return await executor.execute(**execute_kwargs)
 
     async def check_consistency(
         self,

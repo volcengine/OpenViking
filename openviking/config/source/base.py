@@ -16,8 +16,8 @@ from openviking.config.scope import ConfigScope, ScopeKind
 
 __all__ = ["ConfigScope", "ScopeKind", "ConfigSource", "ConfigSourceContext", "Mutate"]
 
-# A pure, repeatable function producing the full new override from the current
-# one. It must have no side effects and must not send consumer notifications;
+# A pure, repeatable function producing the complete new settings document from
+# the current one. It must have no side effects or send consumer notifications;
 # a conflict retry may run it again.
 Mutate = Callable[[Optional[dict]], dict]
 
@@ -36,27 +36,35 @@ class ConfigSourceContext:
 
 @runtime_checkable
 class ConfigSource(Protocol):
-    """Storage/awareness of config overrides for individual scopes."""
+    """Storage and change awareness for scoped configuration documents.
+
+    A source instance may be called concurrently from different threads and
+    event loops. Implementations must synchronize mutable state accordingly and
+    must not rely on loop-affine clients or asyncio primitives unless they
+    dispatch those operations to their owning loop internally.
+    """
 
     async def load(self, scope: ConfigScope) -> Optional[dict]:
-        """Read the sparse override (plaintext dict) for one scope.
+        """Read the explicitly stored settings for one scope.
 
-        Returns ``None`` when no override exists for the scope.
+        Omitted model fields are not materialized in storage. This serialization
+        detail does not make Account configuration an override of Cluster
+        configuration. Returns ``None`` when the scope has no stored document.
         """
         ...
 
     async def update(self, scope: ConfigScope, mutate: "Mutate") -> dict:
         """Perform a read-modify-write within the source's own concurrency guard.
 
-        Reads the current override, calls ``mutate`` to get the full new
-        override, writes it back. ``mutate`` is guaranteed to run against the
+        Reads the current settings, calls ``mutate`` to get the complete new
+        document, and writes it back. ``mutate`` is guaranteed to run against the
         latest value and the write must not drop updates; lock vs. CAS is an
         implementation choice.
         """
         ...
 
     async def delete(self, scope: ConfigScope) -> None:
-        """Delete the persisted override for one scope.
+        """Delete the persisted settings for one scope.
 
         Missing state is treated as success. Implementations must provide the
         same concurrency guarantees as :meth:`update`.

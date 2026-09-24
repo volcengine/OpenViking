@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Config source abstraction, registry, and built-in implementations.
 
-A :class:`ConfigSource` owns *where an override comes from, how it is written
+A :class:`ConfigSource` owns *where scoped settings come from, how they are written
 back, how change is detected, and whether/how it is encrypted*. The
 :class:`~openviking.config.manager.RuntimeConfigManager` owns merge, publish and
 invalidation and depends only on this abstraction.

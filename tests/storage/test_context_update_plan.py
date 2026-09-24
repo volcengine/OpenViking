@@ -3454,7 +3454,8 @@ async def test_semantic_processor_runs_only_plan_execution_roots(monkeypatch):
         "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
         AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
     )
-    processor = SemanticProcessor()
+    resolver = SimpleNamespace(get_vlm=AsyncMock())
+    processor = SemanticProcessor(vlm_resolver=resolver)
     processor._cleanup_local_artifact = AsyncMock()
     msg = SemanticMsg(
         uri=root,

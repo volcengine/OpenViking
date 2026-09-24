@@ -7,7 +7,14 @@ import { titleFromMarkdown, sidebarSection, localizedSectionSidebarItems, locali
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.GITHUB_REPOSITORY || 'volcengine/OpenViking'
 const githubRepositoryUrl = `https://github.com/${repo}?utm_source=docs&utm_medium=referral&utm_campaign=docs`
-const base = process.env.DOCS_BASE || '/'
+const configuredBase = '/' + (process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/') + '/'
+const base = configuredBase === '//' ? '/' : configuredBase
+const languageSource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-preference.js'), 'utf8').replace('export function', 'function')
+const entrySource = fs.readFileSync(path.join(docsRoot, '.vitepress/theme/language-entry.js'), 'utf8').replace('export function', 'function')
+const languageBootstrapScript = `${languageSource}\n${entrySource}\n;(() => {
+  const target = docsLanguageEntry(location.href, ${JSON.stringify(base)}, createLanguagePreference())
+  if (target) location.replace(target)
+})()`
 const preferenceBootstrapScript = `;(() => {
   const prefix = 'openviking-preferences:'
   const cookieKey = 'openviking-preferences'
@@ -228,7 +235,8 @@ export default defineConfig({
     ['link', { rel: 'icon', type: 'image/x-icon', href: `${base}favicon.ico` }],
     ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: `${base}favicon-32.png` }],
     ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }],
-    ['script', {}, preferenceBootstrapScript]
+    ['script', {}, preferenceBootstrapScript],
+    ['script', {}, languageBootstrapScript]
   ],
   transformPageData(pageData, { siteConfig }) {
     const srcPath = path.join(siteConfig.srcDir, pageData.relativePath)
@@ -276,7 +284,7 @@ export default defineConfig({
   },
   themeConfig: {
     logo: '/ov-logo.png',
-    logoLink: '/',
+    logoLink: base,
     nav: enNav,
     socialLinks: [
       { icon: 'github', link: githubRepositoryUrl }
@@ -292,7 +300,7 @@ export default defineConfig({
       lang: 'en-US',
       link: '/en/',
       themeConfig: {
-        logoLink: '/en/',
+        logoLink: `${base}en/`,
         nav: enNav,
         outline: {
           level: [2, 3]
@@ -319,7 +327,7 @@ export default defineConfig({
       title: 'OpenViking',
       description: '面向 AI Agent 的开源上下文数据库',
       themeConfig: {
-        logoLink: '/zh/',
+        logoLink: `${base}zh/`,
         nav: zhNav,
         sidebar: {
           '/zh/getting-started/': localizedGroupedSidebarItems('zh', ['getting-started', 'configuration', 'agent-integrations']),

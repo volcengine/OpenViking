@@ -23,18 +23,30 @@ logger = get_logger(__name__)
 class PackService:
     """OVPack export/import and backup/restore service."""
 
-    def __init__(self, viking_fs: Optional[VikingFS] = None, vector_store=None):
+    def __init__(
+        self,
+        viking_fs: Optional[VikingFS] = None,
+        vector_store=None,
+        vector_config_resolver=None,
+    ):
         self._viking_fs = viking_fs
         self._vector_store = vector_store
+        self._vector_config_resolver = vector_config_resolver
 
     def set_viking_fs(self, viking_fs: VikingFS) -> None:
         """Set VikingFS instance (for deferred initialization)."""
         self._viking_fs = viking_fs
 
-    def set_dependencies(self, viking_fs: VikingFS, vector_store=None) -> None:
+    def set_dependencies(
+        self,
+        viking_fs: VikingFS,
+        vector_store=None,
+        vector_config_resolver=None,
+    ) -> None:
         """Set pack service dependencies."""
         self._viking_fs = viking_fs
         self._vector_store = vector_store
+        self._vector_config_resolver = vector_config_resolver
 
     def _ensure_initialized(self) -> VikingFS:
         """Ensure VikingFS is initialized."""
@@ -79,6 +91,7 @@ class PackService:
             to,
             ctx=ctx,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
             include_vectors=include_vectors,
         )
 
@@ -96,6 +109,7 @@ class PackService:
             to,
             ctx=maintenance_ctx,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
             include_vectors=include_vectors,
         )
 
@@ -125,6 +139,7 @@ class PackService:
             on_conflict=on_conflict,
             vector_mode=vector_mode,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
             ctx=ctx,
         )
 
@@ -145,4 +160,5 @@ class PackService:
             on_conflict=on_conflict,
             vector_mode=vector_mode,
             vector_store=self._vector_store,
+            vector_config_resolver=self._vector_config_resolver,
         )

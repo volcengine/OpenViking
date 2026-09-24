@@ -49,6 +49,7 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.storage import StoragePath
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
     from openviking.parse.accessors.base import LocalResource
     from openviking.parse.vlm import VLMProcessor
 
@@ -99,12 +100,13 @@ class ResourceProcessor:
         max_context_size: int = 2000,
         max_split_depth: int = 3,
         runtime_config_manager: Optional[Any] = None,
+        vlm_resolver: Optional["VLMResolver"] = None,
     ):
         """Initialize coordinated writer."""
         self.vikingdb = vikingdb
-        self.embedder = vikingdb.get_embedder()
         self.media_storage = media_storage
         self.runtime_config_manager = runtime_config_manager
+        self.vlm_resolver = vlm_resolver
         self.tree_builder = TreeBuilder()
         self._vlm_processor = None
         self._media_processor = None
@@ -170,18 +172,37 @@ class ResourceProcessor:
         return result
 
     def _get_summarizer(self) -> "Summarizer":
-        """Lazy initialization of Summarizer."""
+        """Lazy initialization of the standalone Summarizer."""
         if self._summarizer is None:
             self._summarizer = Summarizer(self._get_vlm_processor())
         return self._summarizer
 
-    def _get_vlm_processor(self) -> "VLMProcessor":
-        """Lazy initialization of VLM processor."""
-        if self._vlm_processor is None:
-            from openviking.parse.vlm import VLMProcessor
+    async def _summarizer_for(self, ctx: RequestContext) -> "Summarizer":
+        """Build a lightweight account-bound summarizer."""
+        if self._summarizer is not None:
+            return self._summarizer
+        if self.vlm_resolver is None:
+            raise RuntimeError(
+                "ResourceProcessor requires a VLM resolver for account-owned work"
+            )
+        return Summarizer(await self._vlm_processor_for(ctx))
 
-            self._vlm_processor = VLMProcessor()
+    def _get_vlm_processor(self) -> "VLMProcessor":
+        """Return an explicitly configured standalone VLM processor."""
+        if self._vlm_processor is None:
+            raise RuntimeError(
+                "ResourceProcessor requires an explicitly configured VLMProcessor"
+            )
         return self._vlm_processor
+
+    async def _vlm_processor_for(self, ctx: RequestContext) -> "VLMProcessor":
+        from openviking.parse.vlm import VLMProcessor
+
+        if self.vlm_resolver is None:
+            raise RuntimeError(
+                "ResourceProcessor requires a VLM resolver for account-owned work"
+            )
+        return VLMProcessor(vlm=await self.vlm_resolver.get_vlm(ctx.account_id))
 
     def _get_media_processor(self):
         """Lazy initialization of unified media processor."""
@@ -189,10 +210,21 @@ class ResourceProcessor:
             from openviking.utils.media_processor import UnifiedResourceProcessor
 
             self._media_processor = UnifiedResourceProcessor(
-                vlm_processor=self._get_vlm_processor(),
                 storage=self.media_storage,
             )
         return self._media_processor
+
+    async def _media_processor_for(self, ctx: RequestContext):
+        from openviking.utils.media_processor import UnifiedResourceProcessor
+
+        if self.vlm_resolver is None and self._media_processor is not None:
+            return self._media_processor
+        if self.vlm_resolver is None:
+            return self._get_media_processor()
+        return UnifiedResourceProcessor(
+            vlm_processor=await self._vlm_processor_for(ctx),
+            storage=self.media_storage,
+        )
 
     def _build_parse_output_store(self):
         """Return the configured parse output store, or None for AGFS mode.
@@ -591,7 +623,7 @@ class ResourceProcessor:
         **kwargs,
     ) -> Optional["LocalResource"]:
         """Freeze a source when durable routing cannot safely defer access."""
-        media_processor = self._get_media_processor()
+        media_processor = await self._media_processor_for(ctx)
         if not snapshot_required and not media_processor.durable_route_requires_preparation(
             path, **kwargs
         ):
@@ -641,7 +673,7 @@ class ResourceProcessor:
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
         """Expose summarization as a standalone method."""
-        return await self._get_summarizer().summarize(resource_uris, ctx, **kwargs)
+        return await (await self._summarizer_for(ctx)).summarize(resource_uris, ctx, **kwargs)
 
     async def process_resource(
         self,
@@ -697,7 +729,7 @@ class ResourceProcessor:
                     ResourceIngestionEventDataSource,
                 )
 
-                media_processor = self._get_media_processor()
+                media_processor = await self._media_processor_for(ctx)
                 viking_fs = get_viking_fs()
                 # Use reason as instruction fallback so it influences L0/L1
                 # generation and improves search relevance as documented.
@@ -1166,7 +1198,7 @@ class ResourceProcessor:
 
                 if should_summarize:
                     try:
-                        summary_result = await self._get_summarizer().summarize(
+                        summary_result = await (await self._summarizer_for(ctx)).summarize(
                             resource_uris=[root_uri],
                             ctx=ctx,
                             skip_vectorization=not build_index,
@@ -1223,7 +1255,9 @@ class ResourceProcessor:
                 if not should_summarize and temp_uri and not source_committed:
                     viking_fs = get_viking_fs()
                     if vectors_only and target_preexisting and not root_is_file:
-                        diff = await SemanticProcessor()._sync_topdown_recursive(
+                        diff = await SemanticProcessor(
+                            vlm_resolver=self.vlm_resolver
+                        )._sync_topdown_recursive(
                             temp_uri, root_uri, ctx=ctx, lock=resource_lock
                         )
                         sync_deleted_files = list(getattr(diff, "deleted_files", []))
@@ -1249,7 +1283,7 @@ class ResourceProcessor:
                         files=sync_deleted_files, dirs=sync_deleted_dirs, ctx=ctx
                     )
                 if should_refresh_file_parent:
-                    await self._get_summarizer().refresh_file_parent(
+                    await (await self._summarizer_for(ctx)).refresh_file_parent(
                         file_uri=file_refresh.file_uri,
                         ctx=ctx,
                         skip_vectorization=not build_index,
@@ -1277,7 +1311,7 @@ class ResourceProcessor:
                 await get_viking_fs()._async_agfs.pathlock_release(resource_lock)
         elif should_refresh_file_parent:
             try:
-                await self._get_summarizer().refresh_file_parent(
+                await (await self._summarizer_for(ctx)).refresh_file_parent(
                     file_uri=file_refresh.file_uri,
                     ctx=ctx,
                     skip_vectorization=not build_index,

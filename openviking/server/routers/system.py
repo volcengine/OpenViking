@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """System endpoints for OpenViking HTTP Server."""
 
-import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -52,19 +51,6 @@ async def _probe_agfs_readiness() -> dict[str, object]:
         checks["multiwrite_sync"] = "not_supported"
 
     return {"status": "ok", "checks": checks}
-
-
-async def _embedding_probe(embedder) -> str:
-    """Quick embedding probe: embed a single token and check for errors."""
-    from openviking.models.embedder.base import embed_compat
-
-    try:
-        await embed_compat(embedder, "ok", is_query=True)
-        return "ok"
-    except Exception as e:
-        provider = getattr(embedder, "provider", "unknown")
-        model = getattr(embedder, "model_name", "unknown")
-        return f"error: provider={provider} model={model}: {e}"
 
 
 @router.get("/health", tags=["system"])
@@ -163,19 +149,12 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["api_key_manager"] = f"error: {e}"
 
-    # 4. Embedding: quick probe to verify the provider is reachable
+    # 4. Embedding: the provider is initialized by the service startup path.
+    # There is no Account context on an unauthenticated readiness probe, so do
+    # not create or probe a Cluster-scoped embedder here.
     try:
-        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-
-        ov_config = OpenVikingConfigSingleton.get_instance()
-        embedder = ov_config.embedding.get_embedder()
-        if embedder is not None:
-            probe_result = await asyncio.wait_for(_embedding_probe(embedder), timeout=10.0)
-            checks["embedding"] = probe_result
-        else:
-            checks["embedding"] = "not_configured"
-    except asyncio.TimeoutError:
-        checks["embedding"] = "error: probe timed out (provider unreachable)"
+        embedding_provider = getattr(service, "embedding_provider", None)
+        checks["embedding"] = "ok" if embedding_provider is not None else "not_initialized"
     except Exception as e:
         checks["embedding"] = f"error: {e}"
 

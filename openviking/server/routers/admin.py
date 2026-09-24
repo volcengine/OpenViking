@@ -3,6 +3,7 @@
 """Admin endpoints for OpenViking multi-tenant HTTP Server."""
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Request
@@ -135,6 +136,34 @@ class ConfigPatchRequest(BaseModel):
     """
 
     settings: dict[str, Any] = Field(default_factory=dict)
+
+
+_ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS = frozenset({"vlm", "query_planner", "embedding", "vectordb"})
+
+
+def _authorize_account_config_patch(
+    ctx: RequestContext,
+    settings: Mapping[str, object],
+) -> None:
+    restricted = _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS.intersection(settings)
+    if restricted and ctx.role != Role.ROOT:
+        fields = ", ".join(sorted(restricted))
+        raise PermissionDeniedError(
+            f"Only ROOT can modify account configuration fields: {fields}"
+        )
+
+
+def _visible_account_config(
+    ctx: RequestContext,
+    settings: Mapping[str, object],
+) -> dict[str, object]:
+    if ctx.role == Role.ROOT:
+        return dict(settings)
+    return {
+        key: value
+        for key, value in settings.items()
+        if key not in _ROOT_ONLY_ACCOUNT_CONFIG_SECTIONS
+    }
 
 
 class UserSettingsPatch(BaseModel):
@@ -338,6 +367,11 @@ async def _rollback_account_creation(
             return
 
     rollback_errors: list[Exception] = []
+    try:
+        await service.release_account_vector_resources(account_id)
+    except Exception as exc:
+        rollback_errors.append(exc)
+        logger.exception("Failed to release vector resources for account %s", account_id)
     if runtime_config is not None:
         try:
             await runtime_config.delete_account(account_id)
@@ -441,14 +475,12 @@ async def create_account(
     await _validate_initial_user_config(service, account_ctx, body.user_config)
     # Reject bad initial config before any storage is created, so a failed
     # create leaves nothing behind. This validates the active account runtime
-    # field surface without persisting. Only needed when initial settings exist.
-    runtime_config = None
-    if body.settings:
-        runtime_config = _get_runtime_config_manager()
-        try:
-            runtime_config.validate_initial_settings(body.account_id, body.settings)
-        except (ConfigPatchError, ValueError) as exc:
-            raise InvalidArgumentError(str(exc)) from exc
+    # field surface and inherited vector configuration without persisting.
+    runtime_config = _get_runtime_config_manager()
+    try:
+        runtime_config.validate_initial_settings(body.account_id, body.settings or {})
+    except (ConfigPatchError, ValueError) as exc:
+        raise InvalidArgumentError(str(exc)) from exc
     manager = _get_api_key_manager(request)
     user_key = await manager.create_account(
         body.account_id,
@@ -456,8 +488,6 @@ async def create_account(
         seed=body.seed,
     )
     try:
-        await service.initialize_account_workspace(account_ctx)
-        await _write_initial_user_config(service, account_ctx, body.user_config)
         if body.settings and runtime_config is not None:
             # Persist the pre-validated override.
             await runtime_config.patch_account(
@@ -465,6 +495,8 @@ async def create_account(
                 body.settings,
                 creating=True,
             )
+        await service.initialize_account_workspace(account_ctx)
+        await _write_initial_user_config(service, account_ctx, body.user_config)
     except BaseException:
         await _rollback_account_creation(
             service,
@@ -637,7 +669,10 @@ async def get_account_configuration(
     )
     return Response(
         status="ok",
-        result={"account_id": account_id, "settings": settings},
+        result={
+            "account_id": account_id,
+            "settings": _visible_account_config(ctx, settings),
+        },
     )
 
 
@@ -759,6 +794,7 @@ async def patch_account_configuration(
     """Apply a three-state PATCH to the account configuration layer."""
     _check_account_access(ctx, account_id)
     await _check_account_exists(request, account_id)
+    _authorize_account_config_patch(ctx, body.settings)
     try:
         await _get_runtime_config_manager().patch_account(account_id, body.settings)
     except (ConfigPatchError, ValueError) as exc:
@@ -768,7 +804,10 @@ async def patch_account_configuration(
     )
     return Response(
         status="ok",
-        result={"account_id": account_id, "settings": settings},
+        result={
+            "account_id": account_id,
+            "settings": _visible_account_config(ctx, settings),
+        },
     )
 
 

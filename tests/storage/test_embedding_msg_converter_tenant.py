@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tenant-field backfill tests for EmbeddingMsgConverter."""
+"""Explicit account identity and URI owner tests for EmbeddingMsgConverter."""
 
 import pytest
 
@@ -27,14 +27,13 @@ from openviking_cli.session.user_id import UserIdentifier
         ),
     ],
 )
-def test_embedding_msg_converter_backfills_account_and_owner_fields(
+def test_embedding_msg_converter_preserves_account_and_backfills_owner_fields(
     uri, expected_uri, expected_owner_user_id
 ):
     user = UserIdentifier("acme", "alice")
     context = Context(uri=uri, abstract="hello", user=user)
 
-    # Simulate legacy producer that forgot tenant fields.
-    context.account_id = ""
+    # URI ownership may be derived, but account identity must remain explicit.
     context.owner_user_id = None
 
     msg = EmbeddingMsgConverter.from_context(context)

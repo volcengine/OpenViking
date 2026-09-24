@@ -19,6 +19,11 @@ class _DummyAgfs:
 
 class _RemoteGlobVectorStore:
     _backend_type = "vikingdb"
+    _mode = "vikingdb"
+
+    async def get_account_backend(self, account_id):
+        assert account_id
+        return self
 
     def __init__(self, records, count=1000, data_count=None):
         self.records = records

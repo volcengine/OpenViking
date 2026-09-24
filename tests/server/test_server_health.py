@@ -288,6 +288,7 @@ async def test_ready_returns_200_after_initialized(monkeypatch):
 
     class MockService:
         _initialized = True
+        embedding_provider = object()
 
     service = MockService()
     monkeypatch.setattr("openviking.server.dependencies._service", service)

@@ -92,9 +92,9 @@ class UnifiedResourceProcessor:
 
     def _get_vlm_processor(self) -> Optional["VLMProcessor"]:
         if self._vlm_processor is None:
-            from openviking.parse.vlm import VLMProcessor
-
-            self._vlm_processor = VLMProcessor()
+            raise RuntimeError(
+                "UnifiedResourceProcessor requires an explicitly configured VLMProcessor"
+            )
         return self._vlm_processor
 
     def _get_accessor_registry(self):

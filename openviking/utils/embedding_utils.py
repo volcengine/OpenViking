@@ -636,7 +636,10 @@ async def vectorize_file(
         content_type = await _resolve_resource_content_type(
             file_path, file_name, viking_fs, ctx, file_content=file_content
         )
-        embedding_cfg = get_openviking_config().embedding
+        resolver = getattr(viking_fs, "_vector_config_resolver", None)
+        if resolver is None:
+            raise RuntimeError("Vectorization requires a vector config resolver")
+        embedding_cfg = (await resolver.resolve(ctx.account_id)).embedding
         configured_text_source = embedding_cfg.text_source
         effective_text_source = TEXT_SOURCE_SUMMARY_FIRST if use_summary else configured_text_source
         embed_summary = bool(summary and effective_text_source in SUMMARY_TEXT_SOURCES)

@@ -11,6 +11,27 @@ openviking-server doctor
 
 `openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
 
+## Account Embedding and VectorDB
+
+ROOT can configure `settings.embedding` and `settings.vectordb` when creating an
+Account. These sections use Account-specific allowlist schemas. Account and
+Cluster settings remain independent; the vector resolver applies Cluster defaults
+for omitted Account values. Provider connections can only be supplied through a
+complete `credentials` binding. Configuration reads return only Account values.
+
+VectorDB is immutable after Account creation. Existing Accounts may rotate complete
+Embedding credential/deployment bindings and update retry, concurrency, failback, and
+circuit-breaker settings. Outer model identity and other vector-space fields remain
+create-only. Compatible endpoint updates do not interrupt in-flight calls or rebuild
+historical vectors.
+
+Account-owned VectorDB configurations use remote backends only. Account
+configuration cannot select local/cuvs backends, local paths, cuVS tuning, or
+custom adapter parameters. Accounts with no VectorDB settings continue sharing
+the Cluster connection with Account data filtering. Remote resources must
+already exist.
+See [Admin configuration API](../api/08-admin.md#runtime-configuration) for permissions and PATCH rules.
+
 ## Configuration File
 
 Create `~/.openviking/ov.conf` in your home configuration directory:
@@ -52,17 +73,42 @@ For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is al
 OpenViking configuration has two layers:
 
 - **Startup configuration** is read from `ov.conf`. It defines the process baseline and the runtime configuration source. Changing it requires a service restart; the runtime configuration API never rewrites `ov.conf`.
-- **Runtime overrides** are sparse values stored by the configured runtime configuration source. They can be read and updated through the Admin API at Cluster or Account scope.
+- **Runtime settings** are stored independently at Cluster and Account scope by the configured runtime configuration source. They can be read and updated through the Admin API.
 
 Only fields explicitly declared as runtime fields are exposed by the runtime configuration API. The current update surface is:
 
 | Scope | Configuration | Lifecycle | Effective behavior |
 | --- | --- | --- | --- |
 | Cluster | `agent_evolution` | Dynamic | ROOT can update it through the Admin API; it is used as the cluster default. |
-| Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution falls back to the whole Cluster section. An unset Account Feishu section also uses the Cluster section; once set, only `domain` comes from Cluster and omitted Account fields use Feishu defaults. Both are consumed through the runtime manager. |
+| Account | `feishu`, `agent_evolution` | Dynamic | ROOT or the Account ADMIN can update them. Agent Evolution retains deprecated whole-section Cluster fallback for compatibility. Feishu defaulting is implemented by its business resolver: an unset Account section uses Cluster, while a configured section takes only `domain` from Cluster. |
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
+| Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
+| Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
+| Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 
-Cluster `embedding`, Cluster `vlm`, `query_planner`, Cluster `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `vlm`, `memory`, `embedding`, and `vectordb` are not on the current Account configuration API surface; requests that contain them are rejected.
+Cluster `embedding`, `vlm`, `query_planner`, `memory`, `feishu`, storage, parser, retrieval, and other ordinary configuration sections remain startup-only. Account `memory` is not on the current Account configuration API surface.
+
+Account and Cluster configurations are independently stored and published.
+Any use of Cluster settings when Account settings are absent is a business
+default, not implicit configuration inheritance. The VLM resolver implements
+that policy: without an Account VLM section it uses Cluster VLM; with an Account
+section, model-service identity comes from Account while selected runtime
+behavior is composed with Cluster. Account `timeout` overrides Cluster `timeout`
+when set; omitting or resetting it uses Cluster `timeout`. Query Planner selection
+is Account `query_planner`, Account `vlm`, Cluster `query_planner`, then Cluster `vlm`.
+
+The vector resolver validates effective Embedding and VectorDB settings together.
+Account `embedding: {}` is valid; without Account model modes, Cluster model
+bindings are used. Account credentials and explicit VectorDB connections supply
+their own connection and authentication fields. Remote collections, indexes and
+authorization must be provisioned externally. Changing embedding credentials does
+not migrate existing vectors; the caller must preserve model compatibility.
+
+Account-owned business code must resolve model configuration through
+`VLMResolver` and pass the resulting `VLMConfig` to lower-level helpers.
+`ClusterVLMResolver` is restricted to startup, diagnostics, and offline
+evaluation composition roots. A CI architecture test rejects new direct reads
+of Cluster VLM or Query Planner configuration from other production modules.
 
 For runtime changes, use the following endpoints:
 
@@ -74,7 +120,7 @@ GET   /api/v1/admin/accounts/{account_id}/configuration
 PATCH /api/v1/admin/accounts/{account_id}/configuration
 ```
 
-The request body wraps a sparse patch in `settings`:
+The request body wraps a PATCH document in `settings`:
 
 ```json
 {
@@ -86,7 +132,7 @@ The request body wraps a sparse patch in `settings`:
 }
 ```
 
-PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes the override at that layer. Objects merge recursively and arrays replace as a whole. The response contains explicit values at the addressed layer, not inherited or effective values. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for permissions, validation, fallback, and compatibility details. The implementation design is documented in [Runtime Configuration Design](../../design/runtime-configuration-design.md).
+PATCH uses three states: an omitted field is unchanged, a concrete value sets or replaces the value, and `null` removes that value from the addressed scope. Objects merge recursively and arrays replace as a whole. The response contains settings from that scope, not a business-effective Account/Cluster composition. Declarative `fallback` is deprecated, supports only complete sections, and remains solely for compatibility; new features must implement Cluster defaults in their business resolver. See [Admin API - Runtime Configuration](../api/08-admin.md#runtime-configuration) for details.
 
 ## Configuration Examples
 

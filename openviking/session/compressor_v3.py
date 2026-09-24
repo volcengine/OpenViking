@@ -16,7 +16,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import uuid4
 
 from openviking.core.context import Context
@@ -86,6 +86,9 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle, VLMResolver
 
 logger = get_logger(__name__)
 
@@ -253,12 +256,15 @@ class SessionCompressorV3:
         rollout_analyzer: TrajectoryRolloutAnalyzer | Any | None = None,
         streaming_trainer_config: StreamingPolicyTrainerConfig | None = None,
         streaming_memory_updater_config: StreamingMemoryUpdaterConfig | None = None,
+        vlm_resolver: VLMResolver | None = None,
     ):
         self.vikingdb = vikingdb
         self.skill_processor = skill_processor
+        self.vlm_resolver = vlm_resolver
         self.rollout_analyzer = rollout_analyzer or TrajectoryRolloutAnalyzer(
             viking_fs=get_viking_fs(),
             vikingdb=vikingdb,
+            vlm_resolver=vlm_resolver,
         )
         self.streaming_trainer_config = streaming_trainer_config or StreamingPolicyTrainerConfig()
         self.streaming_memory_updater_config = (
@@ -273,9 +279,13 @@ class SessionCompressorV3:
         isolation_handler: Optional[MemoryIsolationHandler] = None,
         transaction_handle=None,
         context_provider: Optional[SessionExtractContextProvider] = None,
+        vlm_config: VLMHandle | None = None,
     ) -> ExtractLoop:
-        config = get_openviking_config()
-        vlm = config.vlm.get_vlm_instance()
+        if vlm_config is None:
+            raise RuntimeError(
+                "SessionCompressorV3 requires an explicitly resolved VLM config"
+            )
+        vlm = vlm_config
         viking_fs = get_viking_fs()
         if context_provider is None:
             context_provider = SessionExtractContextProvider(
@@ -285,6 +295,7 @@ class SessionCompressorV3:
                 ctx=ctx,
                 viking_fs=viking_fs,
                 transaction_handle=transaction_handle,
+                vlm_config=vlm_config,
             )
         return ExtractLoop(
             vlm=vlm,
@@ -689,6 +700,11 @@ class SessionCompressorV3:
                 allowed_memory_types=allowed_memory_types,
             )
 
+        if self.vlm_resolver is None:
+            raise RuntimeError(
+                "SessionCompressorV3 requires a VLM resolver for account-owned work"
+            )
+        vlm_config = await self.vlm_resolver.get_vlm(ctx.account_id)
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
@@ -697,6 +713,7 @@ class SessionCompressorV3:
             viking_fs=viking_fs,
             transaction_handle=None,
             memory_registry=registry,
+            vlm_config=vlm_config,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -718,6 +735,7 @@ class SessionCompressorV3:
             isolation_handler=isolation_handler,
             transaction_handle=None,
             context_provider=context_provider,
+            vlm_config=vlm_config,
         )
         operations, _tools_used = await orchestrator.run()
         if operations is None:
@@ -736,6 +754,7 @@ class SessionCompressorV3:
             registry=registry,
             vikingdb=self.vikingdb,
             config=self.streaming_memory_updater_config,
+            vlm_resolver=self.vlm_resolver,
         )
         update_result = await updater.submit(
             MemoryUpdateRequest(
@@ -895,6 +914,7 @@ class SessionCompressorV3:
                 viking_fs=viking_fs,
                 memory_type=SESSION_SKILL_MEMORY_TYPE,
                 memory_registry=load_skill_extract_registry(),
+                vlm_resolver=self.vlm_resolver,
             ),
             policy_updater=SkillPolicyUpdater(
                 skill_processor=self.skill_processor,
@@ -978,10 +998,12 @@ class SessionCompressorV3:
                 rollout_analyzer=self.rollout_analyzer,
                 gradient_estimator=ExperienceGradientEstimator(
                     viking_fs=viking_fs,
+                    vlm_resolver=self.vlm_resolver,
                 ),
                 policy_optimizer=PatchMergePolicyOptimizer(
                     viking_fs=viking_fs,
                     memory_type="experiences",
+                    vlm_resolver=self.vlm_resolver,
                 ),
                 policy_updater=MemoryFilePolicyUpdater(viking_fs=viking_fs, vikingdb=self.vikingdb),
                 context=PipelineContext(
@@ -1031,6 +1053,7 @@ class SessionCompressorV3:
                 if experiences_allowed:
                     exp_gradients = await ExperienceGradientEstimator(
                         viking_fs=viking_fs,
+                        vlm_resolver=self.vlm_resolver,
                     ).estimate(analysis, exp_trainer.policy_set, gradient_context)
                 exp_training_result = _trajectory_only_training_result(
                     analysis=analysis,

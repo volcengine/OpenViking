@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
@@ -16,6 +16,9 @@ from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.utils.language import resolve_output_language_from_text
+
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle
 
 _SYSTEM_HIDDEN_FIELDS = {
     "source_extraction_id",
@@ -124,8 +127,9 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         required_file_uris: list[str] | None = None,
         output_language: str | None = None,
         memory_registry: MemoryTypeRegistry | None = None,
+        vlm_config: VLMHandle | None = None,
     ):
-        super().__init__(messages=[])
+        super().__init__(messages=[], vlm_config=vlm_config)
         self.memory_type = memory_type
         self._registry = memory_registry
         self.required_file_uris = list(required_file_uris or [])

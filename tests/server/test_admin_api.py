@@ -19,6 +19,8 @@ from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 
+from openviking.config.binding import manager_over_source
+from openviking.config.source import MemoryConfigSource
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
@@ -132,6 +134,7 @@ class _FakeService:
     def __init__(self):
         self.viking_fs = _FakeVikingFS()
         self.sessions = self
+        self.runtime_config_manager = manager_over_source(MemoryConfigSource())
 
     async def get_agent_evolution_enabled(self, account_id):
         del account_id
@@ -185,6 +188,7 @@ def _build_lightweight_admin_test_app() -> FastAPI:
 @pytest_asyncio.fixture(scope="function")
 async def lightweight_admin_app(monkeypatch):
     app = _build_lightweight_admin_test_app()
+    await app.state.fake_service.runtime_config_manager.initialize()
     await app.state.api_key_manager.load()
     return app
 
@@ -1377,14 +1381,7 @@ async def test_account_memory_templates_reach_live_prompts(
     for user, peer in (("alice", None), ("bob", None), ("bob", "customer")):
         prompt = await prompt_for(account_id, user, peer)
         assert "CUSTOM_ACCOUNT_SCOPE EN" in prompt
-        # Preserve the Python protocol's existing static field contract. This
-        # change does not add a language context to that separate path.
-        expected_field = (
-            body["fields"][0]["description"]
-            if output_format == "python"
-            else "ACCOUNT_FIELD EN en"
-        )
-        assert expected_field in prompt
+        assert "ACCOUNT_FIELD EN en" in prompt
     assert "CUSTOM_ACCOUNT_SCOPE" not in await prompt_for("other-account", "alice")
     assert registry.get("profile").description == base_description
     assert (await lightweight_admin_client.delete(url, headers=headers)).status_code == 200
@@ -1466,7 +1463,9 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
 
         return Mock(run=run)
 
-    compressor = SessionCompressorV3(vikingdb=None)
+    vlm = Mock()
+    resolver = Mock(get_vlm=AsyncMock(return_value=vlm))
+    compressor = SessionCompressorV3(vikingdb=None, vlm_resolver=resolver)
     monkeypatch.setattr(compressor, "_get_or_create_react", orchestrator)
     try:
         await compressor._extract_user_memories(
@@ -1476,6 +1475,7 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
         )
     finally:
         await updater.close()
+    resolver.get_vlm.assert_awaited_once_with(account_id)
     assert initialized == ["soul.md"]
     content = MemoryFileUtils.read(fs.files[uri], uri=uri).content
     assert "# OLD_TEMPLATE" in content and "Business fact" in content
@@ -1641,12 +1641,38 @@ async def test_account_memory_templates_corrupt_storage_is_not_overwritten(
         assert fs.agfs._files == original
 
 
-async def test_create_account(admin_client: httpx.AsyncClient, admin_service: OpenVikingService):
-    """ROOT can create an account with first admin."""
+async def test_create_account(
+    admin_client: httpx.AsyncClient, admin_service: OpenVikingService, monkeypatch
+):
+    """ROOT provisioning applies account settings before initializing storage."""
+    settings = {
+        "embedding": {"max_retries": 5},
+        "vectordb": {
+            "backend": "vikingdb",
+            "name": "account_context",
+            "index_name": "default",
+            "dimension": 1024,
+            "vikingdb": {"host": "https://account.invalid"},
+        },
+    }
+    adapter = Mock(mode="vikingdb", USE_CONTENT_FIELD=True)
+    adapter.get.return_value = []
+    adapter.get_collection.return_value.get_meta_data.return_value = {
+        "Fields": [{"FieldName": name} for name in (
+            "id", "uri", "account_id", "context_type", "abstract", "level",
+            "user", "agent", "vector", "sparse_vector", "created_at", "updated_at",
+        )]
+    }
+    adapter.upsert.side_effect = lambda rows: [row["id"] for row in rows]
+    factory = Mock(return_value=adapter)
+    monkeypatch.setattr(
+        "openviking.storage.viking_vector_index_backend.create_collection_adapter",
+        factory,
+    )
     acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice", "settings": settings},
         headers=root_headers(),
     )
     assert resp.status_code == 200
@@ -1658,6 +1684,16 @@ async def test_create_account(admin_client: httpx.AsyncClient, admin_service: Op
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
     assert await admin_service.viking_fs.abstract("viking://user", ctx=ctx)
+    stored = await admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/configuration", headers=root_headers()
+    )
+    assert stored.json()["result"]["settings"] == settings
+    effective = await admin_service.vector_config_resolver.resolve(acct)
+    assert effective.dedicated_vectordb
+    assert effective.vectordb.name == "account_context"
+    assert effective.embedding.max_retries == 5
+    assert factory.call_args.args[0].vikingdb.host == "https://account.invalid"
+    adapter.create_collection.assert_not_called()
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(
@@ -2161,8 +2197,8 @@ async def test_delete_account(
         row[filter.field] == filter.value for row in indexed_rows.values()
     )
     vectors = admin_service.viking_fs.vector_store
-    vectors._root_backend = _SingleAccountBackend(
-        vectors._config, bound_account_id=None, shared_adapter=adapter
+    vectors._resolved_backends[acct] = _SingleAccountBackend(
+        vectors._config, bound_account_id=acct, shared_adapter=adapter
     )
     original_delete = vectors.delete_account_data
     started, release = asyncio.Event(), asyncio.Event()
@@ -3208,7 +3244,8 @@ async def test_trusted_mode_create_account_lists_current_account_metadata(
 
     manager = trusted_admin_app.state.api_key_manager
     account = next(item for item in manager.get_accounts() if item["account_id"] == acct)
-    assert set(account) == {"account_id", "created_at", "user_count"}
+    assert set(account) == {"account_id", "created_at", "user_count", "status"}
+    assert account["status"] == "active"
 
 
 async def test_user_page_summary_and_search_preserve_legacy_response(

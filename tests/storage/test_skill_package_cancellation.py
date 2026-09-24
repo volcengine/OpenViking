@@ -174,14 +174,24 @@ async def test_active_skill_embedding_cancel_settles_only_after_write_exit(
         "openviking_cli.utils.config.get_openviking_config", lambda: _DummyConfig(Embedder())
     )
     handler = TextEmbeddingHandler(
-        SimpleNamespace(is_closing=False, uses_content_field=False, upsert=upsert)
+        SimpleNamespace(
+            is_closing=False,
+            uses_content_field=False,
+            account_uses_content_field=AsyncMock(return_value=False),
+            upsert=upsert,
+        ),
+        SimpleNamespace(bind=lambda _account_id: Embedder()),
     )
     telemetry_id = str(uuid4())
     tracker = get_request_wait_tracker()
     tracker.register_request(telemetry_id)
     msg = EmbeddingMsg(
         "content",
-        {"uri": "viking://agent/skills/demo/file.md", "context_type": "skill"},
+        {
+            "uri": "viking://agent/skills/demo/file.md",
+            "context_type": "skill",
+            "account_id": "acc",
+        },
         telemetry_id=telemetry_id,
     )
     tracker.register_embedding_root(telemetry_id, msg.id)
@@ -269,7 +279,10 @@ async def test_semantic_cancel_drains_embeddings_before_releasing_package(monkey
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: SimpleNamespace(exists=AsyncMock(return_value=True)),
     )
-    worker = asyncio.create_task(SemanticProcessor().on_dequeue({"data": msg.to_json()}))
+    resolver = SimpleNamespace(get_vlm=AsyncMock())
+    worker = asyncio.create_task(
+        SemanticProcessor(vlm_resolver=resolver).on_dequeue({"data": msg.to_json()})
+    )
     await asyncio.wait_for(started.wait(), 1)
     worker.cancel()
     await asyncio.sleep(0)

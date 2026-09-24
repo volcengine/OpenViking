@@ -237,7 +237,7 @@ class _SemanticMixin:
             TypedQuery,
         )
 
-        real_ctx = self._ctx_or_default(ctx)
+        real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
         if filter_only:
@@ -250,13 +250,13 @@ class _SemanticMixin:
             )
 
         for target_dir in retrieval_targets.target_directories:
-            await self._ensure_retrieval_scope(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, real_ctx)
 
         storage = self._get_vector_store()
         if not storage:
             raise RuntimeError("Vector store not initialized. Call OpenViking.initialize() first.")
 
-        embedder = self._get_embedder()
+        embedder = self._get_embedder(real_ctx)
         if not embedder:
             raise RuntimeError("Embedder not configured.")
 
@@ -406,7 +406,7 @@ class _SemanticMixin:
             TypedQuery,
         )
 
-        real_ctx = self._ctx_or_default(ctx)
+        real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
         primary_target_uri = retrieval_targets.first_explicit_directory
 
@@ -417,14 +417,14 @@ class _SemanticMixin:
 
         query_plan: Optional[QueryPlan] = None
         for target_dir in retrieval_targets.target_directories:
-            await self._ensure_retrieval_scope(target_dir, ctx)
+            await self._ensure_retrieval_scope(target_dir, real_ctx)
 
         # When target_uri exists, read its abstract as optional query-planning context.
         target_abstract = ""
         if primary_target_uri:
             try:
                 with telemetry.measure("search.target_abstract"):
-                    target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
+                    target_abstract = await self.abstract(primary_target_uri, ctx=real_ctx)
             except Exception:
                 target_abstract = ""
 
@@ -446,7 +446,16 @@ class _SemanticMixin:
                 )
             ]
         elif intent_enabled and (session_summary or current_messages):
-            analyzer = IntentAnalyzer(max_recent_messages=5)
+            if self._vlm_resolver is None:
+                raise RuntimeError(
+                    "VikingFS requires a VLM resolver for account-owned intent analysis"
+                )
+            analyzer = IntentAnalyzer(
+                max_recent_messages=5,
+                query_planner=await self._vlm_resolver.get_query_planner(
+                    real_ctx.account_id
+                ),
+            )
             with telemetry.measure("search.intent_analysis"):
                 query_plan = await analyzer.analyze(
                     compression_summary=session_summary or "",
@@ -472,7 +481,7 @@ class _SemanticMixin:
 
         # Concurrent execution
         storage = self._get_vector_store()
-        embedder = self._get_embedder()
+        embedder = self._get_embedder(real_ctx)
         retriever = HierarchicalRetriever(
             storage=storage,
             embedder=embedder,
@@ -481,7 +490,6 @@ class _SemanticMixin:
         )
 
         async def _execute(tq: TypedQuery):
-            real_ctx = self._ctx_or_default(ctx)
             logger.debug(
                 "[VikingFS.search._execute] Calling retriever.retrieve with "
                 f"ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"

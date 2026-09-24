@@ -4,10 +4,10 @@ import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 export function createSessionInject({ config, sessionManager }) {
   const injectedSessions = new Set()
 
-  async function injectSessionContext(input, output) {
+  async function buildSessionContext(input) {
     if (config.noAutoInject) return false
-    const sessionID = input.sessionID ?? output.message?.sessionID
-    const messageID = input.messageID ?? output.message?.id
+    const sessionID = input.sessionID
+    const messageID = input.messageID
     if (!sessionID || !messageID || injectedSessions.has(sessionID)) return false
 
     const ovSessionId = sessionManager.getMappedSessionId(sessionID)
@@ -26,7 +26,7 @@ export function createSessionInject({ config, sessionManager }) {
 
     if (parts.length === 0) {
       injectedSessions.add(sessionID)
-      return false
+      return undefined
     }
 
     const block = [
@@ -35,14 +35,6 @@ export function createSessionInject({ config, sessionManager }) {
       "</openviking-context>",
     ].join("\n")
 
-    output.parts.unshift({
-      id: `prt-ov-session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      type: "text",
-      text: block,
-      synthetic: true,
-      sessionID,
-      messageID,
-    })
     injectedSessions.add(sessionID)
     log("INFO", "session-inject", "Injected OpenViking session context", {
       opencode_session: sessionID,
@@ -50,10 +42,28 @@ export function createSessionInject({ config, sessionManager }) {
       hasProfile: Boolean(profile?.block),
       hasArchive: Boolean(archive),
     })
+    return block
+  }
+
+  async function injectSessionContext(input, output) {
+    const block = await buildSessionContext({
+      ...input,
+      sessionID: input.sessionID ?? output.message?.sessionID,
+      messageID: input.messageID ?? output.message?.id,
+    })
+    if (!block) return false
+    output.parts.unshift({
+      id: `prt-ov-session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: "text",
+      text: block,
+      synthetic: true,
+      sessionID: input.sessionID ?? output.message?.sessionID,
+      messageID: input.messageID ?? output.message?.id,
+    })
     return true
   }
 
-  return { injectSessionContext }
+  return { buildSessionContext, injectSessionContext }
 }
 
 async function fetchArchiveBlock(fetcher, ovSessionId, tokenBudget) {

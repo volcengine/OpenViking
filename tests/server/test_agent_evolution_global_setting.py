@@ -384,6 +384,36 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
         "github": {"token": "account-token"}
     }
 
+    from openviking.server.auth import get_request_context
+
+    url = "/api/v1/admin/accounts/default/configuration"
+    model_settings = {
+        "vlm": {
+            "model": "account-model",
+            "credentials": [{"provider": "openai", "api_key": "account-key"}],
+        }
+    }
+    root_updated = await client.patch(url, json={"settings": model_settings})
+    assert root_updated.status_code == 200, root_updated.text
+    assert root_updated.json()["result"]["settings"]["vlm"] == model_settings["vlm"]
+
+    admin = RequestContext(user=UserIdentifier("default", "admin"), role=Role.ADMIN)
+    app = client._transport.app
+    app.dependency_overrides[get_request_context] = lambda: admin
+    try:
+        visible = await client.get(url)
+        assert visible.status_code == 200, visible.text
+        assert visible.json()["result"]["settings"] == {"github": {"token": "account-token"}}
+        denied = await client.patch(
+            url, json={"settings": {"vlm": None, "embedding": {"max_retries": 5}}}
+        )
+        assert denied.status_code == 403, denied.text
+    finally:
+        app.dependency_overrides.pop(get_request_context)
+    assert (await client.get(url)).json()["result"]["settings"] == root_updated.json()["result"][
+        "settings"
+    ]
+
 
 async def test_cluster_agent_evolution_override_is_account_fallback(settings_http):
     client, service = settings_http

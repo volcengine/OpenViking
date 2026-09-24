@@ -411,11 +411,29 @@ def test_get_account_rejects_unknown_field():
 
 
 def test_account_patch_sets_override_and_publishes():
+    source = MemoryConfigSource()
+    manager, holder = _make_manager(source)
+    asyncio.run(manager.initialize())
+
     async def run():
-        manager, _ = _make_manager(MemoryConfigSource())
-        event = await manager.patch_account("ov-a", {"vlm": {"model": "account-model"}})
-        assert event.scope.key == "ov-a"
-        assert (await manager.get_account("ov-a", "vlm")).model == "account-model"
+        await asyncio.gather(
+            asyncio.to_thread(
+                lambda: asyncio.run(manager.patch_account("ov-a", {"vlm": {"model": "account"}}))
+            ),
+            asyncio.to_thread(
+                lambda: asyncio.run(
+                    manager.patch_account("ov-a", {"memory": {"extraction_enabled": False}})
+                )
+            ),
+        )
+        assert await source.load(ConfigScope.account("ov-a")) == {
+            "vlm": {"model": "account"},
+            "memory": {"extraction_enabled": False},
+        }
+        assert (await manager.get_account("ov-a", "vlm")).model == "account"
+        assert (await manager.get_account("ov-a", "memory")).extraction_enabled is False
+        assert (await manager.get_account("ov-b", "vlm")).model is None
+        assert holder["config"].vlm.model is None
 
     asyncio.run(run())
 
@@ -496,9 +514,9 @@ def test_patch_waits_for_matching_consumers_and_filters_registration():
         seen = []
 
         async def matching(event):
+            seen.append(event.new_config.vlm.model)
             started.set()
             await release.wait()
-            seen.append(event.new_config.vlm.model)
 
         async def wrong_scope(event):
             seen.append("wrong-scope")
@@ -523,10 +541,16 @@ def test_patch_waits_for_matching_consumers_and_filters_registration():
         )
         patch_task = asyncio.create_task(manager.patch_cluster({"vlm": {"model": "first"}}))
         await started.wait()
-        assert not patch_task.done()
-        release.set()
-        await patch_task
+        later = asyncio.create_task(manager.patch_cluster({"vlm": {"model": "second"}}))
+        while (await manager.get_settings(ConfigScope.cluster())).get("vlm", {}).get(
+            "model"
+        ) != "second":
+            await asyncio.sleep(0)
+        assert not patch_task.done() and not later.done()
         assert seen == ["first"]
+        release.set()
+        await asyncio.gather(patch_task, later)
+        assert seen == ["first", "second"]
 
     asyncio.run(run())
 
@@ -660,31 +684,86 @@ def test_refresh_does_not_resurrect_evicted_account():
 # -- AccountConfig field attributes + manager fallback ------------------------
 
 
-def test_account_config_field_attributes():
-    fields = AccountConfig.model_fields
-    assert set(fields) == {"acl", "agent_evolution", "feishu", "github"}
-    assert collect_runtime_field_paths(AccountConfig) == {
-        ("acl",),
-        ("acl", "enabled"),
-        ("agent_evolution",),
-        ("agent_evolution", "enabled"),
-        ("feishu",),
-        ("feishu", "app_id"),
-        ("feishu", "app_secret"),
-        ("feishu", "download_images"),
-        ("feishu", "max_records_per_table"),
-        ("feishu", "max_rows_per_sheet"),
-        ("feishu", "request_timeout"),
-        ("github",),
-        ("github", "token"),
+async def test_account_runtime_binding_and_updates_are_isolated():
+    from openviking.config.binding import manager_over_source
+    from openviking.config.vector import AccountVectorConfigResolver
+    from openviking_cli.utils.config import set_openviking_config
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    cluster = OpenVikingConfig.from_dict(
+        {
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "cluster",
+                    "dimension": 4,
+                    "api_key": "cluster-secret",
+                    "api_base": "https://cluster.invalid/v1",
+                }
+            },
+            "vlm": {"provider": "openai", "model": "cluster-vlm", "api_key": "cluster-secret"},
+        }
+    )
+    set_openviking_config(cluster)
+    source = MemoryConfigSource()
+    manager = manager_over_source(source, base_config=cluster)
+    resolver = AccountVectorConfigResolver(manager)
+    credential = {
+        "provider": "openai",
+        "api_key": "account-secret",
+        "api_base": "https://account.invalid/v1",
     }
-    assert is_dynamic(fields["feishu"])
-    assert fallback_of(fields["feishu"]) is None
-    assert is_dynamic(fields["github"])
-    assert fallback_of(fields["github"]) is None
-    assert is_dynamic(fields["agent_evolution"])
-    assert fallback_of(fields["agent_evolution"]) == "agent_evolution"
-    assert collect_frozen_paths(AccountConfig) == set()
+    settings = {
+        "embedding": {"dense": {"model": "account", "dimension": 8, "credentials": [credential]}},
+        "vectordb": {
+            "backend": "http",
+            "url": "http://account-vectors.invalid",
+            "name": "account",
+            "index_name": "default",
+            "dimension": 8,
+        },
+        "vlm": {"model": "account-vlm", "credentials": [credential]},
+    }
+    try:
+        await manager.initialize()
+        with pytest.raises(ValueError, match="dimension"):
+            await manager.patch_account(
+                "a",
+                {**settings, "vectordb": {**settings["vectordb"], "dimension": 4}},
+                creating=True,
+            )
+        assert await source.load(ConfigScope.account("a")) is None
+        await manager.patch_account("a", settings, creating=True)
+        account, default = await resolver.resolve("a"), await resolver.resolve("b")
+        assert account.dedicated_vectordb and account.vectordb.dimension == 8
+        assert account.embedding.dense.credentials[0].api_key == "account-secret"
+        assert account.embedding.dense.api_key is None
+        assert default.embedding.dense.api_key == "cluster-secret"
+        assert default.vectordb.dimension == 4 and not default.dedicated_vectordb
+        vlm = (await manager.get_account("a", "vlm")).to_vlm_config(cluster.vlm)
+        assert vlm.model == "account-vlm" and vlm.credentials[0].api_key == "account-secret"
+        assert vlm.api_key is None
+
+        before = await source.load(ConfigScope.account("a"))
+        with pytest.raises(ConfigPatchError, match="create-only"):
+            await manager.patch_account(
+                "a", {"embedding": {"max_retries": 9, "dense": {"dimension": 4}}}
+            )
+        with pytest.raises(ConfigPatchError, match="api_ky"):
+            await manager.patch_account(
+                "a", {"vlm": {"credentials": [{"provider": "openai", "api_ky": "typo"}]}}
+            )
+        assert await source.load(ConfigScope.account("a")) == before
+        await manager.patch_account(
+            "a", {"embedding": {"dense": {"credentials": [{**credential, "api_key": "rotated"}]}}}
+        )
+        assert (await resolver.resolve("a")).embedding.dense.credentials[0].api_key == "rotated"
+        assert (await resolver.resolve("b")).embedding.dense.api_key == "cluster-secret"
+    finally:
+        OpenVikingConfigSingleton.reset_instance()
 
 
 def test_account_config_ignores_inactive_sections_during_known_patch():
@@ -698,8 +777,8 @@ def test_account_config_ignores_inactive_sections_during_known_patch():
 
         source = MemoryConfigSource()
         scope = ConfigScope.account("ov-a")
-        inactive_section = {"model": "unused"}
-        await source.update(scope, lambda _: {"vlm": inactive_section})
+        inactive_section = {"extraction_enabled": False}
+        await source.update(scope, lambda _: {"memory": inactive_section})
 
         base = OpenVikingConfig.from_dict({})
         set_openviking_config(base)
@@ -709,7 +788,7 @@ def test_account_config_ignores_inactive_sections_during_known_patch():
             assert await manager.get_account("ov-a", "acl") is None
             await manager.patch_account("ov-a", {"acl": {"enabled": True}})
             assert await source.load(scope) == {
-                "vlm": inactive_section,
+                "memory": inactive_section,
                 "acl": {"enabled": True},
             }
         finally:
@@ -732,10 +811,13 @@ def test_account_patch_rejects_inactive_fields_and_allows_active_fields():
         validate_patch(AccountConfig, {"feishu": {"domain": "https://custom.example"}})
     validate_patch(AccountConfig, {"feishu": {"request_timeout": 60}})
     validate_patch(AccountConfig, {"feishu": None})
-    with pytest.raises(ConfigPatchError):
-        validate_patch(AccountConfig, {"vlm": {"model": "m"}})
-    with pytest.raises(ConfigPatchError):
-        validate_patch(AccountConfig, {"embedding": {"dense": {"model": "m"}}}, creating=True)
+    validate_patch(AccountConfig, {"vlm": {"model": "m"}})
+    validate_patch(AccountConfig, {"query_planner": {"timeout": 30}})
+    with pytest.raises(ConfigPatchError, match="max_concurrent"):
+        validate_patch(AccountConfig, {"vlm": {"max_concurrent": 2}})
+    validate_patch(AccountConfig, {"embedding": {"dense": {"model": "m"}}}, creating=True)
+    with pytest.raises(ConfigPatchError, match="create-only"):
+        validate_patch(AccountConfig, {"embedding": {"dense": {"model": "m"}}})
 
 
 def test_feishu_cluster_patch_rejects_unknown_fields():

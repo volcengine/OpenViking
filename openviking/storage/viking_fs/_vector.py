@@ -86,6 +86,16 @@ class _VectorMixin:
         """Get vector store instance."""
         return self.vector_store
 
-    def _get_embedder(self) -> Any:
-        """Get embedder instance."""
-        return self.query_embedder
+    def _get_embedder(self, ctx=None) -> Any:
+        """Bind query calls to the account, resolving settings at each call.
+
+        Fails closed: a request that already carries an account_id must never
+        fall back to a process-wide startup embedder. When the account embedding
+        provider is absent the caller gets an explicit initialization error
+        instead of a Cluster-scoped embedder.
+        """
+        ctx = self._require_request_context(ctx)
+        provider = self._embedding_provider
+        if provider is None:
+            raise RuntimeError("Account embedding provider is not initialized")
+        return provider.bind(ctx.account_id)

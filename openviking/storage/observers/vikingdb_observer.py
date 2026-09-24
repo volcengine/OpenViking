@@ -31,11 +31,15 @@ class VikingDBObserver(BaseObserver):
         if not self._vikingdb_manager:
             return "VikingDB manager not initialized."
 
-        if not await self._vikingdb_manager.collection_exists():
+        backend = (
+            await self._vikingdb_manager.get_account_backend(ctx.account_id)
+            if ctx is not None else self._vikingdb_manager
+        )
+        if not await backend.collection_exists():
             return "No collections found."
 
         statuses = await self._get_collection_statuses(
-            [self._vikingdb_manager.collection_name], ctx=ctx
+            [backend.collection_name], ctx=ctx
         )
         return self._format_status_as_table(statuses)
 
@@ -101,10 +105,14 @@ class VikingDBObserver(BaseObserver):
         self, collection_names: list, *, ctx: Optional[RequestContext] = None
     ) -> Dict[str, Dict]:
         statuses = {}
+        backend = (
+            await self._vikingdb_manager.get_account_backend(ctx.account_id)
+            if ctx is not None else self._vikingdb_manager
+        )
 
         for name in collection_names:
             try:
-                if not await self._vikingdb_manager.collection_exists():
+                if not await backend.collection_exists():
                     continue
 
                 # Current OpenViking flow uses one managed default index per collection.

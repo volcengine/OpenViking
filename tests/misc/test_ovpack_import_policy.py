@@ -10,6 +10,7 @@ import os
 import tempfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -316,6 +317,21 @@ class FakeVectorStore:
     def __init__(self) -> None:
         self.upserts: list[dict[str, object]] = []
 
+    async def resolve(self, account_id):
+        from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+        return SimpleNamespace(
+            embedding=EmbeddingConfig(dense={
+                "provider": "openai", "model": "test", "dimension": 3, "api_key": "test"
+            }),
+            vectordb=SimpleNamespace(sparse_weight=0),
+        )
+
+    async def get_account_backend(self, account_id):
+        return self
+
+    async def get_collection_meta(self):
+        return {}
+
     async def filter(self, **kwargs):
         uri = kwargs["filter"].value
         if uri == "viking://resources/demo":
@@ -389,6 +405,9 @@ class HybridIndexVectorStore(FakeVectorStore):
     def get_index_meta_data(self, index_name):
         assert index_name == self._index_name
         return {"VectorIndex": {"IndexType": "flat_hybrid"}}
+
+    async def get_collection_meta(self):
+        return self.get_index_meta_data(self._index_name)
 
 
 @pytest.fixture
@@ -793,7 +812,8 @@ async def test_export_include_vectors_rejects_missing_index_records(
             "viking://resources/demo",
             str(temp_ovpack_path),
             ctx=request_ctx,
-            vector_store=IncompleteVectorStore(),
+            vector_store=(vector_store := IncompleteVectorStore()),
+            vector_config_resolver=vector_store,
             include_vectors=True,
         )
 
@@ -812,7 +832,8 @@ async def test_export_include_vectors_allows_overview_without_abstract(
         "viking://resources/demo",
         str(temp_ovpack_path),
         ctx=request_ctx,
-        vector_store=OverviewOnlyVectorStore(),
+        vector_store=(vector_store := OverviewOnlyVectorStore()),
+        vector_config_resolver=vector_store,
         include_vectors=True,
     )
 
@@ -880,7 +901,8 @@ async def test_export_include_vectors_rejects_hybrid_index_snapshot(
             "viking://resources/demo",
             str(temp_ovpack_path),
             ctx=request_ctx,
-            vector_store=HybridIndexVectorStore(),
+            vector_store=(vector_store := HybridIndexVectorStore()),
+            vector_config_resolver=vector_store,
             include_vectors=True,
         )
 
@@ -900,19 +922,21 @@ async def test_import_ovpack_restores_required_dense_vector_snapshot(
     }
     monkeypatch.setattr(
         "openviking.storage.ovpack.vectors.embedding_snapshot_metadata",
-        lambda dimensions: {**embedding_metadata, "dimensions": dimensions},
+        lambda dimensions, embedding_cfg: {**embedding_metadata, "dimensions": dimensions},
     )
     monkeypatch.setattr(
         "openviking.storage.ovpack.vectors.current_embedding_metadata",
-        lambda: embedding_metadata,
+        lambda embedding_cfg: embedding_metadata,
     )
 
+    vector_store = FakeVectorStore()
     await export_ovpack(
         FakeExportVikingFS(),
         "viking://resources/demo",
         str(temp_ovpack_path),
         ctx=request_ctx,
-        vector_store=FakeVectorStore(),
+        vector_store=vector_store,
+        vector_config_resolver=vector_store,
         include_vectors=True,
     )
 
@@ -928,6 +952,7 @@ async def test_import_ovpack_restores_required_dense_vector_snapshot(
         request_ctx,
         vector_mode="require",
         vector_store=vector_store,
+        vector_config_resolver=vector_store,
     )
 
     assert result == "viking://resources/imported/demo"
@@ -1150,8 +1175,10 @@ async def _restricted_pack_source(indexed_fs):
             },
             ctx=admin,
         )
-    acl = AclManager(backend)
-    acl.set_enabled(admin.account_id, True)
+    acl = AclManager(
+        backend,
+        SimpleNamespace(get_account=AsyncMock(return_value=SimpleNamespace(enabled=True))),
+    )
     fs.acl_manager = backend.acl_manager = acl
     await fs.set_acl(
         root,

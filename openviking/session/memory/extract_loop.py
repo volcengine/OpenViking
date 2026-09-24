@@ -229,7 +229,7 @@ class ExtractLoop:
         config = get_openviking_config()
         self._link_enabled = config.memory.link_enabled if config.memory else False
 
-        self._resolve_effective_max_output_tokens(config)
+        self._resolve_effective_max_output_tokens()
 
         # 获取 ExtractContext（整个流程复用）
         self._extract_context = self.context_provider.get_extract_context()
@@ -458,20 +458,18 @@ class ExtractLoop:
 
         return final_operations, tools_used
 
-    def _resolve_effective_max_output_tokens(self, config: Any = None) -> None:
+    def _resolve_effective_max_output_tokens(self) -> None:
         """Resolve the extraction output cap.
 
-        Priority: explicit per-loop value > configured vlm.max_tokens >
+        Priority: explicit per-loop value > resolved VLM max_tokens >
         _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS. The default is a functional floor
         that suits the primary Doubao models; a model with a lower max output
         (e.g. gpt-4o-mini) must set vlm.max_tokens in ov.conf to override it.
         """
-        if config is None:
-            config = get_openviking_config()
         if self.max_output_tokens is not None:
             self._effective_max_output_tokens = self.max_output_tokens
             return
-        configured = getattr(getattr(config, "vlm", None), "max_tokens", None)
+        configured = getattr(self.vlm, "max_tokens", None)
         self._effective_max_output_tokens = (
             configured if configured is not None else _DEFAULT_EXTRACTION_MAX_OUTPUT_TOKENS
         )

@@ -284,7 +284,12 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
             reindex_contexts.append(ctx)
             return 0
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: _SpyExecutor())
+    def factory(*, vlm_resolver, vector_config_resolver):
+        assert vlm_resolver is service.viking_fs._vlm_resolver
+        assert vector_config_resolver is service.vector_config_resolver
+        return _SpyExecutor()
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
     result = await service.fs.restore(
         project_dir=root,
         source_commit=v1["commit_oid"],
@@ -644,7 +649,12 @@ async def test_restore_apply_triggers_reindex_hook(client_with_resource_and_blob
             calls.append(uri)
             return {"ok": True}
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: _SpyExecutor())
+    def factory(*, vlm_resolver, vector_config_resolver):
+        assert vlm_resolver is service.viking_fs._vlm_resolver
+        assert vector_config_resolver is service.vector_config_resolver
+        return _SpyExecutor()
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
 
     # Mutate, commit v2, then restore back to c1 — must produce a reindex call.
     await service.viking_fs.write_file(blob_uri, b"v2-bytes\n", ctx=ctx)
@@ -693,7 +703,12 @@ async def test_restore_delete_removes_orphaned_vectors(client_with_resource_and_
             deleted_calls.append((uri, int(level)))
             return 0
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: _SpyExecutor())
+    def factory(*, vlm_resolver, vector_config_resolver):
+        assert vlm_resolver is service.viking_fs._vlm_resolver
+        assert vector_config_resolver is service.vector_config_resolver
+        return _SpyExecutor()
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
 
     # Add a brand-new file that does not exist at c1, then commit v2.
     new_uri = "viking://resources/restore_delete_fixture.txt"

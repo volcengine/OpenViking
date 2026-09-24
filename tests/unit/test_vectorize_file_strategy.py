@@ -53,6 +53,11 @@ class DummyFS:
         self.read_calls = []
         self.read_file_calls = 0
         self.read_file_bytes_calls = 0
+        self.vector_store = self
+        self._vector_config_resolver = self
+
+    async def resolve(self, account_id):
+        return types.SimpleNamespace(embedding=embedding_utils.get_openviking_config().embedding)
 
     async def read(self, _path, offset=0, size=-1, ctx=None):
         self.read_calls.append((offset, size))

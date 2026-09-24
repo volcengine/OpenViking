@@ -2,21 +2,22 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Built-in file-backed config source.
 
-Paths are specific to this provider. The account override retains the legacy
+Paths are specific to this provider. Account settings retain the legacy
 ``setting.json`` location:
 
 ============  ==========================================================
-override      path
+scope         path
 ============  ==========================================================
 account       ``/local/{account_id}/_system/setting.json``
 account backup ``/local/{account_id}/_system/setting.backup.json``
 cluster       ``/local/_system/runtime_config/cluster.json``
 ============  ==========================================================
 
-Only sparse overrides are stored. This source exchanges JSON bytes with AGFS;
-encryption at rest follows the mount's configuration. Backups preserve the
-previous bytes returned by AGFS so readers can recover if the destination is
-left truncated by an interrupted write.
+Only explicitly configured fields are serialized. Account and Cluster documents
+remain independent; this source does not apply fallback or inheritance. It
+exchanges JSON bytes with AGFS, and encryption at rest follows the mount's
+configuration. Backups preserve the previous bytes returned by AGFS so readers
+can recover if the destination is left truncated by an interrupted write.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ CLUSTER_SETTINGS_PATH = "/local/_system/runtime_config/cluster.json"
 
 
 class FileConfigSource:
-    """Store sparse JSON overrides using AGFS locks, backups and rollback."""
+    """Store scoped JSON settings using AGFS locks, backups and rollback."""
 
     def __init__(
         self,

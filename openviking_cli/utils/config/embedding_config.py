@@ -1039,6 +1039,9 @@ class EmbeddingConfig(BaseModel):
         if self.dense:
             return self._create_single_or_failover_embedder("dense", self.dense)
 
+        if self.sparse:
+            return self._create_single_or_failover_embedder("sparse", self.sparse)
+
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
 
     def _create_single_or_failover_embedder(
@@ -1112,6 +1115,8 @@ class EmbeddingConfig(BaseModel):
             return self.hybrid.get_effective_dimension()
         if self.dense:
             return self.dense.get_effective_dimension()
+        if self.sparse:
+            return self.sparse.get_effective_dimension()
         return 2048
 
     @staticmethod

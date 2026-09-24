@@ -1435,6 +1435,7 @@ class SemanticTreeExecutor:
                             children_abstracts,
                             total_files=len(node.file_paths),
                             total_children=len(node.children_dirs),
+                            ctx=self._ctx,
                         )
                 overview, abstract = self._processor._normalize_overview_generation(overview)
 

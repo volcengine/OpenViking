@@ -67,6 +67,7 @@ from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
+    from openviking.config.vlm import VLMResolver
     from openviking.session.compressor_v3 import SessionCompressorV3 as SessionCompressor
     from openviking.storage import VikingDBManager
     from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
@@ -647,6 +648,7 @@ class Session:
         usage_reporter: Optional["UsageReporter"] = None,
         agent_evolution_enabled_provider: Optional[Callable[[], bool | Awaitable[bool]]] = None,
         memory_policy_provider: Optional[MemoryPolicyProvider] = None,
+        vlm_resolver: Optional["VLMResolver"] = None,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
@@ -680,6 +682,12 @@ class Session:
         self._agent_evolution_enabled_provider = agent_evolution_enabled_provider
         self._memory_policy_provider = memory_policy_provider
         self._usage_reporter = usage_reporter
+        self._vlm_resolver = vlm_resolver
+
+    async def _get_vlm_config(self):
+        if self._vlm_resolver is None:
+            raise RuntimeError("Session requires a VLM resolver for account-owned work")
+        return await self._vlm_resolver.get_vlm(self.ctx.account_id)
 
     async def _resolve_memory_policy(
         self, override: Optional[Dict[str, Any]] = None
@@ -4312,7 +4320,7 @@ class Session:
         limits: ExtractionBatchLimits,
     ) -> str:
         messages = [message for batch in batches for message in batch.messages]
-        vlm = get_openviking_config().vlm
+        vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             return await self._generate_archive_summary_async(
                 messages,
@@ -4390,7 +4398,7 @@ class Session:
         )
         checkpoint_instructions = self._checkpoint_prompt_instructions(len(checkpoint_requests))
 
-        vlm = get_openviking_config().vlm
+        vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             if checkpoint_requests:
                 raise ValueError("A configured VLM is required to generate checkpoint summaries")
@@ -4667,7 +4675,8 @@ class Session:
                     "output_language": output_language,
                 },
             )
-            return await get_openviking_config().vlm.get_completion_async(prompt)
+            vlm = await self._get_vlm_config()
+            return await vlm.get_completion_async(prompt)
         except Exception as e:
             logger.warning(f"WM creation fallback failed: {e}")
             turn_count = len([m for m in messages if is_user_query(m)])

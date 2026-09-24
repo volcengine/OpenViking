@@ -380,7 +380,10 @@ tags:
     viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
     viking_fs._async_agfs.pathlock_release = AsyncMock()
 
-    async def _fake_extract_skill_privacy_values(*, skill_name, skill_description, content):
+    async def _fake_extract_skill_privacy_values(
+        *, skill_name, skill_description, content, vlm
+    ):
+        assert vlm is account_vlm
         assert skill_name == "code-review"
         assert skill_description == "Review code from evidence"
         assert "api_key=secret-xyz" in content
@@ -401,9 +404,12 @@ tags:
     privacy_config_service.upsert = AsyncMock()
     vikingdb = MagicMock()
     vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+    account_vlm = object()
+    vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=account_vlm))
     processor = SkillProcessor(
         vikingdb=vikingdb,
         privacy_config_service=privacy_config_service,
+        vlm_resolver=vlm_resolver,
     )
     processor._write_skill_content = AsyncMock()
     processor._enqueue_skill_package = AsyncMock()

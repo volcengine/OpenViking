@@ -9,6 +9,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, model_validator
 
+from openviking_cli.utils.config.runtime_field import RuntimeField
+
 
 def _load_codex_auth_module():
     importlib.import_module("openviking.models.vlm")
@@ -37,12 +39,28 @@ def _reject_stream_config(data: Any, location: str) -> None:
         )
 
 
+def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
+    """Bind one Account tracker to all concrete VLM instances in a wrapper."""
+    if instance is None:
+        return
+    if hasattr(instance, "_token_tracker"):
+        instance._token_tracker = tracker
+    if hasattr(instance, "_vlm_instances"):
+        for child in instance._vlm_instances:
+            _bind_token_usage_tracker(child, tracker)
+    else:
+        for name in ("primary", "backup"):
+            child = getattr(instance, name, None)
+            if child is not None:
+                _bind_token_usage_tracker(child, tracker)
+
+
 class VLMCredential(BaseModel):
     """Single VLM credential configuration for multi-credential failover."""
 
-    id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
-    provider: Optional[str] = Field(default=None, description="Provider type")
-    model: Optional[str] = Field(
+    id: Optional[str] = RuntimeField(default=None, description="Unique identifier for this credential")
+    provider: Optional[str] = RuntimeField(default=None, description="Provider type")
+    model: Optional[str] = RuntimeField(
         default=None,
         description=(
             "Model name (or endpoint id) for this credential. "
@@ -50,26 +68,28 @@ class VLMCredential(BaseModel):
             "to point to a different deployment / endpoint."
         ),
     )
-    api_key: Optional[str] = Field(default=None, description="API key")
-    api_base: Optional[str] = Field(default=None, description="API base URL")
-    api_version: Optional[str] = Field(default=None, description="API version")
-    forward_api_key: Optional[bool] = Field(
+    api_key: Optional[str] = RuntimeField(default=None, description="API key")
+    api_base: Optional[str] = RuntimeField(default=None, description="API base URL")
+    api_version: Optional[str] = RuntimeField(default=None, description="API version")
+    forward_api_key: Optional[bool] = RuntimeField(
         default=None, description="Whether to pass api_key through to LiteLLM"
     )
-    extra_headers: Optional[Dict[str, str]] = Field(default=None, description="Extra HTTP headers")
-    extra_request_body: Optional[Dict[str, Any]] = Field(
+    extra_headers: Optional[Dict[str, str]] = RuntimeField(
+        default=None, description="Extra HTTP headers"
+    )
+    extra_request_body: Optional[Dict[str, Any]] = RuntimeField(
         default=None, description="Extra JSON body fields"
     )
-    reasoning_effort: Optional[str] = Field(
+    reasoning_effort: Optional[str] = RuntimeField(
         default=None,
         description="Reasoning effort for OpenAI-compatible reasoning models",
     )
-    keepalive_expiry: Optional[float] = Field(
+    keepalive_expiry: Optional[float] = RuntimeField(
         default=None,
         ge=0.0,
         description="Idle HTTP connection lifetime for OpenAI-compatible providers",
     )
-    max_tokens: Optional[int] = Field(
+    max_tokens: Optional[int] = RuntimeField(
         default=None,
         gt=0,
         description=(
@@ -113,7 +133,15 @@ class VLMMediaConfig(BaseModel):
 
 
 class VLMConfig(BaseModel):
-    """VLM configuration, supports multiple provider backends and multi-credential failover."""
+    """VLM configuration with multi-provider and multi-credential failover.
+
+    Compatibility contract: top-level fields added here must describe common
+    runtime behavior that is safe for Account VLM configurations to inherit
+    from Cluster configuration. Fields that select a model service, credential,
+    endpoint, or provider-specific request identity must instead be represented
+    by ``AccountVLMConfig`` (normally ``model`` or ``VLMCredential``) and excluded by
+    ``AccountVLMConfig._ACCOUNT_OWNED_MODEL_SERVICE_FIELDS``.
+    """
 
     backup: Optional["VLMConfig"] = Field(
         default=None, description="Backup VLM configuration for failover (legacy)"
@@ -211,6 +239,7 @@ class VLMConfig(BaseModel):
     )
 
     _vlm_instance: Optional[Any] = None
+    _token_usage_tracker: Any = PrivateAttr(default=None)
     _media_semaphores: weakref.WeakKeyDictionary[
         asyncio.AbstractEventLoop,
         weakref.ReferenceType[asyncio.Semaphore],
@@ -665,7 +694,18 @@ class VLMConfig(BaseModel):
                 else:
                     self._vlm_instance = primary
 
+            if self._token_usage_tracker is not None:
+                _bind_token_usage_tracker(self._vlm_instance, self._token_usage_tracker)
+
         return self._vlm_instance
+
+    def set_token_usage_tracker(self, tracker: Any) -> None:
+        """Bind an externally owned tracker without eagerly creating a client."""
+        if self._token_usage_tracker is tracker:
+            return
+        self._token_usage_tracker = tracker
+        if self._vlm_instance is not None:
+            _bind_token_usage_tracker(self._vlm_instance, tracker)
 
     def close(self) -> None:
         """Close and clear the cached VLM instance."""
@@ -673,6 +713,13 @@ class VLMConfig(BaseModel):
         self._vlm_instance = None
         if instance is not None:
             instance.close()
+
+    def __del__(self) -> None:
+        """Release a lazily-created client when the config is no longer referenced."""
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""
@@ -748,6 +795,7 @@ class VLMConfig(BaseModel):
         prompt: str = "",
         thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion."""
@@ -756,6 +804,7 @@ class VLMConfig(BaseModel):
             prompt=prompt,
             thinking=effective_thinking,
             tools=tools,
+            tool_choice=tool_choice,
             messages=messages,
         )
 
@@ -766,6 +815,7 @@ class VLMConfig(BaseModel):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: Optional[int] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
         effective_thinking = self.thinking if thinking is None else thinking
@@ -775,6 +825,7 @@ class VLMConfig(BaseModel):
             tools=tools,
             tool_choice=tool_choice,
             messages=messages,
+            max_tokens=max_tokens,
         )
 
     def is_available(self) -> bool:
@@ -793,6 +844,7 @@ class VLMConfig(BaseModel):
         images: Optional[list] = None,
         thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images."""
@@ -802,6 +854,7 @@ class VLMConfig(BaseModel):
             images=images,
             thinking=effective_thinking,
             tools=tools,
+            tool_choice=tool_choice,
             messages=messages,
         )
 
@@ -864,6 +917,7 @@ class VLMConfig(BaseModel):
         images: Optional[list] = None,
         thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
@@ -873,6 +927,7 @@ class VLMConfig(BaseModel):
             images=images,
             thinking=effective_thinking,
             tools=tools,
+            tool_choice=tool_choice,
             messages=messages,
         )
 

@@ -11,7 +11,7 @@ This is the only OpenCode plugin example maintained in this repository. It does 
 
 Prepare the following first:
 
-- OpenCode
+- OpenCode 1.15.7+ or OpenCode 2.0.15+
 - OpenViking HTTP Server
 - Node.js 18+
 - A valid OpenViking API key if authentication is enabled on the server
@@ -37,6 +37,8 @@ Normal users are recommended to enable it through OpenCode's package plugin mech
   "plugin": ["@openviking/opencode-plugin"]
 }
 ```
+
+This `plugin` entry works on both v1 and v2. OpenCode v2 normalizes it to the native `plugins` form at load time, so no manual config migration is required.
 
 ## Installation Method 2: Source Install
 

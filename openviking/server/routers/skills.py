@@ -634,7 +634,7 @@ async def find_skills(
 
         # Both finds embed the same query text, so wrap the fan-out in the
         # request-scoped cache to reuse the first in-flight embed.
-        with query_embed_cache_scope():
+        async with query_embed_cache_scope():
             user_execution, agent_execution = await asyncio.gather(
                 run_operation(
                     operation="skills.find",

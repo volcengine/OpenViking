@@ -84,7 +84,15 @@ def test_phase2_batches_keep_a_turn_together_when_it_fits():
 
 @pytest.mark.asyncio
 async def test_working_memory_batches_carry_the_previous_summary_forward():
-    session = Session(viking_fs=None)
+    vlm = type("VLM", (), {"is_available": lambda self: True})()
+    session = Session(
+        viking_fs=None,
+        vlm_resolver=type(
+            "Resolver",
+            (),
+            {"get_vlm": AsyncMock(return_value=vlm)},
+        )(),
+    )
     messages = [_message("u1"), _message("u2"), _message("u3")]
     calls = []
 
@@ -117,10 +125,17 @@ async def test_working_memory_batches_carry_the_previous_summary_forward():
 
 @pytest.mark.asyncio
 async def test_working_memory_no_vlm_fallback_uses_all_messages(monkeypatch):
-    session = Session(viking_fs=None)
     messages = [_message("u1"), _message("u2"), _message("u3")]
     config = type("Config", (), {"vlm": None})()
     monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    session = Session(
+        viking_fs=None,
+        vlm_resolver=type(
+            "Resolver",
+            (),
+            {"get_vlm": AsyncMock(return_value=None)},
+        )(),
+    )
 
     limits = ExtractionBatchLimits(max_messages=1)
     result = await session._generate_archive_summary_with_batching(
@@ -134,11 +149,18 @@ async def test_working_memory_no_vlm_fallback_uses_all_messages(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_working_memory_prompt_fallback_uses_all_messages(monkeypatch):
-    session = Session(viking_fs=None)
     messages = [_message("u1"), _message("u2"), _message("u3")]
     vlm = type("VLM", (), {"is_available": lambda self: True})()
     config = type("Config", (), {"vlm": vlm})()
     monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    session = Session(
+        viking_fs=None,
+        vlm_resolver=type(
+            "Resolver",
+            (),
+            {"get_vlm": AsyncMock(return_value=vlm)},
+        )(),
+    )
 
     def unavailable_prompt():
         raise ImportError("prompt module unavailable")

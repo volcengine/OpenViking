@@ -59,7 +59,11 @@ class DummyStorage:
     async def _acl_enabled(self, ctx: RequestContext) -> bool:
         return self.acl_manager is not None and await self.acl_manager.is_enabled(ctx.account_id)
 
-    async def collection_exists_bound(self) -> bool:
+    async def get_account_backend(self, account_id):
+        assert account_id
+        return self
+
+    async def collection_exists(self) -> bool:
         return True
 
     async def search_in_tenant(

@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+from openviking.config.vlm import VLMResolver
 from openviking.core.context import (
     Context,
     ContextLevel,
@@ -145,6 +146,25 @@ class ReindexExecutor:
         "skill": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
         "memory": {"vectors_only", "semantic_and_vectors", "prune_orphans"},
     }
+
+    def __init__(
+        self,
+        vlm_resolver: VLMResolver | None = None,
+        vector_config_resolver=None,
+    ) -> None:
+        self.vlm_resolver = vlm_resolver
+        self.vector_config_resolver = vector_config_resolver
+
+    async def _semantic_processor_for(self, ctx: RequestContext) -> SemanticProcessor:
+        if self.vlm_resolver is None:
+            raise RuntimeError(
+                "ReindexExecutor requires a VLM resolver for semantic reindexing"
+            )
+        vlm = await self.vlm_resolver.get_vlm(ctx.account_id)
+        return SemanticProcessor(
+            max_concurrent_llm=vlm.max_concurrent,
+            vlm_resolver=self.vlm_resolver,
+        )
 
     @staticmethod
     def _effective_file_vectorization_concurrency() -> int:
@@ -988,9 +1008,6 @@ class ReindexExecutor:
         counters = run.counters
         ctx = run.ctx
         if mode == "semantic_and_vectors":
-            processor = SemanticProcessor(
-                max_concurrent_llm=get_openviking_config().vlm.max_concurrent
-            )
             if not recursive:
                 await self._regenerate_skill_semantics(uri=uri, ctx=ctx, lock=run.lock)
                 await self._reindex_skill_vectors(
@@ -1001,11 +1018,13 @@ class ReindexExecutor:
                     ingest_options=run.ingest_options,
                 )
                 return
+            owner_ctx = self._content_owner_ctx(uri, ctx)
+            processor = await self._semantic_processor_for(owner_ctx)
             executor = SemanticTreeExecutor(
                 processor=processor,
                 context_type="skill",
                 max_concurrent_llm=processor.max_concurrent_llm,
-                ctx=self._content_owner_ctx(uri, ctx),
+                ctx=owner_ctx,
                 lock=run.lock,
                 generation_trigger="reindex",
                 ingest_options=run.ingest_options,
@@ -1084,10 +1103,8 @@ class ReindexExecutor:
         lock: dict | None = None,
         recursive: bool = True,
     ) -> None:
-        processor = SemanticProcessor(
-            max_concurrent_llm=get_openviking_config().vlm.max_concurrent,
-        )
         owner_ctx = self._content_owner_ctx(uri, ctx)
+        processor = await self._semantic_processor_for(owner_ctx)
         msg = SemanticMsg(
             uri=uri,
             context_type=context_type,
@@ -1799,7 +1816,13 @@ class ReindexExecutor:
     async def _regenerate_skill_semantics(
         self, *, uri: str, ctx: RequestContext, lock: dict | None = None
     ) -> None:
-        await SemanticProcessor()._skill_root_semantics(uri, ctx=ctx, regenerate=True, lock=lock)
+        processor = await self._semantic_processor_for(ctx)
+        await processor._skill_root_semantics(
+            uri,
+            ctx=ctx,
+            regenerate=True,
+            lock=lock,
+        )
 
     async def _read_directory_abstract(self, uri: str, *, ctx: RequestContext) -> str:
         try:
@@ -1846,7 +1869,11 @@ class ReindexExecutor:
         content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
 
         if content_type == ResourceContentType.TEXT:
-            embedding_config = get_openviking_config().embedding
+            if self.vector_config_resolver is None:
+                raise RuntimeError("ReindexExecutor requires a vector config resolver")
+            embedding_config = (
+                await self.vector_config_resolver.resolve(ctx.account_id)
+            ).embedding
             text_source = embedding_config.text_source
             if text_source in SUMMARY_TEXT_SOURCES and summary:
                 return summary

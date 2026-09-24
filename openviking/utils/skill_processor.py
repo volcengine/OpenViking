@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from openviking.config.vlm import VLMHandle, VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
@@ -102,10 +103,16 @@ class SkillProcessor:
         self,
         vikingdb: VikingDBManager,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        vlm_resolver: Optional[VLMResolver] = None,
     ):
         """Initialize skill processor."""
+        if privacy_config_service is not None and vlm_resolver is None:
+            raise ValueError(
+                "SkillProcessor requires a VLM resolver when privacy extraction is enabled"
+            )
         self.vikingdb = vikingdb
         self._privacy_config_service = privacy_config_service
+        self._vlm_resolver = vlm_resolver
 
     async def process_skill(
         self,
@@ -474,16 +481,21 @@ class SkillProcessor:
     async def prepare_skill_privacy(
         self, skill_dict: Dict[str, Any], ctx: RequestContext
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
-        del ctx
         if not self._privacy_config_service:
             return skill_dict, {}
 
         content = skill_dict.get("content", "")
-        extraction_result = await extract_skill_privacy_values(
-            skill_name=skill_dict.get("name", ""),
-            skill_description=skill_dict.get("description", ""),
-            content=content,
-        )
+        extraction_kwargs = {
+            "skill_name": skill_dict.get("name", ""),
+            "skill_description": skill_dict.get("description", ""),
+            "content": content,
+        }
+        if self._vlm_resolver is None:
+            raise RuntimeError(
+                "SkillProcessor requires a VLM resolver for account-owned work"
+            )
+        extraction_kwargs["vlm"] = await self._vlm_resolver.get_vlm(ctx.account_id)
+        extraction_result = await extract_skill_privacy_values(**extraction_kwargs)
         if not extraction_result.values:
             return skill_dict, {}
 
@@ -547,7 +559,7 @@ class SkillProcessor:
             delete_if_empty=delete_if_empty,
         )
 
-    async def _generate_overview(self, skill_dict: Dict[str, Any], config) -> str:
+    async def _generate_overview(self, skill_dict: Dict[str, Any], vlm: VLMHandle) -> str:
         """Generate L1 overview using VLM."""
         from openviking.prompts import render_prompt
 
@@ -559,7 +571,7 @@ class SkillProcessor:
                 "skill_content": skill_dict.get("content", ""),
             },
         )
-        return await config.vlm.get_completion_async(prompt)
+        return await vlm.get_completion_async(prompt)
 
     async def _write_skill_content(
         self,

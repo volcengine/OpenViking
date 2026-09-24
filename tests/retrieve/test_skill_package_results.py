@@ -60,10 +60,14 @@ class PagedStore:
         self.calls = []
         self.child_calls = []
 
-    def _acl_enabled(self, ctx):
+    async def _acl_enabled(self, ctx):
         return False
 
-    async def collection_exists_bound(self):
+    async def get_account_backend(self, account_id):
+        assert account_id
+        return self
+
+    async def collection_exists(self):
         return True
 
     def _page(self, records, kwargs):

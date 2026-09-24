@@ -5,24 +5,24 @@
 A plain Pydantic ``Field`` is not on the config API surface: PATCH requests
 targeting it are rejected. Every component of a writable nested path must use
 :func:`RuntimeField`; marking a section does not grant access to its ordinary
-``Field`` descendants. ``RuntimeField`` records two orthogonal attributes so
-generic code can decide what the API may do without per-field branching:
+``Field`` descendants. ``RuntimeField`` records lifecycle metadata so generic
+code can decide what the API may write without per-field branching:
 
 - ``dynamic`` — the field's writable lifecycle, a single boolean covering all
   mutability. ``True`` (default): writable both at creation and by later PATCH.
   ``False``: writable only when the owning object is first created (account or
   cluster config); any later PATCH that touches it is rejected. When a
   ``dynamic=False`` field is not given at creation it is fixed to its default
-  (which may be a ``fallback``, resolved at read time — never materialized).
-- ``fallback`` — when an account leaves this field unset, which cluster-level
-  field supplies the value. The value may be a dotted path (``storage.vectordb``)
-  to reach a nested cluster field.
+  (which may use the deprecated compatibility ``fallback`` behavior).
+- ``fallback`` — deprecated compatibility metadata for legacy whole-section
+  fallback. It selects one complete Cluster field when the corresponding
+  top-level Account field is unset; it never recursively merges fields.
 
 These attributes are stored on the field's ``json_schema_extra`` under the
-``x-runtime-config`` key and read back through the helpers below. ``dynamic`` and
-``fallback`` are orthogonal: a ``dynamic=False`` field may still carry a
-``fallback`` (meaning "if not given at creation, fall back to the cluster default
-forever").
+``x-runtime-config`` key and read back through the helpers below. New Account
+configuration should not use ``fallback``. When business behavior needs an
+unset Account setting to use Cluster configuration, the business resolver
+should combine the independently published Account and Cluster models.
 
 Whether a field is cluster-wide or per-account is *not* one of these attributes:
 it is decided by which model declares the field. Fields on ``OpenVikingConfig``
@@ -62,12 +62,11 @@ def RuntimeField(  # noqa: N802
             PATCH that touches it (or ``null``-deletes it via a parent) is
             rejected. A field declared with a plain ``Field`` — i.e. without
             ``RuntimeField`` — is never on the config surface at all.
-        fallback: name of a cluster-level field, optionally dotted to reach a
-            nested field (``storage.vectordb``). When an account has not set this
-            field, its effective value is read from ``OpenVikingConfig.<fallback>``.
-            ``None`` (default) means there is no cluster fallback; the manager
-            returns ``None`` for an unset account field and the caller supplies
-            any business default. Only meaningful on ``AccountConfig``.
+        fallback: Deprecated compatibility-only Cluster field path. It applies
+            only when a top-level Account section is entirely unset and returns
+            that complete Cluster section; it does not merge nested fields.
+            New code should leave this as ``None`` and implement defaults in its
+            business resolver. Only meaningful on ``AccountConfig``.
     """
     from pydantic import Field
 
@@ -75,6 +74,7 @@ def RuntimeField(  # noqa: N802
     extra[RUNTIME_CONFIG_KEY] = {
         "dynamic": dynamic,
         "fallback": fallback,
+        "fallback_deprecated": fallback is not None,
     }
     return Field(json_schema_extra=extra, **kwargs)
 
@@ -103,9 +103,11 @@ def is_dynamic(field: FieldInfo) -> bool:
 
 
 def fallback_of(field: FieldInfo) -> Optional[str]:
-    """Return the cluster field path this account field falls back to, else ``None``.
+    """Return a legacy whole-section Cluster fallback path, else ``None``.
 
-    The result may be dotted (``storage.vectordb``); resolution walks the path.
+    Deprecated: this helper exists for compatibility with fields that already
+    declare ``fallback``. New business code should resolve Account and Cluster
+    configuration explicitly.
     """
     meta = _runtime_meta(field)
     return meta.get("fallback") if meta else None

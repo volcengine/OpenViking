@@ -57,7 +57,7 @@
 | trae / trae-cn | 4 hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） | ❌ | ✅ | ❌ |
 | zcode | 4 hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） | ❌ | ✅ | ❌ |
 | kimicode | 7 个原生 plugin hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），首次成功 prompt 加载 | ❌（PreCompact 只捕获/commit） | ✅ | ❌ |
-| opencode | 8 plugin hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） + repo 列表进 system prompt | ❌（compacting 前后各 commit 一次） | ✅ | ❌（有 toast） |
+| opencode | v1/v2 双栈 plugin hook + MCP 代理 | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200） + repo 列表进 system prompt | ❌（只在压缩完成后 commit） | ✅ | ❌ |
 | dsh | Cordis 原生插件（同进程）+ MCP 代理 + skill | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），每 session 一次 | ❌ | ✅ | ❌ |
 | pi | 原生扩展（9 事件） | ✅ | ✅ | ❌ | ✅（10000）+ `<available-skills>`（1200），进 systemPrompt 每轮重拼 | ✅ **takeover**（默认开） | ✅ | ✅ |
 | openclaw | context-engine 插件（`ownsCompaction:true`） | ✅ | ❌（走 `/find`，该接口无 session_id 字段） | ❌ | ❌ | ✅ **ContextEngine 全接管** | ❌ 失败轮次不重放 | ❌ |
@@ -285,7 +285,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | cursor | `beforeSubmitPrompt` | prompt 原文；基于事件 id 与 500ms 窗口去重，同 promptHash 复用缓存块 | ✅ `cu-` | A | `additional_context` | ❌ |
 | trae / trae-cn | `UserPromptSubmit` | 剥离历史注入块后的 prompt（只认 `input.prompt`） | ✅ `tr-`/`trcn-` | A | `additionalContext` | ❌ |
 | zcode | `UserPromptSubmit` | 剥离三类注入块（含 `<system-reminder>`） | ✅ `zc-` | A | `additionalContext`（严格 JSON） | ❌ |
-| opencode | 每条 `chat.message` 中的 user 消息 | 拼接非 synthetic text part；若正文已含 `<openviking-context` 则跳过本轮召回 | ✅ `oc-` | A（timeoutMs=30000） | 合成 synthetic part 并 `unshift` 到 parts 最前 | ❌ |
+| opencode | v1：每条 `chat.message`；v2：每条 `prompt` | v1 拼接非 synthetic text part；v2 直接读取 prompt text | ✅ `oc-` | A（timeoutMs=30000） | v1 合成 synthetic part；v2 写入消息 metadata，并在 context hook 中插到该 user message 前 | ❌ |
 | dsh | `agent/pre-step` waterfall（先 await next 再 append） | claimed batch 全部消息（过滤自身注入的内容） | ✅ `dsh-` | A | 借由 `createUserMessage` append 到 `decision.messages` 尾部（source: plugin/openviking-memory） | ❌ |
 | pi | `before_agent_start` 阶段排队；在 `context` 事件内检索（当前轮 prompt 拿当前轮记忆） | prompt 原文 | ✅ `pi-`（会话未建立时不带） | A | 前置到最后一条真实 user 消息（通过 `<openviking-context` 幂等检测） | ❌ |
 | openclaw | context-engine transformContext assemble（设有 7 道 passthrough 门） | 最后一条 user 消息纯 text，清洗后截 4000 字符 | ❌（`/find` 无该字段） | `/find` | 以 `<relevant-memories>` + `Source: openviking-auto-recall` 格式前置进最后一条 user 消息 | ❌ |
@@ -342,7 +342,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 
 ### 3.3.1 机制底座
 
-- **写入路径**：JS 系统一通过 `batch-send.mjs` 处理（对应接口 `POST /messages/batch`，每批最多 100 条，与服务端的 `max_length=100` 限制保持一致；若遇 404/405 错误则降级为逐条发送）。增量游标由各家自行实现（cc 按 transcript turn 序号计算，codex 机制相同；cursor 采用 `sha256(index+role+content)`；zcode 基于 rollout 的 `turn_id`；opencode 依赖事件流 Map；dsh 基于事件白名单；pi 依据 branch 条目水位；hermes 则按当前轮切片）。
+- **写入路径**：JS 系统一通过 `batch-send.mjs` 处理（对应接口 `POST /messages/batch`，每批最多 100 条，与服务端的 `max_length=100` 限制保持一致；若遇 404/405 错误则降级为逐条发送）。增量游标由各家自行实现（cc 按 transcript turn 序号计算，codex 机制相同；cursor 采用 `sha256(index+role+content)`；zcode 基于 rollout 的 `turn_id`；opencode v1 依赖事件流 Map，v2 在 execution 结束时读取 context 并按 message id 推进游标；dsh 基于事件白名单；pi 依据 branch 条目水位；hermes 则按当前轮切片）。
 - **commit 是客户端触发的**（详见 [§2.3](#_2-3-服务端会话与-commit-语义)）：服务端默认不自动 commit。下表所有的"阈值/触发"条件，均指客户端逻辑。
 - **keep_recent_count 差异**（即 commit 后给宿主留多少 live tail）：服务端默认值为 0。各家传参如下：cc/codex 阈值提交传 10；cursor、trae×2、zcode 发空 body `{}`，即传 0（每次均为全量归档）；opencode 传 10；dsh 传 10；pi 在非 takeover 模式传 10，takeover 模式传 3（本地含义是"保留 3 个用户轮"，而服务端按消息条数解释，实际保留更少）；openclaw 在 afterTurn 阈值触发时传 10，在 compact/reset/memory_store 操作时传 0；hermes 恒定传 0。
 - **写路径 detach**（`async-writer.mjs`，cc/codex/zcode 的 Stop 默认开）：drain stdin → spawn detached worker → approve → write payload → unref（注：spawn 失败时尚未 approve，回落同步恰好只输出一次）。detached worker 自成进程组，不受终端信号波及——这是保证 cc 在关闭链路时具有高可靠性、zcode 在按下 Ctrl+C 时不丢失写入数据的关键机制。附带效果：执行 detach 后，Stop 的 `appended N turn(s)` 提示将不再展示（设置 `OPENVIKING_WRITE_PATH_ASYNC=0` 可恢复该提示）。
@@ -356,7 +356,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | cursor | stop：`capturedSinceCommit ≥ 8`（按消息条数计算，≈4 轮问答；纯客户端计数），keep 0 | sessionEnd：已注册该事件（但实践中不触达，见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | preCompact：无条件触发 |
 | trae / trae-cn | 每个有内容的 Stop 都 commit（无阈值），keep 0 | — | 无（上游无 PreCompact 事件） |
 | zcode | 同 trae（每 Stop 都 commit，keep 0；rollout 增量游标保守推进，若有漏掉的轮次，将在同会话的下个 Stop 补齐） | — | 无（上游无 PreCompact 事件） |
-| opencode | `session.idle` 路径：flush 执行后，需满足 `pending_tokens ≥ 20000` 才 commit，keep 10 | `session.deleted` / `session.error`：强制 commit；dispose：强制 commit | 在 `experimental.session.compacting` 前与 `session.compacted` 后各触发一次（即一次宿主压缩 = 两次 commit） |
+| opencode | v1 `session.idle` / v2 execution 结束：flush 后 `pending_tokens ≥ 20000` 才 commit，keep 10 | `session.deleted` / v1 `session.error`：强制 commit；v1 dispose / v2 cleanup：强制 commit | v1 在 compacting 前与 compacted 后触发；v2 只在 `session.compaction.ended` 后触发 |
 | dsh | `turn/end`：`pending_tokens ≥ 20000`（30s 超时），keep 10 | teardown（见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | 无（不监听 compaction 事件） |
 | pi（takeover 默认开） | `onTurnSynced`：本地估算 `pendingTokens ≥ 30000` 且 `lastSeenUserTurns > 3` 时，执行 commitAndAdvance（keep 3；overview 15×2s 轮询，拿不到则边界不推进，但 pendingTokens 会清零，重新累计后重试） | 手动执行 `/viking commit` | `session_before_compact`（需 `firstKeptEntryId` 非空） |
 | pi（takeover off） | syncBranch 执行后：服务端 `pending_tokens ≥ 20000`，keep 10 | `session_shutdown`：无条件 commit；手动执行 `/viking commit` | `session_before_compact`：无条件 commit |
@@ -378,7 +378,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | cursor | **—**（chat 关闭 / new-chat 无事件） | **—** | **—** | **—**（`sessionEnd` 已注册且仅 window_close 触发，但此时宿主已销毁 shell-exec host，hook 在 spawn 前中止） | **—** | 结束在 <8 条消息水位的会话，尾部依赖同一会话的后续消息触发 commit |
 | trae / trae-cn | **—**（无 session-end 类事件） | **—** | **—** | **—** | **—** | 每 Stop 已 commit，最大待归档量 = 最后一轮 in-flight |
 | zcode | **—**（无 session-end 类事件） | **C\*** | **—** | **—** | **—** | C\* 前提：Ctrl+C 时该轮 Stop 已触发（detached worker 照常写完）；每 Stop 已 commit，漏掉的轮次靠 rollout 游标在同一会话的下个 Stop 补回 |
-| opencode | **C\***（≥1.15.11 的 `dispose` → `flushAll({commit:true})`，覆盖全部四种关闭；<1.15.11 无该 hook → —） | **C\*** | **C\*** | **C\*** | **—** | C\* 前提：宿主 shutdown 预算 5s，单会话最坏 health 5s + batch 10s + commit 30s，多会话串行累加——超预算的 commit 会被截断，且 pending queue 不覆盖此场景（fetch 未 settle 不入队）；重启后 `init()` 不主动 flush 遗留会话 |
+| opencode | **C\***（v1 ≥1.15.11 的 `dispose` 或 v2 cleanup → `flushAll({commit:true})`） | **C\*** | **C\*** | **C\*** | **—** | C\* 前提：宿主给 cleanup 的时间有限，慢请求或多个会话串行提交可能被截断；v2 会在无活动 60 分钟、服务停止和本地插件热重载时触发 cleanup |
 | dsh | **C**（Cordis teardown → 每 session 一次 3s 超时 commit，无阈值） | **C**（第一次；第二次 Ctrl+C 强退 → —） | **C** | **—**（无 SIGHUP 监听） | **—** | teardown commit 与阈值 commit 共享同一条串行写链，5s 进程 grace 内前方有慢请求时可能挤不进；web 形态关浏览器 tab 不触发 teardown |
 | pi（takeover 默认） | **—**（`session_shutdown` 全关闭方式都触发且被 await，handler 持久化本地 takeover 状态，不 commit） | **—** | **—** | **—** | **—** | 下次续跑攒满 30000，或手动 `/viking commit` |
 | pi（takeover off） | **C**（`await sync.commit()`，失败入 pending 队列） | **C** | **C** | **C** | **—** | — |
@@ -410,7 +410,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 |---|---|
 | claude-code | 隔离最完整：SubagentStart 派生 `cc-<sid>__subagent-<agent_id>` 独立会话，SubagentStop 读 subagent transcript 推送后无条件 commit 并清 state |
 | codex / trae-cli | 不单独建会话：subagent 输出（`agent_message` / `sub_agent_activity`）折叠进主会话的 assistant/tool part |
-| opencode | `oc-<parent>__subagent-<child>` 挂在父命名空间下；开场注入跳过 subagent（召回不跳过）；ID 派生依赖事件顺序——`chat.message` 先于 `session.created` 到达时会丢 `__subagent-` 后缀 |
+| opencode | `oc-<parent>__subagent-<child>` 挂在父命名空间下；开场注入跳过 subagent（召回不跳过）；v2 从 `session.created` 的 `parentID` 建立映射，再在 execution 结束时读取 context |
 | dsh | 每个 subagent = 独立 `dsh-<id>` 会话，父子关系不保留；N 个 subagent = N 份 profile 注入 + N 个独立会话 |
 | hermes | `delegate_task` 传 `skip_memory=True` → subagent 不接 OV（无会话/召回/工具面）；子任务产出不回灌 |
 | cursor / trae×2 / zcode / pi / openclaw | 无 subagent 处理（有独立会话 id 就各自成会话，否则混入主会话；openclaw 可用 `bypassSessionPatterns` 屏蔽） |
@@ -425,7 +425,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | claude-code | 不接管 | PreCompact 同步 commit（唯一不 detach 的写路径，因为 CC 随后立刻重写 transcript） | `source="compact"` 的 SessionStart 会把 OV 的 `latest_archive_overview` + ≤5 条 abstracts 重新注回 |
 | codex / trae-cli | 不接管 | PreCompact 补齐未捕获轮次 → 全量 commit → `ovSessionId=null`（补齐不全时不 commit，留待重试）；无 PostCompact 接线，依靠 Stop 的转录收缩做防御性纠偏 | resume 时注入 archive digest |
 | cursor / trae×2 / zcode | 不接管 | cursor：preCompact 无条件 commit（trae×2/zcode 上游无该事件） | — |
-| opencode | 不接管 | compacting 前 flush+commit | `session.compacted` 触发后再 flush+commit（共两次） |
+| opencode | 不接管 | v1 compacting 前 flush+commit；v2 在压缩前捕获对话 | v1 `session.compacted` 再提交一次；v2 `session.compaction.ended` 后提交一次 |
 | dsh | 不感知（不监听 compaction 事件；注入走 pre-step user 消息，随宿主压缩一起收缩，profile 不重投） | — | — |
 | pi | **takeover 双层接管**（默认开，[§3.4.2](#_3-4-2-pi-takeover)） | `session_before_compact`：flush → commit → pollOverview。成功则返回自定义 compaction 摘要覆盖 pi 的；失败则 fail-open 回退到 pi 默认压缩 | 成功后 resetBoundary |
 | openclaw | **全接管**：`ownsCompaction: true`，宿主不再跑自己的摘要（[§3.4.3](#_3-4-3-openclaw-contextengine)） | `compact()` = commit(wait=true, keep 0) → 读回 overview 当 summary | 主 assemble 用 `[Session History Summary]` 重建上下文 |
@@ -487,7 +487,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 | claude-code | 各 hook catch→approve，不阻塞；session-start 时连 pending 重放都跳过 | context-face 6h + host-cli 探测 7d + health 5s | 无（靠 pending 重放）；peer_scope 降级 1 次；batch→逐条 | 否（uri-guard deny 是设计意图） |
 | codex / trae-cli | 各 hook catch→noop | context-face 6h + 压缩器 runtime_failed（至下次启动） | 同上（靠 pending 重放，SessionStart 触发） | 否 |
 | cursor/trae×2/zcode | fetch 吞成 status:0，catch 返回空注入；锁 5s 拿不到则静默跳过 | context-face 6h（服务端整体不可达时无负缓存，每轮等满 15s） | 无 | 否 |
-| opencode | 各路径 catch→WARN；`event`/`dispose` hook 无 try/catch（不可重试的 commit 失败会冒泡宿主） | 仅 context-face 6h；`/health` 无缓存（每轮一次往返） | 无同步重试；MCP 代理 401/403、400/404 各一次 | 基本否（event/dispose 例外） |
+| opencode | recall、context、after-tool、事件循环与 cleanup 失败均 catch→WARN；URI guard 的预期拒绝仍会返回给模型 | 仅 context-face 6h；`/health` 无缓存 | 无同步重试；MCP 代理 401/403、400/404 各一次 | 否（URI guard deny 是设计意图） |
 | dsh | client 全吞异常；`ensureState` 失败不缓存（服务端不可达时每 pre-step 两次 health 各 5s） | context-face 6h + user-space 缓存进程内不过期 | 无；pending 跨进程重放 3 次 | 是（pre-step 串行 profile+recall；session/flush 阻塞） |
 | pi | health 失败时 start() 提前返回，本轮也不注册工具，此后每 prompt 静默重试连接；`/mcp` 握手单独失败（401/403、超时、server 无 `/mcp`）不影响启动：召回、同步、takeover 照常，状态栏显示 `tools ✗`，`/viking` 打印完整错误 | context-face 6h；握手没有负缓存，一直失败就每轮重试一次，最多占满 5s 握手预算才轮到排队召回 | hook 侧无，只有 pending queue；传输失败后丢弃当前 MCP 连接，下次调用重新连接；失败的工具调用不会自动重放 | 部分（session_shutdown 被 await：takeover 近 0、非 takeover 最坏 30s，外加关闭 MCP 客户端；turn_end 网络异常时逐条各等 10s） |
 | openclaw | client 构造永不失败；health 吞异常；召回 500ms precheck 失败跳过 | 无负缓存（每轮一次 500ms health 预检） | 无（单次 fetch）；commit/afterTurn 的 Phase2 轮询 | 否（`memory_store` 重抛例外；`compact()` 最长阻塞 5 分钟） |
@@ -507,7 +507,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 | cursor | ❌ | ❌ | rule（alwaysApply）+ 2 个 skill（`openviking-memory`、`openviking-skills`） | ❌（共用安装器 TUI） | 独立 uri-guard，不受插件开关控制 |
 | trae/trae-cn | ❌ | ❌ | 无 | ❌ | — |
 | zcode | ❌ | ❌ | 无 | ❌ | — |
-| opencode | ❌（有 toast） | ❌ | 无（设计上不提供） | ✅ | — |
+| opencode | ❌ | ❌ | 无（设计上不提供） | ✅ | v1 有 toast；v2 只写日志 |
 | dsh | ❌ | ❌ | 2 个 skill：`openviking-memory` 与 `openviking-skills`（独立的 `ctx.skills` provider） | ❌ | `ctx.provide("openvikingMemory")` 供其他 Cordis 插件二次开发 |
 | pi | ✅ `ctx.ui.setStatus` | ✅ `/viking` `/viking commit` | 无 | ✅ | e2e-live.sh |
 | openclaw | ❌ | ✅ 5 个（/add-resource /add-skill /ov-search /ov-query-config /ov-recall-trace） | 3 skill 随插件分发 | ✅（key 角色探测 + 版本兼容检查 + `status` 命令） | Gateway HTTP 路由做 recall trace 可视化；feature-gate RPC；健康检查脚本 |
@@ -585,9 +585,9 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 ## opencode
 
 - **集成文档**：[OpenCode 插件](./10-opencode.md)
-- **形态**：npm 插件 `@openviking/opencode-plugin`，config hook 自注入 MCP 条目（工具带 `openviking_` 前缀）。8 个 plugin hook：config / event / tool.execute.before / tool.execute.after / experimental.chat.system.transform / chat.message / experimental.session.compacting / dispose。tool.execute.before 拒绝路径是 `viking://` URI 的 read/glob/grep；bash 命令带 `viking://` URI 时，tool.execute.after 在输出末尾追加提示。版本 0.4.1。
-- **能力亮点**：`dispose` hook 覆盖全部四种常规关闭方式（宿主 ≥1.15.11）；repo 列表进 system prompt（[§3.2.3](#_3-2-3-profile-开场注入)）；宿主事件面最丰富（session.idle/compacted/deleted/error 各有语义）。
-- **行为要点**：`commitTokenThreshold=20000`（取正数，0 回落默认值）；commit 超时 30000ms；一次宿主压缩 = 两次 commit；dispose 的 5s 宿主预算下，多会话慢 commit 可能被截断，且 pending queue 不覆盖此场景（[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）；<1.15.11 无 dispose 时关闭不 commit；重启后不主动 flush 遗留会话；开场注入每会话尝试一次（[§3.2.3](#_3-2-3-profile-开场注入)）；`bypassSessionPatterns` 的目录匹配在 opencode 上不适用（input 无 cwd）。
+- **形态**：npm 插件 `@openviking/opencode-plugin` 0.5.0，同一入口支持 OpenCode v1 ≥1.15.7 与 v2 ≥2.0.15。v1 保留原有 hooks；v2 使用 `setup(ctx)`、prompt/context/tool hooks 和结构化生命周期事件。MCP 工具保持 `openviking_*` 前缀，v2 显式设置 `codemode:false`。
+- **能力亮点**：v2 在 prompt hook 只召回一次并把上下文存进用户消息 metadata，后续每个模型 step 注入同一份内容，避免重复请求和 prompt cache 失效；execution 结束后通过 `session.context()` 捕获完整的用户、助手和工具消息。repo 列表继续进入 system prompt（[§3.2.3](#_3-2-3-profile-开场注入)）。
+- **行为要点**：`commitTokenThreshold=20000`，commit 超时 30000ms。v2 在每次 execution 结束（succeeded、failed、interrupted）后按阈值提交，session 删除、compaction ended 和 cleanup 时强制提交；failed 与 interrupted 都保留状态。v2 只处理本 location 的 session，捕获游标存放在插件 storage 中。v2 cleanup 会在 60 分钟无活动、服务停止和本地插件热重载时触发；v2 没有 toast API，只写日志。开场注入每会话尝试一次（[§3.2.3](#_3-2-3-profile-开场注入)）。
 - **配置**：env + ovcli.conf `plugin.opencode` + workspace 文件。
 - **维度索引**：工具面 [§2.1](#_2-1-服务端-mcp-工具面) ｜召回 [§3.2](#_3-2-自动召回与注入) ｜commit [§3.3.2](#_3-3-2-常规-commit-触发条件)/[§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵) ｜subagent [§3.3.5](#_3-3-5-subagent-会话对照)。
 

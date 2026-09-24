@@ -118,9 +118,11 @@ class ModelProviderProbeDataSource(ProbeMetricDataSource):
         """
 
         def _probe() -> tuple[str, bool]:
-            config = self._config_provider()
-            provider = str(getattr(getattr(config, "vlm", None), "provider", "") or "unknown")
-            _ = config.vlm.get_vlm_instance()
+            from openviking.config.vlm import ClusterVLMResolver
+
+            vlm = ClusterVLMResolver(self._config_provider).get_vlm_sync()
+            provider = str(getattr(vlm, "provider", "") or "unknown")
+            _ = vlm.get_vlm_instance()
             return provider, True
 
         return self.safe_tuple_probe("provider", _probe, default_name="unknown")

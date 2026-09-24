@@ -7,14 +7,16 @@ from configuration *merge/publish/invalidation* (:class:`RuntimeConfigManager`).
 
 Cluster and account are two independent Pydantic models: cluster fields live on
 ``OpenVikingConfig`` and account fields on :class:`AccountConfig`. A field's
-scope is decided by which model declares it. Account reads go through
-``RuntimeConfigManager.get_account(account_id, field)``, which loads on demand
-and resolves the field's declared cluster fallback.
+scope is decided by which model declares it. Business code should resolve
+defaults from the independently published models. The manager's declarative
+whole-section fallback remains only for compatibility with existing fields.
 """
 
 from openviking.config.account_config import AccountConfig
 from openviking.config.assembly import build_config_source, resolve_config_source_settings
 from openviking.config.manager import (
+    AccountCandidateContext,
+    AccountCandidateValidator,
     ConfigChangeConsumer,
     ConfigChangeEvent,
     ConfigChangeReason,
@@ -36,6 +38,8 @@ from openviking_cli.utils.config.open_viking_config import RuntimeConfigSettings
 
 __all__ = [
     "AccountConfig",
+    "AccountCandidateContext",
+    "AccountCandidateValidator",
     "ConfigChangeConsumer",
     "ConfigChangeEvent",
     "ConfigChangeReason",

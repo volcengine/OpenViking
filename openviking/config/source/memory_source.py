@@ -4,10 +4,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
 from typing import Optional
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.config.scope import ConfigScope
 from openviking.config.source.base import ConfigSourceContext, Mutate
 from openviking.config.source.registry import register_config_source
@@ -19,7 +19,7 @@ class MemoryConfigSource:
     def __init__(self, ctx: Optional[ConfigSourceContext] = None) -> None:
         self._namespace = ctx.params.get("namespace", "") if ctx else ""
         self._store: dict[tuple, Optional[dict]] = {}
-        self._lock = asyncio.Lock()
+        self._lock = AsyncSemaphore()
 
     def _key(self, scope: ConfigScope) -> tuple:
         return (self._namespace, scope.kind.value, scope.key)

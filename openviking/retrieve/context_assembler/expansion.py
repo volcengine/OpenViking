@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, List, Tuple
 
+from openviking.config.vlm import VLMHandle
 from openviking.retrieve.context_assembler.params import MAX_PLANNED_QUERIES
 from openviking.retrieve.intent_analyzer import IntentAnalyzer
 from openviking_cli.utils.config import get_openviking_config
@@ -28,6 +29,7 @@ async def expand_queries(
     session: Any,
     mode: str = "auto",
     timeout_s: float | None = None,
+    planner: VLMHandle | None = None,
 ) -> Tuple[List[str], str]:
     """Return ``(queries, status)`` with the original query always first."""
     if mode != "auto" or session is None:
@@ -46,7 +48,12 @@ async def expand_queries(
 
     timeout = timeout_s or get_openviking_config().retrieval.recall_intent_timeout_s
     try:
-        analyzer = IntentAnalyzer(max_recent_messages=RECENT_MESSAGES)
+        if planner is None:
+            raise RuntimeError("Query expansion requires an explicitly resolved query planner")
+        analyzer = IntentAnalyzer(
+            max_recent_messages=RECENT_MESSAGES,
+            query_planner=planner,
+        )
         plan = await asyncio.wait_for(
             analyzer.analyze(
                 compression_summary=summary,

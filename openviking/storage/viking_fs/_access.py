@@ -99,6 +99,14 @@ class _AccessMixin:
         bound = self._bound_ctx.get()
         return bound or self._default_ctx()
 
+    def _require_request_context(self, ctx: Optional[RequestContext]) -> RequestContext:
+        """Resolve an account context without inventing the default account."""
+        if ctx is None and self._bound_ctx.get() is None:
+            raise RuntimeError(
+                "Account request context is required for account-scoped operations"
+            )
+        return self._ctx_or_default(ctx)
+
     @contextmanager
     def bind_request_context(self, ctx: RequestContext):
         """Temporarily bind ctx for legacy internal call paths without explicit ctx param."""

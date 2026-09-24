@@ -154,7 +154,11 @@ class _GrepMixin:
         if not vector_store:
             return "fs"
 
-        backend_type = getattr(vector_store, "_backend_type", "unknown")
+        account_id = getattr(ctx, "account_id", None) if ctx is not None else None
+        if account_id and hasattr(vector_store, "get_account_backend"):
+            backend_type = (await vector_store.get_account_backend(account_id))._mode
+        else:
+            backend_type = getattr(vector_store, "_backend_type", "unknown")
         # Keep this set consistent with ``CollectionAdapter.USE_CONTENT_FIELD``:
         # only these backends store the ``content`` field required for full-text grep.
         if backend_type not in ("volcengine", "vikingdb"):
@@ -184,17 +188,29 @@ class _GrepMixin:
     async def _collection_has_fulltext(self, vector_store, ctx) -> bool:
         """Check if collection has content field and FullText config.
 
-        Result is cached on the VikingFS instance since collection schema
-        does not change at runtime.
+        The cache is scoped by Account and collection identity because one
+        VikingFS instance can serve dedicated Account VectorDB collections.
         """
-        if self._fulltext_available is not None:
-            return self._fulltext_available
+        account_id = getattr(ctx, "account_id", "") if ctx is not None else ""
+        backend = None
+        if account_id and hasattr(vector_store, "get_account_backend"):
+            backend = await vector_store.get_account_backend(account_id)
+        elif not account_id:
+            backend = vector_store
+        cache_key = (
+            account_id,
+            str(getattr(backend, "_mode", "")),
+            str(getattr(backend, "collection_name", getattr(backend, "_collection_name", ""))),
+            str(getattr(backend, "index_name", getattr(backend, "_index_name", ""))),
+        )
+        if cache_key in self._fulltext_available:
+            return self._fulltext_available[cache_key]
         try:
             meta = None
             if hasattr(vector_store, "get_collection_meta"):
                 meta = await vector_store.get_collection_meta(ctx=ctx)
             if not meta:
-                self._fulltext_available = False
+                self._fulltext_available[cache_key] = False
                 return False
             fields = meta.get("Fields", [])
             has_content = any(
@@ -203,7 +219,7 @@ class _GrepMixin:
             fulltext = meta.get("FullText") or []
             has_content_fulltext = any(ft.get("Field") == "content" for ft in fulltext)
             result = has_content and has_content_fulltext
-            self._fulltext_available = result
+            self._fulltext_available[cache_key] = result
             return result
         except Exception:
             logger.debug(

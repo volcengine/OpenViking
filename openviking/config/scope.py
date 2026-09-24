@@ -1,10 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Logical address of a single config override.
+"""Logical address of one scoped configuration document.
 
-``ConfigScope`` names *one* override (cluster-wide or one account). It does not
-express inheritance layers and does not prescribe storage layout; that is a
-``ConfigSource`` implementation detail.
+``ConfigScope`` identifies Cluster configuration or one Account's configuration.
+It does not express inheritance, fallback, precedence, or storage layout.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ class ScopeKind(str, Enum):
 
 @dataclass(frozen=True)
 class ConfigScope:
-    """A logical address for one override; validated on construction."""
+    """A validated logical address for one scoped configuration."""
 
     kind: ScopeKind
     key: Optional[str] = None
