@@ -1,0 +1,78 @@
+{
+  "project_id": "launch-video",
+  "project_uri": "viking://resources/openmontage/launch-video",
+  "artifacts": [
+    {
+      "stage": "brief",
+      "relative_path": "01-brief/brief.md",
+      "title": "Launch Video Brief",
+      "content": "# Launch Video Brief\n\nGoal: produce a 45-second launch video for the Northstar workspace release.\n\nCreative intent:\n- calm, editorial motion\n- no handheld camera simulation\n- still frames are allowed only for the final CTA card\n\nProvider lock:\n- after approval, provider must stay on Remotion + ImageGen Alpha\n- sample-before-batch generation is mandatory before full asset production\n"
+    },
+    {
+      "stage": "script",
+      "relative_path": "02-script/script.md",
+      "title": "Launch Video Script",
+      "content": "# Script\n\nScene 1 introduces the pain of tab overload.\nScene 2 shows the workspace timeline.\nScene 3 ends with the CTA line: 'Ship context, not chaos.'\n\nThe narration must keep the phrase 'sample-before-batch' as a production rule reminder.\n"
+    },
+    {
+      "stage": "scene_plan",
+      "relative_path": "03-scene-plan/scene_plan.md",
+      "title": "Scene Plan",
+      "content": "# Scene Plan\n\nScene 1:\n- duration: 10s\n- motion required: yes\n- visual: browser tabs collapsing into a single timeline rail\n\nScene 2:\n- duration: 18s\n- motion required: yes\n- visual: cards snapping into a production board\n\nScene 3:\n- duration: 17s\n- motion required: no\n- visual: still CTA card with product lockup\n"
+    },
+    {
+      "stage": "asset_manifest",
+      "relative_path": "04-asset-manifest/asset_manifest.md",
+      "title": "Asset Manifest",
+      "content": "# Asset Manifest\n\nRequired assets:\n- 3 product UI stills\n- 2 gradient backplates\n- 1 voiceover track\n- 1 logo lockup SVG\n\nBatching rule:\n- generate one approved keyframe sample before producing the full image batch\n- keep provider fixed to ImageGen Alpha after approval\n"
+    },
+    {
+      "stage": "render_report",
+      "relative_path": "05-render-report/render_report.md",
+      "title": "Render Report",
+      "content": "# Render Report\n\nTerminal output: final Remotion render at 1920x1080, 24fps.\n\nChecks:\n- provider remained locked after approval\n- still image used only on the final CTA card\n- render completed without missing assets\n"
+    }
+  ],
+  "evaluations": [
+    {
+      "id": "brief-provider-lock",
+      "stage": "brief",
+      "query": "Which provider stack stays locked after approval for the launch video?",
+      "target_uri": "viking://resources/openmontage/launch-video/01-brief",
+      "expected_uri_suffix": "01-brief/brief.md",
+      "expected_keywords": ["Remotion", "ImageGen Alpha", "provider"]
+    },
+    {
+      "id": "script-cta-line",
+      "stage": "script",
+      "query": "What is the final CTA line in the approved script?",
+      "target_uri": "viking://resources/openmontage/launch-video/02-script",
+      "expected_uri_suffix": "02-script/script.md",
+      "expected_keywords": ["Ship context, not chaos"]
+    },
+    {
+      "id": "scene-plan-still-card",
+      "stage": "scene_plan",
+      "query": "Which scene is allowed to stay still instead of requiring motion?",
+      "target_uri": "viking://resources/openmontage/launch-video/03-scene-plan",
+      "expected_uri_suffix": "03-scene-plan/scene_plan.md",
+      "expected_keywords": ["Scene 3", "motion required: no", "CTA"]
+    },
+    {
+      "id": "asset-manifest-sample-rule",
+      "stage": "asset_manifest",
+      "query": "What batching rule applies before generating the full image set?",
+      "target_uri": "viking://resources/openmontage/launch-video/04-asset-manifest",
+      "expected_uri_suffix": "04-asset-manifest/asset_manifest.md",
+      "expected_keywords": ["approved keyframe sample", "full image batch"]
+    },
+    {
+      "id": "render-terminal-output",
+      "stage": "render_report",
+      "query": "What is the terminal output deliverable for the pipeline?",
+      "target_uri": "viking://resources/openmontage/launch-video/05-render-report",
+      "expected_uri_suffix": "05-render-report/render_report.md",
+      "expected_keywords": ["final Remotion render", "1920x1080", "24fps"]
+    }
+  ]
+}
