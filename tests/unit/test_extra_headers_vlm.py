@@ -11,7 +11,7 @@ import httpx
 import pytest
 from litellm.llms.ollama.chat.transformation import OllamaChatConfig
 from openai import OpenAI
-from volcenginesdkarkruntime._exceptions import ArkBadRequestError
+from volcenginesdkarkruntime._exceptions import ArkAPIStatusError
 
 from openviking.models.vlm.backends.litellm_vlm import (
     LiteLLMVLMProvider,
@@ -348,22 +348,25 @@ class TestOpenAIVLMClientRetries:
         assert call_kwargs["max_retries"] == 0
 
     @pytest.mark.parametrize(
-        "message",
+        ("status_code", "message", "expected_attempts"),
         [
-            "Total tokens of multi-modal content and text exceed max message tokens.",
-            "The parameter model is invalid.",
+            (400, "Total tokens of multi-modal content and text exceed max message tokens.", 1),
+            (400, "The parameter model is invalid.", 1),
+            (401, "Unauthorized", 1),
+            (503, "Service Unavailable", 6),
         ],
     )
     @patch("volcenginesdkarkruntime.AsyncArk")
-    def test_volcengine_async_client_does_not_retry_bad_request(
-        self, mock_async_ark_class, message
+    def test_volcengine_async_client_uses_shared_retry_policy(
+        self, mock_async_ark_class, status_code, message, expected_attempts
     ):
-        error = ArkBadRequestError(
-            f"Error code: 400 - InvalidParameter: {message}",
+        error = ArkAPIStatusError(
+            f"Error code: {status_code} - {message}",
             response=httpx.Response(
-                400, request=httpx.Request("POST", "https://example.invalid/chat/completions")
+                status_code,
+                request=httpx.Request("POST", "https://example.invalid/chat/completions"),
             ),
-            body={"error": {"code": "InvalidParameter", "message": message}},
+            body={"error": {"message": message}},
             request_id="test-request",
         )
         mock_client = MagicMock()
@@ -378,12 +381,12 @@ class TestOpenAIVLMClientRetries:
             }
         )
 
-        with patch("openviking.models.vlm.backends.volcengine_vlm.asyncio.sleep", new=AsyncMock()):
-            with pytest.raises(ArkBadRequestError) as raised:
+        with patch("openviking.utils.model_retry.asyncio.sleep", new=AsyncMock()):
+            with pytest.raises(ArkAPIStatusError) as raised:
                 asyncio.run(vlm.get_completion_async("hello"))
 
         assert raised.value is error
-        mock_client.chat.completions.create.assert_awaited_once()
+        assert mock_client.chat.completions.create.await_count == expected_attempts
         call_kwargs = mock_async_ark_class.call_args.kwargs
         assert call_kwargs["timeout"] == 12.0
         assert call_kwargs["max_retries"] == 0

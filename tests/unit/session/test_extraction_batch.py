@@ -150,13 +150,16 @@ async def test_working_memory_no_vlm_fallback_uses_all_messages(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["create", "update", "fallback"])
-async def test_working_memory_context_limit_propagates_without_replay(monkeypatch, path):
-    from openviking.utils.model_retry import retry_async
-
-    error = RuntimeError(
+@pytest.mark.parametrize(
+    "message",
+    [
         "Error code: 400 - InvalidParameter: Total tokens of multi-modal content "
-        "and text exceed max message tokens."
-    )
+        "and text exceed max message tokens.",
+        "503 Service Unavailable",
+    ],
+)
+async def test_working_memory_propagates_model_errors(monkeypatch, path, message):
+    error = RuntimeError(message)
     completion = AsyncMock(side_effect=["no tool call", error] if path == "fallback" else error)
     vlm = SimpleNamespace(is_available=lambda: True, get_completion_async=completion)
     monkeypatch.setattr(
@@ -174,10 +177,8 @@ async def test_working_memory_context_limit_propagates_without_replay(monkeypatc
             latest_archive_overview="" if path == "create" else "## Current State\nPrevious work",
         )
 
-    # Phase 2 uses this same retry owner; the original error must reach its
-    # failure handler without regenerating the summary or returning a placeholder.
     with pytest.raises(RuntimeError) as raised:
-        await retry_async(summarize, max_retries=3)
+        await summarize()
 
     assert raised.value is error
     assert completion.await_count == (2 if path == "fallback" else 1)
