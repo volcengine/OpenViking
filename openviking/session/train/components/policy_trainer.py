@@ -277,8 +277,7 @@ class StreamingPolicyTrainer:
                 metadata={"no_op": True, "gradient_count": 0},
             )
         tracer.info(
-            "StreamingPolicyTrainer buffered gradients "
-            f"new_gradients={len(gradients)}",
+            f"StreamingPolicyTrainer buffered gradients new_gradients={len(gradients)}",
             console=self.config.trace_console,
         )
         buffered = _BufferedRolloutTraining(
@@ -290,7 +289,6 @@ class StreamingPolicyTrainer:
         result = await self._batcher.submit(buffered)
         self._last_apply_result = result.apply_result
         return _scope_training_result_to_submitter(result, buffered)
-
 
     @tracer("train.streaming_policy_trainer.train_rollouts", ignore_result=True, ignore_args=True)
     async def train_rollouts(
@@ -317,9 +315,7 @@ class StreamingPolicyTrainer:
         analyses = _unique_by_identity(
             [item.analysis for item in items if item.analysis is not None]
         )
-        rollouts = _unique_by_identity(
-            [item.rollout for item in items if item.rollout is not None]
-        )
+        rollouts = _unique_by_identity([item.rollout for item in items if item.rollout is not None])
         tracer.info(
             "StreamingPolicyTrainer flush started "
             f"reason={reason} "
@@ -464,17 +460,13 @@ def _scope_training_result_to_submitter(
     For per-commit consumers (memory_diff/case links), exposing all batch plan
     items would make one trace appear to add every other concurrently flushed
     experience.  Keep the full batch result available via ``batch_result`` but
-    scope the top-level fields to the submitter's analyses and source
-    trajectories.
+    scope the top-level fields to the submitter's analyses, source trajectories,
+    and own gradients.
     """
 
-    analysis = submitter.analysis
-    if analysis is None:
-        return result
-
-    scoped_plan = _scope_plan_to_analysis(
+    scoped_plan = _scope_plan_to_submitter(
         result.plan,
-        analysis=analysis,
+        submitter=submitter,
         apply_result=result.apply_result,
     )
     scoped_apply_result = _scope_apply_result_to_plan(
@@ -482,20 +474,21 @@ def _scope_training_result_to_submitter(
         scoped_plan,
     )
     metadata = dict(result.metadata or {})
+    analysis = submitter.analysis
     metadata.update(
         {
             "batch_rollout_count": metadata.get("rollout_count"),
             "batch_analysis_count": metadata.get("analysis_count"),
             "batch_gradient_count": metadata.get("gradient_count"),
             "rollout_count": 1 if submitter.rollout is not None else 0,
-            "analysis_count": 1,
+            "analysis_count": 1 if analysis is not None else 0,
             "gradient_count": len(submitter.gradients),
             "source": "streaming_rollouts_scoped",
             "scoped_to_submitter": True,
         }
     )
     return ScopedRolloutTrainingResult(
-        analyses=[analysis],
+        analyses=[analysis] if analysis is not None else [],
         gradients=list(submitter.gradients),
         plan=scoped_plan,
         apply_result=scoped_apply_result,
@@ -504,36 +497,61 @@ def _scope_training_result_to_submitter(
     )
 
 
-def _scope_plan_to_analysis(
+def _scope_plan_to_submitter(
     plan: PolicyUpdatePlan,
     *,
-    analysis: RolloutAnalysis,
+    submitter: "_BufferedRolloutTraining",
     apply_result: PolicyApplyResult,
 ) -> PolicyUpdatePlan:
-    trajectory_uris = _analysis_trajectory_uris(analysis)
+    trajectory_uris = _analysis_trajectory_uris(submitter.analysis)
+    gradient_uris = _submitter_gradient_uris(submitter)
     scoped_items = [
         item
         for item in list(getattr(plan, "items", []) or [])
-        if _plan_item_belongs_to_trajectories(
+        if _plan_item_belongs_to_submitter(
             item,
+            root_uri=getattr(apply_result.updated_policy_set, "root_uri", ""),
             trajectory_uris=trajectory_uris,
+            gradient_uris=gradient_uris,
         )
     ]
     metadata = dict(getattr(plan, "metadata", {}) or {})
     metadata.update(
         {
             "scoped_to_trajectory_uris": sorted(trajectory_uris),
+            "scoped_to_gradient_uris": sorted(gradient_uris),
             "unscoped_item_count": len(getattr(plan, "items", []) or []),
         }
     )
     return PolicyUpdatePlan(items=scoped_items, metadata=metadata)
 
 
-def _plan_item_belongs_to_trajectories(
+def _submitter_gradient_uris(submitter: "_BufferedRolloutTraining") -> set[str]:
+    """Target URIs this submitter's own gradients proposed.
+
+    Skill-only submissions arrive with ``analysis=None`` and their plan items
+    carry no ``derived_from`` trajectory link, so the submitted gradients are
+    the only ownership signal left for them.
+    """
+
+    uris: set[str] = set()
+    for gradient in list(submitter.gradients or []):
+        uri = str(getattr(gradient, "target_uri", "") or "").strip()
+        if uri:
+            uris.add(uri)
+    return uris
+
+
+def _plan_item_belongs_to_submitter(
     item: Any,
     *,
+    root_uri: str,
     trajectory_uris: set[str],
+    gradient_uris: set[str],
 ) -> bool:
+    item_uri = _plan_item_uri(item, root_uri)
+    if item_uri and item_uri in gradient_uris:
+        return True
     if not trajectory_uris:
         return False
     for link in getattr(item, "links", []) or []:
@@ -572,14 +590,20 @@ def _scope_apply_result_to_plan(
     )
     return PolicyApplyResult(
         updated_policy_set=apply_result.updated_policy_set,
-        written_uris=[uri for uri in getattr(apply_result, "written_uris", []) or [] if uri in plan_uris],
-        deleted_uris=[uri for uri in getattr(apply_result, "deleted_uris", []) or [] if uri in plan_uris],
+        written_uris=[
+            uri for uri in getattr(apply_result, "written_uris", []) or [] if uri in plan_uris
+        ],
+        deleted_uris=[
+            uri for uri in getattr(apply_result, "deleted_uris", []) or [] if uri in plan_uris
+        ],
         errors=list(getattr(apply_result, "errors", []) or []),
         metadata=metadata,
     )
 
 
-def _analysis_trajectory_uris(analysis: RolloutAnalysis) -> set[str]:
+def _analysis_trajectory_uris(analysis: RolloutAnalysis | None) -> set[str]:
+    if analysis is None:
+        return set()
     return {
         str(getattr(trajectory, "uri", "") or "")
         for trajectory in getattr(analysis, "trajectories", []) or []
@@ -696,7 +720,9 @@ def _combine_training_results(
             analyses=[],
             gradients=[],
             plan=PolicyUpdatePlan(metadata={"empty": True}),
-            apply_result=PolicyApplyResult(updated_policy_set=ExperienceSet(root_uri="", policies=[])),
+            apply_result=PolicyApplyResult(
+                updated_policy_set=ExperienceSet(root_uri="", policies=[])
+            ),
             metadata={
                 "source": source,
                 "rollout_count": 0,
