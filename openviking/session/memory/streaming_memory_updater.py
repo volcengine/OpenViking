@@ -2137,13 +2137,33 @@ def _operation_tree_lock_paths(
     viking_fs: Any | None,
     ctx: RequestContext,
 ) -> list[str]:
-    """Lock old parent directories that may become empty after URI migration."""
+    """Tree-lock parent directories that may be emptied by this batch.
+
+    `generate_overview` follows any batch whose last file in a directory is removed with
+    a recursive rm of that directory, so the lease has to cover the parent. A same-dir
+    rename does not empty the parent (the target replaces the source in place), so those
+    can stay on exact locks.
+    """
+    replacements = dict(operations.delete_replacements or {})
     directories: set[str] = set()
-    for source_uri, target_uri in dict(operations.delete_replacements or {}).items():
+    for source_uri, target_uri in replacements.items():
         source_directory = str(source_uri).rstrip("/").rpartition("/")[0]
         target_directory = str(target_uri).rstrip("/").rpartition("/")[0]
         if source_directory and source_directory != target_directory:
             directories.add(source_directory)
+    for memory_file in operations.delete_file_contents or []:
+        uri = getattr(memory_file, "uri", None)
+        if not uri:
+            continue
+        source_directory = str(uri).rstrip("/").rpartition("/")[0]
+        if not source_directory:
+            continue
+        replacement = replacements.get(str(uri))
+        if replacement:
+            replacement_directory = str(replacement).rstrip("/").rpartition("/")[0]
+            if replacement_directory == source_directory:
+                continue
+        directories.add(source_directory)
     return _uri_lock_paths(directories, viking_fs, ctx)
 
 
