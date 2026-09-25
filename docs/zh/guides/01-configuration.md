@@ -1406,11 +1406,9 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 {
   "memory": {
     "session_auto_commit": {
-      "default_enabled": false,
-      "idle_enabled": false,
-      "check_interval_seconds": 60.0,
-      "scan_batch_size": 16,
-      "scan_batch_pause_seconds": 0.0
+      "enabled": false,
+      "check_interval_seconds": 600.0,
+      "scan_rate_limit_files_per_second": 2.0
     }
   }
 }
@@ -1418,24 +1416,21 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `default_enabled` | bool | 对未显式传入 `auto_commit_policy` 的新 session，是否默认开启 auto commit。为 `false` 时，这类 session 保持关闭 | `false` |
-| `idle_enabled` | bool | 是否启用服务端 idle timeout 自动 commit 调度器。关闭后，不会启动 idle scheduler；但 token / message-count 的即时触发仍然生效 | `false` |
-| `check_interval_seconds` | float | idle scheduler 的检查周期，单位秒，必须大于 `0` | `60.0` |
-| `scan_batch_size` | int | 每个 idle 扫描批次最多并发读取的 session meta 文件数量，必须大于 `0` | `16` |
-| `scan_batch_pause_seconds` | float | idle 扫描批次之间的可选暂停时间，单位秒，用于降低大量 session 扫描时的存储压力 | `0.0` |
+| `enabled` | bool | 自动 commit 总开关。开启后：未显式传入 `auto_commit_policy` 的新 session 会套用默认 policy，同时启动后台 idle 扫描器；关闭后两者都不发生 | `false` |
+| `check_interval_seconds` | float | 两轮 idle 扫描之间的最小间隔，单位秒，必须大于 `0` | `600.0` |
+| `scan_rate_limit_files_per_second` | float | idle 扫描时每秒最多读取的 session `.meta.json` 文件数，必须大于 `0`，用于限制大量 session 扫描时的存储 IO 压力 | `2.0` |
 
 说明：
 
 - `memory.session_auto_commit` 是服务端全局配置，不是单个 session 的业务 policy。
 - session 级别的自动触发参数通过 session 级 `auto_commit_policy` 设置（见下表）。可以在创建 session 时通过 `POST /api/v1/sessions` 设置，也可以通过 `PATCH /api/v1/sessions/{session_id}/config` 部分更新。PATCH 时省略 `auto_commit_policy` 会保留现有策略，传 `null` 会禁用自动 commit；通过 `GET /api/v1/sessions/{session_id}` 查看生效策略。
-- `default_enabled=false` 时，既无显式 policy、也无 `server.user_config_defaults.auto_commit_policy` 的新 Session 保持 auto commit 关闭，并返回 `auto_commit_policy: null`。任一 policy 存在时都会启用自动 Commit，并用下方默认值补齐缺失字段。
-- `default_enabled=true` 时，既无显式 policy、也无部署级默认 policy 的新 Session 会带上下方内置 policy。
-- `idle_enabled=false` 时：
-  - 不会启动 `SessionAutoCommitScheduler`
-- `idle_enabled=true` 时：
-  - `SessionAutoCommitScheduler` 会按固定周期扫描 AGFS `/local/{account}/user/{user}/sessions` 下的 session `.meta.json`
-  - 不会做单独的启动恢复扫描，idle 检查只发生在周期扫描时
-- token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，也不受这个开关影响。
+- `enabled=false` 时：既无显式 policy、也无 `server.user_config_defaults.auto_commit_policy` 的新 Session 保持 auto commit 关闭，并返回 `auto_commit_policy: null`；同时不启动 `SessionAutoCommitScheduler`。
+- `enabled=true` 时：
+  - 既无显式 policy、也无部署级默认 policy 的新 Session 会带上下方内置 policy。
+  - `SessionAutoCommitScheduler` 启动后立即开始一轮扫描，之后每轮结束后至少等待 `check_interval_seconds` 再开始下一轮；若一轮耗时已超过该值，则立即开始下一轮。
+  - 扫描过程中以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，避免瞬时 IO 洪峰。
+  - 不会做单独的启动恢复扫描，idle 检查只发生在周期扫描时。
+- token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，但同样以 session 是否带有 `auto_commit_policy` 为前提。
 
 ###### 单 session 自动 commit 策略
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -27,8 +28,6 @@ AGFS_SESSION_SCAN_ROOT = "/local"
 class SessionAutoCommitScheduler:
     """Scheduler for idle-based automatic session commits."""
 
-    DEFAULT_CHECK_INTERVAL = 60.0
-
     def __init__(
         self,
         session_service: Any,
@@ -39,14 +38,19 @@ class SessionAutoCommitScheduler:
     ):
         self._session_service = session_service
         self._config = config
-        self._check_interval = (
-            self.DEFAULT_CHECK_INTERVAL if check_interval is None else float(check_interval)
+        if check_interval is not None:
+            self._check_interval = float(check_interval)
+        else:
+            self._check_interval = float(
+                getattr(config, "check_interval_seconds", 600.0)
+            )
+        raw_rate = getattr(config, "scan_rate_limit_files_per_second", 2.0)
+        rate = float(raw_rate) if raw_rate is not None else 2.0
+        self._scan_rate_limit = max(0.0, rate)
+        self._min_read_interval = (
+            1.0 / self._scan_rate_limit if self._scan_rate_limit > 0 else 0.0
         )
-        self._scan_batch_size = max(1, int(getattr(config, "scan_batch_size", 16) or 16))
-        self._scan_batch_pause_seconds = max(
-            0.0,
-            float(getattr(config, "scan_batch_pause_seconds", 0.0) or 0.0),
-        )
+        self._last_scan_read_at = 0.0
         self._sleep = sleep
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -73,16 +77,26 @@ class SessionAutoCommitScheduler:
 
     async def _run_loop(self) -> None:
         while self._running:
-            try:
-                await self._sleep(self._check_interval)
-            except asyncio.CancelledError:
-                break
+            if not self._config.enabled:
+                try:
+                    await self._sleep(self._check_interval)
+                except asyncio.CancelledError:
+                    break
+                continue
 
+            round_start = time.monotonic()
             try:
-                if self._config.idle_enabled:
-                    await self._scan_once()
+                await self._scan_once()
             except Exception as exc:
                 logger.error("Session auto-commit scheduler loop failed: %s", exc, exc_info=True)
+
+            elapsed = time.monotonic() - round_start
+            wait = self._check_interval - elapsed
+            if wait > 0:
+                try:
+                    await self._sleep(wait)
+                except asyncio.CancelledError:
+                    break
 
     async def _scan_once(self) -> None:
         now = datetime.now(timezone.utc)
@@ -90,13 +104,24 @@ class SessionAutoCommitScheduler:
         due = 0
         scheduled = 0
         agfs = self._get_agfs_client()
-        async for batch in self._iter_session_meta_path_batches(agfs):
-            batch_scanned, batch_due, batch_scheduled = await self._process_meta_batch(
-                agfs, batch, now
+        async for meta_path in self._iter_session_meta_paths(agfs):
+            await self._pace_scan_read()
+            item = await self._read_idle_candidate(agfs, meta_path, now)
+            scanned += 1
+            if item is None:
+                continue
+            session_id, account_id, user_id = item
+            due += 1
+            ctx = RequestContext(
+                user=UserIdentifier(account_id=account_id, user_id=user_id),
+                role=Role.USER,
             )
-            scanned += batch_scanned
-            due += batch_due
-            scheduled += batch_scheduled
+            if await self._session_service.maybe_schedule_auto_commit(
+                session_id,
+                ctx,
+                reason_hint="idle_timeout",
+            ):
+                scheduled += 1
 
         if due > 0:
             logger.info(
@@ -106,39 +131,19 @@ class SessionAutoCommitScheduler:
                 scheduled,
             )
 
+    async def _pace_scan_read(self) -> None:
+        if self._min_read_interval <= 0:
+            return
+        now = time.monotonic()
+        wait = self._min_read_interval - (now - self._last_scan_read_at)
+        if wait > 0:
+            await self._sleep(wait)
+        self._last_scan_read_at = time.monotonic()
+
     def _get_agfs_client(self) -> AsyncAGFSClient:
         if self._agfs_client is None:
             self._agfs_client = AsyncAGFSClient(self._session_service.viking_fs.agfs)
         return self._agfs_client
-
-    async def _process_meta_batch(
-        self,
-        agfs: AsyncAGFSClient,
-        batch: list[str],
-        now: datetime,
-    ) -> tuple[int, int, int]:
-        results = await asyncio.gather(
-            *(self._read_idle_candidate(agfs, meta_path, now) for meta_path in batch)
-        )
-        due = 0
-        scheduled = 0
-        for item in results:
-            if item is None:
-                continue
-            session_id, account_id, user_id = item
-            due += 1
-            ctx = RequestContext(
-                user=UserIdentifier(account_id=account_id, user_id=user_id),
-                role=Role.USER,
-            )
-            did_schedule = await self._session_service.maybe_schedule_auto_commit(
-                session_id,
-                ctx,
-                reason_hint="idle_timeout",
-            )
-            if did_schedule:
-                scheduled += 1
-        return len(batch), due, scheduled
 
     async def _read_idle_candidate(
         self,
@@ -196,16 +201,15 @@ class SessionAutoCommitScheduler:
             return None
         return session_id, account_id, user_id
 
-    async def _iter_session_meta_path_batches(
+    async def _iter_session_meta_paths(
         self, agfs: AsyncAGFSClient
-    ) -> AsyncIterator[list[str]]:
+    ) -> AsyncIterator[str]:
         try:
             account_entries = await agfs.ls(AGFS_SESSION_SCAN_ROOT)
         except Exception:
             logger.warning("Failed to scan AGFS tree for idle auto-commit", exc_info=True)
             return
 
-        batch: list[str] = []
         seen: set[str] = set()
         for account_entry in account_entries:
             account_id = str(account_entry.get("name") or "").strip()
@@ -258,14 +262,7 @@ class SessionAutoCommitScheduler:
                     meta_path = f"{sessions_root}/{session_id}{SESSION_META_SUFFIX}"
                     if meta_path not in seen:
                         seen.add(meta_path)
-                        batch.append(meta_path)
-                    if len(batch) >= self._scan_batch_size:
-                        yield batch
-                        batch = []
-                        if self._scan_batch_pause_seconds > 0:
-                            await self._sleep(self._scan_batch_pause_seconds)
-        if batch:
-            yield batch
+                        yield meta_path
 
 
 def resolve_policy(policy: Optional[Dict[str, Any]]) -> AutoCommitPolicy:

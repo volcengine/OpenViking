@@ -85,6 +85,23 @@ test("captures DSH message events without recapturing injected context", () => {
   assert.equal(otherPlugin, null);
 });
 
+test("DSH capture applies rules after removing injected context", () => {
+  const event = {
+    type: "user/message",
+    data: {
+      role: "user",
+      content: [{ type: "text", text: "<openviking-context>approved</openviking-context>Remember private details." }],
+      source: { kind: "user" },
+    },
+  };
+  assert.equal(captureEvent(event, { ...CONFIG, captureFilters: ["k/approved/"] }), null);
+  assert.deepEqual(captureEvent(event, { ...CONFIG, captureFilters: ["d/approved/"] }), {
+    role: "user",
+    parts: [{ type: "text", text: "Remember private details." }],
+    peer_id: "workspace-a",
+  });
+});
+
 test("preserves DSH tool call identity in captured tool results", () => {
   const names = new Map();
   assert.equal(captureEvent({

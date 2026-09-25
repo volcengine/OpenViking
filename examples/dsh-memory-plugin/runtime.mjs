@@ -18,10 +18,11 @@ import {
 } from "./capture.mjs";
 
 export class OpenVikingRuntime {
-  constructor(client, config, logger = console) {
+  constructor(client, config, logger = console, resolveSessionPeer = null) {
     this.client = client;
     this.config = config;
     this.logger = logger;
+    this.resolveSessionPeer = resolveSessionPeer;
     this.states = new Map();
     this.drainTimer = null;
     this.drainRunning = false;
@@ -33,7 +34,7 @@ export class OpenVikingRuntime {
     let state = this.states.get(session.id);
     if (state) return state;
     const cwd = session.header?.cwd || process.cwd();
-    const peer = resolveEffectivePeerId({
+    const peer = this.resolveSessionPeer?.(cwd) ?? resolveEffectivePeerId({
       cfg: {
         peerId: this.config.explicitPeerId,
         peerSource: this.config.peerSource,

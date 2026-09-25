@@ -52,14 +52,15 @@ process.stdin.on("end", () => {
 '
 }
 
-# A plugin that carries both a host manifest and an installer manifest has to
-# say the same version in both: the host installs by one and the installer
-# decides "nothing changed" by the other, so a mismatch means a plugin that
-# reports upgraded and behaves like it did not.
+# Each host-facing manifest must report the distributed agent-hook version.
+# Kimi also exposes kimi.plugin.json to the host and its marketplace, so keep
+# that version aligned with the integration and root manifests.
 PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/cursor/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/trae/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/zcode/openviking.integration.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/openviking.integration.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json"
 )
 
 failed=0

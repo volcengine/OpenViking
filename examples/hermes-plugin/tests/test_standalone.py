@@ -2,6 +2,7 @@
 
 import json
 import threading
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -22,6 +23,258 @@ def test_external_discovery_preserves_profile_config_and_relative_setup(external
     assert module_b._setup._ov() is module_b
     assert provider_again.get_tool_schemas() == provider_a.get_tool_schemas()
     assert (home_a / "config.yaml").read_bytes() == before
+
+
+def test_initialized_profile_owns_connection_and_recall_across_other_profile(external_provider, monkeypatch):
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    requests = []
+    servers = []
+
+    def start_server(label):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                requests.append((label, self.path, body, self.headers.get("X-API-Key"),
+                                 self.headers.get("X-OpenViking-Actor-Peer")))
+                payload = b'{"result":{"memories":[]}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        servers.append((server, worker))
+        return f"http://127.0.0.1:{server.server_port}"
+
+    @contextmanager
+    def profile_scope(home):
+        home_token = set_hermes_home_override(home)
+        secret_token = set_secret_scope(build_profile_secret_scope(home), profile_home=str(home))
+        try:
+            yield
+        finally:
+            reset_secret_scope(secret_token)
+            reset_hermes_home_override(home_token)
+
+    try:
+        endpoint_a, endpoint_b = start_server("a"), start_server("b")
+        home_a, provider, module, _ = external_provider("owner-a")
+        home_b, _, _, _ = external_provider("owner-b")
+        for home, endpoint, label, budget in (
+            (home_a, endpoint_a, "a", 1100), (home_b, endpoint_b, "b", 2200)
+        ):
+            (home / "config.yaml").write_text(
+                "memory:\n  provider: openviking\n  openviking:\n"
+                f"    endpoint: {endpoint}\n    recall_limit: {3 if label == 'a' else 9}\n"
+                "    profile_token_budget: ${OV_TEST_BUDGET}\n", encoding="utf-8"
+            )
+            (home / ".env").write_text(
+                f"OPENVIKING_API_KEY=key-{label}\n"
+                f"OPENVIKING_ACCOUNT=account-{label}\nOPENVIKING_USER=user-{label}\n"
+                f"OPENVIKING_AGENT=peer-{label}\nOV_TEST_BUDGET={budget}\n", encoding="utf-8"
+            )
+
+        monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+        with profile_scope(home_a):
+            provider.initialize("session-a", hermes_home=str(home_a))
+            assert provider._client._api_key == "key-a"
+            assert provider._profile_token_budget() == 1100
+
+        with profile_scope(home_b):
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+            assert provider._client._account == "account-a"
+            assert provider._client._user == "user-a"
+            assert provider._recall_config()["limit"] == 3
+            assert provider._profile_token_budget() == 1100
+
+            (home_a / ".env").write_text(
+                "OPENVIKING_API_KEY=key-a-new\nOPENVIKING_ACCOUNT=account-a\n"
+                "OPENVIKING_USER=user-a\nOPENVIKING_AGENT=peer-a-new\n"
+                "OV_TEST_BUDGET=1100\n", encoding="utf-8"
+            )
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+
+            # Removing A's credentials must not borrow B's active or process values.
+            (home_a / ".env").write_text(
+                "OPENVIKING_AGENT=peer-a\nOV_TEST_BUDGET=1100\n", encoding="utf-8"
+            )
+            monkeypatch.setenv("OPENVIKING_API_KEY", "process-b-key")
+            monkeypatch.setenv("OPENVIKING_ACCOUNT", "process-b-account")
+            monkeypatch.setenv("OPENVIKING_USER", "process-b-user")
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+            assert (provider._client._api_key, provider._client._account, provider._client._user) == (
+                "", "default", "default"
+            )
+
+            # An absent A endpoint must not route to B's process-level endpoint.
+            (home_a / "config.yaml").write_text("memory:\n  provider: openviking\n", encoding="utf-8")
+            monkeypatch.setenv("OPENVIKING_ENDPOINT", endpoint_b)
+            assert provider._resolve_bound_connection_settings()["endpoint"] == module._DEFAULT_ENDPOINT
+
+        assert [(label, key, peer) for label, _, _, key, peer in requests] == [
+            ("a", "key-a", "peer-a"), ("a", "key-a-new", "peer-a-new"),
+            ("a", None, "peer-a")
+        ]
+        assert all(body["session_id"] == "session-a" for _, _, body, _, _ in requests)
+    finally:
+        for server, worker in servers:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+
+
+def test_routed_profile_does_not_borrow_launch_process_env(external_provider, monkeypatch):
+    from agent.secret_scope import (
+        build_profile_secret_scope,
+        get_secret,
+        reset_secret_scope,
+        serves_routed_profile,
+        set_secret_scope,
+    )
+    from hermes_constants import (
+        get_routing_process_hermes_home,
+        pin_process_hermes_home,
+        process_hermes_home_is_pinned,
+        reset_hermes_home_override,
+        set_hermes_home_override,
+    )
+
+    launch_home, launch_provider, launch_module, _ = external_provider("launch")
+    routed_home, routed_provider, routed_module, _ = external_provider("routed")
+    launch_provider._hermes_home, launch_provider._hermes_home_bound = str(launch_home), True
+    routed_provider._hermes_home, routed_provider._hermes_home_bound = str(routed_home), True
+    monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", False)
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19521")
+    monkeypatch.setenv("OPENVIKING_API_KEY", "launch-key")
+    prior_pin = get_routing_process_hermes_home() if process_hermes_home_is_pinned() else None
+    pin_process_hermes_home(launch_home)
+    home_token = set_hermes_home_override(routed_home)
+    scope_token = set_secret_scope(build_profile_secret_scope(routed_home), profile_home=str(routed_home))
+    try:
+        # Some hosts mirror the routed home into process env; the pinned launch
+        # home, not the current override or env mirror, owns process credentials.
+        monkeypatch.setenv("HERMES_HOME", str(routed_home))
+        assert serves_routed_profile()
+        assert get_secret("OPENVIKING_API_KEY") is None
+        routed = routed_provider._resolve_bound_connection_settings()
+        launch = launch_provider._resolve_bound_connection_settings()
+        assert (routed["endpoint"], routed["api_key"]) == (routed_module._DEFAULT_ENDPOINT, "")
+        assert (launch["endpoint"], launch["api_key"]) == ("http://127.0.0.1:19521", "launch-key")
+    finally:
+        reset_secret_scope(scope_token)
+        reset_hermes_home_override(home_token)
+        pin_process_hermes_home(prior_pin)
+
+
+def test_multiplex_launch_profile_uses_frozen_process_secrets(external_provider, monkeypatch):
+    from agent.secret_scope import get_secret
+    from hermes_constants import (
+        get_routing_process_hermes_home,
+        pin_process_hermes_home,
+        process_hermes_home_is_pinned,
+    )
+    from tui_gateway import launch_profile_policy
+
+    launch_home, launch_provider, launch_module, _ = external_provider("multiplex-launch")
+    routed_home, routed_provider, routed_module, _ = external_provider("multiplex-routed")
+    launch_provider._hermes_home, launch_provider._hermes_home_bound = str(launch_home), True
+    routed_provider._hermes_home, routed_provider._hermes_home_bound = str(routed_home), True
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19522")
+    monkeypatch.setenv("OPENVIKING_API_KEY", "frozen-launch-key")
+    monkeypatch.setattr(launch_profile_policy, "_snapshot", None)
+    launch_profile_policy.capture_launch_env()
+    monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", True)
+    prior_pin = get_routing_process_hermes_home() if process_hermes_home_is_pinned() else None
+    pin_process_hermes_home(launch_home)
+    try:
+        # A later process mutation must not affect the launch snapshot or leak to B.
+        monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19523")
+        monkeypatch.setenv("OPENVIKING_API_KEY", "poisoned-live-key")
+        with launch_profile_policy.launch_profile_runtime_scope(launch_home):
+            assert get_secret("OPENVIKING_API_KEY") == "frozen-launch-key"
+            launch = launch_provider._resolve_bound_connection_settings()
+            routed = routed_provider._resolve_bound_connection_settings()
+            assert (launch["endpoint"], launch["api_key"]) == (
+                "http://127.0.0.1:19522", "frozen-launch-key"
+            )
+            assert (routed["endpoint"], routed["api_key"]) == (routed_module._DEFAULT_ENDPOINT, "")
+
+        (launch_home / ".env").write_text("OPENVIKING_API_KEY=file-key\n")
+        with launch_profile_policy.launch_profile_runtime_scope(launch_home):
+            assert launch_provider._resolve_bound_connection_settings()["api_key"] == "file-key"
+
+        # The messaging gateway may activate multiplex without freezing a launch
+        # snapshot. In that case, never capture its live process env on demand.
+        monkeypatch.setattr(launch_profile_policy, "_snapshot", None)
+        without_snapshot = launch_provider._resolve_bound_connection_settings()
+        assert (without_snapshot["endpoint"], without_snapshot["api_key"]) == (
+            launch_module._DEFAULT_ENDPOINT, "file-key"
+        )
+        assert launch_profile_policy._snapshot is None
+    finally:
+        pin_process_hermes_home(prior_pin)
+
+
+def test_api_key_trusted_retry_keeps_default_identity(external_provider):
+    _, _, module, _ = external_provider("trusted-retry")
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            account = self.headers.get("X-OpenViking-Account")
+            user = self.headers.get("X-OpenViking-User")
+            requests.append((self.path, account, user))
+            if self.path == "/health":
+                status, payload = 200, {"status": "ok", "healthy": True, "version": "0.4.18", "auth_mode": "trusted"}
+            elif account == user == "default":
+                status, payload = 200, {"result": {}}
+            else:
+                status, payload = 400, {"error": {"code": "INVALID_ARGUMENT", "message":
+                    "Trusted mode requests must include X-OpenViking-Account and X-OpenViking-User."}}
+            raw = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}"
+    try:
+        settings = module._resolve_connection_settings({}, env={"OPENVIKING_API_KEY": "test-key"})
+        assert (settings["account"], settings["user"]) == ("default", "default")
+        client = module._VikingClient(endpoint, settings["api_key"],
+                                      account=settings["account"], user=settings["user"])
+        assert client.validate_auth() == {"result": {}}
+        assert requests[:2] == [
+            ("/api/v1/system/status", None, None),
+            ("/api/v1/system/status", "default", "default"),
+        ]
+        ok, message, role = module._validate_openviking_setup_values(
+            {"endpoint": endpoint, "api_key": "test-key"})
+        assert (ok, message, role) == (True, "", "root")
+        assert all((account, user) in ((None, None), ("default", "default"))
+                   for _, account, user in requests)
+        assert requests[-1] == ("/api/v1/admin/accounts", "default", "default")
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
 
 
 @pytest.mark.parametrize("target", ["memory", "user"])
@@ -674,6 +927,65 @@ def test_session_switch_commits_below_live_threshold(external_provider, monkeypa
     assert provider._drain_finalizers(timeout=5)
     assert provider._client.post.call_args.args[0] == "/api/v1/sessions/live-sid/commit"
     assert provider._session_id == "new-sid"
+
+
+@pytest.mark.parametrize("agent_context", ["cron", "subagent", "flush"])
+def test_non_primary_contexts_skip_writes(external_provider, monkeypatch, agent_context):
+    """cron/subagent/flush contexts stay read-only: no turn uploads, commits, or mirroring."""
+    from unittest.mock import Mock
+
+    home, provider, module, _ = external_provider(f"non-primary-{agent_context}")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19531")
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+    provider.initialize("live-sid", hermes_home=str(home))
+    assert (provider._agent_context, provider._writes_enabled) == ("primary", True)
+    provider.initialize("live-sid", hermes_home=str(home), agent_context=agent_context)
+    assert (provider._agent_context, provider._writes_enabled) == (agent_context, False)
+
+    provider._client = Mock()
+    provider._client.get.return_value = {"pending_tokens": 20000}
+    provider._ensure_client = lambda: True
+    provider._new_client = lambda: provider._client
+    provider._acquire_run_lock()
+    _finish_turn(provider)
+    provider.on_session_switch("new-sid")
+    provider.on_session_end([])
+    provider.on_memory_write("add", "user", f"not mirrored ({agent_context})")
+    assert provider._drain_finalizers(timeout=5)
+
+    assert provider._client.method_calls == []
+    assert provider._pending_sessions() == []
+
+
+@pytest.mark.parametrize("agent_context", ["cron", "subagent", "flush"])
+def test_non_primary_session_switch_keeps_search_on_current_session(external_provider, monkeypatch, agent_context):
+    """A read-only provider must still follow session changes for recall."""
+    from unittest.mock import Mock
+
+    from agent.memory_manager import MemoryManager
+
+    home, provider, module, _ = external_provider(f"read-only-switch-{agent_context}")
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19531")
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+    provider.initialize("old-sid", hermes_home=str(home), agent_context=agent_context)
+    client = Mock()
+    client.post.return_value = {"result": {"memories": []}}
+    provider._client = client
+    provider._ensure_client = lambda: client
+    provider._profile_prefetched_sessions.update({"old-sid", "new-sid"})
+
+    manager = MemoryManager()
+    manager.add_provider(provider)
+    manager.on_session_switch("new-sid", reason="compression")
+    assert provider._session_id == "new-sid"
+    assert provider._profile_prefetched_sessions == set()
+    provider.handle_tool_call("viking_search", {"query": "preferences", "mode": "deep"})
+    provider.on_session_end([])
+
+    client.post.assert_called_once_with(
+        "/api/v1/search/search", {"query": "preferences", "session_id": "new-sid"}
+    )
 
 
 def test_live_commit_does_not_block_next_turn_or_lose_its_pending_marker(external_provider, monkeypatch):

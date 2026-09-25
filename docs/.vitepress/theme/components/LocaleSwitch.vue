@@ -47,7 +47,7 @@ async function switchLocale(choice: 'auto' | 'en' | 'zh') {
     @focusout="event => { if (menu && !menu.contains(event.relatedTarget as Node)) menu.open = false }">
     <summary :aria-label="locale === 'zh' ? '语言' : 'Language'">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 5h12M9 3v2m4 0c-1 7-5 10-10 12m2-9c1 4 4 7 8 9m0 4 5-13 5 13m-8-4h6"/></svg>
-      {{ locale === 'zh' ? '中' : 'EN' }}{{ preference === 'auto' ? (locale === 'zh' ? ' · 自动' : ' · Auto') : '' }}
+      {{ locale === 'zh' ? '中' : 'EN' }}
     </summary>
     <div class="ov-locale-options">
       <button type="button" :aria-pressed="preference === 'auto'" @click="switchLocale('auto')">{{ locale === 'zh' ? '跟随浏览器' : 'Follow browser' }}</button>

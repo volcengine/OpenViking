@@ -18,7 +18,7 @@ events imply "context for a particular codex `session_id` is gone".
   memory extractor) at session-end-equivalent moments. `/messages`
   auto-creates the OV session, so the plugin does not call session create.
 - **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
-  shape `{ codexSessionId, ovSessionId, transcriptPath, capturedTurnCount, createdAt, lastUpdatedAt }`.
+  shape `{ codexSessionId, ovSessionId, transcriptPath, capturedTurnCount, captureFormatVersion, createdAt, lastUpdatedAt }`.
 - **End marker** — `<safe-codex-session-id>.ended.<timestamp>`, a sidecar written by the
   `SessionEnd` parent hook, containing the timestamp at which it was
   written. Its presence means "the thread ended and its commit has not been
@@ -210,8 +210,12 @@ a state file that never captured a turn is identical to no state file at all.
 Every `Stop` reads `transcript_path`, slices to `[capturedTurnCount, end)`,
 and appends each new user/assistant turn to the OV session for this codex
 `session_id` (the `/messages` endpoint auto-creates it on first append).
-State is updated:
-`{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`.
+Codex's startup-only user message is removed before slicing. Only complete
+host blocks before the first `turn_context` qualify: plugin recommendations,
+`AGENTS.md instructions`, and `<environment_context>`. If a message also
+contains a real prompt, only those blocks are removed. Normal conversation
+may quote the same labels without being filtered. State is updated:
+`{ovSessionId, capturedTurnCount, captureFormatVersion, lastUpdatedAt: now}`.
 
 The transcript and persisted cursor own retries. Failed messages are not also
 put in the shared pending queue: replaying both sources would duplicate them.
@@ -359,6 +363,7 @@ OV session id, while commits create additional archives under that session.
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop or retirement"
   "transcriptPath": "/path/rollout.jsonl", // last rollout seen; lets the sweep catch up
   "capturedTurnCount": 7,            // turns from transcript already appended
+  "captureFormatVersion": 2,         // cursor counts turns after Codex startup filtering
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
 }
@@ -368,6 +373,12 @@ Legacy state files from earlier plugin versions may still contain a UUID
 `ovSessionId`; those are now overwritten with the derived `cx-*` id on the
 next resolve. The migration window for preserving old UUID sessions has
 closed.
+
+A state file without `captureFormatVersion` uses the old extraction count.
+On the first readable rollout under the session lock, the plugin subtracts
+startup turns before the old cursor and persists version 2 before appending.
+Unreadable rollouts leave the old cursor untouched for a later retry. Already
+written OV sessions and extracted memories are not changed.
 
 State files are atomic-write (tmpfile + rename) to survive crash mid-write.
 

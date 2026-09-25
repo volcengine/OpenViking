@@ -21,11 +21,10 @@ export function readProxyConfig(env = process.env, cwd = process.cwd()) {
   const cfg = resolveConfig({}, env, cwd);
   return toMcpProxyConfig(cfg, {
     env,
-    // Not gated through `resolveMcpActorPeerId` like the other proxies: DSH's
-    // parent process resolves the peer per session and hands it over in the
-    // child env. Empty means it has none, and deriving one from wherever DSH
-    // launched this process would send a peer the runtime does not.
-    peerId: String(env.OPENVIKING_PEER_ID || "").trim(),
+    // The child env carries the runtime's resolved peer, but the shared mapper
+    // still decides whether the proxy may send it. In broad recall mode the
+    // actor header must stay unset; otherwise a process launched in workspace A
+    // narrows MCP searches for a session whose runtime is serving workspace B.
     debug: Boolean(env.OV_DEBUG_LOG),
     debugLogPath: env.OV_DEBUG_LOG || "",
   });

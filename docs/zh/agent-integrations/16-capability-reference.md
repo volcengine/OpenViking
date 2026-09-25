@@ -152,11 +152,11 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 - **会话隐式创建**：插件普遍不显式调用 `POST /sessions`（dsh 例外，它会发一个只含 `session_id` 的 create）；首次 `POST /sessions/{id}/messages(/batch)` 时由服务端 `auto_create=True` 建会话。召回侧 `mode="context"` 的 `_load_session(auto_create=True)` 也会建（第一次召回即在服务端创建会话）。
 - **commit 两阶段**：`POST /sessions/{id}/commit` 的 Phase 1（归档 archive）同步完成后才返回，Phase 2（记忆抽取）作为后台任务返回 `task_id`。`keep_recent_count` 服务端默认 **0**（全量归档，不留 live tail）。
 - **服务端自动 commit 默认关闭，除非显式策略或部署级默认策略将其启用**：
-  - `memory.session_auto_commit.default_enabled = false`、`idle_enabled = false`（`memory_config.py:15-16`）；无存储 policy 的会话自动 commit 关闭（`session_service.py:637-638`）；idle 扫描器在 `idle_enabled=false` 时根本不创建（`core.py:440-448`），构成双重门控。
+  - `memory.session_auto_commit.enabled = false`（`memory_config.py`）；无存储 policy 的会话自动 commit 关闭（`session_service.py`）；idle 扫描器在 `enabled=false` 时根本不创建（`core.py`），构成双重门控。
   - `POST /messages` 的 auto_create 不接受 policy 参数，但配置后会继承 `server.user_config_defaults.auto_commit_policy`；`POST /sessions`（create）与 `PATCH /sessions/{id}/config` 仍是显式的 Session 级控制面。
   - 当前没有插件下发 `auto_commit_policy`；第一方客户端中会下发该字段的是 **ov CLI**（`ov session new --auto-commit-policy-json` / `--no-auto-commit`、`ov session config set`）。
   - policy 显式启用时，服务端默认阈值是 `pending_token_threshold=150000（严格大于）/ message_count_threshold=100 / idle_timeout_seconds=86400 / keep_recent_count=0 / min_commit_interval_seconds=0`。注意这组服务端默认值与各插件客户端的 20000/10 是相互独立的两层配置。
-- **由此**：插件可通过 `server.user_config_defaults.auto_commit_policy` 继承新 Session 的 token/message 阈值；idle timeout 兜底还需开启 `memory.session_auto_commit.idle_enabled=true`。未配置该 fallback 时，客户端仍需自行安排 commit 路径（[§3.3](#_3-3-会话与-commit-生命周期)）。
+- **由此**：插件可通过 `server.user_config_defaults.auto_commit_policy` 继承新 Session 的 token/message 阈值；idle timeout 兜底还需开启 `memory.session_auto_commit.enabled=true`。未配置该 fallback 时，客户端仍需自行安排 commit 路径（[§3.3](#_3-3-会话与-commit-生命周期)）。
 - **tool output 外置**：服务端 `tool_output_externalization.enabled=True`、`threshold_chars=20000`（`server/config.py:257-258`）——客户端普遍把 `captureToolMaxChars` 设到 1000000 仅作兜底，真正的截断/外置在服务端做，externalized 结果通过 `tool_output_ref` 引用（openclaw 有三个专门工具读它）。
 - **服务端召回相关熔断**：`retrieval.recall_intent_timeout_s=5.0`（query expansion）、`recall_rewrite_timeout_s=30.0`（digest，[§3.2.5](#_3-2-5-召回再摘要)）、`enable_intent=true`。客户端超时预算按这两条推导（[§3.2.4](#_3-2-4-超时与预算链)）。
 
@@ -178,7 +178,7 @@ per-harness 章节（档案卡）只写差异；所有共享事实均在本章�
 | zcode | 配置驱动（合并进 `~/.zcode/cli/config.json`，并强制 `hooks.enabled=true`） | 一键 `--harness zcode` | `zc-<sess_…>` | env + ovcli.conf `plugin.zcode` | ❌ |
 | kimicode | Kimi Code 原生插件（`kimi.plugin.json`，managed copy + `installed.json`） | 一键 `--harness kimicode` | `kc-<session_id>` | env + ovcli.conf `plugin.kimicode` + workspace 文件 | ❌ |
 | opencode | npm 插件 `@openviking/opencode-plugin`（config hook 自注入 MCP 条目） | 一键 `--harness opencode`（npm 注册 + 代理快照兜底）/ 手动 npm / 源码 | `oc-<id>`；subagent 格式为 `oc-<parent>__subagent-<child>` | env + ovcli.conf `plugin.opencode` | ✅ |
-| dsh | Cordis 同进程插件（`cordis.patch.yml` plugin group） | 统一安装器（会询问 profile，默认 `web`），或执行 `dsh plugin --profile web add @openviking/dsh-memory-plugin` | `dsh-<session.id 原样>`；subagent 各自独立会话 | env + ovcli.conf `plugin.dsh` + cordis patch config（行为旋钮的最低层；凭据仍以 patch 优先） | ❌ |
+| dsh | Cordis 同进程插件（`cordis.patch.yml` 条目） | 统一安装器（会询问 profile，默认 `web`），或执行 `dsh plugin --profile web add @openviking/dsh-memory-plugin` | `dsh-<session.id 原样>`；subagent 各自独立会话 | env + ovcli.conf `plugin.dsh` + cordis patch config（行为旋钮的最低层；凭据仍以 patch 优先） | ❌ |
 | pi | pi 原生扩展（目录装载，jiti 直译 TS） | 一键 `--harness pi`（复制到自动发现目录，无需 `pi install`） | `pi-<piSessionId>` | env + ovcli.conf `plugin.pi`（凭据字段由凭据链统一解析） | ✅ |
 | openclaw | context-engine 插件（`ownsCompaction:true`）+ 15 工具 + 5 slash + 4 hook + HTTP 路由 | ClawHub 执行 `openclaw plugins install clawhub:@openviking/openclaw-plugin` 搭配 `openclaw openviking setup` / npm 安装器 / TOS 离线包 | UUID 原样小写，否则 `sha256(sessionKey)`；`memory_store` 临时会话 `memory-store-<ts>-<rand>` | `openclaw.json` 的 `plugins.entries.openviking.config`（严格校验：存在未知键/非法值时插件进入 setup-only 模式）+ 少量 env | ✅ `openclaw openviking setup`（交互/非交互 + key 角色探测 + 版本兼容检查） |
 | hermes | Hermes bundled MemoryProvider（随 Hermes 发布，无需装插件） | 执行 `hermes memory setup openviking`（curses 向导）或手动 `config set memory.provider openviking` + `.env` | 由 Hermes 生成 `%Y%m%d_%H%M%S_<hex6>`，插件原样使用 | `.env`（`OPENVIKING_*`）或 ovcli.conf 联动（`use_ovcli_config` 模式会清空 .env 里的 5 个对应变量）+ config.yaml | ✅（多层菜单） |
@@ -723,7 +723,7 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 - **`examples/memory-plugin-shared/lib/`**（Node）：包含完整的核心功能模块，例如 `recall-core`（三级降级召回）、`profile-inject`、`capture-utils`（消息归一 + 注入回流防护）、`pending-queue`（离线重放）、`batch-send`、`mcp-proxy-core`（stdio↔HTTP 代理）、`session-model`（会话 id 派生）以及 `credentials`。构建瘦 harness 时，只需实现一个适配层，把宿主生命周期事件映射到这些模块即可（例如 `agent-hook-runtime.mjs` 就是 cursor、trae、zcode 共用的现成一体化运行时，接新宿主时的主要工作只是解析其 stdin JSON 字段名）。
 - **Agent Plugins 1.0 便携包**（位于 `agent-plugins/`）：采用 `plugin.json` + `skills/` + `mcp.json`（stdio→HTTP 代理）的规范化便携格式。该方案刻意不含 hooks（召回/沉淀靠 skill 教模型自调工具），非常适合符合 Agent Plugins 规范的客户端直接加载；此外，`plugin.test.mjs` 定义了规范一致性校验（schema URL、name 规则、静态 headers 不含机密、`mcp.json` 引用不逃逸插件根等），可作为自行打包的 lint 依据。
 
-**接入时务必对齐的三个约定**（与现有 harness 保持一致的行为）：① 召回调用点必须转发 `session_id`，这样才有服务端 expansion + 跨轮去重（详见 [§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；② 适配器不要用自己的超时压过 helper 下发的 deadline；③ 关闭时要安排一条 commit 路径，否则未达阈值的尾部对话需等待后续触发才能归档（详见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）——若宿主没有关闭事件，需开启 `memory.session_auto_commit.idle_enabled`，并提供 Session 级或部署级默认 policy。这三条正是 `recall-session-wiring.test.mjs` 用跨插件正则钉死的。
+**接入时务必对齐的三个约定**（与现有 harness 保持一致的行为）：① 召回调用点必须转发 `session_id`，这样才有服务端 expansion + 跨轮去重（详见 [§3.2.1](#_3-2-1-机制底座-一条共享管线-两条服务端路径)）；② 适配器不要用自己的超时压过 helper 下发的 deadline；③ 关闭时要安排一条 commit 路径，否则未达阈值的尾部对话需等待后续触发才能归档（详见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)）——若宿主没有关闭事件，需开启 `memory.session_auto_commit.enabled`，并提供 Session 级或部署级默认 policy。这三条正是 `recall-session-wiring.test.mjs` 用跨插件正则钉死的。
 
 ---
 

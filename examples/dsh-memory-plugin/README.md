@@ -21,7 +21,7 @@ Or add the package to a profile directly:
 
 ```bash
 dsh plugin --profile web add @openviking/dsh-memory-plugin
-dsh --profile web --dump-config    # should list the openviking-memory group
+dsh --profile web --dump-config    # should list openviking-memory-runtime
 ```
 
 `dsh plugin` forwards to pnpm inside the profile directory, so the bundle has to
@@ -34,7 +34,7 @@ It also needs `node examples/memory-plugin-shared/sync.mjs` run first: the
 
 ## Requirements
 
-- `@deepseek-ai/dsh` `0.1.0-rc.6`, `0.1.5-rc.1`, or `0.1.5-rc.2`; stable `0.1.x` releases are also admitted by the peer range
+- `@deepseek-ai/dsh` `0.1.0-rc.6`, `0.1.5-rc.1`, `0.1.5-rc.2`, or `0.1.7-rc.2`; stable `0.1.x` releases are also admitted by the peer range
 - Node.js `^22.19.0` or `>=24`
 - A reachable OpenViking server
 
@@ -48,9 +48,10 @@ individual DSH core packages to the profile. DSH initializes profiles with
 available through its module fallback at boot. A missing-peer warning during
 `dsh plugin add` alone does not prove startup is broken.
 
-The peer range is `>=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1`. The second clause
-explicitly admits the `0.1.5` release candidates: semver does not include them
-in the first clause merely because they compare above `0.1.0-rc.6`. Other
+The peer range is `>=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2`. Each
+pre-release clause admits one series explicitly: semver does not include a
+release candidate in the first clause merely because it compares above
+`0.1.0-rc.6`, so every verified pre-release series is listed on its own. Other
 pre-release series need separate verification. Local devDependencies and
 `overrides` stay pinned to rc.6 to exercise the minimum supported contract.
 
@@ -137,7 +138,7 @@ effect for the tools when DSH restarts the bundle, as it does for the runtime.
 
 Two consequences follow from the proxy being one process per profile:
 
-- **The actor peer is process-level.** Recall, capture, and commit still resolve a peer per session from that session's workspace repository, but tool calls carry the peer resolved at boot. Set `OPENVIKING_PEER_ID` when one process serves several repositories and you need tool calls attributed exactly.
+- **MCP actor scope is process-level.** With the default `recallPeerScope: all`, MCP tool calls omit the actor peer header. With `actor`, they use the peer resolved at boot. Automatic recall, capture, and commit resolve their peer from each session's workspace.
 - **`remember` is not session-scoped.** The server's MCP `remember` stores into
   its own short-lived session rather than the live `dsh-<session-id>` stream —
   the same behavior the Claude Code, Codex, and Cursor integrations have.
@@ -175,27 +176,43 @@ Common environment variables:
 | `OPENVIKING_WORKSPACE_PEER` | Derive a peer from each DSH session workspace's git identity by default; `0` sends no peer |
 | `OPENVIKING_RECALL_PEER_SCOPE` | `all` for cross-workspace recall or `actor` for isolation |
 
-The patch can also carry plugin config:
+The profile's `cordis.patch.yml` can also carry plugin config:
 
 ```yaml
-- insert:
-    - id: openviking-memory
-      name: '@deepseek-ai/cordis-plugin-group'
-      group: true
-      isolate:
-        openvikingMemory: true
-      config:
-        - id: openviking-memory-runtime
-          name: '@openviking/dsh-memory-plugin'
-          config:
-            endpoint: http://127.0.0.1:1933
-            recallTokenBudget: 2000
-            scoreThreshold: 0.35
-            captureToolResults: false
-            skipSubagentSessions: true
-            commitTokenThreshold: 20000
-            mcpToolCallTimeoutMs: 60000
+- id: openviking-memory-runtime
+  config:
+    endpoint: http://127.0.0.1:1933
+    recallMaxTokens: 2000
+    scoreThreshold: 0.35
+    captureToolResults: false
+    skipSubagentSessions: true
+    commitTokenThreshold: 20000
+    mcpToolCallTimeoutMs: 60000
 ```
+
+Recall normally uses `POST /api/v1/search/search` with `mode: "context"`.
+`recallMaxTokens` (`OPENVIKING_RECALL_MAX_TOKENS`) sets this request's
+`max_tokens` budget for server-assembled context. When it is unset, the plugin
+omits `max_tokens` and uses the server's default budget.
+
+`recallLimit` (`OPENVIKING_RECALL_LIMIT`) scales the category quotas for context
+recall; it is not a strict cap on the final number of entries. When explicitly
+set, it allocates at least one slot to each of the six categories: events,
+entities, preferences, experiences, resources, and skills. For example,
+`recallLimit: 4` sends six one-slot quotas, so the result can contain more than
+four entries. Lowering it does not expand the set of categories searched.
+Actual results still depend on matching content, score filtering, deduplication,
+and the token budget. When unset, the server's coding preset supplies the quotas.
+
+The older size settings apply to fallback recall, not the primary context request:
+
+- `recallTokenBudget` (`OPENVIKING_RECALL_TOKEN_BUDGET`) controls the estimated
+  token budget of the locally rendered block when both server-side context and
+  the legacy `/api/v1/search/recall` endpoint are unavailable and recall falls
+  back to raw search results.
+- `recallMaxContentChars` (`OPENVIKING_RECALL_MAX_CONTENT_CHARS`) limits each
+  item's content in that local fallback. It also sets the legacy `/recall`
+  request's `max_chars` to `max(1000, recallMaxContentChars * recallLimit)`.
 
 ## Behavior
 
@@ -210,7 +227,18 @@ The patch can also carry plugin config:
 - `tools/pre-execute` denies a DSH filesystem tool (`read`, `glob`, `grep`, `edit`, `write`, `str_replace_editor`) whose path argument is a `viking://` URI, pointing the model at the bridged `mcp__openviking__*` tools instead. A `write` or `edit` under a skill directory (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) points at `mcp__openviking__add_skill` instead, which creates or replaces a whole skill from its `SKILL.md` text. A `grep` whose pattern is `viking://` text still runs.
 - `tools/post-execute` lets a `bash` command that carries a `viking://` URI run unchanged and attaches a notice for the model: use the bridged tools if it meant OpenViking content, or ignore the notice when the URI is intentional data such as an `ov` argument or an HTTP payload.
 
-Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. DSH does not read workspace `.openviking/config.json` files, so a `peer.id` written there has no effect; pin a peer with `OPENVIKING_PEER_ID` instead. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
+Each DSH session maps to `dsh-<session-id>` in OpenViking. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. With the default peer settings, no peer is sent outside a git repository, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
+
+Workspace peer settings are loaded from `session.header.cwd` when the session first uses memory. A workspace can set `peer.id` to name its project explicitly, or `peer.source` to choose a preset or template chain. For example, `<root>/.openviking/config.json` can contain:
+
+```json
+{
+  "version": 1,
+  "peer": { "id": "my-project" }
+}
+```
+
+The shared loader also applies `config.local.json` and machine registry overrides. Explicit host `peerId`, environment overrides and pinned `ovcli.conf` credentials retain their existing precedence. The resolved peer stays fixed for the session's runtime state; new sessions load the current workspace settings. A session without a cwd falls back to the process's working directory.
 
 ## Tools
 

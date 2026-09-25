@@ -1097,9 +1097,8 @@ impl FileSystem for MountableFS {
         pattern: &str,
         options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
-        // Route grep to the mounted plugin so plugin-specific fast paths (e.g. localfs + rg)
-        // can take effect. If a plugin doesn't override grep, it will fall back to the trait
-        // default implementation on that plugin instance (still correct, just slower).
+        // Route grep to the mounted plugin so plugin-specific implementations can take effect.
+        // Plugins without an override use the trait's default implementation.
         let (mount_info, rel_path) = self.find_mount(path).await?;
 
         // Exclude path only applies when it resolves to the same mount point; otherwise it

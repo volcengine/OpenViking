@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from openviking.connector.auth import OAUTH_REF_ARG, project_auth_config
 from openviking.connector.client import ConnectorClient
 from openviking.connector.routing import (
     CONNECTOR_ARGS_AUTH_CONFIG_KEY,
@@ -565,6 +566,10 @@ class ConnectorDelegate:
             auth_config = {
                 str(key): str(value) for key, value in (declared_auth or {}).items() if value
             }
+
+        if add_type in {"meego", "feishu_project"} and OAUTH_REF_ARG in (connector_args or {}):
+            auth_config = await project_auth_config(connector_args or {}, ctx)
+            forwarded_args.pop(OAUTH_REF_ARG, None)
 
         tos_path: Optional[str] = None
         param_config: Optional[Dict[str, Any]] = None

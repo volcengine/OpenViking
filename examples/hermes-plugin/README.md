@@ -135,8 +135,13 @@ OpenViking's server config is separate from Hermes:
   `account`, and `user`. It is read from `OPENVIKING_CLI_CONFIG_FILE` or
   `~/.openviking/ovcli.conf`.
 
-Hermes-side provider config is read from environment variables in the active
-profile's `.env`:
+Hermes-side provider config is read from the initialized profile's `.env`.
+After initialization, the provider keeps that profile for connection, identity,
+and recall settings, including when another profile is active in the same
+process. For the launch profile, process-level `OPENVIKING_*` values fill missing
+`.env` values. Under multi-profile hosting, Hermes uses the process values frozen
+at activation; a messaging gateway without that snapshot does not read them.
+Routed profiles never inherit the launch profile's process values.
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
@@ -378,3 +383,12 @@ client commits do not use the server scheduler's interval or retention settings.
 The plugin retains the existing `keep_recent_count: 0` commit behavior.
 The threshold is not a hard limit on extraction input: one turn can
 exceed it, and the server may include other context during extraction.
+
+### Non-primary contexts
+
+Hermes passes an `agent_context` to `initialize()`. Sessions started for scheduled
+cron jobs, delegated subagents, or flush forks (`cron`, `subagent`, `flush`) are
+non-primary: recall and profile reads keep working, but the provider skips turn
+uploads, session commits, and memory mirroring, so fixed-prompt job output neither
+lands in the memory bank nor spends server-side extraction budget. Interactive
+sessions (and hosts that predate `agent_context`) keep the previous write behavior.

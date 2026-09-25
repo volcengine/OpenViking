@@ -57,6 +57,7 @@ kubectl -n vikingdb get events --sort-by=.lastTimestamp
 | Pod Pending | Labels, taints, resource requests, PVCs, node affinity | Use Pod / PVC events to distinguish scheduling from storage failures |
 | PVC Pending / no StorageClass reported | Actual classes, kubeconfig context, RBAC for listing classes | Set the appropriate class explicitly; do not delete PVCs as a first response |
 | License not Active | Fingerprint, expiry, system namespace, first CR synchronization | Follow the bundled licensing procedure and check status again |
+| `license checksum mismatch` | Whether the `.vlic` was issued for this cluster's fingerprint and left unmodified | Do not edit the file; request the original `.vlic` again using this cluster's `fingerprint.json` |
 | API Server fails after resources were submitted | Host-to-API network and API health | After recovery, inspect `cluster get` / `doctor` instead of reinstalling |
 | Workspace Ready but import or retrieval fails | Model credentials, dimensions, API paths, limits, vector service, user key | Run OpenViking P0 and inspect the failed stage |
 | Root Key works for administration but fails on data | Key type used by the application | Use a User / Admin Key |

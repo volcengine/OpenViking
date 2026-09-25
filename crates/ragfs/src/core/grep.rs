@@ -102,8 +102,4 @@ impl<'a> GrepLineCollector<'a> {
     pub(crate) fn limit_reached(&self) -> bool {
         self.result.count >= self.limit && self.pending_after.is_empty()
     }
-
-    pub(crate) fn match_count(&self) -> usize {
-        self.result.count
-    }
 }

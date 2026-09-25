@@ -11,7 +11,7 @@ import pytest
 
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError
 from openviking.server.identity import RequestContext, Role
-from openviking.service.fs_service import FSService
+from openviking.service.fs_service import FSService, ListingPage
 from openviking.storage.abstract_overview import body_for_preview
 from openviking.storage.errors import LockAcquisitionError
 from openviking_cli.exceptions import InvalidArgumentError
@@ -496,8 +496,47 @@ async def test_ls_and_tree_skip_tag_projection_without_tags_or_include_tags(requ
 
     service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
 
-    assert await service.ls("viking://resources", ctx=request_context) == entries
-    assert await service.tree("viking://resources", ctx=request_context) == entries
+    assert await service.ls("viking://resources", ctx=request_context) == ListingPage(
+        entries=entries, has_more=False
+    )
+    assert await service.tree("viking://resources", ctx=request_context) == ListingPage(
+        entries=entries, has_more=False
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["ls", "tree"])
+@pytest.mark.parametrize(
+    ("entry_count", "expected_has_more"),
+    [(1, False), (2, False), (3, True)],
+)
+async def test_ls_and_tree_detect_more_entries_with_n_plus_one(
+    request_context, method_name, entry_count, expected_has_more
+):
+    entries = [
+        {"uri": f"viking://resources/{index}.md", "isDir": False} for index in range(entry_count)
+    ]
+
+    async def fetch(*_args, offset=0, node_limit=None, **_kwargs):
+        return entries[offset:] if node_limit is None else entries[offset : offset + node_limit]
+
+    viking_fs = SimpleNamespace(
+        ls=AsyncMock(side_effect=fetch),
+        tree=AsyncMock(side_effect=fetch),
+    )
+    service = FSService(viking_fs=viking_fs)
+
+    page = await getattr(service, method_name)(
+        "viking://resources",
+        ctx=request_context,
+        offset=0,
+        node_limit=2,
+    )
+
+    assert page.entries == entries[:2]
+    assert page.has_more is expected_has_more
+    fetch_mock = getattr(viking_fs, method_name)
+    assert fetch_mock.await_args.kwargs["node_limit"] == 3
 
 
 @pytest.mark.asyncio
@@ -657,6 +696,7 @@ async def test_ls_applies_offset_and_node_limit_after_tag_filtering(request_cont
     ] + [
         {"uri": "viking://resources/b.md", "isDir": False},
         {"uri": "viking://resources/c.md", "isDir": False},
+        {"uri": "viking://resources/d.md", "isDir": False},
     ]
 
     async def fake_ls(*_args, offset=0, node_limit=None, **_kwargs):
@@ -681,6 +721,11 @@ async def test_ls_applies_offset_and_node_limit_after_tag_filtering(request_cont
                     "level": 2,
                     "search_tags": ["team=search", "env=prod"],
                 },
+                {
+                    "uri": "viking://resources/d.md",
+                    "level": 2,
+                    "search_tags": ["team=search", "env=prod"],
+                },
             ]
 
     service = FSService(viking_fs=viking_fs, vikingdb=FakeVikingDB())
@@ -693,7 +738,7 @@ async def test_ls_applies_offset_and_node_limit_after_tag_filtering(request_cont
         output="agent",
     )
 
-    assert result == finalized
+    assert result == ListingPage(entries=finalized, has_more=True)
     assert viking_fs.ls.await_count == 2
     assert viking_fs.ls.await_args_list[0].kwargs["output"] == "original"
     assert viking_fs.ls.await_args_list[0].kwargs["node_limit"] == 256
@@ -737,11 +782,13 @@ async def test_ls_tag_filter_keeps_zero_node_limit_unbounded_for_entry_and_simpl
         node_limit=0,
     )
 
-    assert [entry["uri"] for entry in entry_result] == [
+    assert [entry["uri"] for entry in entry_result.entries] == [
         "viking://resources/a.md",
         "viking://resources/b.md",
     ]
-    assert simple_result == ["viking://resources/a.md", "viking://resources/b.md"]
+    assert simple_result == ListingPage(
+        entries=["viking://resources/a.md", "viking://resources/b.md"], has_more=False
+    )
 
 
 @pytest.mark.asyncio
@@ -768,9 +815,16 @@ async def test_tree_projects_directory_tags_from_abstract_and_overview_records(r
         tags=["team=search", "env=prod"],
     )
 
-    assert result == [
-        {"uri": "viking://resources/docs", "isDir": True, "tags": ["team=search", "env=prod"]}
-    ]
+    assert result == ListingPage(
+        entries=[
+            {
+                "uri": "viking://resources/docs",
+                "isDir": True,
+                "tags": ["team=search", "env=prod"],
+            }
+        ],
+        has_more=False,
+    )
     assert viking_fs.tree.await_args.kwargs["node_limit"] == 1000
 
 
@@ -793,10 +847,11 @@ async def test_tree_tag_filter_keeps_zero_node_limit_unbounded(request_context):
         "viking://resources", ctx=request_context, tags=["env=prod"], node_limit=0
     )
 
-    assert [entry["uri"] for entry in result] == [
+    assert [entry["uri"] for entry in result.entries] == [
         "viking://resources/a.md",
         "viking://resources/b.md",
     ]
+    assert result.has_more is False
     assert viking_fs.tree.await_args.kwargs["node_limit"] is None
 
 

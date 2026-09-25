@@ -73,6 +73,15 @@ test("oversized turns are truncated to captureMaxLength before they are sent", (
   assert.equal(wider.payloads[0].content, long.trim());
 });
 
+test("Zcode filters the full turn before capping the payload", () => {
+  const turn = { role: "user", content: `Remember ${"x".repeat(100)} SECRET123`, turnId: "turn-001" };
+  const plan = buildZcodeCapturePlan([turn], {}, {
+    captureMaxLength: 64,
+    captureFilters: ["d/SECRET123/"],
+  });
+  assert.deepEqual(plan.payloads, []);
+});
+
 test("non-retryable failure keeps cursor, dedup, and pending prompt unchanged", () => {
   const state = {
     lastTurnId: "turn-000",

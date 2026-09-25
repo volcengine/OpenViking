@@ -41,6 +41,12 @@ presets. Shared Agent changes gateway session settings only after confirmation;
 Personal Agent preserves them. An upgrade with no recall scope set retains the
 previous recall requests. No Hermes core patch is required.
 
+Profile-bound connection and recall settings adapt
+[starship-s's Hermes PR #83647](https://github.com/NousResearch/hermes-agent/pull/83647),
+with the original author retained. This port leaves memory URI handling as it
+is: the original PR's UID-less `viking://user/memories/...` rewrite is not
+accepted by current OpenViking servers.
+
 ## Migration coordination
 
 After this directory is merged, submit a Hermes catalog entry with:

@@ -41,7 +41,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
    dsh --profile web --dump-config
    ```
 
-   输出里应该能看到 `openviking-memory` 插件组。
+   输出里应该能看到 `openviking-memory-runtime` 条目。
 
 > 还没有 `ovcli.conf`？见[部署指南 → CLI](../guides/03-deployment.md#cli)。
 >
@@ -83,20 +83,12 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 行为参数写在 profile 的 Cordis patch 条目里：
 
 ```yaml
-- insert:
-    - id: openviking-memory
-      name: '@deepseek-ai/cordis-plugin-group'
-      group: true
-      isolate:
-        openvikingMemory: true
-      config:
-        - id: openviking-memory-runtime
-          name: '@openviking/dsh-memory-plugin'
-          config:
-            recallTokenBudget: 2000
-            scoreThreshold: 0.35
-            captureToolResults: false
-            commitTokenThreshold: 20000
+- id: openviking-memory-runtime
+  config:
+    recallTokenBudget: 2000
+    scoreThreshold: 0.35
+    captureToolResults: false
+    commitTokenThreshold: 20000
 ```
 
 同一个 `config` 块里的 `syncTurns: false` 让该集成变成只读：画像注入和记忆召回照常，但什么都不再写回——不捕获对话、不 commit，也不重放此前会话排入队列的写入，那些写入会一直留在队列里，直到某个仍在写入的会话把它们排空。
@@ -113,7 +105,7 @@ patch 中写的凭证优先于环境变量。行为旋钮按优先级从高到�
 
 | 现象 | 排查方向 |
 |------|----------|
-| 没有注入，也没有 OpenViking 工具 | `dsh --profile web --dump-config` 里应能看到 `openviking-memory`；重新运行安装器或 `dsh plugin --profile web add …` |
+| 没有注入，也没有 OpenViking 工具 | `dsh --profile web --dump-config` 里应能看到 `openviking-memory-runtime`；重新运行安装器或 `dsh plugin --profile web add …` |
 | 装到了错误的 profile | 安装器默认 `web`；用 `--dsh-profile <name>` 重新运行 |
 | 安装时报 `ERESOLVE` | `@deepseek-ai/dsh-*` 各包预发布 tag 不同步；请精确安装 `@deepseek-ai/dsh@0.1.0-rc.6` |
 | 安装时报包「不在 npm registry 中」 | pnpm 默认拒绝发布不满 24 小时的版本（`minimumReleaseAge`）。等一等，或把该精确版本加进 profile 的 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` |

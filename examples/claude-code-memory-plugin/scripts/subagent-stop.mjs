@@ -33,7 +33,7 @@ import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
-import { filterCaptureParts } from "./shared/capture-utils.mjs";
+import { shapeCaptureParts } from "./shared/capture-utils.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -81,8 +81,8 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   for (const turn of turns) {
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
-    // Blank text parts are pruned and the configured capture filters applied.
-    const parts = filterCaptureParts(turn.parts, turn.role, cfg).parts;
+    // Sanitize injected context before applying the configured filters.
+    const parts = shapeCaptureParts(turn.parts, turn.role, cfg).parts;
     if (parts.length === 0) continue;
     const payload = { role: turn.role, parts };
     if (peerId) payload.peer_id = peerId;

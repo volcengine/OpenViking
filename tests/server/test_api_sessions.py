@@ -536,7 +536,7 @@ async def test_get_session_context_stops_at_newest_failed_archive(
     assert body["result"]["stats"]["failedArchives"] == 1
 
     # The failed archive's raw messages are still durable on disk.
-    raw = await session._read_archive_messages(failed_archive_uri)
+    raw = await session._archives.read_messages(failed_archive_uri)
     assert [message.content for message in raw] == ["Failed archive message"]
 
 
@@ -639,7 +639,7 @@ async def test_create_session_uses_default_policy_when_server_default_enabled(
     client: httpx.AsyncClient,
     service,
 ):
-    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(default_enabled=True))
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=True))
 
     resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
@@ -656,7 +656,7 @@ async def test_create_session_can_disable_server_default_auto_commit(
     client: httpx.AsyncClient,
     service,
 ):
-    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(default_enabled=True))
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=True))
 
     resp = await client.post(
         "/api/v1/sessions",
@@ -681,7 +681,7 @@ async def test_auto_created_session_uses_default_policy_when_server_default_enab
     client: httpx.AsyncClient,
     service,
 ):
-    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(default_enabled=True))
+    service.sessions.set_session_auto_commit_config(SessionAutoCommitConfig(enabled=True))
     session_id = "auto-created-default-policy"
 
     add_resp = await client.post(

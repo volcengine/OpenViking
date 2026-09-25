@@ -11,8 +11,15 @@ import pytest
 from openviking.message import Message, TextPart, ToolPart
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.service.task_tracker import get_task_tracker
+from openviking.session import working_memory as wm
+from openviking.session.checkpoints import (
+    CheckpointPlanner,
+)
+from openviking.session.checkpoints import (
+    CheckpointRequest as _CheckpointRequest,
+)
 from openviking.session.memory.constants import AGENT_EVOLUTION_MEMORY_TYPES
-from openviking.session.session import Session, _ArchiveSummaryResult, _CheckpointRequest
+from openviking.session.session import _ArchiveSummaryResult
 
 
 async def _write_archive(
@@ -62,7 +69,7 @@ def _text_message(message_id: str, role: str, text: str) -> Message:
 
 
 def test_checkpoint_record_respects_remaining_retained_budget():
-    records = Session._build_checkpoint_records(
+    records = CheckpointPlanner.build_records(
         [
             _CheckpointRequest(
                 turn_anchor_message_id="u1",
@@ -106,7 +113,7 @@ async def test_session_context_enforces_hard_budget_without_mutating_archive_raw
     await session._write_to_agfs_async(messages=[live])
 
     context = await session.get_session_context(token_budget=100)
-    raw = await session._read_archive_messages(f"{session.uri}/history/archive_001")
+    raw = await session._archives.read_messages(f"{session.uri}/history/archive_001")
 
     assert context["estimatedTokens"] <= 100
     assert context["stats"]["activeTokens"] <= 100
@@ -217,8 +224,8 @@ async def test_coverage_metadata_cannot_hide_a_pending_archive(
     )
 
     # Phase 2 bookkeeping still refuses to treat a pending archive as covered.
-    states = await session._scan_archive_states()
-    covered = session._covered_archive_ids(states)
+    states = await session._archives.scan_states()
+    covered = session._archives.covered_archive_ids(states)
     assert "archive_001" not in covered
 
     # The read path stops at the newest terminal, so the pending archive that is
@@ -951,12 +958,12 @@ async def test_roll_forward_collects_multiple_checkpoint_requests(
     current_uri = await _write_archive(session, 3, [current], meta={})
     combined = [first_anchor, first_source, second_anchor, second_source, current]
 
-    requests = await session._collect_checkpoint_requests_for_phase2(
+    requests = await session._checkpoints.collect_requests_for_phase2(
         current_uri,
         ["archive_001", "archive_002"],
         combined,
     )
-    formatted = session._format_messages_for_wm(combined, requests)
+    formatted = wm.format_messages_for_wm(combined, requests)
 
     assert [request.turn_anchor_message_id for request in requests] == ["u1", "u2"]
     assert [request.source_message_ids for request in requests] == [("a1",), ("a2",)]
@@ -1004,7 +1011,7 @@ async def test_phase2_rolls_previous_cumulative_checkpoint_into_v2_record(
         },
     )
 
-    requests = await session._collect_checkpoint_requests_for_phase2(
+    requests = await session._checkpoints.collect_requests_for_phase2(
         current_uri,
         [],
         [anchor, current_source],
@@ -1014,7 +1021,7 @@ async def test_phase2_rolls_previous_cumulative_checkpoint_into_v2_record(
     assert requests[0].source_message_ids == ("a2",)
     assert requests[0].previous_checkpoint_source_message_ids == ("a1",)
     assert requests[0].previous_checkpoint_abstract == "Pool saturation was confirmed."
-    records = session._build_checkpoint_records(
+    records = session._checkpoints.build_records(
         requests,
         ("Pool saturation was confirmed; the network path was ruled out.",),
     )
@@ -1072,7 +1079,7 @@ async def test_phase2_migrates_legacy_checkpoint_deltas_to_cumulative_v2(
         },
     )
 
-    requests = await session._collect_checkpoint_requests_for_phase2(
+    requests = await session._checkpoints.collect_requests_for_phase2(
         current_uri,
         [],
         [anchor, current_source],
@@ -1082,7 +1089,7 @@ async def test_phase2_migrates_legacy_checkpoint_deltas_to_cumulative_v2(
     assert requests[0].previous_checkpoint_abstract == (
         "Pool saturation was confirmed.\n\nThe network path was ruled out."
     )
-    record = session._build_checkpoint_records(
+    record = session._checkpoints.build_records(
         requests,
         (
             "Pool saturation was confirmed, the network was ruled out, "
@@ -1116,7 +1123,7 @@ async def test_checkpoint_request_rejects_user_or_cross_turn_sources(
     )
 
     with pytest.raises(ValueError, match="outside its Assistant/Tool prefix"):
-        await session._collect_checkpoint_requests_for_phase2(
+        await session._checkpoints.collect_requests_for_phase2(
             archive_uri,
             [],
             [anchor, assistant],
@@ -1186,7 +1193,7 @@ async def test_missing_required_checkpoint_keeps_archive_raw_uncovered(
     # disk. The terminal-stop read path no longer replays its raw messages, so
     # the archived step ``a1`` is gone while the retained anchor and live tail
     # stay, and no checkpoint is synthesized.
-    raw = await session._read_archive_messages(archive_uri)
+    raw = await session._archives.read_messages(archive_uri)
     assert [message.id for message in raw] == ["u1", "a1"]
     context = await session.get_session_context()
     assert [message["id"] for message in context["messages"]] == ["u1", "a2"]
@@ -1548,7 +1555,7 @@ async def test_turn_budget_commit_archives_complete_old_turn_and_keeps_latest_us
             "peer": {"enabled": False},
         },
     )
-    archived = await session._read_archive_messages(result["archive_uri"])
+    archived = await session._archives.read_messages(result["archive_uri"])
 
     assert [message.content for message in archived] == ["first query", "first answer"]
     assert [message.content for message in session.messages] == ["latest query", "latest answer"]
@@ -1576,7 +1583,7 @@ async def test_concurrent_stale_session_instances_use_one_authoritative_phase1_s
     )
 
     assert sum(result["archived"] is True for result in results) == 1
-    assert len(await session_a._list_archive_refs()) == 1
+    assert len(await session_a._archives.list_refs()) == 1
     assert await session_a._read_live_messages_strict() == []
 
 
@@ -1735,7 +1742,7 @@ async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_durable(
     with pytest.raises(RuntimeError, match="queue unavailable"):
         await session.commit_async()
 
-    states = await session._scan_archive_states()
+    states = await session._archives.scan_states()
     context = await session.get_session_context()
     failed = json.loads(
         await session._viking_fs.read_file(
@@ -1747,7 +1754,7 @@ async def test_queue_enqueue_failure_marks_archive_failed_and_keeps_raw_durable(
     assert failed["stage"] == "queue_enqueue"
     # Raw stays durable on disk, and this message is also still live in root
     # because the failed commit never trimmed it.
-    raw = await session._read_archive_messages(states[0].archive_uri)
+    raw = await session._archives.read_messages(states[0].archive_uri)
     assert [message.content for message in raw] == ["do not lose me"]
     assert [message["parts"][0]["text"] for message in context["messages"]] == ["do not lose me"]
     assert context["stats"]["failedArchives"] == 1
@@ -1772,7 +1779,7 @@ async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
     with pytest.raises(RuntimeError, match="synthetic root rewrite failure"):
         await session.commit_async(keep_recent_count=1)
 
-    states = await session._scan_archive_states()
+    states = await session._archives.scan_states()
     failed = json.loads(
         await session._viking_fs.read_file(
             f"{states[0].archive_uri}/.failed.json",
@@ -1787,7 +1794,7 @@ async def test_phase1_root_rewrite_failure_marks_orphan_archive_failed(
     # The orphan archive keeps its raw messages durable on disk and Phase 2 can
     # still roll them forward. The terminal-stop read path, however, no longer
     # replays them as logical live, so only the retained tail is assembled.
-    raw = await fresh._read_archive_messages(states[0].archive_uri)
+    raw = await fresh._archives.read_messages(states[0].archive_uri)
     assert [message.content for message in raw] == ["archive candidate"]
     assert [message["parts"][0]["text"] for message in context["messages"]] == ["retained tail"]
 
@@ -1885,7 +1892,7 @@ async def test_interrupted_phase1_before_root_rewrite_becomes_failed(
     )
 
     assert not await session._ensure_phase1_ready(archive_uri)
-    states = await session._scan_archive_states()
+    states = await session._archives.scan_states()
     context = await session.get_session_context()
     failed = json.loads(
         await session._viking_fs.read_file(f"{archive_uri}/.failed.json", ctx=session.ctx)

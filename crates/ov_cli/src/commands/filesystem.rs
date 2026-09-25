@@ -283,7 +283,7 @@ fn output_filesystem_entries(
                 }
                 if simple {
                     if let Some(rendered) = render_simple_fields(result, &defs, is_tree) {
-                        println!("{rendered}");
+                        println!("{}", with_more_nodes_hint(rendered, result));
                     } else {
                         output_success(result, output_format, compact);
                     }
@@ -293,7 +293,7 @@ fn output_filesystem_entries(
             } else if let Some(rendered) =
                 render_filesystem_entries_for_table(result, output_format, is_tree, simple)
             {
-                println!("{rendered}");
+                println!("{}", with_more_nodes_hint(rendered, result));
             } else {
                 output_success(result, output_format, compact);
             }
@@ -354,6 +354,23 @@ fn render_simple_tree_paths(result: &Value) -> Option<String> {
     render_simple_fields(result, &[path], false)
 }
 
+fn render_simple_paths(result: &Value) -> Option<String> {
+    let entries = result
+        .get("result")
+        .and_then(Value::as_array)
+        .or_else(|| result.as_array())?;
+    if entries.iter().all(Value::is_string) {
+        return Some(
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    render_simple_tree_paths(result)
+}
+
 fn render_fields_table(result: &Value, fields: &[&FieldDef], is_tree: bool) {
     let (entries, profile) = match filesystem_entries(result) {
         Some(v) => v,
@@ -366,6 +383,7 @@ fn render_fields_table(result: &Value, fields: &[&FieldDef], is_tree: bool) {
     if entries.is_empty() {
         lines.push(theme::muted("(empty)").to_string());
         append_profile_lines(profile, &mut lines);
+        append_more_nodes_hint(result, &mut lines);
         println!("{}", lines.join("\n"));
         return;
     }
@@ -432,7 +450,23 @@ fn render_fields_table(result: &Value, fields: &[&FieldDef], is_tree: bool) {
     }
 
     append_profile_lines(profile, &mut lines);
+    append_more_nodes_hint(result, &mut lines);
     println!("{}", lines.join("\n"));
+}
+
+fn append_more_nodes_hint(result: &Value, lines: &mut Vec<String>) {
+    if result.get("has_more").and_then(Value::as_bool) == Some(true) {
+        lines.push(String::new());
+        lines.push(
+            theme::muted("More nodes available. Use --offset to view the next page.").to_string(),
+        );
+    }
+}
+
+fn with_more_nodes_hint(rendered: String, result: &Value) -> String {
+    let mut lines = vec![rendered];
+    append_more_nodes_hint(result, &mut lines);
+    lines.join("\n")
 }
 
 fn display_width(s: &str) -> usize {
@@ -483,12 +517,10 @@ fn render_filesystem_entries_for_table(
     if matches!(output_format, OutputFormat::Json) {
         return None;
     }
-    if is_tree {
-        if simple {
-            render_simple_tree_paths(value)
-        } else {
-            render_tree_entries_for_table(value)
-        }
+    if simple {
+        render_simple_paths(value)
+    } else if is_tree {
+        render_tree_entries_for_table(value)
     } else {
         render_ls_entries_for_table(value)
     }
@@ -959,7 +991,7 @@ fn output_message_result(
 mod tests {
     use super::{
         render_filesystem_entries_for_table, render_ls_entries_for_table, render_simple_fields,
-        render_tree_entries_for_table,
+        render_tree_entries_for_table, with_more_nodes_hint,
     };
     use crate::output::render_profiled_scalar_result;
     use serde_json::json;
@@ -1149,6 +1181,21 @@ mod tests {
     }
 
     #[test]
+    fn table_output_appends_more_nodes_hint() {
+        let result = json!({
+            "result": [{"uri": "viking://resources/a.md", "isDir": false}],
+            "has_more": true
+        });
+
+        let rendered = strip_ansi(&with_more_nodes_hint("a.md".to_string(), &result));
+
+        assert_eq!(
+            rendered,
+            "a.md\n\nMore nodes available. Use --offset to view the next page."
+        );
+    }
+
+    #[test]
     fn tree_simple_without_fields_renders_one_path_per_line() {
         let result = json!([
             {"rel_path": "docs", "isDir": true},
@@ -1163,6 +1210,29 @@ mod tests {
         );
 
         assert_eq!(rendered.as_deref(), Some("docs/\ndocs/readme.md"));
+    }
+
+    #[test]
+    fn ls_simple_with_pagination_metadata_renders_one_uri_per_line() {
+        let result = json!({
+            "result": [
+                "viking://resources/a.md",
+                "viking://resources/b.md"
+            ],
+            "has_more": true
+        });
+
+        let rendered = render_filesystem_entries_for_table(
+            &result,
+            crate::output::OutputFormat::Table,
+            false,
+            true,
+        );
+
+        assert_eq!(
+            rendered.as_deref(),
+            Some("viking://resources/a.md\nviking://resources/b.md")
+        );
     }
 
     #[test]

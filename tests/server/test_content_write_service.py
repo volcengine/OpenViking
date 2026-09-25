@@ -188,7 +188,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     queue_status = await service.resources.wait_processed()
     assert queue_status["Embedding"]["error_count"] == 0
     import_root = imported["root_uri"]
-    children = await service.fs.ls(import_root, ctx=writer, simple=True)
+    children = (await service.fs.ls(import_root, ctx=writer, simple=True)).entries
     for target in [import_root, *children]:
         acl = await service.fs.get_acl(target, ctx=admin)
         assert acl["direct_entries"] == []
@@ -207,7 +207,7 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert removed_acl["acl_mode"] == "inherit"
     assert removed_acl["direct_entries"] == []
     assert removed_acl["effective_entries"] == inherited_entries
-    assert await service.fs.ls(import_root, ctx=reader, simple=True) == children
+    assert (await service.fs.ls(import_root, ctx=reader, simple=True)).entries == children
 
     await service.fs.write(uri, content="line2\n", ctx=writer, mode="append", wait=True)
     assert (await service.fs.get_acl(uri, ctx=admin))["direct_entries"] == []
@@ -268,7 +268,9 @@ async def test_shared_resource_creation_inherits_acl_and_preserves_plain_append(
     assert (await service.fs.get_acl(explicit_import, ctx=admin))[
         "direct_entries"
     ] == inherited_entries
-    imported_children = await service.fs.ls(explicit_import, ctx=admin, simple=True)
+    imported_children = (
+        await service.fs.ls(explicit_import, ctx=admin, simple=True)
+    ).entries
     for child in imported_children:
         report = await service.fs.get_acl(child, ctx=admin)
         assert report["direct_entries"] == []

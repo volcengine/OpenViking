@@ -2758,10 +2758,10 @@ EOF
       warn "dsh: $DSH_PACKAGE $(t 'not found in profile' '未在 profile 中找到') $dsh_profile"
       ok=0
     fi
-    if dsh --profile "$dsh_profile" --dump-config 2>/dev/null | grep -q 'openviking-memory'; then
-      info "dsh: $(t 'plugin group composed into the profile' '插件组已合入 profile')"
+    if dsh --profile "$dsh_profile" --dump-config 2>/dev/null | grep -q 'openviking-memory-runtime'; then
+      info "dsh: $(t 'plugin composed into the profile' '插件已合入 profile')"
     else
-      warn "dsh: $(t 'plugin group not present in the composed profile' '合成后的 profile 中没有插件组')"
+      warn "dsh: $(t 'plugin not present in the composed profile' '合成后的 profile 中没有该插件')"
       ok=0
     fi
   fi

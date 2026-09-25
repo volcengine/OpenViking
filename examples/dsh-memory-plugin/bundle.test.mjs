@@ -10,7 +10,7 @@ const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url));
 const FORBIDDEN_IDENTIFIER = ["tra", "ex"].join("");
 const FORBIDDEN_PATTERN = new RegExp(FORBIDDEN_IDENTIFIER, "i");
 
-test("bundle uses neutral DSH naming, bounded peers, and an isolated service", async () => {
+test("bundle uses neutral DSH naming and bounded peers", async () => {
   const manifest = JSON.parse(await readFile(
     new URL("./package.json", import.meta.url),
     "utf8",
@@ -38,9 +38,11 @@ test("bundle uses neutral DSH naming, bounded peers, and an isolated service", a
     );
   }
   assert.equal(manifest.dsh.bundle.patch, "./cordis.patch.yml");
-  assert.match(patch, /name: '@deepseek-ai\/cordis-plugin-group'/);
-  assert.match(patch, /openvikingMemory: true/);
-  assert.match(patch, /name: '@openviking\/dsh-memory-plugin'/);
+  assert.doesNotMatch(patch, /group:/);
+  assert.match(
+    patch,
+    /- id: openviking-memory-runtime\n\s+name: '@openviking\/dsh-memory-plugin'/,
+  );
   assert.doesNotMatch(JSON.stringify(manifest), FORBIDDEN_PATTERN);
   assert.doesNotMatch(patch, FORBIDDEN_PATTERN);
 });

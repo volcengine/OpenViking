@@ -15,7 +15,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import ListingResponse, Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
 from openviking.storage.acl import AclSpec
@@ -95,7 +95,7 @@ async def ls(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.ls(
+        page = await service.fs.ls(
             uri,
             ctx=_ctx,
             recursive=recursive,
@@ -118,7 +118,7 @@ async def ls(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
 @router.get("/tree")
@@ -144,7 +144,7 @@ async def tree(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.tree(
+        page = await service.fs.tree(
             uri,
             ctx=_ctx,
             output=output,
@@ -164,7 +164,7 @@ async def tree(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
 @router.get("/stat")

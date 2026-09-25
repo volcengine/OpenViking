@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for Working Memory growth behavior and anti-bloat guards."""
 
-from openviking.session.session import Session
+from openviking.session import working_memory as wm
 
 
 def _wm(
@@ -40,13 +40,13 @@ def _keep_all() -> dict:
     }
 
 
-def _section_items(wm: str, header: str) -> list[str]:
-    parsed = Session._parse_wm_sections(wm)
-    return Session._wm_extract_bullet_items(parsed.get(f"## {header}", ""))
+def _section_items(wm_doc: str, header: str) -> list[str]:
+    parsed = wm.parse_wm_sections(wm_doc)
+    return wm.wm_extract_bullet_items(parsed.get(f"## {header}", ""))
 
 
-def _section_body(wm: str, header: str) -> str:
-    parsed = Session._parse_wm_sections(wm)
+def _section_body(wm_doc: str, header: str) -> str:
+    parsed = wm.parse_wm_sections(wm_doc)
     return parsed.get(f"## {header}", "")
 
 
@@ -64,7 +64,7 @@ def test_key_facts_section_grows_monotonically_under_repeated_appends():
             "op": "APPEND",
             "items": [f"Decision {idx}: keep module_{idx}.py because contract {idx} is stable."],
         }
-        merged = Session._merge_wm_sections(merged, ops)
+        merged = wm.merge_wm_sections(merged, ops)
 
     items = _section_items(merged, "Key Facts & Decisions")
 
@@ -82,7 +82,7 @@ def test_errors_and_corrections_section_grows_with_each_new_error():
             "op": "APPEND",
             "items": [f"Round {idx}: corrected assumption {idx} after verification."],
         }
-        merged = Session._merge_wm_sections(merged, ops)
+        merged = wm.merge_wm_sections(merged, ops)
 
     items = _section_items(merged, "Errors & Corrections")
 
@@ -100,7 +100,7 @@ def test_files_and_context_section_can_keep_growing_with_unique_paths():
             "op": "APPEND",
             "items": [f"src/file_{idx}.py - referenced during round {idx}."],
         }
-        merged = Session._merge_wm_sections(merged, ops)
+        merged = wm.merge_wm_sections(merged, ops)
 
     items = _section_items(merged, "Files & Context")
 
@@ -135,7 +135,7 @@ def test_key_facts_consolidation_rejected_when_trivially_small():
         ),
     }
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
     items = _section_items(merged, "Key Facts & Decisions")
 
     assert len(items) == 42
@@ -219,7 +219,7 @@ def test_key_facts_consolidation_accepted_when_anchors_preserved():
         "content": _GOOD_CONSOLIDATION,
     }
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
     items = _section_items(merged, "Key Facts & Decisions")
 
     assert len(items) <= 15
@@ -256,7 +256,7 @@ def test_key_facts_consolidation_rejected_when_anchors_missing():
         "content": "\n".join(vague_items),
     }
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
     items = _section_items(merged, "Key Facts & Decisions")
 
     assert len(items) >= 41
@@ -286,7 +286,7 @@ def test_key_facts_consolidation_accepted_at_low_volume_with_anchors():
     ops = _keep_all()
     ops["Key Facts & Decisions"] = {"op": "UPDATE", "content": consolidated}
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
     items = _section_items(merged, "Key Facts & Decisions")
 
     assert len(items) == 10
@@ -309,7 +309,7 @@ def test_extract_anchors_catches_mixed_case_names():
         "- McCloud reviewed the PR on 2024-03-15.\n"
         "- Rewrote the frontend in JavaScript."
     )
-    anchors = Session._extract_lexical_anchors(text)
+    anchors = wm.extract_lexical_anchors(text)
     assert "openai" in anchors
     assert "mccloud" in anchors
     assert "javascript" in anchors
@@ -318,7 +318,7 @@ def test_extract_anchors_catches_mixed_case_names():
 def test_extract_anchors_catches_standard_proper_nouns():
     """Standard Titlecase names like Caroline, Sweden, Portland."""
     text = "- Caroline traveled to Sweden and visited Portland."
-    anchors = Session._extract_lexical_anchors(text)
+    anchors = wm.extract_lexical_anchors(text)
     assert "caroline" in anchors
     assert "sweden" in anchors
     assert "portland" in anchors
@@ -327,7 +327,7 @@ def test_extract_anchors_catches_standard_proper_nouns():
 def test_extract_anchors_filters_stopwords():
     """Common English words should be filtered even if capitalized."""
     text = "The And Other Some These Those"
-    anchors = Session._extract_lexical_anchors(text)
+    anchors = wm.extract_lexical_anchors(text)
     assert "the" not in anchors
     assert "other" not in anchors
     assert "some" not in anchors
@@ -356,7 +356,7 @@ def test_key_facts_rejected_consolidation_salvages_new_facts():
         ),
     }
 
-    merged = Session._merge_wm_sections(old_wm, ops)
+    merged = wm.merge_wm_sections(old_wm, ops)
     items = _section_items(merged, "Key Facts & Decisions")
 
     assert len(items) >= 42
@@ -374,9 +374,9 @@ def test_build_wm_section_reminders_triggers_above_threshold():
     key_facts = "\n".join(
         f"- Fact {idx}: something important about item {idx}." for idx in range(1, 35)
     )
-    wm = _wm(key_facts=key_facts)
+    wm_doc = _wm(key_facts=key_facts)
 
-    reminders = Session._build_wm_section_reminders(wm)
+    reminders = wm.build_wm_section_reminders(wm_doc)
 
     assert "<section_size_warnings>" in reminders
     assert "Key Facts" in reminders
@@ -390,18 +390,18 @@ def test_build_wm_section_reminders_skips_append_only_sections():
     errors = "\n".join(
         f"- Error {idx}: something went wrong in round {idx}." for idx in range(1, 40)
     )
-    wm = _wm(errors=errors)
+    wm_doc = _wm(errors=errors)
 
-    reminders = Session._build_wm_section_reminders(wm)
+    reminders = wm.build_wm_section_reminders(wm_doc)
 
     assert "Errors" not in reminders
 
 
 def test_build_wm_section_reminders_silent_below_threshold():
     key_facts = "\n".join(f"- Fact {idx}: something about item {idx}." for idx in range(1, 10))
-    wm = _wm(key_facts=key_facts)
+    wm_doc = _wm(key_facts=key_facts)
 
-    reminders = Session._build_wm_section_reminders(wm)
+    reminders = wm.build_wm_section_reminders(wm_doc)
 
     assert reminders == ""
 
@@ -420,15 +420,15 @@ def test_wm_section_reminders_consistent_with_prompt_template():
     )
     prior_wm = _wm(key_facts=big_key_facts)
 
-    reminders = Session._build_wm_section_reminders(prior_wm)
+    reminders = wm.build_wm_section_reminders(prior_wm)
 
     assert reminders.startswith("<section_size_warnings>")
     assert reminders.endswith("</section_size_warnings>")
     assert "Key Facts & Decisions" in reminders
     assert "34 bullets" in reminders
     assert "MUST be consolidated" in reminders
-    assert f"<={Session._WM_SECTION_BULLET_THRESHOLD} bullets" in reminders
-    assert f"<={Session._WM_SECTION_TOKEN_THRESHOLD} tokens" in reminders
+    assert f"<={wm._WM_SECTION_BULLET_THRESHOLD} bullets" in reminders
+    assert f"<={wm._WM_SECTION_TOKEN_THRESHOLD} tokens" in reminders
 
 
 # =====================================================================
@@ -458,7 +458,7 @@ def test_working_memory_document_size_keeps_increasing_across_rounds():
             "op": "APPEND",
             "items": [f"Round {idx}: corrected assumption {idx} after verification."],
         }
-        merged = Session._merge_wm_sections(merged, ops)
+        merged = wm.merge_wm_sections(merged, ops)
 
     assert len(merged) > initial_size
     kf_items = _section_items(merged, "Key Facts & Decisions")
@@ -486,7 +486,7 @@ def test_antibloat_normal_append_passes_under_threshold():
         "op": "APPEND",
         "items": ["New fact A", "New fact B"],
     }
-    merged = Session._merge_wm_sections(merged, ops)
+    merged = wm.merge_wm_sections(merged, ops)
     items = _section_items(merged, "Key Facts & Decisions")
     assert len(items) == 12
     assert "New fact A" in items
@@ -502,7 +502,7 @@ def test_antibloat_throttled_append_caps_at_5():
         "op": "APPEND",
         "items": [f"Extra {i}" for i in range(10)],
     }
-    merged = Session._merge_wm_sections(merged, ops)
+    merged = wm.merge_wm_sections(merged, ops)
     items = _section_items(merged, "Key Facts & Decisions")
     assert len(items) == 35, f"Expected 30 + 5 (capped) = 35; got {len(items)}"
 
@@ -516,7 +516,7 @@ def test_antibloat_throttled_dedup_filters_existing():
         "op": "APPEND",
         "items": ["Fact 0", "Fact 1", "Brand new insight"],
     }
-    merged = Session._merge_wm_sections(merged, ops)
+    merged = wm.merge_wm_sections(merged, ops)
     items = _section_items(merged, "Key Facts & Decisions")
     assert "Brand new insight" in items
     assert items.count("Fact 0") == 1
@@ -532,7 +532,7 @@ def test_antibloat_emergency_inserts_sentinel_and_stops():
         "op": "APPEND",
         "items": ["Emergency fact A"],
     }
-    merged = Session._merge_wm_sections(merged, ops)
+    merged = wm.merge_wm_sections(merged, ops)
     items = _section_items(merged, "Key Facts & Decisions")
     assert len(items) == 56, f"Expected 55 + 1 sentinel = 56; got {len(items)}"
     assert any("CONSOLIDATION REQUIRED" in it for it in items)
@@ -543,7 +543,7 @@ def test_antibloat_emergency_inserts_sentinel_and_stops():
         "op": "APPEND",
         "items": ["Emergency fact B"],
     }
-    merged = Session._merge_wm_sections(merged, ops2)
+    merged = wm.merge_wm_sections(merged, ops2)
     items2 = _section_items(merged, "Key Facts & Decisions")
     assert len(items2) == 56, f"Sentinel already present — should stay at 56; got {len(items2)}"
     assert "Emergency fact B" not in items2
@@ -562,7 +562,7 @@ def test_antibloat_salvage_bypass_blocked_at_emergency():
         "op": "UPDATE",
         "content": "- Only one bullet.",
     }
-    merged = Session._merge_wm_sections(merged, ops)
+    merged = wm.merge_wm_sections(merged, ops)
     items = _section_items(merged, "Key Facts & Decisions")
     assert len(items) == 55, (
         f"Salvage APPEND should be suppressed at emergency level; got {len(items)}"
@@ -578,6 +578,6 @@ def test_antibloat_nonstring_items_handled():
         "op": "APPEND",
         "items": [123, None, "Valid new fact", True],
     }
-    merged = Session._merge_wm_sections(merged, ops)
+    merged = wm.merge_wm_sections(merged, ops)
     items = _section_items(merged, "Key Facts & Decisions")
     assert "Valid new fact" in items

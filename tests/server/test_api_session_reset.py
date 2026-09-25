@@ -89,7 +89,7 @@ async def test_reset_empty_archive_survives_late_summary_and_next_commit(
         )
         await session.load()
         assert await session.resume_queued_commit(job)
-        assert await session._archive_terminal_state(job.archive_uri) == "completed"
+        assert await session._archives.terminal_state(job.archive_uri) == "completed"
         return session
 
     await add("old task one")
@@ -167,7 +167,7 @@ async def test_reset_write_failure_does_not_block_next_archive(service, monkeypa
         await session.commit_async(reset_context=True)
 
     boundary = f"{session._session_uri}/history/archive_001"
-    assert await session._archive_terminal_state(boundary) == "failed"
+    assert await session._archives.terminal_state(boundary) == "failed"
     assert await session._can_run_archive(2)
     # Retrying reset publishes a new terminal boundary rather than reusing the partial one.
     assert (await session.commit_async(reset_context=True))["reset_context"] is True

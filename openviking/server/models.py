@@ -25,6 +25,12 @@ class Response(BaseModel):
     profile: Optional[list[str]] = None
 
 
+class ListingResponse(Response):
+    """Filesystem listing response with pagination metadata."""
+
+    has_more: bool
+
+
 # Error code to HTTP status code mapping
 ERROR_CODE_TO_HTTP_STATUS = {
     "OK": 200,

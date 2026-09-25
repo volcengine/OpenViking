@@ -142,7 +142,7 @@ class SessionService:
     def _new_session_auto_commit_policy(self) -> Optional[Dict[str, Any]]:
         if self._default_user_auto_commit_policy is not None:
             return dict(self._default_user_auto_commit_policy)
-        if self._session_auto_commit_config.default_enabled:
+        if self._session_auto_commit_config.enabled:
             return AutoCommitPolicy.from_dict(None).to_dict()
         return None
 
@@ -653,7 +653,7 @@ class SessionService:
             return self._message_write_threshold_exceeded(session, policy)
 
         if reason == "idle_timeout":
-            if not self._session_auto_commit_config.idle_enabled:
+            if not self._session_auto_commit_config.enabled:
                 return False
             idle_timeout = get_idle_timeout_seconds(policy)
             if idle_timeout is None or not has_idle_uncommitted_content(session.meta.to_dict()):

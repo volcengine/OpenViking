@@ -1436,11 +1436,9 @@ Legacy compatibility example:
 {
   "memory": {
     "session_auto_commit": {
-      "default_enabled": false,
-      "idle_enabled": false,
-      "check_interval_seconds": 60.0,
-      "scan_batch_size": 16,
-      "scan_batch_pause_seconds": 0.0
+      "enabled": false,
+      "check_interval_seconds": 600.0,
+      "scan_rate_limit_files_per_second": 2.0
     }
   }
 }
@@ -1448,24 +1446,21 @@ Legacy compatibility example:
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `default_enabled` | bool | Enables auto commit by default for newly created sessions that do not explicitly provide `auto_commit_policy`. When `false`, those sessions keep auto commit disabled | `false` |
-| `idle_enabled` | bool | Enables the server-side idle-timeout auto-commit scheduler. When disabled, the idle scheduler is not started. Token- and message-count immediate triggering still works | `false` |
-| `check_interval_seconds` | float | Poll interval for the idle scheduler in seconds. Must be greater than `0` | `60.0` |
-| `scan_batch_size` | int | Maximum number of session meta files read concurrently in each idle scan batch. Must be greater than `0` | `16` |
-| `scan_batch_pause_seconds` | float | Optional pause between idle scan batches, in seconds. Use this to reduce storage pressure during large scans | `0.0` |
+| `enabled` | bool | Master switch for automatic session commits. When enabled, newly created sessions without an explicit `auto_commit_policy` get a default policy, and the idle-timeout background scheduler is started. When disabled, neither happens | `false` |
+| `check_interval_seconds` | float | Minimum interval between two idle scan rounds in seconds. Must be greater than `0` | `600.0` |
+| `scan_rate_limit_files_per_second` | float | Maximum number of session `.meta.json` files read per second during an idle scan. Must be greater than `0`. Bounds background storage IO when the sessions tree is very large | `2.0` |
 
 Notes:
 
 - `memory.session_auto_commit` is a server-wide control surface, not a per-session business policy.
 - Per-session auto-commit behavior is configured through the session-level `auto_commit_policy` (see the table below). Set it when creating a session with `POST /api/v1/sessions`, or partially update it through `PATCH /api/v1/sessions/{session_id}/config`. Omitting `auto_commit_policy` from a PATCH preserves it; sending `null` disables automatic commits. Use `GET /api/v1/sessions/{session_id}` to inspect the effective policy.
-- When `default_enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`. Providing either policy enables auto commit and fills missing fields from the defaults below.
-- When `default_enabled=true`, sessions without an explicit or deployment-default policy get the built-in policy below.
-- When `idle_enabled=false`:
-  - `SessionAutoCommitScheduler` is not started
-- When `idle_enabled=true`:
-  - `SessionAutoCommitScheduler` wakes up periodically and scans session `.meta.json` files under AGFS `/local/{account}/user/{user}/sessions`
-  - It does not perform a dedicated startup recovery sweep; idle detection happens only on periodic scans
-- Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, and are unaffected by this switch.
+- When `enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`; `SessionAutoCommitScheduler` is not started.
+- When `enabled=true`:
+  - Sessions without an explicit or deployment-default policy get the built-in policy below.
+  - `SessionAutoCommitScheduler` starts a scan round immediately, then waits at least `check_interval_seconds` before the next round. If a round already took longer than that interval, the next round starts immediately.
+  - Within a round, session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second` to avoid IO spikes.
+  - It does not perform a dedicated startup recovery sweep; idle detection happens only on periodic scans.
+- Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, but still require the session to carry an `auto_commit_policy`.
 
 ###### Per-session Auto Commit Policy
 

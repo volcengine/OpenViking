@@ -14,7 +14,9 @@ import pytest
 
 from openviking.message.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
-from openviking.session.session import WM_SEVEN_SECTIONS, Session, SessionMeta
+from openviking.session import working_memory as wm
+from openviking.session.session import Session, SessionMeta
+from openviking.session.working_memory import WM_SEVEN_SECTIONS
 
 # -----------------------------------------------------------------------
 # Helpers
@@ -58,20 +60,20 @@ def _calc_pending_tokens(tokens: list, keep_recent_count: int) -> int:
 
 class TestParseWmSections:
     def test_round_trip(self):
-        wm = _make_wm(session_title="My Session", current_state="Idle")
-        parsed = Session._parse_wm_sections(wm)
+        wm_doc = _make_wm(session_title="My Session", current_state="Idle")
+        parsed = wm.parse_wm_sections(wm_doc)
         assert parsed["## Session Title"] == "My Session"
         assert parsed["## Current State"] == "Idle"
         assert parsed.get("## Task & Goals", "") == ""
 
     def test_empty_input(self):
-        assert Session._parse_wm_sections("") == {}
-        assert Session._parse_wm_sections(None) == {}
+        assert wm.parse_wm_sections("") == {}
+        assert wm.parse_wm_sections(None) == {}
 
     def test_multiline_body(self):
         body = "- item 1\n- item 2\n- item 3"
-        wm = _make_wm(key_facts_and_decisions=body)
-        parsed = Session._parse_wm_sections(wm)
+        wm_doc = _make_wm(key_facts_and_decisions=body)
+        parsed = wm.parse_wm_sections(wm_doc)
         assert "item 1" in parsed["## Key Facts & Decisions"]
         assert "item 3" in parsed["## Key Facts & Decisions"]
 
@@ -83,24 +85,24 @@ class TestParseWmSections:
 
 class TestExtractBulletItems:
     def test_dash_bullets(self):
-        items = Session._wm_extract_bullet_items("- foo\n- bar\n- baz")
+        items = wm.wm_extract_bullet_items("- foo\n- bar\n- baz")
         assert items == ["foo", "bar", "baz"]
 
     def test_numbered_list(self):
-        items = Session._wm_extract_bullet_items("1. first\n2. second\n3) third")
+        items = wm.wm_extract_bullet_items("1. first\n2. second\n3) third")
         assert items == ["first", "second", "third"]
 
     def test_plain_lines(self):
-        items = Session._wm_extract_bullet_items("plain line one\nplain line two")
+        items = wm.wm_extract_bullet_items("plain line one\nplain line two")
         assert items == ["plain line one", "plain line two"]
 
     def test_skips_headings_and_blank(self):
-        items = Session._wm_extract_bullet_items("# heading\n\n- real")
+        items = wm.wm_extract_bullet_items("# heading\n\n- real")
         assert items == ["real"]
 
     def test_empty(self):
-        assert Session._wm_extract_bullet_items("") == []
-        assert Session._wm_extract_bullet_items(None) == []
+        assert wm.wm_extract_bullet_items("") == []
+        assert wm.wm_extract_bullet_items(None) == []
 
 
 # =======================================================================
@@ -111,33 +113,33 @@ class TestExtractBulletItems:
 class TestEnforceAppendOnly:
     def test_keep_passes_through(self):
         op = {"op": "KEEP"}
-        result = Session._wm_enforce_append_only("Key Facts & Decisions", op, "- old fact")
+        result = wm.wm_enforce_append_only("Key Facts & Decisions", op, "- old fact")
         assert result == {"op": "KEEP"}
 
     def test_append_passes_through(self):
         op = {"op": "APPEND", "items": ["new item"]}
-        result = Session._wm_enforce_append_only("Key Facts & Decisions", op, "- old fact")
+        result = wm.wm_enforce_append_only("Key Facts & Decisions", op, "- old fact")
         assert result == op
 
     def test_update_demoted_to_append(self):
         old = "- existing fact"
         op = {"op": "UPDATE", "content": "- existing fact\n- brand new fact"}
-        result = Session._wm_enforce_append_only("Key Facts & Decisions", op, old)
+        result = wm.wm_enforce_append_only("Key Facts & Decisions", op, old)
         assert result["op"] == "APPEND"
         assert "brand new fact" in result["items"]
 
     def test_update_with_all_duplicates_becomes_keep(self):
         old = "- fact alpha\n- fact beta"
         op = {"op": "UPDATE", "content": "- fact alpha\n- fact beta"}
-        result = Session._wm_enforce_append_only("Key Facts & Decisions", op, old)
+        result = wm.wm_enforce_append_only("Key Facts & Decisions", op, old)
         assert result["op"] == "KEEP"
 
     def test_none_op_becomes_keep(self):
-        result = Session._wm_enforce_append_only("Errors & Corrections", None, "old")
+        result = wm.wm_enforce_append_only("Errors & Corrections", None, "old")
         assert result == {"op": "KEEP"}
 
     def test_unknown_op_becomes_keep(self):
-        result = Session._wm_enforce_append_only("Errors & Corrections", {"op": "DELETE"}, "old")
+        result = wm.wm_enforce_append_only("Errors & Corrections", {"op": "DELETE"}, "old")
         assert result == {"op": "KEEP"}
 
 
@@ -148,7 +150,7 @@ class TestEnforceAppendOnly:
 
 class TestEnforceFilesNoRegression:
     def test_keep_passes_through(self):
-        result = Session._wm_enforce_files_no_regression({"op": "KEEP"}, "- src/main.py")
+        result = wm.wm_enforce_files_no_regression({"op": "KEEP"}, "- src/main.py")
         assert result == {"op": "KEEP"}
 
     def test_update_preserving_all_paths(self):
@@ -157,19 +159,19 @@ class TestEnforceFilesNoRegression:
             "op": "UPDATE",
             "content": "- src/main.py updated\n- config.yaml stays\n- new.ts added",
         }
-        result = Session._wm_enforce_files_no_regression(op, old)
+        result = wm.wm_enforce_files_no_regression(op, old)
         assert result["op"] == "UPDATE"
 
     def test_update_dropping_path_rejected(self):
         old = "- src/main.py\n- src/utils.ts\n- config.yaml"
         op = {"op": "UPDATE", "content": "- src/main.py\n- config.yaml"}
-        result = Session._wm_enforce_files_no_regression(op, old)
+        result = wm.wm_enforce_files_no_regression(op, old)
         assert result["op"] in ("KEEP", "APPEND")
 
     def test_update_dropping_path_but_adding_new(self):
         old = "- src/main.py\n- src/utils.ts"
         op = {"op": "UPDATE", "content": "- src/main.py\n- brand_new/file.go"}
-        result = Session._wm_enforce_files_no_regression(op, old)
+        result = wm.wm_enforce_files_no_regression(op, old)
         assert result["op"] in ("KEEP", "APPEND")
         if result["op"] == "APPEND":
             items_text = " ".join(result.get("items", []))
@@ -177,11 +179,11 @@ class TestEnforceFilesNoRegression:
 
     def test_append_passes_through(self):
         op = {"op": "APPEND", "items": ["new_dir/new_file.rs"]}
-        result = Session._wm_enforce_files_no_regression(op, "- src/main.py")
+        result = wm.wm_enforce_files_no_regression(op, "- src/main.py")
         assert result == op
 
     def test_none_op(self):
-        result = Session._wm_enforce_files_no_regression(None, "old")
+        result = wm.wm_enforce_files_no_regression(None, "old")
         assert result == {"op": "KEEP"}
 
 
@@ -192,33 +194,33 @@ class TestEnforceFilesNoRegression:
 
 class TestEnforceTitleStability:
     def test_keep_passes_through(self):
-        result = Session._wm_enforce_title_stability({"op": "KEEP"}, "old title")
+        result = wm.wm_enforce_title_stability({"op": "KEEP"}, "old title")
         assert result == {"op": "KEEP"}
 
     def test_update_with_overlap_accepted(self):
         op = {"op": "UPDATE", "content": "Debug Session Refinement"}
-        result = Session._wm_enforce_title_stability(op, "Debug Session Setup")
+        result = wm.wm_enforce_title_stability(op, "Debug Session Setup")
         assert result["op"] == "UPDATE"
 
     def test_update_with_zero_overlap_rejected(self):
         op = {"op": "UPDATE", "content": "Completely Different Topic"}
-        result = Session._wm_enforce_title_stability(op, "Database Migration Plan")
+        result = wm.wm_enforce_title_stability(op, "Database Migration Plan")
         assert result == {"op": "KEEP"}
 
     def test_empty_old_title_accepts_anything(self):
         op = {"op": "UPDATE", "content": "Brand New Title"}
-        result = Session._wm_enforce_title_stability(op, "")
+        result = wm.wm_enforce_title_stability(op, "")
         assert result["op"] == "UPDATE"
 
     def test_stopwords_only_old_title_accepts(self):
         """When old title has NO meaningful words (all stopwords), any update is accepted."""
         op = {"op": "UPDATE", "content": "The Plan for Notes"}
-        result = Session._wm_enforce_title_stability(op, "A Session Title")
+        result = wm.wm_enforce_title_stability(op, "A Session Title")
         assert result["op"] == "UPDATE"
 
     def test_meaningful_words_no_overlap_rejected(self):
         op = {"op": "UPDATE", "content": "React Components"}
-        result = Session._wm_enforce_title_stability(op, "Python Migration Tools")
+        result = wm.wm_enforce_title_stability(op, "Python Migration Tools")
         assert result == {"op": "KEEP"}
 
 
@@ -234,20 +236,20 @@ class TestEnforceOpenIssuesResolved:
             "- bug in auth module (investigating)\n- slow query on /api/users\n- new: memory leak"
         )
         op = {"op": "UPDATE", "content": new_content}
-        result = Session._wm_enforce_open_issues_resolved(op, old)
+        result = wm.wm_enforce_open_issues_resolved(op, old)
         assert result["op"] == "UPDATE"
         assert "memory leak" in result["content"]
 
     def test_update_silently_dropping_item_restores(self):
         old = "- bug in auth module\n- slow query on /api/users"
         op = {"op": "UPDATE", "content": "- slow query on /api/users"}
-        result = Session._wm_enforce_open_issues_resolved(op, old)
+        result = wm.wm_enforce_open_issues_resolved(op, old)
         assert result["op"] == "UPDATE"
         assert "silently dropped, restored" in result["content"]
         assert "bug in auth" in result["content"]
 
     def test_keep_passes_through(self):
-        result = Session._wm_enforce_open_issues_resolved({"op": "KEEP"}, "old")
+        result = wm.wm_enforce_open_issues_resolved({"op": "KEEP"}, "old")
         assert result == {"op": "KEEP"}
 
     def test_already_restored_item_not_restored_again(self):
@@ -255,7 +257,7 @@ class TestEnforceOpenIssuesResolved:
         restored a second time -- they had their chance."""
         old = "- [silently dropped, restored] stale follow-up issue\n- fresh unresolved bug"
         op = {"op": "UPDATE", "content": "- fresh unresolved bug"}
-        result = Session._wm_enforce_open_issues_resolved(op, old)
+        result = wm.wm_enforce_open_issues_resolved(op, old)
         assert "stale follow-up" not in result["content"]
         assert "fresh unresolved bug" in result["content"]
 
@@ -266,7 +268,7 @@ class TestEnforceOpenIssuesResolved:
             "- [silently dropped, restored] [silently dropped, restored] old issue\n- active issue"
         )
         op = {"op": "UPDATE", "content": "- active issue"}
-        result = Session._wm_enforce_open_issues_resolved(op, old)
+        result = wm.wm_enforce_open_issues_resolved(op, old)
         assert "old issue" not in result["content"]
         assert "active issue" in result["content"]
 
@@ -275,7 +277,7 @@ class TestEnforceOpenIssuesResolved:
         the marker exactly once."""
         old = "- never-restored issue\n- kept issue"
         op = {"op": "UPDATE", "content": "- kept issue"}
-        result = Session._wm_enforce_open_issues_resolved(op, old)
+        result = wm.wm_enforce_open_issues_resolved(op, old)
         assert "[silently dropped, restored]" in result["content"]
         assert "never-restored issue" in result["content"]
 
@@ -289,7 +291,7 @@ class TestMergeWmSections:
     def test_all_keep(self):
         old = _make_wm(session_title="Title", current_state="Working")
         ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
-        result = Session._merge_wm_sections(old, ops)
+        result = wm.merge_wm_sections(old, ops)
         assert "## Session Title" in result
         assert "Title" in result
         assert "Working" in result
@@ -298,7 +300,7 @@ class TestMergeWmSections:
         old = _make_wm(current_state="Idle")
         ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
         ops["Current State"] = {"op": "UPDATE", "content": "Active debugging"}
-        result = Session._merge_wm_sections(old, ops)
+        result = wm.merge_wm_sections(old, ops)
         assert "Active debugging" in result
         assert "Idle" not in result
 
@@ -306,14 +308,14 @@ class TestMergeWmSections:
         old = _make_wm(open_issues="- existing issue")
         ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
         ops["Open Issues"] = {"op": "APPEND", "items": ["new issue found"]}
-        result = Session._merge_wm_sections(old, ops)
+        result = wm.merge_wm_sections(old, ops)
         assert "existing issue" in result
         assert "new issue found" in result
 
     def test_missing_section_defaults_to_keep(self):
         old = _make_wm(session_title="Original Title")
         ops = {}
-        result = Session._merge_wm_sections(old, ops)
+        result = wm.merge_wm_sections(old, ops)
         assert "Original Title" in result
 
     def test_guard_key_facts_update_accepted_when_no_anchors(self):
@@ -322,7 +324,7 @@ class TestMergeWmSections:
         old = _make_wm(key_facts_and_decisions="- fact A\n- fact B")
         ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
         ops["Key Facts & Decisions"] = {"op": "UPDATE", "content": "- fact A\n- fact C"}
-        result = Session._merge_wm_sections(old, ops)
+        result = wm.merge_wm_sections(old, ops)
         assert "fact A" in result
         assert "fact C" in result
         assert "fact B" not in result
@@ -331,20 +333,20 @@ class TestMergeWmSections:
         old = _make_wm(session_title="Database Migration Plan")
         ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
         ops["Session Title"] = {"op": "UPDATE", "content": "Completely Unrelated Topic"}
-        result = Session._merge_wm_sections(old, ops)
+        result = wm.merge_wm_sections(old, ops)
         assert "Database Migration Plan" in result
         assert "Completely Unrelated Topic" not in result
 
     def test_all_seven_sections_present(self):
         old = _make_wm()
         ops = {s: {"op": "KEEP"} for s in WM_SEVEN_SECTIONS}
-        result = Session._merge_wm_sections(old, ops)
+        result = wm.merge_wm_sections(old, ops)
         for section in WM_SEVEN_SECTIONS:
             assert f"## {section}" in result
 
     def test_none_ops(self):
         old = _make_wm(session_title="Keep Me")
-        result = Session._merge_wm_sections(old, None)
+        result = wm.merge_wm_sections(old, None)
         assert "Keep Me" in result
         for section in WM_SEVEN_SECTIONS:
             assert f"## {section}" in result
@@ -358,19 +360,19 @@ class TestMergeWmSections:
 class TestWmRecoverOpsFromRaw:
     def test_recover_keep_ops(self):
         raw = '"Session Title": {"op": "KEEP"}, "Current State": {"op": "KEEP"}'
-        ops = Session._wm_recover_ops_from_raw(raw)
+        ops = wm.wm_recover_ops_from_raw(raw)
         assert ops["Session Title"] == {"op": "KEEP"}
         assert ops["Current State"] == {"op": "KEEP"}
 
     def test_recover_update_op(self):
         raw = '"Current State": {"op": "UPDATE", "content": "Now debugging auth"}'
-        ops = Session._wm_recover_ops_from_raw(raw)
+        ops = wm.wm_recover_ops_from_raw(raw)
         assert ops["Current State"]["op"] == "UPDATE"
         assert "debugging auth" in ops["Current State"]["content"]
 
     def test_recover_append_op(self):
         raw = '"Open Issues": {"op": "APPEND", "items": ["new bug", "another issue"]}'
-        ops = Session._wm_recover_ops_from_raw(raw)
+        ops = wm.wm_recover_ops_from_raw(raw)
         assert ops["Open Issues"]["op"] == "APPEND"
         assert "new bug" in ops["Open Issues"]["items"]
         assert "another issue" in ops["Open Issues"]["items"]
@@ -381,19 +383,19 @@ class TestWmRecoverOpsFromRaw:
             '"Current State": {"op": "UPDATE", "content": "active"}, '
             '"Open Issues": {"op": "APPEND", "items": ["todo"]}'
         )
-        ops = Session._wm_recover_ops_from_raw(raw)
+        ops = wm.wm_recover_ops_from_raw(raw)
         assert len(ops) == 3
         assert ops["Session Title"]["op"] == "KEEP"
         assert ops["Current State"]["op"] == "UPDATE"
         assert ops["Open Issues"]["op"] == "APPEND"
 
     def test_empty_input(self):
-        assert Session._wm_recover_ops_from_raw("") == {}
-        assert Session._wm_recover_ops_from_raw(None) == {}
+        assert wm.wm_recover_ops_from_raw("") == {}
+        assert wm.wm_recover_ops_from_raw(None) == {}
 
     def test_partial_recovery(self):
         raw = '"Session Title": {"op": "KEEP"}, garbled content here...'
-        ops = Session._wm_recover_ops_from_raw(raw)
+        ops = wm.wm_recover_ops_from_raw(raw)
         assert "Session Title" in ops
         assert len(ops) >= 1
 
@@ -402,12 +404,12 @@ class TestWmRecoverOpsFromRaw:
             '"Session Title": {"op": "KEEP"}, '
             '"Current State": {"op": "UPDATE", "content": "partial content '
         )
-        ops = Session._wm_recover_ops_from_raw(raw)
+        ops = wm.wm_recover_ops_from_raw(raw)
         assert "Session Title" in ops
 
     def test_escaped_content(self):
         raw = r'"Current State": {"op": "UPDATE", "content": "line1\nline2 with \"quotes\""}'
-        ops = Session._wm_recover_ops_from_raw(raw)
+        ops = wm.wm_recover_ops_from_raw(raw)
         assert ops["Current State"]["op"] == "UPDATE"
         assert "line1" in ops["Current State"]["content"]
 
@@ -486,8 +488,8 @@ class TestIsWmV2Detection:
         return bool(overview) and any(f"## {s}" in overview for s in WM_SEVEN_SECTIONS)
 
     def test_valid_v2(self):
-        wm = _make_wm(session_title="Test")
-        assert self._is_wm_v2(wm) is True
+        wm_doc = _make_wm(session_title="Test")
+        assert self._is_wm_v2(wm_doc) is True
 
     def test_legacy_format(self):
         legacy = "Session overview: this is a legacy format with no sections"
@@ -518,19 +520,19 @@ class TestIsWmV2Detection:
 
 class TestWmPathLikeRe:
     def test_python_file(self):
-        assert Session._WM_PATH_LIKE_RE.search("src/main.py")
+        assert wm._WM_PATH_LIKE_RE.search("src/main.py")
 
     def test_typescript_file(self):
-        assert Session._WM_PATH_LIKE_RE.search("components/App.tsx")
+        assert wm._WM_PATH_LIKE_RE.search("components/App.tsx")
 
     def test_deep_path(self):
-        assert Session._WM_PATH_LIKE_RE.search("openviking/session/session")
+        assert wm._WM_PATH_LIKE_RE.search("openviking/session/session")
 
     def test_yaml_file(self):
-        assert Session._WM_PATH_LIKE_RE.search("config.yaml")
+        assert wm._WM_PATH_LIKE_RE.search("config.yaml")
 
     def test_no_match_plain_word(self):
-        assert not Session._WM_PATH_LIKE_RE.search("hello")
+        assert not wm._WM_PATH_LIKE_RE.search("hello")
 
 
 # =======================================================================
@@ -577,7 +579,7 @@ class TestAppendNonStringItems:
             "Errors & Corrections": {"op": "KEEP"},
             "Open Issues": {"op": "APPEND", "items": ["valid item", 42, None, {"bad": True}]},
         }
-        merged = Session._merge_wm_sections(old_wm, ops)
+        merged = wm.merge_wm_sections(old_wm, ops)
         assert "valid item" in merged
         assert "Existing issue" in merged
         assert "42" not in merged
@@ -593,7 +595,7 @@ class TestAppendNonStringItems:
             "Errors & Corrections": {"op": "KEEP"},
             "Open Issues": {"op": "APPEND", "items": []},
         }
-        merged = Session._merge_wm_sections(old_wm, ops)
+        merged = wm.merge_wm_sections(old_wm, ops)
         assert "Existing issue" in merged
 
 
@@ -608,7 +610,7 @@ class TestMergeWmSectionsEdgeCases:
             session_title="Original Title",
             current_state="Running",
         )
-        merged = Session._merge_wm_sections(old_wm, {})
+        merged = wm.merge_wm_sections(old_wm, {})
         assert "Original Title" in merged
         assert "Running" in merged
 
@@ -623,7 +625,7 @@ class TestMergeWmSectionsEdgeCases:
             "Errors & Corrections": {"op": "KEEP"},
             "Open Issues": {"op": "KEEP"},
         }
-        merged = Session._merge_wm_sections(old_wm, ops)
+        merged = wm.merge_wm_sections(old_wm, ops)
         assert "Running" in merged
 
     def test_all_sections_update(self):
@@ -640,7 +642,7 @@ class TestMergeWmSectionsEdgeCases:
             "Errors & Corrections": {"op": "KEEP"},
             "Open Issues": {"op": "UPDATE", "content": "- New issue"},
         }
-        merged = Session._merge_wm_sections(old_wm, ops)
+        merged = wm.merge_wm_sections(old_wm, ops)
         assert "New State" in merged
         assert "New Goals" in merged
 
@@ -656,11 +658,11 @@ def _msg(role, parts):
 
 
 class TestFormatMessageForWm:
-    """Tests for Session._format_message_for_wm."""
+    """Tests for wm.format_message_for_wm."""
 
     def test_text_only(self):
         m = _msg("user", [TextPart(text="Hello world")])
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         assert result == "[user]: Hello world"
 
     def test_tool_part_included(self):
@@ -672,7 +674,7 @@ class TestFormatMessageForWm:
                 ),
             ],
         )
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         assert "[tool:search (completed)]" in result
         assert "found 3 results" in result
         assert result.startswith("[assistant]:")
@@ -691,7 +693,7 @@ class TestFormatMessageForWm:
             [ToolPart(tool_name="view_image", tool_status="completed", tool_output=output)],
         )
 
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
 
         assert "before" in result
         assert "after" in result
@@ -706,7 +708,7 @@ class TestFormatMessageForWm:
             [ToolPart(tool_name="view_image", tool_status="completed", tool_output=malformed)],
         )
 
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
 
         assert malformed in result
         assert "inline image omitted" not in result
@@ -718,7 +720,7 @@ class TestFormatMessageForWm:
                 ContextPart(abstract="Summary of prior session"),
             ],
         )
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         assert "[context] Summary of prior session" in result
 
     def test_mixed_parts(self):
@@ -734,7 +736,7 @@ class TestFormatMessageForWm:
                 TextPart(text="Done reading."),
             ],
         )
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         lines = result.split("\n")
         assert lines[0] == "[assistant]: Let me check."
         assert "[tool:read_file (completed)]" in lines[1]
@@ -742,12 +744,12 @@ class TestFormatMessageForWm:
 
     def test_empty_parts(self):
         m = _msg("user", [])
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         assert "(no content)" in result
 
     def test_whitespace_only_text_skipped(self):
         m = _msg("user", [TextPart(text="   ")])
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         assert "(no content)" in result
 
     def test_tool_with_empty_output(self):
@@ -757,7 +759,7 @@ class TestFormatMessageForWm:
                 ToolPart(tool_name="delete", tool_status="completed", tool_output=""),
             ],
         )
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         assert "[tool:delete (completed)]" in result
 
     def test_tool_default_status(self):
@@ -767,7 +769,7 @@ class TestFormatMessageForWm:
                 ToolPart(tool_name="run", tool_output="ok"),
             ],
         )
-        result = Session._format_message_for_wm(m)
+        result = wm.format_message_for_wm(m)
         assert "(pending)" in result
 
 
@@ -790,10 +792,17 @@ async def test_hydrated_extraction_output_redacts_inline_images():
         async def read(self, _tool_result_id, **_kwargs):
             return {"content": f"before data:image/png;base64,{image_data} after"}
 
-    session = Session.__new__(Session)
-    session._tool_result_store = lambda: Store()
+    from openviking.session.tool_output_externalizer import ToolOutputExternalizer
 
-    hydrated = await session._hydrate_tool_outputs_for_extraction([original])
+    externalizer = ToolOutputExternalizer(
+        viking_fs=object(),
+        session_uri="viking://user/test/sessions/test",
+        session_id="test",
+        ctx=None,
+    )
+    externalizer.tool_result_store = lambda: Store()
+
+    hydrated = await externalizer.hydrate_for_extraction([original])
 
     assert original.parts[0].tool_output == "externalized preview"
     assert image_data not in hydrated[0].parts[0].tool_output

@@ -8,25 +8,37 @@ description: Deploy VikingDB and OpenViking through configuration preview, Vikin
 
 Deploy VikingDB and OpenViking in your own Kubernetes cluster using the deployment package. Complete the [deployment checklist](19-deployment-checklist.md) first. For Python, Docker, or the open-source Helm chart, see [server deployment](03-deployment.md).
 
-## 1. Prepare materials and configuration directories
+## 1. Get materials and sync images
 
-After extracting the package, check `bin/ovadmin`, `viking-docs/`, and the delivery manifest. The ZIP contains the CLI and documentation; **it does not contain all runtime images**. If a `vikinglist` is supplied, it can download additional materials. Skip material downloads when images have already been synchronized.
+Deployment materials are available on request. Register your email through the [commercial editions form](https://github.com/volcengine/openviking/#commercial-editions). After review, the package download link and a trial license are sent to that email.
 
-Run these commands on the target deployment host. Replace all placeholders. `ovadmin` manages the deployment; `ov` is the application client CLI.
+After extracting the package, check `bin/ovadmin`, `viking-docs/`, and the delivery manifest. The package contains only the CLI and documentation. Download the runtime images listed in `vikinglist`, then import them into the customer Registry. Skip this section if the images are already in your Registry.
+
+Run these commands on the deployment host. Replace all placeholders. `ovadmin` manages the deployment; `ov` is the application client CLI.
 
 ```bash
 export VIKING_HOME=/opt/viking-deploy
 export CONFIG_DIR=/opt/viking-deploy/conf
+export MATERIAL_DIR=/opt/viking-deploy/materials
+export IMAGE_REGISTRY='<registry.example.com/team/viking>'
 export PATH="${VIKING_HOME}/bin:${PATH}"
 
 ovadmin version --output json
 
-# Only when downloading through a material manifest: review first
+# Download image archives into ${MATERIAL_DIR}/repo
 ovadmin material download --listfile "${VIKING_HOME}/vikinglist" \
-  --output-dir "${VIKING_HOME}/materials" --dry-run
+  --output-dir "${MATERIAL_DIR}"
+
+# Log in to the Registry first (docker login or skopeo login), then import and verify
+ovadmin material import-registry --repo-dir "${MATERIAL_DIR}/repo" \
+  --registry "${IMAGE_REGISTRY}"
+ovadmin material check-registry --listfile "${VIKING_HOME}/vikinglist" \
+  --image-registry "${IMAGE_REGISTRY}"
 ```
 
-After reviewing the download plan, remove `--dry-run` to fetch materials, then import images into the customer Registry following the package manual. Isolated environments also require import tools, infrastructure dependencies, model services, and a license renewal / telemetry return plan. Downloading the ZIP alone does not make the system offline-ready.
+Download URLs in `vikinglist` are signed and expire. If you get `HTTP 403`, ask the delivery team for a fresh list. If the deployment host cannot reach the URLs, download on a connected machine and copy the `repo` directory over. Without a Docker daemon, run `skopeo login` and add `--skopeo-bin "$(command -v skopeo)"` to `import-registry`. Tags that already exist in the Registry are skipped, so reruns are safe. Continue once `check-registry` reports no missing images.
+
+Isolated environments also need infrastructure dependencies, model services, and a license renewal / telemetry return plan. Having the images in place does not make the system fully offline-ready.
 
 ## 2. Generate and edit configuration
 
@@ -34,7 +46,7 @@ After reviewing the download plan, remove `--dry-run` to fetch materials, then i
 ovadmin init config \
   --dir "${CONFIG_DIR}" \
   --profile cluster \
-  --image-registry '<registry.example.com/team/viking>' \
+  --image-registry "${IMAGE_REGISTRY}" \
   --image-pull-secret viking-registry-secret \
   --openviking-storage-class '<storage-class-name>'
 ```
@@ -52,7 +64,15 @@ Edit the generated configuration before deploying:
 
 The full image prefix includes the repository path. Use Operator image names from the manifest: this release uses `vikingdb_operator` and `openviking_operator`, with underscores. Use tags from the delivery set, not old example tags.
 
-Check namespaces, external Secret / ConfigMap references, node labels, and StorageClass. Complete dependency initialization using the bundled infrastructure requirements. Run preflight checks and initialize pull Secrets for namespaces configured in the delivery:
+Label nodes for scheduling. `cluster` needs at least 2 online nodes and 1 offline node; `standalone` schedules components on online nodes.
+
+```bash
+kubectl label node '<node-name>' nodeLevel=online --overwrite
+kubectl label node '<offline-node-name>' nodeLevel=offline --overwrite
+kubectl get nodes -L nodeLevel
+```
+
+Then check namespaces, external Secret / ConfigMap references, and StorageClass. Complete dependency initialization using the bundled infrastructure requirements. Run preflight checks and initialize pull Secrets for namespaces configured in the delivery:
 
 ```bash
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" check
@@ -73,12 +93,19 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" setup apply \
   --module vikingdb --dir "${CONFIG_DIR}" --yes
 ```
 
-When licensing is enabled, the first apply may exit while waiting for License Active. Before importing, the `VikingDbCluster` CRD and target CR must exist, and the Operator must have completed its first status synchronization. Import the license bound to this cluster using the package's licensing procedure, then repeat apply with the same configuration:
+When licensing is enabled, the first apply may exit while waiting for License Active. By then the `VikingDbCluster` CR exists. After the Operator completes its first status sync, generate a fingerprint for this cluster, send it to the license issuer for a `.vlic`, import it, and repeat apply with the same configuration:
 
 ```bash
-ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license import --file '<license.vlic>'
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license fingerprint \
+  --system-namespace viking-system --out fingerprint.json
+
+# After receiving a .vlic issued for this cluster's fingerprint
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license import \
+  --system-namespace viking-system --file '<license.vlic>'
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license status
 ```
+
+The `.vlic` must be issued from this cluster's `fingerprint.json`. A fingerprint from another cluster, or an edited file, fails verification.
 
 Skip licensing steps when licensing is disabled. Verify VikingDB before proceeding:
 
@@ -92,7 +119,40 @@ Replace `vikingdb` if your cluster has a different name. Smoke tests create test
 
 ## 4. Deploy OpenViking and create a Workspace
 
-Skip this step for a VikingDB-only delivery. Prepare the release's ConfigMap Template and model Secret Template, then preview and install the OpenViking Operator:
+Skip this step for a VikingDB-only delivery.
+
+First write the model configuration into a Secret Template. It uses the same structure as `ov.conf`. The example below uses the default Volcengine Ark models, with a `1024`-dimension embedding. For other model services, also check the API protocol and dimension; see [model integration checks](19-deployment-checklist.md#model-integration-checks).
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "volcengine",
+      "model": "doubao-embedding-vision-251215",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "<embedding-api-key>",
+      "dimension": 1024,
+      "input": "multimodal"
+    }
+  },
+  "vlm": {
+    "provider": "volcengine",
+    "model": "doubao-seed-2-0-lite-260428",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<vlm-api-key>"
+  }
+}
+```
+
+Save it as `ov.conf.secret`, load it into a Secret, then delete the local plaintext file:
+
+```bash
+kubectl -n vikingdb create secret generic openviking-secrets \
+  --from-file=ov.conf.secret=ov.conf.secret \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Then preview and install the OpenViking Operator, and create the workspace:
 
 ```bash
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" setup apply \
@@ -107,7 +167,7 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" workspace create "${WORKSPACE_NAME}" \
   --namespace vikingdb \
   --image '<runtime-image-from-delivery-manifest>' \
   --conf-template '<configmap-template-name>' \
-  --conf-secret '<secret-template-name>' \
+  --conf-secret openviking-secrets \
   --wait
 
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" workspace get "${WORKSPACE_NAME}"
@@ -133,15 +193,16 @@ The generated configuration contains a Root API Key for initialization and admin
 
 For an in-cluster client, use `gen-conf --endpoint-type service`. For an external client, supply a reachable entry point with `--endpoint '<openviking-endpoint>'`. Generating configuration does not create Ingress, TLS, or a load balancer. Add `--force` only after deciding to overwrite an existing output file.
 
-Record all applicable acceptance results:
+The deployment is complete when all of the following hold:
 
-- Materials and running versions match; the deployment preview matches the target environment.
-- `VikingDbCluster` is Ready for its current generation; License is Active when enabled.
-- `OpenVikingWorkspace` is Ready when OpenViking is deployed.
-- `doctor` passes; each delivered product passes its own P0 smoke.
+- All nodes are `Ready`, and no application Pod is `Pending`, in `ImagePullBackOff`, or restarting repeatedly.
+- `check-registry` reports no missing images; materials and running versions match.
+- `VikingDbCluster` is Ready for its current generation; `OpenVikingWorkspace` is Ready when OpenViking is deployed.
+- With licensing enabled, `license status vikingdb` shows State `Active`, and the `viking-license-verdict` Secret exists in the application namespace.
+- `doctor` passes, and VikingDB P0 and OpenViking P0 each pass.
 - The application client can authenticate, import, read, and retrieve through its actual endpoint.
 
-VikingDB P0 does not replace OpenViking P0. Running Pods do not replace these checks. These checks do not establish capacity, recoverability, or high availability.
+Running Pods do not replace these checks, and these checks do not establish capacity, recoverability, or high availability. After deployment, connect with the generated client configuration using the [CLI quickstart](../getting-started/02-quickstart.md).
 
 ## Bundled reference manuals
 

@@ -21,6 +21,7 @@ import contextvars
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import PurePosixPath
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
@@ -29,9 +30,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
     AudioContent,
+    CallToolResult,
     ContentBlock,
     ImageContent,
     TextContent,
+    ToolAnnotations,
 )
 from pydantic import BaseModel, Field
 from starlette.requests import Request
@@ -245,6 +248,81 @@ mcp = FastMCP(
     stateless_http=True,
 )
 
+# Each static profile describes the tool's most consequential supported mode.
+_READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
+
+class _MCPToolFailure(str):
+    """Mark a returned string as a whole-call tool execution failure."""
+
+
+def _mcp_failure(message: str) -> _MCPToolFailure:
+    return _MCPToolFailure(message)
+
+
+def _mcp_error_results(*, structured_output: bool = True):
+    """Adapt an already registered tool to return explicit MCP errors.
+
+    Apply this above ``@mcp.tool`` so the literal registration remains the
+    authoritative tool list. Direct Python calls keep the existing return value.
+    The registered MCP handler converts only ``_MCPToolFailure`` values to
+    ``CallToolResult(isError=True)``.
+    """
+
+    def decorator(func):
+        registered_tool = mcp._tool_manager.get_tool(func.__name__)
+        if registered_tool is None:
+            raise RuntimeError(f"MCP tool is not registered: {func.__name__}")
+
+        @wraps(func)
+        async def wire_handler(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            if not isinstance(result, _MCPToolFailure):
+                return result
+
+            message = str(result)
+            return CallToolResult(
+                content=[TextContent(type="text", text=message)],
+                structuredContent={"result": message} if structured_output else None,
+                isError=True,
+            )
+
+        # Keep the schema and metadata produced by the literal @mcp.tool
+        # registration. Only replace the callable used at the wire boundary.
+        registered_tool.fn = wire_handler
+
+        @wraps(func)
+        async def direct_handler(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            return str(result) if isinstance(result, _MCPToolFailure) else result
+
+        return direct_handler
+
+    return decorator
+
 
 # -- find / search ---------------------------------------------------------
 
@@ -258,7 +336,7 @@ def _resolve_context_type_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def find(
     query: str,
     target_uri: str = "",
@@ -311,7 +389,7 @@ _MCP_CONTEXT_ONLY_ALIASES = {
 }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def search(
     query: str,
     target_uri: str = "",
@@ -634,7 +712,8 @@ def _mcp_media_download_hint(uri: str) -> str:
     )
 
 
-@mcp.tool(structured_output=False)
+@_mcp_error_results(structured_output=False)
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
 async def read(
     uris: str | list[str],
     offset: int = 0,
@@ -648,7 +727,9 @@ async def read(
     uri_list = uris if isinstance(uris, list) else [uris]
     semaphore = asyncio.Semaphore(10)
 
-    async def _preflight_one(uri: str) -> tuple[str, Optional[int], Optional[str]]:
+    async def _preflight_one(
+        uri: str,
+    ) -> tuple[str, Optional[int], Optional[_MCPToolFailure]]:
         """Resolve a URI and stat media before any binary bytes are loaded."""
         try:
             resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -664,15 +745,19 @@ async def read(
                 return (
                     resolved_uri,
                     None,
-                    f"Cannot render {uri}: URI points to a directory. "
-                    "Use the list tool (or `ov ls` / `ov tree`) to browse its contents.",
+                    _mcp_failure(
+                        f"Cannot render {uri}: URI points to a directory. "
+                        "Use the list tool (or `ov ls` / `ov tree`) to browse its contents."
+                    ),
                 )
             if is_video:
                 return (
                     resolved_uri,
                     None,
-                    f"Cannot render {uri}: MCP has no standard VideoContent block. "
-                    f"{_mcp_media_download_hint(uri)}",
+                    _mcp_failure(
+                        f"Cannot render {uri}: MCP has no standard VideoContent block. "
+                        f"{_mcp_media_download_hint(uri)}"
+                    ),
                 )
 
             size = stat.get("size") if stat else None
@@ -680,25 +765,27 @@ async def read(
                 return (
                     resolved_uri,
                     None,
-                    f"Cannot render {uri}: file size is unavailable. "
-                    f"{_mcp_media_download_hint(uri)}",
+                    _mcp_failure(
+                        f"Cannot render {uri}: file size is unavailable. "
+                        f"{_mcp_media_download_hint(uri)}"
+                    ),
                 )
             return resolved_uri, size, None
         except OpenVikingError as exc:
-            return uri, None, str(exc)
+            return uri, None, _mcp_failure(str(exc))
 
     preflight = await asyncio.gather(*[_preflight_one(uri) for uri in uri_list])
-    checked: list[tuple[str, Optional[int], Optional[str]]] = []
+    checked: list[tuple[str, Optional[int], Optional[_MCPToolFailure]]] = []
     media_total = 0
     for uri, (resolved_uri, size, error) in zip(uri_list, preflight, strict=True):
         if error is None and size is not None:
             if size > _MCP_MEDIA_MAX_BYTES:
-                error = (
+                error = _mcp_failure(
                     f"Media file is too large to inline through MCP ({size} bytes; limit "
                     f"{_MCP_MEDIA_MAX_BYTES} bytes). {_mcp_media_download_hint(uri)}"
                 )
             elif media_total + size > _MCP_MEDIA_MAX_BYTES:
-                error = (
+                error = _mcp_failure(
                     f"Cannot inline {uri}: combined media size would exceed the MCP tool-call "
                     f"limit of {_MCP_MEDIA_MAX_BYTES} bytes. Read fewer media files at once. "
                     f"{_mcp_media_download_hint(uri)}"
@@ -708,7 +795,7 @@ async def read(
         checked.append((resolved_uri, size, error))
 
     async def _read_one(
-        uri: str, prepared: tuple[str, Optional[int], Optional[str]]
+        uri: str, prepared: tuple[str, Optional[int], Optional[_MCPToolFailure]]
     ) -> str | ContentBlock:
         async with semaphore:
             try:
@@ -720,7 +807,7 @@ async def read(
                 if is_image or is_audio:
                     data = await service.fs.read_file_bytes(resolved_uri, ctx=ctx)
                     if declared_size is None or len(data) > declared_size:
-                        return (
+                        return _mcp_failure(
                             f"Cannot render {uri}: file changed after its size was checked. "
                             "Retry the read."
                         )
@@ -730,7 +817,7 @@ async def read(
                         else _sniff_mcp_audio_mime_type(data, resolved_uri)
                     )
                     if mime_type is None:
-                        return (
+                        return _mcp_failure(
                             f"Cannot render {uri}: its bytes do not match a supported media "
                             f"format. {_mcp_media_download_hint(uri)}"
                         )
@@ -745,7 +832,7 @@ async def read(
                 )
                 return content
             except OpenVikingError as exc:
-                return str(exc)
+                return _mcp_failure(str(exc))
 
     if len(uri_list) == 1:
         result = await _read_one(uri_list[0], checked[0])
@@ -769,13 +856,16 @@ async def read(
     parts = []
     for uri, text in zip(uri_list, results, strict=True):
         parts.append(f"=== {uri} ===\n{text}")
-    return "\n\n".join(parts)
+    combined = "\n\n".join(parts)
+    if results and all(isinstance(result, _MCPToolFailure) for result in results):
+        return _mcp_failure(combined)
+    return combined
 
 
 # -- list ------------------------------------------------------------------
 
 
-@mcp.tool(name="list")
+@mcp.tool(name="list", annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def ls(
     uri: str = "viking://",
     recursive: bool = False,
@@ -818,7 +908,8 @@ async def ls(
     if sort_by is not None:
         options["sort_by"] = sort_by
         options["sort_order"] = sort_order
-    entries = await service.fs.ls(resolved_uri, **options)
+    page = await service.fs.ls(resolved_uri, **options)
+    entries = page.entries
     if not entries:
         return f"(no entries under {uri})"
 
@@ -831,6 +922,8 @@ async def ls(
             lines.append(f"[{'dir' if is_dir else 'file'}] {entry_uri}")
         else:
             lines.append(f"[{'dir' if is_dir else 'file'}] {name}")
+    if page.has_more:
+        lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
 
 
@@ -853,7 +946,7 @@ def _tree_abstract(entry: Dict[str, Any]) -> str:
     return " ".join(abstract.split())
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def tree(
     uri: str = "viking://",
     level_limit: int = 3,
@@ -887,7 +980,7 @@ async def tree(
     output = "agent" if include_abstract else "original"
     effective_limit = limit if limit is not None else node_limit
     try:
-        entries = await service.fs.tree(
+        page = await service.fs.tree(
             resolved_uri,
             ctx=ctx,
             output=output,
@@ -897,7 +990,8 @@ async def tree(
             offset=offset,
         )
     except NotFoundError:
-        entries = []
+        page = None
+    entries = page.entries if page is not None else []
     if not entries:
         return f"(nothing under {uri})"
 
@@ -916,7 +1010,7 @@ async def tree(
         abstract = _tree_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
-    if len(entries) >= effective_limit:
+    if page is not None and page.has_more:
         lines.append(
             f"(truncated at node_limit={effective_limit}; narrow the uri or raise node_limit to see more)"
         )
@@ -931,7 +1025,7 @@ class StoreMessage(BaseModel):
     content: str = Field(description="Message text content")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def remember(messages: list[StoreMessage]) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
     import uuid
@@ -956,7 +1050,7 @@ async def remember(messages: list[StoreMessage]) -> str:
 # -- write -----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def write(
     uri: str,
     content: str,
@@ -996,7 +1090,7 @@ async def write(
     return message + _indexing_hint(result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def edit(
     uri: str,
     old_string: str,
@@ -1155,7 +1249,20 @@ async def _maybe_sitemap_hint(path: str) -> str:
         return ""
 
 
-@mcp.tool()
+def _resource_add_error(result: Any) -> _MCPToolFailure | None:
+    if not isinstance(result, dict) or result.get("status") != "error":
+        return None
+    errors = result.get("errors")
+    detail = (
+        result.get("message")
+        or (errors[0] if isinstance(errors, list) and errors else None)
+        or "resource processing failed"
+    )
+    return _mcp_failure(f"Error adding resource: {detail}")
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
@@ -1241,30 +1348,30 @@ async def add_resource(
                 field_name="parent",
             )
     except (InvalidArgumentError, PermissionDeniedError) as exc:
-        return f"Error: {exc}"
+        return _mcp_failure(f"Error: {exc}")
 
     try:
         mode = normalize_parse_mode((args or {}).get("parse_mode", ParseMode.DEFAULT))
     except InvalidArgumentError as exc:
-        return f"Error: {exc}"
+        return _mcp_failure(f"Error: {exc}")
 
     if watch_interval < 0:
-        return (
+        return _mcp_failure(
             "Error: watch_interval must be >= 0. Use 0 for one-shot add (no watch); "
             "use a positive number of minutes (>=1440 recommended) to subscribe to auto-refresh."
         )
 
     add_type = add_type.strip()
     if add_type and temp_file_id:
-        return "Error: add_type cannot be combined with temp_file_id."
+        return _mcp_failure("Error: add_type cannot be combined with temp_file_id.")
     if add_type and not path:
-        return "Error: add_type requires 'path'."
+        return _mcp_failure("Error: add_type requires 'path'.")
     if add_type and parent:
-        return "Error: add_type cannot be combined with parent."
+        return _mcp_failure("Error: add_type cannot be combined with parent.")
     if add_type and not to:
-        return "Error: add_type requires an exact 'to' target."
+        return _mcp_failure("Error: add_type requires an exact 'to' target.")
     if to and parent:
-        return "Error: Cannot specify both 'to' and 'parent' at the same time."
+        return _mcp_failure("Error: Cannot specify both 'to' and 'parent' at the same time.")
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
@@ -1287,19 +1394,12 @@ async def add_resource(
                 tag_mode=tag_mode,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
-            return f"Error: {exc}"
+            return _mcp_failure(f"Error: {exc}")
         except Exception as exc:
-            return f"Error adding resource: {exc}"
-        # add_resource returns a business-error dict (no raise) for parse/finalize failures;
-        # surface it instead of reporting a false success.
-        if isinstance(result, dict) and result.get("status") == "error":
-            errors = result.get("errors")
-            detail = (
-                result.get("message")
-                or (errors[0] if isinstance(errors, list) and errors else None)
-                or "resource processing failed"
-            )
-            return f"Error adding resource: {detail}"
+            return _mcp_failure(f"Error adding resource: {exc}")
+        error = _resource_add_error(result)
+        if error is not None:
+            return error
         root_uri = result.get("root_uri", "") if isinstance(result, dict) else ""
         return (
             f"Resource added: {root_uri}"
@@ -1308,11 +1408,13 @@ async def add_resource(
         )
 
     if not path:
-        return "Error: provide either 'path' (remote URL or local file) or 'temp_file_id'."
+        return _mcp_failure(
+            "Error: provide either 'path' (remote URL or local file) or 'temp_file_id'."
+        )
 
     # Branch 2: agent passed a temp_file_id-shaped string as `path` — guide them
     if TEMP_FILE_ID_RE.match(path):
-        return (
+        return _mcp_failure(
             f"Error: '{path}' looks like a temp_file_id, not a path. "
             f'Pass it as the temp_file_id kwarg: add_resource(temp_file_id="{path}")'
         )
@@ -1341,7 +1443,10 @@ async def add_resource(
                 tag_mode=tag_mode,
             )
         except Exception as exc:
-            return f"Error adding resource: {exc}"
+            return _mcp_failure(f"Error adding resource: {exc}")
+        error = _resource_add_error(result)
+        if error is not None:
+            return error
         root_uri = result.get("root_uri", "")
         task_id = result.get("task_id", "")
         if watch_interval > 0:
@@ -1431,7 +1536,9 @@ async def add_resource(
 
 def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> str:
     if result.get("status") == "error":
-        return f"Error adding skill: {result.get('message') or 'skill processing failed'}"
+        return _mcp_failure(
+            f"Error adding skill: {result.get('message') or 'skill processing failed'}"
+        )
     if list_only:
         found = result.get("skills") or []
         lines = [f"Skills in the source ({len(found)}); nothing was installed:"]
@@ -1447,7 +1554,8 @@ def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> 
     return "\n".join(lines)
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def add_skill(
     data: str = "",
     path: str = "",
@@ -1490,21 +1598,23 @@ async def add_skill(
     ctx = _get_ctx()
     path = path.strip()
     if data.strip() and path:
-        return "Error: pass either 'data' (SKILL.md text) or 'path', not both."
+        return _mcp_failure("Error: pass either 'data' (SKILL.md text) or 'path', not both.")
     if not data.strip() and not path:
-        return "Error: provide 'data' (full SKILL.md text) or 'path' (Git URL or local path)."
+        return _mcp_failure(
+            "Error: provide 'data' (full SKILL.md text) or 'path' (Git URL or local path)."
+        )
     if data.strip() and looks_like_local_path(data.strip()):
-        return (
+        return _mcp_failure(
             f"Error: 'data' looks like a file path. Pass it as add_skill(path=\"{data.strip()}\")."
         )
     if path.startswith("viking://"):
-        return (
+        return _mcp_failure(
             "Error: 'path' must be a Git URL or a local path. To copy a skill already in "
             "OpenViking, read its SKILL.md and pass the text as 'data'."
         )
     is_git = path.startswith(GIT_SKILL_SOURCE_PREFIXES)
     if path and not is_git and is_remote_resource_source(path):
-        return (
+        return _mcp_failure(
             f"Error: unsupported skill source '{path}'. Pass a Git URL "
             f"({', '.join(GIT_SKILL_SOURCE_PREFIXES)}) or a local path."
         )
@@ -1515,7 +1625,7 @@ async def add_skill(
             # Fail here, not after a one-time upload token is spent on a root the installer rejects.
             target = SkillProcessor._resolve_skill_root_uri(ctx, target)  # noqa: SLF001
     except (InvalidArgumentError, PermissionDeniedError) as exc:
-        return f"Error: {exc}"
+        return _mcp_failure(f"Error: {exc}")
 
     if data.strip() or is_git:
         try:
@@ -1532,9 +1642,9 @@ async def add_skill(
                 ),
             )
         except (InvalidArgumentError, PermissionDeniedError) as exc:
-            return f"Error: {exc}"
+            return _mcp_failure(f"Error: {exc}")
         except Exception as exc:
-            return f"Error adding skill: {exc}"
+            return _mcp_failure(f"Error adding skill: {exc}")
         return _format_skill_install_result(result, list_only=list_only)
 
     server_config = get_server_config()
@@ -1612,17 +1722,18 @@ async def add_skill(
 # `resume`, `trigger`, `update --interval`, etc.) for those operations.
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
     ctx = _get_ctx()
     scheduler = getattr(service, "watch_scheduler", None)
     if scheduler is None or not scheduler.is_running:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     wm = scheduler.watch_manager
     if wm is None:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     # get_all_tasks does not raise PermissionDeniedError — it silently filters
     # tasks the caller cannot see (watch_manager.py:596-624), so we just
     # accept the filtered list.
@@ -1644,7 +1755,8 @@ async def list_watches() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def cancel_watch(to_uri: str) -> str:
     """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
@@ -1654,10 +1766,10 @@ async def cancel_watch(to_uri: str) -> str:
     to_uri = _resolve_mcp_workspace_uri(to_uri, ctx)
     scheduler = getattr(service, "watch_scheduler", None)
     if scheduler is None or not scheduler.is_running:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     wm = scheduler.watch_manager
     if wm is None:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     task = await wm.get_task_by_uri(
         to_uri,
         ctx.account_id,
@@ -1665,7 +1777,7 @@ async def cancel_watch(to_uri: str) -> str:
         str(ctx.role),
     )
     if task is None:
-        return f"No watch task found for {to_uri}"
+        return _mcp_failure(f"No watch task found for {to_uri}")
     try:
         # Return value (bool) is intentionally ignored: delete_task returns
         # False only when the task was removed between our lookup and the
@@ -1680,14 +1792,15 @@ async def cancel_watch(to_uri: str) -> str:
             str(ctx.role),
         )
     except _wm_mod.PermissionDeniedError:
-        return f"Permission denied for {to_uri}"
+        return _mcp_failure(f"Permission denied for {to_uri}")
     return f"Watch cancelled: {to_uri}"
 
 
 # -- grep ------------------------------------------------------------------
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def grep(
     uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
 ) -> str:
@@ -1735,10 +1848,14 @@ async def grep(
     failure_lines = [f"  {p}: {error}" for p, error in failures]
 
     if not merged:
+        if failures and len(failures) == len(results):
+            return _mcp_failure("grep failed for every pattern:\n" + "\n".join(failure_lines))
         if failures:
-            # Nothing was searched successfully, so "no matches" would be an answer to a
-            # question that was never asked.
-            return "grep failed for every pattern:\n" + "\n".join(failure_lines)
+            successful = [p for p, _, error in results if error is None]
+            return (
+                f"No matches found for successful pattern(s): {', '.join(successful)}\n"
+                "Patterns that could not be searched:\n" + "\n".join(failure_lines)
+            )
         return f"No matches found for pattern(s): {', '.join(patterns)}"
 
     lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
@@ -1756,7 +1873,8 @@ async def grep(
 # -- glob ------------------------------------------------------------------
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
@@ -1766,7 +1884,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
     try:
         result = await service.fs.glob(pattern, ctx=ctx, uri=resolved_uri, node_limit=node_limit)
     except Exception as e:
-        return f"Error: {e}"
+        return _mcp_failure(f"Error: {e}")
 
     matches = result.get("matches", [])
     if not matches:
@@ -1782,7 +1900,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 # -- forget ----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def forget(uri: str, recursive: bool = False) -> str:
     """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling.
 
@@ -1798,7 +1916,7 @@ async def forget(uri: str, recursive: bool = False) -> str:
 # -- health ----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def health() -> str:
     """Check whether the OpenViking server is healthy."""
     try:

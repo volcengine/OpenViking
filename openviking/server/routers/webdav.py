@@ -234,14 +234,14 @@ async def propfind(
 
     entries = [_entry_from_stat(request, normalized_path, stat)]
     if _depth_header(request) > 0 and stat.get("isDir", False):
-        children = await service.fs.ls(
+        page = await service.fs.ls(
             uri,
             ctx=_ctx,
             output="original",
             show_all_hidden=True,
             node_limit=10000,
         )
-        for child in _exposed_child_entries(children):
+        for child in _exposed_child_entries(page.entries):
             child_name = str(child["name"])
             child_path = child_name if not normalized_path else f"{normalized_path}/{child_name}"
             entries.append(_entry_from_stat(request, child_path, child))

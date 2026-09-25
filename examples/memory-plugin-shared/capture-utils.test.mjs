@@ -7,6 +7,8 @@ import {
   findLastHumanTurnIndex,
   filterCaptureParts,
   sanitizeCapturedText,
+  shapeCapturePayload,
+  shapeCaptureParts,
   shouldCaptureText,
 } from "./lib/capture-utils.mjs"
 
@@ -240,6 +242,80 @@ test("filterCaptureParts never judges a turn that carries no text", () => {
   assert.equal(shaped.dropped, false)
   assert.deepEqual(shaped.parts, [TOOL_PART])
   assert.equal(filterCaptureParts([], "user", { captureFilters: ["k/x/"] }).dropped, false)
+})
+
+test("already-extracted parts are sanitized before capture rules run", () => {
+  const parts = [
+    { type: "text", text: "<system-reminder>approved</system-reminder>Remember SECRET123" },
+    TOOL_PART,
+  ]
+  assert.equal(shapeCaptureParts(parts, "user", { captureFilters: ["k/approved/"] }).dropped, true)
+  assert.deepEqual(shapeCaptureParts(parts, "user", {
+    captureFilters: ["d/approved/", "s/SECRET123/[redacted]/g"],
+  }).parts, [{ type: "text", text: "Remember [redacted]" }, TOOL_PART])
+  assert.equal(parts[0].text.includes("SECRET123"), true)
+})
+
+test("shared capture filters sanitized conversation text before keep and drop", () => {
+  const payload = { role: "user", content: "<openviking-context>approved</openviking-context>Remember private details." }
+  const kept = shapeCapturePayload(payload, "user", { captureFilters: ["k/approved/"] })
+  assert.equal(kept.dropped, true)
+  assert.deepEqual(extractCaptureTurns([{ payload }], { captureFilters: ["k/approved/"] }), [])
+
+  const dropped = shapeCapturePayload(payload, "user", { captureFilters: ["d/approved/"] })
+  assert.equal(dropped.dropped, false)
+  assert.deepEqual(dropped.parts, [{ type: "text", text: "Remember private details." }])
+  assert.equal(dropped.text, "Remember private details.")
+})
+
+test("shared capture filters aggregate text and leave tool payloads intact", () => {
+  const payload = { role: "assistant", content: [
+    { type: "text", text: "Remember secret" },
+    { type: "toolCall", id: "call-1", name: "lookup", arguments: { secret: true } },
+  ] }
+  assert.equal(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["d/secret/"],
+  }, { faithful: true }).dropped, true)
+
+  const shaped = shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["s/secret/[redacted]/g"],
+  }, { faithful: true })
+  assert.equal(shaped.text, "Remember [redacted]")
+  assert.equal(shaped.parts[1].tool_input.secret, true)
+
+  const toolOnly = shapeCapturePayload({ role: "assistant", content: payload.content.slice(1) }, "assistant", {
+    captureFilters: ["k/never matches/"],
+  }, { faithful: true })
+  assert.equal(toolOnly.dropped, false)
+  assert.equal(toolOnly.parts[0].type, "tool")
+})
+
+test("shared capture uses conversation text for mixed messages regardless of rule presence", () => {
+  const payload = { role: "assistant", content: [
+    { type: "text", text: "Run this." },
+    { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "x" } },
+  ] }
+  const baseline = shapeCapturePayload(payload, "assistant", {}, { faithful: true })
+  assert.equal(baseline.text, "Run this.")
+  assert.deepEqual(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["user:d/.*/"],
+  }, { faithful: true }), baseline)
+  assert.deepEqual(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["s/zzz/y/"],
+  }, { faithful: true }), baseline)
+  assert.equal(shapeCapturePayload(payload, "assistant", {
+    captureFilters: ["assistant:s/Run/Do/"],
+  }, { faithful: true }).text, "Do this.")
+})
+
+test("sanitation keeps ordinary timestamped log lines", () => {
+  const log = "2024-01-01 12:00:00 ERROR something broke\n2024-01-01 12:00:01 INFO retry"
+  assert.equal(sanitizeCapturedText(log), log)
+  const turns = extractCaptureTurns([userEntry(log)], {})
+  assert.equal(turns.length, 1)
+  assert.deepEqual(turns[0].parts, [{ type: "text", text: log }])
+  assert.equal(sanitizeCapturedText("[2024-01-01 12:00:00] Context"), "Context")
+  assert.equal(sanitizeCapturedText("[2024-01-01 12:00:00 ERROR] failed"), "[2024-01-01 12:00:00 ERROR] failed")
 })
 
 test("shouldCaptureText reports a filtered drop and can be asked to skip filters", () => {

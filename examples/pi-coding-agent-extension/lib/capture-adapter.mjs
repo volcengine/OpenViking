@@ -1,9 +1,5 @@
 import {
-  extractPartsFromPayload,
-  extractTextFromPayload,
-  sanitizeCapturedText,
-  shouldCaptureText,
-  truncateCaptureText,
+  shapeCapturePayload,
 } from "../shared/capture-utils.mjs";
 
 function normalizeRole(role) {
@@ -24,20 +20,6 @@ function entryPayload(entry) {
   return entry;
 }
 
-function faithfulDecision(rawText, cfg) {
-  const sanitized = sanitizeCapturedText(rawText);
-  if (!sanitized) return { shouldCapture: false, reason: "empty", text: "" };
-  const capped = truncateCaptureText(sanitized, cfg.captureMaxLength || 24000);
-  const compact = String(capped || "").replace(/\s+/g, " ").trim();
-  if (/^\[openviking-memory\]/i.test(compact)) {
-    return { shouldCapture: false, reason: "plugin_status", text: "" };
-  }
-  if (/^\/[a-z0-9_-]{1,64}\b/i.test(compact)) {
-    return { shouldCapture: false, reason: "slash_command", text: "" };
-  }
-  return { shouldCapture: true, reason: "faithful", text: capped };
-}
-
 export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg = {}) {
   const entries = Array.isArray(branch) ? branch : [];
   const previousCount = Math.max(0, Number(syncedEntryCount) || 0);
@@ -53,28 +35,23 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
     if (!role) continue;
     if (role === "assistant" && cfg.captureAssistantTurns === false) continue;
 
-    const rawText = extractTextFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
-    const parts = extractPartsFromPayload(payload, { toolMaxChars: cfg.captureToolMaxChars });
-    const decision = cfg.faithfulCapture || cfg.takeoverEnabled
-      ? faithfulDecision(rawText, cfg)
-      : shouldCaptureText(rawText, role, cfg);
-    const structuredParts = parts.filter((part) => part?.type !== "text");
-    if (!decision.shouldCapture && structuredParts.length === 0) continue;
+    const shaped = shapeCapturePayload(payload, role, cfg, {
+      faithful: cfg.faithfulCapture || cfg.takeoverEnabled,
+    });
+    if (shaped.dropped) continue;
+    const structuredParts = shaped.parts.filter((part) => part?.type !== "text");
+    if (!shaped.text && structuredParts.length === 0) continue;
 
-    // decision.text is derived from rawText, which renders tool I/O as
-    // "[tool-result ...]" lines. For a tool-only payload that would resend the
-    // same output the tool part already carries, so only keep it when the
-    // payload really had text of its own.
-    const hasTextPart = parts.some((part) => part?.type === "text");
+    // Tool-only payloads must not also send rendered tool output as text.
     const bodyParts = [
-      ...(hasTextPart && decision.shouldCapture && decision.text
-        ? [{ type: "text", text: decision.text }]
+      ...(shaped.parts.some((part) => part?.type === "text") && shaped.text
+        ? [{ type: "text", text: shaped.text }]
         : []),
       ...structuredParts,
     ];
     const body = bodyParts.length > 0
       ? { role, parts: bodyParts }
-      : { role, content: decision.text };
+      : { role, content: shaped.text };
     if (cfg.peerId) body.peer_id = cfg.peerId;
     payloads.push(body);
   }

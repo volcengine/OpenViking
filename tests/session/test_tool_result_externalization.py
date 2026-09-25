@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-import openviking.session.session as session_module
+import openviking.session.tool_output_externalizer as tool_output_externalizer
 import openviking.session.tool_result_store as tool_result_store
 from openviking.message import ToolPart
 from openviking.server.config import ToolOutputExternalizationConfig
@@ -85,7 +85,7 @@ async def test_tool_output_externalization_write_contract(
         return original_synopsis(*args, **kwargs)
 
     monkeypatch.setattr(tool_result_store, "generate_tool_result_synopsis", wrapped)
-    monkeypatch.setattr(session_module, "generate_tool_result_synopsis", wrapped)
+    monkeypatch.setattr(tool_output_externalizer, "generate_tool_result_synopsis", wrapped)
     caller_loop = asyncio.get_running_loop()
     write_started = asyncio.Event()
     release_write = asyncio.Event()

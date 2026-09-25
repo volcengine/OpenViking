@@ -168,6 +168,41 @@ test("session-end catches up the missing turns then commits", async () => {
   }
 });
 
+test("session-end migrates a startup-inclusive cursor before catch-up and commit", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-startup-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  const startup = {
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [
+      { type: "input_text", text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nAnswer in Chinese.\n</INSTRUCTIONS>" },
+      { type: "input_text", text: "<environment_context>\n  <cwd>/tmp/project</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-09-25</current_date>\n  <timezone>Asia/Singapore</timezone>\n</environment_context>" },
+    ] },
+  };
+  try {
+    await writeState(stateDir, "startup-end", { capturedTurnCount: 2 });
+    await writeFile(transcriptPath, [
+      JSON.stringify(startup),
+      JSON.stringify({ type: "turn_context", payload: { turn_id: "first" } }),
+      turn("user", "Previously captured"),
+      turn("user", "New question"),
+    ].join("\n"));
+    await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+      await runSessionEnd(
+        { session_id: "startup-end", transcript_path: transcriptPath },
+        workerEnv(baseUrl, stateDir),
+      );
+    });
+    assert.deepEqual(sentMessages(calls).map((item) => item.parts?.[0]?.text ?? item.content), ["New question"]);
+    assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
+    const state = await readState(stateDir, "startup-end");
+    assert.equal(state.captureFormatVersion, 2);
+    assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("a second session-end on an unchanged transcript neither sends nor commits", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-idem-"));
   const transcriptPath = join(stateDir, "transcript.jsonl");

@@ -56,9 +56,18 @@ function v1Hooks(runtime) {
 
     "chat.message": async (input, output) => {
       try {
-        await sessionInject.injectSessionContext(input, output)
-        if (!isRecallEnabled(config)) return
-        await recall.injectRelevantMemories(input, output)
+        // opencode awaits this hook before persisting/broadcasting the user
+        // message, so serial awaits here stack remote latency onto message
+        // display (#5148). Session inject and recall are independent after
+        // entry; overlap them the way the dsh plugin does (#4643).
+        if (!isRecallEnabled(config)) {
+          await sessionInject.injectSessionContext(input, output)
+          return
+        }
+        await Promise.all([
+          sessionInject.injectSessionContext(input, output),
+          recall.injectRelevantMemories(input, output),
+        ])
       } catch (error) {
         log("WARN", "recall", "Auto recall failed", { error: error?.message ?? String(error) })
       }

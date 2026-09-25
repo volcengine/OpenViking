@@ -57,6 +57,7 @@ kubectl -n vikingdb get events --sort-by=.lastTimestamp
 | Pod Pending | 节点标签、污点、资源 requests、PVC 与节点亲和性 | 用 Pod / PVC 事件区分调度和存储问题 |
 | PVC Pending / 无可用 StorageClass | 实际 StorageClass、kubeconfig context、列举存储类的 RBAC | 显式指定适用的存储类；不直接删除 PVC |
 | License 非 Active | fingerprint、有效期、system namespace、CR 首次同步 | 按随包授权流程处理，再查状态 |
+| `license checksum mismatch` | `.vlic` 是否由本集群 fingerprint 签发、文件是否被改动 | 不修改文件内容；用本集群 `fingerprint.json` 重新申请原始 `.vlic` |
 | API Server 访问失败，但已提交资源 | 部署机到 API Server 的网络与 API 状态 | 恢复后用 `cluster get` / `doctor` 查最终状态，不立即重装 |
 | workspace Ready，但导入或检索失败 | 模型鉴权、维度、API 路径、限流、向量服务、用户 Key | 运行 OpenViking P0 并读取对应失败阶段 |
 | Root Key 可管理但数据访问失败 | 是否把 Root Key 用于数据面 | 改用 User / Admin Key |

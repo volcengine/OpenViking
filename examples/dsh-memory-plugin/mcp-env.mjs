@@ -21,6 +21,7 @@ export function buildMcpConfig(config) {
   // standalone Node binary. This tells Electron to run the proxy script as
   // Node instead of attempting to launch a second Desktop instance.
   const env = { ELECTRON_RUN_AS_NODE: "1", ...forwardConnectionEnv(config) };
+  if (config.recallPeerScope) env.OPENVIKING_RECALL_PEER_SCOPE = config.recallPeerScope;
   if (config.timeoutMs) env.OPENVIKING_TIMEOUT_MS = String(config.timeoutMs);
   return {
     transport: "stdio",

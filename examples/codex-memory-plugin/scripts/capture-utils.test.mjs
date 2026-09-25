@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { extractCaptureTurns } from "./capture-utils.mjs";
+import { extractCaptureTranscript, extractCaptureTurns } from "./capture-utils.mjs";
 
 const CAPTURE_CONFIG = {
   captureAssistantTurns: true,
@@ -9,11 +9,92 @@ const CAPTURE_CONFIG = {
   captureMaxLength: 24000,
 };
 
+const startupBlocks = [
+  "<recommended_plugins>\nHere is a list of plugins that are available but not installed.\n\n- Example (example@marketplace)\n</recommended_plugins>",
+  "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse Chinese for answers.\n</INSTRUCTIONS>",
+  "<environment_context>\n  <cwd>/tmp/project</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-09-25</current_date>\n  <timezone>Asia/Singapore</timezone>\n  <filesystem><permission_profile type=\"disabled\" /></filesystem>\n</environment_context>",
+];
+
+function userEntry(...texts) {
+  return {
+    type: "response_item",
+    payload: { type: "message", role: "user", content: texts.map((text) => ({ type: "input_text", text })) },
+  };
+}
+
+test("excludes complete Codex startup blocks and records their old turn positions", () => {
+  const { turns, excludedLegacyTurnIndices } = extractCaptureTranscript([
+    { type: "session_meta", payload: {} },
+    userEntry(...startupBlocks),
+    { type: "turn_context", payload: {} },
+    userEntry("How does capture work?"),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(excludedLegacyTurnIndices, [0]);
+  assert.deepEqual(turns.map((turn) => turn.text), ["How does capture work?"]);
+});
+
+test("records separate excluded startup messages at their old indices", () => {
+  const { turns, excludedLegacyTurnIndices } = extractCaptureTranscript([
+    userEntry(startupBlocks[0]),
+    userEntry(startupBlocks[1], startupBlocks[2]),
+    { type: "turn_context", payload: {} },
+    userEntry("Real question"),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(excludedLegacyTurnIndices, [0, 1]);
+  assert.deepEqual(turns.map((turn) => turn.text), ["Real question"]);
+});
+
+test("excludes the legacy path-qualified AGENTS.md startup block", () => {
+  const legacyAgents = "# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nUse Chinese for answers.\n</INSTRUCTIONS>";
+  const { turns, excludedLegacyTurnIndices } = extractCaptureTranscript([
+    userEntry(legacyAgents),
+    { type: "turn_context", payload: {} },
+    userEntry("Real question"),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(excludedLegacyTurnIndices, [0]);
+  assert.deepEqual(turns.map((turn) => turn.text), ["Real question"]);
+});
+
+test("preserves user text mixed into a startup message", () => {
+  const { turns, excludedLegacyTurnIndices } = extractCaptureTranscript([
+    userEntry(`${startupBlocks[0]}\nPlease explain this plugin list.`, startupBlocks[1], startupBlocks[2]),
+    { type: "turn_context", payload: {} },
+    userEntry("Why does the rollout contain AGENTS.md instructions and <environment_context>?"),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(excludedLegacyTurnIndices, []);
+  assert.deepEqual(turns.map((turn) => turn.text), [
+    "Please explain this plugin list.",
+    "Why does the rollout contain AGENTS.md instructions and <environment_context>?",
+  ]);
+});
+
+test("keeps incomplete wrappers and normal-turn quotations", () => {
+  const quoted = `${startupBlocks[0]}\n\n${startupBlocks[1]}`;
+  const { turns, excludedLegacyTurnIndices } = extractCaptureTranscript([
+    userEntry("<recommended_plugins>\nmissing closing tag"),
+    { type: "turn_context", payload: {} },
+    userEntry(quoted),
+  ], CAPTURE_CONFIG);
+  assert.deepEqual(excludedLegacyTurnIndices, []);
+  assert.equal(turns.length, 2);
+  assert.match(turns[1].text, /AGENTS\.md instructions/);
+});
+
 function toolParts(turns, toolName) {
   return turns
     .flatMap((turn) => turn.parts)
     .filter((part) => part.type === "tool" && part.tool_name === toolName);
 }
+
+test("keeps timestamped user log lines on the capture wire", () => {
+  const log = "2024-01-01 12:00:00 ERROR something broke\n2024-01-01 12:00:01 INFO retry";
+  const turns = extractCaptureTurns([{
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: log }] },
+  }], CAPTURE_CONFIG);
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0].parts, [{ type: "text", text: log }]);
+});
 
 test("pairs current Codex function_call records by call_id", () => {
   const turns = extractCaptureTurns(

@@ -84,6 +84,7 @@ INPUT_TOO_LARGE_PATTERNS = (
     "contextwindowexceeded",
     "context window exceeded",
     "maximum context length",
+    "exceed max message tokens",
     "max input tokens",
     "too many input tokens",
     "input length exceeds",

@@ -145,6 +145,34 @@ test("pre-compact catches up, commits and keeps the cursor", async () => {
   }
 });
 
+test("pre-compact does not create or commit a startup-only session", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-startup-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  try {
+    await writeFile(transcriptPath, [
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", role: "user", content: [{ type: "input_text",
+          text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse Chinese.\n</INSTRUCTIONS>" }],
+      } }),
+      JSON.stringify({ type: "turn_context", payload: {} }),
+    ].join("\n"));
+    await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+      await runPreCompact(
+        { session_id: "startup-only", transcript_path: transcriptPath, trigger: "manual" },
+        baseEnv(baseUrl, stateDir),
+      );
+    });
+    assert.equal(calls.some((call) => call.path.endsWith("/messages/batch")), false);
+    assert.equal(calls.some((call) => call.path.endsWith("/commit")), false);
+    const state = JSON.parse(await readFile(join(stateDir, "startup-only.json"), "utf-8"));
+    assert.equal(state.ovSessionId, null);
+    assert.equal(state.capturedTurnCount, 0);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("pre-compact leaves state untouched when the session lock is held", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-lock-"));
   const transcriptPath = join(stateDir, "transcript.jsonl");
