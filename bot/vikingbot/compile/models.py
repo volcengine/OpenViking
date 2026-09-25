@@ -42,7 +42,7 @@ class CompileLimits(BaseModel):
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.
     shuffle_concurrency: int = Field(default=6, ge=1)
-    # Maximum primary records per routing request; the final retry uses single records.
+    # Maximum primary records per routing request, including retried records.
     shuffle_batch_size: int = Field(default=4, ge=1, strict=True)
     # Per-task Reduce workers, also used for consolidating same-path candidate files.
     merge_concurrency: int = Field(default=10, ge=1)
@@ -85,7 +85,7 @@ class SanitizedCompileRequest(BaseModel):
     skill: str
     # Inclusive source modification cutoff in UTC; None compiles all source files.
     last_compile_time: datetime | None = None
-    # Enable deterministic Wiki link repair, source links and navigation generation.
+    # Rebuild resource index.md files from actual Markdown paths; preserve knowledge bodies.
     wiki_links: bool = Field(default=False, strict=True)
 
 

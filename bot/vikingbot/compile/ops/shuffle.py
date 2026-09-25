@@ -7,11 +7,12 @@ import heapq
 import json
 import math
 from array import array
+from collections import Counter
 from collections.abc import Sequence
 from threading import Event
 
 from openviking.core.namespace import relative_uri_path
-from vikingbot.compile.pipeline_io import bounded_jobs
+from vikingbot.compile.pipeline_io import bounded_jobs, retry_allowed
 from vikingbot.compile.plan import Group, Record, RouteBatchResponse, RouteDecision, Routing, digest
 
 
@@ -294,6 +295,7 @@ class Shuffle:
             }
 
         accepted, errors = {}, {}
+        retries = {record.record_id: Counter() for record in records}
         system = (
             "Routing rules:\n"
             + (rule.instructions if isinstance(rule, Routing) else rule)
@@ -421,7 +423,11 @@ class Shuffle:
                             errors.pop(key, None)
             for index in indices:
                 key = records[index].record_id
-                state = "completed" if key in accepted else "failed" if attempt == 3 else "pending"
+                state = (
+                    "completed"
+                    if key in accepted
+                    else ("pending" if retry_allowed(retries[key], errors[key]) else "failed")
+                )
                 entry = {"status": state, "inputs": [key], "attempt": attempt}
                 if key in accepted:
                     entry["output_count"] = 1
@@ -432,7 +438,9 @@ class Shuffle:
                 await r.files.put(f"jobs/{node.name}-{key}", entry)
 
         pending = list(range(len(records)))
-        for attempt, size in enumerate([r.limits.shuffle_batch_size] * 2 + [1], start=1):
+        attempt, size = 0, r.limits.shuffle_batch_size
+        while pending:
+            attempt += 1
             if attempt > 1:
                 r.metrics["route_record_retries"] += len(pending)
             await bounded_jobs(
@@ -441,11 +449,14 @@ class Shuffle:
                 concurrency=r.limits.shuffle_concurrency,
                 metrics=r.metrics,
             )
-            pending = [index for index in pending if records[index].record_id not in accepted]
-            if not pending:
-                break
-        if pending:
-            r.failures.append(f"{len(pending)} routing records failed: {list(errors.values())[:4]}")
+            pending = [
+                index
+                for index in pending
+                if records[index].record_id not in accepted
+                and r.status.get(records[index].record_id) != "failed"
+            ]
+        if errors:
+            r.failures.append(f"{len(errors)} routing records failed: {list(errors.values())[:4]}")
         links, targets = [], {}
         for record in records:
             if decision := accepted.get(record.record_id):

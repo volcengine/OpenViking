@@ -82,6 +82,7 @@ INPUT_TOO_LARGE_PATTERNS = (
     "request entity too large",
     "content too large",
     "contextwindowexceeded",
+    "context_length_exceeded",
     "context window exceeded",
     "maximum context length",
     "max input tokens",

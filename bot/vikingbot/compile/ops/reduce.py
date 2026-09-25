@@ -1,20 +1,23 @@
 """Reduce candidate work sets into records or revision-bound files.
 
-Structured overflow aggregation and same-path candidate synthesis belong to Reduce;
+Automatic overflow aggregation and same-path candidate synthesis belong to Reduce;
 Finalize prepares the accepted file collection for publication without model calls.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from functools import partial
 from typing import TYPE_CHECKING
 
 from openviking.core.namespace import relative_uri_path
+from openviking.utils.model_retry import ERROR_CLASS_INPUT_TOO_LARGE, classify_api_error
 from vikingbot.compile import file_ops
 from vikingbot.compile.ops import common
 from vikingbot.compile.ops.common import _RECORDS
-from vikingbot.compile.pipeline_io import bounded_jobs
+from vikingbot.compile.pipeline_io import ModelCallError, bounded_jobs, retry_allowed
 from vikingbot.compile.plan import (
+    CombineResponse,
     FileDraft,
     FileResponse,
     Group,
@@ -76,7 +79,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
     """Accept unique paths and resolve collisions using the Skill and request.
 
     Concurrent decisions reserve renamed paths before saving; a competing reservation
-    permits one replan with the current path set. Failed decisions stay unpublished; successful
+    uses the shared retry allowance with the current path set. Failed decisions stay unpublished; successful
     unrelated outputs remain available for partial recovery. Candidates stay on disk.
     """
     candidates = {}
@@ -116,13 +119,12 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                     "with supporting inputs, without patches or base_hash; runtime binds revisions."
                 ),
             )
-            for attempt in range(2):
+            retries = Counter()
+            while True:
                 unavailable = sorted(p for p, owner in reserved.items() if owner != path)
                 try:
-                    response = await common.ask_transform(
-                        runtime,
+                    response = await runtime.model.ask(
                         "reduce_merge",
-                        transform,
                         runtime.system + "\n" + transform.instructions,
                         {
                             "candidates": [a for _, a in items],
@@ -131,12 +133,13 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                         },
                         FileResponse,
                         validate,
+                        agent=transform.execution == "agent",
                     )
                     validate(response)
-                except ValueError:
-                    if attempt or unavailable == sorted(
+                except ValueError as exc:
+                    if unavailable == sorted(
                         p for p, owner in reserved.items() if owner != path
-                    ):
+                    ) or not retry_allowed(retries, str(exc)):
                         raise
                 else:
                     reserved.update((draft.path, path) for draft in response.files)
@@ -179,7 +182,7 @@ async def ready_file(runtime: Pipeline, group):
 
 
 async def reduce_group(runtime: Pipeline, node, group: Group, *, stage="reduce"):
-    """Transform a work set into records or file candidates; Map binds full replacements."""
+    """Generate a work set, combining only after provider input overflow, at most three times."""
     transform = getattr(runtime.contract, node.task)
     records, old = group.records, {}
     if transform.output == "files":
@@ -255,40 +258,39 @@ async def reduce_group(runtime: Pipeline, node, group: Group, *, stage="reduce")
         system += _EXISTING_FILES
     for depth in range(4):
         data = {**extra, "inputs": [await common.payload(runtime, r) for r in records]}
-        if (
-            runtime.model.fits(system, data, schema)
-            or depth == 3
-            or stage == "map"
-            or runtime.contract.overflow != "structured"
-        ):
+        try:
+            if transform.output == "records":
+                return await common.transform(runtime, "reduce", transform, records, extra)
+            response = await runtime.model.ask(
+                stage,
+                system,
+                data,
+                schema,
+                lambda value, records=records: file_ops.validate_files(
+                    runtime, value, group, records, old
+                ),
+                agent=transform.execution == "agent",
+            )
             break
-        combine = runtime.contract.combine
-        assert combine is not None
-        combine_system = runtime.system + _RECORDS + "\nTask: " + combine.instructions
+        except ModelCallError as exc:
+            if (
+                classify_api_error(exc) != ERROR_CLASS_INPUT_TOO_LARGE
+                or depth == 3
+                or stage == "map"
+            ):
+                raise
         chunks = await common.pack(
             runtime,
             records,
-            combine_system,
-            RecordResponse,
-            {"record_fields": combine.fields, "scope_fields": runtime.contract.distinguish},
+            common._COMBINE,
+            CombineResponse,
         )
         reduced = []
         for chunk in chunks:
-            reduced.extend(await common.transform(runtime, "combine", combine, chunk))
+            reduced.extend(await common.transform(runtime, "combine", None, chunk))
         if not reduced:
             raise ValueError("Overflow aggregation cannot discard all required contributions")
         records = reduced
-    if transform.output == "records":
-        return await common.transform(runtime, "reduce", transform, records, extra)
-    response = await common.ask_transform(
-        runtime,
-        stage,
-        transform,
-        system,
-        data,
-        FileResponse,
-        lambda value: file_ops.validate_files(runtime, value, group, records, old),
-    )
     if stage == "map":
         return await file_ops.save_replacements(runtime, response, group, records)
     return await file_ops.save_files(runtime, response, group, records, old)

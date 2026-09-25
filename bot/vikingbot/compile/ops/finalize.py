@@ -27,9 +27,9 @@ async def run(runtime: Pipeline, references: list[str], *, partial=False) -> Ren
     References name accepted task artifacts validated during generation or checkpoint
     recovery. The returned bundle contains write operations for the service to publish,
     without performing target writes here.
-    With wiki_links enabled, navigation uses code-rendered direct-child links and
-    reads only ancestor indexes. Otherwise accepted file contents remain unchanged.
-    Retained arbitrary pages are never enumerated or loaded; old entries are preserved.
+    With wiki_links enabled, directory listings and submitted Markdown paths define
+    complete runtime-owned indexes. Only retained index bodies are read or rewritten;
+    retained knowledge pages supply paths without body reads. Otherwise contents stay unchanged.
     Partial recovery retains the same write guards. Resource recovery permits missing
     prescribed outputs; Skill packages require all declared files before publication.
     Navigation does not invoke models or Skill scripts, including during recovery.
@@ -52,34 +52,75 @@ async def run(runtime: Pipeline, references: list[str], *, partial=False) -> Ren
         )
         outputs[path] = {"source_refs": artifact["source_refs"]}
     existing = {}
-    wiki_files = {
-        path: payload for path, payload in files.items() if file_ops.is_wiki(runtime, path, payload)
+    page_files = {
+        path: payload
+        for path, payload in files.items()
+        if path.lower().endswith(".md")
+        and not any(part.startswith(".") for part in path.split("/"))
     }
-    if runtime.request.wiki_links and wiki_files:
-        for path, payload in wiki_files.items():
-            wiki_files[path] = relocate_wiki_links(
+    if runtime.request.wiki_links and not runtime.skill_target and page_files:
+        known_paths = set(files)
+        pending = [runtime.target]
+        seen = {runtime.target}
+        while pending:
+            directory = pending.pop()
+            offset = 0
+            while True:
+                try:
+                    entries = await runtime.client.list_resources(
+                        directory, node_limit=500, offset=offset
+                    )
+                except OpenVikingError as exc:
+                    if exc.code != "NOT_FOUND" or directory != runtime.target:
+                        raise
+                    break
+                for entry in entries:
+                    uri = str(entry.get("uri") or "").rstrip("/")
+                    path = relative_uri_path(runtime.target, uri)
+                    if not path:
+                        raise ValueError(
+                            f"Navigation inventory returned an out-of-scope URI: {uri}"
+                        )
+                    if any(part.startswith(".") for part in path.split("/")):
+                        continue
+                    if entry.get("isDir", entry.get("is_dir", False)):
+                        if uri not in seen:
+                            seen.add(uri)
+                            pending.append(uri)
+                    else:
+                        known_paths.add(path)
+                offset += len(entries)
+                if len(entries) < 500:
+                    break
+        for path, payload in page_files.items():
+            page_files[path] = relocate_wiki_links(
                 payload.decode(),
                 origin=origins[path],
                 path=path,
                 target_uri=runtime.target,
                 relocations=relocations,
-                known_paths=set(files),
+                known_paths=known_paths,
             ).encode()
         indexes: set[str] = set()
-        for path in wiki_files:
+        for path in known_paths:
+            if not path.lower().endswith(".md") or any(
+                part.startswith(".") for part in path.split("/")
+            ):
+                continue
             parts = path.split("/")[:-1]
             indexes.update("/".join([*parts[:i], "index.md"]) for i in range(len(parts) + 1))
-        for path in sorted(indexes - set(files)):
+        for path in sorted(indexes):
             text = await file_ops.load_old(runtime, path)
             if text is not None:
                 existing[path] = text.encode()
-                revisions[path] = content_hash(text)
+            revisions[path] = content_hash(text) if text is not None else None
+            owners[path] = "runtime:navigation"
         finalized = finalize_resource_output(
-            wiki_files,
+            page_files,
             target_uri=runtime.target,
             source_roots={key: info["uri"] for key, info in runtime.evidence.items()},
             existing_files=existing,
-            known_paths=set(files) | set(existing),
+            known_paths=known_paths | set(existing),
             partial_catalog=True,
             source_uris_by_path=source_uris,
         )
@@ -100,11 +141,11 @@ async def run(runtime: Pipeline, references: list[str], *, partial=False) -> Ren
             # A missing exact target and unique matching title allow a local repair;
             # unrecalled historical pages never get redirected by basename alone.
             finalized = finalize_resource_output(
-                wiki_files,
+                page_files,
                 target_uri=runtime.target,
                 source_roots={key: info["uri"] for key, info in runtime.evidence.items()},
                 existing_files=existing,
-                known_paths=set(files) | set(existing),
+                known_paths=known_paths | set(existing),
                 partial_catalog=True,
                 source_uris_by_path=source_uris,
                 verified_missing_paths=missing,
@@ -126,6 +167,11 @@ async def run(runtime: Pipeline, references: list[str], *, partial=False) -> Ren
                     f"Unresolved links to {len(broken)} verified missing targets."
                 )
         files.update(finalized.files)
+        if finalized.link_report.get("invalid_metadata"):
+            runtime.warnings.append(
+                f"Invalid YAML in {len(finalized.link_report['invalid_metadata'])} pages; "
+                "navigation uses filenames and preserves page content."
+            )
     else:
         finalized = None
     if set(runtime.contract.required_paths) - set(files):

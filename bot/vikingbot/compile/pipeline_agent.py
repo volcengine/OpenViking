@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import Counter
 from copy import copy
 
 import json_repair
@@ -12,9 +13,9 @@ from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import COMPILE_DRAFT_ROOT
+from vikingbot.compile.pipeline_io import retry_allowed
 from vikingbot.compile.plan import (
     FileResponse,
-    InputReferenceError,
     RecordResponse,
     content_hash,
     result_schema,
@@ -32,22 +33,24 @@ class ChildProvider(LLMProvider):
         self.model = model
         self.stage = stage
         self.submit = submit
+        self.failures = Counter()
 
     def get_default_model(self):
         return self.model.model
 
     async def chat(self, messages, tools=None, **kwargs):
-        """Meter requests and stop exhausted input-reference repairs before calling the model."""
-        if self.submit is not None and self.submit.repair_calls_remaining is not None:
-            if self.submit.repair_calls_remaining == 0:
-                raise ValueError("Input reference repair exhausted two model requests")
-            self.submit.repair_calls_remaining -= 1
-        response = await self.model.call(
-            self.stage, messages, tools, max_tokens=self.model.max_tokens
-        )
-        if response.finish_reason in {"length", "max_tokens"}:
-            raise ValueError("Agent output was truncated; partial tool calls cannot be executed")
-        return response
+        """Retry truncated output without executing incomplete tool calls."""
+        while True:
+            response = await self.model.call(
+                self.stage, messages, tools, max_tokens=self.model.max_tokens
+            )
+            if response.finish_reason not in {"length", "max_tokens"}:
+                return response
+            error = "Agent output was truncated; use smaller writes or content_ref and complete tool calls"
+            if not retry_allowed(self.failures, error):
+                raise ValueError(error)
+            self.model.metrics["repairs"] += 1
+            messages = [*messages, {"role": "user", "content": error}]
 
 
 async def complete_tool_result(result, session_key):
@@ -93,7 +96,7 @@ async def prepare_assignment(data, sandbox, root):
 
 
 class EmitResult(Tool):
-    """Validate one child's typed result; two failed submissions exhaust its repair budget."""
+    """Validate child results with independent retry allowances for distinct errors."""
 
     name = "emit"
     description = "Submit the complete typed transformation result."
@@ -110,10 +113,9 @@ class EmitResult(Tool):
         self.schema, self.validate = schema, validate
         self.sandbox, self.root = sandbox, root
         self.result = None
-        self.failures = 0
+        self.failures = Counter()
+        self.can_retry = True
         self.last_error = ""
-        # None leaves normal generation unchanged; reference repairs allow edit then emit.
-        self.repair_calls_remaining: int | None = None
         self.data = data or {}
         self.metrics = metrics
 
@@ -187,24 +189,16 @@ class EmitResult(Tool):
                 self.validate(result)
             self.result = result
             return "Result accepted."
-        except (ValueError, OSError) as exc:
-            self.failures += 1
+        except (ValueError, TypeError, OSError) as exc:
+            self.last_error = str(exc)[:1600]
+            self.can_retry = retry_allowed(self.failures, self.last_error)
             if self.metrics is not None:
                 self.metrics["validation_failures"] += 1
-                if self.failures == 1:
+                if self.can_retry:
                     self.metrics["repairs"] += 1
-            self.last_error = str(exc)[:1600]
             feedback = "Error: " + self.last_error
-            if isinstance(exc, InputReferenceError) and self.schema is FileResponse:
-                if self.repair_calls_remaining is None:
-                    self.repair_calls_remaining = 2
-                feedback += (
-                    f"\nAt most {self.repair_calls_remaining} model requests remain. "
-                    "Correct only input references/dispositions, preserve the body, then emit. "
-                    "Do not guess source attribution or reread unchanged files."
-                )
             if (
-                self.failures == 1
+                self.can_retry
                 and self.sandbox is not None
                 and isinstance(kwargs, dict)
                 and "result_ref" not in kwargs
@@ -258,26 +252,28 @@ def agent_runner(loop, session_key, connection, limits):
         child = copy(loop)
         child.provider = ChildProvider(model, schema, stage, submit=submit)
         child._preview_tool_result = complete_tool_result
+        instructions = (
+            "\nUse emit to submit. Supplied Skill attachments are complete; "
+            "they fulfill the Skill's reading requirements without a tool call. Do not reread them. "
+            "read_skill_resource is available for additional references. "
+            "Only assigned evidence and your isolated scratch files are available. "
+            "Prefer one inline emit for small finished results; scratch writing and rereading "
+            "are optional, not mandatory verification steps. "
+            "Write large/multiple files using write_file, then emit content_ref paths "
+            "relative to your scratch root, without repeating their content. Runtime hashes "
+            "the files and validates paths, revisions and source coverage before acceptance. "
+            "For a large record collection, build a JSON result file incrementally with file "
+            "tools, then emit only result_ref pointing to that file. Finished independent Map "
+            "files may use ready_path plus ready_content_ref and concise routing payloads. "
+            "Use run_skill_script for Python scripts supplied by the selected Skill. "
+            "Scratch files are data; writing a script does not execute it. "
+            "Use edit_file to repair existing JSON."
+        )
         await child._run_agent_loop(
             messages=[
                 {
                     "role": "system",
-                    "content": system
-                    + "\nUse emit to submit. Supplied Skill attachments are complete; "
-                    "they fulfill the Skill's reading requirements without a tool call. Do not reread them. "
-                    "read_skill_resource is available for additional references. "
-                    "Only assigned evidence and your isolated scratch files are available. "
-                    "Prefer one inline emit for small finished results; scratch writing and rereading "
-                    "are optional, not mandatory verification steps. "
-                    "Write large/multiple files using write_file, then emit content_ref paths "
-                    "relative to your scratch root, without repeating their content. Runtime hashes "
-                    "the files and validates paths, revisions and source coverage before acceptance. "
-                    "For a large record collection, build a JSON result file incrementally with file "
-                    "tools, then emit only result_ref pointing to that file. Finished independent Map "
-                    "files may use ready_path plus ready_content_ref and concise routing payloads. "
-                    "Use run_skill_script for Python scripts supplied by the selected Skill. "
-                    "Scratch files are data; writing a script does not execute it. "
-                    "Use edit_file to repair existing JSON.",
+                    "content": system + instructions,
                 },
                 {"role": "user", "content": json.dumps(assignment, ensure_ascii=False)},
             ],
@@ -292,7 +288,7 @@ def agent_runner(loop, session_key, connection, limits):
             agent_id=child_id,
             context_compact_budget=None,
             max_iterations=limits.subagent_iterations,
-            should_stop=lambda: submit.failures >= 2,
+            should_stop=lambda: not submit.can_retry,
         )
         if submit.result is None:
             raise ValueError(

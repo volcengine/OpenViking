@@ -17,6 +17,7 @@ from vikingbot.compile.plan import (
     RecordResponse,
     Transform,
     content_hash,
+    result_schema,
 )
 from vikingbot.compile.skill_resources import EvidenceReader
 from vikingbot.providers.base import LLMResponse, ToolCallRequest
@@ -112,20 +113,22 @@ async def test_unlocated_neighbour_retains_full_shard(files):
 @pytest.mark.parametrize(
     "location", [None, span(2, 3), span(4, 3), span(1, 6), span(1, 2, "other")]
 )
-async def test_map_numbers_view_and_validates_supporting_locations(files, location):
+@pytest.mark.parametrize("routing_text", [None, "", "price"])
+async def test_map_numbers_view_and_validates_supporting_locations(files, location, routing_text):
     source = files.data["sources/S"]
     record = Record("S", "sources/S", ["S"], source["uri"], {}, [])
     registered = []
 
     async def ask(stage, system, data, schema, validate, **kwargs):
         assert data["inputs"][0]["payload"]["text"].startswith("1: # Terms\r\n2: price: 12")
+        assert "routing_text" not in result_schema(schema, data)["$defs"]["RecordDraft"]["required"]
         result = RecordResponse.model_validate(
             {
                 "records": [
                     {
                         "inputs": ["S"],
                         "payload": {"price": 12},
-                        "routing_text": "price",
+                        **({"routing_text": routing_text} if routing_text is not None else {}),
                         **({"evidence_spans": [location]} if location else {}),
                     }
                 ]
@@ -157,6 +160,8 @@ async def test_map_numbers_view_and_validates_supporting_locations(files, locati
         stored = await files.get(records[0].payload_ref)
         assert stored["evidence_spans"] == ([location] if location else [])
         assert records[0].source_refs == ["S"]
+        assert stored["routing_text"] == records[0].routing_text
+        assert records[0].routing_text == (routing_text or '{"price": 12}')
     assert content_hash(source["text"]) == source["hash"]
     assert source["text"].startswith("# Terms\r\n")
 

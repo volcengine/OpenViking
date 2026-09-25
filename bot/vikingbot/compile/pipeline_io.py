@@ -21,7 +21,6 @@ from vikingbot.compile.plan import (
     DEFAULT_MAX_TOKENS,
     PROCESSING_VERSION,
     FileResponse,
-    MissingReadyPathError,
     RouteBatchResponse,
     digest,
     result_schema,
@@ -32,6 +31,71 @@ from vikingbot.utils.helpers import cal_str_tokens
 T = TypeVar("T")
 R = TypeVar("R", bound=BaseModel)
 ROOT = f"{COMPILE_STAGING_ROOT}/pipeline"
+
+
+def parse_file_result(text: str) -> Any:
+    """Parse file-result JSON, escaping only unambiguous bare quotes in files[].content.
+
+    Existing escapes and all other fields remain unchanged. A quote followed by
+    a comma or closing object ends the content. Malformed results raise ValueError
+    for the caller's normal retry; alternative content boundaries are not searched.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    decoder = json.JSONDecoder()
+    stack, parts = [], []
+    key, start, pos = None, 0, 0
+    while pos < len(text):
+        char = text[pos]
+        if char == '"':
+            if key == "content" and stack == [("{", None), ("[", "files"), ("{", None)]:
+                pos += 1
+                while pos < len(text):
+                    if text[pos] == "\\":
+                        pos += 2
+                        continue
+                    if text[pos] == '"':
+                        end = pos + 1
+                        while end < len(text) and text[end] in " \t\r\n":
+                            end += 1
+                        if end == len(text) or text[end] in ",}":
+                            break
+                        parts.append(text[start:pos] + "\\")
+                        start = pos
+                    pos += 1
+                key = None
+            else:
+                value, pos = decoder.raw_decode(text, pos)
+                end = pos
+                while end < len(text) and text[end] in " \t\r\n":
+                    end += 1
+                key = value if end < len(text) and text[end] == ":" else None
+                continue
+        elif char in "{[":
+            stack.append((char, key))
+            key = None
+        elif char in "}]":
+            if not stack:
+                raise ValueError("Unexpected closing delimiter in file result")
+            stack.pop()
+            key = None
+        elif char == ",":
+            key = None
+        pos += 1
+    parts.append(text[start:])
+    return json.loads("".join(parts))
+
+
+def retry_allowed(failures: Counter, error: str) -> bool:
+    """Allow three retries per diagnostic within one assignment, independent of other errors.
+
+    Call once after each failed attempt. Counts persist for recurring diagnostics;
+    callers retain their existing cancellation, iteration and wall-clock limits.
+    """
+    failures[error] += 1
+    return failures[error] <= 3
 
 
 class ModelCallError(OSError):
@@ -146,8 +210,8 @@ class JsonModel:
     Character estimates guide batching and evidence inlining, never reject requests. Usage
     estimates reuse AgentLoop's mixed-text estimator; provider usage is authoritative.
     Cache identity includes model settings, Skill/contract and processing version.
-    Only validated responses enter the cache. Validation gets one repair, plus one
-    extra attempt when the repaired result lacks a required ready_path.
+    Only validated responses enter the cache. Each distinct validation failure
+    receives the shared per-error retry allowance.
     """
 
     def __init__(self, provider, model, temperature, files, limits, usage, metrics):
@@ -207,7 +271,7 @@ class JsonModel:
                 len(str(m.get("content", ""))) for m in messages if m.get("role") == "tool"
             ),
             "skill_attachment_chars": sum(len(value) for value in self.resources.snapshots.values())
-            if self.resources and stage != "route"
+            if self.resources and stage not in {"plan", "route", "combine"}
             else 0,
         }
         self.metrics["estimated_input_tokens"] += cal_str_tokens(
@@ -233,7 +297,9 @@ class JsonModel:
                     self.usage[name] = self.usage.get(name, 0) + value
                     self.metrics[f"{stage}_{name}"] += value
             if response.finish_reason == "error":
-                raise OSError("Model transport failure; see provider diagnostics")
+                raise OSError(
+                    response.content or "Model transport failure; see provider diagnostics"
+                )
             return response
         except TimeoutError as exc:
             report["error"] = "TimeoutError"
@@ -279,19 +345,18 @@ class JsonModel:
                 }
                 if self.fits(system, candidate, schema):
                     data = candidate
-        # Routing uses the planned criteria; Skill attachments belong to other stages.
-        if stage != "route" and self.resources and self.resources.snapshots:
+        # Combine consolidates supplied evidence without loading Skill instructions or attachments.
+        resources = self.resources if stage not in {"plan", "route", "combine"} else None
+        if resources and resources.snapshots:
             system += "\nComplete Skill attachments (authoritative data):\n" + json.dumps(
-                self.resources.snapshots, ensure_ascii=False
+                resources.snapshots, ensure_ascii=False
             )
-        dependencies = dict(self.resources.hashes) if self.resources else {}
+        dependencies = dict(resources.hashes) if resources else {}
         key = digest(
             [self.identity, stage, system, data, schema.model_json_schema(), agent, dependencies]
         )
         cached = None if schema is RouteBatchResponse else await self.files.get(f"cache/{key}")
-        if cached is not None and (
-            not self.resources or await self.resources.valid(cached["dependencies"])
-        ):
+        if cached is not None and (not resources or await resources.valid(cached["dependencies"])):
             try:
                 result = schema.model_validate(cached["result"])
                 if validate:
@@ -315,13 +380,13 @@ class JsonModel:
             f"cache/{key}",
             {
                 "result": result.model_dump(),
-                "dependencies": dict(self.resources.hashes) if self.resources else {},
+                "dependencies": dict(resources.hashes) if resources else {},
             },
         )
         return result
 
     async def direct(self, stage, system, data, schema, validate, key):
-        """Allow scoped reads and bounded repairs, including one extra for missing ready_path."""
+        """Allow scoped reads and three repairs for each distinct output failure."""
         tools = [
             {
                 "type": "function",
@@ -332,9 +397,12 @@ class JsonModel:
                 },
             }
         ]
-        evidence = EvidenceReader(self.files, data)
-        readers = {"read_evidence": evidence} if evidence.allowed - evidence.delivered else {}
-        if self.resources and stage != "route":
+        readers = {}
+        if stage not in {"plan", "combine"}:
+            evidence = EvidenceReader(self.files, data)
+            if evidence.allowed - evidence.delivered:
+                readers["read_evidence"] = evidence
+        if self.resources and stage not in {"plan", "route", "combine"}:
             readers[self.resources.name] = self.resources
         for reader in readers.values():
             tools.append(
@@ -347,7 +415,7 @@ class JsonModel:
                     },
                 }
             )
-        if stage != "route":
+        if stage not in {"plan", "route", "combine"}:
             system += (
                 "\nSupplied complete attachments fulfill the Skill's reading requirements. "
                 "Only read additional resources whose contents are missing; never reread supplied text."
@@ -361,6 +429,7 @@ class JsonModel:
             {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
         ]
         failures = 0
+        retries = Counter()
         while True:
             response = await self.call(stage, messages, tools, max_tokens=self.max_tokens)
             raw = None
@@ -412,7 +481,10 @@ class JsonModel:
                 ):
                     # Repair provider-preserved text before validating structure and provenance.
                     raw = raw["raw"]
-                    raw = json_repair.loads(raw, stream_stable=True)
+                    if schema is FileResponse and stage in {"reduce", "reduce_merge"}:
+                        raw = parse_file_result(raw)
+                    else:
+                        raw = json_repair.loads(raw, stream_stable=True)
                 category = "schema"
                 result = schema.model_validate(raw)
                 category = "semantic"
@@ -444,12 +516,8 @@ class JsonModel:
                     },
                 )
                 self.metrics["validation_failures"] += 1
-                failure_limit = 3 if isinstance(exc, MissingReadyPathError) else 2
-                if (
-                    schema is RouteBatchResponse
-                    or failures >= failure_limit
-                    or category == "truncated"
-                ):
+                # Routing owns retries per primary record, including malformed responses.
+                if schema is RouteBatchResponse or not retry_allowed(retries, error):
                     raise ValueError(f"{stage}: {category}: {error}") from exc
                 self.metrics["repairs"] += 1
                 messages.append(
@@ -467,8 +535,6 @@ class JsonModel:
                             "The plan is a DSL string; do not wrap the result or contract in a JSON string."
                             if stage == "plan"
                             else ""
-                        )
-                        + "\nOnly remove an unsupported requirement if a listed runtime capability "
-                        "actually satisfies it. Otherwise retain it and report failure.",
+                        ),
                     }
                 )

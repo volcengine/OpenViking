@@ -6,18 +6,18 @@ import ast
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-PROCESSING_VERSION = "compile-pipeline-31"
+PROCESSING_VERSION = "compile-pipeline-33"
 # Explicit output-token fallback when the configured VLM provides no value.
 DEFAULT_MAX_TOKENS = 32_000
 
 # Common tasks share one collection flow; explicit plans still pass the AST whitelist.
 DEFAULT_PLAN = (
     "records = p.map(sources, task=contract.extract)\n"
-    "groups = p.shuffle(records, by=contract.routing, against=target)\n"
+    "groups = p.shuffle(records, by=contract.routing)\n"
     "changes = p.reduce(groups, task=contract.reduce)\n"
     "p.finalize(changes, into=target)"
 )
@@ -39,30 +39,42 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class Transform(StrictModel):
-    """A bounded transformation; fields declare the permitted intermediate structure.
+class PlanModel(BaseModel):
+    """Discard undeclared planner fields while validating declared fields and constraints.
 
-    Hierarchical aggregation is allowed only through an explicitly supplied combine
-    transform. Its fields must carry the Skill's required conditions and exceptions.
+    Open dictionaries such as transform fields and scope definitions retain their
+    entries; only unknown model attributes are omitted from the parsed plan.
     """
 
-    instructions: str = Field(min_length=1, max_length=6000)
-    output: Literal["records", "files"] = "records"
-    execution: Literal["direct", "agent"] = "direct"
+    model_config = ConfigDict(extra="ignore")
+
+
+class Transform(PlanModel):
+    """A bounded transformation; fields declare the permitted intermediate structure."""
+
+    instructions: str = Field(
+        min_length=1,
+        description="Work on assigned inputs, expected results and any step-specific constraints or checks. "
+        "Map/Reduce also receive the full Skill and user instruction; avoid repeating them.",
+    )
+    output: Literal["records", "files"] = Field(
+        default="records",
+        description="records carries evidence to later steps; files produces output files.",
+    )
+    execution: Literal["direct", "agent"] = Field(
+        default="direct",
+        description="direct: model calls reading assigned evidence and Skill attachments. "
+        "agent: also uses scratch files and Skill scripts.",
+    )
     input_unit: Literal["range", "file"] = Field(
         default="range",
-        description="Source Map assignment boundary. Use range for partial evidence "
-        "that later stages synthesize; use file when the Map result requires "
-        "whole-document context. State that dependency in instructions. "
-        "Intermediate records stay separate.",
+        description="When Map reads source files: file keeps each file's text ranges together; "
+        "range permits separate or batched ranges. Map over records handles each record separately.",
     )
     fields: dict[str, str] = Field(
         default_factory=lambda: {"text": "Facts extracted from the source."},
-        description="Payload field names mapped to optional simple descriptions; empty descriptions "
-        "are allowed. Prefer one sentence per description, "
-        "without a count limit. Runtime keys inputs, scope, "
-        "routing_text, evidence_spans, ready_path, ready_content, ready_content_ref and target_uri are already "
-        "provided beside payload and must not be repeated. Leave the default for files output.",
+        description='Record content field names mapped to instructions for producing their values; '
+        'e.g. {"facts": "Facts, conditions and exceptions to retain"}. Omit for files output.',
     )
 
     @field_validator("fields", mode="before")
@@ -89,11 +101,18 @@ class Transform(StrictModel):
         return {name: description for name, description in value.items() if name not in reserved}
 
 
-class Routing(StrictModel):
+class Routing(PlanModel):
     """Group records by semantic instructions or preserve the entire collection as one group."""
 
-    mode: Literal["semantic", "all"] = "semantic"
-    instructions: str = Field(default="", max_length=4000)
+    mode: Literal["semantic", "all"] = Field(
+        default="semantic",
+        description="semantic groups related records using instructions; all puts every record in one group.",
+    )
+    instructions: str = Field(
+        default="",
+        description="Which records belong together and why; required for semantic mode. "
+        "Must stand alone: Shuffle does not receive the Skill or user instruction.",
+    )
 
     @model_validator(mode="after")
     def check_instructions(self) -> Routing:
@@ -103,40 +122,52 @@ class Routing(StrictModel):
         return self
 
 
-class Contract(StrictModel):
+class Contract(PlanModel):
     """Task-local interpretation of the original Skill, which remains authoritative.
 
     distinguish maps scope field names to their extraction meanings.
     Scope values describe evidence; they are not equality keys for candidate grouping.
-    unsupported requirements stop planning instead of silently weakening the Skill.
     No identifiers in this contract enumerate individual input documents.
     """
 
-    version: Literal[1] = 1
-    extract: Transform
-    reduce: Transform | None = None
-    synthesize: Transform | None = None
-    combine: Transform | None = None
-    routing: Annotated[str, Field(max_length=4000)] | Routing = ""
-    final_routing: Annotated[str, Field(max_length=4000)] | Routing = ""
+    extract: Transform = Field(
+        description="Work configuration, typically for processing sources: extract facts or generate files.",
+    )
+    reduce: Transform | None = Field(
+        default=None,
+        description="Additional work configuration, typically consolidating related facts into a topic summary.",
+    )
+    synthesize: Transform | None = Field(
+        default=None,
+        description="Additional work configuration, typically processing earlier results into final deliverables.",
+    )
+    routing: str | Routing = Field(
+        default="",
+        description="Grouping rule referenced by Shuffle's by parameter; omit when not used.",
+    )
+    final_routing: str | Routing = Field(
+        default="",
+        description="Another grouping rule for a Shuffle step needing different criteria; same format as routing.",
+    )
     distinguish: dict[str, str] = Field(
         default_factory=dict,
-        description="Scope field names mapped to their meanings. Prefer short names such as "
-        "subject, page_role and version; explain what to extract in each value.",
+        description='Record applicability field names mapped to extraction instructions, not actual values; '
+        'e.g. {"version": "Product version these facts apply to"}. These are not exact-match grouping keys.',
     )
-    preserve: list[str] = Field(default_factory=list, max_length=16)
-    overflow: Literal["direct", "structured"] = "direct"
+    preserve: list[str] = Field(
+        default_factory=list,
+        description="Extra requirements shared with Map/Reduce, e.g. details to preserve. "
+        "Omit if covered by the Skill or user instruction.",
+    )
     output_format: Literal["wiki", "files"] = Field(
         default="files",
-        description="wiki requires OKF Markdown pages; files permits arbitrary/mixed text files.",
+        description="Use files for ordinary text or Markdown outputs. Choose wiki when the task "
+        "requires OpenViking Knowledge Format (OKF) wiki pages with its page metadata and link rules.",
     )
-    required_paths: list[str] = Field(default_factory=list, max_length=16)
-    validation: str = Field(default="", max_length=4000)
-    unsupported: list[str] = Field(
+    required_paths: list[str] = Field(
         default_factory=list,
-        max_length=16,
-        description="Only missing runtime capabilities that prevent this task. Deferred validation, "
-        "checks delegated to operators are supported.",
+        description="Prescribed output paths relative to request.to; no wildcards or guessed filenames. "
+        "Omit if none are required.",
     )
 
     @field_validator("distinguish", mode="before")
@@ -156,23 +187,19 @@ class Contract(StrictModel):
             value["reduce"] = {"output": "files", **value["reduce"]}
         return value
 
-    @model_validator(mode="after")
-    def check_contract(self) -> Contract:
-        """Reject unusable contracts before any source transformation begins."""
-        if self.unsupported:
-            raise ValueError(f"Unrepresentable Skill requirements: {self.unsupported}")
-        if self.overflow == "structured" and (
-            self.combine is None or self.combine.output != "records"
-        ):
-            raise ValueError("structured overflow requires a records combine transform")
-        return self
 
-
-class PlanProposal(StrictModel):
+class PlanProposal(PlanModel):
     """A task contract with an optional custom flow; omission uses the four standard operators."""
 
-    contract: Contract
-    plan: str = Field(default=DEFAULT_PLAN, min_length=1, max_length=8000)
+    contract: Contract = Field(
+        description="Work definitions, grouping rules and output requirements referenced by the plan.",
+    )
+    plan: str = Field(
+        default=DEFAULT_PLAN,
+        min_length=1,
+        max_length=8000,
+        description="Assignments and operator calls as a string, connecting the chosen steps and ending with Finalize.",
+    )
 
 
 @dataclass(frozen=True)
@@ -248,16 +275,10 @@ def parse_plan(program: str, contract: Contract) -> list[Node]:
         if op in {"map", "reduce"}:
             required = {"task"}
             if set(kwargs) != required:
-                hint = (
-                    " Configure overflow at contract.overflow; remove the overflow keyword "
-                    "from this call."
-                    if "overflow" in kwargs
-                    else ""
-                )
                 raise ValueError(
                     f"plan line {call.lineno}, node {name}: p.{op} accepts only the task keyword; "
                     f"missing={sorted(required - set(kwargs))}; unexpected={sorted(set(kwargs) - required)}. "
-                    f"Received {ast.unparse(call)}.{hint}"
+                    f"Received {ast.unparse(call)}."
                 )
             task = reference(
                 kwargs["task"], "contract", {"extract", "reduce", "synthesize"}, "task"
@@ -315,7 +336,11 @@ class RecordDraft(StrictModel):
     evidence_spans: list[EvidenceSpan] = Field(default_factory=list)
     # JSON preserves nested facts and relations without prescribing their business shape.
     payload: dict[str, JsonValue] = Field(default_factory=dict)
-    routing_text: str = Field(min_length=1, max_length=600)
+    routing_text: str = Field(
+        default="",
+        max_length=600,
+        description="Short semantic routing description.",
+    )
     scope: dict[str, str] = Field(default_factory=dict)
     # A path without content is only a hint, never a finished or publishable file.
     ready_content: str | None = None
@@ -360,15 +385,28 @@ class RecordDraft(StrictModel):
 
 
 class InputReferenceError(ValueError):
-    """Invalid input accounting; file agents receive a bounded metadata repair window."""
+    """Input references or dispositions do not match the assigned evidence."""
 
 
 class MissingReadyPathError(ValueError):
-    """Finished content lacks its output path; direct calls allow one extra repair."""
+    """Finished content lacks the relative path required for publication."""
 
 
 class RecordResponse(StrictModel):
     records: list[RecordDraft] = Field(default_factory=list, max_length=64)
+
+
+class CombinedContent(StrictModel):
+    """Intermediate evidence for Reduce; inputs identify its supporting batch materials."""
+
+    inputs: list[str] = Field(min_length=1)
+    content: str = Field(min_length=1)
+
+
+class CombineResponse(StrictModel):
+    """Consolidated batch contents, with provenance maintained by the runtime."""
+
+    records: list[CombinedContent] = Field(min_length=1, max_length=64)
 
 
 def result_schema(schema, data):
@@ -377,9 +415,32 @@ def result_schema(schema, data):
     # remain available to Shuffle so valid neighbours survive a partial response.
     result = (RouteResponse if schema is RouteBatchResponse else schema).model_json_schema()
     if schema is PlanProposal:
-        output = result["$defs"]["Transform"]["properties"]["output"]
-        output.pop("default")
-        output["description"] = "Defaults to records; contract.reduce defaults to files."
+        # Planner-facing fields carry their meaning; class docstrings and generated titles do not.
+        for definition in [result, *result["$defs"].values()]:
+            definition.pop("title", None)
+            definition.pop("description", None)
+            for property_schema in definition.get("properties", {}).values():
+                property_schema.pop("title", None)
+        # Explicit plans are required from the model; stored contracts retain parsing defaults.
+        result["properties"]["plan"].pop("default")
+        result["required"] = ["contract", "plan"]
+        transform = result["$defs"]["Transform"]
+        transform["properties"]["output"].pop("default")
+        transform["required"] = ["instructions", "output"]
+        properties = result["$defs"]["Contract"]["properties"]
+        # Shared requirements remain readable from saved contracts; planners use stage instructions.
+        properties.pop("preserve")
+        # Model output uses objects for referenced configurations, omitting unused optional entries.
+        for name, definition in (
+            ("reduce", "Transform"),
+            ("synthesize", "Transform"),
+            ("routing", "Routing"),
+            ("final_routing", "Routing"),
+        ):
+            properties[name] = {
+                "$ref": f"#/$defs/{definition}",
+                "description": properties[name]["description"],
+            }
     if schema in (RouteResponse, RouteBatchResponse):
         ids = [item["record"] for item in data["records"]]
         result["properties"]["decisions"].update(minItems=len(ids), maxItems=len(ids))
@@ -397,7 +458,7 @@ def result_schema(schema, data):
     if schema is RecordResponse and "record_fields" in data:
         record = result["$defs"]["RecordDraft"]
         properties = record["properties"]
-        record["required"] = ["inputs", "routing_text", "scope"]
+        record["required"] = ["inputs", "scope"]
         for name, fields in (("payload", data["record_fields"]), ("scope", data["scope_fields"])):
             value = properties[name]["additionalProperties"]
             if name == "scope":

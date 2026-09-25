@@ -29,109 +29,115 @@ from vikingbot.compile.plan import (
 from vikingbot.compile.renderer import RenderedBundle
 from vikingbot.compile.skill_resources import SkillResources
 
-_PLANNER = """Plan the input collection using the original Skill, its attachments, and request.instruction.
-Choose the simplest plan that satisfies the requested result. Determine the deliverables and
-which inputs each depends on before choosing operators. Do not assume one output per input.
-Use source_summary for file sizes and fragmentation.
-Samples come from files selected by length; they are excerpts,
-not complete documents or representative coverage of all topics.
+_PLANNER = """## Task Description
 
-Operators
+You are the planner for a compile task. A compile task transforms source materials
+into the outputs required by a Skill and the user's instruction.
 
-- Map processes independent units into records or files. Use input_unit=file to keep each
-  source file together, or range to allow source-range batching. Intermediate records stay separate.
-- Shuffle groups records. Use a routing string for semantic grouping, or {"mode":"all"}
-  to put all records into one group. Make routing criteria self-contained: Shuffle receives
-  record evidence, but not the original Skill or instruction.
-- Reduce synthesizes each group into records or files. One group may produce several files.
-  Resolve shared identities and references before generating files that depend on them.
-- Finalize publishes files.
+Design the simplest sequence of processing steps that fulfills those requirements.
+The runtime executes your plan to read the materials, process them and publish the outputs.
+Return contract, which describes the work for each step, and plan, which specifies
+which steps run and how their results pass between them. The emit tool defines the
+fields you must fill in.
 
-Stage instructions
+## Inputs
 
-The Skill and request.instruction define the whole task. Each transform's instructions must
-explain its assigned work, input scope, expected output, and what later stages do with that output.
+The user message contains a JSON object with the following fields:
 
-For work requiring later synthesis, ask for the evidence needed downstream and identify
-which later stage produces the final result. If assigned inputs are only part of the collection,
-say so explicitly; do not let the transform treat its local assignment as the whole task.
-For independently complete work, ask for the finished deliverable.
+- skill: the complete SKILL.md text describing the task requirements.
+- request.instruction: the user's requirements for this compile task.
+- request.to: the destination for the generated outputs.
+- target_has_content: whether request.to contains any visible files or subdirectories.
+- source_summary: file counts, sizes and splitting statistics; sizes are Unicode characters.
+- runtime.time: the task timestamp for interpreting relative dates in the request.
 
-Reference Skill rules without copying them. Preserve required facts, conditions, exceptions
-and uncertainty.
+Only the main Skill text is included. Source document contents and other files
+referenced by the Skill are not included. Plan from the supplied requirements and
+statistics; the execution steps inspect those contents.
+Before execution, the runtime divides large source files into text segments called ranges.
 
-Records
+## Available Operators
 
-Define payload fields with short, plain descriptions. File outputs need no custom fields.
-The runtime supplies source IDs, ranges, hashes and counts.
+Operators are the processing steps supported by the runtime. Select and combine
+those needed for the task. You may use an operator more than once; the four operators
+below are not a required sequence.
 
-Keep evidence for joint synthesis in payload. Independently complete files may use
-ready_content/ref with ready_path; keep only useful identity and relationship information
-in payload instead of duplicating the finished content.
+### Map
 
-Use distinguish to describe scope fields, for example:
-{"subject": "The entity and where the facts apply", "version": "The effective version"}.
-Scope describes applicability, not exact-match grouping keys. Paths alone do not determine groups.
+Processes assigned source text. It can produce final files directly or return
+structured intermediate items called records. Each record contains information
+needed by later steps, such as facts extracted from a document.
+Map can also process records produced by an earlier step.
 
-Plan syntax
+### Shuffle
 
-Declare only the transforms and routing rules used. Omit plan to select this default:
+Collects records into groups according to a grouping rule.
+Each group is a collection of records that Reduce will process together.
 
-records = p.map(sources, task=contract.extract)
-groups = p.shuffle(records, by=contract.routing, against=target)
-changes = p.reduce(groups, task=contract.reduce)
-p.finalize(changes, into=target)
+### Reduce
 
-For independent file output, set extract.output=files and provide a Map -> Finalize plan.
-Use against=target when existing target content matters; omit it for intermediate grouping.
+Processes all records in a group together, combining their information.
+It can produce final files or new records for further processing.
+One group may produce multiple output files.
 
-Custom plans use this assignment syntax with sources, target, contract and p.
-Map accepts sources or records; Shuffle accepts records; Reduce accepts groups;
-Finalize accepts files. Consume each dataset once and finish with one Finalize.
-Do not use imports, loops, arbitrary calls, or enumerate individual inputs and jobs.
+### Finalize
 
-Execution and contract settings
+Publishes the generated files to the requested destination and ends the flow.
 
-Transforms default to execution=direct. extract defaults to records; reduce defaults to files.
-Choose execution=agent for iterative work, Skill scripts, or scratch-file processing.
-Oversized direct calls also use agents with scratch assignments and scoped reads.
+## Plan Syntax
 
-All settings are direct fields of contract:
-- preserve and validation: additional requirements beyond the Skill.
-- required_paths: prescribed exact relative output paths, without wildcards or guessed filenames.
-- output_format: files for ordinary or mixed text files; wiki for OKF pages.
-- unsupported: missing capabilities that prevent completing the task. Report these explicitly.
+Write plan as a string of assignments and operator calls. The runtime provides
+p for calling the operators, sources for the prepared source materials, and target
+for the output destination request.to. Other variables name results of earlier steps.
 
-For additional synthesis stages, define contract.synthesize and contract.final_routing.
-Use output=records for intermediate Reduce stages and output=files for final deliverables.
+These are examples of individual calls, not a complete plan or a prescribed sequence:
 
-Set contract.overflow to direct or structured.
-direct sends the whole group to Reduce. structured uses contract.combine to produce
-intermediate records when the group exceeds the input budget.
-Define contract.combine with output=records when selecting structured.
+- Map: mapped = p.map(sources, task=contract.extract)
+  mapped names the result; sources is the input; task selects the work configuration.
+  A previous records result can replace sources.
+- Shuffle: grouped = p.shuffle(records, by=contract.routing)
+  records is a previous records result; by selects the grouping rule.
+  Add against=target only when target_has_content is true and the task requires
+  comparing, updating or integrating existing target content.
+  Otherwise grouping uses only the current inputs.
+- Reduce: combined = p.reduce(groups, task=contract.reduce)
+  groups is a previous Shuffle result; task selects the work configuration.
+- Finalize: p.finalize(files, into=target)
+  files is a previous Map or Reduce result containing output files.
 
-Reduce reads the overflow policy from contract automatically.
-Its plan syntax is p.reduce(groups, task=contract.reduce).
-The reduce call accepts only the task keyword.
+The task argument can reference contract.extract, contract.reduce or contract.synthesize.
+Each contains instructions and settings for the work to perform. Any of them can be used
+by Map or Reduce; their names suggest common uses rather than operator types or positions.
+The by argument can reference contract.routing or contract.final_routing.
+Use these configuration names; reuse a configuration when multiple steps need the same work.
+Define optional work configurations and grouping rules only when referenced by the plan.
 
-Available capabilities
+## Plan Rules
 
-The runtime handles source rereads, scoped history recall, provenance and conditional writes.
-Read missing Skill resources with read_skill_resource.
-Agents can read, write and edit private scratch files and run Skill-supplied Python scripts
-through run_skill_script. They cannot scan all history, access external networks, or execute
-arbitrary scratch scripts.
+Write a single sequence of the operator calls shown above. Do not include
+Python control flow, imports or other function calls.
+Give each intermediate result a new variable name and pass it to exactly
+one subsequent call. End the sequence with one Finalize call.
+
+Each call describes a processing step over a collection of data.
+The runtime assigns files, text ranges or records to individual jobs within
+that step; do not write a separate call for each source file or job.
+
+## Execution Capabilities
+
+Map/Reduce can read their assigned evidence and files referenced by the Skill.
+A work configuration with execution=agent also permits private scratch files and
+Skill-supplied Python scripts. Execution steps cannot scan all history, access external
+networks or run arbitrary scratch scripts.
+
 """
 
 
 _SKILL_OUTPUT = """The target is a Skill namespace. The whole task must deliver one complete Skill package.
-Each transform follows its assigned instructions and contributes intermediate evidence
-or complete files to that package.
 
 Keep all package files under one <skill-name>/ directory.
-Choose the package name once in the contract.
 Set contract.output_format=files and include <skill-name>/SKILL.md in
-contract.required_paths.
+contract.required_paths, using the same package directory for every output file.
 
 The final SKILL.md must have YAML frontmatter with name matching the package directory
 and a nonempty description. Preserve attachments in their native formats.
@@ -218,10 +224,8 @@ class Pipeline:
             }
             self.metrics["input_ranges"] = len(sources)
             self.metrics["input_files"] = len({x["uri"] for x in self.evidence.values()})
-            source_summary, samples = await self.summarize_sources(sources)
-            references = self.resources.references(self.skill)
-            for reference in references:
-                await self.resources.read(reference)
+            source_summary = self.summarize_sources(sources)
+            target_has_content = bool(await self.client.list_resources(self.target, node_limit=1))
 
             def validate_plan(proposal):
                 parse_plan(proposal.plan, proposal.contract)
@@ -241,27 +245,19 @@ class Pipeline:
                         raise ValueError(str(exc)) from exc
                     if any(not p.startswith(name + "/") for p in proposal.contract.required_paths):
                         raise ValueError("Required Skill outputs must share the package directory")
-                missing = set(references) - set(self.resources.hashes)
-                if missing:
-                    raise ValueError(
-                        f"Read the referenced Skill resources before planning: {sorted(missing)}"
-                    )
 
             proposal = await self.model.ask(
                 "plan",
                 _PLANNER + self.output_instructions,
                 {
                     "skill": self.skill,
-                    "skill_resources": references,
-                    "runtime": prompt_runtime,
+                    "runtime": {"time": runtime["time"]},
                     "request": {
                         "to": self.target,
                         "instruction": self.request.instruction,
-                        "source_root_count": len(self.request.from_),
                     },
-                    "source_counts": dict(self.metrics),
                     "source_summary": source_summary,
-                    "samples": samples,
+                    "target_has_content": target_has_content,
                 },
                 PlanProposal,
                 validate_plan,
@@ -281,23 +277,17 @@ class Pipeline:
                 + self.request.instruction
                 + "\n\n# Shared requirements\n"
                 + self.contract.model_dump_json(
-                    include={"preserve", "validation", "required_paths"}
+                    include={"preserve", "required_paths"}
                 )
                 + "\n\n# Output rules\n"
                 + self.output_instructions
                 + "\n# Runtime\n"
                 + json.dumps(prompt_runtime)
-                + "\n\n# Skill attachments (read necessary rules before use)\n"
-                + json.dumps(self.resources.hashes)
                 + "\n"
-            )
-            contract_hash = digest(
-                [self.skill, self.contract.model_dump(), self.model.identity, self.resources.hashes]
             )
             await self.files.put(
                 "contract",
                 {
-                    "hash": contract_hash,
                     "contract": self.contract.model_dump(),
                     "skill": self.skill,
                     "dependencies": dict(self.resources.hashes),
@@ -306,7 +296,6 @@ class Pipeline:
             await self.files.put(
                 "plan",
                 {
-                    "contract_hash": contract_hash,
                     "program": proposal.plan,
                     "nodes": [asdict(n) for n in nodes],
                 },
@@ -431,37 +420,29 @@ class Pipeline:
             "coverage", {"counts": dict(Counter(manifest.values())), "inputs": inputs}
         )
 
-    async def summarize_sources(
-        self, sources: list[Record]
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        """Summarize seeded sources and sample files by length for the planner.
+    def summarize_sources(self, sources: list[Record]) -> dict[str, Any]:
+        """Return file-size and fragmentation statistics for seeded source records.
 
-        Sources retain seed order and non-overlapping Unicode character ranges;
-        counts exclude repeated reading context. Percentiles use nearest ranks.
-        Samples contain at most 500 characters from the first range of the smallest,
-        median and largest files, with duplicate selections removed. They represent
-        file lengths, not semantic categories. Empty input yields zero counts and
-        no samples. Only selected source shards are read; stored sources are unchanged.
+        Counts use non-overlapping Unicode character ranges from evidence metadata,
+        excluding repeated reading context. Percentiles use nearest ranks. Empty
+        input yields zero counts. Source bodies are neither read nor modified.
         """
         chars: Counter[str] = Counter()
         ranges: Counter[str] = Counter()
-        first: dict[str, Record] = {}
         for record in sources:
             evidence = self.evidence[record.record_id]
             uri = evidence["uri"]
             chars[uri] += evidence["end_char"] - evidence["start_char"]
             ranges[uri] += 1
-            first.setdefault(uri, record)
 
-        ordered = sorted(chars, key=lambda uri: (chars[uri], uri))
-        lengths = [chars[uri] for uri in ordered]
+        lengths = sorted(chars.values())
         count = len(lengths)
 
         def percentile(percent: int) -> int:
             """Return a nearest-rank file length for a percentile in 1..100, or zero if empty."""
             return lengths[(count * percent + 99) // 100 - 1] if count else 0
 
-        summary = {
+        return {
             "file_count": count,
             "range_count": len(sources),
             "total_chars": sum(lengths),
@@ -474,22 +455,6 @@ class Pipeline:
             "files_with_multiple_ranges": sum(n > 1 for n in ranges.values()),
             "max_ranges_per_file": max(ranges.values(), default=0),
         }
-        samples = []
-        if ordered:
-            for index in sorted({0, (count - 1) // 2, count - 1}):
-                uri = ordered[index]
-                source = await self.files.get(first[uri].payload_ref)
-                excerpt = source["text"][:500]
-                samples.append(
-                    {
-                        "uri": uri,
-                        "file_chars": chars[uri],
-                        "range_count": ranges[uri],
-                        "excerpt": excerpt,
-                        "excerpt_is_complete_file": len(excerpt) == chars[uri],
-                    }
-                )
-        return summary, samples
 
     async def seed(self, batches) -> list[Record]:
         """Retain exact ranges with content hashes and offsets before any transformation."""

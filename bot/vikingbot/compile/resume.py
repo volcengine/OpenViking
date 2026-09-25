@@ -100,7 +100,8 @@ async def run(pipeline):
         raise ValueError("Skill differs from the checkpoint")
     if pipeline.model.identity != runtime["model_settings"]:
         raise ValueError("Model settings differ from the checkpoint")
-    if not await pipeline.resources.valid(contract["dependencies"]):
+    dependencies = await pipeline.files.get("skill-dependencies") or contract["dependencies"]
+    if not await pipeline.resources.valid(dependencies):
         raise ValueError("Skill dependencies differ from the checkpoint")
     pipeline.contract = Contract.model_validate(contract["contract"])
     prompt_runtime = {key: value for key, value in runtime.items() if key in {"time", "skill"}}
@@ -110,13 +111,11 @@ async def run(pipeline):
         + "\nInstruction:\n"
         + pipeline.request.instruction
         + "\nShared requirements:\n"
-        + pipeline.contract.model_dump_json(include={"preserve", "validation", "required_paths"})
+        + pipeline.contract.model_dump_json(include={"preserve", "required_paths"})
         + "\n"
         + pipeline.output_instructions
         + "\nRuntime: "
         + json.dumps(prompt_runtime)
-        + "\nSkill attachments (read necessary rules before use): "
-        + json.dumps(pipeline.resources.hashes)
     )
     for key, source in checkpoint["sources"].items():
         pipeline.evidence[key] = {k: v for k, v in source.items() if k not in {"text", "context"}}

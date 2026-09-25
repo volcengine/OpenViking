@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import posixpath
-import re
 import shlex
 import sys
 import uuid
@@ -22,13 +21,14 @@ class SkillResources(Tool):
 
     A task snapshots at most 32 attachments, 256 KiB each and 1 MiB total. Reads
     return complete requested line ranges with hashes and explicit remaining lines.
-    Hashes bind downstream caches to all attachments consulted by the planner.
+    Hashes bind execution caches and recovery to attachments read by execution stages.
     """
 
     name = "read_skill_resource"
     description = (
-        "Read a Skill configuration, reference or template. Path is relative to the selected "
-        "Skill, or its full Viking URI. Omit offset/limit to read the complete file. "
+        "Read a configuration, reference or template inside the selected Skill package. "
+        "Path is relative to that Skill, or a full Viking URI inside it. "
+        "Omit offset/limit to read the complete file. "
         "Line offsets are zero-based; use explicit non-overlapping ranges for long files."
     )
     parameters = {
@@ -57,16 +57,6 @@ class SkillResources(Tool):
         path = validate_relative_file_path(path)
         safe_join_viking_uri(self.root, path)
         return path
-
-    def references(self, text):
-        """List explicit Markdown attachment references without interpreting shell commands."""
-        paths = []
-        text = re.sub(r"```.*?```|`[^`\n]*`", "", text, flags=re.DOTALL)
-        for match in re.finditer(r"\]\(([^\s)]+)\)", text):
-            value = match[1].split("#", 1)[0]
-            if value and ("://" not in value or value.startswith(self.root + "/")):
-                paths.append(self.path(value))
-        return sorted(set(paths))
 
     async def read(self, path, *, refresh=False):
         """Load a bounded attachment and persist its content version; errors never mean absence."""
