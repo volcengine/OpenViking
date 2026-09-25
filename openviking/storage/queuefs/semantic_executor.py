@@ -36,6 +36,12 @@ from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
+from openviking.utils.model_call import (
+    current_model_workload,
+    is_model_call_error,
+    model_stage,
+    model_workload,
+)
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -234,6 +240,7 @@ class SemanticTreeExecutor:
         self._task_context = get_task_context()
         self._processing_index = None
         self._telemetry = get_current_telemetry()
+        self._model_workload = current_model_workload()
         self._telemetry_id = telemetry_id
         self._stale = False
         self._changed_paths = {
@@ -506,7 +513,20 @@ class SemanticTreeExecutor:
         # unrelated node pause the creator's clock when it has no timing owner.
         token = processing_owner.set(None)
         try:
-            with bind_telemetry(self._telemetry), task_context, timing:
+            scope = self._model_workload
+            with (
+                bind_telemetry(self._telemetry),
+                task_context,
+                timing,
+                model_workload(
+                    scope.operation,
+                    workload=scope.workload,
+                    stage=scope.stage,
+                    deadline_at=scope.deadline_at,
+                    root_task_id=scope.root_task_id,
+                ),
+                model_stage(scope.stage),
+            ):
                 await self._run_work_bound(work)
         finally:
             processing_owner.reset(token)
@@ -1109,15 +1129,18 @@ class SemanticTreeExecutor:
                 }
                 if file_content is not None:
                     summary_kwargs["file_content"] = file_content
-                summary_dict = await self._processor._generate_single_file_summary(
-                    file_path, **summary_kwargs
-                )
+                with model_stage("file_summary"):
+                    summary_dict = await self._processor._generate_single_file_summary(
+                        file_path, **summary_kwargs
+                    )
         except (AbstractOverviewFormatError, FileNotFoundError, ValueError):
             # A generated sidecar that opted into OKF must never be treated as
             # an empty file summary; doing so would silently feed metadata or
             # corrupted YAML into a later regeneration.
             raise
         except Exception as e:
+            if is_model_call_error(e):
+                raise
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}
@@ -1429,14 +1452,15 @@ class SemanticTreeExecutor:
                     overview = self._select_direct_media_overview(node, file_summaries)
                 if overview is None:
                     async with self._llm_sem:
-                        overview = await self._processor._generate_overview(
-                            dir_uri,
-                            file_summaries,
-                            children_abstracts,
-                            total_files=len(node.file_paths),
-                            total_children=len(node.children_dirs),
-                            ctx=self._ctx,
-                        )
+                        with model_stage("directory_overview"):
+                            overview = await self._processor._generate_overview(
+                                dir_uri,
+                                file_summaries,
+                                children_abstracts,
+                                total_files=len(node.file_paths),
+                                total_children=len(node.children_dirs),
+                                ctx=self._ctx,
+                            )
                 overview, abstract = self._processor._normalize_overview_generation(overview)
 
             if self._closed:
@@ -1471,6 +1495,8 @@ class SemanticTreeExecutor:
         except AbstractOverviewFormatError:
             raise
         except Exception as e:
+            if is_model_call_error(e):
+                raise
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             self._record_skill_failure(dir_uri, e)
         else:

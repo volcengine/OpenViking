@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from openviking.storage.context_update_plan import SemanticPlan
 from openviking.utils.ingest_options import IngestOptions
+from openviking.utils.model_call import current_model_workload
 
 
 def build_semantic_coalesce_key(
@@ -50,6 +51,9 @@ class SemanticMsg:
     status: str = "pending"  # pending/processing/completed
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp()))
     queue_enqueued_at: float = 0.0
+    model_operation: str = "other"
+    model_deadline_at: float | None = None
+    root_task_id: str = ""
     recursive: bool = True  # Whether to recursively process subdirectories
     account_id: str = "default"
     user_id: str = "default"
@@ -114,6 +118,9 @@ class SemanticMsg:
         file_abstracts: Optional[Dict[str, str]] = None,
         plan: SemanticPlan | Dict[str, Any] | None = None,
         queue_enqueued_at: float = 0.0,
+        model_operation: str | None = None,
+        model_deadline_at: float | None = None,
+        root_task_id: str | None = None,
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
@@ -128,6 +135,14 @@ class SemanticMsg:
         self.role = role
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
+        model_scope = current_model_workload()
+        self.model_operation = model_scope.operation if model_operation is None else model_operation
+        self.model_deadline_at = (
+            model_scope.deadline_at
+            if model_operation is None and model_deadline_at is None
+            else model_deadline_at
+        )
+        self.root_task_id = model_scope.root_task_id if root_task_id is None else str(root_task_id)
         self.target_uri = target_uri
         self.lock_handoff = lock_handoff
         self.is_code_repo = is_code_repo
@@ -227,6 +242,9 @@ class SemanticMsg:
             ),
             plan=data.get("plan") if isinstance(data.get("plan"), dict) else None,
             queue_enqueued_at=data.get("queue_enqueued_at", 0.0),
+            model_operation=data.get("model_operation", "other"),
+            model_deadline_at=data.get("model_deadline_at"),
+            root_task_id=data.get("root_task_id", ""),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

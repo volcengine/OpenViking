@@ -9,7 +9,6 @@ import asyncio
 import atexit
 import threading
 import time
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set, Union
 
 from openviking.service.task_work_index import TaskWorkIndex
@@ -150,9 +149,7 @@ class QueueManager:
         if self._started:
             return
         if self.SEMANTIC in self._queues and self._vlm_resolver is None:
-            raise RuntimeError(
-                "QueueManager requires a VLM resolver before semantic workers start"
-            )
+            raise RuntimeError("QueueManager requires a VLM resolver before semantic workers start")
 
         self._started = True
 
@@ -271,43 +268,16 @@ class QueueManager:
     def _queue_worker_loop(
         self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int = 1
     ) -> None:
-        """Worker loop for a single queue.
-
-        When max_concurrent > 1, items are fetched and processed in parallel
-        (up to max_concurrent at a time). Otherwise items are processed one by one.
-        """
+        """Run bounded deliveries with cancellable shutdown, including one worker."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        poll_interval = (
-            self._REQUEUE_POLL_INTERVAL
-            if queue.name in {self.SESSION_COMMIT, self.EXTERNAL_TASK}
-            else self._poll_interval
-        )
         try:
-            if max_concurrent > 1:
-                loop.run_until_complete(
-                    self._worker_async_concurrent(queue, stop_event, max_concurrent)
-                )
-            else:
-                while not stop_event.is_set():
-                    try:
-                        queue_size = loop.run_until_complete(queue.size())
-                        if queue.has_dequeue_handler() and queue_size > 0:
-                            data = loop.run_until_complete(queue.dequeue())
-                            if data is not None:
-                                logger.debug("[QueueManager] Dequeued message from %s", queue.name)
-                            if queue.name in {self.SESSION_COMMIT, self.EXTERNAL_TASK}:
-                                stop_event.wait(poll_interval)
-                        else:
-                            stop_event.wait(poll_interval)
-                    except asyncio.CancelledError:
-                        if not stop_event.is_set():
-                            raise
-                        break
-                    except Exception as e:
-                        logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
-                        traceback.print_exc()
-                        stop_event.wait(poll_interval)
+            # Admission waits can span a provider cooldown. Reuse the same
+            # shutdown drain/cancel path at concurrency=1 so stop() never has
+            # to wait for that entire cooldown before observing its stop event.
+            loop.run_until_complete(
+                self._worker_async_concurrent(queue, stop_event, max_concurrent)
+            )
         finally:
             # Consumers may own timers and async generators in addition to
             # their active queue deliveries. Finish them on the worker loop.
@@ -358,7 +328,18 @@ class QueueManager:
             while len(active_tasks) < max_concurrent:
                 if not queue.has_dequeue_handler():
                     break
-                data = await queue.dequeue_raw()
+                try:
+                    data = await queue.dequeue_raw()
+                except Exception as error:
+                    # Queue initialization precedes dequeue_raw's own error
+                    # handling. Preserve the single worker's polling recovery
+                    # when that I/O fails before any delivery is acquired.
+                    logger.error(
+                        "[QueueManager] Failed to acquire delivery from %s: %s",
+                        queue.name,
+                        error,
+                    )
+                    break
                 if data is None:
                     break
                 task = asyncio.create_task(process_one(data))

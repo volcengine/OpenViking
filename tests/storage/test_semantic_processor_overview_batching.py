@@ -1,12 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.storage.queuefs import semantic_processor as semantic_processor_module
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.utils.model_call import ModelCallError
 
 
 class RecordingVLM:
@@ -41,6 +44,50 @@ class _TestVLMResolver:
 
 
 @pytest.mark.asyncio
+async def test_terminal_batch_cancels_and_drains_sibling_requests(monkeypatch):
+    started = asyncio.Event()
+    drained = asyncio.Event()
+    calls = 0
+
+    async def completion(prompt):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await started.wait()
+            raise ModelCallError("max_attempts", "transient", 4, "fixture")
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            drained.set()
+
+    config = SimpleNamespace(
+        vlm=SimpleNamespace(
+            is_available=lambda: True, get_completion_async=AsyncMock(side_effect=completion)
+        ),
+        semantic=SimpleNamespace(max_overview_prompt_chars=1, overview_batch_size=1),
+        output_language_override="en",
+    )
+    monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(semantic_processor_module, "render_prompt", lambda *_: "prompt")
+    processor = SemanticProcessor(
+        max_concurrent_llm=2,
+        vlm_resolver=_TestVLMResolver(config.vlm),
+    )
+    with pytest.raises(ModelCallError, match="max_attempts"):
+        await asyncio.wait_for(
+            processor._generate_overview(
+                "viking://resources/root",
+                [{"name": "a", "summary": "a"}, {"name": "b", "summary": "b"}],
+                [],
+            ),
+            timeout=1,
+        )
+    assert drained.is_set()
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_children_only_oversized_overview_is_batched(monkeypatch):
     vlm = RecordingVLM()
     config = SimpleNamespace(
@@ -65,9 +112,7 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
     )
     children = [{"name": f"child-{index}", "abstract": "x" * 20} for index in range(3)]
 
-    overview = await SemanticProcessor(
-        vlm_resolver=_TestVLMResolver(vlm)
-    )._generate_overview(
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
         "viking://resources/root",
         file_summaries=[],
         children_abstracts=children,
@@ -143,9 +188,7 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
         lambda _name, values: values["file_summaries"],
     )
 
-    overview = await SemanticProcessor(
-        vlm_resolver=_TestVLMResolver(vlm)
-    )._generate_overview(
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
         "viking://resources/业务 docs",
         file_summaries=[
             {"name": "first file.md", "summary": "first summary"},

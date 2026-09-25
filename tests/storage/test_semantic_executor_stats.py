@@ -34,6 +34,13 @@ from openviking.telemetry import (
     bind_telemetry,
     get_current_telemetry,
 )
+from openviking.telemetry.context import bind_telemetry_stage
+from openviking.utils.model_call import (
+    current_model_workload,
+    model_stage,
+    model_workload,
+    run_model_async,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -69,6 +76,7 @@ class _FakeProcessor:
         self.vectorized_dirs = []
         self.vectorized_files = []
         self.vectorized_contexts = {}
+        self.vectorized_workloads = {}
         self.summarized_files = []
         self.overview_inputs = []
         self.verify_streaming = verify_streaming
@@ -122,6 +130,7 @@ class _FakeProcessor:
             task_context.task_id if task_context is not None else None,
             get_current_telemetry().telemetry_id,
         )
+        self.vectorized_workloads[file_path] = current_model_workload()
 
     async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
         await self._vectorize_directory(uri, context_type, abstract, overview, ctx=ctx)
@@ -169,6 +178,57 @@ def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
             semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_executor_attributes_model_stages_without_changing_token_stages(monkeypatch):
+    from openviking.metrics.datasources.model_retry import ModelRetryEventDataSource
+
+    root_uri = "viking://resources/root"
+    fake_fs = _FakeVikingFS({root_uri: [{"name": "a.txt", "isDir": False}]})
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    _patch_semantic_config(monkeypatch)
+    events = []
+    monkeypatch.setattr(
+        ModelRetryEventDataSource, "_emit", lambda name, payload: events.append((name, payload))
+    )
+
+    class Processor(_FakeProcessor):
+        async def _model_request(self):
+            # SemanticProcessor uses this legacy stage inside both generation
+            # methods. It must not override the executor's model-only stage.
+            with bind_telemetry_stage("semantic_execute"):
+
+                async def request():
+                    get_current_telemetry().add_token_usage(3, 2)
+                    return "summary"
+
+                return await run_model_async(request, model_type="vlm")
+
+        async def _generate_single_file_summary(self, file_path, **kwargs):
+            return {"name": "a.txt", "summary": await self._model_request()}
+
+        async def _generate_overview(self, *args, **kwargs):
+            return await self._model_request()
+
+    processor = Processor()
+    telemetry = OperationTelemetry(operation="add_resource", enabled=True)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    with bind_telemetry(telemetry), model_workload("add_resource"):
+        executor = SemanticTreeExecutor(processor, "resource", 2, ctx)
+        await executor.run(root_uri)
+
+    for event in ("model_retry.logical_call", "model_retry.attempt"):
+        assert sorted(payload["stage"] for name, payload in events if name == event) == [
+            "directory_overview",
+            "file_summary",
+        ]
+    tokens = telemetry.finish().summary["tokens"]
+    assert set(tokens["stages"]) == {"semantic_execute"}
+    assert tokens["stages"]["semantic_execute"]["llm"]["input"] == 6
+    assert tokens["stages"]["semantic_execute"]["llm"]["output"] == 4
 
 
 @pytest.mark.asyncio
@@ -435,6 +495,7 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
     with (
         bind_task_context("task-a", "acc1", "user1"),
         bind_telemetry(telemetry_a),
+        model_workload("add_resource", deadline_at=111),
     ):
         executor_a = SemanticTreeExecutor(
             processor=processor,
@@ -445,6 +506,7 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
     with (
         bind_task_context("task-b", "acc1", "user1"),
         bind_telemetry(telemetry_b),
+        model_workload("session_commit", workload="online", deadline_at=222),
     ):
         executor_b = SemanticTreeExecutor(
             processor=processor,
@@ -453,7 +515,9 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
             ctx=ctx,
         )
 
-    await asyncio.gather(executor_a.run(root_a), executor_b.run(root_b))
+    with model_workload("search", deadline_at=333), model_stage("archive_summary"):
+        await asyncio.gather(executor_a.run(root_a), executor_b.run(root_b))
+        assert current_model_workload().deadline_at == 333
 
     assert processor.max_active_summaries == 1
     assert executor_a.get_stats().done_nodes == 21
@@ -464,6 +528,17 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
     assert {processor.vectorized_contexts[f"{root_b}/b-{idx}.txt"] for idx in range(20)} == {
         ("task-b", telemetry_b.telemetry_id)
     }
+    for root, operation, workload, deadline in [
+        (root_a, "add_resource", "offline", 111),
+        (root_b, "session_commit", "online", 222),
+    ]:
+        scopes = [
+            scope for path, scope in processor.vectorized_workloads.items() if path.startswith(root)
+        ]
+        assert len(scopes) == 20
+        assert {(s.operation, s.workload, s.stage, s.deadline_at) for s in scopes} == {
+            (operation, workload, "other", deadline)
+        }
 
 
 @pytest.mark.asyncio

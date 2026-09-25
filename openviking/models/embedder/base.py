@@ -17,12 +17,10 @@ from openviking.utils.embedding_input import (
     resolve_embedding_max_input_tokens,
     truncate_embedding_input,
 )
-from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking.utils.exceptions import AllCredentialsFailedError as AllCredentialsFailedError
+from openviking.utils.model_call import delegate_model_call, run_model_async, run_model_sync
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
-    classify_api_error,
-    retry_async,
-    retry_sync,
 )
 from openviking_cli.utils import get_logger
 
@@ -76,9 +74,9 @@ class QueryEmbeddingCache(dict[Any, _SharedQueryEmbedding]):
             self.pop(key, None)
 
     async def close(self) -> None:
-        pending = {
-            entry.task for entry in self.values() if not entry.task.done()
-        } | {task for task in self._pending_tasks if not task.done()}
+        pending = {entry.task for entry in self.values() if not entry.task.done()} | {
+            task for task in self._pending_tasks if not task.done()
+        }
         for task in pending:
             task.cancel()
         if pending:
@@ -373,9 +371,11 @@ class EmbedderBase(ABC):
             finally:
                 self._active_call_started_at = previous_started_at
 
-        return retry_sync(
+        return run_model_sync(
             _wrapped,
+            model_type="embedding",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name=operation_name,
         )
@@ -418,9 +418,11 @@ class EmbedderBase(ABC):
                 self._active_call_started_at = previous_started_at
                 semaphore.release()
 
-        return await retry_async(
+        return await run_model_async(
             _wrapped,
+            model_type="embedding",
             max_retries=self.max_retries,
+            adapter=self,
             logger=logger,
             operation_name=operation_name,
         )
@@ -795,8 +797,7 @@ class FailoverEmbedder(EmbedderBase):
             exception, since the same request fails on every credential of the
             same model. Credential-level auth errors (401/403) advance to the
             next credential; only the last credential fails fast. Per-credential
-            retry counts are handled by each underlying embedder; there is no
-            global retry cap.
+            attempts share one logical-call budget across all credentials.
         """
         if not embedders:
             raise ValueError("At least one embedder instance is required")
@@ -818,99 +819,51 @@ class FailoverEmbedder(EmbedderBase):
             failback_request_count=failback_request_count,
         )
 
-    def _embed_with_failover(self, method_name: str, *args, **kwargs) -> EmbedResult:
-        """Execute an embedder method with multi-credential failover support.
-
-        Args:
-            method_name: Name of the method to call on embedder instances
-            *args: Positional arguments to pass to the method
-            **kwargs: Keyword arguments to pass to the method
-
-        Returns:
-            The result from the embedder method
-
-        Raises:
-            AllCredentialsFailedError if all credentials fail
-        """
-        aggregated_errors = []
-
-        # Start from the current (possibly failed-back) active credential, then
-        # cycle through the whole ring once so an unavailable active credential
-        # does not block the request. A credential that succeeds this cycle
-        # becomes the new active one (fast failover); slow sticky failback to
-        # higher priority is still handled by maybe_failback() across requests.
+    def _embed_with_failover(self, method_name: str, *args, **kwargs):
+        """One logical call, one total budget across ordered credentials."""
         start = self._switcher.maybe_failback()
-        n = self._switcher.n
 
-        for offset in range(n):
-            idx = (start + offset) % n
-            credential_id = self._credential_ids[idx]
-            embedder = self._embedders[idx]
-
-            try:
-                method = getattr(embedder, method_name)
-                result = method(*args, **kwargs)
+        def candidate(idx):
+            def execute_once():
+                instance = self._embedders[idx]
+                with delegate_model_call(instance):
+                    result = getattr(instance, method_name)(*args, **kwargs)
                 self._switcher.commit_success(idx)
                 return result
-            except Exception as exc:
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
 
-                if self._switcher.is_fail_fast(error_class):
-                    # Request-level failure: re-raise the original exception;
-                    # trying other credentials is useless.
-                    raise
+            return execute_once
 
-                logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
-                )
+        callbacks = [candidate((start + i) % self._switcher.n) for i in range(self._switcher.n)]
+        return run_model_sync(
+            callbacks[0],
+            alternatives=callbacks[1:],
+            model_type="embedding",
+            max_retries=self.max_retries,
+            adapter=self,
+        )
 
-        raise AllCredentialsFailedError(aggregated_errors)
-
-    async def _embed_with_failover_async(self, method_name: str, *args, **kwargs) -> EmbedResult:
-        """Execute an async embedder method with multi-credential failover support.
-
-        Args:
-            method_name: Name of the async method to call on embedder instances
-            *args: Positional arguments to pass to the method
-            **kwargs: Keyword arguments to pass to the method
-
-        Returns:
-            The result from the async embedder method
-
-        Raises:
-            AllCredentialsFailedError if all credentials fail
-        """
-        aggregated_errors = []
-
-        # See the sync variant for the ring-traversal rationale.
+    async def _embed_with_failover_async(self, method_name: str, *args, **kwargs):
+        """One logical call, one total budget across ordered credentials."""
         start = self._switcher.maybe_failback()
-        n = self._switcher.n
 
-        for offset in range(n):
-            idx = (start + offset) % n
-            credential_id = self._credential_ids[idx]
-            embedder = self._embedders[idx]
-
-            try:
-                method = getattr(embedder, method_name)
-                result = await method(*args, **kwargs)
+        def candidate(idx):
+            async def execute_once():
+                instance = self._embedders[idx]
+                with delegate_model_call(instance):
+                    result = await getattr(instance, method_name)(*args, **kwargs)
                 self._switcher.commit_success(idx)
                 return result
-            except Exception as exc:
-                error_class = classify_api_error(exc)
-                aggregated_errors.append((credential_id, error_class, exc, idx))
 
-                if self._switcher.is_fail_fast(error_class):
-                    # Request-level failure: re-raise the original exception;
-                    # trying other credentials is useless.
-                    raise
+            return execute_once
 
-                logger.warning(
-                    f"Credential {credential_id} failed with {error_class}, trying next credential"
-                )
-
-        raise AllCredentialsFailedError(aggregated_errors)
+        callbacks = [candidate((start + i) % self._switcher.n) for i in range(self._switcher.n)]
+        return await run_model_async(
+            callbacks[0],
+            alternatives=callbacks[1:],
+            model_type="embedding",
+            max_retries=self.max_retries,
+            adapter=self,
+        )
 
     @property
     def supports_multimodal(self) -> bool:

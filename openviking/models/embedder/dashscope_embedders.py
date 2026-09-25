@@ -87,6 +87,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
         # --- sync clients ---
         # Text mode: OpenAI-compatible
         self._openai_client = openai.OpenAI(
+            max_retries=0,
             api_key=self.api_key,
             base_url=f"{self.api_base}/compatible-mode/v1",
         )
@@ -206,6 +207,7 @@ class DashScopeDenseEmbedder(DenseEmbedderBase):
     def _get_async_openai_client(self) -> openai.AsyncOpenAI:
         return self._async_openai_client_cache.get(
             lambda: openai.AsyncOpenAI(
+                max_retries=0,
                 api_key=self.api_key,
                 base_url=f"{self.api_base}/compatible-mode/v1",
             )

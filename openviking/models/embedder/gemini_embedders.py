@@ -20,6 +20,7 @@ from openviking.models.embedder.base import (
     EmbedResult,
     truncate_and_normalize,
 )
+from openviking.utils.model_retry import ERROR_CLASS_AUTH, ProviderModelError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -52,7 +53,9 @@ _ERROR_HINTS: Dict[int, str] = {
     401: "Invalid API key. Verify your GOOGLE_API_KEY or api_key in config.",
     403: "Permission denied. API key may lack access to this model.",
     404: "Model not found: '{model}'. Check spelling (e.g. 'gemini-embedding-2-preview').",
-    429: "Quota exceeded. Wait and retry, or increase your Google API quota.",
+    # A 429 can mean temporary throttling or exhausted quota. Do not invent a
+    # quota classification in this explanatory wrapper; preserve SDK evidence.
+    429: "Request rejected. Check the provider's error details and retry policy.",
     500: "Gemini service error (Google-side). Retry after a delay.",
     503: "Gemini service unavailable. Retry after a delay.",
 }
@@ -67,6 +70,23 @@ def _raise_api_error(e: APIError, model: str) -> None:
     if hint:
         msg += f": {hint.format(model=model)}"
     raise RuntimeError(msg) from e
+
+
+def _normalize_gemini_error(error: APIError) -> Exception:
+    """Translate provider-specific credential evidence before owner classification."""
+    message = str(error).lower()
+    if (
+        error.code == 400
+        and "api key" in message
+        and any(marker in message for marker in ("invalid", "not valid", "expired"))
+    ):
+        return ProviderModelError(
+            str(error),
+            error_class=ERROR_CLASS_AUTH,
+            error_code=getattr(error, "status", None) or "invalid_api_key",
+            status_code=error.code,
+        )
+    return error
 
 
 class GeminiDenseEmbedder(DenseEmbedderBase):
@@ -141,7 +161,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 api_key=api_key,
                 http_options=HttpOptions(
                     retry_options=HttpRetryOptions(
-                        attempts=max(self.max_retries + 1, 1),
+                        attempts=1,
                         initial_delay=0.5,
                         max_delay=8.0,
                         exp_base=2.0,
@@ -207,23 +227,25 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
 
         # SDK accepts plain str; converts to REST Parts format internally.
         def _call() -> EmbedResult:
-            result = self.client.models.embed_content(
-                model=self.model_name,
-                contents=text,
-                config=self._build_config(task_type=task_type, title=title),
-            )
+            try:
+                result = self.client.models.embed_content(
+                    model=self.model_name,
+                    contents=text,
+                    config=self._build_config(task_type=task_type, title=title),
+                )
+            except (APIError, ClientError) as error:
+                normalized = _normalize_gemini_error(error)
+                if normalized is error:
+                    raise
+                raise normalized from error
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
 
         try:
-            result = (
-                _call()
-                if _HTTP_RETRY_AVAILABLE
-                else self._run_with_retry(
-                    _call,
-                    logger=logger,
-                    operation_name="Gemini embedding",
-                )
+            result = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Gemini embedding",
             )
             # Estimate token usage
             estimated_tokens = self._estimate_tokens(text)
@@ -252,11 +274,17 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         task_type = self._resolve_task_type(is_query=is_query, task_type=task_type)
 
         async def _call() -> EmbedResult:
-            result = await self.client.aio.models.embed_content(
-                model=self.model_name,
-                contents=text,
-                config=self._build_config(task_type=task_type, title=title),
-            )
+            try:
+                result = await self.client.aio.models.embed_content(
+                    model=self.model_name,
+                    contents=text,
+                    config=self._build_config(task_type=task_type, title=title),
+                )
+            except (APIError, ClientError) as error:
+                normalized = _normalize_gemini_error(error)
+                if normalized is error:
+                    raise
+                raise normalized from error
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
 

@@ -4,7 +4,6 @@
 import hashlib
 import inspect
 import json
-import logging
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -86,7 +85,8 @@ class TextEmbeddingHandler(ProductionTextEmbeddingHandler):
         provider = AccountEmbeddingProvider(AccountVectorConfigResolver(manager), manager)
         vikingdb.account_uses_content_field = AsyncMock(
             return_value=getattr(
-                vikingdb, "uses_content_field",
+                vikingdb,
+                "uses_content_field",
                 config.storage.vectordb.backend in {"volcengine", "vikingdb"},
             )
         )
@@ -794,55 +794,60 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_open_breaker_logs_summary_instead_of_per_item_warning(
-    monkeypatch, caplog
-):
+async def test_embedding_handler_expired_admission_fails_without_requeue(monkeypatch):
+    from unittest.mock import AsyncMock
+
     from openviking.utils.circuit_breaker import CircuitBreakerOpen
-
-    class _QueueingVikingDB:
-        is_closing = False
-        has_queue_manager = True
-
-        def __init__(self):
-            self.enqueued = []
-
-        async def enqueue_embedding_msg(self, msg):
-            self.enqueued.append(msg.id)
-            return None
 
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
-        "openviking_cli.utils.config.get_openviking_config",
-        lambda: _DummyConfig(embedder),
+        "openviking_cli.utils.config.get_openviking_config", lambda: _DummyConfig(embedder)
     )
-
-    handler = TextEmbeddingHandler(_QueueingVikingDB())
+    backend = SimpleNamespace(
+        is_closing=False, has_queue_manager=True, enqueue_embedding_msg=AsyncMock()
+    )
+    handler = TextEmbeddingHandler(backend)
     monkeypatch.setattr(
-        await handler.breaker(),
-        "check",
-        lambda: (_ for _ in ()).throw(CircuitBreakerOpen("open")),
+        handler._embedding_provider,
+        "wait_until_ready",
+        AsyncMock(
+            side_effect=CircuitBreakerOpen("Model circuit breaker open after admission wait")
+        ),
     )
+    result = await handler.on_dequeue(_build_queue_payload())
+    assert result.outcome is ProcessOutcome.FAILED
+    assert "breaker open" in result.error
+    assert embedder.calls == 0
+    backend.enqueue_embedding_msg.assert_not_awaited()
 
-    import openviking.storage.collection_schemas as collection_schemas
 
-    monkeypatch.setattr(collection_schemas.logger, "propagate", False)
-    collection_schemas.logger.addHandler(caplog.handler)
-    collection_schemas.logger.setLevel(logging.WARNING)
-    try:
-        with caplog.at_level(logging.WARNING):
-            first_result = await handler.on_dequeue(_build_queue_payload())
-            second_result = await handler.on_dequeue(_build_queue_payload())
-    finally:
-        collection_schemas.logger.removeHandler(caplog.handler)
+@pytest.mark.asyncio
+async def test_embedding_handler_waits_for_breaker_then_embeds_once(monkeypatch):
+    from unittest.mock import AsyncMock
 
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
-    assert warnings.count(
-        "Embedding circuit breaker is open; re-enqueueing messages account=default"
-    ) == 1
-    for result in (first_result, second_result):
-        assert result.outcome is ProcessOutcome.REQUEUED
-        assert result.value is None
-        assert result.error is None
+    embedder = _DummyEmbedder()
+    config = _DummyConfig(embedder)
+    config.embedding.circuit_breaker = SimpleNamespace(
+        failure_threshold=1,
+        reset_timeout=0.01,
+        max_reset_timeout=0.02,
+    )
+    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: config)
+    backend = SimpleNamespace(
+        is_closing=False,
+        uses_content_field=False,
+        has_queue_manager=True,
+        enqueue_embedding_msg=AsyncMock(),
+        upsert=AsyncMock(return_value="id-1"),
+    )
+    handler = TextEmbeddingHandler(backend)
+    breaker = await handler.breaker()
+    breaker.record_failure(RuntimeError("503 unavailable"))
+    result = await handler.on_dequeue(_build_queue_payload())
+    assert result.outcome is ProcessOutcome.SUCCESS
+    assert embedder.calls == 1
+    backend.upsert.assert_awaited_once()
+    backend.enqueue_embedding_msg.assert_not_awaited()
 
 
 @pytest.mark.asyncio

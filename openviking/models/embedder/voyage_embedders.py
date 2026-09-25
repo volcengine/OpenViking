@@ -80,6 +80,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             )
 
         self.client = openai.OpenAI(
+            max_retries=0,
             api_key=self.api_key,
             base_url=self.api_base,
         )
@@ -96,6 +97,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
     def _get_async_client(self):
         return self._async_client_cache.get(
             lambda: openai.AsyncOpenAI(
+                max_retries=0,
                 api_key=self.api_key,
                 base_url=self.api_base,
             )

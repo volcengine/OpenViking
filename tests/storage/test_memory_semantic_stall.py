@@ -18,7 +18,6 @@ from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.circuit_breaker import CircuitBreakerOpen
 
 
 def _processor():
@@ -54,37 +53,41 @@ def _build_data(msg: SemanticMsg) -> dict:
 @pytest.mark.parametrize("context_type", ["resource", "memory", "skill"])
 async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context_type):
     processor = _processor()
-    processor._circuit_breaker = SimpleNamespace(
-        check=MagicMock(side_effect=CircuitBreakerOpen), retry_after=0
-    )
-    entered, release = asyncio.Event(), asyncio.Event()
-    written = []
+    entered = asyncio.Event()
 
-    async def enqueue(msg):
+    async def wait_until_ready(**kwargs):
         entered.set()
-        await release.wait()
-        written.append(msg.id)
+        await asyncio.Future()
 
-    queue = SimpleNamespace(enqueue=enqueue)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager",
-        lambda: SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda _: queue),
+    processor._circuit_breakers["acc1"] = SimpleNamespace(
+        wait_until_ready=wait_until_ready,
+        abandon=MagicMock(),
+        retry_after=0,
     )
-    msg = _make_msg(context_type=context_type, telemetry_id=str(uuid4()))
+    lease = {"owner_id": "consumer", "lease_ref": "fixture"}
+    pathlock = SimpleNamespace(
+        pathlock_adopt=AsyncMock(return_value=lease),
+        pathlock_release=AsyncMock(),
+    )
+    fs = SimpleNamespace(_async_agfs=pathlock)
+    reenqueue = AsyncMock()
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fs)
+    monkeypatch.setattr(processor, "_reenqueue_semantic_msg", reenqueue)
+    msg = _make_msg(
+        context_type=context_type,
+        telemetry_id=str(uuid4()),
+        lock_handoff={"owner_id": "producer"},
+    )
     worker = asyncio.create_task(processor.on_dequeue(msg.to_dict()))
     try:
         await asyncio.wait_for(entered.wait(), 1)
         worker.cancel()
-        if context_type == "skill":
-            await asyncio.sleep(0)
-            assert not worker.done()
-            assert not written
-            release.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(worker, 1)
-        assert written == ([msg.id] if context_type == "skill" else [])
+        pathlock.pathlock_adopt.assert_awaited_once_with(msg.lock_handoff)
+        pathlock.pathlock_release.assert_awaited_once_with(lease)
+        reenqueue.assert_not_awaited()
     finally:
-        release.set()
         if not worker.done():
             worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
@@ -167,14 +170,8 @@ async def test_memory_ls_error_returns_failed():
 
 
 @pytest.mark.asyncio
-async def test_memory_ls_transient_error_requeues():
-    """Transient errors during ls() re-enqueue the msg and increment requeue count.
-
-    A 500-class error wrapped by the processor's `raise RuntimeError(...) from e`
-    is classified as `transient`. The outer on_dequeue() path must call
-    _reenqueue_semantic_msg(), bump requeue_count, and return REQUEUED without
-    a terminal error.
-    """
+async def test_memory_ls_error_after_execution_fails_without_requeue():
+    """Storage failures after execution starts must not replay completed model work."""
     processor = _processor()
 
     fake_fs = MagicMock()
@@ -199,10 +196,10 @@ async def test_memory_ls_transient_error_requeues():
     ):
         result = await processor.on_dequeue(data)
 
-    assert result.outcome is ProcessOutcome.REQUEUED
+    assert result.outcome is ProcessOutcome.FAILED
     assert result.value is None
-    assert result.error is None
-    reenqueue_mock.assert_awaited_once()
+    assert "500 Internal Server Error" in result.error
+    reenqueue_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

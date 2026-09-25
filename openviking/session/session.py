@@ -63,8 +63,10 @@ from openviking.session.working_memory import (
 )
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking.telemetry.context import bind_telemetry_stage
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.model_retry import is_retryable_api_error, retry_async
+from openviking.utils.model_call import is_model_call_error, model_workload
+from openviking.utils.model_retry import ERROR_CLASS_UNKNOWN, classify_api_error
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import (
@@ -88,9 +90,6 @@ MemoryPolicyProvider = Callable[[], Awaitable[MemoryPolicyData]]
 logger = get_logger(__name__)
 
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
-_MEMORY_EXTRACTION_MAX_RETRIES = 3
-_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
-_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 
@@ -99,6 +98,18 @@ def _load_render_prompt() -> Callable[..., str]:
     from openviking.prompts import render_prompt
 
     return render_prompt
+
+
+def _is_model_provider_error(error: Exception) -> bool:
+    """Return whether a caught VLM exception represents a model-call failure.
+
+    Decorated adapters attach a terminal marker once the retry owner stops.
+    Direct or legacy adapters can still expose a recognizable provider or
+    transport error without that marker, so preserve those errors for the
+    Phase 2 owner instead of silently replacing them with a summary fallback.
+    Response parsing and schema errors remain eligible for fallback.
+    """
+    return is_model_call_error(error) or classify_api_error(error) != ERROR_CLASS_UNKNOWN
 
 
 def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
@@ -1649,7 +1660,10 @@ class Session:
         """
         # ponytail: reuse archive ordering; no second session identity or context store.
         newest = f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
-        if self._compression.compression_index > 0 and await self._archives.is_context_reset_archive(newest):
+        if (
+            self._compression.compression_index > 0
+            and await self._archives.is_context_reset_archive(newest)
+        ):
             return  # Context is already empty; no second boundary needed.
         self._compression.compression_index += 1
         archive_uri = (
@@ -1978,7 +1992,10 @@ class Session:
             request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
-                with bind_telemetry(telemetry):
+                with (
+                    bind_telemetry(telemetry),
+                    model_workload("session_commit", root_task_id=task_id),
+                ):
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
                     extraction_batch_limits = resolve_extraction_batch_limits(auto_commit_policy)
@@ -2091,24 +2108,22 @@ class Session:
                                 },
                             )
 
-                    async def _run_retryable_phase2_step(
+                    async def _run_phase2_step(
                         operation_name: str,
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
-                        # Secondary safety net on top of the per-call retry that the
-                        # VLM/embedding layer already performs. Reuses the shared
-                        # transient-error classifier so permanent failures (auth,
-                        # quota, content-safety, 400, oversized input) fail fast
-                        # instead of being retried pointlessly.
-                        return await retry_async(
-                            fn,
-                            max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
-                            base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
-                            max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
-                            is_retryable=is_retryable_api_error,
-                            logger=logger,
-                            operation_name=operation_name,
-                        )
+                        # A step can have storage side effects and several model calls.
+                        # Retrying it would replay successful work and reset model budgets.
+                        if operation_name == "archive_summary":
+                            stage = "archive_summary"
+                        elif "skill" in operation_name:
+                            stage = "skill_extract"
+                        elif "working" in operation_name:
+                            stage = "working_memory"
+                        else:
+                            stage = "memory_extract"
+                        with bind_telemetry_stage(stage):
+                            return await fn()
 
                     async def _run_recorded_memory_step(
                         operation_name: str,
@@ -2116,7 +2131,7 @@ class Session:
                         step_messages: List[Message],
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
-                        result = await _run_retryable_phase2_step(operation_name, fn)
+                        result = await _run_phase2_step(operation_name, fn)
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
@@ -2127,7 +2142,9 @@ class Session:
                             archive_uri,
                             {
                                 "completed_memory_steps": (
-                                    self._archives.serialize_completed_memory_steps(completed_memory_steps)
+                                    self._archives.serialize_completed_memory_steps(
+                                        completed_memory_steps
+                                    )
                                 )
                             },
                         )
@@ -2172,7 +2189,9 @@ class Session:
                         extraction_tasks: List[Any] = []
                         extraction_labels: List[str] = []
                         if working_memory_enabled:
-                            extraction_tasks.append(_run_archive_summary())
+                            extraction_tasks.append(
+                                _run_phase2_step("archive_summary", _run_archive_summary)
+                            )
                             extraction_labels.append("archive_summary")
 
                         if self._session_compressor and long_term_has_work:
@@ -2280,7 +2299,10 @@ class Session:
                                 "Memory and session skill extraction skipped "
                                 "(disabled by config or memory_policy)"
                             )
-                        await _run_archive_summary()
+                        if working_memory_enabled:
+                            await _run_phase2_step("archive_summary", _run_archive_summary)
+                        else:
+                            await _run_archive_summary()
 
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its
@@ -2673,7 +2695,9 @@ class Session:
                     archive["archive_uri"],
                 )
 
-        merged_messages = self._archives.stable_deduplicate_messages(archive_messages + list(self._messages))
+        merged_messages = self._archives.stable_deduplicate_messages(
+            archive_messages + list(self._messages)
+        )
         merged_messages = await self._checkpoints.insert_terminal_checkpoints(
             merged_messages,
             terminal if terminal_state == "completed" else None,
@@ -3010,6 +3034,8 @@ class Session:
                     )
                 return await vlm.get_completion_async(prompt)
             except Exception as e:
+                if _is_model_provider_error(e):
+                    raise
                 wm.wm_debug(f"creation failed: {e}")
                 logger.warning(f"WM creation failed: {e}")
                 if checkpoint_requests:
@@ -3022,27 +3048,40 @@ class Session:
 
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
         wm.wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
-        reminders = wm.build_wm_section_reminders(latest_archive_overview)
-        if reminders:
-            wm.wm_debug(f"section_reminders injected ({len(reminders)}B)")
-        update_prompt = render_prompt(
-            "compression.ov_wm_v2_update",
-            {
-                "messages": formatted,
-                "latest_archive_overview": latest_archive_overview,
-                "wm_section_reminders": reminders,
-                "checkpoint_instructions": checkpoint_instructions,
-                "output_language": output_language,
-            },
-        )
-        resp = await vlm.get_completion_async(
-            prompt=update_prompt,
-            tools=[WM_UPDATE_TOOL],
-            tool_choice={
-                "type": "function",
-                "function": {"name": "update_working_memory"},
-            },
-        )
+        try:
+            reminders = wm.build_wm_section_reminders(latest_archive_overview)
+            if reminders:
+                wm.wm_debug(f"section_reminders injected ({len(reminders)}B)")
+            update_prompt = render_prompt(
+                "compression.ov_wm_v2_update",
+                {
+                    "messages": formatted,
+                    "latest_archive_overview": latest_archive_overview,
+                    "wm_section_reminders": reminders,
+                    "checkpoint_instructions": checkpoint_instructions,
+                    "output_language": output_language,
+                },
+            )
+            resp = await vlm.get_completion_async(
+                prompt=update_prompt,
+                tools=[WM_UPDATE_TOOL],
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": "update_working_memory"},
+                },
+            )
+        except Exception as e:
+            if _is_model_provider_error(e):
+                raise
+            import traceback as _tb
+
+            wm.wm_debug(f"tool_call raised: {type(e).__name__}: {e} tb={_tb.format_exc()[-400:]}")
+            if checkpoint_requests:
+                raise
+            logger.warning("WM update tool_call failed (%s); falling back to creation prompt", e)
+            return await self._fallback_generate_wm_creation(
+                formatted, messages, latest_archive_overview, output_language
+            )
 
         has_tc = bool(getattr(resp, "has_tool_calls", False) and getattr(resp, "tool_calls", None))
         _preview = (str(resp)[:200]).replace(chr(10), " ")
@@ -3192,17 +3231,26 @@ class Session:
         )
         from openviking.prompts import render_prompt
 
-        prompt = render_prompt(
-            "compression.ov_wm_v2",
-            {
-                "messages": formatted_messages,
-                "latest_archive_overview": prior_overview,
-                "checkpoint_instructions": "",
-                "output_language": output_language,
-            },
-        )
-        vlm = await self._get_vlm_config()
-        return await vlm.get_completion_async(prompt)
+        try:
+            prompt = render_prompt(
+                "compression.ov_wm_v2",
+                {
+                    "messages": formatted_messages,
+                    "latest_archive_overview": prior_overview,
+                    "checkpoint_instructions": "",
+                    "output_language": output_language,
+                },
+            )
+            vlm = await self._get_vlm_config()
+            return await vlm.get_completion_async(prompt)
+        except Exception as e:
+            if _is_model_provider_error(e):
+                raise
+            logger.warning(f"WM creation fallback failed: {e}")
+            turn_count = len([m for m in messages if is_user_query(m)])
+            return (
+                f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
+            )
 
     async def _write_to_agfs_async(
         self,

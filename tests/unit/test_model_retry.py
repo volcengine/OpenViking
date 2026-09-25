@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for shared model retry helpers."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from openviking.pyagfs.exceptions import (
@@ -21,6 +23,7 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_UNKNOWN,
     classify_api_error,
     extract_metric_error_code,
+    is_retryable_rate_limit_error,
     retry_async,
     retry_sync,
 )
@@ -68,13 +71,26 @@ def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_terminal_rate_limit_error_is_not_retryable(wrapped):
+    error = RuntimeError("Error code: 429 - TooManyRequests")
+    error.model_retry_terminal = True
+    if wrapped:
+        wrapper = RuntimeError("provider call failed")
+        wrapper.__cause__ = error
+        error = wrapper
+
+    assert not is_retryable_rate_limit_error(error)
+
+
 class _ProviderError(RuntimeError):
-    def __init__(self, *, status_code=None, error_code=None, code=None, body=None):
+    def __init__(self, *, status_code=None, error_code=None, code=None, body=None, response=None):
         super().__init__("provider request failed")
         self.status_code = status_code
         self.error_code = error_code
         self.code = code
         self.body = body
+        self.response = response
 
 
 def test_extract_metric_error_code_prefers_structured_provider_code():
@@ -85,6 +101,28 @@ def test_extract_metric_error_code_prefers_structured_provider_code():
     assert extract_metric_error_code(
         _ProviderError(body={"error": {"code": "InvalidParameter"}})
     ) == ("InvalidParameter")
+    assert (
+        extract_metric_error_code(_ProviderError(response=SimpleNamespace(status_code=503)))
+        == "503"
+    )
+
+
+@pytest.mark.parametrize(
+    ("status_code", "code", "expected"),
+    [
+        (400, "AccountOverdue", ERROR_CLASS_AUTH),
+        (400, "ContentFilter", ERROR_CLASS_CONTENT_SAFETY),
+        (429, "insufficient_quota", ERROR_CLASS_QUOTA_EXCEEDED),
+    ],
+)
+def test_structured_semantic_code_takes_precedence_over_http_status(status_code, code, expected):
+    assert classify_api_error(_ProviderError(status_code=status_code, code=code)) == expected
+
+
+def test_response_status_takes_precedence_over_misleading_message():
+    error = RuntimeError("the previous request returned 429 rows")
+    error.response = SimpleNamespace(status_code=400)
+    assert classify_api_error(error) == ERROR_CLASS_PERMANENT
 
 
 def test_extract_metric_error_code_uses_safe_fallbacks_only():
@@ -94,6 +132,24 @@ def test_extract_metric_error_code_uses_safe_fallbacks_only():
     wrapped_timeout.__cause__ = TimeoutError("request timed out")
     assert extract_metric_error_code(wrapped_timeout) == "timeout"
     assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_structured_http_status_takes_precedence_over_conflicting_text(wrapped):
+    rate_limited = RuntimeError("Rate limit is 400 requests per minute")
+    rate_limited.status_code = 429
+    bad_request = RuntimeError("Last request returned 429 rows")
+    bad_request.status_code = 400
+    if wrapped:
+        rate_limit_wrapper = RuntimeError("provider call failed")
+        rate_limit_wrapper.__cause__ = rate_limited
+        rate_limited = rate_limit_wrapper
+        bad_request_wrapper = RuntimeError("provider call failed")
+        bad_request_wrapper.__cause__ = bad_request
+        bad_request = bad_request_wrapper
+
+    assert classify_api_error(rate_limited) == ERROR_CLASS_TRANSIENT
+    assert classify_api_error(bad_request) == ERROR_CLASS_PERMANENT
 
 
 def test_classify_all_credentials_failed_prefers_transient_over_auth():
@@ -143,6 +199,21 @@ def test_classify_account_quota_exceeded():
         '"message":"You have exceeded the 5-hour usage quota"}}'
     )
     assert classify_api_error(error) == ERROR_CLASS_QUOTA_EXCEEDED
+
+
+@pytest.mark.parametrize("field", ["code", "type"])
+@pytest.mark.parametrize("shape", ["attribute", "body", "nested_body"])
+def test_structured_quota_classification_without_message_hint(field, shape):
+    error = RuntimeError("TooManyRequests")
+    error.status_code = 429
+    if shape == "attribute":
+        setattr(error, field, "insufficient_quota")
+    else:
+        body = {field: "insufficient_quota"}
+        error.body = {"error": body} if shape == "nested_body" else body
+    wrapper = RuntimeError("request failed")
+    wrapper.__cause__ = error
+    assert classify_api_error(wrapper) == ERROR_CLASS_QUOTA_EXCEEDED
 
 
 def test_classify_quota_limit():

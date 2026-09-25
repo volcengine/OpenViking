@@ -304,3 +304,120 @@ def test_session_commit_message_ignores_unknown_fields():
     assert message.auto_commit_policy == {}
     assert "actor_peer_id" not in message.to_dict()
     assert "usage_uris" not in message.to_dict()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_kind,expected_requests", [("model", 4), ("storage", 0)])
+async def test_phase2_failure_does_not_replay_step_and_writes_terminal_marker(
+    monkeypatch, error_kind, expected_requests
+):
+    from openviking.utils.model_call import run_model_async
+
+    session_uri = "viking://user/default/sessions/retry-contract"
+    archive_uri = f"{session_uri}/history/archive_001"
+    message = Message(id="archived", role="user", parts=[TextPart("fixture")])
+    files = {f"{archive_uri}/messages.jsonl": message.to_jsonl() + "\n"}
+    session = Session(
+        viking_fs=_MemoryVikingFS(files), session_id="retry-contract", session_uri=session_uri
+    )
+    tracker = TaskTracker(_TaskStore())
+    set_task_tracker(tracker)
+    monkeypatch.setattr("openviking.utils.model_call.random.uniform", lambda *_: 0)
+    config = SimpleNamespace(
+        memory=SimpleNamespace(extraction_enabled=False, session_skill_extraction_enabled=False)
+    )
+    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    step_calls = 0
+    requests = 0
+
+    async def summary(*args, **kwargs):
+        nonlocal step_calls
+        step_calls += 1
+        if error_kind == "storage":
+            raise TimeoutError("storage timeout after a possible side effect")
+
+        async def provider():
+            nonlocal requests
+            requests += 1
+            raise TimeoutError("provider timeout")
+
+        return await run_model_async(provider, model_type="vlm")
+
+    monkeypatch.setattr(session, "_generate_archive_summary_async", summary)
+    # Preserve a previously completed sibling even when this summary fails.
+    monkeypatch.setattr(
+        session,
+        "_prepare_phase2_archive_messages",
+        AsyncMock(
+            return_value=([message], "archive_001", "archive_001", [], {"long_term": {"archived"}})
+        ),
+    )
+    await tracker.create(
+        "session_commit",
+        resource_id=session.session_id,
+        account_id="default",
+        user_id="default",
+        task_id="retry-task",
+    )
+    try:
+        await session._run_memory_extraction(
+            task_id="retry-task",
+            archive_uri=archive_uri,
+            messages=[message],
+            first_message_id=message.id,
+            last_message_id=message.id,
+            memory_policy={"working_memory": {"enabled": True}},
+        )
+        assert step_calls == 1
+        assert requests == expected_requests
+        marker = json.loads(files[f"{archive_uri}/.failed.json"])
+        assert marker["stage"] == "memory_extraction"
+        assert marker["completed_memory_steps"] == {"long_term": ["archived"]}
+        assert f"{archive_uri}/.done" not in files
+        assert (await tracker.get("retry-task")).status == TaskStatus.FAILED
+        queued = SessionCommitMsg(
+            task_id="retry-task",
+            session_id=session.session_id,
+            session_uri=session_uri,
+            archive_uri=archive_uri,
+            user={"account_id": "default", "user_id": "default"},
+        )
+        assert await session.resume_queued_commit(queued)
+        assert step_calls == 1
+    finally:
+        set_task_tracker(None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_overview", ["", "## Current State\nExisting work"])
+async def test_working_memory_terminal_error_does_not_trigger_creation_fallback(
+    monkeypatch, prior_overview
+):
+    from openviking.utils.model_call import ModelCallError
+
+    terminal = ModelCallError("max_attempts", "transient", 4, "fixture")
+    completion = AsyncMock(side_effect=terminal)
+    vlm = SimpleNamespace(is_available=lambda: True, get_completion_async=completion)
+    session = Session(
+        viking_fs=_MemoryVikingFS({}),
+        session_id="wm-retry-contract",
+        vlm_resolver=SimpleNamespace(get_vlm=AsyncMock(return_value=vlm)),
+    )
+    config = SimpleNamespace(vlm=vlm)
+    monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+    monkeypatch.setattr(
+        "openviking.session.session.resolve_output_language_from_conversation",
+        lambda *args, **kwargs: "en",
+    )
+    monkeypatch.setattr(
+        "openviking.session.session._load_render_prompt", lambda: lambda *args, **kwargs: "fixture"
+    )
+    fallback = AsyncMock()
+    monkeypatch.setattr(session, "_fallback_generate_wm_creation", fallback)
+    with pytest.raises(ModelCallError):
+        await session._generate_archive_summary_async(
+            [Message(id="u1", role="user", parts=[TextPart("fixture")])],
+            latest_archive_overview=prior_overview,
+        )
+    completion.assert_awaited_once()
+    fallback.assert_not_awaited()

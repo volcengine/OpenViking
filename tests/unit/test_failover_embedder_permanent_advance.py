@@ -17,7 +17,13 @@ import time
 import pytest
 
 from openviking.models.embedder.base import EmbedderBase, EmbedResult, FailoverEmbedder
-from openviking.utils.exceptions import AllCredentialsFailedError
+from openviking.utils.model_call import model_workload
+
+
+@pytest.fixture(autouse=True)
+def offline_workload():
+    with model_workload("add_resource"):
+        yield
 
 
 class _StubEmbedder(EmbedderBase):
@@ -76,9 +82,9 @@ def test_auth_error_on_primary_advances_to_backup():
     assert result.dense_vector == [0.0, 0.0, 0.0, 0.0]
 
 
-def test_auth_error_on_all_credentials_raises_aggregated():
+def test_auth_error_on_all_credentials_is_terminal():
     """When every credential fails with auth, the whole ring is tried then
-    AllCredentialsFailedError is raised aggregating each failure."""
+    the final SDK error carries a terminal model-call outcome."""
     primary = _StubEmbedder("primary", error=_make_401_error())
     backup = _StubEmbedder("backup", error=_make_401_error())
 
@@ -87,13 +93,14 @@ def test_auth_error_on_all_credentials_raises_aggregated():
         credential_ids=["primary", "backup"],
     )
 
-    with pytest.raises(AllCredentialsFailedError) as excinfo:
+    with pytest.raises(RuntimeError) as excinfo:
         fe.embed("hello")
 
     assert primary.calls == 1
     assert backup.calls == 1
-    # The aggregated error records both failing credentials.
-    assert len(excinfo.value.errors) == 2
+    # The terminal outcome reports the shared budget.
+    assert excinfo.value.model_call_error.attempts == 2
+    assert excinfo.value.model_call_error.error_class == "auth"
 
 
 def test_permanent_400_fails_fast_without_trying_backup():
@@ -132,12 +139,8 @@ def test_three_credentials_advance_through_chain():
     assert result.dense_vector == [0.0] * 4
 
 
-def test_more_than_ten_credentials_all_tried():
-    """With >10 credentials, every one is tried (no global retry cap cuts it short).
-
-    Regression for the removed ``total_max_retries`` cap: exhaustion is decided
-    solely by reaching the end of the credential chain.
-    """
+def test_many_credentials_share_one_global_attempt_cap():
+    """Credential count must not multiply the configured logical-call budget."""
     n = 15
     failing = [_StubEmbedder(f"cred{i}", error=_make_401_error()) for i in range(n - 1)]
     last = _StubEmbedder(f"cred{n - 1}")
@@ -148,12 +151,11 @@ def test_more_than_ten_credentials_all_tried():
         credential_ids=[f"c{i}" for i in range(n)],
     )
 
-    result = fe.embed("hello")
-
-    # Every failing credential was attempted exactly once, then the last succeeded.
-    assert all(e.calls == 1 for e in failing)
-    assert last.calls == 1
-    assert result.dense_vector == [0.0] * 4
+    with pytest.raises(RuntimeError) as excinfo:
+        fe.embed("hello")
+    assert excinfo.value.model_call_error.reason == "max_attempts"
+    assert sum(e.calls for e in embedders) == 4
+    assert last.calls == 0
 
 
 def test_ring_wraps_when_active_is_last_and_unavailable():
