@@ -285,11 +285,11 @@ overview = await client.overview(uri="viking://resources")
 
 ### How do I improve retrieval quality?
 
-1. **Evaluate reranking**: Compare ranking results on representative queries before enabling it
-2. **Check summaries**: Verify that L0/L1 represent the source accurately; adjust the import `instruction` or summary templates when needed
-3. **Organize directories**: Import with `parent` for an existing parent directory or `to` for an exact target URI
-4. **Use session context**: Keep `retrieval.enable_intent` on (default) and pass a session with content to `search()`
-5. **Choose appropriate Embedding mode**: Use `multimodal` input for multimodal content
+1. **Check summaries**: Verify that L0/L1 represent the source accurately; adjust the import `instruction` or summary templates when needed
+2. **Organize directories**: Import with `parent` for an existing parent directory or `to` for an exact target URI
+3. **Use session context**: Keep `retrieval.enable_intent` on (default) and pass a session with content to `search()`
+4. **Choose appropriate Embedding mode**: Use `multimodal` input for multimodal content
+5. **Evaluate reranking**: Compare ranking results with and without reranking on representative queries before enabling it. You can try Jev (TypeSafe System One) as the rerank provider: it judges each candidate's relevance to the query independently, so candidate scores do not compete. See the [Configuration Guide](../guides/01-configuration.md#rerank) for setup
 
 ### How is the retrieval result score calculated?
 

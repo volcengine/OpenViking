@@ -283,11 +283,11 @@ overview = await client.overview(uri="viking://resources")
 
 ### 如何提升检索质量？
 
-1. **评估 Rerank 模型**：对代表性查询比较排序结果，再决定是否启用
-2. **检查摘要**：确认 L0/L1 是否准确反映来源；需要调整时使用导入的 `instruction` 或摘要模板
-3. **组织目录结构**：导入时用 `parent` 指定现有父目录，或用 `to` 指定最终 URI
-4. **使用会话上下文**：保持 `retrieval.enable_intent` 开启（默认），并向 `search()` 传入有内容的会话
-5. **选择合适的 Embedding 模式**：多模态内容使用 `multimodal` 输入
+1. **检查摘要**：确认 L0/L1 是否准确反映来源；需要调整时使用导入的 `instruction` 或摘要模板
+2. **组织目录结构**：导入时用 `parent` 指定现有父目录，或用 `to` 指定最终 URI
+3. **使用会话上下文**：保持 `retrieval.enable_intent` 开启（默认），并向 `search()` 传入有内容的会话
+4. **选择合适的 Embedding 模式**：多模态内容使用 `multimodal` 输入
+5. **评估 Rerank 模型**：对代表性查询比较启用前后的排序结果，再决定是否启用。可以尝试用 Jev（TypeSafe System One）做 rerank：它对每个候选单独判断与查询的相关性，各候选分数互不竞争；配置见[配置指南](../guides/01-configuration.md#rerank)
 
 ### 检索结果的分数是如何计算的？
 
