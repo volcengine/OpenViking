@@ -61,7 +61,7 @@ Development covers context storage and retrieval, agent integrations, and deploy
 
 ### Governance Structure and Decision-Making
 
-The governance committee oversees technical direction, release and feature priorities, architecture and compatibility reviews, engineering standards, contributor collaboration, and integrations with related projects. Members include Haojie Qin ([@qin-ctx](https://github.com/qin-ctx)), Jiahui Zhou ([@zhoujh01](https://github.com/zhoujh01)), Zhiheng Liu ([@ZaynJarvis](https://github.com/ZaynJarvis)), and Maojia Sheng ([@MaojiaSheng](https://github.com/MaojiaSheng)). Eligible community contributors can join the committee through future nomination and election procedures.
+The governance committee oversees technical direction, release and feature priorities, architecture and compatibility reviews, engineering standards, contributor collaboration, and integrations with related projects. Members include Maojia Sheng ([@MaojiaSheng](https://github.com/MaojiaSheng)), Haojie Qin ([@qin-ctx](https://github.com/qin-ctx)), Jiahui Zhou ([@zhoujh01](https://github.com/zhoujh01)), and Zhiheng Liu ([@ZaynJarvis](https://github.com/ZaynJarvis)). Eligible community contributors can join the committee through future nomination and election procedures.
 
 See the [contribution guide](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md) for module contacts and recently active reviewers.
 

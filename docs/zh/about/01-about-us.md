@@ -61,7 +61,7 @@ OpenViking 自启动起就与高校和研究机构合作，共同探索面向 AI
 
 ### 治理架构与决策机制
 
-开源治理委员会负责技术路线、版本与功能优先级、核心架构和兼容性评审、工程规范、贡献者协作，以及相关项目的集成。成员包括 Haojie Qin（[@qin-ctx](https://github.com/qin-ctx)）、Jiahui Zhou（[@zhoujh01](https://github.com/zhoujh01)）、Zhiheng Liu（[@ZaynJarvis](https://github.com/ZaynJarvis)）、Maojia Sheng（[@MaojiaSheng](https://github.com/MaojiaSheng)）。符合条件的社区贡献者可以通过后续的提名与选举程序加入委员会。
+开源治理委员会负责技术路线、版本与功能优先级、核心架构和兼容性评审、工程规范、贡献者协作，以及相关项目的集成。成员包括 Maojia Sheng（[@MaojiaSheng](https://github.com/MaojiaSheng)）、Haojie Qin（[@qin-ctx](https://github.com/qin-ctx)）、Jiahui Zhou（[@zhoujh01](https://github.com/zhoujh01)）、Zhiheng Liu（[@ZaynJarvis](https://github.com/ZaynJarvis)）。符合条件的社区贡献者可以通过后续的提名与选举程序加入委员会。
 
 具体模块的协作入口和近期活跃评审者见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。
 
