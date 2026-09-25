@@ -13,6 +13,7 @@ from openviking.core.namespace import (
     context_type_for_uri,
     is_content_root_uri,
     is_session_uri,
+    may_include_event_memory,
     owner_space_for_uri,
     resolve_request_uri,
     resolve_uri,
@@ -91,6 +92,19 @@ def test_exact_memory_and_skill_root_detection():
     assert classify_uri("viking://agent/skills/demo").is_skill_root
     assert not classify_uri("viking://user/alice/skills").is_skill_root
     assert not classify_uri("viking://user/alice/skills/demo/assets").is_skill_root
+
+
+def test_event_memory_detection_covers_user_and_peer_namespaces():
+    assert classify_uri("viking://user/alice/memories/events/e.md").is_event_memory
+    assert classify_uri("viking://user/alice/peers/peer-a/memories/events/e.md").is_event_memory
+    assert not classify_uri("viking://user/alice/memories/preferences/p.md").is_event_memory
+
+    assert may_include_event_memory("viking://user")
+    assert may_include_event_memory("viking://user/alice")
+    assert may_include_event_memory("viking://user/alice/peers/peer-a")
+    assert may_include_event_memory("viking://user/alice/peers/peer-a/memories/events")
+    assert not may_include_event_memory("viking://user/alice/memories/preferences")
+    assert not may_include_event_memory("viking://resources")
 
 
 def test_shared_agent_skill_target_has_no_user_owner_or_peer_filter():

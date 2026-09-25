@@ -507,7 +507,13 @@ class LocalCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
+        if advance is not None or return_detail_info:
+            raise NotImplementedError(
+                "Advanced vector ranking options are only supported by remote VikingDB backends"
+            )
         search_result = SearchResult()
         index = self.indexes.get(index_name)
         if not index:

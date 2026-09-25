@@ -722,6 +722,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
     result = await search(
         query="what happened",
         mode="context",
+        events_time_decay_protection="2d",
         quotas={"events": 1, "entities": 0},
         purpose="coding",
         min_score=0.1,
@@ -743,6 +744,7 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
     assert params.quotas == {"events": 1, "entities": 0}
     assert params.purpose == "coding"
     assert params.score_threshold == 0.1
+    assert params.events_time_decay_protection == "2d"
     assert params.max_tokens == 800
     assert params.detail == {"events": "overview"}
     assert params.dedup_turns == 5

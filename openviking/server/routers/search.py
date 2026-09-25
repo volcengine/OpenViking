@@ -43,6 +43,7 @@ from openviking.utils.search_filters import (
     merge_search_filter,
 )
 from openviking.utils.tags import build_search_tags_filter
+from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
@@ -138,6 +139,15 @@ class FindRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     read_content: bool = False
     telemetry: TelemetryRequest = False
+    events_time_decay_protection: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_time_decay(self) -> "FindRequest":
+        validate_event_time_decay_request(self.events_time_decay_protection)
+        if self.events_time_decay_protection is not None:
+            if not self.query.strip() and not self.image_url:
+                raise ValueError("events_time_decay_protection requires a semantic query or image")
+        return self
 
 
 def _reject_unknown_categories(value: Any, label: str, allowed: Sequence[str]) -> None:
@@ -189,9 +199,10 @@ def context_only_fields_error(supplied_fields, as_named_by_caller=None) -> Optio
     used = sorted(set(CONTEXT_ONLY_FIELDS) & set(supplied_fields))
     if not used:
         return None
-    names = sorted({name for field in used for name in ((as_named_by_caller or {}).get(field) or {field})})
-    return (f"{', '.join(names)} require mode='context'; "
-            "set mode='context' or drop these fields")
+    names = sorted(
+        {name for field in used for name in ((as_named_by_caller or {}).get(field) or {field})}
+    )
+    return f"{', '.join(names)} require mode='context'; set mode='context' or drop these fields"
 
 
 class SearchRequest(BaseModel):
@@ -222,6 +233,7 @@ class SearchRequest(BaseModel):
     level: Optional[Union[int, str, List[int]]] = None
     read_content: bool = False
     telemetry: TelemetryRequest = False
+    events_time_decay_protection: Optional[str] = None
 
     mode: Literal["list", "context"] = "list"
 
@@ -239,6 +251,7 @@ class SearchRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
+        validate_event_time_decay_request(self.events_time_decay_protection)
         if self.mode == "list":
             error = context_only_fields_error(self.model_fields_set)
             if error:
@@ -375,6 +388,7 @@ async def find(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            events_time_decay_protection=request.events_time_decay_protection,
         ),
     )
     result = execution.result
@@ -419,6 +433,7 @@ async def _search_context(
         limit=actual_limit,
         score_threshold=request.score_threshold,
         filter=effective_filter,
+        events_time_decay_protection=request.events_time_decay_protection,
         session_id=request.session_id,
         query_expansion=request.query_expansion,
         max_tokens=request.max_tokens,
@@ -494,6 +509,7 @@ async def search(
             filter=effective_filter,
             level=_resolve_levels(request.level) or None,
             image_url=resolved_image_url,
+            events_time_decay_protection=request.events_time_decay_protection,
         )
 
     execution = await run_operation(

@@ -45,7 +45,11 @@ describe("OpenVikingClient", () => {
       actorPeerId: "peer",
       fetch: fetcher,
     });
-    await client.find("hello", { targetUri: "viking://resources", limit: 5 });
+    await client.find("hello", {
+      targetUri: "viking://resources",
+      limit: 5,
+      eventsTimeDecayProtection: "2d",
+    });
     const [url, init] = fetcher.mock.calls[0]!;
     expect(String(url)).toBe("https://example.com/api/v1/search/find");
     expect(new Headers(init?.headers).get("X-OpenViking-Actor-Peer")).toBe(
@@ -55,6 +59,7 @@ describe("OpenVikingClient", () => {
       query: "hello",
       target_uri: "viking://resources",
       limit: 5,
+      events_time_decay_protection: "2d",
     });
   });
 
@@ -104,6 +109,7 @@ describe("OpenVikingClient", () => {
         purpose: "coding",
         maxTokens: 3000,
         dedupTurns: 5,
+        eventsTimeDecayProtection: "2d",
       }),
     ).resolves.toMatchObject({ rendered: "<memory />" });
 
@@ -114,6 +120,7 @@ describe("OpenVikingClient", () => {
       purpose: "coding",
       max_tokens: 3000,
       dedup_turns: 5,
+      events_time_decay_protection: "2d",
     });
     await expect(
       client.searchContext("query", { extra: { mode: "list" } }),

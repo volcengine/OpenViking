@@ -137,6 +137,20 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
     assert config.reindex.file_vectorization_concurrency == 8
 
 
+def test_retrieval_config_ignores_unknown_persisted_fields():
+    config = OpenVikingConfig.from_dict(
+        {
+            "retrieval": {
+                "hotness_alpha": 0.25,
+                "future_ranking_option": "forward-compatible",
+            }
+        }
+    )
+
+    assert config.retrieval.hotness_alpha == 0.25
+    assert not hasattr(config.retrieval, "future_ranking_option")
+
+
 def test_glob_uses_safe_defaults():
     config = OpenVikingConfig.from_dict({})
 

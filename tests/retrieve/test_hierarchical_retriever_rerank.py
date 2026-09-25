@@ -14,6 +14,7 @@ from openviking.core.context import ContextLevel
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
+from openviking.utils.time_decay import fuse_time_decay_scores
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
@@ -77,6 +78,7 @@ class DummyStorage:
         level=None,
         limit: int = 10,
         offset: int = 0,
+        events_time_decay_protection: str | None = None,
     ):
         self.search_calls.append(
             {
@@ -89,6 +91,7 @@ class DummyStorage:
                 "level": level,
                 "limit": limit,
                 "offset": offset,
+                "events_time_decay_protection": events_time_decay_protection,
             }
         )
         return [
@@ -206,6 +209,42 @@ class DirectChildProxy:
         ]
 
 
+class ThinkingEventStorage(DummyStorage):
+    def __init__(self, *, time_score=0.9):
+        super().__init__()
+        self.time_score = time_score
+
+    async def search_in_tenant(self, ctx, *, level=None, **kwargs):
+        self.search_calls.append({"ctx": ctx, "level": level, **kwargs})
+        if level == [0, 1]:
+            return [
+                _result(
+                    "viking://user/user1/memories/events",
+                    0.4,
+                    level=1,
+                    context_type="memory",
+                )
+            ]
+        return []
+
+    async def search_children_in_tenant(self, ctx, parent_uri: str, **kwargs):
+        self.child_search_calls.append({"ctx": ctx, "parent_uri": parent_uri, **kwargs})
+        if parent_uri != "viking://user/user1/memories/events":
+            return []
+        extra = {"_origin_score": 0.2}
+        if self.time_score is not None and kwargs.get("events_time_decay_protection") is not None:
+            extra["_time_score"] = self.time_score
+        return [
+            _result(
+                f"{parent_uri}/event",
+                0.2,
+                abstract="event",
+                context_type="memory",
+                **extra,
+            )
+        ]
+
+
 class FakeRerankClient:
     def __init__(self, scores):
         self.scores = list(scores)
@@ -226,6 +265,10 @@ def _ctx() -> RequestContext:
 
 def _query() -> TypedQuery:
     return TypedQuery(query="hello", context_type=ContextType.RESOURCE, intent="")
+
+
+def _memory_query() -> TypedQuery:
+    return TypedQuery(query="hello", context_type=ContextType.MEMORY, intent="")
 
 
 def _config() -> RerankConfig:
@@ -374,10 +417,13 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_returns_none(mon
         lambda config: fake_client,
     )
 
-    storage = QuickSearchStorage([
-        _result("viking://resources/a/deep-a.md", 0.2, abstract="deep A"),
-        _result("viking://resources/b/deep-b.md", 0.8, abstract="deep B"),
-    ])
+    storage = QuickSearchStorage(
+        [
+            _result("viking://resources/a/deep-a.md", 0.2, abstract="deep A"),
+            _result("viking://resources/b/deep-b.md", 0.8, abstract="deep B"),
+        ]
+    )
+
     async def acl_enabled(_account_id):
         return True
 
@@ -721,3 +767,167 @@ async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
         markdown,
         "",
     ]
+
+
+@pytest.mark.asyncio
+async def test_quick_mode_returns_time_decay_scores():
+    class DecayAwareQuickStorage(QuickSearchStorage):
+        async def search_in_tenant(self, *args, **kwargs):
+            self.search_calls.append(dict(kwargs))
+            result = dict(self.results[0])
+            if kwargs.get("events_time_decay_protection") == "1d":
+                result.update(_score=0.4, _origin_score=0.4, _time_score=1.0)
+            return [result]
+
+    storage = DecayAwareQuickStorage(
+        [
+            _result(
+                "viking://user/user1/memories/events/recent",
+                0.4,
+                context_type="memory",
+            )
+        ]
+    )
+    retriever = HierarchicalRetriever(storage=storage, embedder=DummyEmbedder())
+
+    result = await retriever.retrieve(
+        _memory_query(),
+        ctx=_ctx(),
+        limit=1,
+        mode=RetrieverMode.QUICK,
+        events_time_decay_protection="1d",
+    )
+
+    assert result.matched_contexts[0].score == pytest.approx(0.4)
+    assert result.matched_contexts[0].origin_score == pytest.approx(0.4)
+    assert result.matched_contexts[0].time_score == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_time_decay_preserves_a_negative_score_threshold():
+    class DecayAwareStorage(QuickSearchStorage):
+        async def search_in_tenant(self, *args, **kwargs):
+            self.search_calls.append(dict(kwargs))
+            return self.results
+
+    storage = DecayAwareStorage(
+        [_result("viking://user/user1/memories/events/recent", -0.05, context_type="memory")]
+    )
+    retriever = HierarchicalRetriever(storage=storage, embedder=DummyEmbedder())
+
+    result = await retriever.retrieve(
+        _memory_query(),
+        ctx=_ctx(),
+        mode=RetrieverMode.QUICK,
+        score_threshold=-0.1,
+        events_time_decay_protection="0",
+    )
+
+    assert [item.score for item in result.matched_contexts] == [-0.05]
+    assert storage.search_calls
+
+
+@pytest.mark.asyncio
+async def test_thinking_global_leaf_prefetch_applies_time_decay():
+    class DecayAwareThinkingStorage(QuickSearchStorage):
+        async def search_in_tenant(self, *args, **kwargs):
+            self.search_calls.append(dict(kwargs))
+            if kwargs.get("level") == [0, 1]:
+                return []
+            if kwargs.get("events_time_decay_protection") != "0":
+                return []
+            return [
+                _result(
+                    "viking://user/user1/memories/events/old",
+                    0.45,
+                    context_type="memory",
+                    _origin_score=0.9,
+                    _time_score=0.5,
+                )
+            ]
+
+        async def search_children_in_tenant(self, *args, **kwargs):
+            self.child_search_calls.append(dict(kwargs))
+            return []
+
+    storage = DecayAwareThinkingStorage([])
+
+    async def acl_enabled(_account_id):
+        return True
+
+    storage.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
+    retriever = HierarchicalRetriever(storage=storage, embedder=DummyEmbedder())
+    retriever._rerank_client = FakeRerankClient([0.6])
+
+    result = await retriever.retrieve(
+        _memory_query(),
+        ctx=_ctx(),
+        limit=1,
+        mode=RetrieverMode.THINKING,
+        events_time_decay_protection="0",
+    )
+
+    assert result.matched_contexts[0].score == pytest.approx(0.3)
+    assert result.matched_contexts[0].origin_score == pytest.approx(0.6)
+    assert result.matched_contexts[0].time_score == pytest.approx(0.5)
+
+    leaf_call = next(call for call in storage.search_calls if call.get("level") == [2])
+    assert leaf_call["for_rerank"] is True
+    origins = [
+        call["request_now"]
+        for call in storage.search_calls + storage.child_search_calls
+        if call.get("events_time_decay_protection") is not None
+    ]
+    assert origins and origins[0] is not None
+    assert all(origin == origins[0] for origin in origins)
+
+
+@pytest.mark.asyncio
+async def test_thinking_time_decay_fuses_after_rerank_and_propagation():
+    fake_client = FakeRerankClient([0.4, 0.8])
+    retriever = HierarchicalRetriever(
+        storage=ThinkingEventStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=None,
+        retrieval_config=RetrievalConfig(
+            hotness_alpha=0.5,
+            score_propagation_alpha=0.25,
+        ),
+    )
+    retriever._rerank_client = fake_client
+
+    result = await retriever.retrieve(
+        _memory_query(),
+        ctx=_ctx(),
+        limit=1,
+        mode=RetrieverMode.THINKING,
+        events_time_decay_protection="2d",
+    )
+
+    propagated_rerank_score = 0.25 * 0.8 + 0.75 * 0.4
+    expected = fuse_time_decay_scores(origin_score=propagated_rerank_score, addition_score=0.9)
+    assert result.matched_contexts[0].score == pytest.approx(expected)
+    assert result.matched_contexts[0].origin_score == pytest.approx(propagated_rerank_score)
+    assert result.matched_contexts[0].time_score == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_thinking_missing_event_time_keeps_legacy_hotness():
+    retriever = HierarchicalRetriever(
+        storage=ThinkingEventStorage(time_score=None),
+        embedder=DummyEmbedder(),
+        retrieval_config=RetrievalConfig(hotness_alpha=0.5),
+    )
+    retriever._rerank_client = FakeRerankClient([0.4, 0.4])
+
+    result = await retriever.retrieve(
+        _memory_query(),
+        ctx=_ctx(),
+        limit=1,
+        mode=RetrieverMode.THINKING,
+        events_time_decay_protection="0",
+    )
+
+    assert result.matched_contexts[0].score == pytest.approx(0.2)
+    assert result.matched_contexts[0].origin_score == pytest.approx(0.4)
+    assert result.matched_contexts[0].time_score is None

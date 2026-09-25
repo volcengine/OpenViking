@@ -96,3 +96,29 @@ def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | 
         ordered[key] = value
 
     return [f"{key}={value}" for key, value in ordered.items()]
+
+
+def preserve_memory_type_tag(
+    existing: Iterable[str] | None,
+    incoming: Iterable[str] | None,
+) -> list[str]:
+    """Preserve the extracted memory type while updating ordinary search tags."""
+    existing_memory_type = next(
+        (
+            tag
+            for tag in normalize_search_tags(existing, discard_invalid=True)
+            if tag.startswith("memory_type=")
+        ),
+        None,
+    )
+    # Only memory extraction creates or changes this tag. Ordinary writes
+    # preserve it, including its absence on legacy memories.
+    user_tags = [
+        tag
+        for tag in normalize_search_tags(incoming, discard_invalid=True)
+        if not tag.startswith("memory_type=")
+    ]
+    return merge_search_tags(
+        [existing_memory_type] if existing_memory_type is not None else [],
+        user_tags,
+    )

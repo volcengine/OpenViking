@@ -27,6 +27,7 @@ func (c *Client) Find(ctx context.Context, queryText string, opts *FindOptions) 
 	}
 	payload["limit"] = limit
 	setString(payload, "image_url", imageURL)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
@@ -73,6 +74,7 @@ func (c *Client) Search(ctx context.Context, queryText string, opts *SearchOptio
 	payload["limit"] = limit
 	setString(payload, "image_url", imageURL)
 	setString(payload, "session_id", opts.SessionID)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setAny(payload, "score_threshold", opts.ScoreThreshold)
 	setAny(payload, "filter", opts.Filter)
 	setAny(payload, "context_type", opts.ContextType)
@@ -123,6 +125,7 @@ func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchCo
 	setString(payload, "since", opts.Since)
 	setString(payload, "until", opts.Until)
 	setString(payload, "time_field", opts.TimeField)
+	setString(payload, "events_time_decay_protection", opts.EventsTimeDecayProtection)
 	setString(payload, "query_expansion", opts.QueryExpansion)
 	setAny(payload, "max_tokens", opts.MaxTokens)
 	if opts.Quotas != nil {

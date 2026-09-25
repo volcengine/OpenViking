@@ -12,8 +12,8 @@ from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
     FetchDataInCollectionResult,
-    SearchItemResult,
     SearchResult,
+    parse_remote_search_result,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApi,
@@ -211,18 +211,7 @@ class VolcengineApiKeyCollection(ICollection):
         return result
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:
-        result = SearchResult()
-        if isinstance(data, dict) and "data" in data:
-            data_list = data.get("data", [])
-            result.data = [
-                SearchItemResult(
-                    id=item.get("id"),
-                    fields=item.get("fields"),
-                    score=item.get("score"),
-                )
-                for item in data_list
-            ]
-        return result
+        return parse_remote_search_result(data)
 
     def _parse_aggregate_result(
         self,
@@ -372,6 +361,8 @@ class VolcengineApiKeyCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
         if dense_vector is None and sparse_vector is None:
             raise ValueError("At least one of dense_vector or sparse_vector is required")
@@ -388,6 +379,10 @@ class VolcengineApiKeyCollection(ICollection):
         }
         if sparse_vector:
             data["sparse_vector"] = sparse_vector
+        if advance is not None:
+            data["advance"] = advance
+        if return_detail_info:
+            data["return_detail_info"] = True
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 

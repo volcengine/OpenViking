@@ -393,7 +393,13 @@ class HttpCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         sparse_vector: Optional[Dict[str, float]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
+        return_detail_info: bool = False,
     ) -> SearchResult:
+        if advance is not None or return_detail_info:
+            raise NotImplementedError(
+                "Advanced vector ranking options are not supported by the HTTP collection"
+            )
         url = self.url_prefix + "api/vikingdb/data/search/vector"
         response = requests.post(
             url,

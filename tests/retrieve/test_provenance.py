@@ -95,6 +95,24 @@ class TestFindResultProvenance:
 
 
 class TestMatchedContextSearchTags:
+    def test_legacy_positional_arguments_keep_their_meaning(self):
+        ctx = MatchedContext(
+            "viking://resources/docs/arch.md",
+            ContextType.RESOURCE,
+            2,
+            "Architecture doc",
+            "Architecture overview",
+            "documentation",
+            0.87,
+            "semantic_match",
+            ["team=infra"],
+        )
+
+        assert ctx.match_reason == "semantic_match"
+        assert ctx.search_tags == ["team=infra"]
+        assert ctx.origin_score is None
+        assert ctx.time_score is None
+
     def test_context_to_dict_exposes_search_tags_as_tags(self):
         ctx = MatchedContext(
             uri="viking://resources/docs/arch.md",

@@ -127,6 +127,9 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		if got := body["time_field"]; got != "created_at" {
 			t.Fatalf("time_field = %#v", got)
 		}
+		if got := body["events_time_decay_protection"]; got != "2d" {
+			t.Fatalf("events_time_decay_protection = %#v", got)
+		}
 		levels, ok := body["level"].([]any)
 		if !ok || len(levels) != 2 || levels[0] != float64(0) || levels[1] != float64(2) {
 			t.Fatalf("level = %#v", body["level"])
@@ -144,14 +147,15 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.Find(context.Background(), "auth", &FindOptions{
-		TargetURI:   "resources/docs",
-		Limit:       5,
-		ContextType: []string{"resource"},
-		Since:       "2026-06-01",
-		Until:       "2026-06-18",
-		TimeField:   "created_at",
-		Level:       []int{0, 2},
-		Tags:        []string{"topic=docs", "kind=api"},
+		TargetURI:                 "resources/docs",
+		Limit:                     5,
+		ContextType:               []string{"resource"},
+		Since:                     "2026-06-01",
+		Until:                     "2026-06-18",
+		TimeField:                 "created_at",
+		Level:                     []int{0, 2},
+		Tags:                      []string{"topic=docs", "kind=api"},
+		EventsTimeDecayProtection: "2d",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -641,6 +645,9 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 		if body["max_tokens"] != float64(3000) || body["dedup_turns"] != float64(5) {
 			t.Fatalf("budget fields = %#v", body)
 		}
+		if body["events_time_decay_protection"] != "2d" {
+			t.Fatalf("events_time_decay_protection = %#v", body["events_time_decay_protection"])
+		}
 		writeOK(t, w, map[string]any{
 			"rendered": "<memory />",
 			"entries":  []any{},
@@ -650,10 +657,11 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 	defer closeServer()
 
 	result, err := client.SearchContext(context.Background(), "continue refactor", &SearchContextOptions{
-		SessionID:  "session-1",
-		Purpose:    "coding",
-		MaxTokens:  Int(3000),
-		DedupTurns: Int(5),
+		SessionID:                 "session-1",
+		Purpose:                   "coding",
+		MaxTokens:                 Int(3000),
+		DedupTurns:                Int(5),
+		EventsTimeDecayProtection: "2d",
 	})
 	if err != nil {
 		t.Fatal(err)

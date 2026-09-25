@@ -57,6 +57,7 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、带
 | query | str | 否 | "" | 搜索查询字符串；未提供 `image_url` 时必填 |
 | image_url | str | 否 | None | 图片查询，支持 `data:image/...;base64,...`、`http(s)://` 或 `viking://` URI；需要 multimodal embedding 模型 |
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
+| events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
@@ -395,6 +396,7 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 | target_uri | str \| List[str] | 否 | "" | 限制搜索范围到指定的 URI 前缀 |
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
+| events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 最大返回结果数 |
@@ -411,6 +413,10 @@ openviking find "红色海报风格" --image ./poster.png --uri "viking://resour
 
 `search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。
 
+事件时间衰减同时作用于语义 `find()`、`search(mode="list")` 和 `search(mode="context")` 中 `viking://user/{user_id}/memories/events/` 与 `viking://user/{user_id}/peers/{peer_id}/memories/events/` 下的 L2 结果，不作用于其他记忆类型、L0/L1、无 query 的纯过滤 `find()`、`recall`、`grep` 或 `glob`。启用后按 `score = origin_score * time_score` 融合；context 模式使用该最终分组装候选。保护期内 `time_score` 为 1，原分不变；时间距离与 VikingDB 指数衰减算子一致，取时间戳与请求时间的绝对差。list 响应中的 event 结果额外返回 `origin_score` 和 `time_score`，CLI 分别展示为 semantic、time 和 final 分。时间取自已有索引的 `updated_at` 字段，无需重新索引或改写时间戳；本地计算遇到缺失或非法时间时保持原分；云端使用索引中的日期时间字段和后处理算子。衰减曲线由服务端内部维护，调用方只需按请求传入保护期，无需修改 `ov.conf` 或 `ovcli.conf`。
+
+由记忆提取流程新生成或更新的记忆会自动写入 `memory_type=<类型>` 检索标签。启用衰减时，本地和云端均将带 `memory_type=events` 标签的 L2 记忆单独召回，再与其余结果合并排序，无需指定 peer id。存量数据不补标签，无标签记忆保持原分。直接内容刷新和普通标签更新保留已有类型，不从 URI 推断或重设类型。
+
 #### 3. 使用示例
 
 **HTTP API**
@@ -426,9 +432,10 @@ curl -X POST http://localhost:1933/api/v1/search/search \
     -d '{
         "query": "best practices",
         "session_id": "abc123",
-        "context_type": "skill",
+        "context_type": "memory",
         "since": "2h",
         "time_field": "updated_at",
+        "events_time_decay_protection": "1d",
         "limit": 10
     }'
 ```
@@ -546,6 +553,10 @@ openviking search "best practices" --context-type skill
 # 带时间过滤的搜索
 openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-20
 
+# 对 user 和 peer 的事件记忆启用时间衰减排序
+openviking search "recent decisions" --context-type memory --level 2 \
+    --events-time-decay-protection 1d
+
 # 不带会话的搜索（仍进行意图分析）
 openviking search "how to implement OAuth 2.0 authorization code flow"
 
@@ -625,7 +636,7 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 
 #### 2. 接口和参数说明
 
-**L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额就是唯一候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
+**L0 检索域**：`query`、`image_url`、`context_type`、`limit`、`score_threshold`、`filter`、`tags`、`since`/`until` 以及可选的 `events_time_decay_protection` 与 list 模式一致。`limit` 只约束 quota-free 检索；一旦 `purpose` 或显式 `quotas` 启用分桶检索，各分类配额就是唯一候选上限。`target_uri` 在 context 模式下暂不支持（返回 400）；`level` 被忽略，档位由 `detail` 决定。
 
 **L1 查询理解**
 

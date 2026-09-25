@@ -1494,6 +1494,7 @@ pub async fn handle_find(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    events_time_decay_protection: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1528,6 +1529,9 @@ pub async fn handle_find(
     if read_content {
         params.push("--read-content".to_string());
     }
+    if let Some(ref protection) = events_time_decay_protection {
+        params.push(format!("--events-time-decay-protection {}", protection));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1545,6 +1549,7 @@ pub async fn handle_find(
         context_type,
         tags,
         read_content,
+        events_time_decay_protection,
         ctx.output_format,
         ctx.compact,
     )
@@ -1564,6 +1569,7 @@ pub async fn handle_search(
     context_type: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     read_content: bool,
+    events_time_decay_protection: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
@@ -1601,6 +1607,9 @@ pub async fn handle_search(
     if read_content {
         params.push("--read-content".to_string());
     }
+    if let Some(ref protection) = events_time_decay_protection {
+        params.push(format!("--events-time-decay-protection {}", protection));
+    }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1619,6 +1628,7 @@ pub async fn handle_search(
         context_type,
         tags,
         read_content,
+        events_time_decay_protection,
         ctx.output_format,
         ctx.compact,
     )

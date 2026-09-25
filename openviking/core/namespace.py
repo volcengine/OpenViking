@@ -79,6 +79,15 @@ class UriClassification:
             and len(self.parts) == self.content_index + 2
         )
 
+    @property
+    def is_event_memory(self) -> bool:
+        return (
+            self.is_memory
+            and self.content_index is not None
+            and len(self.parts) > self.content_index + 1
+            and self.parts[self.content_index + 1] == "events"
+        )
+
 
 def uri_parts(uri: str) -> list[str]:
     """Return canonical Viking URI path segments without query parameters."""
@@ -146,6 +155,26 @@ def classify_uri(uri: str) -> UriClassification:
 
 def context_type_for_uri(uri: str) -> str:
     return classify_uri(uri).context_type
+
+
+def may_include_event_memory(uri: str) -> bool:
+    """Return whether a canonical user or peer subtree can contain event memories."""
+    parts = tuple(uri_parts(uri))
+    if not parts or parts[0] != "user":
+        return False
+    if len(parts) == 1:
+        return True
+    suffix = parts[2:]
+    if not suffix or suffix == ("peers",):
+        return True
+    if suffix[0] == "memories":
+        return len(suffix) == 1 or suffix[1] == "events"
+    if suffix[0] != "peers" or len(suffix) < 2:
+        return False
+    peer_suffix = suffix[2:]
+    return not peer_suffix or (
+        peer_suffix[0] == "memories" and (len(peer_suffix) == 1 or peer_suffix[1] == "events")
+    )
 
 
 def canonical_user_root(ctx: RequestContext) -> str:
@@ -352,6 +381,7 @@ def is_content_root_uri(
         and classification.content_index is not None
         and len(parts) == classification.content_index + 1
     )
+
 
 def _validate_peer_id_segments(parts: list[str]) -> None:
     if len(parts) >= 4 and parts[0] == "user" and parts[2] == "peers":

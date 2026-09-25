@@ -79,6 +79,7 @@ from openviking.utils.search_filters import (
     resolve_context_types,
 )
 from openviking.utils.skill_processor import SkillProcessor
+from openviking.utils.time_decay import validate_event_time_decay_request
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -267,8 +268,13 @@ async def find(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
+    events_time_decay_protection: Optional[str] = None,
 ) -> str:
     """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills."""
+    try:
+        validate_event_time_decay_request(events_time_decay_protection)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
     context_filter = _resolve_context_type_filter(context_type)
@@ -299,6 +305,7 @@ async def find(
             score_threshold=min_score,
             filter=context_filter,
             level=level,
+            events_time_decay_protection=events_time_decay_protection,
         )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
@@ -335,6 +342,7 @@ async def search(
     rewrite: Literal["off", "auto"] = "off",
     rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
+    events_time_decay_protection: Optional[str] = None,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis.
 
@@ -344,6 +352,10 @@ async def search(
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
     ``target_uri`` is only supported in list mode.
     """
+    try:
+        validate_event_time_decay_request(events_time_decay_protection)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
     context_filter = _resolve_context_type_filter(context_type)
@@ -373,6 +385,7 @@ async def search(
                 limit=limit,
                 score_threshold=min_score,
                 filter=context_filter,
+                events_time_decay_protection=events_time_decay_protection,
                 session_id=session_id,
                 query_expansion=query_expansion,
                 max_tokens=max_tokens,
@@ -444,6 +457,7 @@ async def search(
         score_threshold=0.35 if min_score is None else min_score,
         filter=context_filter,
         level=level,
+        events_time_decay_protection=events_time_decay_protection,
     )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
@@ -511,6 +525,8 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
                 "hit_uri": m.uri,
                 "score": getattr(m, "score", 0.0),
                 "abstract": getattr(m, "abstract", "") or getattr(m, "overview", ""),
+                "origin_score": getattr(m, "origin_score", None),
+                "time_score": getattr(m, "time_score", None),
             }
             # Several files of one skill package can match; keep the best-scored hit.
             previous = seen.get(uri)
@@ -546,6 +562,10 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
         abstract = (item["abstract"] or "(no abstract)").strip()
         uri = item["uri"]
         line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}\n    {abstract}"
+        origin_score = item["origin_score"]
+        time_score = item["time_score"]
+        if origin_score is not None or time_score is not None:
+            line += f"\n    origin_score={origin_score}, time_score={time_score}"
         if uri in contents:
             line += f"\n\n    {contents[uri]}"
         lines.append(line)

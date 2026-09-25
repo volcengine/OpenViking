@@ -3,6 +3,7 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
@@ -24,7 +25,8 @@ from openviking.storage.viking_fs._base import (
 )
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
-from openviking_cli.exceptions import NotFoundError
+from openviking.utils.time_decay import parse_duration_ms
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
 class _SemanticMixin:
@@ -199,6 +201,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = None,
     ):
         """Semantic search.
 
@@ -223,8 +226,19 @@ class _SemanticMixin:
         filter_only = is_filter_only_query(query, image_url)
         if filter_only:
             _ensure_filter_present(filter)
+            if events_time_decay_protection is not None:
+                raise InvalidArgumentError(
+                    "events_time_decay_protection requires a semantic query or image"
+                )
         else:
             _ensure_non_empty_search_query(query, image_url)
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        request_now = (
+            datetime.now(timezone.utc) if events_time_decay_protection is not None else None
+        )
 
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import (
@@ -291,6 +305,8 @@ class _SemanticMixin:
             score_threshold=score_threshold,
             scope_dsl=filter,
             level=level,
+            events_time_decay_protection=events_time_decay_protection,
+            request_now=request_now,
         )
 
         # Convert QueryResult to FindResult
@@ -382,6 +398,7 @@ class _SemanticMixin:
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
         image_url: Optional[str] = None,
+        events_time_decay_protection: Optional[str] = None,
     ):
         """Complex search with session context.
 
@@ -396,6 +413,13 @@ class _SemanticMixin:
             FindResult
         """
         _ensure_non_empty_search_query(query, image_url)
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        request_now = (
+            datetime.now(timezone.utc) if events_time_decay_protection is not None else None
+        )
         telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
@@ -501,6 +525,8 @@ class _SemanticMixin:
                 score_threshold=score_threshold,
                 scope_dsl=filter,
                 level=level,
+                events_time_decay_protection=events_time_decay_protection,
+                request_now=request_now,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])

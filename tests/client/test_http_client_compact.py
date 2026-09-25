@@ -89,8 +89,29 @@ async def test_search_omits_unset_optional_fields():
 
     payload = fake.calls[-1]["json"]
     assert payload["query"] == "hello"
-    for dropped in ("session_id", "score_threshold", "filter", "context_type", "tags"):
+    for dropped in (
+        "session_id",
+        "score_threshold",
+        "filter",
+        "context_type",
+        "tags",
+        "events_time_decay_protection",
+    ):
         assert dropped not in payload
+
+
+async def test_search_keeps_explicit_time_decay_protection():
+    client, fake = _client_with_fake()
+
+    await client.search(
+        "hello",
+        options={
+            "events_time_decay_protection": "2d",
+        },
+    )
+
+    payload = fake.calls[-1]["json"]
+    assert payload["events_time_decay_protection"] == "2d"
 
 
 async def test_add_resource_omits_empty_args_and_null_fields():

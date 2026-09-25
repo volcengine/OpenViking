@@ -210,6 +210,61 @@ async def test_query_expansion_fans_out_planned_queries(monkeypatch):
     assert result.stats["query_expansion"] == "used"
 
 
+async def test_time_decay_protection_is_forwarded_to_context_retrieval():
+    protections_seen = []
+
+    async def fake_find(**kwargs):
+        protections_seen.append(kwargs["events_time_decay_protection"])
+        return _FakeFindResult()
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find=fake_find),
+        fs=SimpleNamespace(read=None),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+
+    await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="recent decisions",
+            peer_scope="actor",
+            events_time_decay_protection="2d",
+        ),
+    )
+
+    assert protections_seen == ["2d"]
+
+
+async def test_time_decay_preserves_negative_threshold_in_skill_only_fanout():
+    thresholds = []
+
+    async def fake_find_skills(**kwargs):
+        thresholds.append(kwargs["score_threshold"])
+        return _FakeFindResult()
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find_skills=fake_find_skills),
+        fs=SimpleNamespace(read=None),
+        sessions=SimpleNamespace(),
+        viking_fs=None,
+    )
+
+    await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="skill",
+            quotas={"skills": 1},
+            score_threshold=-0.1,
+            events_time_decay_protection="0",
+        ),
+    )
+
+    assert thresholds and all(threshold == -0.1 for threshold in thresholds)
+
+
 async def test_disabled_intent_does_not_load_session_or_expand_query():
     async def fake_find(**kwargs):
         assert kwargs["query"] == "raw query"

@@ -5,6 +5,7 @@ VikingDB Manager class that extends VikingVectorIndexBackend with queue manageme
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Tuple
 
 from openviking.server.identity import RequestContext
@@ -51,9 +52,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             queue_manager: QueueManager instance.
         """
         # Initialize the base VikingVectorIndexBackend without queue management
-        super().__init__(
-            config=vectordb_config,
-        )
+        super().__init__(config=vectordb_config)
 
         # Queue management specific attributes
         self._queue_manager = queue_manager
@@ -433,18 +432,27 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        events_time_decay_protection: Optional[str] = None,
+        request_now: Optional[datetime] = None,
+        for_rerank: bool = False,
     ) -> List[Dict[str, Any]]:
-        return await self._manager.search_in_tenant(
-            self._ctx,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=context_type,
-            target_directories=target_directories,
-            extra_filter=extra_filter,
-            level=level,
-            limit=limit,
-            offset=offset,
-        )
+        kwargs: Dict[str, Any] = {
+            "query_vector": query_vector,
+            "sparse_query_vector": sparse_query_vector,
+            "context_type": context_type,
+            "target_directories": target_directories,
+            "extra_filter": extra_filter,
+            "level": level,
+            "limit": limit,
+            "offset": offset,
+        }
+        if events_time_decay_protection is not None:
+            kwargs.update(
+                events_time_decay_protection=events_time_decay_protection,
+                request_now=request_now,
+                for_rerank=for_rerank,
+            )
+        return await self._manager.search_in_tenant(self._ctx, **kwargs)
 
     async def filter_in_tenant(
         self,
@@ -474,17 +482,24 @@ class VikingDBManagerProxy:
         target_directories: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
+        events_time_decay_protection: Optional[str] = None,
+        request_now: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._manager.search_children_in_tenant(
-            self._ctx,
-            parent_uri=parent_uri,
-            query_vector=query_vector,
-            sparse_query_vector=sparse_query_vector,
-            context_type=context_type,
-            target_directories=target_directories,
-            extra_filter=extra_filter,
-            limit=limit,
-        )
+        kwargs: Dict[str, Any] = {
+            "parent_uri": parent_uri,
+            "query_vector": query_vector,
+            "sparse_query_vector": sparse_query_vector,
+            "context_type": context_type,
+            "target_directories": target_directories,
+            "extra_filter": extra_filter,
+            "limit": limit,
+        }
+        if events_time_decay_protection is not None:
+            kwargs.update(
+                events_time_decay_protection=events_time_decay_protection,
+                request_now=request_now,
+            )
+        return await self._manager.search_children_in_tenant(self._ctx, **kwargs)
 
     async def get_context_by_uri(
         self,

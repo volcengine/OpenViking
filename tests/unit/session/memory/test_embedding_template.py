@@ -103,6 +103,53 @@ class TestContentTemplateRendering:
 
 class TestEmbeddingTextConstruction:
     @pytest.mark.asyncio
+    async def test_direct_refresh_with_peer_named_memories_does_not_replace_type_tag(self):
+        uri = "viking://user/alice/peers/memories/memories/events/event.md"
+        viking_fs = Mock(read_file=AsyncMock(return_value="# Event body"))
+        vikingdb = Mock(has_queue_manager=True)
+        vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+
+        with patch(
+            "openviking.session.memory.memory_type_registry.get_default_registry",
+            return_value=MemoryTypeRegistry(load_schemas=False),
+        ):
+            refreshed = await MemoryUpdater.refresh_file_embedding(
+                viking_fs=viking_fs,
+                vikingdb=vikingdb,
+                uri=uri,
+                memory_type="memories",
+                ctx=SimpleNamespace(user=None, account_id="default"),
+            )
+
+        assert refreshed
+        message = vikingdb.enqueue_embedding_msg.await_args.args[0]
+        assert "search_tags" not in message.context_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("edited", [False, True])
+    @pytest.mark.parametrize("peer_path", ["", "peers/memories/"])
+    async def test_direct_file_vectorization_does_not_infer_a_type_tag(self, edited, peer_path):
+        uri = f"viking://user/alice/{peer_path}memories/events/event.md"
+        updater = MemoryUpdater(registry=MemoryTypeRegistry(load_schemas=False), vikingdb=Mock())
+        updater._viking_fs = Mock(read_file=AsyncMock(return_value="# Event body"))
+        updater._vikingdb.enqueue_embedding_msg = AsyncMock(return_value=True)
+        result = MemoryUpdateResult()
+        (result.add_edited if edited else result.add_written)(uri)
+
+        assert (
+            await updater._vectorize_memories(
+                result,
+                SimpleNamespace(user=None, account_id="default"),
+                uri_memory_type_map={} if edited else {uri: "events"},
+            )
+            == 1
+        )
+
+        message = updater._vikingdb.enqueue_embedding_msg.await_args.args[0]
+        assert "search_tags" not in message.context_data
+        assert "_upsert_options" not in message.context_data
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("tags", "mode", "expected_mode"),
         [
@@ -200,7 +247,10 @@ class TestEmbeddingTextConstruction:
 
         embedding_msg = updater._vikingdb.enqueue_embedding_msg.await_args.args[0]
         assert embedding_msg.context_data["search_tags"] == [experience_source_tag(experience_uri)]
-        assert embedding_msg.context_data["_upsert_options"] == {"search_tag_mode": "append"}
+        assert embedding_msg.context_data["_upsert_options"] == {
+            "search_tag_mode": "append",
+            "extracted_memory_type": "trajectories",
+        }
 
     @pytest.mark.asyncio
     async def test_logs_final_embedding_text_before_vectorization(self):
@@ -242,7 +292,10 @@ class TestEmbeddingTextConstruction:
             patch("openviking.session.memory.memory_updater.logger.error") as mock_logger_error,
         ):
             mock_from_context.side_effect = lambda context: SimpleNamespace(
-                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
             )
             await updater._vectorize_memories(
                 result,
@@ -292,7 +345,10 @@ class TestEmbeddingTextConstruction:
 
         with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
             mock_from_context.side_effect = lambda context: SimpleNamespace(
-                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
             )
             await updater._vectorize_memories(
                 result,
@@ -341,7 +397,10 @@ class TestEmbeddingTextConstruction:
 
         with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
             mock_from_context.side_effect = lambda context: SimpleNamespace(
-                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
             )
             await updater._vectorize_memories(
                 result,
@@ -391,7 +450,10 @@ class TestEmbeddingTextConstruction:
 
         with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
             mock_from_context.side_effect = lambda context: SimpleNamespace(
-                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
             )
             await updater._vectorize_memories(
                 result,
@@ -440,7 +502,10 @@ class TestEmbeddingTextConstruction:
 
         with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
             mock_from_context.side_effect = lambda context: SimpleNamespace(
-                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
             )
             await updater._vectorize_memories(
                 result,
@@ -488,7 +553,10 @@ class TestEmbeddingTextConstruction:
 
         with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
             mock_from_context.side_effect = lambda context: SimpleNamespace(
-                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
             )
             await updater._vectorize_memories(
                 result,
@@ -536,7 +604,10 @@ class TestEmbeddingTextConstruction:
 
         with patch.object(EmbeddingMsgConverter, "from_context") as mock_from_context:
             mock_from_context.side_effect = lambda context: SimpleNamespace(
-                telemetry_id=None, id="msg-1", message=context.get_vectorization_text()
+                telemetry_id=None,
+                id="msg-1",
+                message=context.get_vectorization_text(),
+                context_data={},
             )
             await updater._vectorize_memories(
                 result,

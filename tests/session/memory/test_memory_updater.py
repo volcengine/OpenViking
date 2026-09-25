@@ -546,7 +546,43 @@ class TestMemoryUpdater:
 
         assert set(operation.uris) == {alice_uri, bob_uri}
         assert set(result.written_uris) == {alice_uri, bob_uri}
+        assert updater._vectorize_memories.await_args.kwargs["search_tags_by_uri"] == {
+            alice_uri: ["memory_type=entities"],
+            bob_uri: ["memory_type=entities"],
+        }
         isolation_handler.calculate_memory_uris.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_extraction_update_tags_event_with_peer_named_memories(self):
+        uri = "viking://user/alice/peers/memories/memories/events/event.md"
+        updater = MemoryUpdater(registry=MagicMock())
+        updater._get_viking_fs = MagicMock(return_value=MagicMock())
+        updater._apply_upsert = AsyncMock()
+        updater._sync_resource_refs_for_result = AsyncMock()
+        updater._vectorize_memories = AsyncMock()
+        updater.generate_overview = AsyncMock()
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    old_memory_file_content=MemoryFile(uri=uri, content="old"),
+                    memory_fields={"content": "new"},
+                    memory_type="events",
+                    uris=[uri],
+                )
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+
+        result = await updater.apply_operations(
+            operations=operations,
+            ctx=RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER),
+        )
+
+        assert result.edited_uris == [uri]
+        assert updater._vectorize_memories.await_args.kwargs["search_tags_by_uri"][uri] == [
+            "memory_type=events"
+        ]
 
     @pytest.mark.asyncio
     async def test_apply_operations_isolates_unresolved_uris(self):
