@@ -326,4 +326,4 @@ python -m openviking.eval.ragas.rag_eval --docs_dir ./docs --question_file ./que
 - 回放 CLI：[ragas/play_recorder.py](./ragas/play_recorder.py)
 - IO 录制器：[recorder/__init__.py](./recorder/__init__.py)
 - 示例数据：[datasets/local_doc_example_glm5.jsonl](./datasets/local_doc_example_glm5.jsonl)
-- 测试文件：[tests/eval/](../../tests/eval/)、[tests/storage/test_recorder.py](../../tests/storage/test_recorder.py)
+- 测试文件：[tests/eval/](../../tests/eval/)
