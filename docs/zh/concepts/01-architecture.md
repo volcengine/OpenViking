@@ -26,7 +26,7 @@ Retrieval     Sessions       Resource / Skill import
                  |
              VikingFS
            /          \
-       AGFS         Vector index
+      RAGFS         Vector index
 ```
 
 </details>
@@ -43,7 +43,7 @@ Retrieval     Sessions       Resource / Skill import
 | **Session** | 会话管理 | 消息记录、使用追踪、会话归档、触发记忆提交 |
 | **Parse** | 上下文提取 | 文档解析（PDF/MD/HTML）、树构建（TreeBuilder）、异步语义生成 |
 | **Memory** | 记忆提取 | 按 MemoryType Schema 提取记忆（ExtractLoop），由 LLM 合并去重后以 patch 写回（MemoryUpdater）；由 `SessionCompressorV3` 编排 |
-| **Storage** | 存储层 | VikingFS 虚拟文件系统、向量索引、AGFS 集成 |
+| **Storage** | 存储层 | VikingFS 虚拟文件系统、向量索引、RAGFS 集成 |
 
 </div>
 
@@ -66,7 +66,7 @@ OpenViking 采用双层存储架构，实现内容与索引分离（详见 [存�
 
 | 存储层 | 职责 | 内容 |
 |--------|------|------|
-| **AGFS** | 内容存储 | L0/L1/L2 完整内容、多媒体文件、关联关系 |
+| **RAGFS** | 内容存储 | L0/L1/L2 完整内容、多媒体文件、关联关系 |
 | **向量库** | 索引存储 | URI、向量、元数据和检索需要的文本（包括摘要） |
 
 ## 数据流概览
@@ -74,11 +74,11 @@ OpenViking 采用双层存储架构，实现内容与索引分离（详见 [存�
 ### 添加上下文
 
 ```
-输入 → Parser → TreeBuilder → AGFS → SemanticQueue → 向量库
+输入 → Parser → TreeBuilder → RAGFS → SemanticQueue → 向量库
 ```
 
 1. **Parser**：将源文档解析为文件与目录；是否调用模型取决于所选 Parser
-2. **TreeBuilder**：移动临时目录到 AGFS，入队语义处理
+2. **TreeBuilder**：移动临时目录到 RAGFS，入队语义处理
 3. **SemanticQueue**：异步自底向上生成 L0/L1
 4. **向量库**：建立索引用于语义搜索
 
@@ -103,7 +103,7 @@ OpenViking 采用双层存储架构，实现内容与索引分离（详见 [存�
 2. **归档边界**：按提交参数划分归档消息和保留消息；默认归档全部当前消息
 3. **归档**：生成历史片段的 L0/L1
 4. **记忆提取**：根据记忆策略和 MemoryType Schema 从消息中提取记忆
-5. **存储**：写入 AGFS + 向量库
+5. **存储**：写入 RAGFS + 向量库
 
 ## 部署模式
 
@@ -135,10 +135,10 @@ curl http://localhost:1933/api/v1/search/find \
 
 | 原则 | 说明 |
 |------|------|
-| **存储层纯粹** | 存储层只做 AGFS 操作和基础向量搜索，Rerank 在检索层完成 |
+| **存储层纯粹** | 存储层只做 RAGFS 操作和基础向量搜索，Rerank 在检索层完成 |
 | **三层信息** | L0/L1/L2 实现渐进式详情加载，节省 Token 消耗 |
 | **两阶段检索** | 向量检索提供候选项；文本 search 可按配置遍历目录并重排序 |
-| **单一数据源** | AGFS 保存源文件，向量记录保留检索需要的文本与元数据 |
+| **单一数据源** | RAGFS 保存源文件，向量记录保留检索需要的文本与元数据 |
 
 ## 相关文档
 

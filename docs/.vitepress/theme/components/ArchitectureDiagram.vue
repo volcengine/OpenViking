@@ -11,7 +11,7 @@ const columns = [60, 185.5, 325.5]
         CLI, SDK and HTTP clients call the HTTP Server (REST API and the /mcp endpoint), which calls the
         Service Layer. The Service Layer drives three pipelines: Retrieval; Sessions with memory
         extraction; and Resource and Skill import with parse and semantic queues. All three read and
-        write VikingFS, which stores content in AGFS and indexes it in the vector index.
+        write VikingFS, which stores content in RAGFS and indexes it in the vector index.
       </desc>
       <defs>
         <marker id="arch-diagram-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -65,7 +65,7 @@ const columns = [60, 185.5, 325.5]
       <text class="note" x="200" y="473">virtual filesystem</text>
 
       <rect class="box" x="40" y="520" width="150" height="58" rx="8" />
-      <text class="name" x="115" y="542">AGFS</text>
+      <text class="name" x="115" y="542">RAGFS</text>
       <text class="note" x="115" y="563">source files</text>
 
       <rect class="box" x="210" y="520" width="150" height="58" rx="8" />

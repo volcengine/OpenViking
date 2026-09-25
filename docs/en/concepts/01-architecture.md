@@ -26,7 +26,7 @@ Retrieval     Sessions       Resource / Skill import
                  |
              VikingFS
            /          \
-       AGFS         Vector index
+      RAGFS         Vector index
 ```
 
 </details>
@@ -43,7 +43,7 @@ Retrieval     Sessions       Resource / Skill import
 | **Session** | Session management | Message recording, usage tracking, session archiving, triggering memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
 | **Memory** | Memory extraction | Schema-driven extraction by MemoryType (ExtractLoop), LLM merge and deduplication written back as patches (MemoryUpdater); orchestrated by `SessionCompressorV3` |
-| **Storage** | Storage layer | VikingFS virtual filesystem, vector index, AGFS integration |
+| **Storage** | Storage layer | VikingFS virtual filesystem, vector index, RAGFS integration |
 
 </div>
 
@@ -66,7 +66,7 @@ OpenViking uses a dual-layer storage architecture separating content from index 
 
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
-| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files |
+| **RAGFS** | Content storage | L0/L1/L2 full content, multimedia files |
 | **Vector Index** | Index storage | URIs, vectors, metadata, and text used for retrieval, including abstracts |
 
 ## Data Flow Overview
@@ -74,11 +74,11 @@ OpenViking uses a dual-layer storage architecture separating content from index 
 ### Adding Context
 
 ```
-Input → Parser → TreeBuilder → AGFS → SemanticQueue → Vector Index
+Input → Parser → TreeBuilder → RAGFS → SemanticQueue → Vector Index
 ```
 
 1. **Parser**: Parse source documents into files and directories; model use depends on the selected parser
-2. **TreeBuilder**: Move temp directory to AGFS, enqueue for semantic processing
+2. **TreeBuilder**: Move temp directory to RAGFS, enqueue for semantic processing
 3. **SemanticQueue**: Async bottom-up L0/L1 generation
 4. **Vector Index**: Build index for semantic search
 
@@ -103,7 +103,7 @@ Messages → Archive Boundary → Archive → Memory Extraction → Storage
 2. **Archive Boundary**: Split archived and retained messages according to the commit parameters; by default, archive all current messages
 3. **Archive**: Generate L0/L1 for history segments
 4. **Memory Extraction**: Extract memories from messages according to the memory policy and MemoryType schemas
-5. **Storage**: Write to AGFS + vector index
+5. **Storage**: Write to RAGFS + vector index
 
 ## Deployment Mode
 
@@ -135,10 +135,10 @@ curl http://localhost:1933/api/v1/search/find \
 
 | Principle | Description |
 |-----------|-------------|
-| **Pure Storage Layer** | Storage only handles AGFS operations and basic vector search; Rerank is in retrieval layer |
+| **Pure Storage Layer** | Storage only handles RAGFS operations and basic vector search; Rerank is in retrieval layer |
 | **Three-Layer Information** | L0/L1/L2 enables progressive detail loading, saving token consumption |
 | **Two-Stage Retrieval** | Vector retrieval supplies candidates; text search can traverse directories and rerank when configured |
-| **Single Data Source** | AGFS holds source files; vector records retain the text and metadata needed for retrieval |
+| **Single Data Source** | RAGFS holds source files; vector records retain the text and metadata needed for retrieval |
 
 ## Related Documents
 
