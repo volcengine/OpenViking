@@ -71,7 +71,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 - **启动子代理（subagent）时** — 为其分配相互隔离的记忆会话。
 - **原生文件工具访问 `viking://` 路径前** — 拦截该调用，并提示改用对应的 OpenViking MCP 工具；对 skill 路径的 `Write` 或 `Edit` 会被引导到 `add_skill`。
 
-捕获通常在独立后台进程中执行。生命周期 hook 仍有超时限制，也可能等待捕获或提交；后台执行不代表立即持久化或完全没有延迟。
+捕获在独立后台进程中执行，不阻塞当前对话轮次。PreCompact 和 SessionEnd 会在 hook 超时范围内等待会话提交完成。
 
 skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 skill：先列你自己在 `viking://~/skills` 下的，再列账号内共享在 `viking://agent/skills` 下的，每个附一句简短描述。要照清单里的 skill 执行前，Claude 会先用 OpenViking 的 `read` 工具读取它的 `SKILL.md`。清单有独立的 Token 预算：放不下描述时只列名称，连一个名称都放不下时缩成一行总数。插件自带的 `openviking-skills` skill 告诉 Claude 如何查找和使用 OpenViking 中的 skill，如何用 `add_skill` MCP 工具创建、安装和共享 skill，如何删除 skill，以及在你要求时如何把 `~/.claude/skills` 等本地 skill 迁入 OpenViking。
 

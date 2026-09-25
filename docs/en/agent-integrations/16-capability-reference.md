@@ -721,10 +721,10 @@ If your preferred agent or harness is not among the 11 listed previously, you ca
 
 | Path | Effort | Agent-initiated tool surface | Auto recall/capture hooks | Session/commit | Compaction takeover |
 |---|---|---|---|---|---|
-| ① [Direct MCP connection](./06-mcp-clients.md) | Configure endpoint, credentials, and transport | ✅ All 16 tools | ❌ The model calls them itself | Only `remember` creates a temporary session | ❌ |
-| ② HTTP API / SDK / [LangChain](./07-langchain-langgraph.md) | Implement calls and lifecycle handling | Flexible (call REST as needed) | Custom implementation | Custom implementation (or use the LangChain middleware) | ❌ |
-| ③ Reuse shared-core | Adapt and validate host lifecycle events | ✅ 16 tools (through the MCP proxy) | ✅ Full recall/capture/commit/pending set | ✅ | Depends on which events you wire up |
-| [Agent Plugins portable package](./15-agent-plugins.md) | Install MCP and skill configuration | ✅ Server MCP tools | ❌ Model follows the skill and calls tools | Only `remember` creates a temporary session | ❌ |
+| ① [Direct MCP connection](./06-mcp-clients.md) | Minutes: configure endpoint, credentials, and transport | ✅ All 16 tools | ❌ The model calls them itself | Only `remember` creates a temporary session | ❌ |
+| ② HTTP API / SDK / [LangChain](./07-langchain-langgraph.md) | Hours: implement calls and lifecycle handling | Flexible (call REST as needed) | Custom implementation | Custom implementation (or use the LangChain middleware) | ❌ |
+| ③ Reuse shared-core | Days: adapt and validate host lifecycle events | ✅ 16 tools (through the MCP proxy) | ✅ Full recall/capture/commit/pending set | ✅ | Depends on which events you wire up |
+| [Agent Plugins portable package](./15-agent-plugins.md) | Minutes: install MCP and skill configuration | ✅ Server MCP tools | ❌ Model follows the skill and calls tools | Only `remember` creates a temporary session | ❌ |
 
 ## 6.2 Path ①: Direct MCP connection (recommended starting point)
 

@@ -71,7 +71,7 @@ The plugin hooks into the Claude Code lifecycle:
 - **For each subagent** — assigns an isolated memory session
 - **Before a native file tool touches a `viking://` path** — blocks the call and names the OpenViking MCP tool to use instead; a `Write` or `Edit` on a skill path is pointed to `add_skill`
 
-Capture normally runs in a detached worker. Lifecycle hooks still have timeouts and may wait for capture or commit work; background execution does not guarantee immediate persistence or zero delay.
+Capture runs in a detached worker and does not block the conversation turn. PreCompact and SessionEnd wait for the session commit, within their hook timeouts.
 
 The skill catalog is an `<available-skills>` block that lists the skills stored in OpenViking: your own under `viking://~/skills` first, then the ones shared with your account under `viking://agent/skills`, each with a short description. Before following a listed skill, Claude reads its `SKILL.md` with the OpenViking `read` tool. The catalog has its own token budget: when the descriptions do not fit, it lists names only, and when not even one name fits, it shrinks to a one-line count. The bundled `openviking-skills` skill tells Claude how to find and use OpenViking skills, create, install, and share them with the `add_skill` MCP tool, delete them, and move local skills such as `~/.claude/skills` into OpenViking when you ask.
 

@@ -1,6 +1,6 @@
 # Multi-Write Storage
 
-Multi-write storage lets OpenViking use one primary storage backend together with multiple backup backends under a unified filesystem abstraction. It supports replicas, configurable read routing, and storage migration; it does not automatically promote a backup to primary.
+Multi-write storage lets OpenViking use one primary storage backend together with multiple backup backends under a unified filesystem abstraction. It supports replicas (including cross-region replicas), configurable read routing, and storage migration; it does not automatically promote a backup to primary.
 
 From the API user's point of view, interfaces such as `read()`, `write()`, `ls()`, and `stat()` do not change. Multi-write logic lives inside RAGFS, so callers do not need to care which underlying backend ultimately stores a file.
 

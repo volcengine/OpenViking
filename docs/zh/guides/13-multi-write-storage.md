@@ -1,6 +1,6 @@
 # 多写存储指南
 
-本指南介绍如何配置 OpenViking 的多写存储能力。多写存储允许一个 primary 后端同时复制写入多个 backup 后端，用于保存副本、配置读路由和存储迁移。primary 故障时不会自动提升 backup。
+本指南介绍如何配置 OpenViking 的多写存储能力。多写存储允许一个 primary 后端同时复制写入多个 backup 后端，用于保存副本（包括跨地域副本）、配置读路由和存储迁移。primary 故障时不会自动提升 backup。
 
 多写能力位于 RAGFS 内部。OpenViking 的 Python SDK、HTTP API 和 CLI 使用方式保持不变。
 

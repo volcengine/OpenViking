@@ -8,7 +8,7 @@ OpenViking 是面向 AI Agent 的开源上下文数据库，由字节跳动火�
 
 ### Viking 团队背景
 
-Viking 团队主要开发向量检索、知识库和记忆管理产品。OpenViking 将这些领域的工程经验用于开源上下文数据库，与社区共同开发。
+Viking 团队主要开发向量检索、知识库和记忆管理产品。团队有数十名工程师，覆盖分布式系统、机器学习、数据工程和 AI 算法，在上下文工程上有商业化落地经验。OpenViking 将这些领域的工程经验用于开源上下文数据库，与社区共同开发。
 
 这些工作涉及三个相互关联的问题：如何从非结构化内容中提取可检索的信息，如何在大量候选内容中找到相关上下文，以及如何保留对后续任务有用的交互经验。OpenViking 对应提供[资源解析与提取](../concepts/06-extraction.md)、[上下文检索](../concepts/07-retrieval.md)和[会话与记忆管理](../concepts/08-session.md)。可沿这些入口了解实现和使用条件。
 
@@ -17,7 +17,7 @@ Viking 团队主要开发向量检索、知识库和记忆管理产品。OpenVik
 | 时间 | 主要工作 |
 | --- | --- |
 | 2019–2023 | VikingDB 在字节跳动内部用于向量检索 |
-| 2024 | 在火山引擎提供 VikingDB、Viking 知识库和 Viking 记忆库 |
+| 2024 | 在火山引擎提供 VikingDB、Viking 知识库和 Viking 记忆库，支撑数千家企业客户开发 AI 应用 |
 | 2025 | 扩展 AI 搜索、知识助手等应用 |
 | 2025 年末 | 开源 [MineContext](https://github.com/volcengine/MineContext)，探索主动式上下文应用 |
 | 2026 年初 | 开源 OpenViking |
@@ -61,7 +61,7 @@ OpenViking 自启动起就与高校和研究机构合作，共同探索面向 AI
 
 ### 治理架构与决策机制
 
-开源治理委员会负责技术路线、版本与功能优先级、核心架构和兼容性评审、工程规范、贡献者协作，以及相关项目的集成。成员包括 Haojie Qin、Jiahui Zhou、Linggang Wang、Maojia Sheng、Yaohui Sun。
+开源治理委员会负责技术路线、版本与功能优先级、核心架构和兼容性评审、工程规范、贡献者协作，以及相关项目的集成。成员包括 Haojie Qin、Jiahui Zhou、Linggang Wang、Maojia Sheng、Yaohui Sun。符合条件的社区贡献者可以通过后续的提名与选举程序加入委员会。
 
 具体模块的协作入口和近期活跃评审者见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。
 
@@ -99,3 +99,5 @@ Issue 和 PR 需要提供的信息见[贡献指南](https://github.com/volcengin
 ## 讨论与协作机制
 
 [GitHub 仓库](https://github.com/volcengine/OpenViking) 保存代码、文档和评审记录。[GitHub Discussions](https://github.com/volcengine/OpenViking/discussions) 用于技术方案讨论和社区交流，群聊适合即时交流；需要跟踪的问题和方案请同步到 Issue 或 Pull Request，方便后续查阅和协作。
+
+希望开展技术合作或生态集成的研究机构和企业，可以在 GitHub Discussions 发起讨论，或通过飞书群联系团队。

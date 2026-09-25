@@ -2,7 +2,7 @@
 
 OpenViking Server supports multiple built-in authentication modes with role-based access control. The mode is auto-detected if not explicitly configured. In addition, custom authentication plugins can be registered to support arbitrary identity sources.
 
-Use API Key mode when OpenViking should manage credentials, OIDC or LDAP for an existing identity service, and Trusted mode behind a gateway that validates callers.
+API Key mode is the default and recommended for most deployments. Use API Key mode when OpenViking should manage credentials, OIDC or LDAP for an existing identity service, and Trusted mode behind a gateway that validates callers.
 
 ## Authentication Modes Overview
 

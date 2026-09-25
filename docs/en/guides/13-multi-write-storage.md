@@ -1,6 +1,6 @@
 # Multi-Write Storage Guide
 
-This guide explains how to configure multi-write storage in OpenViking. Multi-write storage lets one primary backend replicate writes to multiple backup backends for replica storage, optional read routing, and migration. It does not automatically promote a backup when the primary fails.
+This guide explains how to configure multi-write storage in OpenViking. Multi-write storage lets one primary backend replicate writes to multiple backup backends for replica storage (including cross-region replicas), optional read routing, and migration. It does not automatically promote a backup when the primary fails.
 
 Multi-write lives inside RAGFS. The Python SDK, HTTP API, and CLI usage remain unchanged.
 

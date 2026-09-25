@@ -704,10 +704,10 @@ MCP `write` / REST `content/write` 的三道 guard（`content_write.py`）：可
 
 | 路径 | 投入 | agent 主动工具面 | 自动召回/捕获 hook | 会话/commit | 压缩接管 |
 |---|---|---|---|---|---|
-| ① [通用 MCP 直连](./06-mcp-clients.md) | 配置连接地址、凭据与传输方式 | ✅ 16 工具全量 | ❌ 由模型主动调用 | 仅 `remember` 建临时会话 | ❌ |
-| ② HTTP API / SDK / [LangChain](./07-langchain-langgraph.md) | 编写调用代码和生命周期处理 | 自选（按需调 REST） | 自己实现 | 自己实现（或用 LangChain middleware） | ❌ |
-| ③ 复用 shared-core | 适配并验证宿主生命周期事件 | ✅ 16 工具（经 MCP 代理） | ✅ 召回/捕获/commit/pending 全套 | ✅ | 视接入哪些事件而定 |
-| [Agent Plugins 便携包](./15-agent-plugins.md) | 安装 MCP 与 skill 配置 | ✅ 服务端 MCP 工具 | ❌ 依赖模型按 skill 调工具 | 仅 `remember` 建临时会话 | ❌ |
+| ① [通用 MCP 直连](./06-mcp-clients.md) | 分钟级：配置连接地址、凭据与传输方式 | ✅ 16 工具全量 | ❌ 由模型主动调用 | 仅 `remember` 建临时会话 | ❌ |
+| ② HTTP API / SDK / [LangChain](./07-langchain-langgraph.md) | 小时级：编写调用代码和生命周期处理 | 自选（按需调 REST） | 自己实现 | 自己实现（或用 LangChain middleware） | ❌ |
+| ③ 复用 shared-core | 天级：适配并验证宿主生命周期事件 | ✅ 16 工具（经 MCP 代理） | ✅ 召回/捕获/commit/pending 全套 | ✅ | 视接入哪些事件而定 |
+| [Agent Plugins 便携包](./15-agent-plugins.md) | 分钟级：安装 MCP 与 skill 配置 | ✅ 服务端 MCP 工具 | ❌ 依赖模型按 skill 调工具 | 仅 `remember` 建临时会话 | ❌ |
 
 ## 6.2 路径①：通用 MCP 直连（推荐起步）
 

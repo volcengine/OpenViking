@@ -6,6 +6,13 @@
 
 OpenViking organizes an agent's resources, memories, and skills as files. Applications can browse paths, search semantically, and read content on demand. They can also retain preferences and experience extracted from sessions for later tasks.
 
+It targets four common problems when building agents:
+
+- **Fragmented context**: memories, resources, and skills live in different places and are hard to manage together
+- **Weak retrieval**: flat chunk storage loses the surrounding structure, so results lack the full context
+- **Opaque retrieval**: implicit retrieval chains are hard to inspect when results go wrong
+- **Limited memory iteration**: agents lack task memory that improves across sessions
+
 For example, an agent revising a deployment plan can search project documentation and read the relevant configuration. Constraints agreed in an earlier session can also be retrieved and reused if they were extracted as memories. The application must connect retrieval and session submission; installing the database alone does not give an agent this context. Start by [importing and searching a resource](../getting-started/02-quickstart.md), then connect an [agent tool](../agent-integrations/01-overview.md) if needed.
 
 ### What's the fundamental difference between OpenViking and traditional vector databases?

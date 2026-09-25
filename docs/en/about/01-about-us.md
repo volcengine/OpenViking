@@ -8,7 +8,7 @@ OpenViking is an open-source context database for AI agents, initiated and maint
 
 ### Viking Team Background
 
-The Viking team develops vector retrieval, knowledge base, and memory management products. OpenViking applies that engineering experience to a context database developed with the open-source community.
+The Viking team develops vector retrieval, knowledge base, and memory management products. Its dozens of engineers work across distributed systems, machine learning, data engineering, and AI algorithms, and have run context engineering in commercial production. OpenViking applies that engineering experience to a context database developed with the open-source community.
 
 This work involves three related problems: extracting searchable information from unstructured content, finding relevant context among many candidates, and retaining interaction experience for later tasks. OpenViking addresses these through [resource parsing and extraction](../concepts/06-extraction.md), [context retrieval](../concepts/07-retrieval.md), and [session and memory management](../concepts/08-session.md). These pages explain the implementation and conditions for use.
 
@@ -17,7 +17,7 @@ This work involves three related problems: extracting searchable information fro
 | Period | Work |
 | --- | --- |
 | 2019–2023 | VikingDB used for vector retrieval within ByteDance |
-| 2024 | VikingDB, Viking Knowledge Base, and Viking Memory Base offered on Volcengine |
+| 2024 | VikingDB, Viking Knowledge Base, and Viking Memory Base offered on Volcengine, used by thousands of enterprise customers to build AI applications |
 | 2025 | Expanded into AI search and knowledge assistants |
 | Late 2025 | Open-sourced [MineContext](https://github.com/volcengine/MineContext) to explore proactive context applications |
 | Early 2026 | Open-sourced OpenViking |
@@ -61,7 +61,7 @@ Development covers context storage and retrieval, agent integrations, and deploy
 
 ### Governance Structure and Decision-Making
 
-The governance committee oversees technical direction, release and feature priorities, architecture and compatibility reviews, engineering standards, contributor collaboration, and integrations with related projects. Members include Haojie Qin, Jiahui Zhou, Linggang Wang, Maojia Sheng, and Yaohui Sun.
+The governance committee oversees technical direction, release and feature priorities, architecture and compatibility reviews, engineering standards, contributor collaboration, and integrations with related projects. Members include Haojie Qin, Jiahui Zhou, Linggang Wang, Maojia Sheng, and Yaohui Sun. Eligible community contributors can join the committee through future nomination and election procedures.
 
 See the [contribution guide](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md) for module contacts and recently active reviewers.
 
@@ -99,3 +99,5 @@ For what to include in issues and pull requests, see the [contribution guide](ht
 ## Discussion and Collaboration
 
 The [GitHub repository](https://github.com/volcengine/OpenViking) holds code, documentation, and review records. Use [GitHub Discussions](https://github.com/volcengine/OpenViking/discussions) for design discussions and community exchange, chat for immediate discussion, and an issue or pull request for work that needs tracking.
+
+Research institutions and companies interested in technical collaboration or integrations can start a thread in GitHub Discussions or contact the team through the Lark group.
