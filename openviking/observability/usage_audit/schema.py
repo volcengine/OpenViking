@@ -8,10 +8,10 @@ serve any region. Token and retrieval rollups are hour-grained so cross-tz
 "today" queries can slice at user-local day boundaries.
 """
 
-# Stored on the `_schema_meta` row. Version 4 has an explicit additive migration;
-# unhandled newer transitions fail closed, while older incompatible snapshots
-# continue to use the reset path.
-SCHEMA_VERSION = 5
+# Stored on the `_schema_meta` row. Versions 4 and 5 have explicit additive
+# migrations; unhandled newer transitions fail closed, while older incompatible
+# snapshots continue to use the reset path.
+SCHEMA_VERSION = 6
 
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS _schema_meta (
@@ -69,6 +69,20 @@ CREATE TABLE IF NOT EXISTS usage_context_write_bucket (
 );
 CREATE INDEX IF NOT EXISTS idx_usage_context_write_account_date
     ON usage_context_write_bucket(account_id, date_utc, hour_utc);
+
+-- One row per usage event: the deterministic event_id makes a replayed commit
+-- count once.
+CREATE TABLE IF NOT EXISTS usage_experience_event (
+    event_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    resource_uri TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    date_utc TEXT NOT NULL,
+    hour_utc INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_experience_resource_date
+    ON usage_experience_event(account_id, resource_uri, date_utc);
 
 CREATE TABLE IF NOT EXISTS request_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

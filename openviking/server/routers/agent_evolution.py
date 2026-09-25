@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Agent Evolution endpoints."""
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import get_request_context
@@ -57,6 +57,28 @@ async def get_experience_outcome_distribution(
     result = await service.agent_evolution.get_experience_outcome_distribution(
         experience_uri=experience_uri,
         ctx=_ctx,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return Response(status="ok", result=result)
+
+
+@router.get("/experiences/usage")
+async def get_experience_usage(
+    request: Request,
+    experience_uri: str = Query(..., description="Experience file URI"),
+    start_date: str | None = Query(None, description="UTC start date, inclusive (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="UTC end date, inclusive (YYYY-MM-DD)"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Count recall and injection events for an Experience."""
+    service = get_service()
+    experience_uri = validate_request_viking_uri(experience_uri, _ctx)
+    runtime = getattr(request.app.state, "usage_audit_runtime", None)
+    result = await service.agent_evolution.get_experience_usage(
+        experience_uri=experience_uri,
+        ctx=_ctx,
+        store=runtime.store if runtime is not None else None,
         start_date=start_date,
         end_date=end_date,
     )

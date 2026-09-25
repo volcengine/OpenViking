@@ -36,11 +36,13 @@ import { TrajectoryList } from './-components/trajectory-list'
 import { TrajectoryPreviewSheet } from './-components/trajectory-preview-sheet'
 import {
   fetchContent,
+  fetchExperienceUsage,
   fetchOutcomeDistribution,
   fetchTrajectories,
 } from './-lib/api'
 import { getExperienceDisplayName, resolveTimeRange } from './-lib/experience'
 import type {
+  ExperienceUsage,
   TimeRange,
   TimeRangePreset,
   TrajectoryItem,
@@ -60,6 +62,32 @@ function getErrorMessage(error: unknown): string {
     return error.message
   }
   return String(error)
+}
+
+function UsageTile({ count, label }: { count: number; label: string }) {
+  return (
+    <div className="grid gap-0.5 rounded-lg border border-border/60 px-3 py-2">
+      <span className="text-2xl font-semibold tabular-nums">{count}</span>
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </div>
+  )
+}
+
+function UsageCounts({ usage }: { usage: ExperienceUsage }) {
+  const { t } = useTranslation('agentExperiencePage')
+  if (!usage.available) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {t('detail.usageUnavailable')}
+      </p>
+    )
+  }
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <UsageTile count={usage.recallCount} label={t('detail.usageRecall')} />
+      <UsageTile count={usage.injectCount} label={t('detail.usageInject')} />
+    </div>
+  )
 }
 
 function ExperienceDetailRoute() {
@@ -100,6 +128,25 @@ function ExperienceDetailRoute() {
       }),
     queryKey: [
       'agent-experience-outcomes',
+      identityScopeKey,
+      experienceUri,
+      timeRange.preset,
+      timeRange.startDate,
+      timeRange.endDate,
+    ],
+    retry: false,
+  })
+
+  const usageQuery = useQuery({
+    enabled: activeTab === 'impact',
+    queryFn: ({ signal }) =>
+      fetchExperienceUsage({
+        experienceUri,
+        signal,
+        timeRange,
+      }),
+    queryKey: [
+      'agent-experience-usage',
       identityScopeKey,
       experienceUri,
       timeRange.preset,
@@ -330,6 +377,24 @@ function ExperienceDetailRoute() {
           <CardContent className="grid gap-5 px-5 pb-5">
             {activeTab === 'impact' ? (
               <>
+                <section className="grid gap-3">
+                  <h3 className="text-sm font-medium">
+                    {t('detail.usageTitle')}
+                  </h3>
+                  {usageQuery.isLoading ? (
+                    <div className="flex min-h-16 items-center gap-2 text-sm text-muted-foreground">
+                      <LoaderCircleIcon className="size-4 animate-spin" />
+                      {t('detail.loadingMore')}
+                    </div>
+                  ) : usageQuery.isError ? (
+                    <p className="text-sm text-muted-foreground">
+                      {getErrorMessage(usageQuery.error)}
+                    </p>
+                  ) : usageQuery.data ? (
+                    <UsageCounts usage={usageQuery.data} />
+                  ) : null}
+                </section>
+
                 <section className="grid gap-3">
                   <h3 className="text-sm font-medium">
                     {t('detail.outcomeTitle')}

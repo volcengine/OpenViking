@@ -1834,7 +1834,14 @@ Explicit `auth_mode: "api_key"` requires a non-empty `root_api_key`, including o
 
 ### Usage Reporter
 
-The optional Usage Reporter extracts memory usage events from committed session tool parts. The built-in file log sink writes each event as one flat JSON object to a dedicated hourly rotating file:
+The Usage Reporter counts Experience recall (`memory.recalled`) and injection (`memory.injected`) events from two sources:
+
+- at session commit, OpenViking find/search/list (recall) and read/multi_read (injection) tool parts;
+- Experiences served by `POST /api/v1/search/search` with `mode="context"` (and the deprecated `/recall`) count as recalls, which covers harness auto-recall.
+
+`enabled` defaults to `"auto"`: it reports only for accounts whose Agent Evolution is on. `true` reports for every account and `false` turns reporting off. Events always go to the local Usage/Audit store (`observability.usage_audit`, deduplicated by `event_id`, kept for `usage_retention_days`), which backs the recall and injection counts on the Studio Experience detail page; sinks listed under `sinks` receive the same events.
+
+The built-in file log sink writes each event as one flat JSON object to a dedicated hourly rotating file:
 
 ```json
 {
