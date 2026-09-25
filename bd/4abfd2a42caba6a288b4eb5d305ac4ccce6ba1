@@ -1,0 +1,42 @@
+bot/tests/test_compile_evidence_spans.py
+  h_b34c679d17e2ac 20,116-117,124,131,163-164
+bot/vikingbot/compile/models.py
+  h_b34c679d17e2ac 45,88
+bot/vikingbot/compile/ops/common.py
+  h_b34c679d17e2ac 10,15,17,19-20,31,43-44,51,57-68,75-84,86-92,96-113,140,171-182,186-193,249-255,257-264,269-284,289-293,303,311,315,334,336-345
+bot/vikingbot/compile/ops/finalize.py
+  h_b34c679d17e2ac 30-32,55-59,61-96,102,105-109,112,116-117,119,123,144,148,170-174
+bot/vikingbot/compile/ops/reduce.py
+  h_b34c679d17e2ac 3,9,14,18,20,82,122-123,126,136,139-140,142,185,261-273,275-281,285-286,290
+bot/vikingbot/compile/ops/shuffle.py
+  h_b34c679d17e2ac 10,15,298,426-430,441-443,452-459
+bot/vikingbot/compile/pipeline.py
+  h_b34c679d17e2ac 32,34-35,37-41,43,45,47-52,54-57,59,61-63,65,67-70,72,74-75,77,79-81,83,85,87,89-91,93,95-106,108-113,115-131,140,227-228,254,260,280,423-428,438,445
+bot/vikingbot/compile/pipeline_agent.py
+  h_b34c679d17e2ac 7,16,36,42-53,99,116-117,192-194,197,201,255-271,276,291
+bot/vikingbot/compile/pipeline_io.py
+  h_b34c679d17e2ac 36-100,213-214,274,300-302,348-350,352,354,359,383,389,400-405,418,432,484-487,519-520,538
+bot/vikingbot/compile/plan.py
+  h_b34c679d17e2ac 9,13,20,42-43,45-46,49-68,71-72,76-77,104,107-115,125,133-151,154-160,164-165,167,169-170,191,194-202,281,339-343,388,392,399-411,418-443,461
+bot/vikingbot/compile/renderer.py
+  h_b34c679d17e2ac 64,263,265,273-274,351-353,505,507-509,514-518,520,522-535,541,546-556,572,578-579,597,601-605,610,617,621
+bot/vikingbot/compile/resume.py
+  h_b34c679d17e2ac 103-104,114
+bot/vikingbot/compile/skill_resources.py
+  h_b34c679d17e2ac 24,29-31
+openviking/utils/model_retry.py
+  h_b34c679d17e2ac 85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "bd4abfd2a42caba6a288b4eb5d305ac4ccce6ba1",
+  "prompts": {},
+  "humans": {
+    "h_b34c679d17e2ac": {
+      "author": "fujiajie.168 <fujiajie.168@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
