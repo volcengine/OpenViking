@@ -209,6 +209,7 @@ claude
 | `OPENVIKING_WRITE_PATH_ASYNC`          | `true`        | 把写 hook detach 到后台 worker，避免 CC 等待 commit RTT            |
 | `OPENVIKING_BYPASS_SESSION`            | `false`       | 一次性：`1`/`true`=当前进程所有 hook 直接放行                      |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS`   | `""`          | CSV 的 glob 模式，匹配 `session_id` 或 `cwd`                       |
+| `OPENVIKING_SKIP_SUBAGENT_SESSIONS`    | `false`       | `1`/`true`=跳过 SubagentStart / SubagentStop，子代理 transcript 不捕获、不提交 |
 | `OPENVIKING_MEMORY_ENABLED`            | (auto)        | `0`/`false`/`no`=强制禁用；`1`/`true`/`yes`=强制启用               |
 | `OPENVIKING_DEBUG`                     | `false`       | `1`/`true`=向 `~/.openviking/logs/cc-hooks.log` 输出 debug 日志    |
 | `OPENVIKING_DEBUG_LOG`                 | `~/.openviking/logs/cc-hooks.log` | 覆盖日志路径                                  |
