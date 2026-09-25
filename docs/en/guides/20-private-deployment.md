@@ -36,7 +36,7 @@ ovadmin material check-registry --listfile "${VIKING_HOME}/vikinglist" \
   --image-registry "${IMAGE_REGISTRY}"
 ```
 
-Download URLs in `vikinglist` are signed and expire. If you get `HTTP 403`, ask the delivery team for a fresh list. If the deployment host cannot reach the URLs, download on a connected machine and copy the `repo` directory over. Continue once `check-registry` reports no missing images.
+Download URLs in `vikinglist` are signed and expire. If you get `HTTP 403`, ask the delivery team for a fresh list. If the deployment host cannot reach the URLs, download on a connected machine and copy the `repo` directory over. Without a Docker daemon, run `skopeo login` and add `--skopeo-bin "$(command -v skopeo)"` to `import-registry`. Tags that already exist in the Registry are skipped, so reruns are safe. Continue once `check-registry` reports no missing images.
 
 Isolated environments also need infrastructure dependencies, model services, and a license renewal / telemetry return plan. Having the images in place does not make the system fully offline-ready.
 
@@ -119,7 +119,40 @@ Replace `vikingdb` if your cluster has a different name. Smoke tests create test
 
 ## 4. Deploy OpenViking and create a Workspace
 
-Skip this step for a VikingDB-only delivery. Prepare the release's ConfigMap Template and model Secret Template, then preview and install the OpenViking Operator:
+Skip this step for a VikingDB-only delivery.
+
+First write the model configuration into a Secret Template. It uses the same structure as `ov.conf`. The example below uses the default Volcengine Ark models, with a `1024`-dimension embedding. For other model services, also check the API protocol and dimension; see [model integration checks](19-deployment-checklist.md#model-integration-checks).
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "volcengine",
+      "model": "doubao-embedding-vision-251215",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "<embedding-api-key>",
+      "dimension": 1024,
+      "input": "multimodal"
+    }
+  },
+  "vlm": {
+    "provider": "volcengine",
+    "model": "doubao-seed-2-0-lite-260428",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<vlm-api-key>"
+  }
+}
+```
+
+Save it as `ov.conf.secret`, load it into a Secret, then delete the local plaintext file:
+
+```bash
+kubectl -n vikingdb create secret generic openviking-secrets \
+  --from-file=ov.conf.secret=ov.conf.secret \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Then preview and install the OpenViking Operator, and create the workspace:
 
 ```bash
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" setup apply \
@@ -134,7 +167,7 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" workspace create "${WORKSPACE_NAME}" \
   --namespace vikingdb \
   --image '<runtime-image-from-delivery-manifest>' \
   --conf-template '<configmap-template-name>' \
-  --conf-secret '<secret-template-name>' \
+  --conf-secret openviking-secrets \
   --wait
 
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" workspace get "${WORKSPACE_NAME}"
@@ -160,15 +193,16 @@ The generated configuration contains a Root API Key for initialization and admin
 
 For an in-cluster client, use `gen-conf --endpoint-type service`. For an external client, supply a reachable entry point with `--endpoint '<openviking-endpoint>'`. Generating configuration does not create Ingress, TLS, or a load balancer. Add `--force` only after deciding to overwrite an existing output file.
 
-Record all applicable acceptance results:
+The deployment is complete when all of the following hold:
 
-- Materials and running versions match; the deployment preview matches the target environment.
-- `VikingDbCluster` is Ready for its current generation; License is Active when enabled.
-- `OpenVikingWorkspace` is Ready when OpenViking is deployed.
-- `doctor` passes; each delivered product passes its own P0 smoke.
+- All nodes are `Ready`, and no application Pod is `Pending`, in `ImagePullBackOff`, or restarting repeatedly.
+- `check-registry` reports no missing images; materials and running versions match.
+- `VikingDbCluster` is Ready for its current generation; `OpenVikingWorkspace` is Ready when OpenViking is deployed.
+- With licensing enabled, `license status vikingdb` shows State `Active`, and the `viking-license-verdict` Secret exists in the application namespace.
+- `doctor` passes, and VikingDB P0 and OpenViking P0 each pass.
 - The application client can authenticate, import, read, and retrieve through its actual endpoint.
 
-VikingDB P0 does not replace OpenViking P0. Running Pods do not replace these checks. These checks do not establish capacity, recoverability, or high availability.
+Running Pods do not replace these checks, and these checks do not establish capacity, recoverability, or high availability. After deployment, connect with the generated client configuration using the [CLI quickstart](../getting-started/02-quickstart.md).
 
 ## Bundled reference manuals
 

@@ -36,7 +36,7 @@ ovadmin material check-registry --listfile "${VIKING_HOME}/vikinglist" \
   --image-registry "${IMAGE_REGISTRY}"
 ```
 
-`vikinglist` 里的下载地址带签名和有效期，返回 `HTTP 403` 时向交付方重新获取。部署机无法访问下载地址时，在联网机器下载后，把 `repo` 目录拷到部署机。`check-registry` 不再报告缺失镜像后继续。
+`vikinglist` 里的下载地址带签名和有效期，返回 `HTTP 403` 时向交付方重新获取。部署机无法访问下载地址时，在联网机器下载后，把 `repo` 目录拷到部署机。部署机没有 Docker daemon 时，`skopeo login` 后给 `import-registry` 加 `--skopeo-bin "$(command -v skopeo)"`。Registry 中已有的同名 tag 默认跳过，可以放心重跑。`check-registry` 不再报告缺失镜像后继续。
 
 隔离环境还要准备基础组件、模型服务，以及 License 续期和遥测回传方案；镜像到位不代表系统可以完全离线运行。
 
@@ -119,7 +119,40 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" check smoketest --target vdb --p0
 
 ## 4. 部署 OpenViking 与 Workspace
 
-如果只交付 VikingDB，跳过本节。准备好随包版本的 ConfigMap Template 和模型 Secret Template 后，预览并安装 OpenViking Operator：
+如果只交付 VikingDB，跳过本节。
+
+先把模型配置写入 Secret Template，内容结构与 `ov.conf` 一致。下面是火山方舟的默认模型，Embedding 输出维度为 `1024`；换其他模型服务时，同时核对接口协议和维度，见[部署前检查](19-deployment-checklist.md#模型接入检查)。
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "volcengine",
+      "model": "doubao-embedding-vision-251215",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key": "<embedding-api-key>",
+      "dimension": 1024,
+      "input": "multimodal"
+    }
+  },
+  "vlm": {
+    "provider": "volcengine",
+    "model": "doubao-seed-2-0-lite-260428",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key": "<vlm-api-key>"
+  }
+}
+```
+
+保存为 `ov.conf.secret` 后写入 Secret，然后删除本地明文文件：
+
+```bash
+kubectl -n vikingdb create secret generic openviking-secrets \
+  --from-file=ov.conf.secret=ov.conf.secret \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+再预览并安装 OpenViking Operator，创建 workspace：
 
 ```bash
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" setup apply \
@@ -134,7 +167,7 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" workspace create "${WORKSPACE_NAME}" \
   --namespace vikingdb \
   --image '<runtime-image-from-delivery-manifest>' \
   --conf-template '<configmap-template-name>' \
-  --conf-secret '<secret-template-name>' \
+  --conf-secret openviking-secrets \
   --wait
 
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" workspace get "${WORKSPACE_NAME}"
@@ -160,15 +193,16 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" check smoketest \
 
 客户端在集群内可用 `gen-conf --endpoint-type service`。集群外需可访问的入口，可用 `--endpoint '<openviking-endpoint>'` 指定；生成配置不会替你创建 Ingress、TLS 或负载均衡。已存在的输出文件需确认后才加 `--force` 覆盖。
 
-验收记录应包含以下结果：
+以下条件全部满足即完成部署：
 
-- 本次物料与运行版本一致，配置预览符合目标环境。
-- `VikingDbCluster` 当前 generation 为 Ready；启用授权时 License 为 Active。
-- 部署 OpenViking 时，`OpenVikingWorkspace` 为 Ready。
-- `doctor` 通过，VikingDB P0 与 OpenViking P0 按交付范围分别通过。
+- 所有节点 `Ready`，业务 Pod 没有 `Pending`、`ImagePullBackOff` 或持续重启。
+- `check-registry` 没有报告缺失镜像；物料版本与运行版本一致。
+- `VikingDbCluster` 当前 generation 为 Ready；部署 OpenViking 时 `OpenVikingWorkspace` 为 Ready。
+- 启用 License 时，`license status vikingdb` 的 State 为 `Active`，业务 namespace 中存在 `viking-license-verdict` Secret。
+- `doctor` 通过，VikingDB P0 与 OpenViking P0 分别通过。
 - 从业务客户端验证入口、鉴权、导入、读取和检索。
 
-VikingDB P0 不能替代 OpenViking P0；Pod Running 不能替代上述验收。上述检查也不替代容量、恢复或高可用验证。
+Pod Running 不能替代上述验收，上述检查也不替代容量、恢复或高可用验证。部署完成后，用生成的客户端配置按 [CLI 快速开始](../getting-started/02-quickstart.md)连接服务。
 
 ## 随包文档索引
 
