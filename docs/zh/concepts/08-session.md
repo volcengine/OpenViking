@@ -10,6 +10,9 @@ Session 负责管理对话消息、记录上下文使用、提取长期记忆。
 `client.session(session_id=...)` 追加消息或提交会话。
 
 ```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 session_info = client.create_session(session_id="chat_001")
 session = client.session(session_id=session_info["session_id"])
 session.add_message(role="user", content="...")
@@ -22,7 +25,7 @@ session.commit()
 |------|------|
 | `add_message(role, content=None, parts=None, options=None, peer_id=None)` | 添加消息 |
 | `commit()` | 提交：归档（同步） + 摘要生成和记忆提取（异步后台） |
-| `get_task(task_id)` | 查询后台任务状态 |
+| `client.get_task(task_id)` | 查询后台任务状态 |
 
 ### add_message
 
@@ -66,10 +69,11 @@ result = session.commit()
 #   "archived": True
 # }
 
-# 查询后台任务进度
-task = client.get_task(task_id=result["task_id"])
-# task["status"]: "pending" | "running" | "completed" | "failed"
-# sum(task["result"]["memories_extracted"].values()): 3
+# 产生归档时才有后台任务；无可归档消息时返回 skipped 和 task_id: null
+task_id = result.get("task_id")
+if task_id:
+    task = client.get_task(task_id=task_id)
+    print(task)  # 单次查询，不代表任务已完成
 ```
 
 ## 消息结构
@@ -100,11 +104,11 @@ class Message:
 
 commit() 分两阶段执行：
 
-**Phase 1（同步，立即完成）**：
-1. 递增 compression_index
-2. 写入消息到归档目录（`messages.jsonl`）
-3. 清空当前消息列表
-4. 返回 `task_id`
+**Phase 1（请求内完成归档准备）**：
+1. 在路径锁保护下分配归档编号，划分归档消息和保留消息
+2. 写入归档消息（`messages.jsonl`），将后续处理加入持久化队列
+3. 更新当前消息列表；默认归档全部消息，也可通过提交参数保留最近的消息或轮次
+4. 产生归档时返回 `task_id`，用于跟踪后台处理
 
 **Phase 2（异步后台）**：
 5. 生成结构化摘要（LLM）→ 写入 `.abstract.md` 和 `.overview.md`
@@ -144,29 +148,24 @@ OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`
 
 ### 提取流程
 
-```
-消息 → LLM 提取 → 候选记忆
-         ↓
-向量预过滤 → 找相似记忆
-         ↓
-LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
-         ↓
-写入 AGFS → 向量化
+```text
+归档消息 + 启用的记忆 schema
+    → ExtractLoop 读取相关记忆并生成更新操作
+    → MemoryUpdater 校验并应用新增、修改和删除
+    → 保存记忆、更新索引、记录 memory_diff.json
 ```
 
-### 去重决策
+已有记忆会参与提取，更新可以合并或修改现有文件，也可能创建或删除文件。实际操作受记忆 schema、写入权限和输出校验约束，不能把每次提交理解成必然新增记忆。只有产生 case 时，后续训练才会生成 trajectory、experience 或已启用的 session skill。
 
-| 层级 | 决策 | 说明 |
-|------|------|------|
-| Candidate | `skip` | 候选记忆重复，直接跳过 |
-| Candidate | `create` | 创建候选记忆；必要时先删除冲突旧记忆 |
-| Candidate | `none` | 不创建候选记忆，只处理已有记忆 |
-| Existing item | `merge` | 将候选内容合并到指定已有记忆 |
-| Existing item | `delete` | 删除冲突的已有记忆 |
+<a id="去重决策"></a>
+
+### 如何检查更新结果
+
+先等待 commit 对应任务完成，再查看 `memory_diff.json`。其中新增、修改、删除是实际文件变更；`skipped_operations` 表示提取提出了操作，但校验或策略使其跳过。内容未变化的更新不会作为有效变更计入 diff。
 
 ## 记忆变更记录
 
-每次 `session.commit()` 会在归档目录写入 `memory_diff.json`，记录本次提交的所有记忆变更，便于审计和回溯。
+提交后的后台处理会在归档目录写入 `memory_diff.json`，记录本次提交的记忆变更，便于审计和回溯。收到 `task_id` 时文件可能尚未生成，先按[会话 API](../api/05-sessions.md)查询任务完成状态。
 
 ```json
 {
@@ -175,23 +174,23 @@ LLM 去重决策 → candidate(skip/create/none) + item(merge/delete)
   "operations": {
     "adds": [
       {
-        "uri": "memory/user/xxx/identity.md",
+        "uri": "viking://user/alice/memories/identity.md",
         "memory_type": "identity",
         "after": "新创建的文件内容"
       }
     ],
     "updates": [
       {
-        "uri": "memory/user/xxx/context/project.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/entities/project.md",
+        "memory_type": "entities",
         "before": "修改前的文件内容",
         "after": "修改后的文件内容"
       }
     ],
     "deletes": [
       {
-        "uri": "memory/user/xxx/context/old.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/entities/old.md",
+        "memory_type": "entities",
         "deleted_content": "被删除的文件内容"
       }
     ]

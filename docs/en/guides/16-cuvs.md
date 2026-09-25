@@ -6,7 +6,7 @@ The `cuvs` backend keeps OpenViking's embedded record store, scalar indexes, spa
 
 Use Linux x86_64 or aarch64 with a supported NVIDIA GPU and a compatible CUDA driver. Check the [cuVS installation requirements](https://docs.nvidia.com/cuvs/installation) and [Python package guide](https://docs.nvidia.com/cuvs/installation/python) for the selected release. Current cuVS source builds require CUDA Toolkit 12.2 or newer and Ampere or newer GPUs; package requirements depend on the chosen release.
 
-Install the package matching the host CUDA major version:
+From an OpenViking source checkout, activate your Python virtual environment and run **one** of the following installation options, matching the host CUDA major version:
 
 ```bash
 # CUDA 12
@@ -118,10 +118,10 @@ Explicit `backend: "cuvs"` continues to use cuVS for supported dense queries.
 mutations are coalesced for `auto_rebuild_debounce_ms`, and a worker builds the
 new immutable GPU snapshot without holding the cross-backend mutation lock.
 The 500 ms default avoids rebuilding most intermediate batches during normal
-interactive ingestion. For a known multi-call bulk load, wrap all writes in
+interactive ingestion. For code using the internal vector backend, wrap a known multi-call bulk load in
 `async with backend.bulk_ingest(ctx=ctx):`: native visibility and persistence
 still advance per call, while derived GPU maintenance is deferred until the
-outermost scope exits and then scheduled once. This scope is a maintenance hint,
+outermost scope exits and then scheduled once. This internal API is not exposed by the HTTP SDK. The scope is a maintenance hint,
 not a transaction or atomicity boundary; exiting it schedules the rebuild but
 does not itself wait for GPU readiness. The vector backend benchmark adds that
 explicit readiness wait before timing search. Changing the debounce remains
@@ -142,8 +142,7 @@ device payload to `N * dimension * 2` bytes. CAGRA additionally retains approxim
 `N * intermediate_graph_degree * 4` bytes while building. Each cached filter
 bitset costs approximately `ceil(N / 32) * 4` bytes.
 
-Prior index-only runs measured the following `cudaMemGetInfo` deltas from just
-before to just after build; each value is the median of five clean processes:
+The [historical index benchmark](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/PRELIMINARY_RESULTS.md) used an NVIDIA H20, cuVS 26.06, CuPy 14.1.1, and CUDA runtime 12.9, before request micro-batching was added. It measured the following `cudaMemGetInfo` deltas immediately before and after build; each value is the median of five clean processes. Use the [benchmark harness](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/README.md) to measure your own configuration:
 
 | Dataset | cuVS algorithm | Measured GPU delta |
 | --- | --- | ---: |
@@ -186,8 +185,10 @@ presenting the comparison as equal-dtype or equal-memory. This separation is
 intentional for the initial opt-in
 integration and leaves existing CPU behavior unchanged. In auto mode, the
 filter candidate thresholds can select either representation per query, so
-applications that require one fixed numerical representation should use an
-explicit backend or disable the native-routing thresholds.
+applications that require one fixed representation for dense queries should select
+an explicit backend and dtype. Setting the routing thresholds to zero only removes
+candidate-count routing; auto mode can still fall back for memory pressure, GPU
+unavailability, or a dirty snapshot.
 
 Lower-precision GPU storage is explicit rather than an implicit cast. Setting
 `dtype: "float16"` casts both the cuVS dataset and every query to float16 for

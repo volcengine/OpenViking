@@ -10,6 +10,9 @@ Getting a session by ID does not create it. Create the session first, then use
 `client.session(session_id=...)` to append messages or commit it.
 
 ```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 session_info = client.create_session(session_id="chat_001")
 session = client.session(session_id=session_info["session_id"])
 session.add_message(role="user", content="...")
@@ -22,7 +25,7 @@ session.commit()
 |--------|-------------|
 | `add_message(role, content=None, parts=None, options=None, peer_id=None)` | Add message |
 | `commit()` | Commit: archive (sync) + summary generation and memory extraction (async background) |
-| `get_task(task_id)` | Query background task status |
+| `client.get_task(task_id)` | Query background task status |
 
 ### add_message
 
@@ -66,10 +69,11 @@ result = session.commit()
 #   "archived": True
 # }
 
-# Poll background task progress
-task = client.get_task(task_id=result["task_id"])
-# task["status"]: "pending" | "running" | "completed" | "failed"
-# sum(task["result"]["memories_extracted"].values()): 3
+# A task is created only for an archive; no-op commits return skipped and task_id: null.
+task_id = result.get("task_id")
+if task_id:
+    task = client.get_task(task_id=task_id)
+    print(task)  # One status check does not mean the task has finished.
 ```
 
 ## Message Structure
@@ -100,11 +104,11 @@ class Message:
 
 commit() executes in two phases:
 
-**Phase 1 (synchronous, returns immediately)**:
-1. Increment compression_index
-2. Write messages to archive directory (`messages.jsonl`)
-3. Clear current messages list
-4. Return `task_id`
+**Phase 1 (archive preparation within the request)**:
+1. Allocate the archive number and split archived and retained messages under a path lock
+2. Persist archive messages (`messages.jsonl`) and enqueue processing in the durable queue
+3. Update the live message list; default commits archive all messages, while retention parameters can keep recent messages or turns
+4. Return `task_id` when an archive was created, to track background processing
 
 **Phase 2 (asynchronous background)**:
 5. Generate structured summary (LLM) → write `.abstract.md` and `.overview.md`
@@ -144,29 +148,24 @@ Within `memory_policy.memory_types`, `experiences` enables the complete Agent Ev
 
 ### Extraction Flow
 
-```
-Messages → LLM Extract → Candidate Memories
-              ↓
-Vector Pre-filter → Find Similar Memories
-              ↓
-LLM Dedup Decision → candidate(skip/create/none) + item(merge/delete)
-              ↓
-Write to AGFS → Vectorize
+```text
+Archived messages + enabled memory schemas
+    → ExtractLoop reads relevant memories and produces update operations
+    → MemoryUpdater validates and applies additions, edits, and deletions
+    → Persist memories, update indexes, and record memory_diff.json
 ```
 
-### Dedup Decisions
+Existing memories inform extraction. An update can merge or edit existing files, create files, or delete them. Memory schemas, write permissions, and output validation constrain these operations; a commit does not necessarily add a memory. Subsequent training produces trajectories, experiences, or enabled session skills only when extraction yields a case.
 
-| Level | Decision | Description |
-|------|----------|-------------|
-| Candidate | `skip` | Candidate is duplicate, skip and do nothing |
-| Candidate | `create` | Create candidate memory (optionally delete conflicting existing memories first) |
-| Candidate | `none` | Do not create candidate; resolve existing memories by item decisions |
-| Per-existing item | `merge` | Merge candidate content into specified existing memory |
-| Per-existing item | `delete` | Delete specified conflicting existing memory |
+<a id="dedup-decisions"></a>
+
+### Checking Update Results
+
+Wait for the commit task, then inspect `memory_diff.json`. Additions, updates, and deletions describe actual file changes. `skipped_operations` records proposed operations skipped by validation or policy. Updates that leave content unchanged are excluded from effective changes in the diff.
 
 ## Memory Diff
 
-Each `session.commit()` writes a `memory_diff.json` to the archive directory, recording all memory changes from that commit for auditing and rollback.
+Background processing writes `memory_diff.json` to the archive directory, recording memory changes for auditing and review. It may not exist when `task_id` is returned; check task completion as described in the [Sessions API](../api/05-sessions.md).
 
 ```json
 {
@@ -175,23 +174,23 @@ Each `session.commit()` writes a `memory_diff.json` to the archive directory, re
   "operations": {
     "adds": [
       {
-        "uri": "memory/user/xxx/identity.md",
+        "uri": "viking://user/alice/memories/identity.md",
         "memory_type": "identity",
         "after": "Newly created file content"
       }
     ],
     "updates": [
       {
-        "uri": "memory/user/xxx/context/project.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/entities/project.md",
+        "memory_type": "entities",
         "before": "Content before modification",
         "after": "Content after modification"
       }
     ],
     "deletes": [
       {
-        "uri": "memory/user/xxx/context/old.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/entities/old.md",
+        "memory_type": "entities",
         "deleted_content": "Deleted file content"
       }
     ]

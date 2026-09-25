@@ -14,7 +14,7 @@
 
 ## 步骤2：验证
 
-1. 启动 Codex。首次启动会停在 Hook 信任确认上，选 **Trust all and continue**：
+1. 启动 Codex。首次启动会显示类似下面的 hook 审阅提示（具体界面随版本变化），选 **Trust all and continue**：
 
    ```text
    Hooks need review
@@ -26,26 +26,17 @@
      3. Continue without trusting (hooks won't run)
    ```
 
-   OpenViking 注册的 6 个 Hook 是（Codex 版本较旧时可能少几个）：
-
-   ```text
-   SessionStart
-   UserPromptSubmit
-   PreToolUse
-   Stop
-   SessionEnd
-   PreCompact
-   ```
-
-2. 错过这个提示，或当时选了第 3 项，Hook 就不会运行。输入 `/hooks` 补上信任并开启条目，`/plugins` 里确认 `openviking-memory` 已启用——两个开关相互独立，都要是开着的。插件更新动了 Hook 时会再要求信任一次。
-
-3. 验证 Profile 加载：信任完成后，提交第一条 Prompt（内容随意即可）。此时插件应自动加载 Profile——若对话开头出现记忆召回内容，则表明接入成功：
+   如果跳过了提示或选了第 3 项，打开 `/hooks`，检查 OpenViking 的命令，再信任并开启需要使用的 hooks。在 `/plugins` 中确认 `openviking-memory` 已启用。新增或变更的 hooks 需要重新检查。
+2. 确认 OpenViking MCP 工具可用，让 Codex 调用 `health` 和 `list`。这一步验证工具连接；自动召回还需开启 `UserPromptSubmit`，对话采集需开启 `Stop`。
+3. 在已有记忆的工作目录中询问之前保存的信息，检查 hook 输出或调试日志。召回内容类似：
 
    ```text
    • UserPromptSubmit hook (completed)
      hook context: <openviking-context source="auto-recall" format="digest">
        OpenViking memory digest:
    ```
+
+   新账号可能还没有 profile 或相关记忆可注入。会话提交时机和完整验证步骤见下方文档。
 
 ## 故障排查
 

@@ -1,24 +1,24 @@
 # Data Encryption
 
-OpenViking provides transparent at-rest data encryption to ensure data security and isolation in multi-tenant environments.
+OpenViking supports at-rest encryption: it encrypts files before storage and decrypts them for authorized reads. Each account uses a separate account key.
 
 ## Overview
 
 ### Why Encryption
 
-In a multi-tenant architecture, resources, memories, and skills from different customers (accounts) are stored in a shared AGFS instance. Encryption ensures:
+Multiple accounts can share an AGFS instance. When encryption is enabled:
 
-- Even if an attacker gains AGFS disk access, they cannot read any customer's plaintext data
+- Encrypted files require the corresponding keys to decrypt; protect keys separately from data
 - Different accounts' data is encrypted with independent keys for tenant isolation
-- All encryption/decryption operations are centralized at the VikingFS layer; AGFS and external object stores only see ciphertext
+- The RAGFS encryption wrapper handles file reads and writes at runtime; coverage depends on each backend configuration
 
 ### Transparency
 
-Encryption is completely transparent to users and developers:
+Enabling encryption preserves the client API:
 
 - **No client API changes**: Existing code works without modification
-- **Application layer unaware**: Read/write operations behave exactly like unencrypted
-- **Backward compatible**: Unencrypted old files can still be read normally
+- **Plaintext responses**: Authorized reads still return decrypted content; unavailable keys or failed ciphertext authentication cause errors
+- **Compatible with existing files**: Old plaintext files remain readable; enabling encryption does not encrypt them automatically
 
 ## Three-Layer Key Architecture
 
@@ -28,7 +28,7 @@ OpenViking uses an Envelope Encryption architecture with a three-layer key syste
 ┌─────────────────────────────────────────────────────────┐
 │  Layer 1: Root Key                                     │
 │  • Global unique per OpenViking instance               │
-│  • Storage: KMS service / ~/.openviking/master.key    │
+│  • Storage: local key or KMS/Vault-protected ciphertext    │
 │  • Purpose: Derive all account keys                    │
 └────────────────────┬────────────────────────────────────┘
                      │ HKDF derivation
@@ -64,8 +64,8 @@ OpenViking supports three key providers for different deployment scenarios:
 | Provider | Use Case | Root Key Storage | Features |
 |----------|----------|-----------------|----------|
 | **Local** | Dev environments, single-node deployments | Local file `~/.openviking/master.key` | Simple, no external services |
-| **Vault** | Production, multi-cloud | HashiCorp Vault Transit Engine | Enterprise-grade key management, version control |
-| **Volcengine KMS** | Volcengine cloud deployments | Volcengine KMS | Cloud-native KMS service |
+| **Vault** | Production, multi-cloud | Transit-encrypted value stored in Vault KV | Vault protects the root key |
+| **Volcengine KMS** | Volcengine cloud deployments | KMS-encrypted value stored in local `key_file` | KMS protects the root key |
 
 ### Local (File)
 
@@ -133,58 +133,26 @@ Suitable for Volcengine cloud deployments:
 
 ## How It Works
 
+Startup resolves the root key, then RAGFS `EncryptionWrappedFS` handles file content for protected backends. Python key providers load or unwrap the root key; individual file operations do not call KMS to derive account keys.
+
 ### Write Flow
 
+```text
+Client plaintext → RAGFS encryption wrapper → Backend ciphertext
 ```
-Client              VikingFS             FileEncryptor         KeyManager        AGFS
-  │                   │                       │                     │             │
-  │  write(uri, data) │                       │                     │             │
-  │──────────────────>│                       │                     │             │
-  │                   │  encrypt(account_id,  │                     │             │
-  │                   │           plaintext)  │                     │             │
-  │                   │──────────────────────>│                     │             │
-  │                   │                       │ derive_account_key()│             │
-  │                   │                       │────────────────────>│             │
-  │                   │                       │<────────────────────│             │
-  │                   │                       │  account_key        │             │
-  │                   │  1. Generate random File Key                              │
-  │                   │  2. Encrypt content with File Key                         │
-  │                   │  3. Encrypt File Key with Account Key                     │
-  │                   │  4. Build envelope format                                 │
-  │                   │<──────────────────────│                     │             │
-  │                   │  ciphertext           │                     │             │
-  │                   │──────────────────────────────────────────────────────────>│
-  │                   │                       │                     │  Write      │
-  │<──────────────────│                       │                     │             │
-  │   success         │                       │                     │             │
-```
+
+1. Derive the account key from the root key and `account_id` with HKDF-SHA256; it may be cached at runtime.
+2. Generate a random File Key and nonces for this encryption.
+3. Encrypt content with the File Key using AES-256-GCM, then wrap the File Key with the account key.
+4. Persist the envelope header, wrapped File Key, nonces, and content ciphertext.
 
 ### Read Flow
 
+```text
+Backend file → Check OVE1 → Unwrap File Key → Authenticate and decrypt → Client plaintext
 ```
-Client              VikingFS             FileEncryptor         KeyManager        AGFS
-  │                   │                       │                     │             │
-  │  read(uri)        │                       │                     │             │
-  │──────────────────>│                       │                     │             │
-  │                   │──────────────────────────────────────────────────────────>│
-  │                   │                       │                     │  Read       │
-  │                   │<──────────────────────────────────────────────────────────│
-  │                   │ raw_bytes             │                     │             │
-  │                   │ Check magic == "OVE1"?│                     │             │
-  │                   │ Yes → decrypt()       │                     │             │
-  │                   │──────────────────────>│                     │             │
-  │                   │                       │ derive_account_key()│             │
-  │                   │                       │────────────────────>│             │
-  │                   │                       │<────────────────────│             │
-  │                   │                       │  account_key        │             │
-  │                   │  1. Parse envelope format                                 │
-  │                   │  2. Decrypt File Key with Account Key                     │
-  │                   │  3. Decrypt content with File Key                         │
-  │                   │<──────────────────────│                     │             │
-  │                   │  plaintext            │                     │             │
-  │<──────────────────│                       │                     │             │
-  │   content         │                       │                     │             │
-```
+
+For encrypted files, the account key unwraps the File Key, which authenticates and decrypts the content. Old files without `OVE1` are read as plaintext. An incorrect key or failed ciphertext authentication returns an error, not decrypted content.
 
 ### Envelope Format
 
@@ -199,15 +167,19 @@ Encrypted files use a unified envelope format starting with the magic number `OV
 ```
 
 - If a file doesn't start with `OVE1`, it's treated as unencrypted and plaintext is returned directly
-- Backward compatible, old files don't need migration
+- Old files remain readable; protecting existing plaintext requires a separate migration or rewrite
 
 ## Multi-Tenant Isolation
 
 Different accounts' data is encrypted with independent Account Keys:
 
 - Account A's key cannot decrypt Account B's files
-- Even with full AGFS access, data can't be read without the corresponding key
-- Tenant isolation is implemented at the key layer, not relying on storage permissions
+- For files already encrypted, obtaining backend ciphertext still requires the corresponding key to decrypt it
+- Separate keys supplement tenant access controls; they do not replace authentication or storage permissions
+
+## Encryption Coverage
+
+This protects file backends where encryption is enabled. It does not automatically encrypt a separate vector database, logs, or exported OVPack files; vector records can contain abstracts and memory text. Multi-write backups can disable encryption individually, so check each backend configuration.
 
 ## Configuration Example
 

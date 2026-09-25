@@ -18,7 +18,7 @@ viking://{scope}/{path}
 |--------|------|----------|--------|
 | **resources** | 独立资源/客观知识 | 长期 | account 全局 |
 | **user** | 用户级数据，包括 session | 长期 / 会话生命周期 | 当前用户 |
-| **agent** | agent 能力与配置（技能、端点、工具、支付等） | 长期 | account 全局 |
+| **agent** | 账户共享技能与 Agent 配置；端点、工具和支付目录为规划用途 | 长期 | account 全局 |
 | **queue** | 处理队列 | 临时 | 内部 |
 | **temp** | 临时文件 | 解析期间 | 内部 |
 | **upload** | 临时上传文件 | 临时 | 内部 |
@@ -36,7 +36,7 @@ viking://{scope}/{path}
 
 - 通用：所有控制面（REST API、`ov` CLI、SDK、MCP）都接受，可用于任何接受公开作用域 URI 的位置。
 - 仅识别第 0 段：`viking://resources/~/x` 和 `viking://user/alice/~/x` 中的 `~` 仍是字面路径段。
-- 接受但不宣传：`~` 不属于公开作用域列表，`Invalid scope ... Must be one of:` 错误信息中不会出现它。
+- `~` 是用户路径别名，不是独立的存储作用域。
 - 响应始终回显展开后的 canonical URI，不会返回 `viking://~`；持久化数据（向量记录、watch key）
   同样保持 canonical 形式。
 - 需要认证请求身份。所有请求角色（包括 root）都使用该身份的有效 `user_id` 展开；要求 URI
@@ -48,18 +48,14 @@ viking://{scope}/{path}
 
 ## 初始目录
 
-摒弃传统的扁平化数据库思维，将所有上下文组织为一套文件系统。Agent 不再仅是通过向量搜索来找数据，而是可以通过确定性的路径和标准文件系统指令来定位和浏览数据。每个上下文或目录分配唯一的 URI 标识字符串，格式为 viking://{scope}/{path}，让系统能精准定位并访问存储在不同位置的资源。
-
-## 文件 ID
-
-除 URI 之外，每个文件会被自动分配一个稳定的 `id`，作为其在 VikingDB 中向量记录的主键。对于 level 2（常规文件）记录，该 id 按 `md5(f"{account_id}:{uri}")` 确定性计算，由 `stat()` 等元数据接口返回。调用方可凭此 id 直接交叉引用向量索引条目，无需额外查询。id 以 account 为作用域，当文件被移动到其他 URI 时 id 会随之改变（URI 迁移过程中向量记录会重新计算主键）。目录不返回单一 `id`，因为一个目录在多个语义层（L0 abstract、L1 overview、L2）下可能对应多条记录，每条各有自己的 id。
+上下文按目录组织。已知 URI 时，Agent 可以直接列目录、读取文件；未知路径时，可先检索再读取。
 
 ```
 viking://
 ├── user/
 │   └── {user_id}/
-│       ├── profile.md        # 用户画像
 │       ├── memories/         # 用户记忆
+│       │   └── profile.md        # 用户画像
 │       ├── resources/        # 用户私有资源
 │       ├── skills/           # 用户技能
 │       ├── peers/
@@ -84,6 +80,10 @@ viking://
 └── resources/{project}/      # 资源工作区
 ```
 
+## 文件 ID
+
+除 URI 之外，每个文件会被自动分配一个稳定的 `id`，作为其在 VikingDB 中向量记录的主键。对于 level 2（常规文件）记录，该 id 按 `md5(f"{account_id}:{uri}")` 确定性计算，由 `stat()` 等元数据接口返回。调用方可凭此 id 直接交叉引用向量索引条目，无需额外查询。id 以 account 为作用域，当文件被移动到其他 URI 时 id 会随之改变（URI 迁移过程中向量记录会重新计算主键）。目录不返回单一 `id`，因为一个目录在多个语义层（L0 abstract、L1 overview）下可能对应多条记录，每条各有自己的 id。
+
 ## URI 示例
 
 ### 资源
@@ -107,7 +107,7 @@ viking://~/memories/entities/                 # 实体记忆
 viking://~/memories/events/                   # 事件记忆
 viking://~/resources/                         # 自己的私有资源
 viking://~/resources/docs/                    # 自己的私有资源目录
-viking://user/{user_id}/memories/             # 显式用户路径（可写自己的 id；访问他人需 admin/root）
+viking://user/{user_id}/memories/             # 显式用户路径（只能访问自己的 user_id，ADMIN 也不例外；ROOT 在 api_key 模式以外可访问任意用户）
 ```
 
 `viking://resources/...` 是当前 account 的共享区，可通过 [资源访问控制（ACL）](./15-acl.md) 细化目录或文件权限。`viking://user/{user}/resources/...` 是个人私有区；分享资源需要将其移动到共享区。
@@ -154,7 +154,7 @@ Peer 数据使用 `viking://user/<user_id>/peers/<peer_id>/...`。
 
 ```
 viking://user/{user_id}/sessions/{session_id}/          # 会话根目录
-viking://user/{user_id}/sessions/{session_id}/messages  # 会话消息
+viking://user/{user_id}/sessions/{session_id}/messages.jsonl  # 会话消息
 viking://user/{user_id}/sessions/{session_id}/tools     # 工具执行
 viking://user/{user_id}/sessions/{session_id}/history   # 归档历史
 viking://~/sessions/{session_id}/                       # 自己的会话（家目录别名写法）
@@ -173,7 +173,7 @@ Viking URI 支持路径变量用于动态路径生成。这对于按时间序列
 {namespace:key}
 ```
 
-- **namespace**: 变量提供者命名空间（如 `calendar`、`env`、`user`）
+- **namespace**: 变量提供者命名空间（内置 `calendar`）
 - **key**: 命名空间内的变量名
 
 ### 日历变量
@@ -191,12 +191,12 @@ Viking URI 支持路径变量用于动态路径生成。这对于按时间序列
 | `{calendar:ym}` | 年/月 | `2026/05` |
 | `{calendar:quarter}` | 季度（Q1-Q4） | `Q2` |
 | `{calendar:yq}` | 年/季度 | `2026/Q2` |
-| `{calendar:week}` | ISO 周数（带前导零） | `18` |
-| `{calendar:yw}` | 年/ISO 周 | `2026/w18` |
+| `{calendar:week}` | ISO 周数（带前导零） | `19` |
+| `{calendar:yw}` | 年/ISO 周 | `2026/w19` |
 
 ### 使用示例
 
-```python
+```text
 # 按日期组织邮件
 viking://resources/emails/{calendar:today}/inbox
 # 渲染为：viking://resources/emails/2026/05/07/inbox
@@ -226,7 +226,7 @@ viking://resources/snapshots/{calendar:today}/
 
 ```bash
 # 添加今天的邮件 --parent-auto-create 可以简写为 -p
-ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
+ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/
 
 # 读取昨天的日志
 ov read "viking://resources/logs/{calendar:yesterday}/app.log"
@@ -242,7 +242,7 @@ ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" 
 
 ```
 viking://
-├── resources/                    # 独立资源（客观知识，禁止存储非知识类配置）
+├── resources/                    # 账户共享参考资料
 │   └── {project}/
 │       ├── .abstract.md          # 摘要
 │       ├── .overview.md          # 概述
@@ -255,8 +255,8 @@ viking://
 │   └── payments/               # 支付配置（ap2 等）（规划中）
 │
 ├── user/{user_id}/
-│   ├── profile.md                # 用户基本信息
 │   ├── memories/
+│   │   ├── profile.md        # 用户画像
 │   │   ├── preferences/          # 按主题
 │   │   ├── entities/             # 每条独立
 │   │   └── events/               # 每条独立
@@ -277,6 +277,8 @@ viking://
 `actor_peer_id` 只过滤当前用户的 `peers` 集合，公共目录仍按账号隔离。
 
 ## URI 操作
+
+以下 `VikingURI` 辅助类来自随服务端安装的 `openviking_cli` 包，不属于独立 Python SDK 的公开接口。
 
 ### 解析
 
@@ -301,6 +303,8 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 ```
 
 ## API 使用
+
+以下 Python 示例使用已配置连接的 `SyncHTTPClient` 实例 `client`，详见[客户端配置](../configuration/02-client.md)。
 
 ### 指定作用域搜索
 
@@ -334,16 +338,16 @@ results = client.find(
 
 ```python
 # 列出目录
-entries = await client.ls(uri="viking://resources/")
+entries = client.ls(uri="viking://resources/")
 
 # 读取文件
-content = await client.read(uri="viking://resources/docs/api.md")
+content = client.read(uri="viking://resources/docs/api.md")
 
 # 获取摘要
-abstract = await client.abstract(uri="viking://resources/docs/")
+abstract = client.abstract(uri="viking://resources/docs/")
 
 # 获取概览
-overview = await client.overview(uri="viking://resources/docs/")
+overview = client.overview(uri="viking://resources/docs/")
 ```
 
 ## 特殊文件
@@ -352,9 +356,8 @@ overview = await client.overview(uri="viking://resources/docs/")
 
 | 文件 | 用途 |
 |------|------|
-| `.abstract.md` | L0 摘要（~100 tokens） |
-| `.overview.md` | L1 概览（~2k tokens） |
-| `` | 相关资源 |
+| `.abstract.md` | L0 目录摘要（默认正文上限 256 字符） |
+| `.overview.md` | L1 目录概览（默认正文上限 4,000 字符） |
 | `.meta.json` | 元数据 |
 
 ## 最佳实践
@@ -373,24 +376,24 @@ overview = await client.overview(uri="viking://resources/docs/")
 
 ```python
 # 添加到 account 共享资源作用域
-await client.add_resource(url, to="viking://resources/project/")
+client.add_resource(url, to="viking://resources/project/")
 
 # 添加到自己的私有资源根
-await client.add_resource(path, parent="viking://~/resources/project/")
+client.add_resource(path, parent="viking://~/resources/project/")
 
 # 技能默认添加到自己的技能根
-await client.add_skill(skill)  # 默认根目录：viking://~/skills/
+client.add_skill(skill)  # 默认根目录：viking://~/skills/
+```
 
-# 通过 -p 指定写入全局 agent 技能根（公开共享）
-ov skills add xxx -p viking://agent/skills/
+通过 CLI 安装到账户共享技能目录，需要有该路径的写入权限：
+
+```bash
+ov skills add ./skills/search-web -p viking://agent/skills/
 ```
 
 ### resources 作用域约束
 
-`resources` 作用域仅用于存储客观知识类数据（文档、代码、规范、论文等）。
-禁止在 `viking://resources/` 下存储非知识类数据，包括但不限于：
-工具配置、通信端点定义、支付配置、技能定义等。
-此类数据应使用 `viking://agent/` 作用域。
+将参考文档、代码、规范等资料放在 `resources`。需要作为 Skill 发现和加载的内容，应通过技能接口安装到 `viking://~/skills/` 或共享的 `viking://agent/skills/`；仅把 `SKILL.md` 当作普通资源上传，不等于安装技能。
 
 ## 相关文档
 

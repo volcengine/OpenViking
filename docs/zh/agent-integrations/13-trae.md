@@ -6,7 +6,7 @@
 
 前置条件：macOS 或 Linux、Node.js 18+，以及支持 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`Stop` Hook 的 TRAE/TRAE CN 版本。TraeCode CLI 2.0 直接使用兼容 Codex 的插件格式。安装过程中会引导配置 OpenViking 连接信息。
 
-安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。只有本机已运行 OpenViking 服务时才选择 **自建 / 本地**。
+安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）；远程自建服务请选择 **自定义 URL / 保持当前** 并填写其 URL。
 
 ```bash
 # TRAE
@@ -41,7 +41,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 ### TraeCode CLI 2.0：首次启动信任 hooks
 
-TraeCode CLI 2.0 的 hooks 要先信任才会运行。启动 `trae-cli` 时会停在这个确认上，选 **Trust all and continue**；想先看一眼 hook 命令就选 Review hooks：
+TraeCode CLI 2.0 使用 Codex 格式插件。启动 `trae-cli` 时会显示类似下面的 hook 审阅提示，具体界面随版本变化。选 **Trust all and continue**；选 *Continue without trusting* 后 hooks 不会运行。
 
 ```text
 Hooks need review
@@ -53,21 +53,16 @@ Hooks can run outside the sandbox after you trust them.
   3. Continue without trusting (hooks won't run)
 ```
 
-全新安装会一次列出插件注册的全部 6 个 hook。之后每次插件更新只要动了 hook，启动时都会再拦一次，数字是这次新增或改动的条数（比如只改了一个就是 `1 hook is new or changed`），同样选 Trust all and continue。
+也可以在 `/hooks` 中检查 OpenViking 命令，信任并启用准备使用的条目；同时在 `/plugins` 确认插件已启用。定义变化后可能需要重新审阅。MCP 连通不能证明自动召回和捕获已生效，详见 [Codex hook 设置](04-codex.md#首次启动-信任-hooks)。
 
-选第 3 项或错过这一步，hooks 就不会运行：MCP 工具仍能调用，但自动召回和捕获全部停摆。要恢复，得让两个彼此独立的开关都处于开启状态：
-
-- `/hooks` — hook 的信任与开关，把标着 *New hook - review required* 或 *Modified since last trusted* 的条目信任并打开。
-- `/plugins` — 插件本身的启用状态，确认 `openviking-memory` 是 enabled。
-
-TRAE 和 TRAE CN 走 `hooks.json`，重启客户端后直接生效，没有这一步。
+TRAE 和 TRAE CN 使用安装后的 `hooks.json`，不需要审阅 hook，安装后重启对应客户端。
 
 ## 安装内容
 
 - `SessionStart`：加载用户画像、当前项目记忆，以及 OpenViking skill 清单 `<available-skills>`。
 - `UserPromptSubmit`：根据当前问题召回并注入相关内容，召回范围包括你自己的 skill 和账号内共享在 `viking://agent/skills` 下的 skill。
 - `PreToolUse`：在 TRAE 和 TRAE CN 上，`Read`、`Glob`、`Grep` 的路径是 `viking://` URI 时拒绝调用，并提示改用 OpenViking MCP 工具；`Bash` 或 `RunCommand` 命令带 `viking://` URI 时照常执行，同时附加改用建议。TraeCode CLI 2.0 使用 Codex 插件，它的 `PreToolUse` 只匹配 `Bash`，只附加同样的提示，不拒绝调用。
-- `Stop`：捕获本轮消息并立即提交，使短会话也能进入记忆抽取流程。
+- TRAE/TRAE CN 的 `Stop` 捕获并提交本轮消息；TraeCode CLI 2.0 遵循 Codex 插件的捕获与生命周期提交策略。
 - OpenViking MCP Server：透传服务端完整 MCP 工具集（16 个工具）：`find`、`search`、`read`、`list`、`tree`、`remember`、`write`、`edit`、`add_resource`、`add_skill`、`list_watches`、`cancel_watch`、`grep`、`glob`、`forget`、`health`。其中 `search` 的 `mode="context"` 可返回组装后的上下文。
 skill 清单先列你自己的 skill，再列账号内共享的 skill，每条描述截到约 40 token。清单的预算 `skillCatalogTokenBudget`（默认 `1200` token）独立于画像预算；描述放不下时只列名称。把 `skillCatalog` 设为 `false` 或把预算设为 `0` 即可关闭，既可以写在 `~/.openviking/ovcli.conf` 的 `plugin` 段（见[插件配置](../configuration/02-client.md#插件配置)），也可以用环境变量 `OPENVIKING_SKILL_CATALOG` 和 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`。
 
@@ -76,7 +71,7 @@ skill 清单先列你自己的 skill，再列账号内共享的 skill，每条�
 1. 重启 TRAE、TRAE CN 或 TraeCode CLI 2.0，并新建 Agent 会话。
 2. 在客户端的 MCP 设置中确认 `openviking` 已连接。
 3. 提问一个与已有项目或个人偏好相关的问题，确认回答使用了已有记忆。
-4. 告诉 Agent 一个临时偏好，等待回复完成；新建会话后再次询问，确认捕获、提交和跨会话召回均生效。
+4. 告诉 Agent 一个临时偏好，在日志中确认捕获和提交，等待记忆提取完成后，在同一工作区新建会话并再次询问。
 5. 对 TraeCode CLI 2.0，运行 `trae-cli plugin list` 确认 `openviking-memory` 已启用，并在会话里输入 `/hooks`，确认 OpenViking 的条目已信任且处于开启状态。
 
 需要排查 Hook 时，设置 `OPENVIKING_DEBUG=1` 后启动客户端，并查看：

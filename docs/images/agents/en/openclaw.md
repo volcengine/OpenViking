@@ -6,13 +6,13 @@
    openclaw plugins install clawhub:@openviking/openclaw-plugin
    ```
 
-2. Connect OpenClaw to the VolcEngine-hosted OpenViking service:
+2. Run the setup wizard. Enter `{{OPENVIKING_BASE_URL}}` as the service URL and the API key provided on this page:
 
    ```bash
-   openclaw openviking setup --base-url https://api.vikingdb.cn-beijing.volces.com/openviking --api-key <$OPENVIKING_API_KEY>
+   openclaw openviking setup
    ```
 
-3. Configure `peer_role`: `peer_role` identifies the type of conversation participant. It is not a permission role. `assistant` represents agents, tools, or models; `sender` represents human participants. After the setup above, `peer_role` defaults to `none`. To change `peer_role`, run:
+3. Configure `peer_role`: `peer_role` identifies the type of conversation participant. It is not a permission role. `assistant` represents agents, tools, or models; `sender` represents message senders (the legacy value `person` remains an alias). After the setup above, `peer_role` defaults to `none`. To change `peer_role`, run:
 
    ```bash
    openclaw openviking setup --reconfigure

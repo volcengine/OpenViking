@@ -1,12 +1,12 @@
 # Codex Memory Plugin
 
-Equip [Codex](https://developers.openai.com/codex) with persistent memory across sessions. Install it once, and your OpenViking profile, memory index, and skill catalog are loaded at session start, relevant memories are recalled with every prompt, new turns are captured after each response, and sessions are committed before compaction. The plugin also connects Codex to OpenViking's `/mcp` endpoint, enabling the model to call tools such as `find`, `search`, `read`, and `remember` directly.
+Give [Codex](https://developers.openai.com/codex) cross-session memory. Hooks handle automatic recall, capture, and session commits; MCP tools let the model search, read, and manage memories.
 
 Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [Blog: Motivation & demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
 ## Install
 
-Claude Code and Codex share one installer. It asks for your language (English/中文), which harnesses to install, the download source, and your OpenViking credentials; every step is idempotent.
+Claude Code and Codex share one installer. It asks for your language (English/中文), which harnesses to install, the download source, and your OpenViking credentials; the installation steps support repeated runs.
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
@@ -34,7 +34,7 @@ codex
 
 ### First launch: trust the hooks
 
-The plugin's hooks are new to Codex, so startup stops on a trust prompt. Pick **Trust all and continue**, or Review hooks first if you want to read the commands:
+Installing the plugin does not automatically trust its hooks. On first launch Codex shows a review prompt similar to the one below; the exact layout varies by Codex version. Pick **Trust all and continue**, or **Review hooks** to read the commands first. *Continue without trusting* leaves the hooks off until you enable them in `/hooks`.
 
 ```text
 Hooks need review
@@ -46,14 +46,9 @@ Hooks can run outside the sandbox after you trust them.
   3. Continue without trusting (hooks won't run)
 ```
 
-A fresh install lists all 6 hooks the plugin registers. After that, any plugin update that touches a hook stops startup again, with the count of what changed this time (`1 hook is new or changed`, say) — pick Trust all and continue there too.
+You can also open `/hooks`, review the OpenViking commands, and trust and enable the hooks you intend to use. In `/plugins`, also confirm that `openviking-memory` is enabled. The plugin currently declares six hooks. New or changed definitions require another review. See the [official hook trust documentation](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks).
 
-Pick the third option, or skip past the prompt, and the hooks never run: MCP tools still work, but automatic recall and capture are both dead. Recovering means switching on two independent things:
-
-- `/hooks` — hook trust and on/off state. Trust and enable the entries marked *New hook - review required* or *Modified since last trusted*.
-- `/plugins` — the plugin's own enabled state. Confirm `openviking-memory` is enabled.
-
-If either side is off, nothing is recalled or captured.
+MCP tools can work while hooks are disabled. Automatic recall requires `UserPromptSubmit`; capture requires `Stop`, with lifecycle commits handled by the other hooks listed below. If setup was skipped, return to `/hooks` to enable the relevant entries.
 
 <details>
 <summary><b>Manual setup</b></summary>
@@ -80,7 +75,18 @@ For TraeCode CLI 2.0, launch `trae-cli` and use `trae-cli plugin list` to confir
 
 ## How it works
 
-The plugin integrates with Codex's lifecycle by hooking into key events. On `SessionStart` (`startup`, `clear`, or `resume`), it injects `profile.md`, URI and abstract indexes for `preferences/` and `entities/`, and an `<available-skills>` catalog of your OpenViking skills, all through the same shared, CJK-aware profile builder used by the other coding-agent integrations. It then searches OpenViking and injects relevant memories before every prompt (`UserPromptSubmit`), appends new turns to the session after each response (`Stop`), commits the full transcript before compaction (`PreCompact`), and commits the session when the thread shuts down (`SessionEnd`) so memory extraction processes the entire conversation. Before a shell command runs (`PreToolUse` on `Bash`), it looks for a `viking://` URI in the command: the command still runs, and the model gets a notice suggesting the OpenViking MCP tools, which it can ignore when the URI is intentional data such as an `ov` argument. Upon starting a fresh session, it also sweeps any orphaned sessions left by previous runs. A resumed session may combine the fixed profile block with its latest archive digest.
+The plugin handles memory at these Codex lifecycle events:
+
+| Codex event | Plugin behavior |
+| --- | --- |
+| `SessionStart` (`startup`, `clear`, `resume`) | Inject `profile.md`, URI and abstract indexes for `preferences/` and `entities/`, and the `<available-skills>` catalog. It uses the shared CJK-aware profile builder; resumed sessions may also receive the latest archive digest. |
+| `UserPromptSubmit` | Retrieve and inject memories relevant to the current prompt. |
+| `Stop` | Append new conversation turns to the OpenViking session. |
+| `PreCompact` | Capture remaining turns and commit the complete transcript before compaction. |
+| `SessionEnd` | Commit the session on graceful exit for subsequent memory extraction. |
+| `PreToolUse` (`Bash`) | Detect `viking://` URIs in shell commands and suggest the OpenViking MCP tools. The command still runs; the model can ignore the notice when the URI is intentional data, such as an `ov` argument. |
+
+Starting a new session also sweeps orphaned sessions from earlier runs once their idle TTL has expired.
 
 > **Known limitation**: `SessionEnd` requires Codex 0.145 or newer, and it only fires on a graceful exit (`/quit`, `/exit`, double `Ctrl-C`, EOF, end of a `codex exec` run). It does not fire on `SIGTERM`, a closed terminal, `kill -9`, or a crash, and it is deferred when the TUI runs against a `codex app-server` daemon. Those sessions — and every session on Codex older than 0.145, and any TraeCode CLI build without it — are recovered by the idle-TTL sweep (30 minutes) at the next `SessionStart`.
 
@@ -131,8 +137,8 @@ Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf
 |---------|-------|-----|
 | MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Fix `~/.openviking/ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`) and restart Codex; the stdio proxy re-reads it on launch and after auth failures. |
 | MCP tool calls fail with a connection error | Server unreachable or the URL is wrong | Check the endpoint: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| `6 hooks need review`, or the plugin is installed but no hook fires | A fresh install trusts all 6 hooks at once, and every later update that touches a hook asks again; choosing *Continue without trusting* or skipping it leaves the hooks off for good | Trust and enable the entries in `/hooks`, and confirm `openviking-memory` is enabled in `/plugins` — two independent switches, both have to be on. |
-| Plugin still targets an old server after `ov config switch` | Codex keeps the proxy process from the previous session | Restart Codex; the proxy resolves credentials at startup. |
+| Hook review warning, or installed plugin with no recall/capture | Required hooks are untrusted, disabled, or the plugin is disabled | Review and enable the relevant entries in `/hooks`, then confirm `openviking-memory` in `/plugins`. |
+| Plugin still targets an old server after `ov config switch` | The existing proxy retains its connection, or credential env vars override the selected config | Restart Codex and check credential env vars and `OPENVIKING_CLI_CONFIG_FILE`. Remote calls reload changed files after an auth failure, not on every successful request. |
 | Hooks use one server, MCP another | Stale `OPENVIKING_*` credential env vars in one context (env vars override ovcli.conf by default) | Unset the stale env vars (ovcli.conf then drives both), set `OPENVIKING_CREDENTIAL_SOURCE=cli`, or make the env vars consistent. |
 
 ## See also

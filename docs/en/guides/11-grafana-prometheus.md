@@ -1,6 +1,6 @@
 # Using Prometheus and Grafana to View OpenViking Metrics
 
-This document provides a complete end-to-end guide from scratch:
+Connect the metric endpoint to a dashboard in four steps:
 
 1. Start OpenViking and verify that `/metrics` is accessible
 2. Start Prometheus to scrape OpenViking metrics
@@ -47,7 +47,7 @@ OpenViking must have metrics enabled first. Minimal configuration reference:
 }
 ```
 
-After writing the configuration to `~/.openviking/ov.conf`, restart OpenViking Server.
+Merge the metrics section into `~/.openviking/ov.conf`, then restart OpenViking Server.
 
 If you have not started the service yet, you can refer to:
 
@@ -67,10 +67,12 @@ If the response includes text with the `openviking_` prefix, metrics are enabled
 ```text
 # HELP openviking_http_requests_total Total number of HTTP requests
 # TYPE openviking_http_requests_total counter
-openviking_http_requests_total{method="GET",route="/api/v1/system/status",status="200"} 12
+openviking_http_requests_total{method="GET",route="/api/v1/search/find",status="200"} 12
 ```
 
 If the response returns `Prometheus metrics are disabled.`, the configuration has not taken effect or the service has not been restarted.
+
+The examples use port 30300; OpenViking defaults to 1933. Keep the scrape target aligned with the port you actually start.
 
 ## Step 2: Deploy Using the Repository's Built-in Compose Files
 
@@ -99,13 +101,15 @@ By default, this configuration does several things:
 
 - Starts Prometheus and maps the host port to `30909`
 - Starts Grafana and maps the host port to `13000`
-- Automatically configures the Grafana data source to `http://127.0.0.1:30909`
+- Configures the Grafana data source as `http://prometheus:9090` in the general setup, or `http://127.0.0.1:30909` in the host-network setup
 - Automatically loads the OpenViking demo dashboard from the repository
 - Automatically loads `OpenViking - Feedback Baseline`, making it easy to directly view the baseline metrics for `openviking_feedback_*` and `openviking_feedback_channel_*`
 
+These are local demonstration configurations with `admin/admin` credentials. The host-network variant still binds Prometheus to `0.0.0.0`; its name describes how it reaches OpenViking, not restricted dashboard exposure. For local use, bind the dashboard services to loopback (Prometheus `--web.listen-address=127.0.0.1:30909`, Grafana `GF_SERVER_HTTP_ADDR=127.0.0.1`) or restrict their network access.
+
 ### Approach A: General-Purpose
 
-Run directly:
+Run from the OpenViking repository root. Choose one Compose setup, since both use the same host ports:
 
 ```bash
 docker compose -f examples/grafana/docker-compose.yml up -d
@@ -136,7 +140,7 @@ The characteristics of this approach are:
 - Prometheus uses the host network and directly scrapes `127.0.0.1:30300/metrics`
 - Grafana also uses the host network and directly connects to `http://127.0.0.1:30909`
 - There is no need to change OpenViking to `0.0.0.0`
-- It does not trigger the security restriction that "non-localhost listening must configure `root_api_key`"
+- Dev mode can remain bound to loopback; see [Authentication](04-authentication.md) before changing the OpenViking bind address
 
 The access addresses are still:
 
@@ -177,7 +181,7 @@ Explanation:
 If your OpenViking is not listening on `30300`, change the target address in this file to your actual port, then re-run:
 
 ```bash
-docker compose -f examples/grafana/docker-compose.yml up -d
+docker compose -f examples/grafana/docker-compose.yml restart prometheus
 ```
 
 If you are using the Linux localhost approach, the corresponding file to modify is:
@@ -193,14 +197,14 @@ targets: ["127.0.0.1:1933"]
 Then re-run:
 
 ```bash
-docker compose -f examples/grafana/docker-compose.localhost.yml up -d
+docker compose -f examples/grafana/docker-compose.localhost.yml restart prometheus
 ```
 
 ## Step 4: Optional - Create a Docker Network for Manual Deployment
 
 If you are using the compose files above, you do not need to perform this step manually, because Compose automatically creates the default network.
 
-Only when you insist on using `docker run` to start Prometheus and Grafana separately do you need to create an independent network first:
+For separate `docker run` commands, create a shared network first:
 
 ```bash
 docker network create openviking-observability
@@ -218,8 +222,9 @@ On many machines, `9090` is already occupied by another service. To reduce confl
 docker run -d \
   --name prometheus \
   --network openviking-observability \
-  -p 30909:9090 \
-  -v "$PWD/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
+  -p 127.0.0.1:30909:9090 \
+  --add-host host.docker.internal:host-gateway \
+  -v "$PWD/examples/grafana/prometheus.yml:/etc/prometheus/prometheus.yml:ro" \
   prom/prometheus
 ```
 
@@ -267,7 +272,7 @@ Similarly, `3000` on many machines is also often occupied. It is recommended to 
 docker run -d \
   --name grafana \
   --network openviking-observability \
-  -p 13000:3000 \
+  -p 127.0.0.1:13000:3000 \
   grafana/grafana
 ```
 
@@ -311,11 +316,9 @@ Confirm that both the `prometheus` and `grafana` containers are running.
 
 ## Step 8: First Query Directly in Grafana Explore
 
-After adding the data source, do not rush to import a dashboard. It is recommended to first verify basic queries in `Explore`.
+After adding the data source, verify these queries in `Explore`:
 
-It is recommended to try these queries first:
-
-Request volume:
+Requests per second:
 
 ```promql
 rate(openviking_http_requests_total[5m])
@@ -345,7 +348,7 @@ Model call volume:
 rate(openviking_model_calls_total[5m])
 ```
 
-Token usage:
+Tokens per second:
 
 ```promql
 rate(openviking_operation_tokens_total[5m])
@@ -356,6 +359,8 @@ If you are not yet sure which metric names exist, you can first query:
 ```promql
 {__name__=~"openviking_.*"}
 ```
+
+`rate()` needs multiple samples in the selected window. Feedback snapshot gauges, even those named `_total`, should be queried as current values; see [Vikingbot metrics validation](12-vikingbot-metrics-validation.md).
 
 ## Step 9: Import the OpenViking Built-in Dashboards
 
@@ -448,7 +453,7 @@ If you are using the compose auto-import approach, you can also first confirm wh
 
 ### 5. The Dashboard Imports Successfully but the Panels Are Empty
 
-This is usually not because the dashboard file is corrupted, but because:
+Check these causes before changing the dashboard:
 
 - The corresponding metric samples do not yet exist in Prometheus
 - The filter conditions do not match the current environment

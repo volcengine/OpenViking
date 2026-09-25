@@ -1,5 +1,7 @@
 # OpenViking 指标体系设计方案
 
+> **阅读范围：** 本文保留指标体系重构时的背景与后续实现补充。开头的 PrometheusObserver 现状属于重构前描述，不能据此判断当前代码结构。部署与告警配置见[可观测性指南](../zh/guides/05-observability.md)和[监控指南](../zh/guides/11-grafana-prometheus.md)。
+
 ## 背景
 
 本方案讨论的是 OpenViking 的“指标体系（metrics）”，目标是把 `/metrics` 做成一个可持续抓取的 Prometheus 导出端点，并与 `/api/v1/observer/*`（瞬时状态）和 `/api/v1/stats/*`（分析统计）形成清晰边界。

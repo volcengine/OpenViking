@@ -18,7 +18,7 @@ viking://{scope}/{path}
 |-------|-------------|-----------|------------|
 | **resources** | Independent resources / objective knowledge | Long-term | Account global |
 | **user** | User-level data, including sessions | Long-term / session lifetime | Current user |
-| **agent** | Agent capabilities and configuration (skills, endpoints, tools, payments, etc.) | Long-term | Account global |
+| **agent** | Account-shared skills and Agent configuration; endpoint, tool, and payment directories are planned | Long-term | Account global |
 | **queue** | Processing queue | Temporary | Internal |
 | **temp** | Temporary files | During parsing | Internal |
 | **upload** | Temporary upload files | Temporary | Internal |
@@ -42,8 +42,7 @@ each caller.
   public-scope URI is accepted.
 - First segment only: `viking://resources/~/x` and `viking://user/alice/~/x` keep `~` as
   a literal path segment.
-- Accepted, not advertised: `~` is not part of the public scope list, so the
-  `Invalid scope ... Must be one of:` error message never mentions it.
+- `~` is a user-path alias, not a separate storage scope.
 - Responses always echo the expanded canonical URI, never `viking://~`, and persisted
   data (vector records, watch keys) stays canonical as well.
 - Requires an authenticated request identity. Expansion uses that identity's effective
@@ -56,18 +55,14 @@ each caller.
 
 ## Initial Directory Structure
 
-Moving away from traditional flat database thinking, all context is organized as a filesystem. Agents no longer just find data through vector search, but can locate and browse data through deterministic paths and standard filesystem commands. Each context or directory is assigned a unique URI identifier string in the format viking://{scope}/{path}, allowing the system to precisely locate and access resources stored in different locations.
-
-## File IDs
-
-In addition to its URI, every file is automatically assigned a stable `id` that serves as the primary key of its vector record in VikingDB. The id is deterministically computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records, and is returned by `stat()` and other metadata APIs. This allows callers to cross-reference vector index entries without a separate lookup. The id is scoped to the account and changes if the file is moved to a different URI (vector records are re-keyed during URI migration). Directories do not expose a single `id` because a directory may span multiple semantic levels (L0 abstract, L1 overview, L2), each with its own record.
+Context is organized into directories. With a known URI, an agent can list a directory or read a file directly. Otherwise, it can search first and read the returned paths.
 
 ```
 viking://
 ├── user/
 │   └── {user_id}/
-│       ├── profile.md        # User profile
 │       ├── memories/         # User memory storage
+│       │   └── profile.md        # User profile
 │       ├── resources/        # User-owned private resources
 │       ├── skills/           # User skills
 │       ├── peers/
@@ -92,6 +87,10 @@ viking://
 └── resources/{project}/      # Resource workspace
 ```
 
+## File IDs
+
+In addition to its URI, every file is automatically assigned a stable `id` that serves as the primary key of its vector record in VikingDB. The id is deterministically computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records, and is returned by `stat()` and other metadata APIs. This allows callers to cross-reference vector index entries without a separate lookup. The id is scoped to the account and changes if the file is moved to a different URI (vector records are re-keyed during URI migration). Directories do not expose a single `id` because a directory may span multiple semantic levels (L0 abstract, L1 overview), each with its own record.
+
 ## URI Examples
 
 ### Resources
@@ -115,7 +114,7 @@ viking://~/memories/entities/                 # Entity memories
 viking://~/memories/events/                   # Event memories
 viking://~/resources/                         # Your private resources
 viking://~/resources/docs/                    # Your private resource directory
-viking://user/{user_id}/memories/             # Explicit user path (your own id; other ids need admin/root)
+viking://user/{user_id}/memories/             # Explicit user path (own user_id only, ADMIN included; ROOT can read any user except in api_key mode)
 ```
 
 `viking://resources/...` is the shared scope for the current account and supports per-directory or per-file [ACLs](./15-acl.md). `viking://user/{user}/resources/...` is private; move a resource into the shared scope to share it.
@@ -165,7 +164,7 @@ segments, for example `alice` or `web-visitor-alice`.
 
 ```
 viking://user/{user_id}/sessions/{session_id}/          # Session root
-viking://user/{user_id}/sessions/{session_id}/messages  # Session messages
+viking://user/{user_id}/sessions/{session_id}/messages.jsonl  # Session messages
 viking://user/{user_id}/sessions/{session_id}/tools     # Tool executions
 viking://user/{user_id}/sessions/{session_id}/history   # Archived history
 viking://~/sessions/{session_id}/                       # Your own session, via the home alias
@@ -185,7 +184,7 @@ Viking URI supports path variables for dynamic path generation. This is especial
 {namespace:key}
 ```
 
-- **namespace**: Variable provider namespace (e.g., `calendar`, `env`, `user`)
+- **namespace**: Variable provider namespace (`calendar` is built in)
 - **key**: Variable name within the namespace
 
 ### Calendar Variables
@@ -203,12 +202,12 @@ The `calendar` namespace provides date-related variables:
 | `{calendar:ym}` | Year/month | `2026/05` |
 | `{calendar:quarter}` | Quarter (Q1-Q4) | `Q2` |
 | `{calendar:yq}` | Year/quarter | `2026/Q2` |
-| `{calendar:week}` | ISO week number with leading zero | `18` |
-| `{calendar:yw}` | Year/ISO week | `2026/w18` |
+| `{calendar:week}` | ISO week number with leading zero | `19` |
+| `{calendar:yw}` | Year/ISO week | `2026/w19` |
 
 ### Usage Examples
 
-```python
+```text
 # Organize emails by date
 viking://resources/emails/{calendar:today}/inbox
 # Renders to: viking://resources/emails/2026/05/07/inbox
@@ -238,7 +237,7 @@ Path variables are resolved **server-side** at the time of API execution. The CL
 
 ```bash
 # Add today's emails, --parent-auto-create can be shortened to -p
-ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/*.eml
+ov add-resource --parent-auto-create "viking://resources/emails/{calendar:today}/inbox" ./emails/
 
 # Read yesterday's log
 ov read "viking://resources/logs/{calendar:yesterday}/app.log"
@@ -254,15 +253,15 @@ ov add-resource --parent-auto-create "viking://resources/reports/{calendar:ym}" 
 
 ```
 viking://
-├── resources/       # Independent resources
+├── resources/       # Account-shared reference material
 │   └── {project}/
 │       ├── .abstract.md
 │       ├── .overview.md
 │       └── {files...}
 │
 ├── user/{user_id}/
-│   ├── profile.md                # User basic info
 │   ├── memories/
+│   │   ├── profile.md        # User profile
 │   │   ├── preferences/          # By topic
 │   │   ├── entities/             # Each independent
 │   │   └── events/               # Each independent
@@ -291,6 +290,8 @@ remain isolated by account.
 
 ## URI Operations
 
+The `VikingURI` helper below comes from the `openviking_cli` package installed with the server, not the standalone Python SDK public interface.
+
 ### Parsing
 
 ```python
@@ -314,6 +315,8 @@ parent = VikingURI(uri).parent.uri  # viking://resources/docs
 ```
 
 ## API Usage
+
+The Python examples below use a configured `SyncHTTPClient` instance named `client`; see [Client Configuration](../configuration/02-client.md).
 
 ### Targeting Specific Scopes
 
@@ -353,16 +356,16 @@ results = client.find(
 
 ```python
 # List directory
-entries = await client.ls(uri="viking://resources/")
+entries = client.ls(uri="viking://resources/")
 
 # Read file
-content = await client.read(uri="viking://resources/docs/api.md")
+content = client.read(uri="viking://resources/docs/api.md")
 
 # Get abstract
-abstract = await client.abstract(uri="viking://resources/docs/")
+abstract = client.abstract(uri="viking://resources/docs/")
 
 # Get overview
-overview = await client.overview(uri="viking://resources/docs/")
+overview = client.overview(uri="viking://resources/docs/")
 ```
 
 ## Special Files
@@ -371,9 +374,8 @@ Each directory may contain special files:
 
 | File | Purpose |
 |------|---------|
-| `.abstract.md` | L0 abstract (~100 tokens) |
-| `.overview.md` | L1 overview (~2k tokens) |
-| `` | Related resources |
+| `.abstract.md` | L0 directory abstract (default body limit: 256 characters) |
+| `.overview.md` | L1 directory overview (default body limit: 4,000 characters) |
 | `.meta.json` | Metadata |
 
 ## Best Practices
@@ -392,24 +394,24 @@ Each directory may contain special files:
 
 ```python
 # Add resources to the shared account resource scope
-await client.add_resource(url, to="viking://resources/project/")
+client.add_resource(url, to="viking://resources/project/")
 
 # Add private resources to your own resource root
-await client.add_resource(path, parent="viking://~/resources/project/")
+client.add_resource(path, parent="viking://~/resources/project/")
 
 # Skills are added to your own skills root by default
-await client.add_skill(skill)  # default root: viking://~/skills/
+client.add_skill(skill)  # default root: viking://~/skills/
+```
 
-# Write to the global agent skills root (public/shared) via -p override
-ov skills add xxx -p viking://agent/skills/
+Install into the account-shared skills directory with the CLI. This requires write access to that path:
+
+```bash
+ov skills add ./skills/search-web -p viking://agent/skills/
 ```
 
 ### Resources Scope Constraint
 
-The `resources` scope is for objective knowledge only (documents, code, specifications, papers, etc.).
-Storing non-knowledge data in `viking://resources/` is prohibited, including but not limited to:
-tool configurations, communication endpoint definitions, payment configurations, skill definitions, etc.
-Such data should use the `viking://agent/` scope.
+Store reference documents, code, and specifications under `resources`. To make content discoverable and loadable as a Skill, install it through the skill API under `viking://~/skills/` or the shared `viking://agent/skills/`. Uploading `SKILL.md` as an ordinary resource does not install a skill.
 
 ## Related Documents
 

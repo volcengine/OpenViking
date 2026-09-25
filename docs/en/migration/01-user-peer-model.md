@@ -2,6 +2,8 @@
 
 > **Version scope:** This page documents the historical 0.3.x-to-0.4.0 migration. Its Agent directory compatibility and migration instructions do not apply to current versions. `viking://agent/...` now denotes account-shared directories; Agent ID path compatibility, migration, and cleanup have been removed. The current `admin migrate` command handles legacy sessions only.
 
+For current deployments, use [Administration API](../api/08-admin.md). Keep the source installation and its backup available until the historical migration has been verified; these commands are not a direct upgrade path from 0.3.x to the latest release.
+
 This guide is for users already running OpenViking 0.3.x. It explains what to do before and after upgrading to 0.4.0, which legacy usage remains compatible, how to migrate data, and how to move application code to the new model.
 
 ## Upgrade Decision

@@ -1,10 +1,10 @@
 # Path Locks and Crash Recovery
 
-OpenViking uses two simple primitives — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), coordinating concurrent writes and resuming queued session work after a process restart. These primitives do not form an atomic transaction across VikingFS, VectorDB, and QueueManager.
+OpenViking uses two mechanisms — **path locks** and **persistent queue recovery** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), coordinating concurrent writes and resuming queued session work after a process restart. These primitives do not form an atomic transaction across VikingFS, VectorDB, and QueueManager.
 
 ## Design Philosophy
 
-OpenViking is a context database where FS is the source of truth and VectorDB is a derived index. A lost index can be rebuilt from source data, but lost source data is unrecoverable. Therefore:
+OpenViking is a context database where FS is the source of truth and VectorDB is a derived index. An index can generally be rebuilt from retained source data; recovering lost source data depends on backups. Therefore:
 
 > **Better to miss a search result than to return a bad one.**
 
@@ -12,62 +12,29 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 
 1. **Write-exclusive**: Different owners participating in the protocol cannot hold conflicting path locks simultaneously
 2. **On by default**: Protected writes acquire locks by default; ordinary reads and low-level mkdir do not automatically acquire locks
-3. **Lock as protection**: LockContext acquires locks on entry, releases on exit — no undo/journal/commit semantics
-4. **Only session_memory needs crash recovery**: a persistent `session_commit` queue resumes Phase 2 after a process crash
-5. **Queue operations run outside locks**: SemanticQueue/EmbeddingQueue enqueue operations are idempotent and retriable
+3. **Concurrency protection**: Runtime leases do not provide cross-store undo/journal/commit semantics
+4. **Persistent task recovery**: the `session_commit` queue resumes session Phase 2; the corresponding persistent queues recover derived resource processing
+5. **Locks and queues work together**: A business path may enqueue while holding a lock and hand off its lease; retries and deduplication depend on each task protocol, not a universal enqueue guarantee
 
 ## Architecture
 
-```
-Service Layer (rm / mv / add_resource / session.commit)
-    |
-    v
-+--[LockContext async context manager]--+
-|                                       |
-|  1. Create LockHandle                 |
-|  2. Acquire path lock (poll+timeout)  |
-|  3. Execute operations (FS+VectorDB)  |
-|  4. Release lock                      |
-|                                       |
-|  On exception: auto-release lock,     |
-|  exception propagates unchanged       |
-+---------------------------------------+
-    |
-    v
-Storage Layer (VikingFS, VectorDB, QueueManager)
+```text
+Service: rm / mv / add_resource / session.commit
+    → Acquire a lease through RAGFS PathLockManager
+    → Modify covered paths and coordinate indexes and queues
+    → Release the lease or hand it to background processing
 ```
 
 ## Two Core Components
 
-### Component 1: PathLockEngine + LockManager + LockContext (Path Lock System)
+### Component 1: Path Lock System
 
-**PathLockEngine** implements provider-backed distributed locks with two lock types — EXACT and TREE — using ownership tokens to prevent TOCTOU races and automatic stale lock detection and cleanup. The default provider stores lock files in AGFS; the cache provider stores tokens in Redis.
+Rust RAGFS `PathLockManager` and its Provider own runtime locks. Python services acquire, reuse, hand off, and release leases through the binding. The later `LockContext` examples illustrate the lifecycle; they are not current Python SDK or runtime class interfaces.
 
-**LockHandle** is a lightweight lock holder token:
-
-```python
-@dataclass
-class LockHandle:
-    id: str          # Unique ID used to generate fencing tokens
-    locks: list[str] # Provider handles: lock file paths or logical paths
-    created_at: float # Handle creation time
-    last_active_at: float # Last successful acquire/refresh time
-```
-
-**LockManager** is a global singleton managing lock lifecycle:
-- Creates/releases LockHandles
-- Background cleanup of leaked locks (in-process safety net)
-- Relies on QueueManager to resume persisted `session_commit` Phase 2 work after startup
-
-**LockContext** is an async context manager encapsulating the lock/unlock lifecycle:
-
-```python
-# Conceptual example: production path locks are acquired inside the Rust ragfs layer.
-async with LockContext(lock_manager, [path], lock_mode="exact") as handle:
-    # Perform operations under lock protection
-    ...
-# Lock automatically released on exit (including exceptions)
-```
+- **Scope**: EXACT protects one path; TREE protects a path and its subtree.
+- **Provider**: The default filesystem provider stores lock files; cache uses Redis for atomic token checks and writes; memory coordinates only within one process.
+- **Lease**: Records the owner, covered paths, token locations, and refresh state. Background tasks can receive an explicit lease handoff.
+- **Failure handling**: Release validates ownership, and later acquisitions detect stale tokens. Releasing a lock does not undo persisted changes.
 
 ### Component 2: Persistent `session_commit` Queue (Crash Recovery)
 
@@ -75,7 +42,7 @@ async with LockContext(lock_manager, [path], lock_mode="exact") as handle:
 then enqueues a durable `SessionCommitMsg`; after restart, QueueManager resumes any leftover
 `session_commit` jobs and continues Phase 2.
 
-Memory extraction is idempotent — re-extracting from the same archive produces the same result.
+Recovery uses the saved archive and processing state. Memory extraction includes model calls; repeating it does not guarantee identical generated text.
 
 ## Consistency Issues and Solutions
 
@@ -111,7 +78,7 @@ retry is also safe.
 | File moved to new path but index points to old path -> search returns old path (doesn't exist) | Copy first then update index; clean up copy on failure |
 
 **Locking strategy** (handled automatically via `lock_mode="mv"`):
-- Moving a **directory**: TreeLock on the source path and ExactPathLock on the destination path
+- Moving a **directory**: TreeLock on both source and destination subtrees
 - Moving a **file**: EXACT lock on both source path and destination path
 
 Operation flow:
@@ -122,7 +89,7 @@ Operation flow:
 3. Copy to new location (source still intact, safe)
 4. If directory, remove the lock file carried over by cp into the copy
 5. Update VectorDB URIs
-   - Failure -> clean up copy, source and old index intact, consistent state
+   - Failure -> attempt target cleanup; index updates or cleanup may be partial, so inspect before retrying
 6. Delete source
 7. Release lock
 ```
@@ -131,7 +98,7 @@ Operation flow:
 
 | Problem | Solution |
 |---------|----------|
-| File moved from temp to final directory, then crash -> file exists but never searchable | Two separate paths for first-time add vs incremental update |
+| File moved from temp to final directory, then crash -> file exists but never searchable | Commit the content plan first; persistent queues complete derived indexing |
 | Resource already on disk but rm deletes it while semantic processing / vectorization is still running -> wasted work | Lifecycle TreeLock held from finalization through processing completion |
 
 **First-time add and incremental update** use the same planned commit path:
@@ -162,10 +129,7 @@ Automatic naming is handled by the resource layer, not the lock service:
 try `_1`, `_2`, and so on. Only a non-existing candidate attempts `TreeLock`,
 without waiting. If that candidate is busy, the next suffix is tried.
 
-**Server restart recovery**: `SemanticMsg` and its `SemanticPlan` are persisted
-in QueueFS. On restart, `SemanticProcessor` detects that the
-`lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and
-re-acquires a TreeLock before continuing derived work.
+**Server restart recovery**: Persistent QueueFS backends retain `SemanticMsg` and `SemanticPlan`. Semantic processing attempts to adopt `lock_handoff`; recoverable stale handoffs reacquire the original `covered_paths`. Conflicts or unrecoverable handoff errors can still fail processing, so check the task state.
 
 ### Derived Semantic Files (.abstract.md / .overview.md)
 
@@ -189,38 +153,34 @@ hold separate ExactPathLocks for the two source files. Refreshing `preferences/.
 
 ### session.commit()
 
-| Problem | Solution |
-|---------|----------|
-| Messages cleared but archive not written -> conversation data lost | Phase 1 without lock (incomplete archive has no side effects) + Phase 2 with a persistent `session_commit` queue |
+Phase 1 holds an EXACT lock on the session root to establish the commit boundary. Summary generation and memory extraction run in the background, outside that boundary lock, because model calls have unpredictable latency (5s~60s+):
 
-LLM calls have unpredictable latency (5s~60s+) and cannot be inside a lock-holding operation. The design splits into two phases:
+```text
+Phase 1: prepare and publish the archive under lock
+  1. Read messages and policy; allocate an archive number and split archived/retained messages
+  2. Persist archive messages and metadata
+  3. Enqueue SessionCommitMsg and create the task
+  4. Persist retained live messages, session metadata, and the phase1 ready marker
+  5. Release the lock; return task_id, or skipped if nothing was archived
 
-```
-Phase 1 — Archive (no lock):
-  1. Generate archive summary (LLM)
-  2. Write archive (history/archive_N/messages.jsonl + summaries)
-  3. Clear messages.jsonl
-  4. Clear in-memory message list
-
-Phase 2 — Memory extraction + write (persistent `session_commit` queue):
-  1. Persist archive metadata and enqueue `SessionCommitMsg`
-  2. Extract memories from archived messages (LLM)
-  3. Write current message state
-  4. Directly enqueue SemanticQueue
+Phase 2: process the published archive in the background
+  1. Read archived messages and generate summaries
+  2. Extract/update memories and schedule derived processing
+  3. Write memory_diff.json and the completion marker
 ```
 
-**Crash recovery analysis**:
+**Crash recovery checks**:
 
-| Failure moment | State | Recovery action |
-|------------|-------|----------------|
-| During Phase 1 archive write | Queue not published yet | Incomplete archive; next commit scans history/ for index, unaffected |
-| Phase 1 archive complete but messages not cleared | Queue not published yet | Archive complete + messages still present = redundant but safe |
-| During Phase 2 memory extraction/write | `session_commit` job still persisted | After restart: resume the job and recover Phase 2 from archive |
-| Phase 2 complete | Archive marked complete | No recovery needed |
+| Failure point | What to check |
+| --- | --- |
+| Phase 1 not yet published | Preparation may be partial; inspect archive state and live messages rather than treating directory existence as success |
+| Queued but not yet marked ready | Background processing must check Phase 1 state; error paths attempt to mark failure, so task existence alone does not prove success |
+| During Phase 2 extraction or writes | A persistent queue can resume processing, but model retries need not produce identical text |
+| After Phase 2 | Check the terminal task state, archive completion marker, and actual memory changes |
 
 ## LockContext
 
-`LockContext` is an **async** context manager that encapsulates lock acquisition and release:
+This pseudocode illustrates acquiring, using, and releasing a lock. The runtime uses RAGFS lease APIs; `LockContext` cannot be imported from the current Python SDK:
 
 ```python
 # Conceptual example: production path locks are acquired inside the Rust ragfs layer.
@@ -247,9 +207,9 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 |-----------|----------|----------|
 | `exact` | File writes, single-file delete, sidecar writeback | Lock the specified path; conflicts with same-path locks and ancestor TreeLocks |
 | `tree` | Directory delete, resource lifecycle, directory-level protection | Lock the subtree root; conflicts with same-path locks, descendant locks, and ancestor TreeLocks |
-| `mv` | Move operations | Directory move: source TreeLock + destination ExactPathLock; File move: ExactPathLock on both source and destination (controlled by `src_is_dir`) |
+| `mv` | Move operations | Directory move: source TreeLock + destination TreeLock; File move: ExactPathLock on both source and destination (controlled by `src_is_dir`) |
 
-**Exception handling**: `__aexit__` always releases locks and does not swallow exceptions. Lock acquisition failure raises `LockAcquisitionError`.
+**Exception handling**: Business paths release or hand off leases in `finally`. Conflicts surface as busy/lock-acquisition errors. Tokens left by release failure or process exit rely on stale cleanup.
 
 ## Lock Types (EXACT vs TREE)
 
@@ -279,7 +239,7 @@ The following conflicts apply to different owners within the same provider scope
 
 `Tree(/docs/a.md)` does not expand to `Tree(/docs)`. Likewise, Exact on a directory name does not protect its descendants; recursive deletion needs Tree.
 
-Locks coordinate participating operations. The low-level `PathLockWrappedFS` uses Exact for create, write, truncate, and non-recursive remove, and Tree for remove_all. File rename uses Exact on both paths; directory rename uses Tree on the source and Exact on the destination. Read, stat, directory listing, and mkdir pass through, though higher layers may hold their own locks. The operating system does not block I/O that bypasses this protocol.
+Locks coordinate participating operations. The low-level `PathLockWrappedFS` uses Exact for create, write, truncate, and non-recursive remove, and Tree for remove_all. File rename uses Exact on both paths; low-level directory rename uses Tree on the source and Exact on the destination. Public directory `mv` additionally covers both subtrees. Read, stat, directory listing, and mkdir pass through, though higher layers may hold their own locks. The operating system does not block I/O that bypasses this protocol.
 
 ## Lock Mechanism
 
@@ -409,7 +369,7 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 | session_memory extraction crash | Recover Phase 2 from archive and continue the `session_commit` job |
 | Crash while holding lock | Provider token remains; stale detection auto-cleans on a later matching acquisition (default 30s expiry) |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
-| Orphan index | Cleaned on L2 on-demand load |
+| Orphan index | `rm` attempts related vector cleanup even when the target is missing |
 
 ### Defense Summary
 
@@ -419,7 +379,7 @@ After startup, QueueManager resumes persisted `session_commit` jobs:
 | Crash during add_resource semantic processing | Lifecycle lock expires + SemanticProcessor re-acquires on restart | Worker restart |
 | Crash during session.commit Phase 2 | Persistent `session_commit` queue + resumed consumption | On restart |
 | Crash after enqueue, before worker | QueueFS SQLite persistence | Worker restart |
-| Orphan index | L2 on-demand load cleanup | When user accesses |
+| Orphan index | `ov reindex <uri> --mode prune_orphans` (preview with `--dry-run`) | When run manually |
 
 ## Configuration
 
@@ -495,7 +455,7 @@ Legacy compatibility form:
 
 ### QueueFS Persistence
 
-The lock mechanism relies on QueueFS using the SQLite backend to ensure enqueued tasks survive process restarts. This is the default configuration and requires no manual setup.
+Restart recovery requires persisted queue data. QueueFS uses SQLite by default. With the cache backend, durability depends on the configured Provider; the memory backend loses queued work when the process exits.
 
 ## Related Documentation
 

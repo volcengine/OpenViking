@@ -32,11 +32,11 @@ Because Claude Code may block installation scripts from unknown sources, automat
        └ openviking MCP · ✔ connected
    ```
 
-3. Run `/mcp` and confirm it shows:
+3. Run `/mcp` and confirm OpenViking is connected. The tool count depends on the server version:
 
    ```text
    Built-in MCPs (always available)
-     ❯ plugin:openviking-memory:openviking · ✔ connected · 10 tools
+     ❯ plugin:openviking-memory:openviking · ✔ connected
    ```
 
 4. Run `/openviking-memory:ov` and confirm the service status is healthy:

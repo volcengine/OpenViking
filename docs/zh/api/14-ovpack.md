@@ -73,8 +73,15 @@ import openviking_sdk as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
 client.initialize()
 
-# 导出到本地文件（HTTP SDK 会自动处理下载）
-# 注意：导出功能主要通过 CLI 使用
+try:
+    output_path = client.export_ovpack(
+        "viking://resources/my-project/",
+        "./exports/my-project.ovpack",
+        include_vectors=False,
+    )
+    print(output_path)
+finally:
+    client.close()
 ```
 
 **TypeScript SDK**
@@ -133,7 +140,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 2. 解析上传的 `.ovpack` 文件
 3. 校验 manifest 元数据、路径、文件和目录集合、文件大小和 checksum
 4. 应用 `on_conflict`
-5. 导入资源到目标位置，并重建向量
+5. 导入资源到目标位置，并按 `vector_mode` 恢复兼容向量或安排重新向量化
 
 **代码入口**：
 - `openviking/server/routers/pack.py:import_ovpack` - HTTP 路由
@@ -194,7 +201,7 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"parent\": \"viking://resources/imported/\",
-    \"on_conflict\": \"overwrite\",
+    \"on_conflict\": \"fail\",
     \"vector_mode\": \"auto\"
   }"
 ```
@@ -207,8 +214,16 @@ import openviking_sdk as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-admin-key")
 client.initialize()
 
-# 导入 .ovpack 文件（HTTP SDK 会自动处理上传）
-# 注意：导入功能主要通过 CLI 使用
+try:
+    uri = client.import_ovpack(
+        "./exports/my-project.ovpack",
+        "viking://resources/imported/",
+        on_conflict="fail",
+        vector_mode="auto",
+    )
+    print(uri)
+finally:
+    client.close()
 ```
 
 **TypeScript SDK**
@@ -218,7 +233,7 @@ const uri = await client.importOVPack(
   "./exports/docs.ovpack",
   "viking://resources/",
   {
-    onConflict: "overwrite",
+    onConflict: "fail",
     vectorMode: "auto",
   },
 );
@@ -233,7 +248,7 @@ uri, err := client.ImportOVPack(
     "./exports/my-project.ovpack",
     "viking://resources/imported/",
     &openviking.ImportPackOptions{
-        OnConflict: "overwrite",
+        OnConflict: "fail",
         VectorMode: "auto",
     },
 )
@@ -293,8 +308,10 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 将公开 scope root 备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
 `resources` 和当前账号下所有 `user/{user_id}` 内容；session 会通过 user 命名空间下的
 `user/{user_id}/sessions` 一起包含，不包含 `temp`、`queue` 等内部运行态数据，也不包含
-用户账号或 API Key。该接口仅允许 ROOT 或 ADMIN 调用。
+用户账号或用于登录 OpenViking 的 API Key。用户 privacy 配置目录会包含在备份中，其中可能有外部服务密钥。该接口仅允许 ROOT 或 ADMIN 调用。
 设置 `include_vectors=true` 时，会额外导出兼容的纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝导出向量快照。
+
+这里的“公开 scope”指可导出的 URI 根目录，不表示用户文件公开可读。ZIP 包含导出文件的内容，本身不提供备份加密。
 
 备份是在线逐文件读取，不保证同一时刻的原子快照。需要严格一致性时，调用方应在备份窗口暂停写入。
 

@@ -1,6 +1,6 @@
 # Volcengine Model Purchase Guide
 
-This guide introduces how to purchase and configure the model services required by OpenViking on Volcengine.
+For self-hosted OpenViking, this guide covers activating Volcano Ark models, obtaining an API key, and verifying the server configuration. Managed OpenViking clients do not need these local model settings; see the [Quick Start](../getting-started/02-quickstart.md).
 
 ## Overview
 
@@ -88,7 +88,7 @@ After activation, use the model ID: `doubao-embedding-vision-251215`
 
 ### Configuration Template
 
-Create an `~/.openviking/ov.conf` file using the following template:
+This template shows the configuration structure; replace all string placeholders before use. For an existing configuration, update only the model sections and preserve storage, authentication, and other settings:
 
 ```json
 {
@@ -97,8 +97,8 @@ Create an `~/.openviking/ov.conf` file using the following template:
     "api_key": "<your-api-key>",
     "model": "<model-id>",
     "api_base": "<api-endpoint>",
-    "temperature": <temperature-value>,
-    "max_retries": <retry-count>
+    "temperature": 0.1,
+    "max_retries": 3
   },
   "embedding": {
     "dense": {
@@ -106,7 +106,7 @@ Create an `~/.openviking/ov.conf` file using the following template:
       "api_key": "<your-api-key>",
       "model": "<model-id>",
       "api_base": "<api-endpoint>",
-      "dimension": <vector-dimension>,
+      "dimension": 1024,
       "input": "<input-type>"
     }
   }
@@ -123,7 +123,7 @@ Create an `~/.openviking/ov.conf` file using the following template:
 | `api_key` | string | Yes | Volcano Ark API Key |
 | `model` | string | Yes | Model ID, e.g., `doubao-seed-2-0-lite-260428` |
 | `api_base` | string | No | API endpoint address, defaults to Beijing region endpoint, see Appendix - Regional Endpoints for details |
-| `temperature` | float | No | Generation temperature, controls output randomness, range 0-1, recommended 0.1 |
+| `temperature` | float | No | Generation temperature; supported values depend on the model. This example uses 0.1 |
 | `max_retries` | int | No | Number of retries when request fails, recommended 3 |
 
 #### Embedding Configuration Fields
@@ -134,18 +134,18 @@ Create an `~/.openviking/ov.conf` file using the following template:
 | `api_key` | string | Yes | Volcano Ark API Key |
 | `model` | string | Yes | Model ID, e.g., `doubao-embedding-vision-251215` |
 | `api_base` | string | No | API endpoint address, defaults to Beijing region endpoint, see Appendix - Regional Endpoints for details |
-| `dimension` | int | Yes | Vector dimension, depends on the model (usually 1024 or 768) |
+| `dimension` | int | Yes | Must match the model output and index; this example selects 1024 |
 | `input` | string | No | Input type: `"multimodal"` (multimodal) or `"text"` (plain text), default `"multimodal"` |
 
 ### Configuration Example
 
-Save the following content as `~/.openviking/ov.conf`:
+Add these model sections to `~/.openviking/ov.conf`, preserving existing unrelated settings:
 
 ```json
 {
   "vlm": {
     "provider": "volcengine",
-    "api_key": "sk-1234567890abcdef1234567890abcdef",
+    "api_key": "your-ark-api-key",
     "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.1,
@@ -154,7 +154,7 @@ Save the following content as `~/.openviking/ov.conf`:
   "embedding": {
     "dense": {
       "provider": "volcengine",
-      "api_key": "sk-1234567890abcdef1234567890abcdef",
+      "api_key": "your-ark-api-key",
       "model": "doubao-embedding-vision-251215",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
@@ -164,31 +164,27 @@ Save the following content as `~/.openviking/ov.conf`:
 }
 ```
 
-> ⚠️ **Note**: Please replace the `api_key` in the example with your real API Key obtained in Step 3!
+Replace both `your-ark-api-key` values with the key from Step 3. This model credential is separate from the user/admin key used to connect to OpenViking Server.
 
 ## Verify Configuration
 
 ### Test Connection
 
-```python
-import asyncio
-from openviking_sdk import AsyncHTTPClient
+Check model configuration, then start the server:
 
-async def test():
-    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-    await client.initialize()
-
-    # Test adding a simple resource
-    result = await client.add_resource(
-        path="https://example.com",
-        options={"reason": "Connection Test"},
-    )
-    print(f"✓ Configuration successful: {result['root_uri']}")
-
-    await client.close()
-
-asyncio.run(test())
+```bash
+openviking-server doctor
+openviking-server
 ```
+
+In another terminal, configure the CLI and create `quickstart.md` using the [Quick Start](../getting-started/02-quickstart.md). Import it into an unused target:
+
+```bash
+ov add-resource ./quickstart.md --to viking://resources/model-check --wait --timeout 120
+ov find "Who owns the backup process?" --uri viking://resources/model-check
+```
+
+An accepted import does not establish that model configuration works. Wait for completion before searching; after a timeout, inspect the returned task ID, and after failure, read the task error.
 
 ### View Usage
 
@@ -205,15 +201,11 @@ In the Volcano Ark Console:
 | Model Type | Billing Unit |
 |------------|--------------|
 | VLM | Billed by Input/Output Tokens |
-| Embedding | Billed by text length |
+| Embedding | Token usage by model and input modality; see official pricing for details |
 
 ### Free Tier
 
-Volcengine provides a free tier for new users:
-
-- Free Tokens upon first activation
-- Sufficient to complete the OpenViking trial experience
-- See details: [Volcano Ark Pricing](https://www.volcengine.com/docs/82379/1399514)
+Check your console and [Volcano Ark pricing](https://www.volcengine.com/product/ark) for credit availability, eligible models, expiration, and charges after credits run out. Measure token usage with a small document before estimating bulk-ingestion cost; credits do not guarantee coverage of every trial workload.
 
 ## Troubleshooting
 
@@ -226,7 +218,7 @@ Error: Invalid API Key
 ```
 
 **Solution**:
-1. Check if the API Key is copied correctly (complete string starting with `sk-`).
+1. Check that the API key was copied completely without extra whitespace.
 2. Confirm that the API Key has not been deleted or expired.
 3. Re-create an API Key.
 
@@ -238,7 +230,7 @@ Error: Model not activated
 
 **Solution**:
 1. Check the model status in the Volcano Ark Console.
-2. Confirm that the model is in "Running" status.
+2. Confirm that the selected model ID is available to the account.
 3. Check if the account balance is sufficient.
 
 #### Network Connection Issues
@@ -251,7 +243,7 @@ Error: Connection timeout
 1. Check your network connection.
 2. Confirm that the `api_base` configuration is correct.
 3. If you are overseas, confirm that you can access Volcengine services.
-4. Increase the timeout in the configuration.
+4. If the service is reachable but slow, adjust the relevant timeout using the [Configuration Guide](01-configuration.md).
 
 ### Getting Help
 
@@ -271,13 +263,14 @@ Error: Connection timeout
 | Region | API Base |
 |--------|----------|
 | Beijing | `https://ark.cn-beijing.volces.com/api/v3` |
-| Shanghai | `https://ark.cn-shanghai.volces.com/api/v3` |
+
+This guide uses the Beijing endpoint from official examples. For another region, copy the model endpoint from the console rather than substituting a region name in the hostname.
 
 ### Model Version Reference
 
-| Model Name | Current Version | Release Date |
-|------------|-----------------|--------------|
-| Doubao-Seed-2.0 | `doubao-seed-2-0-lite-260428` | 2025-12-28 |
-| Doubao-Embedding-Vision | `doubao-embedding-vision-251215` | 2025-06-15 |
+| Purpose | Model ID used in this guide |
+| --- | --- |
+| VLM | `doubao-seed-2-0-lite-260428` |
+| Embedding | `doubao-embedding-vision-251215` |
 
-> Note: Model versions may be updated, please refer to the Volcano Ark Console for the latest information.
+These are example versions, not a claim about the latest release. See [Ark model releases](https://docs.volcengine.com/docs/ark/model-release-announcement?lang=zh) for availability and [vectorization documentation](https://docs.volcengine.com/docs/ark/vectorization?lang=zh) for input and dimension settings. Before changing embedding models, check whether the existing index needs rebuilding.

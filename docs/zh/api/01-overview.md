@@ -91,20 +91,18 @@ const results = await client.search("部署文档", {
 它与 Python、Go HTTP Client 使用相同的身份请求头和响应信封。更多示例见
 [`sdk/typescript/README_CN.md`](../../../sdk/typescript/README_CN.md)。
 
-未显式传入 `url` 时，HTTP 客户端会自动从 `ovcli.conf` 读取连接信息。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件，默认路径 `~/.openviking/ovcli.conf`，也可通过环境变量指定：
+Python HTTP 客户端从 `ovcli.conf` 读取连接信息，显式传入的构造参数覆盖对应配置。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件，默认路径 `~/.openviking/ovcli.conf`，也可通过环境变量指定：
 
 ```bash
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
-配置文件示例：
+使用 user/admin key 的配置文件示例：
 
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-key",
-  "account": "acme",
-  "user": "alice"
+  "api_key": "your-user-or-admin-key"
 }
 ```
 
@@ -114,8 +112,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
 | `api_key` | API Key | `null`（无认证） |
-| `account` | 租户级请求的默认账户请求头 | `null` |
-| `user` | 租户级请求的默认用户请求头 | `null` |
+| `account` | 账户请求头；trusted 和 dev 模式使用，api_key 模式忽略 | `null` |
+| `user` | 用户请求头；trusted 和 dev 模式使用，api_key 模式忽略 | `null` |
 | `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
@@ -161,7 +159,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI 模式
 
-OpenViking CLI 的命令是 `ov`（通过 `npm install -g @openviking/cli` 安装），连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。CLI 同样从 `ovcli.conf` 读取连接信息（与 HTTP 客户端共享）。
+OpenViking CLI 的命令是 `ov`（通过 `npm install -g @openviking/cli` 安装），连接到 OpenViking 服务端，提供常用操作的 Shell 命令。CLI 同样从 `ovcli.conf` 读取连接信息（与 HTTP 客户端共享）。
 
 基本用法：
 
@@ -209,20 +207,19 @@ ov -o json ls viking://resources/
 
 - **Authorization Bearer** 请求头：`Authorization: Bearer your-key` （建议的方式）
 - **X-API-Key** 请求头：`X-API-Key: your-key`
-- 如果服务端未配置 API Key，则跳过认证。
+- 只有 dev 模式跳过认证；未设置 `auth_mode` 且未设置 `server.root_api_key` 时自动选择 dev 模式。其他模式（api_key、trusted、OIDC、LDAP）按各自配置解析身份。
 - `/health` 和 `/ready` 端点始终不需要认证。
 
 ## 响应格式
 
-所有 HTTP API 响应遵循统一格式：
+常规 JSON API 响应遵循以下格式；文件下载、SSE、Metrics 和 WebDAV 使用各接口说明的格式：
 
 ### 成功响应
 
 ```json
 {
   "status": "ok",
-  "result": { ... },
-  "time": 0.123
+  "result": { ... }
 }
 ```
 
@@ -236,8 +233,7 @@ ov -o json ls viking://resources/
   "error": {
     "code": "NOT_FOUND",
     "message": "Resource not found: viking://resources/nonexistent/"
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -302,8 +298,8 @@ JSON 输出 - 错误：
 
 ### 特殊情况
 
-- **字符串结果**（`read`、`abstract`、`overview`）：直接打印原文
-- **None 结果**（`mkdir`、`rm`、`mv`）：无输出
+- Table 模式下，`read`、`abstract`、`overview` 直接打印文本，`mkdir`、`rm`、`mv` 打印操作确认信息。
+- JSON 模式下，这些命令按上文的 JSON 格式输出。
 
 ### 退出码
 
@@ -354,7 +350,7 @@ JSON 输出 - 错误：
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health` | 基础健康检查（无需认证） |
-| GET | `/ready` | AGFS、VectorDB 和 API Key 管理器就绪检查（无需认证） |
+| GET | `/ready` | AGFS、VectorDB、API Key 管理器和 Embedding 就绪检查（无需认证） |
 | GET | `/api/v1/system/status` | 系统状态 |
 | POST | `/api/v1/system/wait` | 等待后台处理完成 |
 | POST | `/api/v1/system/consistency` | 文件系统与向量索引一致性检查 |
@@ -398,7 +394,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
 | GET | `/api/v1/content/download` | 下载原始文件字节 |
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
-| POST | `/api/v1/content/batch-write` | 执行带前置条件的多文件写入 |
+| POST | `/api/v1/content/batch-write` | 写入多个文件并刷新索引 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
@@ -556,9 +552,11 @@ JSON 输出 - 错误：
 
 ---
 
-## 文档阅读计划
+<a id="文档阅读计划"></a>
 
-左侧导航按职责而不是按历史文件体积组织：
+## 按任务查找接口
+
+按操作类型选择对应文档：
 
 | 分组 | 适合查找的内容 |
 |------|----------------|

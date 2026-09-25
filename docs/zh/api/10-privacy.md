@@ -2,7 +2,11 @@
 
 隐私配置用于按 `category + target_key` 管理敏感字段版本（如 skill 的 `api_key`、`base_url`）。
 
-每次更新都会生成版本快照，可查询历史版本并切换生效版本。
+配置值变化时会生成版本快照，可查询历史版本并切换生效版本。提交与当前版本相同的值不会创建新版本。
+
+以下示例使用当前用户的 API Key。trusted 模式需补充部署要求的身份头。读取接口和 CLI 会返回保存的实际值；下文的 `***` 仅为示例占位符，不表示接口自动脱敏。
+
+激活版本只改变 OpenViking 保存的配置，不会替外部服务轮换、撤销或恢复密钥。
 
 ## 典型场景
 
@@ -24,8 +28,6 @@
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/versions` | 列出版本号 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/versions/{version}` | 获取指定版本详情 |
 | POST | `/api/v1/privacy-configs/{category}/{target_key}/activate` | 激活指定版本 |
-
-下面按接口逐一展开说明。
 
 ---
 
@@ -82,9 +84,7 @@ GET /api/v1/privacy-configs
 
 ```bash
 curl -X GET http://localhost:1933/api/v1/privacy-configs \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -H "X-OpenViking-User: alice"
+  -H "X-API-Key: your-key"
 ```
 
 **响应**
@@ -92,8 +92,7 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 ```json
 {
   "status": "ok",
-  "result": ["skill"],
-  "time": 0.01
+  "result": ["skill"]
 }
 ```
 
@@ -111,9 +110,7 @@ GET /api/v1/privacy-configs/{category}
 
 ```bash
 curl -X GET http://localhost:1933/api/v1/privacy-configs/skill \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -H "X-OpenViking-User: alice"
+  -H "X-API-Key: your-key"
 ```
 
 **响应**
@@ -121,8 +118,7 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs/skill \
 ```json
 {
   "status": "ok",
-  "result": ["byted-viking-search-knowledgebase"],
-  "time": 0.01
+  "result": ["byted-viking-search-knowledgebase"]
 }
 ```
 
@@ -140,9 +136,7 @@ GET /api/v1/privacy-configs/{category}/{target_key}
 
 ```bash
 curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-search-knowledgebase" \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -H "X-OpenViking-User: alice"
+  -H "X-API-Key: your-key"
 ```
 
 **响应**
@@ -166,8 +160,7 @@ curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-sea
         "base_url": "https://example.com"
       }
     }
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -181,7 +174,7 @@ curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-sea
 
 **行为说明**
 
-- `values` 按整包快照写入（本次传入内容成为新版本的 `values`）
+- `values` 完整替换该版本的键值；本次省略的 key 不会出现在新快照中
 - 传入新 key 会直接写入（允许新增）
 - 若与当前版本完全一致，则复用当前版本号，不新建版本
 
@@ -203,8 +196,6 @@ POST /api/v1/privacy-configs/{category}/{target_key}
 curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-search-knowledgebase" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -H "X-OpenViking-User: alice" \
   -d '{
     "values": {
       "api_key": "secret-2",
@@ -233,8 +224,7 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
       "region": "cn"
     },
     "change_reason": "rotate key"
-  },
-  "time": 0.02
+  }
 }
 ```
 
@@ -252,9 +242,7 @@ GET /api/v1/privacy-configs/{category}/{target_key}/versions
 
 ```bash
 curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-search-knowledgebase/versions" \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -H "X-OpenViking-User: alice"
+  -H "X-API-Key: your-key"
 ```
 
 **响应**
@@ -262,8 +250,7 @@ curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-sea
 ```json
 {
   "status": "ok",
-  "result": [1, 2, 3, 4],
-  "time": 0.01
+  "result": [1, 2, 3, 4]
 }
 ```
 
@@ -283,9 +270,7 @@ GET /api/v1/privacy-configs/{category}/{target_key}/versions/{version}
 
 ```bash
 curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-search-knowledgebase/versions/2" \
-  -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -H "X-OpenViking-User: alice"
+  -H "X-API-Key: your-key"
 ```
 
 **响应**
@@ -301,8 +286,7 @@ curl -X GET "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-sea
       "api_key": "secret-1",
       "base_url": "https://example.com"
     }
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -330,8 +314,6 @@ POST /api/v1/privacy-configs/{category}/{target_key}/activate
 curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-search-knowledgebase/activate" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -H "X-OpenViking-Account: default" \
-  -H "X-OpenViking-User: alice" \
   -d '{"version": 2}'
 ```
 
@@ -348,8 +330,7 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
       "api_key": "secret-1",
       "base_url": "https://example.com"
     }
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -361,25 +342,28 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
 
 ```bash
 # 分类/目标
-openviking privacy categories
-openviking privacy list skill
+ov privacy categories
+ov privacy list skill
 
 # 当前生效配置（支持快捷形式）
-openviking privacy get skill byted-viking-search-knowledgebase
-openviking privacy skill byted-viking-search-knowledgebase
+ov privacy get skill byted-viking-search-knowledgebase
+ov privacy skill byted-viking-search-knowledgebase
 
 # 更新（整包 JSON）
-openviking privacy upsert skill byted-viking-search-knowledgebase \
+ov privacy upsert skill byted-viking-search-knowledgebase \
   --values-json '{"api_key":"secret-2","base_url":"https://example.com"}'
 
+# 从本地 JSON 文件读取值，避免把值直接写入命令参数
+ov privacy upsert skill byted-viking-search-knowledgebase --values-file ./privacy-values.json
+
 # 仅更新部分 key（先读取 current 再合并）
-openviking privacy upsert skill byted-viking-search-knowledgebase \
+ov privacy upsert skill byted-viking-search-knowledgebase \
   --key-api_key secret-3
 
 # 版本查询与切换
-openviking privacy versions skill byted-viking-search-knowledgebase
-openviking privacy version skill byted-viking-search-knowledgebase 2
-openviking privacy activate skill byted-viking-search-knowledgebase 2
+ov privacy versions skill byted-viking-search-knowledgebase
+ov privacy version skill byted-viking-search-knowledgebase 2
+ov privacy activate skill byted-viking-search-knowledgebase 2
 ```
 
 ---

@@ -29,7 +29,7 @@ bash cleanup-memory-openviking.sh
 
 ```bash
 openclaw plugins install clawhub:@openviking/openclaw-plugin
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --json
 openclaw gateway restart
 ```
 
@@ -42,7 +42,7 @@ openclaw gateway restart
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
-ov-install --base-url http://your-server:1933
+ov-install --base-url https://openviking.example.com
 ```
 
 常用参数：
@@ -74,10 +74,10 @@ ov-install --base-url http://your-server:1933
 
 ```bash
 # Alice 是 OpenViking user；按 OpenClaw 助手分开 peer 记忆。
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role assistant --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role assistant --json
 
 # support-agent 是 OpenViking user；按给它发消息的人分开 peer 记忆。
-openclaw openviking setup --base-url http://your-server:1933 --api-key sk-xxx --peer-role sender --json
+openclaw openviking setup --base-url https://openviking.example.com --api-key sk-xxx --peer-role sender --json
 ```
 
 安装和 setup 只接受 `sender`；已有的 `peer_role=person` 配置仍兼容，并按 `sender` 处理。OpenViking 会为每个用户初始化受管的 `peers/` 容器，因此 `none` 的含义是不使用具体的 `peers/<peer_id>/memories` 子树。Actor-peer 召回同时包含用户共享记忆和当前 peer 记忆；切换 scope 不会搬迁已有记忆。
@@ -136,7 +136,7 @@ openclaw config get plugins.slots.contextEngine
 # 期望输出：openviking
 ```
 
-全链路健康检查：
+先按 HEALTHCHECK.md 启用 Gateway 的 `/v1/responses` 端点，再从 OpenViking 源码目录执行全链路检查。该命令会发起真实模型请求并写入测试对话：
 
 ```bash
 python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
@@ -160,7 +160,7 @@ python examples/openclaw-plugin/health_check_tools/ov-healthcheck.py
 | `autoRecallTimeoutMs` | `5000` | 整个 auto-recall 流程的外层超时（毫秒）；本地嵌入硬件较慢时可调大（取值范围 1000–300000） |
 
 ```bash
-openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
+openclaw config set plugins.entries.openviking.config.baseUrl https://openviking.example.com
 openclaw config set plugins.entries.openviking.config.apiKey your-api-key
 ```
 

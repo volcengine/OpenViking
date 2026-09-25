@@ -35,28 +35,17 @@ Every integration on this page connects to a running OpenViking server. If you d
 
 ## Low-latency recall
 
-Query expansion and recall-result compression are two independent, optional model calls. Disable both in the Agent plugin when response latency matters most; semantic retrieval, budgeting, tier degradation, and cross-turn dedup continue to work.
-
-The same environment variables apply to both the Claude Code and Codex memory plugins. Query expansion is switchable in every memory plugin that resolves its settings through the shared loader; compression is Claude Code and Codex only.
+Query expansion and recall compression add model calls. Disable both when response time takes priority; retrieval, budgets, and cross-turn deduplication remain enabled:
 
 ```bash
 export OPENVIKING_RECALL_QUERY_EXPANSION=off
 export OPENVIKING_RECALL_COMPRESS=off
 ```
 
-Both plugins have a local compression path, but expose it differently:
-
-- Claude Code defaults to `recallCompress=auto`: it prefers local `claude -p` (Sonnet with low effort) and falls back to an OpenViking server digest when the local CLI is unavailable. `client` forces local-only compression, while `server` forces server-only compression.
-- Codex calls local `codex exec` by default, trying `gpt-5.3-codex-spark` first and then `gpt-5.6-luna` with low effort. It does not enable server-side compression.
-
-The shared default is `recallCompress=auto`. `OPENVIKING_RECALL_COMPRESS=off` disables compression in both plugins; Codex interprets `auto` or `client` as enabling its local compressor. The old Claude Code variable `OPENVIKING_RECALL_REWRITE` remains supported for compatibility, but new configurations should use the unified name.
-
-The same settings can live in `~/.openviking/ovcli.conf`:
+Or configure them in `~/.openviking/ovcli.conf`:
 
 ```json
 {
-  "url": "https://openviking.example.com",
-  "api_key": "your-api-key",
   "plugin": {
     "recallQueryExpansion": "off",
     "recallCompress": "off"
@@ -64,8 +53,23 @@ The same settings can live in `~/.openviking/ovcli.conf`:
 }
 ```
 
-Environment variables take precedence over `ovcli.conf`. Restart the Agent after changing these settings so its hook processes reload the configuration. These are plugin-client settings; the server's `ov.conf` does not need to change.
+### Choose a compression mode
 
-The `plugin` section is read by every memory plugin — claude-code, codex, cursor, trae, trae-cn, zcode, kimicode, opencode, dsh and pi — and a `plugin.<harness>` object overrides the shared keys for one of them, under either spelling (`claude_code` or `claude-code`, `trae_cn` or `trae-cn`). Compression is the exception: the other harnesses honour `recallQueryExpansion` but ignore `recallCompress` and its companions, since none of them requests a server digest.
+| Value | Behavior |
+| --- | --- |
+| `off` | Do not compress recall results |
+| `server` | Request compression on the OpenViking server |
+| `client` | Use a local compressor only; supported by Claude Code and Codex |
+| `auto` | Prefer a local compressor when available; otherwise request automatic server processing |
 
-A context request waits longer than an ordinary request, because aborting it client-side discards the whole response rather than just the stage that ran long. The server pipeline is serial and each optional stage has its own fuse: query expansion (`retrieval.recall_intent_timeout_s`, 5s) runs first, then retrieval, body reads and budgeting, and only then the digest rewrite (`retrieval.recall_rewrite_timeout_s`, 30s). The deadline therefore follows what the request actually asks for — 15s once it carries a session and can spend the expansion fuse, 45s when it also asks for a digest, and the plugin's ordinary timeout when it asks for neither. Set `OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS` (or `plugin.recallContextTimeoutMs`) to pin it — keep it above the fuses the request will spend and below the Agent's own hook timeout.
+Claude Code and Codex default to `auto`. Their local compressors are `claude -p` and `codex exec`; see [§3.2.5](./16-capability-reference.md#_3-2-5-recall-digest). Other integrations that support cloud compression retain `off` as their default and require explicit opt-in. Server compression is supported by Claude Code, Codex, OpenCode, DSH, pi, Cursor, TRAE, TRAE CN, ZCode, OpenClaw, and Hermes. It requires a server with context-search rewrite support.
+
+These settings control automatic recall. Explicit MCP `search` calls use the arguments supplied in that call. See the [shared plugin documentation](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression) for details and older-server fallback behavior.
+
+Shared plugins read the `plugin` section in `ovcli.conf`; `plugin.<harness>` overrides a setting for one client. Environment variables take precedence; the older `OPENVIKING_RECALL_REWRITE` still works as an alias for `OPENVIKING_RECALL_COMPRESS`. See [Plugin settings](../configuration/02-client.md#plugin-settings). Restart the agent after changing settings so its hooks load the new configuration. These are plugin-client settings; the server's `ov.conf` does not need to change.
+
+### Request timeout
+
+Query expansion, retrieval, and digest compression run in sequence. Query expansion defaults to a 5-second timeout (`retrieval.recall_intent_timeout_s`); digest rewriting defaults to 30 seconds (`retrieval.recall_rewrite_timeout_s`).
+
+`OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS` or `plugin.recallContextTimeoutMs` sets the client's timeout for the entire context request. When unset, the client waits the plugin's ordinary timeout, raised to at least 15 seconds when the request carries a session (query expansion) and at least 45 seconds when it asks for a digest. An override should exceed the server timeouts the request will spend and stay below the host's hook timeout. Ending the request early discards the entire response.

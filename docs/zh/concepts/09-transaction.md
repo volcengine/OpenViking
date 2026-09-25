@@ -1,10 +1,10 @@
 # 路径锁与崩溃恢复
 
-OpenViking 通过**路径锁**和**持久化队列恢复**两个简单原语保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，协调并发写入，并在进程重启后继续处理已入队的会话任务。路径锁和队列恢复不构成跨 VikingFS、VectorDB、QueueManager 的原子事务。
+OpenViking 通过**路径锁**和**持久化队列恢复**两种机制保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，协调并发写入，并在进程重启后继续处理已入队的会话任务。路径锁和队列恢复不构成跨 VikingFS、VectorDB、QueueManager 的原子事务。
 
 ## 设计哲学
 
-OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。索引丢了可从源数据重建，源数据丢失不可恢复。因此：
+OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。索引通常可以从保留的源数据重建；恢复丢失的源数据则依赖备份。因此：
 
 > **宁可搜不到，不要搜到坏结果。**
 
@@ -12,61 +12,29 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 
 1. **写互斥**：参与锁协议的不同 owner 不能同时取得冲突路径的锁
 2. **默认生效**：受保护的写操作默认加锁；普通读取和底层 mkdir 不自动加锁
-3. **锁即保护**：进入 LockContext 时加锁，退出时释放，没有 undo/journal/commit 语义
-4. **仅 session_memory 需要崩溃恢复**：通过持久化 `session_commit` 队列在进程崩溃后恢复 Phase 2
-5. **Queue 操作在锁外执行**：SemanticQueue/EmbeddingQueue 的 enqueue 是幂等的，失败可重试
+3. **锁只保护并发**：运行时申请和释放 lease，不提供跨存储的 undo/journal/commit 语义
+4. **持久化任务恢复**：`session_commit` 队列恢复会话 Phase 2；资源派生处理由相应的持久化队列恢复
+5. **锁与队列配合**：业务路径可在持锁时入队并交接 lease；重试和去重取决于具体任务协议，不能把所有 enqueue 视为天然幂等
 
 ## 架构
 
-```
-Service Layer (rm / mv / add_resource / session.commit)
-    |
-    v
-+--[LockContext 异步上下文管理器]-------+
-|                                       |
-|  1. 创建 LockHandle                  |
-|  2. 获取路径锁（轮询 + 超时）        |
-|  3. 执行操作（FS + VectorDB）        |
-|  4. 释放锁                           |
-|                                       |
-|  异常时：自动释放锁，异常原样传播    |
-+---------------------------------------+
-    |
-    v
-Storage Layer (VikingFS, VectorDB, QueueManager)
+```text
+服务层：rm / mv / add_resource / session.commit
+    → RAGFS PathLockManager 申请 lease
+    → 在覆盖的路径内修改文件、协调索引和队列
+    → 释放 lease，或交接给后台处理
 ```
 
 ## 两个核心组件
 
-### 组件 1：PathLockEngine + LockManager + LockContext（路径锁系统）
+### 组件 1：路径锁系统
 
-**PathLockEngine** 实现基于 Provider 的分布式锁，支持 EXACT 和 TREE 两种锁类型，使用归属 token 防止 TOCTOU 竞争，并自动检测和清理过期锁。默认 Provider 在 AGFS 中保存锁文件；Cache Provider 在 Redis 中保存 token。
+运行时锁由 Rust RAGFS 的 `PathLockManager` 和 Provider 管理。Python 服务通过 binding 申请、续用、交接和释放 lease。后文的 `LockContext` 示例仅说明生命周期，不是当前 Python SDK 或运行时类接口。
 
-**LockHandle** 是轻量的锁持有者令牌：
-
-```python
-@dataclass
-class LockHandle:
-    id: str          # 唯一标识，用于生成 fencing token
-    locks: list[str] # Provider handle：锁文件路径或逻辑路径
-    created_at: float # handle 创建时间
-    last_active_at: float # 最近一次成功 acquire/refresh 的时间
-```
-
-**LockManager** 是全局单例，管理锁生命周期：
-- 创建/释放 LockHandle
-- 后台清理泄漏的锁（进程内安全网）
-- 启动后由 QueueManager 恢复持久化的 `session_commit` Phase 2 任务
-
-**LockContext** 是异步上下文管理器，封装加锁/解锁生命周期：
-
-```python
-# Conceptual example: production path locks are acquired inside the Rust ragfs layer.
-async with LockContext(lock_manager, [path], lock_mode="exact") as handle:
-    # 在锁保护下执行操作
-    ...
-# 退出时自动释放锁（包括异常情况）
-```
+- **范围**：EXACT 保护路径本身，TREE 保护路径及其子树。
+- **Provider**：默认 filesystem 保存锁文件；cache 用 Redis 原子检查和写入 token；memory 只在当前进程内协调。
+- **lease**：记录 owner、覆盖路径、token 位置和续期状态。后台任务可以接收显式交接的 lease。
+- **失败处理**：释放前校验 owner，过期锁由后续获取时的 stale 检查清理；锁释放不会撤销已写入的数据。
 
 ### 组件 2：持久化 `session_commit` 队列（崩溃恢复）
 
@@ -74,7 +42,7 @@ async with LockContext(lock_manager, [path], lock_mode="exact") as handle:
 `SessionCommitMsg` 写入持久化队列；进程重启后，QueueManager 会继续消费遗留的 `session_commit`
 任务并恢复 Phase 2。
 
-Memory 提取是幂等的，从同一个 archive 重新提取会得到相同结果。
+恢复使用已保存的 archive 和处理状态。记忆提取包含模型调用，不能假设重新执行会生成逐字相同的内容。
 
 ## 一致性问题与解决方案
 
@@ -109,7 +77,7 @@ Memory 提取是幂等的，从同一个 archive 重新提取会得到相同结�
 | 文件移到新路径但索引指向旧路径 -> 搜索返回旧路径（不存在） | 先 copy 再更新索引，失败时清理副本 |
 
 **加锁策略**（通过 `lock_mode="mv"` 自动处理）：
-- 移动**目录**：源路径加 TreeLock，目标路径加 ExactPathLock
+- 移动**目录**：源路径加 TreeLock，目标路径加 TreeLock
 - 移动**文件**：源路径和目标路径各加 EXACT 锁
 
 操作流程：
@@ -120,7 +88,7 @@ Memory 提取是幂等的，从同一个 archive 重新提取会得到相同结�
 3. Copy 到新位置（源还在，安全）
 4. 如果是目录，删除副本中被 cp 带过去的锁文件
 5. 更新 VectorDB 中的 URI
-   - 失败 -> 清理副本，源和旧索引都在，一致状态
+   - 失败 -> 尝试清理副本；索引或清理可能部分完成，需检查后再重试
 6. 删除源
 7. 释放锁
 ```
@@ -129,7 +97,7 @@ Memory 提取是幂等的，从同一个 archive 重新提取会得到相同结�
 
 | 问题 | 方案 |
 |------|------|
-| 文件从临时目录移到正式目录后崩溃 -> 文件存在但永远搜不到 | 首次添加与增量更新分离为两条独立路径 |
+| 文件从临时目录移到正式目录后崩溃 -> 文件存在但永远搜不到 | 先提交内容计划，再由持久化队列完成派生索引 |
 | 资源已落盘但语义处理/向量化还在跑时被 rm 删除 -> 处理白跑 | 生命周期 TreeLock，从落盘持续到处理完成 |
 
 **首次添加和增量更新**使用同一条计划提交路径：
@@ -158,9 +126,7 @@ Memory 提取是幂等的，从同一个 archive 重新提取会得到相同结�
 判断候选目录是否已占用；已存在则尝试 `_1`、`_2` 后缀。候选目录不存在时才尝试
 获取该目录的 `TreeLock`，且不等待；如果同名正在被并发请求处理，就直接尝试下一个后缀。
 
-**服务重启恢复**：`SemanticMsg` 及其中的 `SemanticPlan` 持久化在 QueueFS
-中。重启后 `SemanticProcessor` 发现 `lifecycle_lock_handle_id` 对应的 handle
-不在内存中，会重新获取 TreeLock 后继续派生处理。
+**服务重启恢复**：`SemanticMsg` 和 `SemanticPlan` 保存在持久化 QueueFS 后端中。语义处理通过 `lock_handoff` 尝试接管 lease；对可恢复的过期交接，按 `covered_paths` 重新申请覆盖范围后继续。锁冲突或不可恢复的交接错误仍会使处理失败，需检查任务状态。
 
 ### 派生语义文件（.abstract.md / .overview.md）
 
@@ -184,38 +150,34 @@ viking://user/default/memories/preferences/editor.md
 
 ### session.commit()
 
-| 问题 | 方案 |
-|------|------|
-| 消息已清空但 archive 未写入 -> 对话数据丢失 | Phase 1 无锁（archive 不完整无副作用）+ Phase 2 持久化 `session_commit` 队列 |
+Phase 1 使用会话根目录的 EXACT 锁划定提交边界。模型调用耗时不可控（5s~60s+），因此摘要生成和记忆提取放在后台，不在这个边界锁内等待：
 
-LLM 调用耗时不可控（5s~60s+），不能放在持锁操作内。设计拆为两个阶段：
+```text
+Phase 1：持锁准备并发布归档
+  1. 读取消息与提交策略，分配归档编号，划分归档和保留消息
+  2. 写归档消息及元数据
+  3. 入队 SessionCommitMsg 并创建 task
+  4. 写当前保留消息、会话元数据和 phase1 ready 标记
+  5. 释放锁，返回 task_id（无可归档内容时 skipped）
 
-```
-Phase 1 — 归档（无锁）：
-  1. 生成归档摘要（LLM）
-  2. 写 archive（history/archive_N/messages.jsonl + 摘要）
-  3. 清空 messages.jsonl
-  4. 清空内存中的消息列表
-
-Phase 2 — 记忆提取 + 写入（持久化 `session_commit` 队列）：
-  1. 持久化 archive 元数据并 enqueue `SessionCommitMsg`
-  2. 从归档消息提取 memories（LLM）
-  3. 写当前消息状态
-  4. 直接 enqueue SemanticQueue
+Phase 2：后台处理已发布归档
+  1. 读取归档消息并生成摘要
+  2. 提取、更新记忆并安排派生处理
+  3. 写 memory_diff.json 和完成标记
 ```
 
 **崩溃恢复分析**：
 
-| 崩溃时间点 | 状态 | 恢复动作 |
-|-----------|------|---------|
-| Phase 1 写 archive 中途 | 队列未发布 | archive 不完整，下次 commit 从 history/ 扫描 index，不受影响 |
-| Phase 1 archive 完成但 messages 未清空 | 队列未发布 | archive 完整 + messages 仍在 = 数据冗余但安全 |
-| Phase 2 记忆提取/写入中途 | `session_commit` 任务仍在持久化队列中 | 重启后继续消费该任务，从 archive 恢复 Phase 2 |
-| Phase 2 完成 | archive 标记为完成 | 无需恢复 |
+| 时间点 | 应检查什么 |
+| --- | --- |
+| Phase 1 尚未发布 | 归档准备可能只完成一部分；检查归档状态和当前消息，不把目录存在当作提交成功 |
+| 已入队但 ready 尚未写入 | 后台处理需要核对 Phase 1 状态；错误路径会尝试记录失败标记，不能仅凭 task 存在判断成功 |
+| Phase 2 提取或写入中途 | 持久化队列可恢复处理，但模型重试不保证生成相同正文 |
+| Phase 2 完成 | 核对 task 最终状态、归档完成标记和实际记忆变更 |
 
 ## LockContext
 
-`LockContext` 是**异步**上下文管理器，封装锁的获取和释放：
+以下伪代码说明申请、使用、释放锁的顺序。当前运行时使用 RAGFS lease API，不能直接从 Python SDK 导入 `LockContext`：
 
 ```python
 # Conceptual example: production path locks are acquired inside the Rust ragfs layer.
@@ -242,9 +204,9 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 |-----------|------|------|
 | `exact` | 文件写入、单文件删除、派生文件写回 | 锁定指定路径；与同路径锁和祖先目录 TreeLock 冲突 |
 | `tree` | 删除目录、资源生命周期、目录级保护 | 锁定子树根节点；与同路径锁、后代锁和祖先 TreeLock 冲突 |
-| `mv` | 移动操作 | 目录移动：源路径 TreeLock + 目标路径 ExactPathLock；文件移动：源路径和目标路径均 ExactPathLock（通过 `src_is_dir` 控制） |
+| `mv` | 移动操作 | 目录移动：源路径 TreeLock + 目标路径 TreeLock；文件移动：源路径和目标路径均 ExactPathLock（通过 `src_is_dir` 控制） |
 
-**异常处理**：`__aexit__` 总是释放锁，不吞异常。获取锁失败时抛出 `LockAcquisitionError`。
+**异常处理**：业务调用通过 `finally` 释放或交接 lease。锁冲突会返回相应 busy/锁获取错误；释放失败或进程退出后的 token 依赖过期清理。
 
 ## 锁类型（EXACT vs TREE）
 
@@ -274,7 +236,7 @@ Exact 和 Tree 表达操作范围，文件、目录或缺失路径表达目标�
 
 `Tree(/docs/a.md)` 不会扩大为 `Tree(/docs)`。反过来，目录自身的 Exact 也不能保护子树，递归删除需要 Tree。
 
-锁只协调参与协议的操作。底层 `PathLockWrappedFS` 对 create、write、truncate、非递归 remove 使用 Exact，对 remove_all 使用 Tree；文件 rename 锁源和目标的 Exact，目录 rename 锁源 Tree 和目标 Exact。read、stat、列目录和 mkdir 直接转发，上层可另行持锁。绕过协议的 I/O 不会被操作系统自动阻断。
+锁只协调参与协议的操作。底层 `PathLockWrappedFS` 对 create、write、truncate、非递归 remove 使用 Exact，对 remove_all 使用 Tree；文件 rename 锁源和目标的 Exact，底层目录 rename 锁源 Tree 和目标 Exact；公开目录 `mv` 额外保护源、目标两棵子树。read、stat、列目录和 mkdir 直接转发，上层可另行持锁。绕过协议的 I/O 不会被操作系统自动阻断。
 
 ## 锁机制
 
@@ -418,7 +380,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 | session_memory 提取中途崩溃 | 从 archive 恢复 Phase 2 并继续消费 `session_commit` 任务 |
 | 锁持有期间崩溃 | Provider token 保留，后续匹配的 acquire 通过 stale 检测自动清理（默认 30s 过期）|
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化，worker 重启后自动拉取 |
-| 孤儿索引 | L2 按需加载时清理 |
+| 孤儿索引 | `rm` 对不存在的目标也会尝试清理相关向量记录 |
 
 ### 防线总结
 
@@ -428,7 +390,7 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 | add_resource 语义处理中途崩溃 | 生命周期锁过期 + SemanticProcessor 重启时重新获取 | worker 重启后 |
 | session.commit Phase 2 崩溃 | 持久化 `session_commit` 队列 + 重试消费 | 重启时 |
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化 | worker 重启后 |
-| 孤儿索引 | L2 按需加载时清理 | 用户访问时 |
+| 孤儿索引 | `ov reindex <uri> --mode prune_orphans`（可先加 `--dry-run` 预览） | 手动执行时 |
 
 ## 配置
 
@@ -502,7 +464,7 @@ Redis 配置：
 
 ### QueueFS 持久化
 
-路径锁机制依赖 QueueFS 使用 SQLite 后端，确保 enqueue 的任务在进程重启后可恢复。这是默认配置，无需手动设置。
+重启恢复要求队列内容已持久化。QueueFS 默认使用 SQLite；使用 cache 后端时，持久性取决于所配置的 Provider。memory 后端不保留进程退出后的任务。
 
 ## 相关文档
 

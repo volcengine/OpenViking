@@ -80,6 +80,8 @@ compatibility.
 
 **CLI**
 
+`ov chat` streams by default through `/chat/stream`.
+
 ```bash
 ov chat -m "Summarize my project progress"
 ```

@@ -92,11 +92,13 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
 
 **安装**：在 AstrBot WebUI → 插件市场搜索 **OpenViking Memory** 并安装；或从链接安装：`https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
 
+当前插件要求 AstrBot 4.23.1+ 和兼容的 OpenViking 服务。`global` 使用 User Key；`venue` 需要 Admin Key 创建用户。迁移旧配置前，先核对上方插件 README。
+
 **主要特性**：
 
 - 基于 hooks 的自动召回与捕获，模型不需要主动调用工具
-- 三档隔离模式：`venue_user`（群/私聊各自独立）、`venue_user_fanout`（跨群共享）、`global_user`（全局共享）
-- 四触发器自动 commit：消息计数、token 阈值、空闲超时、进程退出 flush
+- `self_scope=global` 共用一个 Bot 身份，`venue` 为群/私聊分别创建用户；每个人以 peer 表示。旧版 `isolation_mode` 会映射到这两种范围。
+- 按消息数、token 阈值或空闲超时自动 commit
 - 首次接入群聊时自动拉取平台历史消息入库
 
 ## Open WebUI tool server

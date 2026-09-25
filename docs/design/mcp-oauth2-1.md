@@ -1,5 +1,7 @@
 # OpenViking 原生 OAuth 2.1（MCP 客户端授权）实施方案
 
+> **现行操作入口：** 安装、授权和验证请使用 [OAuth 指南](../zh/guides/11-oauth.md)。下文保留早期 Console、OTP 与 ROOT 授权方案作历史记录，不能直接作为当前版本的部署命令。
+
 > **更新（Studio 迁移）**：本文档保留 Phase 1 的设计与术语作为历史记录。当前
 > 默认授权 UI 已经从独立的 `/console` (端口 8020) 迁移到主服务上的 OpenViking
 > Studio（同源、挂载在 `/studio`）。要点：

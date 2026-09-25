@@ -221,7 +221,7 @@ docs = retriever.invoke("What did the user decide about deployment?")
 ### Context backend
 
 ```python
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_openviking import with_openviking_context
 
@@ -230,7 +230,10 @@ with with_openviking_context(
     url="http://localhost:1933",
     api_key="...",
 ) as chain:
-    result = chain.invoke(...)
+    result = chain.invoke(
+        [HumanMessage(content="Remember that I prefer short answers")],
+        config={"configurable": {"session_id": "support-thread-1"}},
+    )
 ```
 
 ### Agent tools

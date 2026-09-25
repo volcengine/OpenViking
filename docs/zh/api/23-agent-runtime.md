@@ -22,6 +22,8 @@ Agent Runtime Server 负责执行 Agent 任务，当前支持 Compile。应用�
 
 `args` 整体可省略，模型 Endpoint ID 也不是顶层字段。需要指定模型时使用 `args.model_name`；不传时由执行端使用其默认模型配置。
 
+下面的模型选择示例要求执行端支持 `args.model_name`。使用内置 VikingBot 时，省略 `args` 和 CLI 的 `--args`，它不接受非空扩展参数。Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时需 `await compile()`。
+
 **HTTP API**
 
 ```http
@@ -32,6 +34,7 @@ POST /api/v1/compile
 curl -X POST http://localhost:1933/api/v1/compile \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
+  -H "Idempotency-Key: studio-compile-001" \
   -d '{
     "from": ["viking://resources/research"],
     "to": "viking://resources/research-wiki",
@@ -151,13 +154,13 @@ curl http://localhost:1933/api/v1/compile/submissions/studio-compile-001 \
   -H "X-API-Key: your-key"
 ```
 
-返回 `200 OK`，其中 `status` 为 `"ok"`，`result` 为已有的 OV 任务记录，结构与上方创建任务响应一致。查询范围限定为当前账号和用户，不会创建任务。提交不存在（包括键仅被其他用户使用）时返回 `404`；键格式不合法时返回 `422`。
+返回 `200 OK`，其中 `status` 为 `"ok"`，`result` 为已有的 OV 任务记录，结构与上方创建任务响应一致。查询范围限定为当前账号和用户，不会创建任务。提交不存在（包括键仅被其他用户使用）时返回 `404`；键格式不合法时返回 `400 INVALID_ARGUMENT`。
 
 需要安全重试创建请求时，应复用相同的 `Idempotency-Key` 和请求参数。使用同一键提交不同参数会返回 `409`。未传入该请求头的创建请求，不提供用于此查询的提交键。
 
 ### 查询任务
 
-任务仅对创建它的 principal 可见；任务不存在或属于其他 principal 时均返回 `404`。
+普通用户只能查询自己创建的任务；任务不存在或属于其他用户时均返回 `404`。ROOT 查询使用独立的管理可见范围，且不能取消任务。
 
 ```http
 GET /api/v1/tasks/{task_id}

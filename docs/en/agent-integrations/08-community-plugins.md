@@ -95,11 +95,13 @@ Provides auto-capture of group/DM conversations, semantic recall before each LLM
 
 **Install**: In AstrBot WebUI, search **OpenViking Memory** in the Plugin Marketplace; or install from URL: `https://github.com/t0saki/astrbot_plugin_openviking_memory.git`
 
+The current plugin requires AstrBot 4.23.1+ and a compatible OpenViking server. Use a User key for `global`; `venue` needs an Admin key to create users. Check the linked plugin README before migrating an older configuration.
+
 **Key features**:
 
 - Auto-recall and auto-capture via hooks — the model doesn't need to invoke tools
-- Three isolation modes: `venue_user` (per-group/DM), `venue_user_fanout` (cross-venue sharing), `global_user` (single user)
-- Four auto-commit triggers: message count, token threshold, idle timeout, and process-exit flush
+- `self_scope=global` shares one bot identity; `venue` creates a separate user per group/DM. People are represented as peers. Legacy `isolation_mode` values are mapped to these scopes.
+- Automatic commit by message count, token threshold, or idle timeout
 - Backfills platform message history on first venue encounter
 
 ## Open WebUI tool server

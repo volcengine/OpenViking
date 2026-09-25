@@ -4,7 +4,9 @@ WebDAV provides file-protocol access to the `resources` namespace.
 
 **Code entry point**: `openviking/server/routers/webdav.py`
 
-## WebDAV (Phase 1)
+<a id="webdav-phase-1"></a>
+
+## Supported operations
 
 OpenViking Server also exposes a minimal WebDAV adapter for resource files:
 
@@ -12,7 +14,7 @@ OpenViking Server also exposes a minimal WebDAV adapter for resource files:
 /webdav/resources
 ```
 
-Phase 1 intentionally keeps the scope narrow:
+The adapter supports the following scope:
 
 - Resources only. Memories, skills, sessions, and other namespaces are not exposed.
 - Text-first writes. `PUT` currently accepts UTF-8 text content only.
@@ -43,7 +45,7 @@ Except for `OPTIONS`, WebDAV requests use the same authentication headers as oth
 
 | Header | Methods | Required | Description |
 |--------|---------|----------|-------------|
-| `X-API-Key` | All except `OPTIONS` | Yes | OpenViking API key |
+| `X-API-Key` | All except `OPTIONS` | Depends on auth mode | OpenViking API key; trusted mode may also require identity headers |
 | `Depth` | `PROPFIND` | No | `0` returns only the target; other values use one level |
 | `Destination` | `MOVE` | Yes | Target path below `/webdav/resources` |
 | `Overwrite` | `MOVE` | No | Defaults to `T`; set `F` to preserve an existing target |

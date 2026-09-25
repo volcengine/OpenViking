@@ -14,7 +14,7 @@
 
 ## Step 2: Verify
 
-1. Start Codex. The first launch stops on a hook trust prompt — pick **Trust all and continue**:
+1. Start Codex. The first launch shows a hook review prompt similar to this (exact layout varies by version); pick **Trust all and continue**:
 
    ```text
    Hooks need review
@@ -26,26 +26,17 @@
      3. Continue without trusting (hooks won't run)
    ```
 
-   The six hooks OpenViking registers are (an older Codex may show fewer):
-
-   ```text
-   SessionStart
-   UserPromptSubmit
-   PreToolUse
-   Stop
-   SessionEnd
-   PreCompact
-   ```
-
-2. If you miss the prompt or pick the third option, the hooks never run. Enter `/hooks` to trust and enable the entries, and check `/plugins` shows `openviking-memory` as enabled — two independent switches, both have to be on. A plugin update that touches a hook asks for trust again.
-
-3. Verify Profile loading: once trusted, submit your first Prompt. Any prompt is fine. The plugin should load your Profile automatically. If the beginning of the conversation contains recalled memory context, the integration is working:
+   If you skipped it or picked option 3, open `/hooks`. Review the OpenViking commands, then trust and enable the hooks you intend to use. In `/plugins`, confirm that `openviking-memory` is enabled. New or changed hooks require another review.
+2. Confirm that OpenViking MCP tools are available, then ask Codex to call `health` and `list`. This verifies tool access; automatic recall also requires `UserPromptSubmit`, and capture requires `Stop`.
+3. In a workspace with saved memories, ask about previously stored information and check the hook output or debug log. Recalled context looks similar to this:
 
    ```text
    • UserPromptSubmit hook (completed)
      hook context: <openviking-context source="auto-recall" format="digest">
        OpenViking memory digest:
    ```
+
+   An empty new account may have no profile or relevant memories to inject. See the full guide for lifecycle commits and a complete memory check.
 
 ## Troubleshoot
 

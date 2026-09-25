@@ -1,6 +1,6 @@
 # Context Layers (L0/L1/L2)
 
-OpenViking uses a three-layer information model to balance retrieval efficiency, navigation, and full-content fidelity.
+OpenViking uses abstracts and overviews to locate content, then loads the body when more detail is needed. These three layers are called L0, L1, and L2.
 
 ## Overview
 
@@ -50,11 +50,11 @@ This directory covers the primary API authentication methods.
 overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
-L0 is extracted from the L1 body: the Brief Description paragraph after the H1 title and before the first `##` heading. YAML frontmatter is not part of this extraction.
+When generating resource-directory summaries, L0 is extracted from the L1 body: the Brief Description paragraph after the H1 title and before the first `##` heading. YAML frontmatter is not part of this extraction.
 
 ## L2: Detail
 
-L2 is the original or fully parsed content, loaded only when needed and retaining its source format and structure.
+L2 is the original file or parsed body, loaded as needed. Its format depends on ingestion: a PDF may become Markdown, for example, so the source format is not necessarily preserved.
 
 ```python
 content = client.read(uri="viking://resources/docs/auth/oauth.md")
@@ -146,7 +146,7 @@ API authentication guide covering OAuth 2.0, JWT tokens, and API keys.
 - `unsampled_entries`: direct entries not sampled, with `sampled + unsampled = total`.
 - `pending_child_changes`: direct-child change events not yet reflected in the current body (repeated changes to one child count separately).
 
-When the direct-entry count exceeds `semantic.overview_sample_limit` (32 by default), OpenViking uses deterministic, order-preserving stable sampling. Repeated refreshes of an unchanged tree choose the same sample, avoiding noisy body rewrites and Git diffs.
+When the direct-entry count exceeds `semantic.overview_sample_limit` (32 by default), OpenViking uses deterministic, order-preserving stable sampling. Repeated refreshes of an unchanged tree choose the same sample, reducing differences caused by sampling. Model-generated text can still change between refreshes.
 
 `pending_child_changes > 0` means the body is still readable but is known to lag behind lower-level changes. A successful parent refresh resets the value to 0 as part of the new coverage metadata.
 

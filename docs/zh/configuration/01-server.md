@@ -19,6 +19,8 @@ openviking-server --config /path/to/ov.conf
 
 ## 配置结构
 
+下面只展示常用顶层分组，不是可直接运行的完整配置。首次启动可从本页的[最小示例](#最小示例)开始，填写实际模型与凭据；后续示例中的片段应合并到同一个 `ov.conf`。
+
 ```json
 {
   "embedding": {},
@@ -46,7 +48,7 @@ openviking-server --config /path/to/ov.conf
 | `default_user` | string | `"default"` | Service context 使用的默认用户 |
 | `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
-| `query_planner` | object / `null` | `null` | 检索意图分析模型；未配置时回退到 `vlm` |
+| `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写只在配置了 `query_planner` 时运行 |
 | `rerank` | object | disabled | 检索结果重排模型 |
 | `retrieval` | object | 见下表 | 检索排序和意图分析策略 |
 | `grep` | object | 内置默认值 | 文本搜索引擎配置 |
@@ -351,13 +353,15 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
-| `custom_templates_dir` | path | `""` | 附加的自定义记忆模板目录 |
+| `custom_templates_dir` | path | `""` | 自定义记忆模板目录；同名 `memory_type` 覆盖已加载模板 |
 | `experimental_memory_switch` | boolean | `false` | 是否启用实验性记忆模板 |
 | `eager_prefetch` | boolean | `true` | 是否在抽取前预取并读取记忆内容 |
 | `prefetch_search_topn` | integer，`>= 1` | `5` | 预取时读取的检索结果数量 |
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
+
+自动提交还需要单独设置策略：记忆抽取开关不会让会话自动提交。详见[配置指南](../guides/01-configuration.md)的 `memory.session_auto_commit` 和[会话 API](../api/05-sessions.md)。模板目录的加载顺序和生效方式见 [Prompt 指南](../guides/10-prompt-guide.md)。
 
 ## 解析器配置
 

@@ -4,7 +4,7 @@ The Observer API reports immediate status for queues, the vector database, model
 
 ## Observer API
 
-The observer API provides detailed component-level monitoring.
+Python examples below use `SyncHTTPClient`. Observer accessors are properties returning dictionaries: use `client.observer.queue`, without parentheses. Each access makes a request; keep the result when reading several fields.
 
 ### observer.queue
 
@@ -37,13 +37,9 @@ curl -X GET http://localhost:1933/api/v1/observer/queue \
 **Python SDK**
 
 ```python
-print(client.observer.queue())
-# Output:
-# [queue] (healthy)
-# Queue                 Pending  In Progress  Processed  Errors  Total
-# Embedding             0        0            10         0       10
-# Semantic              0        0            10         0       10
-# TOTAL                 0        0            20         0       20
+status = client.observer.queue
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -78,8 +74,7 @@ ov observer queue
     "is_healthy": true,
     "has_errors": false,
     "status": "Queue                 Pending  In Progress  Processed  Errors  Total\nEmbedding             0        0            10         0       10\nSemantic              0        0            10         0       10\nTOTAL                 0        0            20         0       20"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -117,16 +112,9 @@ curl -X GET http://localhost:1933/api/v1/observer/vikingdb \
 **Python SDK**
 
 ```python
-print(client.observer.vikingdb())
-# Output:
-# [vikingdb] (healthy)
-# Collection  Index Count  Vector Count  Status
-# context     1            55            OK
-# TOTAL       1            55
-
-# Access specific attributes
-print(client.observer.vikingdb().is_healthy)  # True
-print(client.observer.vikingdb().status)      # Status table string
+status = client.observer.vikingdb
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -161,8 +149,7 @@ ov observer vikingdb
     "is_healthy": true,
     "has_errors": false,
     "status": "Collection  Index Count  Vector Count  Status\ncontext     1            55            OK\nTOTAL       1            55"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -172,7 +159,7 @@ ov observer vikingdb
 
 #### 1. API Implementation Overview
 
-Get aggregated model subsystem status (VLM, embedding, rerank). Checks if each model provider is healthy and available.
+Get model instance and token-usage information for VLM, embedding, and rerank. `is_healthy` indicates that at least one model instance exists; it does not probe every provider. Use `/ready` for the embedding connectivity probe and inspect actual request errors for other models.
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_models` - HTTP route
@@ -200,13 +187,9 @@ curl -X GET http://localhost:1933/api/v1/observer/models \
 **Python SDK**
 
 ```python
-print(client.observer.models())
-# Output:
-# [models] (healthy)
-# provider_model         healthy  detail
-# dense_embedding        yes      ...
-# rerank                 yes      ...
-# vlm                    yes      ...
+status = client.observer.models
+print(status["is_healthy"])
+print(status["status"])
 ```
 
 **TypeScript SDK**
@@ -240,9 +223,8 @@ ov observer models
     "name": "models",
     "is_healthy": true,
     "has_errors": false,
-    "status": "provider_model         healthy  detail\ndense_embedding        yes      ...\nrerank                 yes      ...\nvlm                    yes      ..."
-  },
-  "time": 0.1
+    "status": "No model usage data available."
+  }
 }
 ```
 
@@ -257,7 +239,6 @@ Get distributed lock system status.
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_lock` - HTTP route
 - `openviking/service/debug_service.py:ObserverService.lock` - Core implementation
-- `openviking/storage/observers/lock_observer.py` - Lock observer
 - `crates/ov_cli/src/commands/observer.rs` - CLI command
 
 #### 2. Interface and Parameters
@@ -289,8 +270,7 @@ The public SDKs and CLI do not currently expose a lock-specific observer method.
     "is_healthy": true,
     "has_errors": false,
     "status": "..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -300,7 +280,7 @@ The public SDKs and CLI do not currently expose a lock-specific observer method.
 
 #### 1. API Implementation Overview
 
-Get retrieval quality metrics.
+Get recorded query counts, result counts, scores, rerank use, and latency. These are diagnostic statistics, not a relevance evaluation. Empty results are valid and do not make the component unhealthy.
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_retrieval` - HTTP route
@@ -341,8 +321,7 @@ ov observer retrieval
     "is_healthy": true,
     "has_errors": false,
     "status": "..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -393,8 +372,7 @@ ov observer filesystem
     "is_healthy": true,
     "has_errors": false,
     "status": "..."
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -404,7 +382,7 @@ ov observer filesystem
 
 #### 1. API Implementation Overview
 
-Get overall system status, including all components (queue, vikingdb, models, lock, retrieval).
+Get overall system status, including all components (queue, vikingdb, models, lock, retrieval, filesystem).
 
 **Code Entry Points**:
 - `openviking/server/routers/observer.py:observer_system` - HTTP route
@@ -431,18 +409,9 @@ curl -X GET http://localhost:1933/api/v1/observer/system \
 **Python SDK**
 
 ```python
-print(client.observer.system())
-# Output:
-# [queue] (healthy)
-# ...
-#
-# [vikingdb] (healthy)
-# ...
-#
-# [models] (healthy)
-# ...
-#
-# [system] (healthy)
+status = client.observer.system
+print(status["is_healthy"])
+print(status["components"])
 ```
 
 **TypeScript SDK**
@@ -505,10 +474,15 @@ ov observer system
         "is_healthy": true,
         "has_errors": false,
         "status": "..."
+      },
+      "filesystem": {
+        "name": "filesystem",
+        "is_healthy": true,
+        "has_errors": false,
+        "status": "..."
       }
     }
-  },
-  "time": 0.1
+  }
 }
 ```
 
