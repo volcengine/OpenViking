@@ -8,25 +8,37 @@ description: Deploy VikingDB and OpenViking through configuration preview, Vikin
 
 Deploy VikingDB and OpenViking in your own Kubernetes cluster using the deployment package. Complete the [deployment checklist](19-deployment-checklist.md) first. For Python, Docker, or the open-source Helm chart, see [server deployment](03-deployment.md).
 
-## 1. Prepare materials and configuration directories
+## 1. Get materials and sync images
 
-After extracting the package, check `bin/ovadmin`, `viking-docs/`, and the delivery manifest. The ZIP contains the CLI and documentation; **it does not contain all runtime images**. If a `vikinglist` is supplied, it can download additional materials. Skip material downloads when images have already been synchronized.
+Deployment materials are available on request. Register your email through the [commercial editions form](https://github.com/volcengine/openviking/#commercial-editions). After review, the package download link and a trial license are sent to that email.
 
-Run these commands on the target deployment host. Replace all placeholders. `ovadmin` manages the deployment; `ov` is the application client CLI.
+After extracting the package, check `bin/ovadmin`, `viking-docs/`, and the delivery manifest. The package contains only the CLI and documentation. Download the runtime images listed in `vikinglist`, then import them into the customer Registry. Skip this section if the images are already in your Registry.
+
+Run these commands on the deployment host. Replace all placeholders. `ovadmin` manages the deployment; `ov` is the application client CLI.
 
 ```bash
 export VIKING_HOME=/opt/viking-deploy
 export CONFIG_DIR=/opt/viking-deploy/conf
+export MATERIAL_DIR=/opt/viking-deploy/materials
+export IMAGE_REGISTRY='<registry.example.com/team/viking>'
 export PATH="${VIKING_HOME}/bin:${PATH}"
 
 ovadmin version --output json
 
-# Only when downloading through a material manifest: review first
+# Download image archives into ${MATERIAL_DIR}/repo
 ovadmin material download --listfile "${VIKING_HOME}/vikinglist" \
-  --output-dir "${VIKING_HOME}/materials" --dry-run
+  --output-dir "${MATERIAL_DIR}"
+
+# Log in to the Registry first (docker login or skopeo login), then import and verify
+ovadmin material import-registry --repo-dir "${MATERIAL_DIR}/repo" \
+  --registry "${IMAGE_REGISTRY}"
+ovadmin material check-registry --listfile "${VIKING_HOME}/vikinglist" \
+  --image-registry "${IMAGE_REGISTRY}"
 ```
 
-After reviewing the download plan, remove `--dry-run` to fetch materials, then import images into the customer Registry following the package manual. Isolated environments also require import tools, infrastructure dependencies, model services, and a license renewal / telemetry return plan. Downloading the ZIP alone does not make the system offline-ready.
+Download URLs in `vikinglist` are signed and expire. If you get `HTTP 403`, ask the delivery team for a fresh list. If the deployment host cannot reach the URLs, download on a connected machine and copy the `repo` directory over. Continue once `check-registry` reports no missing images.
+
+Isolated environments also need infrastructure dependencies, model services, and a license renewal / telemetry return plan. Having the images in place does not make the system fully offline-ready.
 
 ## 2. Generate and edit configuration
 
@@ -34,7 +46,7 @@ After reviewing the download plan, remove `--dry-run` to fetch materials, then i
 ovadmin init config \
   --dir "${CONFIG_DIR}" \
   --profile cluster \
-  --image-registry '<registry.example.com/team/viking>' \
+  --image-registry "${IMAGE_REGISTRY}" \
   --image-pull-secret viking-registry-secret \
   --openviking-storage-class '<storage-class-name>'
 ```
@@ -52,7 +64,15 @@ Edit the generated configuration before deploying:
 
 The full image prefix includes the repository path. Use Operator image names from the manifest: this release uses `vikingdb_operator` and `openviking_operator`, with underscores. Use tags from the delivery set, not old example tags.
 
-Check namespaces, external Secret / ConfigMap references, node labels, and StorageClass. Complete dependency initialization using the bundled infrastructure requirements. Run preflight checks and initialize pull Secrets for namespaces configured in the delivery:
+Label nodes for scheduling. `cluster` needs at least 2 online nodes and 1 offline node; `standalone` schedules components on online nodes.
+
+```bash
+kubectl label node '<node-name>' nodeLevel=online --overwrite
+kubectl label node '<offline-node-name>' nodeLevel=offline --overwrite
+kubectl get nodes -L nodeLevel
+```
+
+Then check namespaces, external Secret / ConfigMap references, and StorageClass. Complete dependency initialization using the bundled infrastructure requirements. Run preflight checks and initialize pull Secrets for namespaces configured in the delivery:
 
 ```bash
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" check
@@ -73,12 +93,19 @@ ovadmin -c "${CONFIG_DIR}/ovadmin.conf" setup apply \
   --module vikingdb --dir "${CONFIG_DIR}" --yes
 ```
 
-When licensing is enabled, the first apply may exit while waiting for License Active. Before importing, the `VikingDbCluster` CRD and target CR must exist, and the Operator must have completed its first status synchronization. Import the license bound to this cluster using the package's licensing procedure, then repeat apply with the same configuration:
+When licensing is enabled, the first apply may exit while waiting for License Active. By then the `VikingDbCluster` CR exists. After the Operator completes its first status sync, generate a fingerprint for this cluster, send it to the license issuer for a `.vlic`, import it, and repeat apply with the same configuration:
 
 ```bash
-ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license import --file '<license.vlic>'
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license fingerprint \
+  --system-namespace viking-system --out fingerprint.json
+
+# After receiving a .vlic issued for this cluster's fingerprint
+ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license import \
+  --system-namespace viking-system --file '<license.vlic>'
 ovadmin -c "${CONFIG_DIR}/ovadmin.conf" license status
 ```
+
+The `.vlic` must be issued from this cluster's `fingerprint.json`. A fingerprint from another cluster, or an edited file, fails verification.
 
 Skip licensing steps when licensing is disabled. Verify VikingDB before proceeding:
 
