@@ -47,32 +47,88 @@ describe('experience listing server pagination', () => {
   })
 
   it('does not skip lookahead records between pages', async () => {
-    get.mockResolvedValueOnce([file('a.md'), file('b.md'), file('c.md')])
-    get.mockResolvedValueOnce([file('c.md'), file('d.md')])
+    get.mockImplementation((request?: { query: { offset: number } }) => {
+      const query = request?.query ?? { offset: -1 }
+      if (query.offset === 2) {
+        return Promise.resolve([file('c.md'), file('d.md')])
+      }
+      return Promise.resolve([file('a.md'), file('b.md'), file('c.md')])
+    })
     await fetchExperiences({ experiencesUri, page: 1, pageSize: 2 })
     const last = await fetchExperiences({
       experiencesUri,
       page: 2,
       pageSize: 2,
     })
-    expect(get.mock.calls[1][0].query.offset).toBe(2)
+    expect(get.mock.calls[2][0].query.offset).toBe(2)
     expect(last.items.map((item) => item.name)).toEqual(['c.md', 'd.md'])
     expect(last.hasMore).toBe(false)
   })
 
-  it('applies pagination to raw entries before filtering out directories', async () => {
-    get.mockResolvedValue([
-      { ...file('folder'), isDir: true },
-      file('a.md'),
-      file('b.md'),
-    ])
+  it('fills a page after a full directory-only page', async () => {
+    const entries = [
+      ...Array.from({ length: 25 }, (_, index) => ({
+        ...file(`folder-${index}`),
+        isDir: true,
+      })),
+      ...Array.from({ length: 20 }, (_, index) =>
+        file(`experience-${index}.md`),
+      ),
+    ]
+    get.mockImplementation(
+      (
+        { query }: { query: { limit: number; offset: number } } = {
+          query: { limit: 0, offset: -1 },
+        },
+      ) =>
+        Promise.resolve(
+          entries.slice(query.offset, query.offset + query.limit),
+        ),
+    )
+
     const result = await fetchExperiences({
       experiencesUri,
       page: 1,
+      pageSize: 10,
+    })
+
+    expect(result.items.map((item) => item.name)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `experience-${index}.md`),
+    )
+    expect(result.hasMore).toBe(true)
+    expect(get).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ offset: 22, limit: 11 }),
+      }),
+    )
+  })
+
+  it('keeps later pages aligned when directories precede the files', async () => {
+    const entries = [
+      { ...file('folder'), is_dir: true },
+      file('a.md'),
+      file('b.md'),
+      file('c.md'),
+    ]
+    get.mockImplementation(
+      (
+        { query }: { query: { offset: number } } = { query: { offset: -1 } },
+      ) => {
+        if (query.offset === 0) return Promise.resolve(entries.slice(0, 3))
+        if (query.offset === 2) return Promise.resolve(entries.slice(2))
+        if (query.offset === 3) return Promise.resolve([entries[3]])
+        return Promise.resolve([])
+      },
+    )
+
+    const result = await fetchExperiences({
+      experiencesUri,
+      page: 2,
       pageSize: 2,
     })
-    expect(result.items.map((item) => item.name)).toEqual(['a.md'])
-    expect(result.hasMore).toBe(true)
+
+    expect(result.items.map((item) => item.name)).toEqual(['c.md'])
+    expect(result.hasMore).toBe(false)
   })
 
   it('allows an empty later page without inventing a total', async () => {

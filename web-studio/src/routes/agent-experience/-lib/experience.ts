@@ -55,7 +55,7 @@ export function normalizeExperienceFiles(value: unknown): ExperienceFileItem[] {
 
   return value.flatMap((raw) => {
     const entry = isRecord(raw) ? raw : null
-    if (!entry || entry.isDir === true) return []
+    if (!entry || entry.isDir === true || entry.is_dir === true) return []
     const name = readString(entry.name)
     const uri = readString(entry.uri)
     if (!name || !uri) return []

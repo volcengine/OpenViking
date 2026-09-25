@@ -10,6 +10,7 @@ import {
   getExperienceDisplayName,
   isExperienceUpdatedSinceLastSeen,
   markExperiencesSeen,
+  normalizeExperienceFiles,
   normalizeOutcomeDistribution,
   normalizeTrajectoryPage,
   resolveTimeRange,
@@ -59,6 +60,25 @@ describe('getExperienceDisplayName', () => {
     expect(
       getExperienceDisplayName('viking://user/default/memories/experiences/x'),
     ).toBe('x')
+  })
+})
+
+describe('normalizeExperienceFiles', () => {
+  it('recognizes both directory field spellings from fs/ls', () => {
+    expect(
+      normalizeExperienceFiles([
+        { name: 'camel', uri: 'viking://camel', isDir: true },
+        { name: 'snake', uri: 'viking://snake', is_dir: true },
+        { name: 'file', uri: 'viking://file' },
+      ]),
+    ).toEqual([
+      {
+        name: 'file',
+        uri: 'viking://file',
+        modTime: undefined,
+        size: undefined,
+      },
+    ])
   })
 })
 

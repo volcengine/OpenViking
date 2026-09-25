@@ -16,7 +16,38 @@ import type {
   TrajectoryPage,
 } from './types'
 
-/** Fetch one page; the extra raw entry determines whether another page exists. */
+async function fetchExperienceEntries(options: {
+  experiencesUri: string
+  offset: number
+  limit: number
+  signal?: AbortSignal
+}): Promise<unknown[]> {
+  const { experiencesUri, offset, limit, signal } = options
+  const result = await getOvResult<unknown>(
+    ovClient.client.get({
+      query: {
+        limit,
+        offset,
+        output: 'original',
+        sort_by: 'mtime',
+        sort_order: 'desc',
+        uri: experiencesUri,
+      },
+      signal,
+      url: '/api/v1/fs/ls',
+    }),
+  )
+  if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+  return result
+}
+
+function isDirectoryEntry(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entry = value as Record<string, unknown>
+  return entry.isDir === true || entry.is_dir === true
+}
+
+/** Fetch a file page without letting directory entries consume its slots. */
 export async function fetchExperiences(options: {
   experiencesUri: string
   page: number
@@ -25,24 +56,52 @@ export async function fetchExperiences(options: {
 }): Promise<ExperiencePage> {
   const { experiencesUri, page, pageSize, signal } = options
   try {
-    const result = await getOvResult<unknown>(
-      ovClient.client.get({
-        query: {
-          limit: pageSize + 1,
-          offset: (page - 1) * pageSize,
-          output: 'original',
-          sort_by: 'mtime',
-          sort_order: 'desc',
-          uri: experiencesUri,
-        },
+    const rawPageSize = pageSize + 1
+    const firstEntries = await fetchExperienceEntries({
+      experiencesUri,
+      offset: 0,
+      limit: rawPageSize,
+      signal,
+    })
+
+    if (firstEntries.length === 0 || !isDirectoryEntry(firstEntries[0])) {
+      const entries =
+        page === 1
+          ? firstEntries
+          : await fetchExperienceEntries({
+              experiencesUri,
+              offset: (page - 1) * pageSize,
+              limit: rawPageSize,
+              signal,
+            })
+      return {
+        items: normalizeExperienceFiles(entries.slice(0, pageSize)),
+        hasMore: entries.length > pageSize,
+        page,
+        pageSize,
+      }
+    }
+
+    const start = (page - 1) * pageSize
+    const end = page * pageSize
+    const files = normalizeExperienceFiles(firstEntries)
+    let entries = firstEntries
+    let rawOffset = entries.length
+
+    while (files.length <= end && entries.length === rawPageSize) {
+      entries = await fetchExperienceEntries({
+        experiencesUri,
+        offset: rawOffset,
+        limit: rawPageSize,
         signal,
-        url: '/api/v1/fs/ls',
-      }),
-    )
-    if (!Array.isArray(result)) throw new Error('Invalid fs/ls response')
+      })
+      rawOffset += entries.length
+      files.push(...normalizeExperienceFiles(entries))
+    }
+
     return {
-      items: normalizeExperienceFiles(result.slice(0, pageSize)),
-      hasMore: result.length > pageSize,
+      items: files.slice(start, end),
+      hasMore: files.length > end,
       page,
       pageSize,
     }
