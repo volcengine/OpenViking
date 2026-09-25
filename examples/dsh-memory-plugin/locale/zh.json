@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "OpenViking 记忆",
+    "description": "为 DeepSeek Harness 提供长期语义记忆：每步自动召回、会话采集与提交、viking:// URI 保护，以及 OpenViking MCP 工具与技能。"
+  }
+}

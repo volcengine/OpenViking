@@ -1,13 +1,17 @@
 {
   "name": "@openviking/dsh-memory-plugin",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
+  "icon": "./icon.svg",
   "type": "module",
   "main": "index.mjs",
   "exports": {
-    ".": "./index.mjs"
+    ".": "./index.mjs",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
+    "icon.svg",
     "index.mjs",
     "client.mjs",
     "config.mjs",
@@ -21,6 +25,7 @@
     "servers/",
     "shared/",
     "skills/",
+    "locale/",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -37,9 +42,9 @@
     "prepublishOnly": "npm run prepack && npm run check && npm test"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1",
-    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1"
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2",
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-llm": "0.1.0-rc.6",

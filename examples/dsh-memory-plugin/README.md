@@ -34,7 +34,7 @@ It also needs `node examples/memory-plugin-shared/sync.mjs` run first: the
 
 ## Requirements
 
-- `@deepseek-ai/dsh` `0.1.0-rc.6`, `0.1.5-rc.1`, or `0.1.5-rc.2`; stable `0.1.x` releases are also admitted by the peer range
+- `@deepseek-ai/dsh` `0.1.0-rc.6`, `0.1.5-rc.1`, `0.1.5-rc.2`, or `0.1.7-rc.2`; stable `0.1.x` releases are also admitted by the peer range
 - Node.js `^22.19.0` or `>=24`
 - A reachable OpenViking server
 
@@ -48,9 +48,10 @@ individual DSH core packages to the profile. DSH initializes profiles with
 available through its module fallback at boot. A missing-peer warning during
 `dsh plugin add` alone does not prove startup is broken.
 
-The peer range is `>=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1`. The second clause
-explicitly admits the `0.1.5` release candidates: semver does not include them
-in the first clause merely because they compare above `0.1.0-rc.6`. Other
+The peer range is `>=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2`. Each
+pre-release clause admits one series explicitly: semver does not include a
+release candidate in the first clause merely because it compares above
+`0.1.0-rc.6`, so every verified pre-release series is listed on its own. Other
 pre-release series need separate verification. Local devDependencies and
 `overrides` stay pinned to rc.6 to exercise the minimum supported contract.
 
