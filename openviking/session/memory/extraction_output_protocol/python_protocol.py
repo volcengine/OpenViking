@@ -75,7 +75,7 @@ _CONTRACT_PREAMBLE = (
     "The SDK is write-only. To inspect memories, call the native search/read tools before returning the program; never emit sdk.search(), sdk.read(), or sdk.existing() (only the system binds existing objects).",
     "Never return memory content as bare Markdown; all changes must be arguments to SDK calls.",
     "Existing objects shown by the system may use obj.update(field=value, ...) to set complete "
-    "scalar/immutable fields, obj.delete(replacement=None),",
+    "scalar/immutable fields,",
     "and, when links are enabled, obj.link(target, link_type='related_to', weight=0.5, match_text=None, description='').",
     "To change an existing string field, edit it through the object's field attribute. Use the "
     "real field name (e.g. content), NOT the literal word 'field':",
@@ -95,10 +95,9 @@ _CONTRACT_PREAMBLE = (
     "Only keyword arguments are accepted by create, set, and obj.update(); a field's update() takes one positional string. Unknown business fields are ignored.",
     "You may end the program with sdk.commit(); when present it must be the final call. If there are no changes, return only sdk.commit().",
     "Use the system-provided existing-object variable names exactly as shown. When a newly "
-    "created memory must be referenced by delete(replacement=...) or link(...), assign the "
-    "create call to a variable first, for example: canonical = sdk.create_<type>(...); "
-    "duplicate_1.delete(replacement=canonical). Never recreate or rebind an existing object "
-    "with sdk.existing().",
+    "created memory must be referenced by another permitted operation, assign the create call "
+    "to a variable first, for example: canonical = sdk.create_<type>(...). Never recreate or "
+    "rebind an existing object with sdk.existing().",
     "",
     "Available write methods for this extraction:",
 )
@@ -173,6 +172,13 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         lines = list(_CONTRACT_PREAMBLE)
         for schema in context.schemas:
             lines.extend(self._render_schema_contract(context, schema))
+        if any(schema.operation_mode != "add_only" for schema in context.schemas):
+            lines.append(
+                "For memory types that permit deletion only: when merging a duplicate into a "
+                "new canonical object of the same type, assign the create/set call to canonical "
+                "first, then use duplicate_1.delete(replacement=canonical). For pure deletes, "
+                "call duplicate_1.delete() without a replacement."
+            )
         if not context.link_enabled:
             lines.append("Links are disabled; obj.link(...) is unavailable.")
         else:
@@ -198,6 +204,17 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             f"  - Identity fields (primary key): {identity_label}. Calls with identical "
             "identity field values address the same memory object.",
         ]
+        if schema.operation_mode == "add_only":
+            lines.append(
+                f"  - {type_alias}: operation_mode=add_only; delete() is unavailable, including "
+                "delete(replacement=...). Do not delete these objects for forgetting, "
+                "deduplication, or replacement requests."
+            )
+        else:
+            lines.append(
+                f"  - {type_alias}: delete(replacement=None) is allowed on existing objects; "
+                "a replacement must be a different memory object of the same type."
+            )
         operation_field = context.operations_model.model_fields.get(schema.memory_type)
         schema_description = getattr(operation_field, "description", None)
         if schema_description:
@@ -257,17 +274,29 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         return lines
 
     def render_reference_rules(self, context: ExtractionOutputContext) -> str:
-        del context
-        return """
+        rules = """
 ## Memory Object Rules
-- Update or delete an existing memory only through its system-provided bound object; never pass or construct a URI.
+- Update an existing memory only through its system-provided bound object; never pass or construct a URI.
 - Create collection memories with listed sdk.create_<memory_type>(...) methods.
 - Set a single-file memory with its listed sdk.set_<memory_type>(...) method; each target scope has only one such object.
 - Existing-object identity, storage paths, and immutable fields are preserved by the system.
-- delete() removes the whole object; use obj.content.drop(text=...) (with the real field name) when only some content must go and the rest stays.
-- For canonical merges, use duplicate.delete(replacement=canonical); for pure deletes, call delete() without replacement.
-- delete(replacement=canonical) discards the duplicate's content entirely and keeps only the canonical. Before deleting a duplicate, first fold every distinct valid fact it holds into the canonical (e.g. canonical.content.edit(...)); merging or compacting must never drop a unique fact that only the duplicate recorded.
+- Being returned by search/read does not grant deletion permission; follow each memory type's operation_mode in the contract.
 """
+        deletable_types = [
+            _identifier_alias(schema.memory_type)
+            for schema in context.schemas
+            if schema.operation_mode != "add_only"
+        ]
+        if not deletable_types:
+            return rules + "- No selected memory type permits delete().\n"
+        return (
+            rules
+            + f"- Deletion is allowed only for existing objects of: {', '.join(deletable_types)}.\n"
+            + """- Delete a permitted existing memory only through its system-provided bound object.
+- For these deletable types, delete() removes the whole object; use obj.content.drop(text=...) (with the real field name) when only some content must go and the rest stays.
+- delete(replacement=canonical) discards the duplicate's content entirely and keeps only the canonical. Before deleting a permitted duplicate, first fold every distinct valid fact it holds into the canonical (e.g. canonical.content.edit(...)); merging or compacting must never drop a unique fact that only the duplicate recorded.
+"""
+        )
 
     def parse(
         self, content: str, context: ExtractionOutputContext
@@ -297,12 +326,20 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         tool_guidance = ""
         binding_guidance = ""
         quote_guidance = ""
+        delete_guidance = ""
         if error and "sdk.existing() is reserved" in error:
             binding_guidance = (
                 " Use the existing-object variable names already supplied by the system; do not "
-                "emit sdk.existing(). If a new object is the replacement, assign its create call "
-                "first, for example `canonical = sdk.create_<type>(...)`, then call "
-                "`duplicate_1.delete(replacement=canonical)`."
+                "emit sdk.existing(). If a new object needs to be referenced, assign its create "
+                "call first, for example `canonical = sdk.create_<type>(...)`, then use only "
+                "operations permitted for that memory type."
+            )
+        if error and "delete() is unavailable" in error and "add_only" in error:
+            delete_guidance = (
+                " Remove delete() calls for the named add_only memory type, including calls with "
+                "replacement=. Preserve those existing objects; a forget or deduplication request "
+                "does not override this restriction. Keep the other valid operations in the "
+                "regenerated program."
             )
         if error and _is_string_literal_syntax_error(error):
             quote_guidance = (
@@ -320,7 +357,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             )
         return (
             "Your previous output was not a valid restricted Python memory SDK program."
-            f"{detail}{tool_guidance}{binding_guidance}{quote_guidance} Regenerate the complete "
+            f"{detail}{tool_guidance}{binding_guidance}{quote_guidance}{delete_guidance} Regenerate the complete "
             "program and output no explanation. "
             "Put Markdown memory content inside quoted SDK arguments, using triple-quoted strings "
             '("""...""") for any multi-line or Markdown text so newlines and quotes stay inside '
@@ -560,7 +597,9 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             "output ONLY a JSON object (no extra text before or after)": "follow the output contract below",
             "output only JSON that matches the schema descriptions": "follow the output contract below",
             "Do NOT use `delete_ids`": "Do NOT call `delete()`",
-            "put it in delete_ids": "delete it through its bound memory object",
+            "put it in delete_ids": (
+                "only if its memory type permits deletion, delete it through its bound memory object"
+            ),
         }
         for old, new in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
             instruction = instruction.replace(old, new)
@@ -1006,7 +1045,11 @@ class _PythonProgramCompiler:
             if not owner.existing:
                 self._error(node, "a memory created in this program cannot be deleted")
             if self.schemas[owner.memory_type].operation_mode == "add_only":
-                self._error(node, "delete() is unavailable for the selected memory schemas")
+                self._error(
+                    node,
+                    f"delete() is unavailable for memory type {owner.memory_type!r} "
+                    f"(operation_mode=add_only; object {owner.name!r})",
+                )
             replacement = kwargs.get("replacement")
             if replacement is not None and not isinstance(replacement, _MemoryObject):
                 self._error(node, "delete replacement must be a memory object")

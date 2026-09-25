@@ -191,6 +191,87 @@ def test_python_contract_includes_link_rules_when_enabled():
     assert "assign the create/set call to a variable first" in contract
 
 
+@pytest.mark.parametrize("include_preferences", [False, True])
+def test_python_builtin_events_delete_policy_matches_parser(include_preferences):
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.load_from_yaml(str(resolve_memory_templates_dir() / "events.yaml"))
+    event_schema = registry.get("events")
+    event = MemoryFile(
+        uri="viking://user/alice/memories/events/board_games.md",
+        memory_type="events",
+        content="Alice played board games with friends.",
+        extra_fields={"event_name": "board_games", "goal": "Socialize"},
+    )
+    schemas = [event_schema]
+    files = [event]
+    if include_preferences:
+        schemas.append(_preference_schema())
+        files.append(
+            _existing_preference(
+                "viking://user/alice/memories/preferences/games.md",
+                "games",
+                "Enjoys board games",
+            )
+        )
+    context = _context(schemas, files=files)
+    protocol = create_extraction_output_protocol("python")
+    contract = protocol.render_contract(context)
+    rules = protocol.render_reference_rules(context)
+    protocol.render_new_bindings(context, source="read after a forget request")
+
+    assert "events: operation_mode=add_only; delete() is unavailable" in contract
+    assert "Being returned by search/read does not grant deletion permission" in rules
+    if include_preferences:
+        assert "Deletion is allowed only for existing objects of: preferences." in rules
+        assert "preferences: delete(replacement=None) is allowed" in contract
+        assert "duplicate_1.delete(replacement=canonical)" in contract
+    else:
+        assert "No selected memory type permits delete()." in rules
+        assert "duplicate_1.delete(replacement=canonical)" not in contract
+        assert "For pure deletes" not in contract
+
+    # The observed failure: a forget request produces deletion of a read Event.
+    operations, error = protocol.parse("events_1.delete()\nsdk.commit()", context)
+    assert operations is None
+    assert "events" in error and "add_only" in error and "events_1" in error
+    retry = protocol.render_format_retry(error)
+    assert "Remove delete() calls for the named add_only memory type" in retry
+    assert "Preserve those existing objects" in retry
+
+    # Recovery does not weaken Event protection or disable valid deletions.
+    program = "preferences_1.delete()\nsdk.commit()" if include_preferences else "sdk.commit()"
+    operations, error = protocol.parse(program, context)
+    assert error is None
+    payload = operations.model_dump()
+    assert payload["events"] == []
+    if include_preferences:
+        assert payload["delete_ids"] == [{"delete_page_id": 2, "replacement_page_id": None}]
+
+
+def test_python_delete_policy_uses_schema_mode_not_builtin_type_name():
+    schema = _project_schema()
+    schema.operation_mode = "add_only"
+    context = _context([schema, _preference_schema()])
+    protocol = create_extraction_output_protocol("python")
+
+    assert "projects: operation_mode=add_only; delete() is unavailable" in protocol.render_contract(
+        context
+    )
+    assert "Deletion is allowed only for existing objects of: preferences." in (
+        protocol.render_reference_rules(context)
+    )
+
+
+def test_python_merge_instruction_qualifies_deletion_permission():
+    protocol = create_extraction_output_protocol("python")
+
+    instruction = protocol.normalize_provider_instruction(
+        "If it is a verified duplicate existing file, put it in delete_ids with the replacement."
+    )
+
+    assert "only if its memory type permits deletion" in instruction
+
+
 @pytest.mark.parametrize("language", ["en", "zh-CN"])
 @pytest.mark.parametrize(
     ("memory_type", "field_name"),
@@ -526,7 +607,7 @@ def test_python_contract_uses_set_for_single_file_schema_and_create_for_collecti
     assert "Current self identity: exactly one sdk.set_profile() call without peer_id" in contract
 
 
-def test_python_reserved_existing_retry_explains_new_replacement_binding():
+def test_python_reserved_existing_retry_explains_binding_without_generic_delete_example():
     protocol = create_extraction_output_protocol("python")
 
     retry = protocol.render_format_retry(
@@ -535,15 +616,14 @@ def test_python_reserved_existing_retry_explains_new_replacement_binding():
 
     assert "existing-object variable names already supplied by the system" in retry
     assert "canonical = sdk.create_<type>(...)" in retry
-    assert "duplicate_1.delete(replacement=canonical)" in retry
+    assert "permitted for that memory type" in retry
+    assert ".delete(" not in retry
 
 
 def test_python_string_literal_retry_pushes_triple_quotes():
     protocol = create_extraction_output_protocol("python")
 
-    retry = protocol.render_format_retry(
-        "Line 33: invalid syntax. Perhaps you forgot a comma?"
-    )
+    retry = protocol.render_format_retry("Line 33: invalid syntax. Perhaps you forgot a comma?")
 
     assert "offending line is shown above" in retry
     assert 'triple-quoted string ("""...""")' in retry
@@ -727,7 +807,7 @@ def test_python_syntax_error_includes_offending_source_line():
 
     assert error is not None
     assert "invalid Python syntax" in error
-    assert 'Little Women' in error
+    assert "Little Women" in error
     assert "^" in error
 
 
@@ -1683,7 +1763,7 @@ def test_python_rejects_fstring_width_format_spec():
     # A width format spec turns a small integer literal into a huge padded string
     # with no repeat operator; format specs are disallowed.
     operations, error = protocol.parse(
-        'sdk.set_profile(content=f"{\'x\':>1000001}")\nsdk.commit()',
+        "sdk.set_profile(content=f\"{'x':>1000001}\")\nsdk.commit()",
         context,
     )
 
