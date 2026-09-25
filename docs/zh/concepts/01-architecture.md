@@ -4,6 +4,11 @@ OpenViking 是为 AI Agent 设计的上下文数据库，将所有上下文（Me
 
 ## 系统概览
 
+<ArchitectureDiagram />
+
+<details>
+<summary>文本版本</summary>
+
 ```text
 CLI / SDK / HTTP client
           |
@@ -23,6 +28,8 @@ Retrieval     Sessions       Resource / Skill import
            /          \
        AGFS         Vector index
 ```
+
+</details>
 
 ## 核心模块
 

@@ -4,6 +4,11 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 
 ## System Overview
 
+<ArchitectureDiagram />
+
+<details>
+<summary>Text version</summary>
+
 ```text
 CLI / SDK / HTTP client
           |
@@ -23,6 +28,8 @@ Retrieval     Sessions       Resource / Skill import
            /          \
        AGFS         Vector index
 ```
+
+</details>
 
 ## Core Modules
 
