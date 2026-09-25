@@ -17,6 +17,13 @@ from openviking.storage.context_update_plan import (
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
+@pytest.fixture(autouse=True)
+def unmanaged_resources(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.resource_ttl.prepare_resource_ttl", AsyncMock(return_value={})
+    )
+
+
 class _DummyVikingDB:
     def get_embedder(self):
         return None
@@ -525,6 +532,7 @@ async def test_resource_processor_allows_flat_root_only_for_single_no_split_sour
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS()
+    fake_fs.ttl_registry = SimpleNamespace(account_may_have_records=AsyncMock(return_value=False))
     fake_fs.glob = AsyncMock(
         side_effect=NotADirectoryError("flat resource roots cannot be globbed")
     )
@@ -568,7 +576,7 @@ async def test_resource_processor_allows_flat_root_only_for_single_no_split_sour
 
     result = await rp.process_resource(
         path="神雕_副本.md",
-        ctx=object(),
+        ctx=SimpleNamespace(account_id="acct"),
         build_index=True,
         parse_mode="no_split",
     )

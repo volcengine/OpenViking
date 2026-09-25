@@ -59,6 +59,8 @@ class SearchContextOptions(_ExtraOptions, total=False):
 
 
 class AddResourceOptions(_ExtraOptions, total=False):
+    ttl_relative: int
+    ttl_absolute: int
     acl: Dict[str, Any]
     reason: str
     instruction: str

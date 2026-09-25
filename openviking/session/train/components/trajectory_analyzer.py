@@ -27,6 +27,11 @@ from openviking.session.memory.experience_lineage import (
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.streaming_memory_updater import (
+    MemoryUpdateRequest,
+    get_streaming_memory_updater,
+    make_streaming_memory_updater_key,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
@@ -60,6 +65,8 @@ class TrajectoryAnalyzerContext:
     inject_evaluation_feedback: bool = True
     include_session_skills: bool = False
     source_archive_uri: str = ""
+    source_session_uri: str = ""
+    source_ttl_generation: str = ""
 
 
 @dataclass(slots=True)
@@ -100,6 +107,8 @@ class TrajectoryRolloutAnalyzer:
             include_session_skills=context.include_session_skills,
             case_name=getattr(rollout.case, "name", ""),
             source_archive_uri=context.source_archive_uri,
+            source_session_uri=context.source_session_uri,
+            source_ttl_generation=context.source_ttl_generation,
         )
         contexts = list((result or {}).get("contexts", []))
         skill_gradients = list((result or {}).get("skill_gradients", []))
@@ -149,6 +158,8 @@ class TrajectoryRolloutAnalyzer:
         include_session_skills: bool = False,
         case_name: str = "",
         source_archive_uri: str = "",
+        source_session_uri: str = "",
+        source_ttl_generation: str = "",
     ) -> dict[str, list[Any]]:
         """Extract trajectory and/or reusable skill operations from rollout messages.
 
@@ -190,6 +201,8 @@ class TrajectoryRolloutAnalyzer:
             include_session_skills=include_session_skills,
             case_name=case_name,
             source_archive_uri=source_archive_uri,
+            source_session_uri=source_session_uri,
+            source_ttl_generation=source_ttl_generation,
             consumed_experience_uris=consumed_experience_uris,
         )
         if phase_result is None:
@@ -209,6 +222,8 @@ class TrajectoryRolloutAnalyzer:
         include_session_skills: bool = False,
         case_name: str = "",
         source_archive_uri: str = "",
+        source_session_uri: str = "",
+        source_ttl_generation: str = "",
         consumed_experience_uris: list[str] | None = None,
     ) -> tuple[list[str], list[str], list[Context], list[PatchSemanticGradient]] | None:
         if self.vlm is None:
@@ -282,6 +297,8 @@ class TrajectoryRolloutAnalyzer:
                     extract_context=extract_context,
                     isolation_handler=isolation_handler,
                     consumed_experience_uris=consumed_experience_uris,
+                    source_session_uri=source_session_uri,
+                    source_ttl_generation=source_ttl_generation,
                 )
             tracer.info(
                 "[trajectory] Applied memory ops: "
@@ -312,7 +329,30 @@ class TrajectoryRolloutAnalyzer:
         extract_context: ExtractContext,
         isolation_handler: MemoryIsolationHandler,
         consumed_experience_uris: list[str] | None = None,
+        source_session_uri: str = "",
+        source_ttl_generation: str = "",
     ) -> MemoryUpdateResult:
+        if source_session_uri and source_ttl_generation:
+            updater = await get_streaming_memory_updater(
+                key=make_streaming_memory_updater_key(request_context=ctx),
+                registry=provider._get_registry(),
+                vikingdb=self.vikingdb,
+            )
+            update_result = await updater.submit(
+                MemoryUpdateRequest(
+                    operations=operations,
+                    messages=list(provider.messages),
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    memory_registry=provider._get_registry(),
+                    isolation_options={"allowed_memory_types": {_TRAJECTORY_MEMORY_TYPE}},
+                    metadata={
+                        "source_session_uri": source_session_uri,
+                        "source_ttl_generation": source_ttl_generation,
+                    },
+                )
+            )
+            return update_result.apply_result
         updater = MemoryUpdater(
             registry=provider._get_registry(),
             vikingdb=self.vikingdb,

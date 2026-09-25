@@ -47,6 +47,16 @@ class _FakeResourceProcessor:
         return None
 
 
+@pytest.fixture(autouse=True)
+def unmanaged_watch_target(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.resource_ttl.resource_ttl_visible", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_ttl.resource_ttl_fields", AsyncMock(return_value={})
+    )
+
+
 @pytest.fixture
 def connector_config(monkeypatch):
     import openviking_cli.utils.config.open_viking_config as config_module

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import openviking.core.ttl as ttl
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
@@ -23,6 +24,7 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import TTLConfig
 
 
 @pytest.mark.asyncio
@@ -519,6 +521,9 @@ class _FakePathLock:
     async def pathlock_release(self, lease):
         self.release_calls.append(lease.id)
 
+    async def stat(self, path, **kwargs):
+        raise FileNotFoundError(path)
+
 
 class _FakeVikingFS:
     def __init__(self, file_uri: str, root_uri: str):
@@ -531,6 +536,9 @@ class _FakeVikingFS:
         self.vector_store = None
         self.tree_entries = []
         self._async_agfs = _FakePathLock()
+        self.ttl_registry = SimpleNamespace(
+            get=AsyncMock(return_value=None), account_may_have_records=AsyncMock(return_value=False)
+        )
 
     async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx
@@ -606,6 +614,37 @@ class _FakeQueueManager:
         del allow_create
         assert name == self.SEMANTIC
         return self.queue
+
+
+@pytest.mark.asyncio
+async def test_memory_create_freezes_server_ttl_and_ignores_caller_fields(monkeypatch):
+    uri = "viking://user/default/memories/events/2026/note.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=uri, root_uri=uri.rsplit("/", 1)[0])
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    config = TTLConfig(user_events={"mode": "days", "ttl_days": 5})
+    monkeypatch.setattr(
+        ttl,
+        "get_openviking_config",
+        lambda: SimpleNamespace(ttl=config),
+    )
+    requested = MemoryFile(
+        content="event",
+        extra_fields={
+            "ttl_days": 999,
+            "received_at": "2999-01-01T00:00:00.000Z",
+            "expires_at": "2999-01-02T00:00:00.000Z",
+        },
+    )
+
+    await coordinator._write_in_place(
+        uri, MemoryFileUtils.write(requested), mode="create", ctx=ctx
+    )
+
+    stored = MemoryFileUtils.read(viking_fs.content[uri], uri=uri)
+    assert stored.extra_fields["ttl_days"] == 5
+    assert stored.extra_fields["received_at"] != "2999-01-01T00:00:00.000Z"
+    assert stored.extra_fields["expires_at"] != "2999-01-02T00:00:00.000Z"
 
 
 @pytest.mark.asyncio
@@ -921,6 +960,9 @@ class _FakeVikingFSForCreate:
         self.content = {}
         self.existing_dirs = set({root_uri} if existing_dirs is None else existing_dirs)
         self._async_agfs = _FakePathLock()
+        self.ttl_registry = SimpleNamespace(
+            get=AsyncMock(return_value=None), account_may_have_records=AsyncMock(return_value=False)
+        )
 
     async def stat(self, uri: str, ctx=None, skip_count=False):
         del ctx

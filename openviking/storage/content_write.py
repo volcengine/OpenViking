@@ -17,6 +17,7 @@ from openviking.core.namespace import (
     relative_uri_path,
     uri_parts,
 )
+from openviking.core.ttl import apply_ttl_fields
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     VECTORS_ONLY,
@@ -39,7 +40,7 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.internal_names import is_storage_internal_name, is_ttl_metadata_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -1090,7 +1091,9 @@ class ContentWriteCoordinator:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
-        if any(is_storage_internal_name(part) for part in uri_parts(uri)):
+        if any(
+            is_storage_internal_name(part) or is_ttl_metadata_name(part) for part in uri_parts(uri)
+        ):
             # Ancestors must also be checked: creating parents could otherwise
             # create hidden directories using storage metadata names.
             raise InvalidArgumentError(f"cannot write storage internal file directly: {uri}")
@@ -1225,6 +1228,19 @@ class ContentWriteCoordinator:
                 mf.content = mf.content + content
             else:
                 mf = MemoryFileUtils.read(content, uri=uri)
+                from openviking.config.ttl import resolve_ttl_config
+
+                mf.extra_fields = apply_ttl_fields(
+                    uri,
+                    mf.extra_fields,
+                    config=await resolve_ttl_config(self._viking_fs, ctx.account_id),
+                )
+            if mode != "create":
+                mf.extra_fields = apply_ttl_fields(
+                    uri,
+                    mf.extra_fields,
+                    existing_fields=mf.extra_fields,
+                )
             sync_memory_resource_refs(mf, source=RESOURCE_REF_SOURCE_CONTENT_WRITE)
             rendered = MemoryFileUtils.write(mf)
             await self._viking_fs.write_file(
@@ -1234,6 +1250,21 @@ class ContentWriteCoordinator:
                 lease_ref=lease_ref,
             )
             return rendered.encode("utf-8")
+
+        from openviking.core.ttl import ttl_scope_for_uri
+
+        resource_write = ttl_scope_for_uri(uri) == "resources"
+        if resource_write and mode == "create":
+            from openviking.storage.resource_ttl import prepare_resource_ttl
+
+            await prepare_resource_ttl(
+                self._viking_fs,
+                uri,
+                is_dir=False,
+                existing=False,
+                ctx=ctx,
+                lease_ref=lease_ref,
+            )
 
         if mode == "append":
             # Plain concatenation for resource/skill files: MEMORY_FIELDS is a
@@ -1249,8 +1280,36 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(f"append only supports text content: {uri}")
             final_content = existing_raw + content
             await self._viking_fs.write_file(uri, final_content, ctx=ctx, lease_ref=lease_ref)
+            if resource_write:
+                from openviking.storage.resource_ttl import prepare_resource_ttl
+
+                await prepare_resource_ttl(
+                    self._viking_fs,
+                    uri,
+                    is_dir=False,
+                    existing=True,
+                    ctx=ctx,
+                    lease_ref=lease_ref,
+                    content_md5=content_md5(final_content.encode("utf-8")),
+                )
             return final_content.encode("utf-8")
         await self._viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+        if resource_write:
+            from openviking.storage.resource_ttl import prepare_resource_ttl
+
+            # New resources pre-publish a cleanup fence above, then use the
+            # completed write as the actual relative-TTL timestamp.
+            await prepare_resource_ttl(
+                self._viking_fs,
+                uri,
+                is_dir=False,
+                existing=True,
+                ctx=ctx,
+                lease_ref=lease_ref,
+                content_md5=content_md5(
+                    content if isinstance(content, bytes) else content.encode("utf-8")
+                ),
+            )
         return content if isinstance(content, bytes) else content.encode("utf-8")
 
     async def _load_file_abstracts(self, uris: list[str], *, ctx: RequestContext) -> dict[str, str]:

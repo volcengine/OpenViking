@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -47,6 +48,7 @@ from openviking.session.train import (
     Trajectory,
 )
 from openviking.session.train.components.session_commit import _case_spec_message_to_request
+from openviking.session.ttl_fence import StaleSessionGenerationError
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
@@ -429,6 +431,10 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
     initialized_with = []
 
     class DummyRegistry:
+        def list_all(self, include_disabled=False):
+            del include_disabled
+            return []
+
         async def initialize_memory_files(self, ctx, allowed_memory_types=None):
             del ctx
             initialized_with.append(allowed_memory_types)
@@ -437,6 +443,7 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
         async def run(self):
             return None, []
 
+    registry = DummyRegistry()
     compressor = SessionCompressorV3(vikingdb=None)
     compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
     compressor._write_final_memory_diff = AsyncMock()
@@ -446,7 +453,11 @@ async def test_v3_initializes_only_allowed_memory_files(monkeypatch):
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_default_registry",
-        lambda: DummyRegistry(),
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(return_value=registry),
     )
 
     await compressor.extract_long_term_memories(
@@ -800,6 +811,10 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
     trained_cases = []
 
     class DummyRegistry:
+        def list_all(self, include_disabled=False):
+            del include_disabled
+            return []
+
         async def initialize_memory_files(self, ctx, allowed_memory_types=None):
             del ctx, allowed_memory_types
             return None
@@ -822,6 +837,7 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
             result.add_written(_case_operation().uris[0])
             return SimpleNamespace(operations=request.operations, apply_result=result)
 
+    registry = DummyRegistry()
     compressor = SessionCompressorV3(vikingdb=None)
     compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
 
@@ -837,7 +853,11 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch):
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_default_registry",
-        lambda: DummyRegistry(),
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(return_value=registry),
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_memory_updater",
@@ -884,6 +904,10 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
         )
 
     class DummyRegistry:
+        def list_all(self, include_disabled=False):
+            del include_disabled
+            return []
+
         async def initialize_memory_files(self, ctx, allowed_memory_types=None):
             del ctx, allowed_memory_types
             return None
@@ -933,6 +957,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
                 apply_result=result,
             )
 
+    registry = DummyRegistry()
     compressor = SessionCompressorV3(vikingdb=None)
     compressor._get_or_create_react = lambda **kwargs: DummyOrchestrator()
 
@@ -945,7 +970,11 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: FakeFS())
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_default_registry",
-        lambda: DummyRegistry(),
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.account_templates.resolve_account_memory_registry",
+        AsyncMock(return_value=registry),
     )
     monkeypatch.setattr(
         "openviking.session.compressor_v3.get_streaming_memory_updater",
@@ -1636,6 +1665,28 @@ async def test_commit_experience_snapshot_skips_when_no_visible_content_changed(
         experience_uris=[],
         archive_uri="viking://user/u/sessions/session-1/history/archive_001",
     )
+
+    viking_fs.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_commit_experience_snapshot_propagates_stale_session_generation():
+    class StaleFence:
+        @asynccontextmanager
+        async def lock(self):
+            raise StaleSessionGenerationError("stale session incarnation")
+            yield
+
+    viking_fs = SimpleNamespace(commit=AsyncMock())
+
+    with pytest.raises(StaleSessionGenerationError, match="stale session incarnation"):
+        await _commit_experience_snapshot(
+            viking_fs,
+            ctx=_ctx(),
+            experience_uris=["viking://user/u/memories/experiences/booking.md"],
+            archive_uri="viking://user/u/sessions/session-1/history/archive_001",
+            write_fence=StaleFence(),
+        )
 
     viking_fs.commit.assert_not_awaited()
 

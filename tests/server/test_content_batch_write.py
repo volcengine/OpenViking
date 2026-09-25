@@ -1,7 +1,9 @@
 import base64
+from types import SimpleNamespace
 
 import pytest
 
+import openviking.core.ttl as ttl
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
@@ -17,6 +19,7 @@ from openviking_cli.exceptions import (
     ResourceExhaustedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import TTLConfig
 
 
 class _PathLockClient:
@@ -267,6 +270,59 @@ async def test_batch_replace_memory_preserves_metadata(monkeypatch):
     assert result["updated"] == [memory_uri]
     assert stored.content == "Updated preference"
     assert stored.extra_fields == expected.extra_fields
+
+
+@pytest.mark.asyncio
+async def test_batch_event_create_freezes_ttl_and_replace_preserves_snapshot(monkeypatch):
+    root = "viking://user/default/memories/events/2026"
+    event_uri = f"{root}/note.md"
+    vfs = _VFS(root)
+    coordinator = ContentWriteCoordinator(vfs)
+
+    async def refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
+    config = TTLConfig(user_events={"mode": "days", "ttl_days": 5})
+    monkeypatch.setattr(ttl, "get_openviking_config", lambda: SimpleNamespace(ttl=config))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    requested = MemoryFileUtils.write(
+        MemoryFile(
+            content="event",
+            extra_fields={
+                "ttl_days": 999,
+                "received_at": "2999-01-01T00:00:00.000Z",
+                "expires_at": "2999-01-02T00:00:00.000Z",
+            },
+        )
+    )
+
+    await coordinator.batch_write(
+        root_uri=root,
+        operations=[{"uri": event_uri, "content": requested, "mode": "upsert"}],
+        ctx=ctx,
+        wait=False,
+    )
+    created = MemoryFileUtils.read(vfs.files[event_uri], uri=event_uri)
+    frozen = {
+        field: created.extra_fields[field]
+        for field in ("ttl_days", "received_at", "expires_at", "ttl_generation")
+    }
+    assert frozen["ttl_days"] == 5
+    assert frozen["received_at"] != "2999-01-01T00:00:00.000Z"
+    assert frozen["expires_at"] != "2999-01-02T00:00:00.000Z"
+
+    config.user_events.ttl_days = 30
+    await coordinator.batch_write(
+        root_uri=root,
+        operations=[{"uri": event_uri, "content": "updated", "mode": "replace"}],
+        ctx=ctx,
+        wait=False,
+    )
+    updated = MemoryFileUtils.read(vfs.files[event_uri], uri=event_uri)
+    assert updated.content == "updated"
+    assert {field: updated.extra_fields[field] for field in frozen} == frozen
 
 
 @pytest.mark.asyncio

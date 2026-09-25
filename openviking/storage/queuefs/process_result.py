@@ -18,7 +18,8 @@ class ProcessOutcome(str, Enum):
 class ProcessResult:
     """A settled delivery that may be ACKed after middleware completes.
 
-    REQUEUED means the handler already enqueued a replacement. Exceptions,
+    REQUEUED means the handler persisted a replacement in a queue or delayed
+    task schedule. Exceptions,
     including unhandled cancellation, leave the current delivery unacknowledged.
     """
 

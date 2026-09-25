@@ -128,6 +128,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "allow_local_path_resolution",
         "enforce_public_remote_targets",
         "resource_lock",
+        "expected_ttl_generation",
         "stage_callback",
         "args",
         "strict",
@@ -161,6 +162,7 @@ _INTERNAL_INGESTION_FIELDS = frozenset(
         "parser_args",
         "resource_lock",
         "route_source",
+        "expected_ttl_generation",
         "skip_watch_management",
         "stage_callback",
         "to_is_directory",
@@ -746,6 +748,12 @@ class ResourceService:
                 else ParserBackend.INTERNAL
             )
             internal_kwargs: Dict[str, Any] = {"parser_backend": parser_backend}
+            if msg.ttl_generation is not None:
+                internal_kwargs["expected_ttl_generation"] = msg.ttl_generation
+            if msg.ttl_relative is not None:
+                internal_kwargs["ttl_relative"] = msg.ttl_relative
+            if msg.ttl_absolute is not None:
+                internal_kwargs["ttl_absolute"] = msg.ttl_absolute
             if "resolved_extension" in queued_args:
                 internal_kwargs["resolved_extension"] = queued_args.pop("resolved_extension")
             normalized_args = await self._normalize_add_resource_args(
@@ -1326,6 +1334,9 @@ class ResourceService:
                 source_name=plan.source_identity.source_name,
                 to_is_directory=planned_to_is_directory,
                 args=plan.processor_args,
+                ttl_generation=processor_kwargs.get("expected_ttl_generation"),
+                ttl_relative=processor_kwargs.get("ttl_relative"),
+                ttl_absolute=processor_kwargs.get("ttl_absolute"),
                 defer_target_resolution=defer_target_resolution,
                 cleanup_empty_target_on_failure=cleanup_empty_target_on_failure,
                 understanding_response_id=plan.understanding_response_id,
@@ -1567,6 +1578,43 @@ class ResourceService:
             **kwargs,
         )
 
+    async def update_resource_config(self, uri: str, ctx: RequestContext, **ttl) -> dict:
+        """Change future resource imports at this path using the existing config manager."""
+        from openviking.core.uri_validation import validate_content_target_uri
+        from openviking_cli.utils.config.ttl_config import ResourceTTL
+
+        uri = validate_content_target_uri(uri, ctx, kind="resource")
+        await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        if self._runtime_config_manager is None:
+            raise NotInitializedError("Runtime configuration manager")
+        try:
+            policy = ResourceTTL(**ttl).policy().model_dump()
+            await self._runtime_config_manager.patch_account(
+                ctx.account_id, {"ttl": {"directories": {uri: policy}}}
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+        return {"uri": uri, "policy": policy}
+
+    async def get_resource_ttl(self, uri: str, ctx: RequestContext) -> dict:
+        from openviking.storage.document_ttl import get_document_ttl
+
+        return await get_document_ttl(self._viking_fs, uri, ctx=ctx)
+
+    async def update_resource_ttl(
+        self,
+        uri: str,
+        expires_at: str | None,
+        ctx: RequestContext,
+        *,
+        ttl_relative: int | None = None,
+    ) -> dict:
+        from openviking.storage.resource_ttl import update_resource_expiry
+
+        return await update_resource_expiry(
+            self._viking_fs, uri, expires_at, ctx=ctx, ttl_relative=ttl_relative
+        )
+
     async def refresh_resource(
         self,
         path: str,
@@ -1589,6 +1637,27 @@ class ResourceService:
         **kwargs,
     ) -> Dict[str, Any]:
         """Submit a scheduled refresh without changing its watch task."""
+        from openviking.core.ttl import ttl_scope_for_uri
+        from openviking.storage.resource_ttl import resource_ttl_fields, resource_ttl_visible
+
+        if to and ttl_scope_for_uri(to) == "resources":
+            fields = await resource_ttl_fields(self._viking_fs, to, ctx=ctx)
+            if not await resource_ttl_visible(
+                self._viking_fs, to, ctx=ctx, require_source=True
+            ):
+                # A completed resource-file cleanup retains a hidden sidecar
+                # fingerprint. Let the parser compare the current source with
+                # that tombstone: unchanged bytes stay deleted, while changed
+                # bytes may establish a new incarnation. While the old registry
+                # record is still pending, keep the generation fence closed.
+                pending = await self._viking_fs.ttl_registry.get(ctx.account_id, to)
+                if not fields or pending is not None:
+                    return {
+                        "status": "success",
+                        "root_uri": to,
+                        "skipped": "expired_or_removed",
+                    }
+            kwargs["expected_ttl_generation"] = fields.get("ttl_generation") or ""
         return await self._submit_resource_ingestion(
             path=path,
             ctx=ctx,
@@ -1732,6 +1801,14 @@ class ResourceService:
                 "field and in args."
             )
         kwargs.update(normalized_args.processor_kwargs)
+        from openviking_cli.utils.config.ttl_config import ResourceTTL
+
+        try:
+            ResourceTTL(
+                ttl_relative=kwargs.get("ttl_relative"), ttl_absolute=kwargs.get("ttl_absolute")
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         tos_signature = kwargs.get("tos_signature")
         tos_access = kwargs.get("tos_access")
         if tos_signature is not None or tos_access is not None:
@@ -1796,6 +1873,11 @@ class ResourceService:
             kwargs=kwargs,
         )
         if delegate_to_connector:
+            if kwargs.get("ttl_relative") is not None or kwargs.get("ttl_absolute") is not None:
+                raise InvalidArgumentError(
+                    "Per-import TTL is not supported by external Connector ingestion; "
+                    "configure the resource directory TTL before importing instead."
+                )
             resolved = connector.resolve_add_type(path, add_type)
             if resolved is None:  # pragma: no cover - should_delegate already resolved it
                 raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")
@@ -2141,6 +2223,8 @@ class ResourceService:
                 return result
             prepared = result.pop("_post_process", None)
             deferred_lock = result.pop("_resource_lock", None)
+            if result.get("skipped"):
+                return result
             if (
                 not to_is_directory
                 and isinstance(prepared, dict)

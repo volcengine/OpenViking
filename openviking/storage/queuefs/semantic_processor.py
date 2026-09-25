@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import unquote, urlsplit
 
 from openviking.core.namespace import classify_uri
+from openviking.core.ttl import hidden_by_ttl, ttl_enabled, ttl_scope_for_uri
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
@@ -40,6 +41,7 @@ from openviking.service.task_processing_time import pause_task_processing
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import detach_task_context
 from openviking.storage.abstract_overview import (
+    SUMMARY_NO_EXPIRY,
     AbstractOverviewWriteResult,
     body_for_preview,
     deterministic_sample,
@@ -907,6 +909,46 @@ class SemanticProcessor(DequeueHandlerBase):
                 item_uri = VikingURI(dir_uri).join(name).uri
                 file_paths.append(item_uri)
         file_paths.sort()
+        ttl_snapshot: Optional[Dict[str, tuple[str, str]]] = None
+        if ttl_scope_for_uri(dir_uri) in {"user_events", "peer_events"} and (
+            ttl_enabled()
+            or await viking_fs.ttl_registry.account_may_have_records(ctx.account_id)
+        ):
+            records = await asyncio.gather(
+                *(viking_fs.ttl_registry.get(ctx.account_id, uri) for uri in file_paths)
+            )
+            ttl_snapshot = {
+                uri: (record.generation, record.expires_at)
+                for uri, record in zip(file_paths, records, strict=True)
+                if record is not None
+            }
+
+        async def _ttl_sources_changed() -> bool:
+            if ttl_snapshot is None:
+                return False
+            current_entries = await viking_fs.ls(
+                dir_uri, node_limit=LS_ALL_NODES, ctx=ctx
+            )
+            current_paths = sorted(
+                VikingURI(dir_uri).join(str(entry.get("name") or "")).uri
+                for entry in current_entries
+                if entry.get("name")
+                and not str(entry.get("name")).startswith(".")
+                and not entry.get("isDir", False)
+            )
+            if current_paths != file_paths:
+                return True
+            current_records = await asyncio.gather(
+                *(viking_fs.ttl_registry.get(ctx.account_id, uri) for uri in file_paths)
+            )
+            current_snapshot = {
+                uri: (record.generation, record.expires_at)
+                for uri, record in zip(file_paths, current_records, strict=True)
+                if record is not None
+            }
+            return current_snapshot != ttl_snapshot or any(
+                hidden_by_ttl(expires_at) for _, expires_at in current_snapshot.values()
+            )
 
         if not file_paths:
             logger.info(f"No memory files found in {dir_uri}")
@@ -1037,6 +1079,12 @@ class SemanticProcessor(DequeueHandlerBase):
                 lock=lock,
                 total_entries=len(file_paths),
                 sampled_entries=len(sampled_summaries),
+                is_stale_locked=_ttl_sources_changed,
+                expires_at=(
+                    min(expiry for _, expiry in ttl_snapshot.values())
+                    if ttl_snapshot
+                    else SUMMARY_NO_EXPIRY if ttl_snapshot is not None else None
+                ),
             )
         except LockAcquisitionError:
             raise
@@ -1077,6 +1125,8 @@ class SemanticProcessor(DequeueHandlerBase):
         lock: Optional[Dict[str, Any]] = None,
         total_entries: int = 0,
         sampled_entries: int = 0,
+        is_stale_locked: Optional[Callable[[], Awaitable[bool]]] = None,
+        expires_at: Optional[str] = None,
     ) -> AbstractOverviewWriteResult:
         return await write_abstract_overview(
             viking_fs=viking_fs,
@@ -1085,7 +1135,9 @@ class SemanticProcessor(DequeueHandlerBase):
             abstract=abstract,
             ctx=ctx,
             is_stale=lambda: is_semantic_msg_stale(msg),
+            is_stale_locked=is_stale_locked,
             metadata={
+                **({"expires_at": expires_at} if expires_at else {}),
                 **({"source": msg.source} if msg.source else {}),
                 "generated_by": {
                     "component": "SemanticProcessor",

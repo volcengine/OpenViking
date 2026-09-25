@@ -375,6 +375,64 @@ async def test_replacement_reacquires_persisted_relation_locks_before_writes(mon
     assert fs.events.index(acquires[1]) < min(fs.events.index(event) for event in writes)
 
 
+@pytest.mark.asyncio
+async def test_apply_operations_skips_stale_source_session_generation(monkeypatch):
+    operations = ResolvedOperations(
+        upsert_operations=[_note_op("late-note")],
+        delete_file_contents=[],
+        errors=[],
+    )
+    request = MemoryUpdateRequest(
+        operations=operations,
+        messages=[],
+        ctx=_ctx(),
+        metadata={
+            "source_session_uri": "viking://user/u/sessions/session-1",
+            "source_ttl_generation": "generation-1",
+        },
+    )
+
+    class _SessionFS:
+        def __init__(self):
+            self._async_agfs = SimpleNamespace(pathlock_release=AsyncMock())
+
+        async def read_file(self, uri, *, ctx, include_expired=False):
+            assert uri == "viking://user/u/sessions/session-1/.meta.json"
+            assert ctx is request.ctx
+            assert include_expired is True
+            return (
+                '{"expires_at":"2999-01-01T00:00:00.000Z",'
+                '"ttl_generation":"generation-2"}'
+            )
+
+    fs = _SessionFS()
+    acquire = AsyncMock(return_value={"lease_ref": "session-fenced-lease"})
+    apply = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater._acquire_stable_operation_lease",
+        acquire,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.MemoryUpdater.apply_operations",
+        apply,
+    )
+
+    result = await StreamingMemoryUpdater(registry=_registry())._apply_operations(
+        operations=operations, request=request, messages=[]
+    )
+
+    assert result.written_uris == []
+    assert result.edited_uris == []
+    assert result.deleted_uris == []
+    apply.assert_not_awaited()
+    fs._async_agfs.pathlock_release.assert_awaited_once_with(
+        {"lease_ref": "session-fenced-lease"}
+    )
+
+
 async def test_operation_to_patch_skips_failed_field_preview_update():
     schema = MemoryTypeSchema(
         memory_type="notes",
@@ -922,6 +980,34 @@ def test_split_request_by_merge_group_groups_by_peer_and_memory_type():
         0,
         0,
     ]
+
+
+def test_split_request_by_merge_group_isolates_session_incarnations():
+    def grouped_key(generation: str) -> MemoryMergeGroupKey:
+        op = _note_op("same-note")
+        request = MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[op], delete_file_contents=[], errors=[]
+            ),
+            messages=[],
+            ctx=_ctx(),
+            metadata={
+                "source_session_uri": "viking://user/u/sessions/session-1/",
+                "source_ttl_generation": generation,
+            },
+        )
+        return split_request_by_merge_group(request)[0][0]
+
+    old_key = grouped_key("generation-1")
+    new_key = grouped_key("generation-2")
+
+    assert old_key == MemoryMergeGroupKey(
+        peer_id=None,
+        memory_type="notes",
+        source_session_uri="viking://user/u/sessions/session-1",
+        source_ttl_generation="generation-1",
+    )
+    assert old_key != new_key
 
 
 def test_split_request_keeps_unresolved_upserts_separate_from_delete_groups():

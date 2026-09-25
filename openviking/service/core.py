@@ -102,6 +102,7 @@ class OpenVikingService:
         self._uri_mutation_coordinator = UriMutationCoordinator()
         self._watch_scheduler: Optional[WatchScheduler] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
+        self._ttl_cleanup_service: Optional[Any] = None
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._runtime_config_manager: Optional[Any] = None
@@ -259,11 +260,7 @@ class OpenVikingService:
         if manager is None:
             return
         base_config = self._config.model_copy(
-            update={
-                "agent_evolution": self._agent_evolution_base_config.model_copy(
-                    deep=True
-                )
-            }
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)}
         )
         await manager.replace_base_config(base_config)
 
@@ -285,11 +282,7 @@ class OpenVikingService:
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
         base_config = self._config.model_copy(
-            update={
-                "agent_evolution": self._agent_evolution_base_config.model_copy(
-                    deep=True
-                )
-            },
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)},
         )
         manager = build_runtime_config_manager(
             AsyncAGFSClient(self._agfs_client),
@@ -496,6 +489,7 @@ class OpenVikingService:
             embedding_provider=self._embedding_provider,
             vector_config_resolver=self._vector_config_resolver,
         )
+        self._viking_fs.runtime_config_manager = self._runtime_config_manager
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
         self._resource_processor = ResourceProcessor(
@@ -633,6 +627,7 @@ class OpenVikingService:
             # Register durable cleanup work before restoring tracked tasks;
             # the deletion service binds consumers once auth is ready.
             self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
+            self._queue_manager.get_queue(self._queue_manager.TTL_CLEANUP, allow_create=True)
             restored_tasks = await self._queue_manager.prepare_task_tracking(get_task_tracker())
             await self._external_task_service.restore_tasks(restored_tasks)
 
@@ -689,6 +684,11 @@ class OpenVikingService:
             await self._session_auto_commit_scheduler.stop()
             self._session_auto_commit_scheduler = None
             logger.info("SessionAutoCommitScheduler stopped")
+
+        if self._ttl_cleanup_service:
+            await self._ttl_cleanup_service.close()
+            self._ttl_cleanup_service = None
+            logger.info("TTLCleanupService stopped")
 
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)

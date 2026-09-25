@@ -84,7 +84,13 @@ class PolicyTrainingEngine:
         policy_set: ExperienceSet,
         ctx: PipelineContext,
     ) -> tuple[PolicyUpdatePlan, PolicyApplyResult]:
-        async with policy_set.lock() as transaction_handle:
+        write_fence = getattr(ctx, "write_fence", None)
+        lock = (
+            write_fence.lock_policy_set(policy_set)
+            if write_fence is not None
+            else policy_set.lock()
+        )
+        async with lock as transaction_handle:
             latest_policy_set = await policy_set.reload()
             plan = await self.policy_optimizer.plan(
                 gradients,

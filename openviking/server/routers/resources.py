@@ -4,7 +4,7 @@
 
 from typing import Any, Dict, Literal, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
@@ -22,11 +22,12 @@ from openviking.server.temp_upload_store import TempUploadStore
 from openviking.storage.acl import AclSpec
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils.config.ttl_config import DocumentTTL, ResourceTTL
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
 
 
-class AddResourceRequest(BaseModel):
+class AddResourceRequest(ResourceTTL):
     """Request model for add_resource.
 
     Attributes:
@@ -136,6 +137,47 @@ class AddResourceRequest(BaseModel):
         return self
 
 
+class UpdateResourceConfigRequest(ResourceTTL):
+    model_config = ConfigDict(extra="forbid")
+    uri: str
+
+
+class UpdateResourceTTLRequest(DocumentTTL):
+    model_config = ConfigDict(extra="forbid")
+    uri: str
+
+
+@router.patch("/resources/config")
+async def update_resource_config(
+    request: UpdateResourceConfigRequest, _ctx: RequestContext = Depends(get_request_context)
+):
+    uri = validate_content_target_uri(resolve_path_variables(request.uri), _ctx, kind="resource")
+    result = await get_service().resources.update_resource_config(
+        uri, _ctx, ttl_relative=request.ttl_relative, ttl_absolute=request.ttl_absolute
+    )
+    return response_from_result(result)
+
+
+@router.get("/resources/ttl")
+async def get_resource_ttl(
+    uri: str = Query(...), _ctx: RequestContext = Depends(get_request_context)
+):
+    uri = validate_content_target_uri(resolve_path_variables(uri), _ctx, kind="resource")
+    return response_from_result(await get_service().resources.get_resource_ttl(uri, _ctx))
+
+
+@router.patch("/resources/ttl")
+async def update_resource_ttl(
+    request: UpdateResourceTTLRequest, _ctx: RequestContext = Depends(get_request_context)
+):
+    uri = validate_content_target_uri(resolve_path_variables(request.uri), _ctx, kind="resource")
+    return response_from_result(
+        await get_service().resources.update_resource_ttl(
+            uri, request.expires_at, _ctx, ttl_relative=request.ttl_relative
+        )
+    )
+
+
 class AddSkillRequest(BaseModel):
     """Request model for add_skill.
 
@@ -214,6 +256,8 @@ async def temp_upload(
             tags=signed.tags,
             tag_mode=signed.tag_mode,
             parse_mode=signed.parse_mode,
+            ttl_relative=signed.ttl_relative,
+            ttl_absolute=signed.ttl_absolute,
         )
 
     try:
@@ -302,6 +346,8 @@ async def add_resource(
         source_name = original_filename
 
     kwargs = {
+        "ttl_relative": request.ttl_relative,
+        "ttl_absolute": request.ttl_absolute,
         "strict": request.strict,
         "source_name": source_name,
         "ignore_dirs": request.ignore_dirs,

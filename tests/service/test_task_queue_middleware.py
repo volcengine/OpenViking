@@ -456,11 +456,12 @@ async def test_cross_loop_cancellation_waits_for_handler_cleanup(tracked_queue):
     request_loop = asyncio.get_running_loop()
 
     class Session:
-        async def exists(self):
+        async def exists(self, *, include_expired=False):
+            assert include_expired
             return True
 
-        async def load(self):
-            pass
+        async def load(self, *, include_expired=False):
+            assert include_expired
 
         async def resume_queued_commit(self, msg):
             assert asyncio.get_running_loop() is not request_loop

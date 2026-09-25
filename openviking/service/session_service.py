@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.core.ttl import hidden_by_ttl
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import read_user_memory_policy
@@ -256,7 +257,7 @@ class SessionService:
         try:
             if session_id:
                 existing = self.session(ctx, session_id)
-                if await existing.exists():
+                if await existing.exists(include_expired=True):
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             if memory_policy is not None:
@@ -288,7 +289,12 @@ class SessionService:
             raise
 
     async def get(
-        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+        self,
+        session_id: str,
+        ctx: RequestContext,
+        *,
+        auto_create: bool = False,
+        include_expired: bool = False,
     ) -> Session:
         """Get an existing session.
 
@@ -297,15 +303,25 @@ class SessionService:
             ctx: Request context
             auto_create: If True, create the session when it does not exist.
                          Default is False (raise NotFoundError).
+            include_expired: If True, return a logically-expired session instead
+                         of hiding it. Only the physical-cleanup path (delete)
+                         sets this; every user-facing read leaves it False so an
+                         expired session is invisible the moment ``expires_at``
+                         passes, before the background sweep removes it.
         """
         try:
             session = self.session(ctx, session_id)
-            if not await session.exists():
+            if not await session.exists(include_expired=True):
                 if not auto_create:
                     raise NotFoundError(session_id, "session")
                 session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
                 await session.ensure_exists()
-            await session.load()
+            await session.load(include_expired=True)
+            if not include_expired and hidden_by_ttl(session.meta.expires_at):
+                # Logically expired: hide from every read path exactly like a
+                # missing session. Physical files may still exist until the
+                # cleanup sweep runs, but they must not be observable here.
+                raise NotFoundError(session_id, "session")
             self._record_lifecycle_metric("get", "ok")
             return session
         except Exception:
@@ -321,7 +337,6 @@ class SessionService:
         self._ensure_initialized()
         session_base_uri = canonical_session_uri(ctx)
         sessions_by_id: Dict[str, Dict[str, Any]] = {}
-
         try:
             entries = await self._viking_fs.ls(
                 session_base_uri,
@@ -333,9 +348,10 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
+                session_uri = f"{session_base_uri}/{name}"
                 sessions_by_id[name] = {
                     "session_id": name,
-                    "uri": f"{session_base_uri}/{name}",
+                    "uri": session_uri,
                     "is_dir": entry.get("isDir", False),
                     "mod_time": entry.get("modTime", ""),
                 }
@@ -356,8 +372,10 @@ class SessionService:
         self._ensure_initialized()
 
         session_uri = canonical_session_uri(ctx, session_id)
-        session = await self.get(session_id, ctx)
-        if not await session.exists():
+        # include_expired: deletion is the physical-cleanup path, so it must be
+        # able to act on a session that is already logically invisible.
+        session = await self.get(session_id, ctx, include_expired=True)
+        if not await session.exists(include_expired=True):
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 

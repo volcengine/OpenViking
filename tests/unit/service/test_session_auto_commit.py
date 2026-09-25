@@ -23,7 +23,6 @@ from openviking.service.session_service import SessionService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.memory_config import SessionAutoCommitConfig
 
-
 _REAL_DATETIME = datetime
 
 
@@ -482,7 +481,7 @@ async def test_scheduler_scans_agfs_paths_directly_without_account_user_indices(
         ("/local/acct_a/user", "acct_a"),
         ("/local/acct_a/user/user_b/sessions", "acct_a"),
     ]
-    assert service.viking_fs.read_calls == [
+    assert sorted(service.viking_fs.read_calls) == [
         "/local/acct_a/user/user_b/sessions/session_due/.meta.json",
         "/local/acct_a/user/user_b/sessions/session_skip/.meta.json",
     ]

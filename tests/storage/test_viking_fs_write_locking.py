@@ -1,8 +1,11 @@
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.ttl_registry import TTLRecord
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -195,6 +198,86 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     assert fake.events[3][3]["lease_ref"] == "lease-1"
     assert fake.events[4] == ("release", {"lease_ref": "lease-1"})
+
+
+def _ttl_event(generation: str, expires_at: str) -> str:
+    fields = {
+        "ttl_days": 30,
+        "received_at": "2026-01-01T00:00:00.000Z",
+        "expires_at": expires_at,
+        "ttl_generation": generation,
+    }
+    return f"body\n\n<!-- MEMORY_FIELDS\n{json.dumps(fields)}\n-->"
+
+
+def _ttl_write_fs(monkeypatch, *, write_error=None):
+    uri = "viking://user/default/memories/events/e.md"
+    path = "/local/default/user/default/memories/events/e.md"
+    events = []
+    old = TTLRecord(
+        object_uri=uri,
+        object_type="event",
+        account_id="default",
+        user_id="default",
+        expires_at="2040-01-01T00:00:00.000Z",
+        generation="old",
+    )
+    records = {("default", uri): old}
+
+    async def get(account_id, object_uri):
+        return records.get((account_id, object_uri))
+
+    async def upsert(record):
+        events.append(("upsert", record.generation, record.expires_at))
+        records[(record.account_id, record.object_uri)] = record
+
+    async def write(_path, _data, **_kwargs):
+        events.append(("write",))
+        if write_error is not None:
+            raise write_error
+
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = SimpleNamespace(
+        pathlock_acquire_exact=AsyncMock(return_value={"lease_ref": "lease"}),
+        pathlock_release=AsyncMock(),
+        write=write,
+    )
+    fs.ttl_registry = SimpleNamespace(
+        get=get, upsert=upsert, remove_if_generation=AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: path)
+    return fs, records, events, old, uri
+
+
+@pytest.mark.asyncio
+async def test_ttl_overwrite_keeps_old_generation_until_write_succeeds(monkeypatch):
+    fs, records, events, _, uri = _ttl_write_fs(monkeypatch)
+
+    await fs.write(uri, _ttl_event("new", "2030-01-01T00:00:00.000Z"), ctx=_default_ctx())
+
+    assert events == [
+        ("upsert", "old", "2030-01-01T00:00:00.000Z"),
+        ("write",),
+        ("upsert", "new", "2030-01-01T00:00:00.000Z"),
+    ]
+    assert records[("default", uri)].generation == "new"
+
+
+@pytest.mark.asyncio
+async def test_failed_ttl_overwrite_restores_old_projection(monkeypatch):
+    fs, records, _, old, uri = _ttl_write_fs(
+        monkeypatch, write_error=RuntimeError("injected write failure")
+    )
+
+    with pytest.raises(RuntimeError, match="injected write failure"):
+        await fs.write(
+            uri,
+            _ttl_event("new", "2050-01-01T00:00:00.000Z"),
+            ctx=_default_ctx(),
+        )
+
+    assert records[("default", uri)] == old
 
 
 @pytest.mark.asyncio

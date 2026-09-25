@@ -19,6 +19,7 @@ from openviking.core.namespace import (
     is_session_uri,
     owner_space_for_uri,
 )
+from openviking.core.ttl import TTL_FIELD_NAMES, ttl_scope_for_uri
 from openviking.parse.parsers.media.utils import (
     MPEG_TS_PROBE_BYTES,
     is_mpeg_ts,
@@ -26,7 +27,11 @@ from openviking.parse.parsers.media.utils import (
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.server.identity import RequestContext
 from openviking.service.task_work_index import TaskWorkRejected
-from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
+from openviking.storage.abstract_overview import (
+    body_for_preview,
+    embedding_text_for_body,
+    semantic_body_digest,
+)
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -71,7 +76,12 @@ def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) 
         # Internal queue metadata, removed by TextEmbeddingHandler before upsert.
         embedding_msg.context_data["_upsert_record_id"] = str(record_id)
     for field, value in overrides.items():
-        if field.startswith("_") or field in NON_PORTABLE_VECTOR_RECORD_FIELDS or value is None:
+        if (
+            field.startswith("_")
+            or field in NON_PORTABLE_VECTOR_RECORD_FIELDS
+            or field in TTL_FIELD_NAMES
+            or value is None
+        ):
             continue
         embedding_msg.context_data[field] = value
 
@@ -89,6 +99,7 @@ def _apply_planned_field_patch(
         for field, value in (field_patch.values if field_patch is not None else {}).items()
         if not field.startswith("_")
         and field not in NON_PORTABLE_VECTOR_RECORD_FIELDS
+        and field not in TTL_FIELD_NAMES
         and value is not None
     }
     for field in patch_values:
@@ -436,6 +447,11 @@ async def vectorize_directory_meta(
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
+        source_ttl = {}
+        if ttl_scope_for_uri(uri) == "resources":
+            from openviking.storage.resource_ttl import resource_ttl_fields
+
+            source_ttl = await resource_ttl_fields(get_viking_fs(), uri, ctx=ctx)
         parent_uri = VikingURI(uri).parent.uri
         owner_space = owner_space_for_uri(uri)
 
@@ -476,6 +492,13 @@ async def vectorize_directory_meta(
                 telemetry_id=telemetry_id,
             )
             level_overrides = (scalar_overrides or {}).get(int(ContextLevel.ABSTRACT.value))
+            if msg_abstract is not None:
+                msg_abstract.context_data.update(
+                    {k: v for k, v in source_ttl.items() if k in TTL_FIELD_NAMES}
+                )
+            if msg_abstract is not None and context_type in {"memory", "resource"}:
+                msg_abstract.context_data["_source_sidecar_uri"] = f"{uri}/.abstract.md"
+                msg_abstract.context_data["_source_sidecar_digest"] = semantic_body_digest(abstract)
             _apply_scalar_overrides(
                 msg_abstract,
                 level_overrides,
@@ -537,6 +560,13 @@ async def vectorize_directory_meta(
                 telemetry_id=telemetry_id,
             )
             level_overrides = (scalar_overrides or {}).get(int(ContextLevel.OVERVIEW.value))
+            if msg_overview is not None:
+                msg_overview.context_data.update(
+                    {k: v for k, v in source_ttl.items() if k in TTL_FIELD_NAMES}
+                )
+            if msg_overview is not None and context_type in {"memory", "resource"}:
+                msg_overview.context_data["_source_sidecar_uri"] = f"{uri}/.overview.md"
+                msg_overview.context_data["_source_sidecar_digest"] = semantic_body_digest(overview)
             _apply_scalar_overrides(
                 msg_overview,
                 level_overrides,
@@ -609,6 +639,21 @@ async def vectorize_file(
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
         viking_fs = get_viking_fs()
+
+        # Capture the incarnation before reading/vectorizing content. A source
+        # replacement during this operation must invalidate the queued write.
+        source_ttl = None
+        if ttl_scope_for_uri(file_path) in {"user_events", "peer_events"}:
+            from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+
+            source_ttl = parse_memory_file_with_fields(
+                await viking_fs.read_file(file_path, ctx=ctx)
+            )
+
+        elif ttl_scope_for_uri(file_path) == "resources":
+            from openviking.storage.resource_ttl import resource_ttl_fields
+
+            source_ttl = await resource_ttl_fields(viking_fs, file_path, ctx=ctx)
 
         file_name = summary_dict.get("name") or os.path.basename(file_path)
         summary = summary_dict.get("summary", "")
@@ -740,6 +785,13 @@ async def vectorize_file(
         _apply_ingest_options(embedding_msg, ingest_options)
         _apply_scalar_overrides(embedding_msg, scalar_override)
         _apply_planned_field_patch(embedding_msg, field_patch)
+        # OVPack/reindex must take the incarnation fence from the restored
+        # source, never from vector scalars (cloud schemas have no TTL fields).
+        if source_ttl is not None:
+            for field in TTL_FIELD_NAMES:
+                embedding_msg.context_data.pop(field, None)
+                if source_ttl.get(field) is not None:
+                    embedding_msg.context_data[field] = source_ttl[field]
         enqueued = await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,

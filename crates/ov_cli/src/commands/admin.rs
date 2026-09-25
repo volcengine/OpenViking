@@ -274,6 +274,28 @@ pub async fn set_account_settings(
     )
 }
 
+pub async fn configuration(
+    client: &HttpClient,
+    account_id: Option<&str>,
+    settings: Option<Value>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let path = match account_id {
+        Some(id) => format!("/api/v1/admin/accounts/{id}/configuration"),
+        None => "/api/v1/admin/configuration".to_string(),
+    };
+    let response = match settings {
+        Some(settings) => {
+            client
+                .patch(&path, &serde_json::json!({"settings": settings}), &[])
+                .await?
+        }
+        None => client.get(&path, &[]).await?,
+    };
+    show_admin(response, output_format, compact)
+}
+
 fn print_admin_user_key_notice(
     response: &Value,
     output_format: OutputFormat,

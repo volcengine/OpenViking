@@ -612,6 +612,29 @@ use crate::AdminCommands;
 pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
+        AdminCommands::GetConfiguration { account_id } => {
+            commands::admin::configuration(
+                &client,
+                account_id.as_deref(),
+                None,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::PatchConfiguration {
+            account_id,
+            settings,
+        } => {
+            commands::admin::configuration(
+                &client,
+                account_id.as_deref(),
+                Some(settings),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         AdminCommands::CreateAccount {
             account_id,
             admin_user_id,

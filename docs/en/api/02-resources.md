@@ -192,6 +192,8 @@ This endpoint is the core entry point for resource management. It supports vario
 | tags | string[] | No | None | Explicit `k=v` retrieval tags written with generated vector records. An empty list with `replace` does not change existing tags |
 | tag_mode | string | No | `replace` | Tag write mode: `replace`, `append`, or `clear`; `clear` removes existing tags without requiring `tags` and ignores supplied tag values |
 | acl | object | No | None | Direct ACL for the final import root; requires manage. Omission preserves existing permissions. See [ACL API](12-acl.md). |
+| ttl_relative | integer | No | null | Retention in whole days (at least 1); mutually exclusive with `ttl_absolute` |
+| ttl_absolute | integer | No | null | Expiry as a Unix timestamp in seconds; mutually exclusive with `ttl_relative` |
 | telemetry | TelemetryRequest | No | False | Whether to return telemetry data |
 
 **Additional Notes**:
@@ -728,6 +730,38 @@ Possible shared response:
 
 ---
 
+## Resource TTL
+
+TTL is disabled by default. Public, user and peer resources use the same lifecycle. An explicit `ttl_relative` or `ttl_absolute` on an import takes precedence over the nearest directory policy and the resource-scope policy. Resources are long-term memory and never inherit the library-global TTL used by events and sessions. Omitting both import parameters inherits only the resource-specific policy.
+
+TTL is tracked independently for every imported L2 file, including files produced by a directory import. A resource directory policy is only the default copied to new files below that path; it is not a deadline for the directory, does not cap a descendant's deadline, and never causes the directory itself to be deleted. Each file therefore expires according to its own effective policy and timestamp, while sibling files that are not yet due remain available.
+
+For relative TTL, a file's deadline is its most recent successful content update plus its snapshotted `ttl_days`. Re-imports, direct content writes, and Watch refreshes that successfully change a live file renew that relative deadline. An explicit absolute deadline remains fixed across content updates. Policy changes affect only files created afterwards; an existing managed file retains its snapshotted policy.
+
+```python
+client.add_resource("./guide.md", ttl_relative=7)
+client.update_resource_config("viking://resources/docs", ttl_relative=30)
+# Disable TTL for future imports under this path.
+client.update_resource_config("viking://resources/docs")
+```
+
+```bash
+ov add-resource ./guide.md --ttl-relative 7
+ov update-resource-config viking://resources/docs --ttl-relative 30
+```
+
+HTTP uses `POST /api/v1/resources` for imports and `PATCH /api/v1/resources/config` with `uri` and one TTL parameter for future policy changes. The corresponding MCP tools are `add_resource` and `update_resource_config`. External Connector imports use the configured directory policy; per-import TTL parameters on that route are rejected.
+
+`GET /api/v1/resources/ttl?uri=...` returns one file's retention metadata. `PATCH /api/v1/resources/ttl` accepts an exact file `uri` and exactly one of `ttl_relative` (whole days) or `expires_at` (a future ISO 8601 timestamp). It supports previously unmanaged live files even with global TTL disabled. Relative retention uses the latest successful content update time; editing retention alone does not reset it. Absolute edits select a fixed deadline and clear the relative duration. Existing generation and content are preserved. Directories are rejected; use `PATCH /api/v1/resources/config` for defaults applied to future files. Expired files cannot be revived. See the [document TTL API](12-content.md#document-expiry) for examples.
+
+Expired L2 content, attachments and their search candidates become invisible immediately, before asynchronous physical cleanup finishes. Physical deletion is deterministically spread across the configured cleanup-jitter window rather than concentrating all tenants at UTC midnight. All L0/L1 files and vectors remain, including summaries inside directories whose L2 files have all expired; TTL neither hides nor rebuilds these summaries, so they can still contain information from expired content. Cleanup failures retain their records for retry. TTL state stays in OpenViking metadata without adding cloud vector fields.
+
+Copy and move preserve a managed source file's lifetime. Unmanaged content overwriting a managed target keeps the target policy; relative retention renews after a successful write. A recursive transfer containing an expired child is rejected before publication. Snapshot and OVPack raw restores reject expired sources/destinations and return a conflict when overwriting a managed file, because raw restoration cannot preserve its update lifecycle. Restoring a live snapshot to an unmanaged destination requires its TTL metadata.
+
+A directory Watch continues refreshing its live files independently. It skips an expired file when the source content is unchanged, preventing cleanup from being undone by a later refresh; if the source content changes, the file may be imported as a new incarnation under the policy effective at that time.
+
+Physical cleanup schedules each object after its deadline plus a stable offset within the configured window (24 hours by default). The service polls every 30 seconds with up to 5 seconds of scan jitter and claims up to 100 objects, subject to byte/time budgets and queue backpressure. Failed deletions retain their retry deadlines across restart. The jitter window is not a completion SLA: queue backlog or failures can delay deletion further. Storage may remain billable between expiry and physical cleanup. Cleanup completion confirms removal of primary-store L2 files and vector records; it does not confirm asynchronous backup completion or a billing adjustment, and retained summaries still occupy storage.
+
 ## Related Documentation
 
 - [File System](03-filesystem.md) - File and directory operations
@@ -735,3 +769,5 @@ Possible shared response:
 - [Retrieval](06-retrieval.md) - Search and context acquisition
 - [ovpack Guide](../guides/09-ovpack.md) - Detailed ovpack import/export documentation
 - [OpenViking Assets](../guides/18-openviking-assets.md) - Declarative resource-set protocol and usage guide
+
+Events and resources share the [document TTL API](12-content.md#document-expiry) and `ov ttl get/set`.

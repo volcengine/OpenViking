@@ -32,6 +32,8 @@ async def ingest_temp_upload(
     tags: Optional[list[str]] = None,
     tag_mode: str = "replace",
     parse_mode: ParseMode | str = ParseMode.DEFAULT,
+    ttl_relative: Optional[int] = None,
+    ttl_absolute: Optional[int] = None,
 ) -> dict[str, Any]:
     """Resolve a temp upload and ingest it as a resource; return the raw add_resource result.
 
@@ -67,6 +69,8 @@ async def ingest_temp_upload(
                 args=ingest_args,
                 tags=tags,
                 tag_mode=tag_mode,
+                ttl_relative=ttl_relative,
+                ttl_absolute=ttl_absolute,
             )
         except Exception:
             raise

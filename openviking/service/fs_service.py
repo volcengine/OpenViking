@@ -37,7 +37,7 @@ from openviking.storage.abstract_overview import (
 from openviking.storage.acl import AclAction, AclMode, AclSpec
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.expr import And, Eq, In, Or
-from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.internal_names import is_storage_internal_name, is_ttl_metadata_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -354,8 +354,31 @@ class FSService:
     @staticmethod
     def _reject_storage_internal_target(uri: str) -> None:
         """Reject reserved names in targets and implicitly created parent directories."""
-        if any(is_storage_internal_name(part) for part in uri_parts(uri)):
+        if any(
+            is_storage_internal_name(part) or is_ttl_metadata_name(part) for part in uri_parts(uri)
+        ):
             raise InvalidArgumentError(f"cannot create storage internal name: {uri}")
+
+    async def get_ttl(self, uri: str, ctx: RequestContext) -> dict:
+        from openviking.storage.document_ttl import get_document_ttl
+
+        self._reject_storage_internal_target(uri)
+        return await get_document_ttl(self._ensure_initialized(), uri, ctx=ctx)
+
+    async def update_ttl(
+        self,
+        uri: str,
+        expires_at: str | None,
+        ctx: RequestContext,
+        *,
+        ttl_relative: int | None = None,
+    ) -> dict:
+        from openviking.storage.document_ttl import update_document_expiry
+
+        self._reject_storage_internal_target(uri)
+        return await update_document_expiry(
+            self._ensure_initialized(), uri, expires_at, ctx=ctx, ttl_relative=ttl_relative
+        )
 
     async def mkdir(
         self,
@@ -437,14 +460,31 @@ class FSService:
         recursive: bool = False,
         wait: bool = False,
         timeout: Optional[float] = None,
+        *,
+        strict: bool = False,
+        lease_ref: Optional[Dict[str, Any]] = None,
+        preserve_summaries: bool = False,
+        verify_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Remove resource."""
+        if is_ttl_metadata_name(uri.rsplit("/", 1)[-1]):
+            raise InvalidArgumentError("cannot remove resource TTL metadata directly")
         viking_fs = self._ensure_initialized()
         cleanup_result: Optional[Dict[str, Any]] = None
         context_type = context_type_for_uri(uri)
-        refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
+        refresh_parent_uri = (
+            self._semantic_refresh_parent_uri(uri, context_type) if lease_ref is None else None
+        )
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        result = await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        result = await viking_fs.rm(
+            uri,
+            recursive=recursive,
+            ctx=ctx,
+            strict=strict,
+            **({"preserve_summaries": True} if preserve_summaries else {}),
+            **({"verify_only": True} if verify_only else {}),
+            **({"lease_ref": lease_ref} if lease_ref is not None else {}),
+        )
         await self._sync_watch_after_rm(uri, account_id=ctx.account_id, context_type=context_type)
         # A refresh on a parent that no longer exists would lock its sidecar
         # paths and thereby recreate the deleted directory. Nothing to
@@ -473,14 +513,14 @@ class FSService:
                     resource_uri=uri,
                     recursive=recursive,
                 )
-            if memory_overview_uri:
+            if memory_overview_uri and not preserve_summaries:
                 await MemoryUpdater.refresh_schema_overview(
                     viking_fs=viking_fs,
                     directory_uri=memory_overview_uri,
                     ctx=ctx,
                 )
             for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
-                cleanup_result
+                cleanup_result if not preserve_summaries else None
             ):
                 await MemoryUpdater.refresh_schema_overview(
                     viking_fs=viking_fs,

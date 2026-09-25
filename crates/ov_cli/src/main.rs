@@ -334,6 +334,19 @@ enum AclCommands {
 #[derive(Subcommand)]
 enum Commands {
     // --- Data Operations ---
+    /// [Data] Inspect or change an existing event/resource document's cleanup time
+    Ttl {
+        #[command(subcommand)]
+        action: TtlCommands,
+    },
+    /// [Data] Set the TTL policy for future imports at a resource path; omit both values to disable
+    UpdateResourceConfig {
+        uri: String,
+        #[arg(long, conflicts_with = "ttl_absolute", value_parser = clap::value_parser!(i64).range(1..=365000))]
+        ttl_relative: Option<i64>,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..=253402300799))]
+        ttl_absolute: Option<i64>,
+    },
     /// [Data] Add resources into OpenViking
     AddResource {
         /// Local path or URL to import
@@ -385,6 +398,12 @@ enum Commands {
             help_heading = "Common options"
         )]
         parent_auto_create: Option<String>,
+        /// Resource TTL in whole days (new resources only)
+        #[arg(long, conflicts_with_all = ["ttl_absolute", "manifest"], value_parser = clap::value_parser!(i64).range(1..=365000))]
+        ttl_relative: Option<i64>,
+        /// Absolute resource expiry as Unix seconds (new resources only)
+        #[arg(long, conflicts_with = "manifest", value_parser = clap::value_parser!(i64).range(1..=253402300799))]
+        ttl_absolute: Option<i64>,
         /// Reason for import
         #[arg(
             long,
@@ -1943,7 +1962,38 @@ enum PrivacyCommands {
 }
 
 #[derive(Subcommand)]
+enum TtlCommands {
+    /// Read a live document's content update time and retention policy
+    Get { uri: String },
+    /// Set a live document's retention, independently of global TTL
+    Set {
+        uri: String,
+        #[arg(
+            long,
+            conflicts_with = "ttl_relative",
+            required_unless_present = "ttl_relative"
+        )]
+        expires_at: Option<String>,
+        /// Retain for this many whole days after the last content update
+        #[arg(long, conflicts_with = "expires_at", required_unless_present = "expires_at", value_parser = clap::value_parser!(i64).range(1..=365000))]
+        ttl_relative: Option<i64>,
+    },
+}
+
+#[derive(Subcommand)]
 enum AdminCommands {
+    /// Read runtime configuration overrides (omit --account-id for cluster settings)
+    GetConfiguration {
+        #[arg(long)]
+        account_id: Option<String>,
+    },
+    /// Patch runtime settings; JSON null removes an override and restores inheritance
+    PatchConfiguration {
+        #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        settings: serde_json::Value,
+    },
     /// Create a new account with its first admin user
     CreateAccount {
         /// Account ID to create
@@ -2709,6 +2759,8 @@ fn is_admin_subcommand(token: &str) -> bool {
             | "set-role"
             | "regenerate-key"
             | "set-account-settings"
+            | "get-configuration"
+            | "patch-configuration"
     )
 }
 
@@ -3257,6 +3309,8 @@ async fn main() {
             watch_interval,
             processing_mode,
             resource_args,
+            ttl_relative,
+            ttl_absolute,
             upload_options,
         } => {
             let ctx =
@@ -3285,35 +3339,81 @@ async fn main() {
                     }
                 }
             } else if let Some(path) = path {
-                handlers::handle_add_resource(
-                    path,
-                    add_type,
-                    to,
-                    parent,
-                    parent_auto_create,
-                    reason,
-                    instruction,
-                    wait,
-                    timeout,
-                    strict_mode,
-                    ignore_dirs,
-                    include,
-                    exclude,
-                    no_directly_upload_media,
-                    watch_interval.unwrap_or(0.0),
-                    processing_mode,
-                    resource_args,
-                    tags,
-                    tag_mode,
-                    acl,
-                    ctx,
-                )
-                .await
+                match handlers::parse_add_resource_args(resource_args.as_deref()) {
+                    Err(e) => Err(e),
+                    Ok(args) => {
+                        let mut args = args.unwrap_or_default();
+                        if let Some(value) = ttl_relative {
+                            args.insert("ttl_relative".into(), value.into());
+                        }
+                        if let Some(value) = ttl_absolute {
+                            args.insert("ttl_absolute".into(), value.into());
+                        }
+                        let resource_args = Some(serde_json::Value::Object(args).to_string());
+                        handlers::handle_add_resource(
+                            path,
+                            add_type,
+                            to,
+                            parent,
+                            parent_auto_create,
+                            reason,
+                            instruction,
+                            wait,
+                            timeout,
+                            strict_mode,
+                            ignore_dirs,
+                            include,
+                            exclude,
+                            no_directly_upload_media,
+                            watch_interval.unwrap_or(0.0),
+                            processing_mode,
+                            resource_args,
+                            tags,
+                            tag_mode,
+                            acl,
+                            ctx,
+                        )
+                        .await
+                    }
+                }
             } else {
                 Err(error::Error::Client(
                     "a path/URL or --manifest is required".to_string(),
                 ))
             }
+        }
+        Commands::Ttl { action } => {
+            let client = ctx.get_client();
+            let result: Result<serde_json::Value> = match action {
+                TtlCommands::Get { uri } => {
+                    client
+                        .get("/api/v1/content/ttl", &[("uri".into(), uri)])
+                        .await
+                }
+                TtlCommands::Set { uri, expires_at, ttl_relative } => {
+                    client
+                        .patch(
+                            "/api/v1/content/ttl",
+                            &serde_json::json!({"uri": uri, "expires_at": expires_at, "ttl_relative": ttl_relative}),
+                            &[],
+                        )
+                        .await
+                }
+            };
+            result.map(|value| output::output_success(&value, ctx.output_format, ctx.compact))
+        }
+        Commands::UpdateResourceConfig {
+            uri,
+            ttl_relative,
+            ttl_absolute,
+        } => {
+            let body = serde_json::json!({"uri": uri, "ttl_relative": ttl_relative, "ttl_absolute": ttl_absolute});
+            ctx.get_client()
+                .patch::<_, serde_json::Value>("/api/v1/resources/config", &body, &[])
+                .await
+                .map(|result| {
+                    output::output_success(&result, ctx.output_format, ctx.compact);
+                })
         }
         Commands::AddSkill(args) => {
             handlers::handle_add_skill(args, legacy_upload_options, ctx).await
@@ -3871,7 +3971,7 @@ async fn main() {
 mod tests {
     use super::{
         Cli, CliContext, Commands, ConfigAddTarget, ConfigCommands, LanguageGateAction,
-        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd, UploadCliOptions,
+        ObserverCommands, PrivacyCommands, SkillCommands, SnapshotCmd, TtlCommands, UploadCliOptions,
         find_command_index, first_command_token, is_language_command_request,
         language_command_can_run_picker, language_gate_action, language_required_message,
         legacy_upload_option_error, plain_help_misuse, pre_parse_output_options,
@@ -3886,6 +3986,95 @@ mod tests {
 
     fn os_args(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn resource_ttl_flags_are_exclusive_and_require_positive_days() {
+        let cli =
+            Cli::try_parse_from(["ov", "add-resource", "a.md", "--ttl-relative", "7"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::AddResource {
+                ttl_relative: Some(7),
+                ttl_absolute: None,
+                ..
+            }
+        ));
+        for values in [
+            vec!["ov", "add-resource", "a.md", "--ttl-relative", "0"],
+            vec![
+                "ov",
+                "add-resource",
+                "a.md",
+                "--ttl-relative",
+                "7",
+                "--ttl-absolute",
+                "2000000000",
+            ],
+            vec![
+                "ov",
+                "add-resource",
+                "--manifest",
+                "a.json",
+                "--ttl-relative",
+                "7",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(values).is_err());
+        }
+        let cli = Cli::try_parse_from([
+            "ov",
+            "update-resource-config",
+            "viking://~/resources/reports",
+            "--ttl-absolute",
+            "2000000000",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::UpdateResourceConfig {
+                ttl_absolute: Some(2000000000),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn document_ttl_accepts_exactly_one_retention_mode() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "ttl",
+            "set",
+            "viking://resources/a.txt",
+            "--ttl-relative",
+            "30",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Ttl {
+                action: TtlCommands::Set {
+                    ttl_relative: Some(30),
+                    expires_at: None,
+                    ..
+                }
+            }
+        ));
+        for tail in [
+            vec![],
+            vec!["--ttl-relative", "0"],
+            vec!["--ttl-relative", "365001"],
+            vec![
+                "--ttl-relative",
+                "1",
+                "--expires-at",
+                "2999-01-01T00:00:00Z",
+            ],
+        ] {
+            let mut args = vec!["ov", "ttl", "set", "viking://resources/a.txt"];
+            args.extend(tail);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
     }
 
     #[test]

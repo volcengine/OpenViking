@@ -53,6 +53,28 @@ class ConfigPatchError(ValueError):
         super().__init__(message)
 
 
+def normalize_config_keys(model: type[BaseModel], data: dict, *, by_alias: bool = True) -> dict:
+    """Canonicalize declared aliases without filling defaults or losing PATCH nulls."""
+    if not isinstance(data, dict):
+        raise ConfigPatchError("patch must be a JSON object")
+    fields = _model_fields(model)
+    names = {getattr(field, "alias", None) or name: name for name, field in fields.items()}
+    result = {}
+    for key, value in data.items():
+        name = names.get(key, key)
+        field = fields.get(name)
+        target = (getattr(field, "alias", None) or name) if by_alias else name
+        if target in result:
+            raise ConfigPatchError("use either a field name or its alias, not both", path=(key,))
+        nested = _unwrap_model(_field_annotation(field))
+        result[target] = (
+            normalize_config_keys(nested, value, by_alias=by_alias)
+            if nested is not None and isinstance(value, dict)
+            else value
+        )
+    return result
+
+
 def validate_patch(
     model: type[BaseModel],
     patch: dict[str, Any],
@@ -76,6 +98,7 @@ def validate_patch(
     """
     if not isinstance(patch, dict):
         raise ConfigPatchError("patch must be a JSON object")
+    patch = normalize_config_keys(model, patch, by_alias=False)
     allowed = collect_runtime_field_paths(model)
     frozen = collect_frozen_paths(model)
     _walk(patch, (), allowed, frozen, model, creating)

@@ -512,6 +512,7 @@ def _epoch_eval_context(ctx: PipelineContext, *, epoch: int) -> PipelineContext:
         gradient_context=ctx.gradient_context,
         optimization_context=ctx.optimization_context,
         apply_context=ctx.apply_context,
+        write_fence=ctx.write_fence,
         execution_metadata=execution_metadata,
         max_epochs=1,
         eval_trials=ctx.eval_trials,

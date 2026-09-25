@@ -369,6 +369,9 @@ JSON 输出 - 错误：
 |------|------|------|
 | POST | `/api/v1/resources/temp_upload` | 上传后续导入所需的临时文件 |
 | POST | `/api/v1/resources` | 从 URL 或临时文件添加资源 |
+| PATCH | `/api/v1/resources/config` | 设置目录下新资源的 TTL 策略 |
+| GET | `/api/v1/resources/ttl` | 查询资源冻结的 TTL 元数据 |
+| PATCH | `/api/v1/resources/ttl` | 修改未过期资源的冻结到期时间 |
 | GET | `/api/v1/fs/ls` | 列出目录 |
 | GET | `/api/v1/fs/tree` | 获取目录树 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |
@@ -394,6 +397,8 @@ JSON 输出 - 错误：
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/content/read` | 读取完整内容（L2） |
+| GET | `/api/v1/content/ttl` | 读取 event/resource 的冻结期限 |
+| PATCH | `/api/v1/content/ttl` | 修改存活 event/resource 的到期时间 |
 | GET | `/api/v1/content/abstract` | 读取摘要（L0） |
 | GET | `/api/v1/content/overview` | 读取概览（L1） |
 | GET | `/api/v1/content/download` | 下载原始文件字节 |

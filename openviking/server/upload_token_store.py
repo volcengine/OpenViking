@@ -58,6 +58,8 @@ class _TokenInfo:
     skill_target_uri: str = ""
     skill_names: Optional[list[str]] = None
     list_only: bool = False
+    ttl_relative: Optional[int] = None
+    ttl_absolute: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,8 @@ class ConsumedUploadToken:
     skill_target_uri: str = ""
     skill_names: Optional[list[str]] = None
     list_only: bool = False
+    ttl_relative: Optional[int] = None
+    ttl_absolute: Optional[int] = None
 
 
 class UploadTokenStore:
@@ -102,6 +106,8 @@ class UploadTokenStore:
         skill_target_uri: str = "",
         skill_names: Optional[list[str]] = None,
         list_only: bool = False,
+        ttl_relative: Optional[int] = None,
+        ttl_absolute: Optional[int] = None,
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to the caller identity and ingestion parameters.
 
@@ -128,6 +134,8 @@ class UploadTokenStore:
             skill_target_uri,
             skill_names,
             list_only,
+            ttl_relative,
+            ttl_absolute,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -160,6 +168,8 @@ class UploadTokenStore:
             skill_target_uri=info.skill_target_uri,
             skill_names=info.skill_names,
             list_only=info.list_only,
+            ttl_relative=info.ttl_relative,
+            ttl_absolute=info.ttl_absolute,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

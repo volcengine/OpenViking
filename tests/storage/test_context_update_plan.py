@@ -12,6 +12,14 @@ from openviking.storage import resource_diff
 from openviking.storage.index_action import FieldPatch
 
 
+@pytest.fixture(autouse=True)
+def unmanaged_resources(monkeypatch):
+    # These plan-only filesystem doubles contain no lifecycle metadata.
+    monkeypatch.setattr(
+        "openviking.storage.resource_ttl.prepare_resource_ttl", AsyncMock(return_value={})
+    )
+
+
 def test_context_plan_has_explicit_actions_and_compact_semantic_roundtrip():
     from openviking.storage.context_update_plan import (
         ContextUpdatePlan,

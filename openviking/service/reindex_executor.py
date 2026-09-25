@@ -1685,7 +1685,14 @@ class ReindexExecutor:
                 )
                 return file_counters
             body = body_source.text if body_source.exists else ""
-            memory_content = MemoryFileUtils.read(body).content if body else ""
+            memory_file = MemoryFileUtils.read(body) if body else None
+            memory_content = memory_file.content if memory_file else ""
+            # The memory file body is the authoritative source of the frozen TTL
+            # expiry. Re-derive it here (never from the current scope policy) so a
+            # reindex keeps the object's original deadline and read-barrier
+            # invisibility, even if the directory policy changed afterwards.
+            expires_at = memory_file.extra_fields.get("expires_at") if memory_file else None
+            ttl_generation = memory_file.extra_fields.get("ttl_generation") if memory_file else None
             existing = await self._fetch_existing_record(
                 uri=file_uri,
                 level=2,
@@ -1714,6 +1721,8 @@ class ReindexExecutor:
                         level=ContextLevel.DETAIL,
                         ctx=ctx,
                         ingest_options=ingest_options,
+                        expires_at=expires_at,
+                        ttl_generation=ttl_generation,
                     )
                     file_counters.rebuilt_records += 1
                 except Exception as exc:
@@ -1732,6 +1741,8 @@ class ReindexExecutor:
                     level=ContextLevel.DETAIL,
                     ctx=ctx,
                     ingest_options=ingest_options,
+                    expires_at=expires_at,
+                    ttl_generation=ttl_generation,
                 )
                 file_counters.rebuilt_records += 1
                 file_counters.warnings.append(
@@ -1903,6 +1914,8 @@ class ReindexExecutor:
         ctx: RequestContext,
         meta: Optional[dict[str, Any]] = None,
         ingest_options: IngestOptions | None = None,
+        expires_at: Optional[str] = None,
+        ttl_generation: Optional[str] = None,
         md5: str | None = None,
     ) -> None:
         service = get_service()
@@ -1921,6 +1934,8 @@ class ReindexExecutor:
             account_id=owner_ctx.account_id,
             owner_space=owner_space_for_uri(uri),
             meta=merged_meta,
+            expires_at=expires_at,
+            ttl_generation=ttl_generation,
             md5=md5,
         )
         context.set_vectorize(Vectorize(text=vector_text))

@@ -43,6 +43,7 @@ class _FakeVikingFS:
         self._abstracts = abstracts or {}
         self.writes = []
         self._async_agfs = self
+        self.ttl_registry = SimpleNamespace(account_may_have_records=AsyncMock(return_value=False))
 
     async def ls(self, uri, node_limit=None, ctx=None):
         del node_limit

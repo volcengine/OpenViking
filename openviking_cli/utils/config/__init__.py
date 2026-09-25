@@ -87,6 +87,7 @@ from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig, TracerConfig
+from .ttl_config import TTL_SCOPES, TTLConfig, TTLPolicy, TTLScope
 from .vectordb_config import OpenGaussConfig, VectorDBBackendConfig
 from .vlm_config import VLMConfig
 
@@ -147,6 +148,10 @@ __all__ = [
     "RerankConfig",
     "RetrievalConfig",
     "StorageConfig",
+    "TTLConfig",
+    "TTLPolicy",
+    "TTLScope",
+    "TTL_SCOPES",
     "OpenGaussConfig",
     "VectorDBBackendConfig",
     "VLMConfig",

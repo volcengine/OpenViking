@@ -127,6 +127,12 @@ def runtime_config_manager():
 
 @pytest.fixture(autouse=True)
 def isolate_service_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "openviking.storage.resource_ttl.resource_ttl_visible", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        "openviking.storage.resource_ttl.resource_ttl_fields", AsyncMock(return_value={})
+    )
     task_tracker = NoopTaskTracker()
     monkeypatch.setattr(
         "openviking.service.task_tracker.get_task_tracker",

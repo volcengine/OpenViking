@@ -125,6 +125,8 @@ class StreamingPolicyTrainerKey:
     account_id: str
     user_id: str
     policy_root_uri: str
+    source_session_uri: str = ""
+    source_ttl_generation: str = ""
 
 
 @dataclass(slots=True)
@@ -653,6 +655,8 @@ def make_streaming_policy_trainer_key(
     *,
     policy_root_uri: str,
     request_context: Any,
+    source_session_uri: str = "",
+    source_ttl_generation: str = "",
 ) -> StreamingPolicyTrainerKey:
     """Build the default registry key from policy root and request context."""
 
@@ -667,6 +671,8 @@ def make_streaming_policy_trainer_key(
         account_id=str(account_id),
         user_id=str(user_id),
         policy_root_uri=policy_root_uri,
+        source_session_uri=str(source_session_uri or "").rstrip("/"),
+        source_ttl_generation=str(source_ttl_generation or ""),
     )
 
 

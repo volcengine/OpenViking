@@ -24,10 +24,12 @@ class _FakeSession:
         self._captured = captured
         self._processed = processed
 
-    async def exists(self) -> bool:
+    async def exists(self, *, include_expired=False) -> bool:
+        assert include_expired
         return True
 
-    async def load(self) -> None:
+    async def load(self, *, include_expired=False) -> None:
+        assert include_expired
         return None
 
     async def resume_queued_commit(self, msg) -> bool:

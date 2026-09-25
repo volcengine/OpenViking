@@ -170,6 +170,9 @@ async def _initialize_runtime_state(
         oauth_store=getattr(app.state, "oauth_store", None),
         usage_audit_runtime=getattr(app.state, "usage_audit_runtime", None),
     )
+    from openviking.service.ttl_cleanup import setup_ttl_cleanup
+
+    app.state.ttl_cleanup_service = await setup_ttl_cleanup(service=service)
     logger.info("OpenVikingService initialization complete")
 
 
@@ -434,6 +437,7 @@ def create_app(
     app.state.config = config
     app.state.api_key_manager = None
     app.state.deletion_service = None
+    app.state.ttl_cleanup_service = None
     set_server_config(config)
 
     # Body dump middleware must be registered BEFORE observability so it ends up

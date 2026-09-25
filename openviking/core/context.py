@@ -82,6 +82,8 @@ class Context:
         owner_space: Optional[str] = None,
         md5: Optional[str] = None,
         id: Optional[str] = None,
+        expires_at: Optional[str] = None,
+        ttl_generation: Optional[str] = None,
     ):
         """
         Initialize a Context object.
@@ -99,6 +101,10 @@ class Context:
         self.active_count = active_count
         self.related_uri = related_uri or []
         self.meta = meta or {}
+        # Frozen TTL expiry (RFC 3339 string) or None when TTL is off for this
+        # object. Persisted verbatim so the read barrier and cleanup scan agree.
+        self.expires_at = expires_at
+        self.ttl_generation = ttl_generation
         try:
             self.level = int(level) if level is not None else None
         except (TypeError, ValueError):
@@ -181,6 +187,11 @@ class Context:
         if self.md5:
             data["md5"] = self.md5
 
+        if self.expires_at is not None:
+            data["expires_at"] = self.expires_at
+        if self.ttl_generation is not None:
+            data["ttl_generation"] = self.ttl_generation
+
         if self.user:
             data["user"] = self.user.to_dict()
 
@@ -238,6 +249,8 @@ class Context:
             account_id=data.get("account_id"),
             owner_user_id=data.get("owner_user_id"),
             owner_space=data.get("owner_space"),
+            expires_at=data.get("expires_at"),
+            ttl_generation=data.get("ttl_generation"),
             md5=data.get("md5"),
         )
         obj.id = data.get("id", obj.id)

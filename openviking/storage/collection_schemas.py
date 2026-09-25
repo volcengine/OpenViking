@@ -18,7 +18,14 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.core.context import ContextType, ResourceContentType
+from openviking.core.ttl import (
+    OBJECT_TYPE_EVENT,
+    TTL_FIELD_NAMES,
+    ttl_object_for_uri,
+    ttl_scope_for_uri,
+)
 from openviking.models.embedder.base import embed_compat
+from openviking.server.error_mapping import is_storage_not_found
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
@@ -877,6 +884,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Write to vector database
                 try:
                     raw_upsert_options = inserted_data.pop("_upsert_options", {})
+                    source_sidecar_uri = str(inserted_data.pop("_source_sidecar_uri", "") or "")
+                    source_sidecar_digest = str(
+                        inserted_data.pop("_source_sidecar_digest", "") or ""
+                    )
                     # Reuse the actual vector-store ID when a semantic plan
                     # rebuilds an existing same-level record. Only genuinely new
                     # records derive an ID locally from (account, uri, level).
@@ -889,64 +900,100 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             account_id, uri, inserted_data.get("level", 2)
                         )
 
-                    if await self._vikingdb.account_uses_content_field(account_id):
-                        inserted_data["content"] = await self._materialize_content(
-                            embedding_msg,
-                            ctx,
-                        )
-                    if embedding_msg.action is IndexAction.MERGE:
-                        field_patch = embedding_msg.field_patch
-                        merge_fields = dict(field_patch.values) if field_patch is not None else {}
-                        merge_modes = dict(field_patch.modes) if field_patch is not None else {}
-                        # Legacy MERGE producers encoded tag intent in context_data
-                        # plus _upsert_options. Normalize them to the explicit patch
-                        # protocol before the exact read.
-                        if "search_tags" in inserted_data and "search_tags" not in merge_fields:
-                            merge_fields["search_tags"] = inserted_data.pop("search_tags")
-                            merge_modes["search_tags"] = str(
-                                raw_upsert_options.get("search_tag_mode", "replace")
+                    async def _write_vector() -> Any:
+                        nonlocal inserted_data
+                        write_data = dict(inserted_data)
+                        if await self._vikingdb.account_uses_content_field(account_id):
+                            write_data["content"] = await self._materialize_content(
+                                embedding_msg,
+                                ctx,
                             )
-                        existing_records = await self._vikingdb.get_strict(
-                            [inserted_data["id"]], ctx=ctx
-                        )
-                        base = (
-                            dict(existing_records[0])
-                            if existing_records
-                            else dict(field_patch.seed_fields)
-                            if field_patch is not None
-                            else {}
-                        )
-                        # Fresh content/model outputs win over the stored record;
-                        # scalar patches are then interpreted against that latest
-                        # exact-get result.
-                        inserted_data = FieldPatch(merge_fields, merge_modes).apply(
-                            {**base, **inserted_data}
-                        )
-                        if not existing_records:
-                            missing_fields = missing_initial_record_fields(inserted_data)
-                            if missing_fields:
-                                raise RuntimeError(
-                                    "merge could not create missing vector record: "
-                                    f"record_id={inserted_data.get('id')} "
-                                    f"missing_fields={missing_fields}"
+                        if embedding_msg.action is IndexAction.MERGE:
+                            field_patch = embedding_msg.field_patch
+                            merge_fields = (
+                                dict(field_patch.values) if field_patch is not None else {}
+                            )
+                            merge_modes = dict(field_patch.modes) if field_patch is not None else {}
+                            # Legacy MERGE producers encoded tag intent in context_data
+                            # plus _upsert_options. Normalize them to the explicit patch
+                            # protocol before the exact read.
+                            if "search_tags" in write_data and "search_tags" not in merge_fields:
+                                merge_fields["search_tags"] = write_data.pop("search_tags")
+                                merge_modes["search_tags"] = str(
+                                    raw_upsert_options.get("search_tag_mode", "replace")
                                 )
-                    upsert_options = normalize_upsert_options(
-                        {**raw_upsert_options, "partial_update": False}
-                    )
-                    if inserted_data.get("context_type") == ContextType.SKILL.value:
-                        # Cancelling the waiter cannot stop a threaded DB write.
-                        # Keep this task active until that write has settled.
-                        result = await run_to_completion(
-                            lambda: self._vikingdb.upsert(
-                                inserted_data, ctx=ctx, options=upsert_options
+                            existing_records = await self._vikingdb.get_strict(
+                                [write_data["id"]], ctx=ctx
                             )
+                            base = (
+                                dict(existing_records[0])
+                                if existing_records
+                                else dict(field_patch.seed_fields)
+                                if field_patch is not None
+                                else {}
+                            )
+                            # Fresh content/model outputs win over the stored record;
+                            # scalar patches are then interpreted against that latest
+                            # exact-get result.
+                            write_data = FieldPatch(merge_fields, merge_modes).apply(
+                                {**base, **write_data}
+                            )
+                            if not existing_records:
+                                missing_fields = missing_initial_record_fields(write_data)
+                                if missing_fields:
+                                    raise RuntimeError(
+                                        "merge could not create missing vector record: "
+                                        f"record_id={write_data.get('id')} "
+                                        f"missing_fields={missing_fields}"
+                                    )
+                        # TTL metadata is source-only, regardless of backend or
+                        # stale fields returned by an existing vector record.
+                        inserted_data = {
+                            field: value
+                            for field, value in write_data.items()
+                            if field not in TTL_FIELD_NAMES
+                        }
+                        upsert_options = normalize_upsert_options(
+                            {**raw_upsert_options, "partial_update": False}
                         )
-                    else:
-                        result = await self._vikingdb.upsert(
+                        if inserted_data.get("context_type") == ContextType.SKILL.value:
+                            # Cancelling the waiter cannot stop a threaded DB write.
+                            # Keep this task active until that write has settled.
+                            return await run_to_completion(
+                                lambda: self._vikingdb.upsert(
+                                    inserted_data, ctx=ctx, options=upsert_options
+                                )
+                            )
+                        return await self._vikingdb.upsert(
                             inserted_data,
                             ctx=ctx,
                             options=upsert_options,
                         )
+
+                    if source_sidecar_uri and source_sidecar_digest:
+                        result = await self._write_directory_vector_if_current(
+                            source_sidecar_uri,
+                            source_sidecar_digest,
+                            ctx,
+                            _write_vector,
+                        )
+                        if result is None:
+                            self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                            self._record_request_success(embedding_msg)
+                            return ProcessResult.success(inserted_data)
+                    elif inserted_data.get("level", 2) == 2 and (
+                        (ttl_object_for_uri(str(uri or "")) or (None,))[0] == OBJECT_TYPE_EVENT
+                        or ttl_scope_for_uri(str(uri or "")) == "resources"
+                    ):
+                        result = await self._write_ttl_vector_if_current(
+                            embedding_msg, ctx, _write_vector
+                        )
+                        if result is None:
+                            self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                            self._record_request_success(embedding_msg)
+                            return ProcessResult.success(inserted_data)
+                    else:
+                        result = await _write_vector()
                     record_id = result
                     if record_id:
                         logger.debug(
@@ -1044,6 +1091,97 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 )
             if embedding_msg is not None and request_failed_message is not None:
                 self._record_request_failure(embedding_msg, request_failed_message)
+
+    async def _write_ttl_vector_if_current(
+        self,
+        embedding_msg: EmbeddingMsg,
+        ctx: RequestContext,
+        write_vector,
+    ) -> Any:
+        """Write a TTL vector only while its source incarnation is live.
+
+        The source object lock makes the final metadata check and vector upsert
+        mutually exclusive with generation-fenced cleanup. A delayed message
+        from a deleted/recreated URI therefore becomes a harmless no-op.
+        """
+        from openviking.core.ttl import OBJECT_TYPE_EVENT, hidden_by_ttl, ttl_object_for_uri
+        from openviking.session.memory.utils.messages import parse_memory_file_with_fields
+        from openviking.storage.viking_fs import get_viking_fs
+
+        data = embedding_msg.context_data
+        uri = str(data.get("uri") or "")
+        target = ttl_object_for_uri(uri)
+        resource = ttl_scope_for_uri(uri) == "resources"
+        if not resource and (target is None or target[0] != OBJECT_TYPE_EVENT):
+            return await write_vector()
+
+        viking_fs = get_viking_fs()
+        object_uri = uri if resource else target[1]
+        path = viking_fs._uri_to_path(object_uri, ctx=ctx)
+        # Producers enqueue before releasing their source write lease. Wait for
+        # that lease, then validate the persisted generation under our own lock.
+        lease = await viking_fs._async_agfs.pathlock_acquire_exact(path, timeout_secs=300.0)
+        try:
+            try:
+                if resource:
+                    from openviking.storage.resource_ttl import (
+                        resource_ttl_fields,
+                        resource_ttl_visible,
+                    )
+
+                    if not await resource_ttl_visible(viking_fs, uri, ctx=ctx, require_source=True):
+                        return None
+                    fields = await resource_ttl_fields(viking_fs, uri, ctx=ctx)
+                    if data.get("md5"):
+                        from openviking.utils.content_hash import content_md5
+
+                        raw = await viking_fs.read_file_bytes(uri, ctx=ctx)
+                        if content_md5(raw) != data["md5"]:
+                            return None
+                else:
+                    content = await viking_fs.read_file(object_uri, ctx=ctx, include_expired=True)
+                    fields = parse_memory_file_with_fields(content)
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    return None
+                raise
+            if hidden_by_ttl(fields.get("expires_at")) or str(
+                fields.get("ttl_generation") or ""
+            ) != str(data.get("ttl_generation") or ""):
+                return None
+            return await write_vector()
+        finally:
+            await viking_fs._async_agfs.pathlock_release(lease)
+
+    async def _write_directory_vector_if_current(
+        self,
+        sidecar_uri: str,
+        expected_digest: str,
+        ctx: RequestContext,
+        write_vector,
+    ) -> Any:
+        """Fence delayed directory embeddings with their source sidecar."""
+        from openviking.storage.abstract_overview import (
+            body_for_preview,
+            semantic_body_digest,
+        )
+        from openviking.storage.viking_fs import get_viking_fs
+
+        viking_fs = get_viking_fs()
+        path = viking_fs._uri_to_path(sidecar_uri, ctx=ctx)
+        lease = await viking_fs._async_agfs.pathlock_acquire_exact(path, timeout_secs=300.0)
+        try:
+            try:
+                raw = await viking_fs.read_file(sidecar_uri, ctx=ctx)
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    return None
+                raise
+            if semantic_body_digest(body_for_preview(raw)) != expected_digest:
+                return None
+            return await write_vector()
+        finally:
+            await viking_fs._async_agfs.pathlock_release(lease)
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Settle request-scoped waiting when a queued embedding is cancelled."""

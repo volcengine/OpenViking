@@ -3,11 +3,12 @@
 """Core filesystem operations mixin for VikingFS."""
 
 import asyncio
+import json
 import math
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -15,19 +16,32 @@ from openviking.core.namespace import (
     may_include_hidden_actor_peers,
     uri_parts,
 )
+from openviking.core.ttl import (
+    OBJECT_TYPE_EVENT,
+    OBJECT_TYPE_RESOURCE,
+    OBJECT_TYPE_RESOURCE_FILE,
+    OBJECT_TYPE_SESSION,
+    TTL_FIELD_NAMES,
+    apply_ttl_fields,
+    ttl_enabled,
+    ttl_metadata_uri,
+    ttl_object_for_uri,
+    ttl_scope_for_uri,
+)
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
-from openviking.server.error_mapping import is_not_found_error, map_exception
+from openviking.server.error_mapping import is_not_found_error, is_storage_not_found, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
     ABSTRACT_OVERVIEW_FILENAMES,
     rewrite_abstract_overview_for_transfer,
 )
 from openviking.storage.acl import AclAction, is_acl_uri
+from openviking.storage.errors import StorageException
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
@@ -45,6 +59,16 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.utils.uri import VikingURI
+
+if TYPE_CHECKING:
+    from openviking.storage.ttl_registry import TTLRecord
+
+
+@dataclass(frozen=True)
+class _TTLWriteMutation:
+    object_uri: str
+    previous: Optional["TTLRecord"]
+    desired: Optional["TTLRecord"]
 
 
 def _glob_match_uri(entry_uri: str, is_dir: Optional[bool]) -> str:
@@ -142,6 +166,8 @@ class _OpsMixin:
         offset: int = 0,
         size: int = -1,
         ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
     ) -> bytes:
         """Read file. Accepts a Viking URI or a 32-char hex vector record id."""
         real_ctx = self._ctx_or_default(ctx)
@@ -154,7 +180,9 @@ class _OpsMixin:
         # offset/size through and let the Rust layer return the requested slice.
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri, path, primary_path, real_ctx, include_expired=include_expired
+            ):
                 continue
             try:
                 result = await self._async_agfs.read(path, offset, size)
@@ -187,8 +215,22 @@ class _OpsMixin:
         if isinstance(data, str):
             data = data.encode("utf-8")
 
-        # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
-        return await self._async_agfs.write(path, data)
+        lease = await self._async_agfs.pathlock_acquire_exact(path)
+        ttl_mutation = None
+        try:
+            ttl_mutation = await self._prepare_ttl_write(uri, data, ctx=ctx)
+            try:
+                # Encryption (when configured) happens inside the ragfs layer keyed by account_id.
+                result = await self._async_agfs.write(
+                    path, data, fs_ctx=self._pathlock_fs_ctx(ctx, lease)
+                )
+            except Exception:
+                await self._rollback_ttl_write(ttl_mutation, ctx=ctx)
+                raise
+            await self._complete_ttl_write(ttl_mutation, ctx=ctx)
+            return result
+        finally:
+            await self._async_agfs.pathlock_release(lease)
 
     async def mkdir(
         self,
@@ -219,6 +261,10 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         lease_ref: Dict[str, Any] | None = None,
         auto_pathlock: bool = True,
+        *,
+        strict: bool = False,
+        preserve_summaries: bool = False,
+        verify_only: bool = False,
     ) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index.
 
@@ -235,6 +281,19 @@ class _OpsMixin:
         target is not concurrently mutated (e.g. best-effort shared upload
         cleanup that only deletes already-expired directories).
 
+        When ``strict`` is True the call does not return until every backing
+        record is gone: the vector delete already re-raises on backend error,
+        and after the FS delete we re-count the URI scope and raise if any
+        vector record remains. Physical cleanup (the TTL sweep) uses this so it
+        only marks an object physically cleaned once files and vectors are
+        both removed. The default (False) keeps the historical
+        best-effort semantics for the interactive delete path.
+
+        TTL uses ``preserve_summaries`` to delete only L2 vectors and content.
+        Summary files, directories, ACLs and lifecycle fences are retained.
+        ``verify_only`` resumes strict confirmation under a caller-owned lease,
+        without repeating vector or content deletion.
+
         Returns:
             Dict with 'estimated_deleted_count' indicating the estimated number
             of nodes deleted from vector index.
@@ -246,6 +305,26 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        vector_options = {"level": ContextLevel.DETAIL} if preserve_summaries else {}
+
+        async def confirm() -> None:
+            try:
+                await self._confirm_vector_scope_cleared(target_uri, ctx=ctx, **vector_options)
+                await self._confirm_fs_scope_cleared(
+                    path, target_uri, preserve_summaries=preserve_summaries
+                )
+            except Exception as exc:
+                # Preserve the cause for retry classification; callers can resume
+                # verification without parsing error text or replaying deletion.
+                raise StorageException(str(exc), action="confirm_delete") from exc
+
+        if verify_only:
+            if not strict or lease_ref is None:
+                raise ValueError("verify_only requires strict deletion and an object lease")
+            await confirm()
+            if not (preserve_summaries and ttl_scope_for_uri(target_uri) == "resources"):
+                await self._remove_resource_file_metadata(target_uri, ctx=ctx, lease_ref=lease_ref)
+            return {"estimated_deleted_count": 0}
 
         async def _estimate_deleted_count(target_path: str, real_ctx: RequestContext) -> int:
             """Estimate number of nodes to be deleted using vector index."""
@@ -265,7 +344,7 @@ class _OpsMixin:
             stat = await self._async_agfs.stat(path)
             is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
         except Exception as exc:
-            if not is_not_found_error(exc):
+            if not (is_storage_not_found(exc) if strict else is_not_found_error(exc)):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
@@ -277,7 +356,17 @@ class _OpsMixin:
             uris_to_delete.append(target_uri)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await self._delete_from_vector_store(
+                uris_to_delete,
+                ctx=ctx,
+                recursive_uri=target_uri if strict and recursive else None,
+                **vector_options,
+            )
+            if strict:
+                await confirm()
+            if not (preserve_summaries and ttl_scope_for_uri(target_uri) == "resources"):
+                await self._remove_resource_file_metadata(target_uri, ctx=ctx, lease_ref=lease_ref)
+            await self._remove_deleted_ttl_records(uris_to_delete, ctx=ctx)
             logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
             return {"estimated_deleted_count": estimated_count}
 
@@ -320,14 +409,29 @@ class _OpsMixin:
                 await self._ensure_access_many(uris_to_delete, ctx, action=AclAction.MANAGE)
             real_ctx = self._ctx_or_default(ctx)
             estimated_count = await _estimate_deleted_count(path, real_ctx)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            await self._delete_from_vector_store(
+                uris_to_delete,
+                ctx=ctx,
+                recursive_uri=target_uri if strict and recursive else None,
+                **vector_options,
+            )
             try:
-                result = await self._async_agfs.rm(
-                    path,
-                    recursive=recursive,
-                    fs_ctx=self._pathlock_fs_ctx(ctx, lease),
-                    auto_pathlock=auto_pathlock,
-                )
+                if preserve_summaries and is_dir:
+                    for content_path in await self._ttl_content_paths(path, target_uri):
+                        await self._async_agfs.rm(
+                            content_path,
+                            recursive=False,
+                            fs_ctx=self._pathlock_fs_ctx(ctx, lease),
+                            auto_pathlock=auto_pathlock,
+                        )
+                    result = {}
+                else:
+                    result = await self._async_agfs.rm(
+                        path,
+                        recursive=recursive,
+                        fs_ctx=self._pathlock_fs_ctx(ctx, lease),
+                        auto_pathlock=auto_pathlock,
+                    )
             except AGFSDirectoryNotEmptyError:
                 raise InvalidArgumentError(
                     f"Directory not empty: {uri}. Use recursive=True to delete non-empty directories."
@@ -344,10 +448,44 @@ class _OpsMixin:
                 result["estimated_deleted_count"] = estimated_count
             else:
                 result = {"estimated_deleted_count": estimated_count}
+            if strict:
+                await confirm()
+            if not (preserve_summaries and ttl_scope_for_uri(target_uri) == "resources"):
+                await self._remove_resource_file_metadata(target_uri, ctx=ctx, lease_ref=lease_ref)
+            await self._remove_deleted_ttl_records(uris_to_delete, ctx=ctx)
             return result
         finally:
             if lease_ref is None and lease is not None:
                 await self._async_agfs.pathlock_release(lease)
+
+    async def _remove_resource_file_metadata(self, uri: str, *, ctx, lease_ref=None) -> None:
+        if ttl_scope_for_uri(uri) != "resources" or ttl_object_for_uri(uri) is not None:
+            return
+        metadata_uri = ttl_metadata_uri(OBJECT_TYPE_RESOURCE_FILE, uri)
+        path = self._uri_to_path(metadata_uri, ctx=ctx)
+        try:
+            await self._async_agfs.stat(path, bypass_cache=True)
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return
+            raise
+        lease = await self._async_agfs.pathlock_acquire_exact(path, owner_lease_ref=lease_ref)
+        try:
+            await self.remove_files(metadata_uri, ctx=ctx, lease_ref=lease)
+        finally:
+            await self._async_agfs.pathlock_release(lease)
+        await self._remove_deleted_ttl_records([metadata_uri], ctx=ctx)
+
+    async def _remove_deleted_ttl_records(self, uris: List[str], *, ctx) -> None:
+        """Drop projections whose authoritative metadata was explicitly deleted."""
+        real_ctx = self._ctx_or_default(ctx)
+        object_uris = {target[1] for uri in uris if (target := ttl_object_for_uri(uri)) is not None}
+        for object_uri in sorted(object_uris):
+            record = await self.ttl_registry.get(real_ctx.account_id, object_uri)
+            if record is not None:
+                await self.ttl_registry.remove_if_generation(
+                    real_ctx.account_id, object_uri, record.generation
+                )
 
     async def remove_files(
         self,
@@ -442,15 +580,25 @@ class _OpsMixin:
             source_uris = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
             )
-            files_created = await self._copy_agfs_entry(
-                old_path,
-                new_path,
-                old_uri=old_uri,
-                new_uri=new_uri,
-                is_dir=is_dir,
-                ctx=ctx,
-                lease_ref=lease,
+            ttl_mutations = await self._register_transferred_ttl_records(
+                source_uris, old_scope, new_scope, ctx=ctx, lease_ref=lease
             )
+            try:
+                files_created = await self._copy_agfs_entry(
+                    old_path,
+                    new_path,
+                    old_uri=old_uri,
+                    new_uri=new_uri,
+                    is_dir=is_dir,
+                    ctx=ctx,
+                    lease_ref=lease,
+                )
+            except Exception:
+                # Preserve the existing transfer contract: a backend copy can
+                # have partially written the target, and cp does not remove it.
+                # Only undo the registry projection that preceded publication.
+                await self._rollback_transferred_ttl_records(ttl_mutations, ctx=ctx)
+                raise
             try:
                 vector_result = await self._copy_vector_store_uris(
                     old_uri,
@@ -459,6 +607,7 @@ class _OpsMixin:
                     ctx=ctx,
                     **({"source_uris": source_uris} if is_dir else {}),
                 )
+                await self._complete_transferred_ttl_records(ttl_mutations, ctx=ctx)
             except Exception:
                 try:
                     await self._cleanup_transfer_target(
@@ -466,6 +615,7 @@ class _OpsMixin:
                     )
                 except Exception:
                     logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
+                await self._rollback_transferred_ttl_records(ttl_mutations, ctx=ctx)
                 raise
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
@@ -532,6 +682,19 @@ class _OpsMixin:
             else:
                 await self._ensure_copy_source_access(source, recursive=directory, ctx=ctx)
             await self._ensure_access(target, ctx, action=AclAction.WRITE)
+            if not directory:
+                real_ctx = self._ctx_or_default(ctx)
+                source_owner = ttl_object_for_uri(source)
+                if source_owner is not None and source_owner[0] == OBJECT_TYPE_RESOURCE:
+                    raise InvalidArgumentError(
+                        "Legacy resource directory TTL metadata is not transferable"
+                    )
+                for uri in (source, target):
+                    if not await self._transfer_ttl_visible(uri, real_ctx):
+                        raise NotFoundError(uri, "file")
+                await self._ensure_transfer_ttl_scope(
+                    source, target, old_scope=old_uri, new_scope=new_uri, ctx=real_ctx
+                )
             await self._ensure_transfer_target_type(
                 self._uri_to_path(target, ctx=ctx), target, is_dir=directory
             )
@@ -543,14 +706,88 @@ class _OpsMixin:
                     name = entry.get("name", "")
                     if not name or name in (".", ".."):
                         continue
+                    child_uri = f"{source.rstrip('/')}/{name}"
+                    ttl_target = ttl_object_for_uri(child_uri)
+                    if ttl_target is not None and ttl_target[0] == OBJECT_TYPE_RESOURCE:
+                        # Legacy directory owners are cleanup-only metadata.
+                        continue
                     await visit(
-                        f"{source.rstrip('/')}/{name}",
+                        child_uri,
                         f"{target.rstrip('/')}/{name}",
                         bool(entry.get("isDir", False)),
                     )
 
         await visit(old_uri, new_uri, is_dir)
+        if not is_dir and ttl_scope_for_uri(old_uri) == "resources":
+            metadata_uri = ttl_metadata_uri(OBJECT_TYPE_RESOURCE_FILE, old_uri)
+            try:
+                await self._async_agfs.stat(
+                    self._uri_to_path(metadata_uri, ctx=ctx), bypass_cache=True
+                )
+            except Exception as exc:
+                if not is_storage_not_found(exc):
+                    raise
+            else:
+                source_uris.append(metadata_uri)
         return source_uris
+
+    async def _transfer_ttl_visible(self, uri: str, ctx: RequestContext) -> bool:
+        owner = ttl_object_for_uri(uri)
+        if owner is not None and owner[0] == OBJECT_TYPE_RESOURCE_FILE:
+            # A destination sidecar may be copied before its body exists.
+            # Check its owner's expiry without requiring the body to exist yet.
+            uri = owner[1]
+        return await self._ttl_uri_visible(uri, ctx)
+
+    async def _ensure_transfer_ttl_scope(
+        self, source: str, target: str, *, old_scope: str, new_scope: str, ctx: RequestContext
+    ) -> None:
+        """Reject moves/copies that would detach content from its TTL owner."""
+        if source.rsplit("/", 1)[-1] in ABSTRACT_OVERVIEW_FILENAMES:
+            return
+        source_owner = ttl_object_for_uri(source)
+        target_owner = ttl_object_for_uri(target)
+        if source_owner is None:
+            if ttl_scope_for_uri(source) != "resources":
+                return
+            from openviking.storage.resource_ttl import resource_ttl_fields
+
+            fields = await resource_ttl_fields(self, source, ctx=ctx)
+            if fields and (
+                ttl_scope_for_uri(target) != "resources"
+                or target_owner is not None
+                or target.rsplit("/", 1)[-1] in ABSTRACT_OVERVIEW_FILENAMES
+            ):
+                raise InvalidArgumentError(
+                    "Transfer destination cannot preserve the source TTL owner"
+                )
+            return
+        object_type, object_uri = source_owner
+        if object_type == OBJECT_TYPE_RESOURCE:
+            return
+        compatible = target_owner is not None and target_owner[0] == object_type
+        if object_type == OBJECT_TYPE_SESSION:
+            old_root = old_scope.rstrip("/")
+            compatible = (
+                compatible
+                and (object_uri == old_root or object_uri.startswith(old_root + "/"))
+                and target_owner[1] == new_scope.rstrip("/") + object_uri[len(old_root) :]
+            )
+        if compatible:
+            return
+        metadata_uri = ttl_metadata_uri(object_type, object_uri)
+        try:
+            raw = self._handle_agfs_read(
+                await self._async_agfs.read(self._uri_to_path(metadata_uri, ctx=ctx))
+            )
+        except Exception as exc:
+            if not is_storage_not_found(exc):
+                raise
+            record = await self.ttl_registry.get(ctx.account_id, object_uri)
+        else:
+            record = self._ttl_record_for_write(metadata_uri, raw, ctx=ctx)
+        if record is not None:
+            raise InvalidArgumentError("Transfer destination cannot preserve the source TTL owner")
 
     async def _ensure_copy_source_access(
         self,
@@ -656,14 +893,122 @@ class _OpsMixin:
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
+        real_ctx = self._ctx_or_default(ctx)
+        for uri in (old_uri, new_uri):
+            if not await self._transfer_ttl_visible(uri, real_ctx):
+                raise NotFoundError(uri, "file")
+        target_owner = ttl_object_for_uri(new_uri)
+        if (
+            target_owner is not None
+            and target_owner[0] == OBJECT_TYPE_EVENT
+            and await self._copy_event_with_target_ttl(
+                old_uri, new_uri, ctx=real_ctx, lease_ref=lease_ref
+            )
+        ):
+            return 1
+        fields = {}
+        if ttl_scope_for_uri(old_uri) == "resources" and ttl_object_for_uri(old_uri) is None:
+            from openviking.storage.resource_ttl import resource_ttl_fields, write_resource_fields
 
+            fields = await resource_ttl_fields(self, old_uri, ctx=self._ctx_or_default(ctx))
+            if fields:
+                if ttl_scope_for_uri(new_uri) != "resources":
+                    raise InvalidArgumentError(
+                        "TTL resources must remain in the resources namespace"
+                    )
+                await write_resource_fields(
+                    self,
+                    OBJECT_TYPE_RESOURCE_FILE,
+                    new_uri,
+                    fields,
+                    ctx=self._ctx_or_default(ctx),
+                    lease_ref=lease_ref,
+                )
         await self._async_agfs.cp(
             old_path,
             new_path,
             recursive=False,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
         )
+        if (
+            not fields
+            and ttl_scope_for_uri(new_uri) == "resources"
+            and ttl_object_for_uri(new_uri) is None
+            and new_uri.rsplit("/", 1)[-1] not in ABSTRACT_OVERVIEW_FILENAMES
+            and (
+                ttl_enabled()
+                or await self.ttl_registry.account_may_have_records(real_ctx.account_id)
+            )
+        ):
+            from openviking.storage.resource_ttl import prepare_resource_ttl, resource_ttl_fields
+            from openviking.utils.content_hash import content_md5
+
+            target_fields = await resource_ttl_fields(self, new_uri, ctx=real_ctx)
+            if (
+                not target_fields
+                and await self.ttl_registry.get(real_ctx.account_id, new_uri) is None
+            ):
+                return 1
+            copied = self._handle_agfs_read(
+                await self._async_agfs.read(new_path, fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref))
+            )
+
+            # This is a content update of the existing target. Keep its saved
+            # duration and renew only after the replacement bytes are durable.
+            await prepare_resource_ttl(
+                self,
+                new_uri,
+                is_dir=False,
+                existing=True,
+                ctx=real_ctx,
+                lease_ref=lease_ref,
+                content_md5=content_md5(copied),
+            )
         return 1
+
+    async def _copy_event_with_target_ttl(
+        self, source: str, target: str, *, ctx: RequestContext, lease_ref: Dict[str, Any]
+    ) -> bool:
+        """Keep the target policy when unmanaged content replaces a managed event."""
+        if not ttl_enabled() and not await self.ttl_registry.account_may_have_records(
+            ctx.account_id
+        ):
+            return False
+        fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
+        source_raw = self._handle_agfs_read(
+            await self._async_agfs.read(self._uri_to_path(source, ctx=ctx), fs_ctx=fs_ctx)
+        )
+        if self._ttl_record_for_write(target, source_raw, ctx=ctx) is not None:
+            return False
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        try:
+            target_raw = self._handle_agfs_read(
+                await self._async_agfs.read(self._uri_to_path(target, ctx=ctx), fs_ctx=fs_ctx)
+            )
+        except Exception as exc:
+            if not is_storage_not_found(exc):
+                raise
+            record = await self.ttl_registry.get(ctx.account_id, target)
+            fields = (
+                {"expires_at": record.expires_at, "ttl_generation": record.generation}
+                if record is not None
+                else {}
+            )
+        else:
+            fields = MemoryFileUtils.read(self._decode_bytes(target_raw), uri=target).extra_fields
+        if not fields.get("expires_at") or not fields.get("ttl_generation"):
+            return False
+        memory = MemoryFileUtils.read(self._decode_bytes(source_raw), uri=target)
+        memory.extra_fields.update({key: fields[key] for key in TTL_FIELD_NAMES if key in fields})
+        await self.write_file_bytes(
+            target, MemoryFileUtils.write(memory).encode(), ctx=ctx, lease_ref=lease_ref
+        )
+        memory.extra_fields = apply_ttl_fields(target, memory.extra_fields, existing_fields=fields)
+        await self.write_file_bytes(
+            target, MemoryFileUtils.write(memory).encode(), ctx=ctx, lease_ref=lease_ref
+        )
+        return True
 
     async def _cleanup_transfer_target(
         self,
@@ -678,6 +1023,10 @@ class _OpsMixin:
             recursive=is_dir,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
         )
+        if not is_dir:
+            await self._remove_resource_file_metadata(
+                self._path_to_uri(path, ctx=ctx), ctx=ctx, lease_ref=lease_ref
+            )
 
     async def mv(
         self,
@@ -768,6 +1117,9 @@ class _OpsMixin:
             uris_to_move = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=True, ctx=ctx
             )
+            ttl_mutations = await self._register_transferred_ttl_records(
+                uris_to_move, old_scope, new_scope, ctx=ctx, lease_ref=lease
+            )
 
             # Check if it's temp directory (files already encrypted)
             is_temp = old_uri.startswith("viking://temp/")
@@ -788,7 +1140,14 @@ class _OpsMixin:
                     or 0
                 )
             except Exception as transfer_error:
+                await self._rollback_transferred_ttl_records(ttl_mutations, ctx=ctx)
+                source_missing = False
                 if is_not_found_error(transfer_error):
+                    try:
+                        await self._async_agfs.stat(old_path, bypass_cache=True)
+                    except Exception as source_error:
+                        source_missing = is_storage_not_found(source_error)
+                if source_missing:
                     try:
                         await self._delete_from_vector_store(uris_to_move, ctx=ctx)
                     except Exception:
@@ -817,6 +1176,7 @@ class _OpsMixin:
                         new_uri,
                         self._ctx_or_default(ctx),
                     )
+                await self._complete_transferred_ttl_records(ttl_mutations, ctx=ctx)
             except Exception:
                 if vector_transfer_completed:
                     try:
@@ -840,12 +1200,16 @@ class _OpsMixin:
                     )
                 except Exception:
                     logger.warning("Failed to clean move target %s", new_uri, exc_info=True)
+                await self._rollback_transferred_ttl_records(ttl_mutations, ctx=ctx)
                 raise
 
             # Old mv semantics: source deletion is the last step, with no copy-back on failure.
             await self._async_agfs.rm(
                 old_path, recursive=is_dir, fs_ctx=self._pathlock_fs_ctx(ctx, lease)
             )
+            await self._remove_transferred_ttl_records(uris_to_move, ctx=ctx)
+            if not is_dir:
+                await self._remove_resource_file_metadata(old_uri, ctx=ctx, lease_ref=lease)
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
                 "operation": "move",
@@ -874,6 +1238,119 @@ class _OpsMixin:
             return result
         finally:
             await self._async_agfs.pathlock_release(lease)
+
+    async def _register_transferred_ttl_records(
+        self,
+        source_uris: List[str],
+        old_scope: str,
+        new_scope: str,
+        *,
+        ctx: Optional[RequestContext],
+        lease_ref: Dict[str, Any],
+    ) -> List[_TTLWriteMutation]:
+        """Register target TTL snapshots before copied bytes are published."""
+        source_uri_set = {uri.rstrip("/") for uri in source_uris}
+        registrations: set[tuple[str, str]] = set()
+        for source_uri in source_uris:
+            if source_uri == ttl_metadata_uri(OBJECT_TYPE_RESOURCE_FILE, old_scope):
+                target_uri = ttl_metadata_uri(OBJECT_TYPE_RESOURCE_FILE, new_scope)
+            else:
+                target_uri = new_scope + source_uri.rstrip("/")[len(old_scope) :]
+            target = ttl_object_for_uri(target_uri)
+            if target is None:
+                continue
+            object_type, object_uri = target
+            target_registration_uri = ttl_metadata_uri(object_type, object_uri)
+            source_registration_uri = (
+                source_uri
+                if object_type == OBJECT_TYPE_RESOURCE_FILE
+                else old_scope + target_registration_uri[len(new_scope) :]
+            )
+            if source_registration_uri not in source_uri_set:
+                continue
+            registrations.add((source_registration_uri, target_registration_uri))
+
+        fs_ctx = self._pathlock_fs_ctx(ctx, lease_ref)
+        mutations: List[_TTLWriteMutation] = []
+        try:
+            for source_uri, target_uri in sorted(registrations):
+                path = self._uri_to_path(source_uri, ctx=ctx)
+                stat = await self._async_agfs.stat(path, fs_ctx=fs_ctx)
+                if isinstance(stat, dict) and stat.get("isDir", False):
+                    continue
+                raw = self._handle_agfs_read(await self._async_agfs.read(path, fs_ctx=fs_ctx))
+                target_owner = ttl_object_for_uri(target_uri)
+                if (
+                    target_owner is not None
+                    and target_owner[0] == OBJECT_TYPE_EVENT
+                    and self._ttl_record_for_write(target_uri, raw, ctx=ctx) is None
+                ):
+                    # The content-copy path preserves and renews an existing
+                    # target policy; do not pre-register its removal here.
+                    continue
+                mutation = await self._prepare_ttl_write(target_uri, raw, ctx=ctx)
+                if mutation is not None:
+                    mutations.append(mutation)
+        except Exception:
+            await self._rollback_transferred_ttl_records(mutations, ctx=ctx)
+            raise
+        return mutations
+
+    async def _complete_transferred_ttl_records(
+        self,
+        mutations: List[_TTLWriteMutation],
+        *,
+        ctx: Optional[RequestContext],
+    ) -> None:
+        """Publish the final target projection after filesystem success."""
+        for mutation in mutations:
+            await self._complete_ttl_write(mutation, ctx=ctx)
+
+    async def _rollback_transferred_ttl_records(
+        self,
+        mutations: List[_TTLWriteMutation],
+        *,
+        ctx: Optional[RequestContext],
+    ) -> None:
+        """Undo projections for target bytes that were not published."""
+        for mutation in mutations:
+            desired = mutation.desired
+            if desired is not None and desired.object_type in {
+                OBJECT_TYPE_RESOURCE,
+                OBJECT_TYPE_RESOURCE_FILE,
+            }:
+                from openviking.storage.resource_ttl import read_resource_fields
+
+                fields = await read_resource_fields(
+                    self, desired.object_type, desired.object_uri, ctx=self._ctx_or_default(ctx)
+                )
+                if fields is not None:
+                    # A failed copy can leave published bytes. Keep their cleanup
+                    # registration instead of rolling it back to an absent object.
+                    await self.ttl_registry.upsert(
+                        replace(
+                            desired,
+                            expires_at=fields["expires_at"],
+                            generation=fields["ttl_generation"],
+                        )
+                    )
+                    continue
+            await self._rollback_ttl_write(mutation, ctx=ctx)
+
+    async def _remove_transferred_ttl_records(
+        self, source_uris: List[str], *, ctx: Optional[RequestContext]
+    ) -> None:
+        """Remove source projections after the corresponding move is durable."""
+        real_ctx = self._ctx_or_default(ctx)
+        object_uris = {
+            target[1] for uri in source_uris if (target := ttl_object_for_uri(uri)) is not None
+        }
+        for object_uri in sorted(object_uris):
+            record = await self.ttl_registry.get(real_ctx.account_id, object_uri)
+            if record is not None:
+                await self.ttl_registry.remove_if_generation(
+                    real_ctx.account_id, object_uri, record.generation
+                )
 
     async def _copy_for_mv(
         self,
@@ -947,6 +1424,9 @@ class _OpsMixin:
             new_child = f"{new_path.rstrip('/')}/{name}"
             old_child_uri = f"{old_uri.rstrip('/')}/{name}"
             new_child_uri = f"{new_uri.rstrip('/')}/{name}"
+            ttl_target = ttl_object_for_uri(old_child_uri)
+            if ttl_target is not None and ttl_target[0] == OBJECT_TYPE_RESOURCE:
+                continue
             await self._ensure_copy_source_access(
                 old_child_uri,
                 recursive=bool(entry.get("isDir", False)),
@@ -983,11 +1463,14 @@ class _OpsMixin:
                         fs_ctx=fs_ctx,
                     )
                 else:
-                    await self._async_agfs.cp(
+                    await self._copy_agfs_entry(
                         old_child,
                         new_child,
-                        recursive=False,
-                        fs_ctx=fs_ctx,
+                        old_uri=old_child_uri,
+                        new_uri=new_child_uri,
+                        is_dir=False,
+                        ctx=ctx,
+                        lease_ref=lease_ref,
                     )
                 copied += 1
         return copied
@@ -1072,6 +1555,8 @@ class _OpsMixin:
         ctx: Optional[RequestContext] = None,
         skip_count: bool = False,
         include_lock_status: bool = False,
+        *,
+        include_expired: bool = False,
     ) -> Dict[str, Any]:
         """
         File/directory information.
@@ -1111,7 +1596,13 @@ class _OpsMixin:
         path = primary_path
         last_not_found: Optional[Exception] = None
         for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri,
+                candidate_path,
+                primary_path,
+                real_ctx,
+                include_expired=include_expired,
+            ):
                 continue
             try:
                 result = await self._async_agfs.stat(candidate_path)
@@ -1151,16 +1642,25 @@ class _OpsMixin:
                     vector_store = self._get_vector_store()
                     if vector_store:
                         if not may_include_hidden_actor_peers(uri, real_ctx):
-                            filter_expr = PathScope("uri", uri, depth=-1)
+                            # User-facing directory count must match what reads
+                            # can see, so drop TTL-expired records (no-op when
+                            # TTL is disabled).
                             result["count"] = await vector_store.count(
-                                filter=filter_expr,
+                                filter=PathScope("uri", uri, depth=-1),
                                 ctx=real_ctx,
+                                include_expired=False,
                             )
                 except Exception as e:
                     logger.warning(f"[VikingFS] Failed to count nodes for directory stat: {e}")
         return result
 
-    async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
+    async def exists(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
+    ) -> bool:
         """Check whether a URI is physically present in the caller's namespace.
 
         Resource ACLs control access to content, not namespace occupancy.  In
@@ -1175,7 +1675,13 @@ class _OpsMixin:
 
         primary_path = self._uri_to_path(uri, ctx=ctx)
         for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri,
+                candidate_path,
+                primary_path,
+                real_ctx,
+                include_expired=include_expired,
+            ):
                 continue
             if await self._agfs_path_exists(candidate_path):
                 return True
@@ -1974,12 +2480,28 @@ class _OpsMixin:
         if isinstance(content, str):
             content = content.encode("utf-8")
 
-        await self._async_agfs.write(
-            path,
-            content,
-            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-            auto_pathlock=auto_pathlock,
-        )
+        owned_lease = None
+        effective_lease = lease_ref
+        if effective_lease is None and auto_pathlock:
+            effective_lease = await self._async_agfs.pathlock_acquire_exact(path)
+            owned_lease = effective_lease
+        ttl_mutation = None
+        try:
+            ttl_mutation = await self._prepare_ttl_write(uri, content, ctx=ctx)
+            try:
+                await self._async_agfs.write(
+                    path,
+                    content,
+                    fs_ctx=self._pathlock_fs_ctx(ctx, effective_lease),
+                    auto_pathlock=False if effective_lease is not None else auto_pathlock,
+                )
+            except Exception:
+                await self._rollback_ttl_write(ttl_mutation, ctx=ctx)
+                raise
+            await self._complete_ttl_write(ttl_mutation, ctx=ctx)
+        finally:
+            if owned_lease is not None:
+                await self._async_agfs.pathlock_release(owned_lease)
 
     async def read_file(
         self,
@@ -1987,6 +2509,8 @@ class _OpsMixin:
         offset: int = 0,
         limit: int = -1,
         ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
     ) -> str:
         """Read single file, optionally sliced by line range.
 
@@ -2006,7 +2530,9 @@ class _OpsMixin:
         # empty bytes for non-existent files instead of raising an error.
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri, path, primary_path, real_ctx, include_expired=include_expired
+            ):
                 continue
             try:
                 stat = await self._async_agfs.stat(path)
@@ -2049,6 +2575,8 @@ class _OpsMixin:
         self,
         uri: str,
         ctx: Optional[RequestContext] = None,
+        *,
+        include_expired: bool = False,
     ) -> bytes:
         """Read single binary file. Accepts a Viking URI or a 32-char hex vector record id."""
         real_ctx = self._ctx_or_default(ctx)
@@ -2057,7 +2585,9 @@ class _OpsMixin:
         primary_path = self._uri_to_path(uri, ctx=ctx)
         last_not_found: Optional[Exception] = None
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+            if not await self._read_path_visible(
+                uri, path, primary_path, real_ctx, include_expired=include_expired
+            ):
                 continue
             try:
                 stat = await self._async_agfs.stat(path)
@@ -2100,12 +2630,205 @@ class _OpsMixin:
         path = self._uri_to_path(uri, ctx=ctx)
         await self._ensure_parent_dirs(path, ctx=ctx, lease_ref=lease_ref)
 
-        await self._async_agfs.write(
-            path,
-            content,
-            fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
-            auto_pathlock=auto_pathlock,
+        owned_lease = None
+        effective_lease = lease_ref
+        if effective_lease is None and auto_pathlock:
+            effective_lease = await self._async_agfs.pathlock_acquire_exact(path)
+            owned_lease = effective_lease
+        ttl_mutation = None
+        try:
+            ttl_mutation = await self._prepare_ttl_write(uri, content, ctx=ctx)
+            try:
+                await self._async_agfs.write(
+                    path,
+                    content,
+                    fs_ctx=self._pathlock_fs_ctx(ctx, effective_lease),
+                    auto_pathlock=False if effective_lease is not None else auto_pathlock,
+                )
+            except Exception:
+                await self._rollback_ttl_write(ttl_mutation, ctx=ctx)
+                raise
+            await self._complete_ttl_write(ttl_mutation, ctx=ctx)
+        finally:
+            if owned_lease is not None:
+                await self._async_agfs.pathlock_release(owned_lease)
+
+    @staticmethod
+    def _ttl_metadata_target(uri: str) -> Optional[tuple[str, str]]:
+        """Identify the source file that owns an event or session's TTL snapshot."""
+        target = ttl_object_for_uri(uri)
+        if target is not None:
+            object_type, object_uri = target
+            if object_type == OBJECT_TYPE_EVENT and object_uri != uri.rstrip("/"):
+                return None
+            if object_type == OBJECT_TYPE_SESSION and uri.rstrip("/") != f"{object_uri}/.meta.json":
+                return None
+        return target
+
+    async def _prepare_ttl_write(
+        self,
+        uri: str,
+        content: bytes,
+        *,
+        ctx: Optional[RequestContext],
+    ) -> Optional[_TTLWriteMutation]:
+        """Prepare a crash-safe projection before publishing TTL metadata.
+
+        New objects publish their desired record first. Overwrites retain the
+        live generation and the earlier deadline until bytes are durable, so a
+        failed or interrupted write cannot postpone cleanup of the old object.
+        """
+        target = self._ttl_metadata_target(uri)
+        if target is None:
+            return None
+        _object_type, object_uri = target
+
+        real_ctx = self._ctx_or_default(ctx)
+        desired = self._ttl_record_for_write(uri, content, ctx=ctx)
+        if (
+            desired is None
+            and not ttl_enabled()
+            and not await self.ttl_registry.account_may_have_records(real_ctx.account_id)
+        ):
+            return None
+        previous = await self.ttl_registry.get(real_ctx.account_id, object_uri)
+        if desired is not None:
+            preregistered = desired
+            if previous is not None:
+                earlier_expiry = min(
+                    (previous.expires_at, desired.expires_at), key=parse_iso_datetime
+                )
+                preregistered = replace(previous, expires_at=earlier_expiry)
+            await self.ttl_registry.upsert(preregistered)
+        if previous is None and desired is None:
+            return None
+        return _TTLWriteMutation(
+            object_uri=object_uri,
+            previous=previous,
+            desired=desired,
         )
+
+    async def _complete_ttl_write(
+        self, mutation: Optional[_TTLWriteMutation], *, ctx: Optional[RequestContext]
+    ) -> None:
+        if mutation is None:
+            return
+        real_ctx = self._ctx_or_default(ctx)
+        if mutation.desired is not None:
+            if mutation.previous is not None:
+                await self.ttl_registry.upsert(mutation.desired)
+            return
+        if mutation.previous is not None:
+            await self.ttl_registry.remove_if_generation(
+                real_ctx.account_id,
+                mutation.object_uri,
+                mutation.previous.generation,
+            )
+
+    async def _rollback_ttl_write(
+        self, mutation: Optional[_TTLWriteMutation], *, ctx: Optional[RequestContext]
+    ) -> None:
+        if mutation is None or mutation.desired is None:
+            return
+        real_ctx = self._ctx_or_default(ctx)
+        try:
+            current = await self.ttl_registry.get(real_ctx.account_id, mutation.object_uri)
+            # A multi-file transfer can fail after completing some projections.
+            # Roll back either stage, but never an unrelated replacement.
+            expected = {mutation.desired.generation}
+            if mutation.previous is not None:
+                expected.add(mutation.previous.generation)
+            if current is None or current.generation not in expected:
+                return
+            if mutation.previous is not None:
+                await self.ttl_registry.upsert(mutation.previous)
+            else:
+                await self.ttl_registry.remove_if_generation(
+                    real_ctx.account_id,
+                    mutation.object_uri,
+                    mutation.desired.generation,
+                )
+        except Exception:
+            logger.warning(
+                "Failed to roll back TTL write projection for %s",
+                mutation.object_uri,
+                exc_info=True,
+            )
+
+    def _ttl_record_for_write(
+        self,
+        uri: str,
+        content: bytes,
+        *,
+        ctx: Optional[RequestContext],
+    ) -> Optional["TTLRecord"]:
+        """Parse a frozen TTL snapshot without changing the registry."""
+        target = self._ttl_metadata_target(uri)
+        if target is None:
+            return None
+        object_type, object_uri = target
+        text = content.decode("utf-8")
+        if object_type in {OBJECT_TYPE_SESSION, OBJECT_TYPE_RESOURCE, OBJECT_TYPE_RESOURCE_FILE}:
+            fields = json.loads(text)
+        else:
+            from openviking.session.memory.utils.messages import (
+                parse_memory_file_with_fields,
+            )
+
+            fields = parse_memory_file_with_fields(text)
+        from openviking.storage.ttl_registry import record_from_fields
+
+        return record_from_fields(
+            uri=object_uri,
+            object_type=object_type,
+            fields=fields,
+            ctx=self._ctx_or_default(ctx),
+        )
+
+    async def _ttl_content_paths(self, path: str, uri: str) -> List[str]:
+        """Raw L2 files under an owner, retaining summaries and its expiry fence."""
+        metadata = ".meta.json" if ttl_scope_for_uri(uri) == "sessions" else ".ttl.json"
+        retained = f"{path}/{metadata}"
+        paths = []
+
+        async def collect(current):
+            try:
+                stat = await self._async_agfs.stat(current, bypass_cache=True)
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    return
+                raise
+            if not stat.get("isDir", False):
+                paths.append(current)
+                return
+            for entry in await self._ls_entries(current):
+                name = entry.get("name", "")
+                child = f"{current}/{name}"
+                if name in {".", ".."} or is_storage_internal_name(name):
+                    continue
+                if entry.get("isDir"):
+                    await collect(child)
+                elif name not in ABSTRACT_OVERVIEW_FILENAMES and child != retained:
+                    paths.append(child)
+
+        await collect(path)
+        return paths
+
+    async def _confirm_fs_scope_cleared(
+        self, path: str, uri: str, *, preserve_summaries: bool = False
+    ) -> None:
+        """Strict-mode check: no content covered by this deletion remains."""
+        if preserve_summaries:
+            if await self._ttl_content_paths(path, uri):
+                raise RuntimeError(f"Filesystem content still present after delete: {uri}")
+            return
+        try:
+            await self._async_agfs.stat(path, bypass_cache=True)
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return
+            raise
+        raise RuntimeError(f"Filesystem data still present after delete: {uri}")
 
     async def append_file(
         self,

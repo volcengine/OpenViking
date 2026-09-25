@@ -30,7 +30,8 @@ class _FakeVikingFS:
     async def exists(self, uri, ctx=None):
         return self.parent_exists
 
-    async def rm(self, uri, recursive=False, ctx=None):
+    async def rm(self, uri, recursive=False, ctx=None, strict=False):
+        assert strict is False  # Interactive removal retains its existing contract.
         self.rm_calls.append({"uri": uri, "recursive": recursive, "ctx": ctx})
         if self.rm_error:
             raise self.rm_error

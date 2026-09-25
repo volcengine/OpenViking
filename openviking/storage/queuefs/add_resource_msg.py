@@ -53,6 +53,9 @@ class AddResourceMsg:
     watch_interval: float = 0
     is_active: Optional[bool] = None
     watch_task_id: Optional[str] = None
+    ttl_generation: Optional[str] = None
+    ttl_relative: Optional[int] = None
+    ttl_absolute: Optional[int] = None
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
     cleanup_empty_target_on_failure: bool = False
@@ -198,6 +201,9 @@ class AddResourceMsg:
             allow_local_path_resolution=bool(data.get("allow_local_path_resolution", True)),
             enforce_public_remote_targets=bool(data.get("enforce_public_remote_targets", False)),
             args=args,
+            ttl_generation=data.get("ttl_generation"),
+            ttl_relative=data.get("ttl_relative"),
+            ttl_absolute=data.get("ttl_absolute"),
             lock_handoff_retry=lock_handoff_retry,
             source_name=data.get("source_name"),
             to_is_directory=(

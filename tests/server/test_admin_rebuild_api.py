@@ -2618,6 +2618,60 @@ async def test_reindex_memory_fallback_reads_existing_record_as_uri_owner(monkey
 
 
 @pytest.mark.asyncio
+async def test_reindex_memory_preserves_frozen_ttl_snapshot(monkeypatch):
+    from openviking.service.reindex_executor import (
+        ReindexExecutor,
+        _PruneSourceRead,
+        _ReindexCounters,
+    )
+
+    class FakeVikingFS:
+        async def exists(self, uri, ctx=None):
+            return True
+
+        async def stat(self, uri, ctx=None, skip_count=False):
+            return {"isDir": False}
+
+    body = (
+        "event body\n\n<!-- MEMORY_FIELDS\n"
+        '{"expires_at":"2030-01-02T00:00:00.000Z",'
+        '"ttl_generation":"generation-1"}\n-->'
+    )
+    upserts = []
+
+    async def fake_read_memory_body(self, uri, *, ctx):
+        return _PruneSourceRead(exists=True, text=body)
+
+    async def fake_fetch_existing_record(self, *, uri, level, ctx):
+        return None
+
+    async def fake_best_file_summary(self, uri, *, ctx):
+        return ""
+
+    async def fake_upsert_context(self, **kwargs):
+        upserts.append(kwargs)
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_read_memory_body", fake_read_memory_body)
+    monkeypatch.setattr(ReindexExecutor, "_fetch_existing_record", fake_fetch_existing_record)
+    monkeypatch.setattr(ReindexExecutor, "_best_file_summary", fake_best_file_summary)
+    monkeypatch.setattr(ReindexExecutor, "_upsert_context", fake_upsert_context)
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+    await ReindexExecutor()._reindex_memory_vectors(
+        uri="viking://user/alice/memories/events/item.md",
+        counters=_ReindexCounters(),
+        ctx=ctx,
+    )
+
+    assert upserts[0]["expires_at"] == "2030-01-02T00:00:00.000Z"
+    assert upserts[0]["ttl_generation"] == "generation-1"
+
+
+@pytest.mark.asyncio
 async def test_reindex_memory_skips_fallback_when_body_read_fails(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 

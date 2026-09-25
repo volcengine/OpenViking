@@ -185,6 +185,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | tags | string[] | 否 | None | 导入时写入向量检索记录的显式检索标签，格式必须是 `k=v`，例如 `["team=search", "env=test"]`。搜索接口可用同名 `tags` 参数过滤召回 |
 | tag_mode | string | 否 | `"replace"` | 标签写入模式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空。`clear` 不要求传 `tags`；`replace` 配合空数组不会修改已有标签。导入时标签会随本次生成的每条向量记录写入；不会在完成后额外调用 `set_tags`，响应也不返回 `tags_result` |
 | acl | object | 否 | None | 设置最终导入根节点的直接 ACL，要求 manage；省略时保留已有权限。见 [ACL API](12-acl.md)。 |
+| ttl_relative | integer | 否 | null | 保留天数，正整数；与 `ttl_absolute` 互斥 |
+| ttl_absolute | integer | 否 | null | 到期时间，Unix 秒级时间戳；与 `ttl_relative` 互斥 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
@@ -734,6 +736,38 @@ shared 模式的响应示例：
 
 ---
 
+## 资源 TTL
+
+TTL 默认关闭，公共资源、用户资源和 peer 资源使用相同规则。解析顺序为“本次导入显式参数 > 最近目录策略 > resources 范围默认 > 关闭”。resource 属于长期记忆，不继承 event 和 session 使用的库全局 TTL；导入时不传 `ttl_relative` 和 `ttl_absolute`，只继承 resource 自己的策略。
+
+TTL 对导入后生成的每个 L2 文件分别登记，包括目录导入产生的每个文件。resource 目录策略只是下属新文件的默认值，不是目录自身的期限，不会限制后代文件的期限，也不会删除目录。因此各文件按自己的有效策略和时间分别到期；目录策略配置时间更早、但某个文件尚未到期时，该文件必须保留。
+
+相对 TTL 按“文件最近一次成功内容更新时间 + 该文件已保存的 `ttl_days`”计算。重复导入、直接修改内容和 Watch 刷新只要成功更新存活文件，就会顺延其相对期限；显式绝对期限不随内容更新变化。策略修改仅影响之后新建的文件，已有纳管文件继续使用自身保存的策略。
+
+```python
+client.add_resource("./guide.md", ttl_relative=7)
+client.update_resource_config("viking://resources/docs", ttl_relative=30)
+# 关闭此路径下后续导入资源的 TTL。
+client.update_resource_config("viking://resources/docs")
+```
+
+```bash
+ov add-resource ./guide.md --ttl-relative 7
+ov update-resource-config viking://resources/docs --ttl-relative 30
+```
+
+HTTP 导入使用 `POST /api/v1/resources`；修改后续策略使用 `PATCH /api/v1/resources/config`，传入 `uri` 和一个 TTL 参数。MCP 对应 `add_resource`、`update_resource_config`。外部 Connector 导入使用已配置的目录策略，该路径不接受单次导入 TTL 参数。
+
+`GET /api/v1/resources/ttl?uri=...` 读取单个文件的保留元数据。`PATCH /api/v1/resources/ttl` 接受精确文件 `uri`，并且必须在 `ttl_relative`（整数天数）与 `expires_at`（未来的 ISO 8601 时间）中选择一个。全局 TTL 关闭时，也支持为此前未纳管的存活文件设置期限。相对时长从最近一次成功内容更新时间起算，修改有效期不重置该时间；设置绝对时间会选择固定期限并清空相对时长。已有 generation 和正文保留。目录 URI 会被拒绝，目录对后续新文件的默认值使用 `PATCH /api/v1/resources/config` 调整。已过期文件不能通过此接口恢复。示例见 [文档 TTL API](12-content.md#文档到期时间)。
+
+L2 正文、附件及其检索候选到期后立即逻辑不可见，再由异步任务物理清理；物理删除按稳定规则分散到配置的清理抖动窗口内，不会让所有租户集中在 UTC 0 点执行。所有 L0/L1 摘要及其向量均保留，即使目录内的 L2 已全部过期，也保留目录和摘要。TTL 不隐藏或重建这些摘要，摘要中仍可能保留过期正文的信息。清理失败会保留登记并重试。TTL 状态保存在 OV 元数据中，不增加公有云向量字段。
+
+复制、移动保留已纳管源文件的生命周期；未纳管内容覆盖已纳管目标时保留目标策略，成功写入后续期相对 TTL。递归搬运中包含已过期子文件时，整次操作会在写入前被拒绝。快照和 OVPack 原始恢复拒绝过期来源或目标；覆盖已纳管文件会返回冲突，因为原始恢复不能保留其更新生命周期。向未纳管目标恢复存活快照时，需要携带源 TTL 元数据。
+
+目录 Watch 会继续逐个刷新仍存活的文件。若某文件已过期且源内容未变化，Watch 会跳过它，避免物理清理后被无条件复活；源内容发生变化时，可以按当时生效的策略作为新一代文件重新导入。
+
+物理清理按每个对象的到期时间加稳定偏移调度，偏移位于配置窗口内（默认 24 小时）。服务每 30 秒扫描，并增加最多 5 秒的扫描抖动；每批最多领取 100 个对象，同时受字节、时间预算和队列背压约束。删除失败按持久化退避时间重试，重启后继续。抖动窗口不是完成 SLA：积压或失败可能进一步推迟删除。到期隐藏至物理清理完成期间仍可能计费。清理完成只确认主存储 L2 文件和向量记录已删除；异步备份完成和计费侧扣减尚未纳入确认，保留的摘要仍占用存储。
+
 ## 相关文档
 
 - [文件系统](03-filesystem.md) - 文件和目录操作
@@ -741,3 +775,5 @@ shared 模式的响应示例：
 - [检索](06-retrieval.md) - 搜索和上下文获取
 - [ovpack 指南](../guides/09-ovpack.md) - ovpack 导入导出详细说明
 - [OpenViking Assets](../guides/18-openviking-assets.md) - 声明式资源集合协议和运行指南
+
+事件和资源也可统一使用 [内容 TTL API](12-content.md#文档到期时间) 与 `ov ttl get/set`。

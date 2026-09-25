@@ -826,3 +826,25 @@ GET /api/v1/tasks?task_type=admin_reindex&resource_id=viking://resources
 - [文件系统](03-filesystem.md) - 目录与文件操作
 - [检索](06-retrieval.md) - 语义搜索与模式搜索
 - [后台任务](17-tasks.md) - 跟踪异步 reindex 任务
+
+## 文档到期时间
+
+`GET /api/v1/content/ttl?uri=...` 返回精确 event 或 resource 文件实际生效的期限，未纳管文件仅返回 `uri`。resource 目录不是带期限对象，传入目录会被拒绝。`PATCH /api/v1/content/ttl` 为存活文件设置或调整有效期，全局 TTL 关闭或文件此前未纳管时也可使用：
+
+```json
+{"uri": "viking://user/alice/memories/events/example.txt", "expires_at": "2027-01-01T00:00:00Z"}
+```
+
+必须且只能提供 `ttl_relative`（1–365000 的整数天数）或 `expires_at`（未来的 ISO 8601 时间）。相对时长从最近一次成功内容更新时间起算；修改有效期不重置该时间，缩短时长可能令文件立即过期。此前未纳管的文件以存储修改时间起算。后续内容成功更新会按已保存的相对时长续期。设置 `expires_at` 会选择固定期限并清空 `ttl_days`，即使该时间恰好等于此前的相对期限。两种方式都保留已有 generation 和正文，在对象锁内更新清理登记，不触发记忆提取或向量重建。
+
+resource 期限始终属于精确文件。修改一个文件不会影响兄弟文件、父目录或目录默认策略；后续新文件的默认值应通过 resource 配置接口调整。目录、摘要、关系和内部元数据不能作为此接口的目标。此接口不能恢复已过期文件。
+
+```bash
+ov ttl get viking://user/alice/memories/events/example.txt
+ov ttl set viking://user/alice/memories/events/example.txt --ttl-relative 30
+ov ttl set viking://user/alice/memories/events/example.txt --expires-at 2027-01-01T00:00:00Z
+```
+
+Python HTTP SDK 对应 `get_ttl(uri)`、`update_ttl(uri, expires_at)`；MCP 使用同名工具。全局、范围和目录默认策略见 [TTL 配置](../configuration/01-server.md#ttl)。TTL 只清理 L2；所有 L0/L1 文件、向量和容纳它们的目录保留。
+
+SDK 相对时长示例：`await client.update_ttl(uri, ttl_relative=30)`.

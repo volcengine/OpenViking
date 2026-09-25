@@ -262,6 +262,96 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("source_change", ["deleted", "new_generation", "unchanged"])
+async def test_ttl_event_summary_does_not_write_after_sources_change_during_llm(
+    monkeypatch, source_change
+):
+    dir_uri = "viking://user/default/memories/events"
+    event_uri = f"{dir_uri}/event.md"
+    registry_record = SimpleNamespace(
+        generation="generation-1", expires_at="2999-01-01T00:00:00.000Z"
+    )
+
+    class Registry:
+        record = registry_record
+
+        async def account_may_have_records(self, account_id):
+            del account_id
+            return True
+
+        async def get(self, account_id, uri):
+            del account_id
+            assert uri == event_uri
+            return self.record
+
+    class EventFS(_FakeVikingFS):
+        def __init__(self):
+            super().__init__()
+            self.file_names = ["event.md"]
+            self.ttl_registry = Registry()
+
+        async def ls(self, uri, node_limit=None, ctx=None):
+            del uri, node_limit, ctx
+            return [{"name": name, "isDir": False} for name in self.file_names]
+
+        async def read_file(self, uri, ctx=None):
+            del ctx
+            raise KeyError(uri)
+
+    fs = EventFS()
+    processor = SemanticProcessor(max_concurrent_llm=1)
+
+    async def generate_file_summary(file_path, llm_sem=None, ctx=None):
+        del file_path, llm_sem, ctx
+        return {"name": "event.md", "summary": "old event"}
+
+    async def generate_overview(
+        uri, file_summaries, children_abstracts, llm_sem=None, total_files=None, **kwargs
+    ):
+        del uri, file_summaries, children_abstracts, llm_sem, total_files, kwargs
+        if source_change == "deleted":
+            fs.file_names = []
+            fs.ttl_registry.record = None
+        elif source_change == "new_generation":
+            fs.ttl_registry.record = SimpleNamespace(
+                generation="generation-2",
+                expires_at="2999-01-01T00:00:00.000Z",
+            )
+        return "stale overview"
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fs
+    )
+    _patch_semantic_config(monkeypatch)
+    monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
+    monkeypatch.setattr(processor, "_generate_overview", generate_overview)
+    monkeypatch.setattr(
+        processor,
+        "_normalize_overview_generation",
+        lambda overview: (overview, "stale abstract"),
+    )
+
+    await processor._process_memory_directory(
+        SemanticMsg(uri=dir_uri, context_type="memory", skip_vectorization=True)
+    )
+
+    if source_change == "unchanged":
+        from openviking.storage.abstract_overview import parse_abstract_overview
+
+        assert len(fs.writes) == 2
+        for _, content in fs.writes:
+            assert parse_abstract_overview(content).metadata["expires_at"] == registry_record.expires_at
+    else:
+        assert fs.writes == []
+    assert fs._async_agfs.acquired_batches == [
+        [
+            "/fake/viking/user/default/memories/events/.overview.md",
+            "/fake/viking/user/default/memories/events/.abstract.md",
+        ]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_memory_directory_vectorizes_changed_files_with_generated_summary(monkeypatch):
     processor = _processor(max_concurrent_llm=4)
     dir_uri = "viking://user/default/memories/preferences"

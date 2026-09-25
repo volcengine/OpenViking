@@ -1,6 +1,8 @@
 import base64
 import io
 import types
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
@@ -96,6 +98,46 @@ class DummyReq:
     def __init__(self):
         self.user = DummyUser()
         self.account_id = "default"
+
+
+@pytest.mark.asyncio
+async def test_event_vectorization_captures_source_generation_before_content_read(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("")
+    fs.read_file = AsyncMock(
+        side_effect=[
+            '<!-- MEMORY_FIELDS {"ttl_generation":"source-before", "expires_at":"2999-01-01T00:00:00Z"} -->\nold',
+            '<!-- MEMORY_FIELDS {"ttl_generation":"source-after"} -->\nreplacement',
+        ]
+    )
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        embedding_utils, "_resolve_context_timestamps", AsyncMock(return_value=(now, now))
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "_resolve_resource_content_type",
+        AsyncMock(return_value=ResourceContentType.TEXT),
+    )
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content", max_input_tokens=4096)
+        ),
+    )
+    assert await embedding_utils.vectorize_file(
+        file_path="viking://user/default/memories/events/e.md",
+        summary_dict={},
+        parent_uri="viking://user/default/memories/events",
+        context_type="memory",
+        ctx=DummyReq(),
+        scalar_override={"ttl_generation": "untrusted-backup"},
+    )
+    assert queue.items[0].context_data["ttl_generation"] == "source-before"
+    assert queue.items[0].context_data["expires_at"] == "2999-01-01T00:00:00Z"
 
 
 def _jpeg_bytes(width: int, height: int) -> bytes:
@@ -630,6 +672,34 @@ async def test_vectorize_directory_meta_writes_search_tags_into_embedding_contex
     assert len(queue.items) == 2
     for msg in queue.items:
         assert msg.context_data["search_tags"] == ["team=search", "env=test"]
+
+
+@pytest.mark.asyncio
+async def test_memory_directory_vectors_are_fenced_by_source_sidecars(monkeypatch):
+    from openviking.storage.abstract_overview import semantic_body_digest
+
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+    uri = "viking://user/default/memories/events/2026"
+
+    await embedding_utils.vectorize_directory_meta(
+        uri=uri,
+        abstract="event abstract",
+        overview="event overview",
+        context_type="memory",
+        ctx=DummyReq(),
+        content_is_body=True,
+    )
+
+    assert queue.items[0].context_data["_source_sidecar_uri"] == f"{uri}/.abstract.md"
+    assert queue.items[0].context_data["_source_sidecar_digest"] == semantic_body_digest(
+        "event abstract"
+    )
+    assert queue.items[1].context_data["_source_sidecar_uri"] == f"{uri}/.overview.md"
+    assert queue.items[1].context_data["_source_sidecar_digest"] == semantic_body_digest(
+        "event overview"
+    )
 
 
 @pytest.mark.asyncio

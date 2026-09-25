@@ -113,11 +113,13 @@ class QueueCollector(StateMetricCollector):
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_errors_total
     # e.g.: openviking_queue_errors_total
     ERRORS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "errors", unit="total")
+    REQUEUED_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "requeued", unit="total")
 
     data_source: QueuePipelineStateDataSource
     config: CollectorConfig = CollectorConfig(timeout_seconds=0.5)
     _last_processed: dict[str, int] = field(default_factory=dict)
     _last_errors: dict[str, int] = field(default_factory=dict)
+    _last_requeued: dict[str, int] = field(default_factory=dict)
 
     def read_metric_input(self):
         """Read the latest queue pipeline status snapshot from the datasource."""
@@ -172,3 +174,16 @@ class QueueCollector(StateMetricCollector):
                         amount=delta,
                     )
                 self._last_errors[queue_name] = errors
+
+            requeued = int(status.requeue_count)
+            prev_requeued = self._last_requeued.get(queue_name, 0)
+            if requeued >= prev_requeued:
+                delta = requeued - prev_requeued
+                if delta:
+                    registry.inc_counter(
+                        self.REQUEUED_TOTAL,
+                        labels=labels,
+                        label_names=("queue",),
+                        amount=delta,
+                    )
+                self._last_requeued[queue_name] = requeued

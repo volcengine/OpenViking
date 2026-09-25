@@ -21,6 +21,9 @@ class SessionCommitMsg:
     # commit. Already normalized by the producer; empty means "no tags".
     event_search_tags: List[str] = field(default_factory=list)
     auto_commit_policy: Dict[str, Any] = field(default_factory=dict)
+    # Session incarnation captured by Phase 1. Empty keeps legacy queued work
+    # compatible; non-empty values fence delayed Phase 2 writeback.
+    ttl_generation: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

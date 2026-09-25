@@ -97,6 +97,9 @@ class QueueManager:
     # Account and user cleanup share one consumer. Retain the persisted name
     # so user cleanup messages queued before this change resume in place.
     DATA_CLEANUP = "UserDeletion"
+    # TTL expiry cleanup. Single consumer so a claimed object is torn down by
+    # exactly one worker; the persisted name keeps in-flight jobs recoverable.
+    TTL_CLEANUP = "TTLCleanup"
     # Deferred work re-enqueues itself; throttle the next scheduling round.
     _REQUEUE_POLL_INTERVAL = 1.0
 
@@ -254,7 +257,7 @@ class QueueManager:
 
     def _max_concurrent_for_queue(self, queue_name: str) -> int:
         """Return the worker concurrency limit for a named queue."""
-        if queue_name == self.DATA_CLEANUP:
+        if queue_name in (self.DATA_CLEANUP, self.TTL_CLEANUP):
             return 1
         if queue_name == self.EMBEDDING:
             return self._max_concurrent_embedding

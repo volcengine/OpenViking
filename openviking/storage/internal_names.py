@@ -43,3 +43,8 @@ WEBDAV_RESERVED_FILENAMES = frozenset(
         *MULTIWRITE_INTERNAL_FILE_NAMES,
     }
 )
+
+
+def is_ttl_metadata_name(name: str) -> bool:
+    """OV-owned resource TTL sidecars (kept in snapshots and directory transfers)."""
+    return name == ".ttl.json" or (name.startswith(".") and name.endswith(".ttl.json"))

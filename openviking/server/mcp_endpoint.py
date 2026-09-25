@@ -1160,6 +1160,50 @@ async def _maybe_sitemap_hint(path: str) -> str:
 
 
 @mcp.tool()
+async def get_ttl(uri: str) -> str:
+    """Read a live event/resource document's frozen cleanup time and TTL owner."""
+    ctx = _get_ctx()
+    uri = validate_request_viking_uri(uri, ctx)
+    return str(await get_service().fs.get_ttl(uri, ctx))
+
+
+@mcp.tool()
+async def update_ttl(
+    uri: str, expires_at: Optional[str] = None, ttl_relative: Optional[int] = None
+) -> str:
+    """Set a live event/resource document's cleanup time (ISO 8601 with timezone).
+
+    Provide relative whole days or a future absolute timestamp. Works with
+    global TTL disabled and on previously unmanaged files. Resource files have
+    independent lifetimes; directory defaults are changed with
+    update_resource_config. Does not revive expired data or change policy for
+    future documents.
+    """
+    ctx = _get_ctx()
+    uri = validate_request_viking_uri(uri, ctx)
+    return str(await get_service().fs.update_ttl(uri, expires_at, ctx, ttl_relative=ttl_relative))
+
+
+@mcp.tool()
+async def update_resource_config(
+    uri: str, ttl_relative: Optional[int] = None, ttl_absolute: Optional[int] = None
+) -> str:
+    """Set TTL for future resource imports at a path; omit both values to disable.
+
+    ttl_relative is whole days; ttl_absolute is a Unix timestamp in seconds.
+    Existing resources retain their frozen expiry.
+    """
+    ctx = _get_ctx()
+    from openviking.core.uri_validation import validate_content_target_uri
+
+    uri = validate_content_target_uri(uri, ctx, kind="resource")
+    result = await get_service().resources.update_resource_config(
+        uri, ctx, ttl_relative=ttl_relative, ttl_absolute=ttl_absolute
+    )
+    return f"Resource TTL policy updated: {result}"
+
+
+@mcp.tool()
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
@@ -1172,6 +1216,8 @@ async def add_resource(
     tags: Optional[list[str]] = None,
     tag_mode: str = "replace",
     args: Optional[dict[str, Any]] = None,
+    ttl_relative: Optional[int] = None,
+    ttl_absolute: Optional[int] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
@@ -1289,6 +1335,8 @@ async def add_resource(
                 processing_mode=processing_mode,
                 tags=tags,
                 tag_mode=tag_mode,
+                ttl_relative=ttl_relative,
+                ttl_absolute=ttl_absolute,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
             return f"Error: {exc}"
@@ -1343,6 +1391,8 @@ async def add_resource(
                 args=args,
                 tags=tags,
                 tag_mode=tag_mode,
+                ttl_relative=ttl_relative,
+                ttl_absolute=ttl_absolute,
             )
         except Exception as exc:
             return f"Error adding resource: {exc}"
@@ -1389,6 +1439,8 @@ async def add_resource(
         tags=tags,
         tag_mode=tag_mode,
         parse_mode=mode.value,
+        ttl_relative=ttl_relative,
+        ttl_absolute=ttl_absolute,
     )
     base_url, url_source = _resolve_public_base_url()
     upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"

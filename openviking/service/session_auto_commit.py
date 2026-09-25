@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from openviking.core.ttl import hidden_by_ttl
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -364,6 +365,11 @@ def _coerce_non_negative_int(value: Any) -> int:
 
 
 def _is_idle_candidate(meta: Dict[str, Any], now: datetime) -> bool:
+    # A logically-expired session is invisible to reads and its pending backlog
+    # must not be resurrected by a late auto-commit; skip it and let the cleanup
+    # sweep remove it. No-op when TTL is off (expires_at absent -> not expired).
+    if hidden_by_ttl(meta.get("expires_at", ""), now=now):
+        return False
     return _is_idle_policy_due(meta, now)
 
 

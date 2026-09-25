@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.message import Message, TextPart, ToolPart
 from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.train import (
     Case,
     CriterionResult,
@@ -277,6 +279,49 @@ async def test_trajectory_rollout_analyzer_extracts_skill_without_persisting_tra
     assert len(result["skill_gradients"]) == 1
     assert result["skill_gradients"][0].after_file.memory_type == "skills"
     assert fs.writes == []
+
+
+@pytest.mark.asyncio
+async def test_trajectory_writeback_uses_source_session_generation_fence(monkeypatch):
+    from openviking.session.train.components import trajectory_analyzer as module
+
+    operations = ResolvedOperations(
+        upsert_operations=[], delete_file_contents=[], errors=[]
+    )
+    apply_result = MemoryUpdateResult()
+    updater = SimpleNamespace(
+        submit=AsyncMock(return_value=SimpleNamespace(apply_result=apply_result))
+    )
+    get_updater = AsyncMock(return_value=updater)
+    monkeypatch.setattr(module, "get_streaming_memory_updater", get_updater)
+    registry = SimpleNamespace()
+    provider = SimpleNamespace(messages=_rollout().messages, _get_registry=lambda: registry)
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(account_id="default", user_id="u"),
+        account_id="default",
+    )
+    analyzer = TrajectoryRolloutAnalyzer(vikingdb=SimpleNamespace())
+
+    result = await analyzer._apply_trajectory_operations(
+        operations=operations,
+        provider=provider,
+        ctx=ctx,
+        extract_context=SimpleNamespace(),
+        isolation_handler=SimpleNamespace(),
+        source_session_uri="viking://user/u/sessions/session-1",
+        source_ttl_generation="generation-1",
+    )
+
+    assert result is apply_result
+    get_updater.assert_awaited_once()
+    request = updater.submit.await_args.args[0]
+    assert request.operations is operations
+    assert request.ctx is ctx
+    assert request.memory_registry is registry
+    assert request.metadata == {
+        "source_session_uri": "viking://user/u/sessions/session-1",
+        "source_ttl_generation": "generation-1",
+    }
 
 
 @pytest.mark.asyncio

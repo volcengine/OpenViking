@@ -509,6 +509,9 @@ class VikingDBManagerProxy:
     async def delete_uris(self, uris: List[str]) -> None:
         return await self._manager.delete_uris(self._ctx, uris)
 
+    async def delete_uri_scope(self, uri: str) -> None:
+        return await self._manager.delete_uri_scope(self._ctx, uri)
+
     async def copy_uri_mapping(
         self,
         source_uri: str,
