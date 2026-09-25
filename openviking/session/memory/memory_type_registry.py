@@ -6,7 +6,7 @@ Memory type registry - loads YAML configurations.
 
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import yaml
 
@@ -19,6 +19,8 @@ from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+_REQUIRED_MEMORY_TEMPLATE_FIELDS = ("memory_type", "directory", "filename_template")
 
 
 def resolve_memory_templates_dir() -> Path:
@@ -173,20 +175,51 @@ class MemoryTypeRegistry:
                 self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
-                logger.error(f"Failed to load {yaml_file}: {e}")
+                message = (
+                    "Skipping invalid memory template %s; existing schema (if any) was kept: %s"
+                )
+                (logger.warning if replace else logger.error)(message, yaml_file, e)
 
         for yaml_file in dir_path_obj.glob("*.yml"):
             try:
                 self.load_from_yaml(str(yaml_file), replace=replace)
                 count += 1
             except Exception as e:
-                logger.error(f"Failed to load {yaml_file}: {e}")
+                message = (
+                    "Skipping invalid memory template %s; existing schema (if any) was kept: %s"
+                )
+                (logger.warning if replace else logger.error)(message, yaml_file, e)
 
         return count
 
-    def _parse_memory_type(self, data: dict) -> MemoryTypeSchema:
+    def _parse_memory_type(self, data: Any) -> MemoryTypeSchema:
         """Parse memory type from YAML data."""
+        if not isinstance(data, dict):
+            raise ValueError("memory template must be a mapping")
+        data = cast(dict[str, Any], data)
+
+        memory_type = data.get("memory_type", data.get("name", ""))
+        directory = data.get("directory")
+        filename_template = data.get("filename_template")
+        template_fields = {
+            "memory_type": memory_type,
+            "directory": directory,
+            "filename_template": filename_template,
+        }
+        missing_fields = [
+            field
+            for field in _REQUIRED_MEMORY_TEMPLATE_FIELDS
+            if not isinstance(template_fields[field], str) or not template_fields[field].strip()
+        ]
+        if missing_fields:
+            raise ValueError(
+                "memory template requires non-empty fields: " + ", ".join(missing_fields)
+            )
+
         fields_data = data.get("fields", [])
+        if not isinstance(fields_data, list):
+            raise ValueError("memory template 'fields' must be a list")
+
         fields = []
         stage = data.get("stage")
         if stage is None and data.get("agent_only", False):
@@ -194,9 +227,14 @@ class MemoryTypeRegistry:
         if stage is None:
             stage = "user"
 
-        for field_data in fields_data:
+        for index, field_data in enumerate(fields_data):
+            if not isinstance(field_data, dict):
+                raise ValueError(f"memory template field {index} must be a mapping")
+            field_name = field_data.get("name")
+            if not isinstance(field_name, str) or not field_name.strip():
+                raise ValueError(f"memory template field {index} requires a non-empty name")
             field = MemoryField(
-                name=field_data.get("name", ""),
+                name=field_name,
                 field_type=FieldType(field_data.get("type", "string")),
                 description=field_data.get("description", ""),
                 merge_op=MergeOp(field_data.get("merge_op", "patch")),
@@ -205,13 +243,13 @@ class MemoryTypeRegistry:
             fields.append(field)
 
         return MemoryTypeSchema(
-            memory_type=data.get("memory_type", data.get("name", "")),
+            memory_type=memory_type,
             description=data.get("description", ""),
             fields=fields,
-            filename_template=data.get("filename_template", ""),
+            filename_template=filename_template,
             content_template=data.get("content_template"),
             embedding_template=data.get("embedding_template"),
-            directory=data.get("directory", ""),
+            directory=directory,
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
             stage=stage,
