@@ -488,7 +488,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ### set_tags()
 
-设置用于检索过滤的显式 `k=v` 标签。`replace` 替换已有标签，`append` 追加标签；对目录设置 `recursive=true` 时会更新目录下的文件。
+设置用于检索过滤的显式 `k=v` 标签。`replace` 替换已有标签，`append` 追加标签，`clear` 显式清空已有标签；对目录设置 `recursive=true` 时会更新目录下的文件。省略 `tags` 或传入空数组配合 `replace` 都是 no-op；只有 `clear` 会清空，且会忽略同时传入的标签值。
 
 **Python SDK**
 

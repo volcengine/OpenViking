@@ -682,6 +682,22 @@ describe("OpenVikingClient", () => {
     ).toThrow("extra cannot override uri");
   });
 
+  it("omits tags when clear is requested", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({ updated: 1 }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.setTags("resources/demo.md", undefined, { mode: "clear" });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      uri: "viking://resources/demo.md",
+      mode: "clear",
+      recursive: false,
+    });
+  });
+
   it("converts an existing Node.js image path to a data URI", async () => {
     const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-image-"));
     const path = join(directory, "photo.png");

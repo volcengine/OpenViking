@@ -675,7 +675,7 @@ export class OpenVikingClient {
   /** Set retrieval tags. */
   setTags(
     uri: string,
-    tags: string[],
+    tags?: string[],
     options: SetTagsOptions = {},
   ): Promise<JsonObject> {
     const body = compact({

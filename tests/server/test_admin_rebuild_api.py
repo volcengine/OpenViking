@@ -464,11 +464,10 @@ async def test_reindex_file_target_uses_exact_lock(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
-    import asyncio
-
     from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.storage.queuefs.reindex_msg import ReindexMsg
 
-    seen = {}
+    seen = {"enqueued": []}
 
     class FakeTask:
         task_id = "task-1"
@@ -477,16 +476,53 @@ async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
         async def create_if_no_running(self, *args, **kwargs):
             return FakeTask()
 
+        update_stage = AsyncMock()
+        fail = AsyncMock()
+
+    class FakeAGFS:
+        async def pathlock_acquire_tree(self, path):
+            seen["path"] = path
+            return {"lease": "root"}
+
+        async def pathlock_to_handoff(self, lease):
+            assert lease == {"lease": "root"}
+            return {"handoff": "root"}
+
+        async def pathlock_handoff(self, lease):
+            assert lease == {"lease": "root"}
+
+        async def pathlock_release(self, lease):
+            raise AssertionError(f"unexpected release: {lease}")
+
+    class FakeVikingFS:
+        _async_agfs = FakeAGFS()
+
+        async def stat(self, uri, *, ctx, skip_count):
+            assert uri == "viking://resources/demo"
+            assert skip_count is True
+            return {"isDir": True}
+
+        def _uri_to_path(self, uri, *, ctx):
+            return "/resources/demo"
+
+    class FakeQueueManager:
+        REINDEX = "Reindex"
+
+        async def enqueue(self, queue_name, data):
+            seen["enqueued"].append((queue_name, data))
+            return "message-1"
+
     executor = ReindexExecutor()
-
-    async def fake_run_tracked(task_id, **kwargs):
-        seen["task_id"] = task_id
-        seen.update(kwargs)
-
-    monkeypatch.setattr(executor, "_run_tracked", fake_run_tracked)
     monkeypatch.setattr(
         "openviking.service.reindex_executor.get_task_tracker",
         lambda: FakeTracker(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.get_service",
+        lambda: SimpleNamespace(viking_fs=FakeVikingFS()),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager", lambda: FakeQueueManager()
     )
     ctx = RequestContext(
         user=UserIdentifier(account_id="test", user_id="alice"),
@@ -501,12 +537,17 @@ async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
         tag_mode="append",
         ctx=ctx,
     )
-    await asyncio.sleep(0)
 
     assert result["status"] == "accepted"
-    assert seen["task_id"] == "task-1"
-    assert seen["ingest_options"].search_tags == ["team=search"]
-    assert seen["ingest_options"].search_tag_mode == "append"
+    assert seen["path"] == "/resources/demo"
+    assert len(seen["enqueued"]) == 1
+    queue_name, payload = seen["enqueued"][0]
+    assert queue_name == "Reindex"
+    message = ReindexMsg.from_dict(payload)
+    assert message.task_id == "task-1"
+    assert message.tags == ["Team=Search"]
+    assert message.tag_mode == "append"
+    assert message.lock_handoff == {"handoff": "root"}
 
 
 @pytest.mark.asyncio

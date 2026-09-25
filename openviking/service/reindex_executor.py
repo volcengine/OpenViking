@@ -256,18 +256,56 @@ class ReindexExecutor:
                 details={"uri": uri},
             )
 
-        asyncio.create_task(
-            self._run_tracked(
-                task.task_id,
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.reindex_msg import ReindexMsg
+
+        service = get_service()
+        path = service.viking_fs._uri_to_path(uri, ctx=ctx)
+        stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
+        acquire = (
+            service.viking_fs._async_agfs.pathlock_acquire_tree
+            if stat.get("isDir", stat.get("is_dir"))
+            else service.viking_fs._async_agfs.pathlock_acquire_exact
+        )
+        lease = await acquire(path)
+        enqueued = False
+        try:
+            handoff = await service.viking_fs._async_agfs.pathlock_to_handoff(lease)
+            msg = ReindexMsg(
+                task_id=task.task_id,
                 uri=uri,
                 object_type=object_type,
                 mode=mode,
                 force=force,
                 recursive=recursive,
-                ingest_options=ingest_options,
-                ctx=ctx,
+                tags=tags,
+                tag_mode=tag_mode,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                group_ids=list(ctx.group_ids),
+                role=str(ctx.role),
+                telemetry_id=get_current_telemetry().telemetry_id or None,
+                lock_handoff=handoff,
             )
-        )
+            queue_manager = get_queue_manager()
+            await queue_manager.enqueue(queue_manager.REINDEX, msg.to_dict())
+            enqueued = True
+            await service.viking_fs._async_agfs.pathlock_handoff(lease)
+            lease = None
+            await tracker.update_stage(
+                task.task_id, "queued", account_id=ctx.account_id, user_id=ctx.user.user_id
+            )
+        except BaseException:
+            if lease is not None:
+                await service.viking_fs._async_agfs.pathlock_release(lease)
+            if not enqueued:
+                await tracker.fail(
+                    task.task_id,
+                    "Failed to enqueue reindex processing",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                )
+            raise
         return {
             "task_id": task.task_id,
             "status": "accepted",
@@ -515,6 +553,7 @@ class ReindexExecutor:
         recursive: bool = True,
         ingest_options: IngestOptions | None = None,
         ctx: RequestContext,
+        existing_lease: dict | None = None,
     ) -> dict[str, Any]:
         service = get_service()
         if service.viking_fs is None or service.vikingdb_manager is None:
@@ -539,7 +578,7 @@ class ReindexExecutor:
         root_is_dir = bool(stat.get("isDir", stat.get("is_dir")))
         if not root_is_dir:
             acquire_lock = service.viking_fs._async_agfs.pathlock_acquire_exact
-        lease = await acquire_lock(path)
+        lease = existing_lease or await acquire_lock(path)
         run: _ReindexRunContext | None = None
         try:
             borrowed = (

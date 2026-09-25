@@ -720,24 +720,45 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         self._validate_tag_mode(mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
-        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        requested_mode = mode
+        normalized_tags = (
+            [] if requested_mode == "clear" else normalize_search_tags(tags, discard_invalid=True)
+        )
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         stat = await self._safe_stat(normalized_uri, ctx=ctx)
+        context_type = context_type_for_uri(normalized_uri)
+        root_uri = await self._resolve_root_uri(normalized_uri, ctx=ctx)
+        if requested_mode == "replace" and not normalized_tags:
+            return self._build_tags_result(
+                uri=normalized_uri,
+                updated_uris=[],
+                skipped_count=1,
+                failed_count=0,
+                root_uri=root_uri,
+                context_type=context_type,
+                tags=normalized_tags,
+                mode=requested_mode,
+            )
+        storage_mode = "replace" if requested_mode == "clear" else requested_mode
         if stat.get("isDir"):
-            return await self._set_directory_tags(
+            result = await self._set_directory_tags(
                 uri=normalized_uri,
                 tags=normalized_tags,
-                mode=mode,
+                mode=storage_mode,
                 recursive=recursive,
                 ctx=ctx,
             )
-        return await self._set_single_uri_tags(
-            uri=normalized_uri,
-            tags=normalized_tags,
-            mode=mode,
-            recursive=recursive,
-            ctx=ctx,
-        )
+        else:
+            result = await self._set_single_uri_tags(
+                uri=normalized_uri,
+                tags=normalized_tags,
+                mode=storage_mode,
+                recursive=recursive,
+                ctx=ctx,
+            )
+        result["mode"] = requested_mode
+        result["tags"] = normalized_tags
+        return result
 
     def _build_write_result(
         self,
@@ -1083,7 +1104,7 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"unsupported batch-write mode: {mode}")
 
     def _validate_tag_mode(self, mode: str) -> None:
-        if mode not in {"replace", "append"}:
+        if mode not in {"replace", "append", "clear"}:
             raise InvalidArgumentError(f"unsupported tag mode: {mode}")
 
     def _ensure_content_write_policy(self, uri: str) -> None:

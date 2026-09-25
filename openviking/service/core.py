@@ -36,6 +36,7 @@ from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
+from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -607,6 +608,11 @@ class OpenVikingService:
                     ),
                     allow_create=True,
                 )
+            self._queue_manager.get_queue(
+                self._queue_manager.REINDEX,
+                dequeue_handler=ReindexProcessor(self._viking_fs),
+                allow_create=True,
+            )
             self._queue_manager.get_queue(
                 self._queue_manager.SESSION_COMMIT,
                 dequeue_handler=SessionCommitProcessor(

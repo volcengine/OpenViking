@@ -488,7 +488,7 @@ Content-Disposition: attachment; filename*=UTF-8''logo.png
 
 ### set_tags()
 
-Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing tags, while `append` adds tags. When the target is a directory, `recursive=true` applies the update to files below it.
+Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing tags, `append` adds tags, and `clear` explicitly removes existing tags. When the target is a directory, `recursive=true` applies the update to files below it. Omitting `tags`, or passing an empty list with `replace`, is a no-op; only `clear` removes tags and it ignores any supplied tag values.
 
 **Python SDK**
 

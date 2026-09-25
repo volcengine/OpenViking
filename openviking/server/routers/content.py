@@ -84,7 +84,7 @@ class SetTagsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
-    tags: list[str]
+    tags: list[str] | None = None
     mode: str = "replace"
     recursive: bool = False
     telemetry: TelemetryRequest = False
@@ -300,12 +300,13 @@ async def set_tags(
     """Set explicit k=v retrieval tags metadata for a file or directory."""
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
+    tags = [] if request.mode == "clear" else request.tags or []
     execution = await run_operation(
         operation="content.set_tags",
         telemetry=request.telemetry,
         fn=lambda: service.fs.set_tags(
             uri=uri,
-            tags=request.tags,
+            tags=tags,
             mode=request.mode,
             recursive=request.recursive,
             ctx=_ctx,

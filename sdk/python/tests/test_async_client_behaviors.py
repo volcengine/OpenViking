@@ -1335,6 +1335,25 @@ async def test_grep_omits_unset_tags_and_forwards_explicit_tags():
 
 
 @pytest.mark.asyncio
+async def test_set_tags_clear_omits_tags_from_sdk_request():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
+    client._http = fake_http
+    client._handle_response_data = lambda _response: {"result": {"tags": []}}
+
+    await client.set_tags("viking://resources/demo.md", mode="clear")
+
+    fake_http.post.assert_awaited_once_with(
+        "/api/v1/fs/attrs/set_tags",
+        json={
+            "uri": "viking://resources/demo.md",
+            "mode": "clear",
+            "recursive": False,
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_glob_normalizes_scope_uri():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))

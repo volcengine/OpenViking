@@ -278,8 +278,9 @@ func (c *Client) BatchWrite(
 }
 
 // SetTags sets explicit k=v retrieval tags metadata for a file or directory.
-// Valid modes are "replace" (default) and "append"; Recursive applies the tags
-// to every file under a directory URI.
+// Valid modes are "replace" (default), "append", and "clear". An empty
+// replace request is a no-op; clear removes existing tags. Recursive applies
+// the update to every file under a directory URI.
 func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
 	if opts == nil {
 		opts = &SetTagsOptions{Mode: "replace"}
@@ -288,9 +289,8 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	if mode == "" {
 		mode = "replace"
 	}
-	// The server contract is tags:list[str]; a nil slice would marshal to JSON
-	// null and fail validation, so normalize to an empty list. With mode
-	// "replace" an empty list clears all tags.
+	// Normalize nil to an empty list. The server treats replace + [] as a no-op
+	// and clear as the explicit request to remove existing tags.
 	if tags == nil {
 		tags = []string{}
 	}

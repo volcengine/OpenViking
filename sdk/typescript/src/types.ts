@@ -128,7 +128,7 @@ export interface CompileOptions {
 }
 /** Retrieval tag update options. */
 export interface SetTagsOptions {
-  mode?: "replace" | "append";
+  mode?: "replace" | "append" | "clear";
   recursive?: boolean;
   telemetry?: unknown;
   extra?: JsonObject;

@@ -1300,20 +1300,22 @@ class AsyncHTTPClient:
     async def set_tags(
         self,
         uri: str,
-        tags: List[str],
+        tags: Optional[List[str]] = None,
         mode: str = "replace",
         recursive: bool = False,
         options: Optional[SetTagsOptions] = None,
     ) -> Dict[str, Any]:
+        fixed: Dict[str, Any] = {
+            "uri": VikingURI.normalize(uri),
+            "mode": mode,
+            "recursive": recursive,
+        }
+        if tags is not None:
+            fixed["tags"] = tags
         payload = self._build_options_payload(
             options,
             SetTagsOptions,
-            fixed={
-                "uri": VikingURI.normalize(uri),
-                "tags": tags,
-                "mode": mode,
-                "recursive": recursive,
-            },
+            fixed=fixed,
         )
         response = await self._request(
             "POST",
@@ -2580,7 +2582,7 @@ class SyncHTTPClient:
     def set_tags(
         self,
         uri: str,
-        tags: List[str],
+        tags: Optional[List[str]] = None,
         mode: str = "replace",
         recursive: bool = False,
         options: Optional[SetTagsOptions] = None,
