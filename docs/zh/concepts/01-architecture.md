@@ -33,15 +33,19 @@ Retrieval     Sessions       Resource / Skill import
 
 ## 核心模块
 
+<div class="module-table">
+
 | 模块 | 职责 | 关键能力 |
 |------|------|---------|
 | **Client** | 统一入口 | 通过 HTTP API 提交 SDK/CLI 支持的操作 |
 | **Service** | 业务逻辑 | FSService、SearchService、SessionService、ResourceService、PackService、DebugService |
 | **Retrieve** | 上下文检索 | 意图分析（IntentAnalyzer）、层级检索（HierarchicalRetriever）、Rerank 精排 |
-| **Session** | 会话管理 | 消息记录、使用追踪、会话压缩、记忆提交 |
+| **Session** | 会话管理 | 消息记录、使用追踪、会话归档、触发记忆提交 |
 | **Parse** | 上下文提取 | 文档解析（PDF/MD/HTML）、树构建（TreeBuilder）、异步语义生成 |
-| **Compressor** | 记忆压缩 | Schema 驱动的记忆提取、LLM 去重决策 |
+| **Memory** | 记忆提取 | 按 MemoryType Schema 提取记忆（ExtractLoop），由 LLM 合并去重后以 patch 写回（MemoryUpdater）；由 `SessionCompressorV3` 编排 |
 | **Storage** | 存储层 | VikingFS 虚拟文件系统、向量索引、AGFS 集成 |
+
+</div>
 
 ## Service 层
 

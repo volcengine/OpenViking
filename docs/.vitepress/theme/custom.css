@@ -507,3 +507,9 @@ html.ov-assistant-pill .VPContent {
 
 /* The custom menu includes browser-following mode on desktop and mobile. */
 .VPNavBarTranslations, .VPNavScreenTranslations { display: none !important; }
+
+/* Architecture page: keep module name and responsibility on one line. */
+.vp-doc .module-table th:nth-child(-n + 2),
+.vp-doc .module-table td:nth-child(-n + 2) {
+  white-space: nowrap;
+}

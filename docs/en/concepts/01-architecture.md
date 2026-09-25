@@ -33,15 +33,19 @@ Retrieval     Sessions       Resource / Skill import
 
 ## Core Modules
 
+<div class="module-table">
+
 | Module | Responsibility | Key Capabilities |
 |--------|----------------|------------------|
 | **Client** | Unified entry | Sends supported SDK/CLI operations to the HTTP API |
 | **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, PackService, DebugService |
 | **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), hierarchical retrieval (HierarchicalRetriever), Rerank |
-| **Session** | Session management | Message recording, usage tracking, session compression, memory commit |
+| **Session** | Session management | Message recording, usage tracking, session archiving, triggering memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
-| **Compressor** | Memory compression | Schema-driven memory extraction and LLM deduplication decisions |
+| **Memory** | Memory extraction | Schema-driven extraction by MemoryType (ExtractLoop), LLM merge and deduplication written back as patches (MemoryUpdater); orchestrated by `SessionCompressorV3` |
 | **Storage** | Storage layer | VikingFS virtual filesystem, vector index, AGFS integration |
+
+</div>
 
 ## Service Layer
 
