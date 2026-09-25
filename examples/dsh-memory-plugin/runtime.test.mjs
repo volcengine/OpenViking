@@ -27,11 +27,12 @@ test("capture queues retryable failures but drops permanent client errors", asyn
     tempDirs.push(pendingDir);
     process.env.OPENVIKING_PENDING_DIR = pendingDir;
 
+    const warnings = [];
     const runtime = new OpenVikingRuntime({
       async addMessage() {
         return { ok: false, status, error: { code: "FAILED" } };
       },
-    }, config(), { debug() {} });
+    }, config(), { debug() {}, warn: message => warnings.push(message) });
     const session = { id: `session-${status}`, header: { cwd: "/workspace" } };
     runtime.stateFor(session).ready = true;
 
@@ -39,6 +40,7 @@ test("capture queues retryable failures but drops permanent client errors", asyn
     await runtime.flush(session);
 
     assert.equal((await listPending()).length, expectedPending, `HTTP ${status}`);
+    assert.equal(warnings.length, status === 400 ? 1 : 0);
   }
 });
 
@@ -485,6 +487,96 @@ test("the per-session peer honors peerSource", async () => {
   assert.equal(byGit.peerId, "github.com-volcengine-openviking");
   assert.equal(byGit.legacyPeerId, deriveWorkspacePeerId(root));
   assert.equal(byCwd.peerId, deriveWorkspacePeerId(root));
+});
+
+test("permanent capture failures warn once per session and recover without logging payloads", async () => {
+  const warnings = [];
+  let response = { ok: false, status: 400, error: { code: "INVALID_ARGUMENT", message: "private message" } };
+  const runtime = new OpenVikingRuntime({
+    async addMessage() { return response; },
+  }, config(), { warn: message => warnings.push(message) });
+  const session = { id: "warnings", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+  const capture = async () => {
+    runtime.capture(session, userEvent("private message"));
+    await runtime.flush(session);
+  };
+
+  await capture();
+  await capture();
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /capture/);
+  assert.match(warnings[0], /"status":400/);
+  assert.match(warnings[0], /"code":"INVALID_ARGUMENT"/);
+  assert.match(warnings[0], /\/api\/v1\/sessions\/\{session_id\}\/messages/);
+  assert.ok(!warnings[0].includes("private message"));
+
+  response = { ok: true };
+  await capture();
+  response = { ok: false, status: 403, error: { code: "private message" } };
+  await capture();
+  assert.equal(warnings.length, 2);
+  assert.ok(!warnings[1].includes("private message"));
+  const other = { id: "other", header: { cwd: "/workspace" } };
+  runtime.stateFor(other).ready = true;
+  runtime.capture(other, userEvent("private message"));
+  await runtime.flush(other);
+  assert.equal(warnings.length, 3);
+});
+
+test("permanent threshold and shutdown commit failures are visible", async () => {
+  const warnings = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() { return { pending_tokens: 20000 }; },
+    async commitSession() { return { ok: false, status: 401, error: { code: "UNAUTHENTICATED" } }; },
+  }, { ...config(), commitTokenThreshold: 100 }, { warn: message => warnings.push(message) });
+  const session = { id: "commit-warnings", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+  runtime.maybeCommit(session, { type: "turn/end" });
+  runtime.maybeCommit(session, { type: "turn/end" });
+  await runtime.flush(session);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /commit.*"status":401/);
+  await runtime.dispose(session);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[1], /shutdown_commit/);
+});
+
+test("permanent initialization failures are visible", async () => {
+  for (const stage of ["health", "ensure_session"]) {
+    const warnings = [];
+    const failure = { ok: false, status: 403, error: { code: "FORBIDDEN" } };
+    const runtime = new OpenVikingRuntime({
+      async healthResult() { return stage === "health" ? failure : { ok: true }; },
+      async ensureSessionResult() { return failure; },
+    }, config(), { warn: message => warnings.push(message) });
+    const session = { id: stage, header: { cwd: "/workspace" } };
+    runtime.capture(session, userEvent("private message"));
+    runtime.capture(session, userEvent("private message"));
+    await runtime.flush(session);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(stage));
+  }
+});
+
+test("thrown writes warn without exposing exception text and the write chain continues", async () => {
+  const warnings = [];
+  let fail = true;
+  const runtime = new OpenVikingRuntime({
+    async addMessage() {
+      if (fail) throw new Error("private message");
+      return { ok: true };
+    },
+  }, config(), { warn: message => warnings.push(message) });
+  const session = { id: "thrown", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+  for (const shouldFail of [true, true, false, true]) {
+    fail = shouldFail;
+    runtime.capture(session, userEvent("private message"));
+    await runtime.flush(session);
+  }
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every(message => message.includes("write_error") && !message.includes("private message")));
 });
 
 function config() {

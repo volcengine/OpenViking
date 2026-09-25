@@ -52,6 +52,7 @@ export class OpenVikingRuntime {
       profileDelivered: false,
       toolNames: new Map(),
       writes: Promise.resolve(),
+      warnedFailures: new Set(),
       initializationRetryable: false,
       hasPendingWrites: false,
       pendingCreatedAt: 0,
@@ -78,6 +79,7 @@ export class OpenVikingRuntime {
   async initializeState(state) {
     state.initializationRetryable = false;
     const health = await this.client.healthResult();
+    this.reportWriteResult(state, "health", health, "/health");
     if (!health.ok) {
       state.initializationRetryable = isRetryableFailure(health);
       return state;
@@ -90,9 +92,11 @@ export class OpenVikingRuntime {
       !ensured.ok
       && !(ensured.status === 409 && ensured.error?.code === "ALREADY_EXISTS")
     ) {
+      this.reportWriteResult(state, "ensure_session", ensured, "/api/v1/sessions");
       state.initializationRetryable = isRetryableFailure(ensured);
       return state;
     }
+    state.warnedFailures.delete("ensure_session");
     // Replay is a write, so it stays behind the same toggle: a backlog queued
     // while capture was on waits for a session that still writes.
     if (isCaptureEnabled(state.config)) {
@@ -172,6 +176,7 @@ export class OpenVikingRuntime {
         payload,
         state.config.peerId,
       );
+      this.reportWriteResult(state, "capture", response, "/api/v1/sessions/{session_id}/messages");
       if (isRetryableFailure(response)) {
         await this.enqueuePendingMessage(state, payload);
       }
@@ -194,6 +199,7 @@ export class OpenVikingRuntime {
         state.ovSessionId,
         state.config.peerId,
       );
+      this.reportWriteResult(state, "commit", response, "/api/v1/sessions/{session_id}/commit");
       this.log("commit", {
         sessionId: state.ovSessionId,
         ok: response.ok,
@@ -228,6 +234,7 @@ export class OpenVikingRuntime {
           state.config.peerId,
           { timeoutMs: Math.min(3000, Number(state.config.requestTimeoutMs) || 3000) },
         );
+        this.reportWriteResult(state, "shutdown_commit", response, "/api/v1/sessions/{session_id}/commit");
         this.log("shutdown_commit", {
           sessionId: state.ovSessionId,
           ok: response.ok,
@@ -254,11 +261,35 @@ export class OpenVikingRuntime {
 
   enqueueWrite(state, operation) {
     state.writes = state.writes
-      .then(operation)
-      .catch(error => this.log("write_error", {
-        sessionId: state.ovSessionId,
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      .then(async () => {
+        await operation();
+        state.warnedFailures.delete("write_error");
+      })
+      .catch(() => this.warnOnce(state, "write_error", {}));
+  }
+
+  reportWriteResult(state, stage, response, path) {
+    if (response.ok) {
+      state.warnedFailures.delete(stage);
+    } else if (!isRetryableFailure(response)) {
+      // Error messages/bodies may echo captured content or credentials. Keep
+      // only a bounded code token and a static endpoint template in warnings.
+      const code = response.error?.code;
+      this.warnOnce(state, stage, {
+        path,
+        status: Number(response.status) || 0,
+        code: typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : undefined,
+      });
+    }
+  }
+
+  warnOnce(state, stage, data) {
+    if (state.warnedFailures.has(stage)) return;
+    state.warnedFailures.add(stage);
+    this.logger?.warn?.(`[openviking:dsh] ${stage} ${JSON.stringify({
+      sessionId: state.ovSessionId,
+      ...data,
+    })}`);
   }
 
   async enqueuePending(state, type, payload) {
