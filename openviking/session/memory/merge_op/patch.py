@@ -13,6 +13,7 @@ from openviking.session.memory.merge_op.base import (
     StrPatch,
     get_python_type_for_field,
 )
+from openviking.session.memory.utils.line_numbers import strip_line_numbers_if_present
 
 
 class PatchOp(MergeOpBase):
@@ -57,7 +58,9 @@ class PatchOp(MergeOpBase):
         # For string fields - check if current_value is None (no original)
         if current_value is None:
             # No original content - extract replace value from patch
-            return self._extract_replace_when_no_original(patch_value)
+            return strip_line_numbers_if_present(
+                self._extract_replace_when_no_original(patch_value)
+            )
 
         # For string fields with existing content
         from openviking.session.memory.merge_op.patch_handler import apply_str_patch
@@ -104,6 +107,8 @@ class PatchOp(MergeOpBase):
         # 空字符串和 None 都保持原值
         if patch_value is None or patch_value == "":
             return current_value
+        if isinstance(patch_value, str):
+            return strip_line_numbers_if_present(patch_value)
         return patch_value
 
     def _extract_replace_when_no_original(self, patch_value: Any) -> Any:

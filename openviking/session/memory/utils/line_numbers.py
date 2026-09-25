@@ -6,6 +6,8 @@ from typing import Optional
 
 _LINE_NUMBER_PREFIX_RE = re.compile(r"^(\d+)\t")
 _LINE_NUMBER_PREFIX_WITH_LEADING_SPACE_RE = re.compile(r"^\s*(\d+)\t")
+_LINE_NUMBER_PREFIXES_RE = re.compile(r"^(?:\d+\t)+")
+_LINE_NUMBER_PREFIXES_WITH_LEADING_SPACE_RE = re.compile(r"^(?:\s*\d+\t)+")
 _LINE_SPLIT_RE = re.compile(r"\r?\n")
 
 
@@ -44,7 +46,11 @@ def extract_start_line_number(content: str) -> Optional[int]:
 
 
 def strip_line_numbers(content: str, aggressive: bool = False) -> str:
-    pattern = _LINE_NUMBER_PREFIX_WITH_LEADING_SPACE_RE if aggressive else _LINE_NUMBER_PREFIX_RE
+    pattern = (
+        _LINE_NUMBER_PREFIXES_WITH_LEADING_SPACE_RE
+        if aggressive
+        else _LINE_NUMBER_PREFIXES_RE
+    )
     return "\n".join(pattern.sub("", line) for line in split_content_lines(content))
 
 
@@ -53,3 +59,26 @@ def every_line_has_line_numbers(content: str) -> bool:
     if not lines:
         return False
     return all(_LINE_NUMBER_PREFIX_RE.match(line) for line in lines)
+
+
+def has_sequential_line_numbers(content: str) -> bool:
+    lines = split_content_lines(content)
+    if not lines:
+        return False
+
+    first_match = _LINE_NUMBER_PREFIX_RE.match(lines[0])
+    if first_match is None:
+        return False
+
+    start_line = int(first_match.group(1))
+    for index, line in enumerate(lines):
+        match = _LINE_NUMBER_PREFIX_RE.match(line)
+        if match is None or int(match.group(1)) != start_line + index:
+            return False
+    return True
+
+
+def strip_line_numbers_if_present(content: str, aggressive: bool = False) -> str:
+    if has_sequential_line_numbers(content):
+        return strip_line_numbers(content, aggressive=aggressive)
+    return content
