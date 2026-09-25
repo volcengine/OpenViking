@@ -10,7 +10,7 @@ import random
 import uuid
 from abc import ABC, abstractmethod
 from tempfile import TemporaryFile
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Iterator, Optional
 from urllib.parse import urlparse
 
 from openviking.storage.errors import CollectionNotFoundError
@@ -98,6 +98,11 @@ class CollectionAdapter(ABC):
     # ``None`` means no batching (suitable for backends without a hard limit).
     # VikingDB-backed adapters override this to 100 to avoid 400 errors.
     _DATA_BATCH_SIZE: int | None = None
+
+    # Whether ``search_by_scalar`` can order by ``date_time`` fields. VikingDB
+    # data planes only sort by int64/float32 scalar-index fields, and their
+    # adapters drop ``date_time`` fields from the scalar index.
+    _CAN_ORDER_BY_DATE_TIME: bool = True
 
     mode: str
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
@@ -511,19 +516,7 @@ class CollectionAdapter(ABC):
         else:
             # Approximate random sampling with a client-generated random
             # vector so every backend behaves consistently.
-            dim = self._dimension
-            if dim <= 0:
-                dim = next(
-                    (
-                        field["Dim"]
-                        for field in coll.get_meta_data().get("Fields", [])
-                        if field.get("FieldName") == "vector"
-                    ),
-                    0,
-                )
-            if dim <= 0:
-                raise ValueError("Vector collection dimension is unavailable")
-            random_vector = [random.uniform(-1, 1) for _ in range(dim)]
+            random_vector = self._random_probe_vector(coll)
             result = coll.search_by_vector(
                 index_name=self._index_name,
                 dense_vector=random_vector,
@@ -541,6 +534,60 @@ class CollectionAdapter(ABC):
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records
+
+    def _random_probe_vector(self, coll: Any) -> list[float]:
+        dim = self._dimension
+        if dim <= 0:
+            dim = next(
+                (
+                    field["Dim"]
+                    for field in coll.get_meta_data().get("Fields", [])
+                    if field.get("FieldName") == "vector"
+                ),
+                0,
+            )
+        if dim <= 0:
+            raise ValueError("Vector collection dimension is unavailable")
+        return [random.uniform(-1, 1) for _ in range(dim)]
+
+    def _iter_matching_id_pages(
+        self, filter: Dict[str, Any] | FilterExpr, batch_size: int
+    ) -> Iterator[list[str]]:
+        """Yield IDs matching ``filter`` in stable pages.
+
+        Backends that can sort by ``updated_at`` page in that order. VikingDB
+        backends cannot, so they page one fixed probe vector: the ranking stays
+        the same across pages because nothing is deleted until enumeration ends.
+        """
+        coll = self.get_collection()
+        vectordb_filter = self._compile_filter(filter)
+        probe_vector = None if self._CAN_ORDER_BY_DATE_TIME else self._random_probe_vector(coll)
+        offset = 0
+        while True:
+            if probe_vector is None:
+                result = coll.search_by_scalar(
+                    index_name=self._index_name,
+                    field="updated_at",
+                    order="asc",
+                    limit=batch_size,
+                    offset=offset,
+                    filters=vectordb_filter,
+                    output_fields=["id"],
+                )
+            else:
+                result = coll.search_by_vector(
+                    index_name=self._index_name,
+                    dense_vector=probe_vector,
+                    limit=batch_size,
+                    offset=offset,
+                    filters=vectordb_filter,
+                    output_fields=["id"],
+                )
+            page = [item.id for item in result.data if item.id]
+            if not result.data:
+                return
+            yield page
+            offset += len(result.data)
 
     def search_by_random(
         self,
@@ -590,19 +637,9 @@ class CollectionAdapter(ABC):
         # Spool only IDs to disk to keep memory bounded for large accounts.
         with TemporaryFile(mode="w+t", encoding="utf-8") as pending_ids:
             offset = 0
-            while True:
-                matched = self.query(
-                    filter=filter,
-                    limit=batch_size,
-                    offset=offset,
-                    output_fields=["id"],
-                    order_by="updated_at",
-                    order_desc=False,
-                )
-                if not matched:
-                    break
-                pending_ids.write(json.dumps([record["id"] for record in matched]) + "\n")
-                offset += len(matched)
+            for page in self._iter_matching_id_pages(filter, batch_size):
+                pending_ids.write(json.dumps(page) + "\n")
+                offset += len(page)
 
             pending_ids.seek(0)
             for batch in pending_ids:
