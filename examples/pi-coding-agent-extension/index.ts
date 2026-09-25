@@ -191,7 +191,7 @@ export default async function (pi: ExtensionAPI) {
       }
 
       // Profile injection
-      profileBlock = await buildSessionProfileBlock(client, config);
+      profileBlock = await buildSessionProfileBlock(client, config, logger);
 
       if (!config.takeoverEnabled && sync.sessionId) {
         // Resume rehydration — fetch archive overview if session was previously committed.
@@ -489,13 +489,19 @@ export default async function (pi: ExtensionAPI) {
 /** Build the <openviking-context> profile block. */
 async function buildSessionProfileBlock(
   client: OVClient, config: OVConfig,
+  logger?: ReturnType<typeof createLogger>,
 ): Promise<string> {
   try {
     const profile = await buildProfileBlock(
       (path, init, options) => client.fetchJSON(path, init, options),
       config.profileTokenBudget,
       config.peerId,
-      config,
+      {
+        ...config,
+        // Without a logger the read/ls failures profile-inject now reports are
+        // dropped, and a broken server still reads as "no profile yet".
+        log: (stage: string, data: unknown) => logger?.log(stage, data),
+      },
     );
     if (!profile?.block) return "";
     return [
