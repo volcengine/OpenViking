@@ -70,7 +70,7 @@ const columns = [60, 185.5, 325.5]
 
       <rect class="box" x="210" y="520" width="150" height="58" rx="8" />
       <text class="name" x="285" y="542">Vector index</text>
-      <text class="note" x="285" y="563">vectors · metadata</text>
+      <text class="note" x="285" y="563">vector records</text>
     </svg>
   </figure>
 </template>
