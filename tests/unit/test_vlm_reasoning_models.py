@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for OpenAI request defaults and explicitly configured reasoning effort."""
 
+import pytest
+
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -9,11 +11,12 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
 class TestOpenAITextCompletionParams:
     """OpenAI defaults must not gate compatible-provider configuration."""
 
-    def test_gpt5_mini_uses_max_completion_tokens(self):
+    @pytest.mark.parametrize("model", ["gpt-5-mini", "gpt-6-luna", "GPT-7"])
+    def test_reasoning_families_use_max_completion_tokens(self, model):
         vlm = OpenAIVLM(
             {
                 "api_key": "sk-test",
-                "model": "gpt-5-mini",
+                "model": model,
                 "api_base": "https://api.openai.com/v1",
                 "max_tokens": 512,
             }

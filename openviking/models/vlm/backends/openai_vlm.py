@@ -4,6 +4,7 @@
 
 import base64
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -41,7 +42,8 @@ _DASHSCOPE_HOSTS = {
 
 
 # These names select existing OpenAI request defaults, not general reasoning capability.
-_OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+# gpt-5 and later generations (gpt-6, gpt-7, ...) share the o-series request contract.
+_OPENAI_REASONING_MODEL_PATTERN = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d)|o[134])")
 
 
 def _build_openai_client_kwargs(
@@ -181,7 +183,7 @@ class OpenAIVLM(VLMBase):
         self, kwargs: Dict[str, Any], thinking: bool, max_tokens: Optional[int] = None
     ) -> None:
         """Apply model defaults, explicit settings, and provider-specific body fields."""
-        if kwargs["model"].lower().startswith(_OPENAI_REASONING_MODEL_PREFIXES):
+        if _OPENAI_REASONING_MODEL_PATTERN.match(kwargs["model"].lower()):
             max_tokens_param = "max_completion_tokens"
             kwargs["reasoning_effort"] = "low"
         else:
