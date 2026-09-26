@@ -52,11 +52,13 @@ class ParserRouter:
         """
         Decide whether to use UnderstandingAPI.
         """
-        # FeishuAccessor has already normalized proprietary content to Markdown.
-        if (
-            isinstance(source, LocalResource)
-            and source.source_type == SourceType.FEISHU
-            and source.meta.get("feishu_content_kind") != "file"
+        # Native document accessors have already normalized proprietary content.
+        if isinstance(source, LocalResource) and (
+            source.source_type == SourceType.DINGTALK
+            or (
+                source.source_type == SourceType.FEISHU
+                and source.meta.get("feishu_content_kind") != "file"
+            )
         ):
             return False
 
@@ -85,6 +87,10 @@ class ParserRouter:
         return ext in extensions
 
     def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
+        from openviking.parse.accessors.dingtalk_accessor import DingTalkAccessor
+
+        if DingTalkAccessor().can_handle(source):
+            return False
         parser_backend = normalize_parser_backend(kwargs.get("parser_backend"))
         if parser_backend is ParserBackend.INTERNAL:
             return False
@@ -113,12 +119,14 @@ class ParserRouter:
 
         parser_backend = normalize_parser_backend(kwargs.pop("parser_backend", None))
 
-        normalized_feishu = (
-            isinstance(source, LocalResource)
-            and source.source_type == SourceType.FEISHU
-            and source.meta.get("feishu_content_kind") != "file"
+        normalized_native = isinstance(source, LocalResource) and (
+            source.source_type == SourceType.DINGTALK
+            or (
+                source.source_type == SourceType.FEISHU
+                and source.meta.get("feishu_content_kind") != "file"
+            )
         )
-        use_understanding = not normalized_feishu and (
+        use_understanding = not normalized_native and (
             parser_backend is ParserBackend.UNDERSTANDING
             or (
                 parser_backend is None

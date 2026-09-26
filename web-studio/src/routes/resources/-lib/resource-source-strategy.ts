@@ -1,4 +1,5 @@
 import type { FeishuAuthMode } from '../-components/feishu-resource-options'
+import type { DingTalkResourceOptionsValue } from '../-components/dingtalk-resource-options'
 import type {
   GitAuthMode,
   GitRefMode,
@@ -13,6 +14,7 @@ import type { ResourceImportCommonBody } from './resource-import-types'
 
 type RemoteResourceCapabilities = {
   exactDestination: boolean
+  initialPaused: boolean
   nativeOptions: boolean
   watch: boolean
 }
@@ -29,17 +31,25 @@ type RemoteSourceStrategy = {
 
 const DEFAULT_CAPABILITIES: RemoteResourceCapabilities = {
   exactDestination: false,
+  initialPaused: false,
   nativeOptions: true,
   watch: true,
 }
 
+const PAUSABLE_WATCH_CAPABILITIES: RemoteResourceCapabilities = {
+  ...DEFAULT_CAPABILITIES,
+  initialPaused: true,
+}
+
 const TOS_CAPABILITIES: RemoteResourceCapabilities = {
   exactDestination: true,
+  initialPaused: false,
   nativeOptions: false,
   watch: false,
 }
 
 export type RemoteSourceOptionState = {
+  dingtalk: DingTalkResourceOptionsValue
   feishu: {
     accessToken: string
     authMode: FeishuAuthMode
@@ -55,6 +65,18 @@ export type RemoteSourceOptionState = {
   }
   watchEnabled: boolean
   web: WebResourceOptionsValue
+}
+
+const DINGTALK_STRATEGY: RemoteSourceStrategy = {
+  build: (state) => ({
+    args: {
+      dingtalk_identity: state.dingtalk.identity,
+      dingtalk_max_nodes: Number(state.dingtalk.maxNodes),
+      dingtalk_max_depth: Number(state.dingtalk.maxDepth),
+      dingtalk_max_bytes: Number(state.dingtalk.maxBytesMiB) * 1024 * 1024,
+    },
+  }),
+  capabilities: PAUSABLE_WATCH_CAPABILITIES,
 }
 
 const DEFAULT_STRATEGY: RemoteSourceStrategy = {
@@ -144,6 +166,7 @@ const REMOTE_SOURCE_STRATEGIES: Record<
   RemoteSourceStrategy
 > = {
   unknown: DEFAULT_STRATEGY,
+  dingtalk: DINGTALK_STRATEGY,
   feishu: FEISHU_STRATEGY,
   git: GIT_STRATEGY,
   webFeed: WEB_STRATEGY,
