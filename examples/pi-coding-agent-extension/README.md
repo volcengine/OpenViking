@@ -148,6 +148,8 @@ All fields below live in `ovcli.conf`'s `plugin` section, or in the `plugin.pi` 
 | `recallLimit`            | `10`       | Legacy quota-scaling input converted to six coding quotas, not a final cap |
 | `scoreThreshold`         | `0.35`     | Min relevance score (0–1)                                                |
 | `minQueryLength`         | `3`        | Skip recall for queries shorter than N characters                        |
+| `recallQueryFilters`     | `[]`       | sed-style rules applied to the prompt before recall (`s///`, `d//`, `k//`) |
+| `recallExcludeUris`      | `[]`       | URIs the recall search must never return (sent as `exclude_uris`)        |
 | `recallLedger`           | `true`     | Persist injected blocks and re-apply them to historical user messages so provider prompt-prefix caches keep hitting |
 
 ### Recall injection ledger
