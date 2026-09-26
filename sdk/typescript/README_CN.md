@@ -20,6 +20,42 @@ const results = await client.search("部署文档", {
 });
 ```
 
+## HTTP 代理
+
+SDK 默认使用运行时的全局 `fetch`。在 Node.js 22.21+ 或 24.0+ 中，请在进程启动前启用
+[Node.js 环境代理支持](https://nodejs.org/learn/http/enterprise-network-configuration)：
+
+```bash
+HTTP_PROXY=http://proxy.example.com:8080 \
+HTTPS_PROXY=http://proxy.example.com:8080 \
+NO_PROXY=localhost,127.0.0.1 \
+NODE_USE_ENV_PROXY=1 node app.js
+```
+
+对于没有内置环境代理支持的 Node.js 18.17+ 版本，请在创建客户端前配置
+[Undici `EnvHttpProxyAgent`](https://github.com/nodejs/undici/blob/v6.21.3/docs/docs/api/EnvHttpProxyAgent.md)：
+
+```bash
+npm install undici@^6.21.3
+```
+
+```ts
+import { OpenVikingClient } from "@openviking/sdk";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
+
+const proxyDispatcher = new EnvHttpProxyAgent();
+setGlobalDispatcher(proxyDispatcher);
+
+const client = new OpenVikingClient({
+  baseUrl: "https://openviking.example.com",
+  apiKey: process.env.OPENVIKING_API_KEY,
+});
+```
+
+请在创建 dispatcher 前设置 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`。这会修改进程级 Undici
+dispatcher。如果应用已经管理传输策略，也可以通过 `ClientConfig.fetch` 传入兼容 WHATWG 的代理
+`fetch` 函数。不要在源代码中保存代理凭据。
+
 SDK 与 Python `openviking-sdk`、Go SDK 使用相同的 HTTP API、身份请求头、响应信封和错误码，覆盖资源与技能、文件系统与内容、资源关系、检索、会话、OVPack、快照、任务、Watch、Observer 状态和租户管理接口。
 
 Node.js 中存在的本地文件路径会自动上传，目录会先压缩后上传；其他字符串会作为 URL 或服务端路径发送。
