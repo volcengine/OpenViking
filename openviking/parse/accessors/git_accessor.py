@@ -35,6 +35,7 @@ from openviking.utils.git_auth import (
     parse_git_http_auth_config,
     raise_git_auth_error,
 )
+from openviking.utils.zip_safe import ZipExtractionLimit
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -489,6 +490,9 @@ class GitAccessor(DataAccessor):
 
             req = urllib.request.Request(zip_url, headers=headers)
             with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > ZipExtractionLimit().max_total_bytes:
+                    raise ValueError(f"GitHub ZIP too large to download: {content_length} bytes")
                 shutil.copyfileobj(resp, f)
 
         try:
@@ -582,6 +586,9 @@ class GitAccessor(DataAccessor):
 
             req = urllib.request.Request(zip_url, headers=headers)
             with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > ZipExtractionLimit().max_total_bytes:
+                    raise ValueError(f"GitLab ZIP too large to download: {content_length} bytes")
                 shutil.copyfileobj(resp, f)
 
         try:
