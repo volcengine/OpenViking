@@ -366,6 +366,7 @@ ov config show
 ov config list -o json
 ov config validate
 ov health
+ov verify-retrieval
 ov status
 ```
 
@@ -376,6 +377,8 @@ Do not print the raw config file unless you understand that it may contain secre
 If a verification command says OpenViking needs a display language, run `ov language en`, or `ov language zh-CN` if the user wants Chinese, then rerun verification.
 
 `ov status` includes broader server and data diagnostics. If `ov config validate` and `ov health` pass, a warning in `ov status` does not always mean CLI setup failed.
+
+`ov verify-retrieval` creates a unique test resource for the active user, waits for processing, requires `find` to return its exact URI, and removes it. The command reports `write`, `stat`, `find`, `cleanup`, and `absence` stages. Use `ov --output json verify-retrieval` in automation. A failed cleanup reports the URI when the resource can still be present. The generated test content uses the normal resource-processing path and can reach the configured model provider.
 
 ## Learn the Rest of the CLI
 

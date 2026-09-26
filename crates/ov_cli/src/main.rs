@@ -1214,6 +1214,8 @@ enum Commands {
     },
     /// [Status] Quick health check
     Health,
+    /// [Status] Verify one user-scoped write-to-retrieval path
+    VerifyRetrieval,
     /// [Status] Configuration management; run without a subcommand to add, edit, or delete configs
     Config {
         #[command(subcommand)]
@@ -2672,6 +2674,7 @@ fn is_top_level_server_command(command: &str) -> bool {
             | "wait"
             | "status"
             | "health"
+            | "verify-retrieval"
             | "reindex"
     )
 }
@@ -3527,6 +3530,16 @@ async fn main() {
             .await
         }
         Commands::Health => handlers::handle_health(ctx).await,
+        Commands::VerifyRetrieval => {
+            let client = ctx.get_client();
+            commands::verify_retrieval::run(
+                &client,
+                ctx.config.timeout,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         Commands::System { action } => handlers::handle_system(action, ctx).await,
         Commands::Observer { action } => handlers::handle_observer(action, ctx).await,
         Commands::Session { action } => handlers::handle_session(action, ctx).await,
@@ -4435,6 +4448,7 @@ mod tests {
             "wait",
             "status",
             "health",
+            "verify-retrieval",
             "reindex",
         ] {
             assert!(
@@ -5019,6 +5033,20 @@ mod tests {
             .expect("post-command sudo should parse");
 
         assert!(cli.sudo);
+    }
+
+    #[test]
+    fn cli_parses_verify_retrieval_command() {
+        Cli::try_parse_from(["ov", "verify-retrieval"]).expect("verify-retrieval should parse");
+    }
+
+    #[test]
+    fn verify_retrieval_does_not_support_sudo() {
+        let cli = Cli::try_parse_from(["ov", "--sudo", "verify-retrieval"])
+            .expect("sudo should parse before runtime validation");
+
+        assert!(cli.sudo);
+        assert!(!cli.command.supports_sudo());
     }
 
     #[test]
