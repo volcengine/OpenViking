@@ -10,7 +10,10 @@ import pytest
 from openviking.service.task_processing_time import ProcessingClock
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import TaskWorkIndex, bind_task_context
-from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor, SemanticNodeScheduler
+from openviking.storage.queuefs.semantic_executor import (
+    SemanticTreeExecutor,
+    SemanticTreeScheduler,
+)
 from openviking.telemetry.request_wait_tracker import RequestWaitTracker
 
 
@@ -46,12 +49,12 @@ async def test_saturated_dag_scheduler_counts_only_dispatched_nodes(monkeypatch)
         SimpleNamespace(monotonic=lambda: now[0]),
     )
     index = TaskWorkIndex()
-    scheduler = SemanticNodeScheduler(max_workers=1)
+    scheduler = SemanticTreeScheduler(max_workers=1)
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_dag.get_semantic_node_scheduler",
+        "openviking.storage.queuefs.semantic_executor.get_semantic_tree_scheduler",
         lambda _: scheduler,
     )
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: None)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: None)
     entered = {name: asyncio.Event() for name in ["a", "b"]}
     release = {name: asyncio.Event() for name in ["a", "b"]}
     queued = asyncio.Event()
@@ -59,7 +62,7 @@ async def test_saturated_dag_scheduler_counts_only_dispatched_nodes(monkeypatch)
     for name in ["a", "b"]:
         index.init_processing(name)
         with bind_task_context(name, "account", "user"):
-            executor = SemanticDagExecutor(None, "resource", 1, None)
+            executor = SemanticTreeExecutor(None, "resource", 1, None)
         executors[name] = executor
 
         async def node(_work, name=name, executor=executor):
@@ -165,7 +168,9 @@ async def test_nested_wait_and_cancellation_restore_processing_owner(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom_enqueue", [False, True])
-async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(monkeypatch, custom_enqueue):
+async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(
+    monkeypatch, custom_enqueue
+):
     from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
     now = [0.0]
@@ -175,7 +180,7 @@ async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(monkeypa
     )
     index = TaskWorkIndex()
     index.init_processing("task")
-    message = SimpleNamespace(uri="viking://resources/retry-test")
+    message = SimpleNamespace(uri="viking://resources/retry-test", account_id="account")
     enqueued = []
 
     async def sleep(delay):
@@ -199,7 +204,9 @@ async def test_semantic_retry_cooldown_excludes_wait_but_counts_enqueue(monkeypa
         "openviking.storage.queuefs.get_queue_manager",
         lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda _: queue),
     )
-    processor = SimpleNamespace(_circuit_breaker=SimpleNamespace(retry_after=30))
+    processor = SimpleNamespace(
+        _account_breaker=lambda _account_id: SimpleNamespace(retry_after=30)
+    )
     worker = asyncio.current_task()
     index.register_active("task", worker)
     try:
