@@ -40,7 +40,7 @@ export function RemoteResourceTypePicker({
       <div
         role="group"
         aria-label={t('sourcePicker.title')}
-        className="grid grid-cols-2 gap-1.5 sm:grid-cols-4"
+        className="grid grid-cols-2 gap-1.5 sm:grid-cols-5"
       >
         {VISIBLE_REMOTE_RESOURCE_DESCRIPTORS.map(({ type, icon: Icon }) => {
           const selected = value === type

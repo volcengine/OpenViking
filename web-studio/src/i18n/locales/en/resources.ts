@@ -153,6 +153,9 @@ const resources = {
     'remoteUrl.hint':
       'HTTP(S) URL, Git repository, or other remote resource address.',
     sourceKind: {
+      dingtalk: 'DingTalk',
+      dingtalkHint:
+        'Imports DingTalk documents or workspaces through a server-configured identity.',
       feishu: 'Feishu / Lark',
       feishuHint:
         'Supports documents, wiki pages, spreadsheets, and bitable links.',
@@ -172,6 +175,10 @@ const resources = {
     sourcePicker: {
       title: 'Supported Remote Resource Types',
       hint: 'Every listed type has a server-side import path. Choose one to configure its parameters, or keep auto detection.',
+      dingtalk: 'DingTalk',
+      dingtalkHint:
+        'Documents, folders, workspaces, sheets, AI tables, and files',
+      dingtalkExample: 'https://alidocs.dingtalk.com/i/nodes/...',
       feishu: 'Feishu / Lark',
       feishuHint: 'Documents, wiki pages, spreadsheets, and bitables',
       feishuExample: 'https://example.feishu.cn/docx/...',
@@ -191,6 +198,26 @@ const resources = {
     configurationGuide: {
       title: 'How do I configure this?',
       documentation: 'Open the server configuration guide',
+    },
+    dingtalk: {
+      title: 'DingTalk access and import limits',
+      hint: 'The selected server identity can read only the DingTalk content granted to it. After import, OpenViking permissions do not automatically follow later DingTalk permission changes.',
+      identity: 'Server identity',
+      identityPlaceholder: 'Select an identity',
+      identityHint:
+        'Endpoints and credentials stay on the server and are never shown in Studio.',
+      identityLoading: 'Loading server identities...',
+      identityError: 'Failed to load DingTalk identities.',
+      identityEmpty:
+        'No DingTalk identity is configured on the server. Add one to ov.conf, then reload.',
+      retry: 'Retry',
+      maxNodes: 'Maximum nodes',
+      maxDepth: 'Maximum depth',
+      maxBytesMiB: 'Maximum run size (MiB)',
+      limitError:
+        'Limits must be whole numbers. Nodes and MiB must be greater than 0; depth may be 0.',
+      limitations:
+        'Unreadable child files are skipped and retried; an existing imported copy is retained. A folder listing failure stops the refresh. Missing nodes are retained because deletion, movement, and lost access cannot be distinguished.',
     },
     feishu: {
       auth: {
@@ -270,6 +297,9 @@ const resources = {
         'This resource type cannot create a scheduled sync. Choose another type.',
       interval: 'Sync interval (minutes)',
       intervalHint: 'For example, 60 for hourly or 1440 for daily.',
+      startPaused: 'Create paused',
+      startPausedHint:
+        'The initial import still runs. Later scheduled syncs stay paused until you resume them from Scheduled Sync.',
     },
     tosOptions: {
       title: 'TOS Import',

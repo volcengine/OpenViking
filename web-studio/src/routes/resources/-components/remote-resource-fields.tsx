@@ -18,13 +18,16 @@ type RemoteResourceFieldsProps = {
   onUrlChange: (value: string) => void
   onResourceTypeChange: (value: RemoteResourceTypeSelection) => void
   onWatchEnabledChange: (enabled: boolean) => void
+  onWatchInitiallyPausedChange: (paused: boolean) => void
   onWatchIntervalChange: (value: string) => void
   resourceKind: RemoteResourceKind
   resourceType: RemoteResourceTypeSelection
   t: TFunction<'addResource'>
   url: string
   watchEnabled: boolean
+  watchInitiallyPaused: boolean
   watchInterval: string
+  watchPauseSupported?: boolean
   watchRequired?: boolean
   watchSupported?: boolean
 }
@@ -43,13 +46,16 @@ export function RemoteResourceFields({
   onUrlChange,
   onResourceTypeChange,
   onWatchEnabledChange,
+  onWatchInitiallyPausedChange,
   onWatchIntervalChange,
   resourceKind,
   resourceType,
   t,
   url,
   watchEnabled,
+  watchInitiallyPaused,
   watchInterval,
+  watchPauseSupported = false,
   watchRequired = false,
   watchSupported = true,
 }: RemoteResourceFieldsProps) {
@@ -127,6 +133,24 @@ export function RemoteResourceFields({
             <p className="text-xs text-muted-foreground">
               {t('watch.intervalHint')}
             </p>
+            {watchPauseSupported ? (
+              <div className="flex items-start justify-between gap-4 pt-2">
+                <div className="grid gap-1">
+                  <Label htmlFor="add-resource-watch-paused">
+                    {t('watch.startPaused')}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {t('watch.startPausedHint')}
+                  </p>
+                </div>
+                <Switch
+                  id="add-resource-watch-paused"
+                  checked={watchInitiallyPaused}
+                  disabled={disabled}
+                  onCheckedChange={onWatchInitiallyPausedChange}
+                />
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

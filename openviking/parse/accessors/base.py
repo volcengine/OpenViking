@@ -36,6 +36,9 @@ class SourceType:
     FEISHU = "feishu"
     """Feishu/Lark document (from FeishuAccessor)."""
 
+    DINGTALK = "dingtalk"
+    """DingTalk document (from DingTalkAccessor)."""
+
 
 @dataclass
 class LocalResource:
