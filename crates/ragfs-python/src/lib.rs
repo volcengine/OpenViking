@@ -8,6 +8,8 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyType};
 use pyo3::wrap_pyfunction;
+use pyo3_stub_gen::define_stub_info_gatherer;
+use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyfunction, gen_stub_pymethods};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
@@ -124,6 +126,7 @@ fn reopen_tracing_file_impl() -> Result<(), String> {
 }
 
 /// Reopen the Rust tracing log file after Python rotates the active log file.
+#[gen_stub_pyfunction]
 #[pyfunction]
 fn reopen_tracing_file() -> PyResult<()> {
     reopen_tracing_file_impl().map_err(PyRuntimeError::new_err)
@@ -1461,6 +1464,7 @@ fn load_git_from_config(
 ///
 /// Embeds the ragfs filesystem engine directly in the Python process.
 /// API-compatible with the Go-based AGFSBindingClient.
+#[gen_stub_pyclass]
 #[pyclass]
 struct RAGFSBindingClient {
     /// Mount manager: mount/unmount/list/get_*_stats/register_plugin.
@@ -1499,6 +1503,7 @@ impl RAGFSBindingClient {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl RAGFSBindingClient {
     /// Create a new RAGFS binding client.
@@ -3069,6 +3074,8 @@ fn ragfs_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     Ok(())
 }
+
+define_stub_info_gatherer!(stub_info);
 
 #[cfg(test)]
 mod tests {
