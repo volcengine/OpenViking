@@ -268,6 +268,17 @@ def _get_httpx():
         return None
 
 
+def _is_timeout_error(error: BaseException) -> bool:
+    """Identify socket and HTTP transport timeouts in query recall."""
+    if isinstance(error, TimeoutError):
+        return True
+    try:
+        from httpx import TimeoutException
+    except ImportError:
+        return False
+    return isinstance(error, TimeoutException)
+
+
 class _VikingClient:
     """Thin HTTP client for the OpenViking REST API (httpx, no SDK dependency)."""
 
@@ -1808,6 +1819,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if client is None:
             return ""
 
+        cfg = None
         try:
             cfg = self._recall_config()
             deadline = time.monotonic() + cfg["timeout_seconds"]
@@ -1896,7 +1908,15 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 deadline=deadline, request_timeout=cfg["request_timeout_seconds"], full_read_limit=cfg["full_read_limit"],
             ))
         except Exception as e:
-            logger.debug("OpenViking context search failed: %s", e)
+            # A timeout leaves query recall empty. Report only local, bounded
+            # diagnostics; exception text can contain query or identity data.
+            if cfg is not None and _is_timeout_error(e):
+                logger.warning(
+                    "OpenViking recall timed out (%s; budget_s=%s request_s=%s); no query context injected",
+                    type(e).__name__, cfg["timeout_seconds"], cfg["request_timeout_seconds"],
+                )
+            else:
+                logger.debug("OpenViking context search failed: %s", e)
             return ""
 
     # -- typed settings ------------------------------------------------------
