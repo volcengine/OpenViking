@@ -2,13 +2,23 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Regression tests for sandbox construction and startup failures."""
 
+import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from vikingbot.config.schema import Config, SessionKey
 from vikingbot.sandbox.backends.srt import SrtBackend
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.session_paths import portable_path_component
+
+
+class _ChunkStream:
+    def __init__(self, chunks):
+        self._chunks = iter(chunks)
+
+    async def read(self, _size):
+        return next(self._chunks, b"")
 
 
 def test_srt_backend_uses_workspace_id_and_nested_config(tmp_path):
@@ -21,6 +31,44 @@ def test_srt_backend_uses_workspace_id_and_nested_config(tmp_path):
     settings = json.loads(backend._settings_path.read_text())
     assert settings["network"]["allowedDomains"] == ["example.com"]
     assert settings["filesystem"]["allowWrite"][0] == str((tmp_path / "shared").resolve())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "character,split_offset",
+    [
+        pytest.param("汉", None, id="cjk-unsplit"),
+        pytest.param("汉", 1, id="cjk-split-after-byte-1"),
+        pytest.param("汉", 2, id="cjk-split-after-byte-2"),
+        pytest.param("🙂", None, id="emoji-unsplit"),
+        pytest.param("🙂", 1, id="emoji-split-after-byte-1"),
+        pytest.param("🙂", 2, id="emoji-split-after-byte-2"),
+        pytest.param("🙂", 3, id="emoji-split-after-byte-3"),
+    ],
+)
+async def test_srt_response_reader_preserves_utf8_across_chunks(tmp_path, character, split_offset):
+    backend = SrtBackend(Config().sandbox, "shared", tmp_path / "shared")
+    expected = f"before-{character}-after"
+    payload = (
+        json.dumps(
+            {"type": "executed", "stdout": expected},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+
+    chunks = [payload]
+    if split_offset is not None:
+        split_at = payload.index(character.encode("utf-8")) + split_offset
+        chunks = [payload[:split_at], payload[split_at:]]
+    backend._process = SimpleNamespace(stdout=_ChunkStream(chunks))
+    backend._response_queue = asyncio.Queue()
+
+    await backend._read_responses()
+
+    assert await backend._response_queue.get() == {"type": "executed", "stdout": expected}
+    assert backend._response_queue.empty()
 
 
 @pytest.mark.asyncio
