@@ -46,7 +46,7 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
     config = SimpleNamespace(
         vlm=vlm,
         semantic=SimpleNamespace(
-            max_overview_prompt_chars=20,
+            max_overview_prompt_chars=180,
             overview_batch_size=2,
         ),
         output_language_override="en",
@@ -65,9 +65,7 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
     )
     children = [{"name": f"child-{index}", "abstract": "x" * 20} for index in range(3)]
 
-    overview = await SemanticProcessor(
-        vlm_resolver=_TestVLMResolver(vlm)
-    )._generate_overview(
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
         "viking://resources/root",
         file_summaries=[],
         children_abstracts=children,
@@ -75,6 +73,7 @@ async def test_children_only_oversized_overview_is_batched(monkeypatch):
 
     assert overview == "overview-3"
     assert len(vlm.prompts) == 3
+    assert all(len(prompt) <= 180 for prompt in vlm.prompts)
     assert "child-0" in vlm.prompts[0]
     assert "child-1" in vlm.prompts[0]
     assert "child-2" not in vlm.prompts[0]
@@ -127,7 +126,7 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
     config = SimpleNamespace(
         vlm=vlm,
         semantic=SimpleNamespace(
-            max_overview_prompt_chars=1,
+            max_overview_prompt_chars=150,
             overview_batch_size=1,
         ),
         output_language_override="en",
@@ -143,13 +142,11 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
         lambda _name, values: values["file_summaries"],
     )
 
-    overview = await SemanticProcessor(
-        vlm_resolver=_TestVLMResolver(vlm)
-    )._generate_overview(
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
         "viking://resources/业务 docs",
         file_summaries=[
-            {"name": "first file.md", "summary": "first summary"},
-            {"name": "第二章#file.md", "summary": "second summary"},
+            {"name": "first file.md", "summary": "first summary" * 4},
+            {"name": "第二章#file.md", "summary": "second summary" * 4},
         ],
         children_abstracts=[],
     )
@@ -159,3 +156,97 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
         "[second](viking://resources/业务%20docs/第二章%23file.md)"
     )
     assert "viking://input_sample_" not in overview
+    assert len(vlm.prompts) == 3
+    assert all(len(prompt) <= 150 for prompt in vlm.prompts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_size", [20, 21])
+async def test_single_overview_respects_rendered_prompt_budget(monkeypatch, prompt_size):
+    vlm = RecordingVLM()
+    config = SimpleNamespace(
+        vlm=vlm,
+        semantic=SimpleNamespace(max_overview_prompt_chars=20, overview_batch_size=10),
+        output_language_override="en",
+    )
+    monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
+    monkeypatch.setattr(
+        semantic_processor_module, "render_prompt", lambda _name, _values: "x" * prompt_size
+    )
+
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
+        "viking://resources/root",
+        file_summaries=[{"name": "a", "summary": "b"}],
+        children_abstracts=[],
+    )
+
+    if prompt_size == 20:
+        assert vlm.prompts == ["x" * 20]
+        assert overview == "overview-1"
+    else:
+        assert overview.endswith("[Directory overview is not generated]")
+        assert vlm.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_batched_overview_skips_oversized_partial_merge_prompt(monkeypatch):
+    vlm = RecordingVLM()
+    config = SimpleNamespace(
+        vlm=vlm,
+        semantic=SimpleNamespace(max_overview_prompt_chars=40, overview_batch_size=1),
+        output_language_override="en",
+    )
+    monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
+
+    def fake_render_prompt(_name, values):
+        if values["file_summaries"].startswith("overview-"):
+            return "x" * 41
+        return "x" * 30
+
+    monkeypatch.setattr(semantic_processor_module, "render_prompt", fake_render_prompt)
+
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
+        "viking://resources/root",
+        file_summaries=[
+            {"name": "a", "summary": "one"},
+            {"name": "b", "summary": "two"},
+        ],
+        children_abstracts=[],
+    )
+
+    assert len(vlm.prompts) == 2
+    assert overview.endswith("[Directory overview is not generated]")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_prompt_size", [39, 40, 41])
+async def test_batched_overview_only_sends_prompts_within_budget(monkeypatch, first_prompt_size):
+    vlm = RecordingVLM()
+    config = SimpleNamespace(
+        vlm=vlm,
+        semantic=SimpleNamespace(max_overview_prompt_chars=40, overview_batch_size=1),
+        output_language_override="en",
+    )
+    monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
+
+    def fake_render_prompt(_name, values):
+        size = first_prompt_size if values["file_summaries"].startswith("- a ") else 41
+        return "x" * size
+
+    monkeypatch.setattr(semantic_processor_module, "render_prompt", fake_render_prompt)
+
+    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
+        "viking://resources/root",
+        file_summaries=[
+            {"name": "a", "summary": "one"},
+            {"name": "b", "summary": "two"},
+        ],
+        children_abstracts=[],
+    )
+
+    if first_prompt_size <= 40:
+        assert vlm.prompts == ["x" * first_prompt_size]
+        assert overview == "overview-1"
+    else:
+        assert vlm.prompts == []
+        assert overview.endswith("[Directory overview is not generated]")
