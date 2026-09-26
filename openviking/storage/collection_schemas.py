@@ -21,7 +21,7 @@ from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.storage.acl import ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
+from openviking.storage.acl import ACL_CONTEXT_FIELDS, ACL_GRANT_FIELDS, ACL_MODE_FIELD, AclMode
 from openviking.storage.errors import (
     CollectionNotFoundError,
     EmbeddingConfigurationError,
@@ -356,17 +356,52 @@ async def init_context_collection(storage) -> bool:
     expected_scalar_indexes = set(schema["ScalarIndex"])
     existing_scalar_indexes = set(existing_meta.get("ScalarIndex", []))
     missing_scalar_indexes = sorted(expected_scalar_indexes - existing_scalar_indexes)
+    missing_acl_fields = sorted(ACL_CONTEXT_FIELDS & set(missing_fields))
+    existing_count: Optional[int] = None
+
+    async def _existing_count() -> int:
+        nonlocal existing_count
+        if existing_count is None:
+            count = getattr(storage, "count", None)
+            if vectordb_cfg.backend == "qdrant":
+                count = getattr(storage, "count_unscoped", None) or count
+            existing_count = await count() if count else 0
+        return existing_count
 
     async def _update_local_schema() -> None:
-        if vectordb_cfg.backend not in {"local", "cuvs"} or "Fields" not in existing_meta:
-            return
         if not missing_fields and not missing_scalar_indexes:
             return
+        if vectordb_cfg.backend not in {"local", "cuvs", "qdrant"}:
+            raise EmbeddingConfigurationError(
+                "Context collection is missing required schema: "
+                f"fields={missing_fields}, scalar_indexes={missing_scalar_indexes}. "
+                "Add them to the remote collection before starting OpenViking."
+            )
         if not hasattr(storage, "update_collection_schema"):
             raise EmbeddingConfigurationError(
                 "Local context collection does not support automatic schema updates"
             )
         await storage.update_collection_schema(schema["Fields"], schema["ScalarIndex"])
+        if vectordb_cfg.backend == "qdrant" and missing_acl_fields:
+            count = 0
+            try:
+                count = await _existing_count()
+            except Exception as exc:
+                logger.warning(
+                    "Qdrant ACL schema migration added %s but could not inspect "
+                    "existing records (%s); ACL fields were not backfilled.",
+                    ", ".join(missing_acl_fields),
+                    exc,
+                )
+            if count:
+                logger.warning(
+                    "Qdrant ACL schema migration added %s to a non-empty collection "
+                    "(%d vector(s)) without backfilling records. If ACL is enabled, "
+                    "existing records remain under legacy URI-namespace visibility "
+                    "until they are rewritten or re-ingested.",
+                    ", ".join(missing_acl_fields),
+                    count,
+                )
 
     base_description, existing_embedding_meta = _decode_collection_description(
         existing_meta.get("Description")
@@ -389,7 +424,7 @@ async def init_context_collection(storage) -> bool:
         await _update_local_schema()
         return False
 
-    existing_count = await storage.count() if hasattr(storage, "count") else 0
+    existing_count = await _existing_count()
     if existing_embedding_meta is None and existing_count == 0:
         if hasattr(storage, "update_collection_description"):
             await storage.update_collection_description(
