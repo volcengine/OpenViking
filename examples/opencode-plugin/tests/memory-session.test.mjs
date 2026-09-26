@@ -396,11 +396,17 @@ test("captured message parts are not retained in the session state file", async 
           },
         },
       })
-      await new Promise((resolve) => setTimeout(resolve, 350))
-
-      const state = JSON.parse(await fs.promises.readFile(join(dir, "openviking-session-state.json"), "utf8"))
-      const persistedSession = Object.values(state.sessions)[0]
-      const persistedMessages = new Map(persistedSession.messages)
+      // The 300ms debounce starts an asynchronous write; elapsed time alone
+      // does not mean the pending message has reached the state file.
+      const deadline = Date.now() + 5000
+      let persistedMessages
+      do {
+        const state = JSON.parse(await fs.promises.readFile(join(dir, "openviking-session-state.json"), "utf8"))
+        persistedMessages = new Map(Object.values(state.sessions)[0].messages)
+        if (persistedMessages.has("msg-pending")) break
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      } while (Date.now() < deadline)
+      assert.ok(persistedMessages.has("msg-pending"), "pending message was not persisted within 5s")
       const capturedMessage = persistedMessages.get("msg-captured")
       const pendingMessage = persistedMessages.get("msg-pending")
       assert.equal(capturedMessage.captured, true)
