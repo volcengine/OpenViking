@@ -72,9 +72,9 @@ class SQLiteUsageAuditStore:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        # Preserve the compatible v4 layout through its additive migration.
-        # Unknown newer transitions fail closed; older daily/local layouts
-        # remain incompatible and use the reset path.
+        # Preserve the compatible v4/v5 layouts through their additive
+        # migrations. Unknown newer transitions fail closed; older daily/local
+        # layouts remain incompatible and use the reset path.
         self._migrate_legacy_sync(conn)
         conn.executescript(SQLITE_SCHEMA)
         conn.execute(
@@ -97,8 +97,10 @@ class SQLiteUsageAuditStore:
             )
         if current == SCHEMA_VERSION:
             return
-        if current == 4 and SCHEMA_VERSION == 5:
-            SQLiteUsageAuditStore._migrate_v4_to_v5_sync(conn)
+        if current in (4, 5) and SCHEMA_VERSION == 6:
+            if current == 4:
+                SQLiteUsageAuditStore._migrate_v4_to_v5_sync(conn)
+            # v6 only adds usage_experience_event, created by SQLITE_SCHEMA.
             return
         if current >= 4:
             raise RuntimeError(
@@ -145,6 +147,7 @@ class SQLiteUsageAuditStore:
             "usage_token_hourly",
             "usage_retrieval_hourly",
             "usage_context_write_bucket",
+            "usage_experience_event",
             "request_audit",
         )
         predicate = "account_id = ?" + (" AND user_id = ?" if user_id is not None else "")
@@ -181,6 +184,7 @@ class SQLiteUsageAuditStore:
             self._write_retrieval_rows(conn, projection.retrieval_rows, updated_at)
             self._write_context_rows(conn, projection.context_rows, updated_at)
             self._write_audit_rows(conn, projection.audit_rows)
+            self._write_experience_rows(conn, projection.experience_rows)
             self._trim_usage_rows(conn, self._usage_max_dates(projection))
             self._trim_audit_rows(conn, projection.touched_audit_accounts)
             conn.execute("COMMIT")
@@ -230,6 +234,19 @@ class SQLiteUsageAuditStore:
                 (*key, count, result_count, updated_at)
                 for key, (count, result_count) in rows.items()
             ],
+        )
+
+    @staticmethod
+    def _write_experience_rows(conn, rows: list[tuple]) -> None:
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO usage_experience_event (
+                event_id, account_id, user_id, resource_uri,
+                event_type, date_utc, hour_utc
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
         )
 
     @staticmethod
@@ -306,6 +323,7 @@ class SQLiteUsageAuditStore:
                 "usage_token_hourly",
                 "usage_retrieval_hourly",
                 "usage_context_write_bucket",
+                "usage_experience_event",
             ):
                 conn.execute(
                     f"DELETE FROM {table} WHERE account_id = ? AND date_utc < ?",
@@ -321,6 +339,11 @@ class SQLiteUsageAuditStore:
         SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.retrieval_rows, date_index=2)
         # context_rows: (account, user, date_utc, hour_utc, op)
         SQLiteUsageAuditStore._merge_max_dates(max_dates, projection.context_rows, date_index=2)
+        # experience_rows: (event_id, account, user, uri, type, date_utc, hour_utc)
+        for row in projection.experience_rows:
+            account_id, event_date = str(row[1]), str(row[5])
+            if event_date > max_dates.get(account_id, ""):
+                max_dates[account_id] = event_date
         return max_dates
 
     @staticmethod
@@ -425,6 +448,52 @@ class SQLiteUsageAuditStore:
                 result[operation] += total
         result["total"] = sum(result.values())
         return result
+
+    async def get_experience_usage(
+        self,
+        *,
+        account_id: str,
+        resource_uri: str,
+        start_date_utc: str | None = None,
+        end_date_utc: str | None = None,
+    ) -> dict[str, int]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._get_experience_usage_sync,
+                account_id,
+                resource_uri,
+                start_date_utc,
+                end_date_utc,
+            )
+
+    def _get_experience_usage_sync(
+        self,
+        account_id: str,
+        resource_uri: str,
+        start_date_utc: str | None,
+        end_date_utc: str | None,
+    ) -> dict[str, int]:
+        assert self._conn is not None
+        sql = """
+            SELECT event_type, COUNT(*) AS total
+            FROM usage_experience_event
+            WHERE account_id = ? AND resource_uri = ?
+        """
+        params: list[Any] = [account_id, resource_uri]
+        if start_date_utc:
+            sql += " AND date_utc >= ?"
+            params.append(start_date_utc)
+        if end_date_utc:
+            sql += " AND date_utc <= ?"
+            params.append(end_date_utc)
+        sql += " GROUP BY event_type"
+        totals = {
+            str(row["event_type"]): int(row["total"]) for row in self._conn.execute(sql, params)
+        }
+        return {
+            "recall_count": totals.get("memory.recalled", 0),
+            "inject_count": totals.get("memory.injected", 0),
+        }
 
     async def get_token_series(
         self,

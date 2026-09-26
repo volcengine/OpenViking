@@ -1819,9 +1819,12 @@ class Session:
         task_id: str,
         archive_uri: str,
         messages: List[Message],
+        agent_evolution_enabled: bool,
     ) -> list[Any]:
         reporter = getattr(self, "_usage_reporter", None)
-        if reporter is None:
+        if reporter is None or not reporter.reports_for(
+            agent_evolution_enabled=agent_evolution_enabled
+        ):
             return []
 
         from openviking.usage_reporter import UsageContext
@@ -2006,6 +2009,7 @@ class Session:
                             task_id=task_id,
                             archive_uri=archive_uri,
                             messages=extraction_messages,
+                            agent_evolution_enabled=agent_evolution_enabled,
                         )
                     )
 

@@ -46,6 +46,13 @@ export type OutcomeDistribution = {
   distribution: OutcomeCount[]
 }
 
+/** Recall/injection event counts; `available` is false when the server keeps none. */
+export type ExperienceUsage = {
+  available: boolean
+  recallCount: number
+  injectCount: number
+}
+
 /** Quick time-range options shared by the outcome and trajectory queries. */
 export type TimeRangePreset = 'all' | '7d' | '30d' | 'custom'
 

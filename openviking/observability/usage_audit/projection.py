@@ -42,6 +42,8 @@ class UsageAuditProjection:
     context_rows: dict[tuple, int] = field(default_factory=dict)
     audit_rows: list[tuple] = field(default_factory=list)
     touched_audit_accounts: set[str] = field(default_factory=set)
+    # (event_id, account, user, resource_uri, event_type, date_utc, hour_utc)
+    experience_rows: list[tuple] = field(default_factory=list)
 
 
 def normalize_identity(value: Any, *, unknown: bool = False) -> str:
@@ -81,6 +83,7 @@ def project_events(
     context_rows: defaultdict[tuple, int] = defaultdict(int)
     audit_rows: list[tuple] = []
     touched_audit_accounts: set[str] = set()
+    experience_rows: list[tuple] = []
 
     for event in events:
         account_id = normalize_identity(event.account_id, unknown=True)
@@ -136,6 +139,23 @@ def project_events(
             )
             continue
 
+        if event.event_name == "experience.usage":
+            event_id = str(payload.get("event_id") or "")
+            resource_uri = str(payload.get("resource_uri") or "")
+            if event_id and resource_uri:
+                experience_rows.append(
+                    (
+                        event_id,
+                        account_id,
+                        user_id,
+                        resource_uri,
+                        str(payload.get("event_type") or ""),
+                        event_date,
+                        event_hour,
+                    )
+                )
+            continue
+
         if event.event_name == "http.request":
             _project_http_request(
                 event,
@@ -154,6 +174,7 @@ def project_events(
         context_rows=dict(context_rows),
         audit_rows=audit_rows,
         touched_audit_accounts=touched_audit_accounts,
+        experience_rows=experience_rows,
     )
 
 

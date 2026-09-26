@@ -36,6 +36,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking.usage_reporter.context_recall import build_context_recall_events
 from openviking.utils.image_search import is_viking_uri
 from openviking.utils.search_filters import (
     SearchContextTypeInput,
@@ -44,6 +45,7 @@ from openviking.utils.search_filters import (
 )
 from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.utils import get_logger
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -58,6 +60,8 @@ def _sanitize_floats(obj: Any) -> Any:
         return [_sanitize_floats(v) for v in obj]
     return obj
 
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 TimeField = Literal["updated_at", "created_at"]
@@ -403,6 +407,43 @@ def _context_ignored_fields(request: SearchRequest) -> List[str]:
     return ignored
 
 
+# Strong refs for fire-and-forget usage reports; asyncio keeps only weak ones.
+_USAGE_REPORT_TASKS: set[asyncio.Task] = set()
+
+
+async def _report_context_recall(
+    *,
+    service: Any,
+    ctx: RequestContext,
+    session_id: Optional[str],
+    result: Any,
+) -> None:
+    """Count Experiences served by harness auto-recall without delaying the response."""
+    if result.stats.get("rewrite") == "no_relevant":
+        return  # the block was blanked, nothing reached the agent
+    reporter = getattr(getattr(service, "sessions", None), "usage_reporter", None)
+    if reporter is None:
+        return
+    events = build_context_recall_events(
+        entries=result.entries,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        session_id=session_id,
+    )
+    if not events:
+        return
+    try:
+        enabled = await service.sessions.get_agent_evolution_enabled(ctx.account_id)
+    except Exception as exc:  # noqa: BLE001 - usage counts must never fail recall
+        logger.warning("Skipping auto-recall usage report: %s", exc)
+        return
+    if not reporter.reports_for(agent_evolution_enabled=enabled):
+        return
+    task = asyncio.create_task(reporter.report(events=events))
+    _USAGE_REPORT_TASKS.add(task)
+    task.add_done_callback(_USAGE_REPORT_TASKS.discard)
+
+
 async def _search_context(
     *,
     service: Any,
@@ -438,6 +479,9 @@ async def _search_context(
         fn=lambda: assemble_context(service=service, ctx=ctx, params=params),
     )
     result = execution.result
+    await _report_context_recall(
+        service=service, ctx=ctx, session_id=request.session_id, result=result
+    )
     ignored = _context_ignored_fields(request)
     if ignored:
         result.stats["ignored"] = ignored
@@ -532,6 +576,9 @@ async def recall(
         fn=lambda: assemble_context(service=service, ctx=_ctx, params=params),
     )
     result = execution.result
+    await _report_context_recall(
+        service=service, ctx=_ctx, session_id=params.session_id, result=result
+    )
     result.stats["deprecated"] = deprecation_stats(aliases)
     response.headers["Deprecation"] = "true"
     response.headers["Link"] = '</api/v1/search/search>; rel="successor-version"'

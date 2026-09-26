@@ -9,6 +9,7 @@ from typing import Any
 
 from openviking.server.config import UsageReporterConfig, UsageReporterSinkConfig
 
+from .event_bus_sink import EventBusUsageSink
 from .extractors import MemoryUsageExtractor
 from .file_log_sink import FileLogUsageSink
 from .reporter import UsageReporter
@@ -39,7 +40,7 @@ def _build_sink(config: UsageReporterSinkConfig) -> UsageSink:
 
 
 def build_usage_reporter(config: UsageReporterConfig) -> UsageReporter | None:
-    if not config.enabled:
+    if config.enabled is False:
         return None
 
     extractors = []
@@ -49,8 +50,11 @@ def build_usage_reporter(config: UsageReporterConfig) -> UsageReporter | None:
         else:
             raise ValueError(f"Unsupported usage extractor: {name}")
 
-    sinks = [_build_sink(sink_config) for sink_config in config.sinks]
+    # The bus sink feeds the local Usage/Audit store behind Studio's counts;
+    # configured sinks forward the same events to deployment pipelines.
+    sinks = [EventBusUsageSink(), *(_build_sink(sink_config) for sink_config in config.sinks)]
     return UsageReporter(
         extractors=extractors,
         sinks=sinks,
+        follows_agent_evolution=config.enabled == "auto",
     )

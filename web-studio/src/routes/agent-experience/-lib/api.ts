@@ -3,6 +3,7 @@ import { getOvResult, isOvClientError, ovClient } from '#/lib/ov-client'
 import {
   DEFAULT_TRAJECTORY_PAGE_SIZE,
   normalizeExperienceFiles,
+  normalizeExperienceUsage,
   normalizeOutcomeDistribution,
   normalizeSourceTrajectoryLinks,
   normalizeTrajectoryPage,
@@ -11,6 +12,7 @@ import type { SourceTrajectoryLink } from './experience'
 import type {
   AgentEvolutionStatus,
   ExperiencePage,
+  ExperienceUsage,
   OutcomeDistribution,
   TimeRange,
   TrajectoryPage,
@@ -174,6 +176,26 @@ export async function fetchOutcomeDistribution(options: {
     }),
   )
   return normalizeOutcomeDistribution(result, experienceUri)
+}
+
+export async function fetchExperienceUsage(options: {
+  experienceUri: string
+  timeRange?: TimeRange
+  signal?: AbortSignal
+}): Promise<ExperienceUsage> {
+  const { experienceUri, timeRange, signal } = options
+  const result = await getOvResult<unknown>(
+    ovClient.client.get({
+      query: {
+        experience_uri: experienceUri,
+        start_date: timeRange?.startDate,
+        end_date: timeRange?.endDate,
+      },
+      signal,
+      url: '/api/v1/agent-evolution/experiences/usage',
+    }),
+  )
+  return normalizeExperienceUsage(result)
 }
 
 export async function fetchSourceTrajectories(

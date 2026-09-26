@@ -317,6 +317,11 @@ const workspace = {
       rangeOrderError: 'Start date must not be after end date',
       rangeInvalidError: 'Invalid date format, expected YYYY-MM-DD',
       rangeUtcHint: 'Filtered by UTC date',
+      usageTitle: 'Usage',
+      usageRecall: 'Recalls',
+      usageInject: 'Injections',
+      usageUnavailable:
+        'This server does not record usage counts (Usage/Audit is off).',
       outcomeTitle: 'Outcome distribution',
       outcomeTotal: '{{count}} trajectories',
       outcomeEmpty: 'No applied trajectories in this time range',

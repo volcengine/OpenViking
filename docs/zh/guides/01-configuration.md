@@ -1801,7 +1801,14 @@ ov add-resource ./docs --exclude "*.tmp"
 
 ### Usage Reporter
 
-可选的 Usage Reporter 从已 commit session 的 tool parts 中抽取记忆使用事件。内置文件日志 Sink 将每个事件写成一行扁平 JSON，并按小时滚动专用日志文件：
+Usage Reporter 统计 Experience 的召回（`memory.recalled`）和注入（`memory.injected`）事件，有两个来源：
+
+- session commit 时，从 tool parts 中识别 OpenViking find/search/list（召回）和 read/multi_read（注入）调用；
+- `POST /api/v1/search/search` 的 `mode="context"`（以及已废弃的 `/recall`）下发 Experience 时直接计为召回，覆盖各 harness 的自动召回。
+
+`enabled` 默认为 `"auto"`：仅对 Agent 进化生效的 account 统计；设为 `true` 对所有 account 统计，设为 `false` 关闭。事件总会写入本地 Usage/Audit 存储（`observability.usage_audit`，按 `event_id` 去重，保留期同 `usage_retention_days`），Studio 的 Experience 详情页据此展示召回次数和注入次数；`sinks` 中配置的 Sink 额外接收同一批事件。
+
+内置文件日志 Sink 将每个事件写成一行扁平 JSON，并按小时滚动专用日志文件：
 
 ```json
 {

@@ -10,6 +10,7 @@ import {
   getExperienceDisplayName,
   isExperienceUpdatedSinceLastSeen,
   markExperiencesSeen,
+  normalizeExperienceUsage,
   normalizeOutcomeDistribution,
   normalizeTrajectoryPage,
   resolveTimeRange,
@@ -284,5 +285,26 @@ describe('formatFileSize', () => {
     expect(formatFileSize(undefined)).toBeUndefined()
     expect(formatFileSize(-1)).toBeUndefined()
     expect(formatFileSize(Number.NaN)).toBeUndefined()
+  })
+})
+
+describe('normalizeExperienceUsage', () => {
+  it('reads recall and inject counts', () => {
+    expect(
+      normalizeExperienceUsage({
+        available: true,
+        recall_count: 4,
+        inject_count: 1,
+      }),
+    ).toEqual({ available: true, recallCount: 4, injectCount: 1 })
+  })
+
+  it('treats a missing store as unavailable rather than zero usage', () => {
+    expect(normalizeExperienceUsage({ available: false })).toEqual({
+      available: false,
+      recallCount: 0,
+      injectCount: 0,
+    })
+    expect(normalizeExperienceUsage(null).available).toBe(false)
   })
 })

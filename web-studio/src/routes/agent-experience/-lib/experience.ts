@@ -1,5 +1,6 @@
 import type {
   ExperienceFileItem,
+  ExperienceUsage,
   OutcomeCount,
   OutcomeDistribution,
   TimeRange,
@@ -324,5 +325,14 @@ export function buildCustomTimeRange(
       startDate: rawStart || undefined,
       endDate: rawEnd || undefined,
     },
+  }
+}
+
+export function normalizeExperienceUsage(value: unknown): ExperienceUsage {
+  const result = isRecord(value) ? value : null
+  return {
+    available: result?.available === true,
+    recallCount: Number(result?.recall_count) || 0,
+    injectCount: Number(result?.inject_count) || 0,
   }
 }
