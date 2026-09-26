@@ -200,15 +200,19 @@ type ListOptions struct {
 
 // TreeOptions controls Tree.
 type TreeOptions struct {
-	Output        string
-	AbsLimit      int
-	ShowAllHidden bool
-	NodeLimit     int
-	LevelLimit    *int
-	Offset        int
-	Limit         int
-	Tags          []string
-	IncludeTags   bool
+	Output          string
+	AbsLimit        int
+	IncludeAbstract *bool
+	IncludeOverview *bool
+	OverviewLimit   int
+	ShowAllHidden   bool
+	DirectoriesOnly bool
+	NodeLimit       int
+	LevelLimit      *int
+	Offset          int
+	Limit           int
+	Tags            []string
+	IncludeTags     bool
 }
 
 // RemoveOptions controls Remove.

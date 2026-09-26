@@ -954,6 +954,10 @@ class FSService:
         tags: Optional[List[str]] = None,
         include_tags: bool = False,
         offset: int = 0,
+        directories_only: bool = False,
+        include_abstract: Optional[bool] = None,
+        include_overview: Optional[bool] = None,
+        overview_limit: int = 4000,
     ) -> ListingPage:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
@@ -965,7 +969,11 @@ class FSService:
                 ctx=ctx,
                 output="original" if tags else output,
                 abs_limit=abs_limit,
+                include_abstract=None if tags else include_abstract,
+                include_overview=False if tags else include_overview is True,
+                overview_limit=overview_limit,
                 show_all_hidden=show_all_hidden,
+                directories_only=directories_only,
                 node_limit=page_limit,
                 level_limit=level_limit,
                 extra_fields=None if tags else extra_fields,
@@ -981,7 +989,12 @@ class FSService:
                 offset,
                 node_limit,
             )
-            if output != "original" or extra_fields:
+            if (
+                output != "original"
+                or extra_fields
+                or include_abstract is True
+                or include_overview is True
+            ):
                 return ListingPage(
                     entries=await viking_fs._finalize_listing_entries(
                         page.entries,
@@ -990,6 +1003,9 @@ class FSService:
                         extra_fields,
                         True,
                         ctx=ctx,
+                        include_abstract=include_abstract,
+                        include_overview=include_overview is True,
+                        overview_limit=overview_limit,
                     ),
                     has_more=page.has_more,
                 )

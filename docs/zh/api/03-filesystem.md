@@ -190,8 +190,12 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
-| abs_limit | int | 否 | HTTP：256；SDK：128 | `agent` 输出中的摘要长度限制 |
+| abs_limit | int | 否 | HTTP：256；SDK：128 | 返回的摘要最大长度 |
+| include_abstract | bool | 否 | 未设置 | 是否返回目录 L0 摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
+| include_overview | bool | 否 | 未设置 | 是否返回目录 L1 概览。未设置时不返回 |
+| overview_limit | int | 否 | 4000 | 返回的概览最大长度 |
 | show_all_hidden | bool | 否 | False | 像 `-a` 一样包含隐藏文件 |
+| directories_only | bool | 否 | False | 仅返回目录节点 |
 | node_limit | int | 否 | 1000 | 最大返回节点数 |
 | offset | int | 否 | 0 | 跳过的可见节点数 |
 | limit | int | 否 | None | `node_limit` 的别名 |
@@ -199,7 +203,7 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 | extra_fields | list[str] | 否 | None | 额外返回的字段：`locked`、`id`、`count` |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的节点 |
 
-`tags` 使用 AND 语义，并在 `offset` 和 `limit` 前应用。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们，否则会省略 tags 以避免额外的向量库读取。
+目录过滤和 `tags` 均在 `offset`、`limit` 前应用。L0/L1 内容只附加到分页选中的目录节点，不占用 `node_limit`。显式传入 `include_abstract=true|false` 会覆盖 `output` 隐含的旧行为。带 tags 过滤的响应会返回 `tags`；未过滤时需传 `include_tags=true` 才返回它们。
 
 
 **Python HTTP SDK**
@@ -230,7 +234,10 @@ console.log(tree);
 
 ```go
 entries, err := client.Tree(ctx, "viking://resources/", &openviking.TreeOptions{
-    Tags: []string{"team=search", "env=prod"},
+    Tags:            []string{"team=search", "env=prod"},
+    DirectoriesOnly: true,
+    IncludeAbstract: openviking.Bool(true),
+    IncludeOverview: openviking.Bool(true),
 })
 if err != nil {
     return err
@@ -265,6 +272,10 @@ openviking tree viking://resources/my-project/ --fields path,type,tags
 
 # 与 ls、glob 一样支持 --simple 和列选择组合
 openviking tree viking://resources/my-project/ --simple --fields path,tags
+
+# 仅返回目录，并附加 L0/L1 内容
+openviking tree viking://resources/my-project/ \
+  --directories-only --include-abstract --include-overview
 ```
 
 与 `ls` 一致，HTTP 响应中的 `result` 保持为节点数组，`has_more` 位于响应顶层。CLI 检测到 `has_more=true` 时会在树输出末尾显示后续节点提示。

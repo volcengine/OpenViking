@@ -7,7 +7,7 @@ import math
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
@@ -1585,20 +1585,47 @@ class _OpsMixin:
         abs_limit: int,
         ctx: Optional[RequestContext] = None,
     ) -> None:
-        """Batch fetch abstracts for entries using a fixed-size worker pool.
+        """Batch fetch abstracts for directory entries."""
+        await self._batch_fetch_directory_summaries(
+            entries,
+            field="abstract",
+            limit=abs_limit,
+            reader=self._read_abstract_for_known_dir,
+            fallback="[.abstract.md is not ready]",
+            ctx=ctx,
+        )
 
-        Non-directory entries receive an empty abstract immediately.
-        Directory entries are processed concurrently via a worker pool,
-        using _read_abstract_for_known_dir to skip redundant stat() calls.
+    async def _batch_fetch_overviews(
+        self,
+        entries: List[Dict[str, Any]],
+        overview_limit: int,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Batch fetch overviews for directory entries."""
+        await self._batch_fetch_directory_summaries(
+            entries,
+            field="overview",
+            limit=overview_limit,
+            reader=self.overview,
+            fallback="[.overview.md is not ready]",
+            ctx=ctx,
+        )
 
-        Args:
-            entries: List of entries to fetch abstracts for
-            abs_limit: Maximum length for abstract truncation
-        """
+    async def _batch_fetch_directory_summaries(
+        self,
+        entries: List[Dict[str, Any]],
+        *,
+        field: str,
+        limit: int,
+        reader: Callable[..., Awaitable[str]],
+        fallback: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Load one summary field for directories with a fixed-size worker pool."""
         dir_jobs = []
         for index, entry in enumerate(entries):
             if not entry.get("isDir", False):
-                entry["abstract"] = ""
+                entry[field] = ""
                 continue
             dir_jobs.append((index, entry))
 
@@ -1621,18 +1648,18 @@ class _OpsMixin:
                     cursor += 1
 
                 try:
-                    abstract = await self._read_abstract_for_known_dir(entry["uri"], ctx=ctx)
+                    summary = await reader(entry["uri"], ctx=ctx)
                 except Exception:
-                    abstract = "[.abstract.md is not ready]"
+                    summary = fallback
 
-                results[index] = abstract
+                results[index] = summary
 
         await asyncio.gather(*(worker() for _ in range(worker_count)))
 
-        for index, abstract in results.items():
-            if len(abstract) > abs_limit:
-                abstract = abstract[: abs_limit - 3] + "..."
-            entries[index]["abstract"] = abstract
+        for index, summary in results.items():
+            if len(summary) > limit:
+                summary = "." * limit if limit <= 3 else summary[: limit - 3] + "..."
+            entries[index][field] = summary
 
     async def _finalize_listing_entries(
         self,
@@ -1642,6 +1669,9 @@ class _OpsMixin:
         extra_fields: Optional[List[str]],
         recursive: bool,
         ctx: Optional[RequestContext] = None,
+        include_abstract: Optional[bool] = None,
+        include_overview: bool = False,
+        overview_limit: int = 4000,
     ) -> List[Dict[str, Any]]:
         """Format and enrich entries after visible-page selection.
 
@@ -1656,9 +1686,15 @@ class _OpsMixin:
         Returns:
             Entries in the requested output format.
         """
+        load_abstract = output == "agent" if include_abstract is None else include_abstract
         if output == "original":
             if extra_fields:
                 await self._augment_entries_extra_fields(entries, extra_fields, ctx=ctx)
+            summary_entries = [entry for entry in entries if entry.get("access") != "denied"]
+            if load_abstract:
+                await self._batch_fetch_abstracts(summary_entries, abs_limit, ctx=ctx)
+            if include_overview:
+                await self._batch_fetch_overviews(summary_entries, overview_limit, ctx=ctx)
             return entries
         if output != "agent":
             raise ValueError(f"Invalid output format: {output}")
@@ -1701,11 +1737,11 @@ class _OpsMixin:
                 item["tags"] = entry["tags"]
             result.append(item)
 
-        await self._batch_fetch_abstracts(
-            [entry for entry in result if entry.get("access") != "denied"],
-            abs_limit,
-            ctx=ctx,
-        )
+        visible_entries = [entry for entry in result if entry.get("access") != "denied"]
+        if load_abstract:
+            await self._batch_fetch_abstracts(visible_entries, abs_limit, ctx=ctx)
+        if include_overview:
+            await self._batch_fetch_overviews(visible_entries, overview_limit, ctx=ctx)
         return result
 
     async def tree(
@@ -1721,6 +1757,10 @@ class _OpsMixin:
         offset: int = 0,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
+        directories_only: bool = False,
+        include_abstract: Optional[bool] = None,
+        include_overview: bool = False,
+        overview_limit: int = 4000,
     ) -> List[Dict[str, Any]]:
         """
         Recursively list all contents (includes rel_path).
@@ -1744,34 +1784,30 @@ class _OpsMixin:
             raise ValueError("offset must be non-negative")
         await self._ensure_access(uri, ctx)
         extra_fields = extra_fields or []
-        if output == "original":
-            entries = await self._tree_original(
-                uri,
-                show_all_hidden,
-                node_limit,
-                level_limit,
-                offset=offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                ctx=ctx,
-            )
-        elif output == "agent":
-            entries = await self._tree_agent(
-                uri,
-                abs_limit,
-                show_all_hidden,
-                node_limit,
-                level_limit,
-                offset=offset,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                ctx=ctx,
-            )
-        else:
+        if output not in {"original", "agent"}:
             raise ValueError(f"Invalid output format: {output}")
-        if extra_fields and output == "original":
-            await self._augment_entries_extra_fields(entries, extra_fields, ctx=ctx)
-        return entries
+        entries = await self._tree_original(
+            uri,
+            show_all_hidden=show_all_hidden,
+            directories_only=directories_only,
+            node_limit=node_limit,
+            level_limit=level_limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            ctx=ctx,
+        )
+        return await self._finalize_listing_entries(
+            entries,
+            output,
+            abs_limit,
+            extra_fields,
+            True,
+            ctx=ctx,
+            include_abstract=include_abstract,
+            include_overview=include_overview,
+            overview_limit=overview_limit,
+        )
 
     async def _tree_original(
         self,
@@ -1783,12 +1819,14 @@ class _OpsMixin:
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
+        directories_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
         result = []
         async for entry, entry_uri in self._iter_visible_tree_entries(
             uri,
             show_all_hidden=show_all_hidden,
+            directories_only=directories_only,
             node_limit=node_limit,
             level_limit=level_limit,
             offset=offset,
@@ -1822,38 +1860,6 @@ class _OpsMixin:
             )
             result.append(new_entry)
         return result
-
-    async def _tree_agent(
-        self,
-        uri: str,
-        abs_limit: int,
-        show_all_hidden: bool = False,
-        node_limit: Optional[int] = 1000,
-        level_limit: Optional[int] = 3,
-        offset: int = 0,
-        sort_by: Optional[str] = None,
-        sort_order: str = "asc",
-        ctx: Optional[RequestContext] = None,
-    ) -> List[Dict[str, Any]]:
-        """Recursively list all contents (agent format with abstracts)."""
-        entries = await self._tree_original(
-            uri,
-            show_all_hidden,
-            node_limit,
-            level_limit,
-            offset=offset,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            ctx=ctx,
-        )
-        return await self._finalize_listing_entries(
-            entries,
-            "agent",
-            abs_limit,
-            None,
-            True,
-            ctx=ctx,
-        )
 
     # ========== Vector Sync Helper Methods ==========
 

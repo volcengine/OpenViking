@@ -535,6 +535,7 @@ impl FileSystem for EncryptionWrappedFS {
         offset: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         // Metadata only — no content read, so delegate to preserve plugin-native tree optimizations.
         let entries = self
@@ -547,6 +548,7 @@ impl FileSystem for EncryptionWrappedFS {
                 None,
                 sort_by,
                 sort_order,
+                directories_only,
             )
             .await?;
         let entries = entries

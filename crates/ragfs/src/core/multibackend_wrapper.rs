@@ -1615,7 +1615,16 @@ impl FileSystem for MultiWriteWrappedFS {
 
         if recursive && search_dir == path_owned {
             let redirect_entries = self
-                .tree_directory(&path_owned, true, None, level_limit, None, None, None)
+                .tree_directory(
+                    &path_owned,
+                    true,
+                    None,
+                    level_limit,
+                    None,
+                    None,
+                    None,
+                    false,
+                )
                 .await?;
             for entry in redirect_entries {
                 if node_limit.is_some_and(|limit| result.count >= limit) {
@@ -1734,7 +1743,16 @@ impl FileSystem for MultiWriteWrappedFS {
         }
 
         let entries = self
-            .tree_directory(path, show_hidden, None, level_limit, None, None, None)
+            .tree_directory(
+                path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                None,
+                None,
+                false,
+            )
             .await?;
 
         let mut matched = Vec::new();
@@ -1782,6 +1800,7 @@ impl FileSystem for MultiWriteWrappedFS {
         offset: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let base = normalize_prefix_path(path);
         if sort_by.is_some() {
@@ -1795,6 +1814,7 @@ impl FileSystem for MultiWriteWrappedFS {
                 level_limit,
                 sort_by,
                 sort_order,
+                directories_only,
                 &mut entries,
             )
             .await?;
@@ -1805,12 +1825,21 @@ impl FileSystem for MultiWriteWrappedFS {
             .inner
             .primary()
             .backend
-            .tree_directory(path, show_hidden, None, level_limit, None, None, None)
+            .tree_directory(
+                path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                None,
+                None,
+                directories_only,
+            )
             .await?;
 
         entries.retain(|e| {
             let name = file_name(&e.path);
-            !MULTIWRITE_INTERNAL_NAMES.contains(&name)
+            !MULTIWRITE_INTERNAL_NAMES.contains(&name) && (!directories_only || e.info.is_dir)
         });
 
         if self.inner.redirects.is_empty() {
@@ -1894,6 +1923,9 @@ impl FileSystem for MultiWriteWrappedFS {
             }
         }
 
+        if directories_only {
+            entries.retain(|entry| entry.info.is_dir);
+        }
         Ok(paginate_entries(entries, offset, node_limit))
     }
 }

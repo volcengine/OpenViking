@@ -548,6 +548,7 @@ class _AccessMixin:
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         ctx: Optional[RequestContext] = None,
+        directories_only: bool = False,
     ):
         """Yield one visible tree page after namespace and ACL filtering."""
         real_ctx = self._ctx_or_default(ctx)
@@ -583,6 +584,7 @@ class _AccessMixin:
                 offset=raw_offset,
                 sort_by=sort_by,
                 sort_order=sort_order,
+                directories_only=directories_only,
             )
             if not raw_entries:
                 return

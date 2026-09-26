@@ -107,7 +107,7 @@ pub async fn collect_under(
     let account_prefix = format!("/local/{}/", account);
 
     let entries = vfs
-        .tree_directory(&root, true, None, None, None, None, None)
+        .tree_directory(&root, true, None, None, None, None, None, false)
         .await?;
 
     let mut survivors = Vec::new();
@@ -226,6 +226,7 @@ mod tests {
             _offset: Option<usize>,
             _sort_by: Option<crate::core::ListSortBy>,
             _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             let raw = self.entries_by_root.get(path).cloned().unwrap_or_default();
 

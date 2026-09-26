@@ -1149,6 +1149,7 @@ impl FileSystem for MountableFS {
         offset: Option<usize>,
         sort_by: Option<crate::core::ListSortBy>,
         sort_order: Option<crate::core::SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let (mount_info, rel_path) = self.find_mount(path).await?;
 
@@ -1168,6 +1169,7 @@ impl FileSystem for MountableFS {
                 None,
                 sort_by,
                 sort_order,
+                directories_only,
             )
             .await?;
 
@@ -1187,6 +1189,7 @@ impl FileSystem for MountableFS {
                 .rsplit('/')
                 .next()
                 .map_or(true, |name| !is_hidden_internal_name(name))
+                && (!directories_only || e.info.is_dir)
         });
 
         Ok(paginate_entries(entries, offset, node_limit))
@@ -1402,6 +1405,7 @@ mod tests {
             _offset: Option<usize>,
             _sort_by: Option<crate::core::ListSortBy>,
             _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             Ok(self.tree_entries.clone())
         }
@@ -2274,7 +2278,16 @@ mod tests {
     async fn test_tree_directory_no_mount_returns_error() {
         let mfs = MountableFS::new();
         let result = mfs
-            .tree_directory("/nonexistent/subdir", false, None, None, None, None, None)
+            .tree_directory(
+                "/nonexistent/subdir",
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
             .await;
         assert!(result.is_err());
     }
@@ -2295,7 +2308,7 @@ mod tests {
         mfs.mount(test_config("rewrite", "/rewrite")).await.unwrap();
 
         let result = mfs
-            .tree_directory("/rewrite/sub", false, None, None, None, None, None)
+            .tree_directory("/rewrite/sub", false, None, None, None, None, None, false)
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
@@ -2316,7 +2329,16 @@ mod tests {
             .unwrap();
 
         let result = mfs
-            .tree_directory("/local/test_account/a", false, None, None, None, None, None)
+            .tree_directory(
+                "/local/test_account/a",
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(result.len(), 1);

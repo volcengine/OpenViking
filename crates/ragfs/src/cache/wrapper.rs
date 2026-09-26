@@ -129,6 +129,7 @@ impl CachedFileSystem {
         offset: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         enum TreeTask {
             VisitDir(String),
@@ -181,7 +182,9 @@ impl CachedFileSystem {
                         if is_dir {
                             stack.push(TreeTask::VisitDir(entry_path));
                         }
-                        stack.push(TreeTask::Emit(tree_entry));
+                        if is_dir || !directories_only {
+                            stack.push(TreeTask::Emit(tree_entry));
+                        }
                     }
                 }
             }
@@ -1269,6 +1272,7 @@ impl FileSystem for CachedFileSystem {
         offset: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         if self.policy.traversal_mode() == CacheTraversalMode::CachedTraversal
             && !self.wraps_multiwrite()
@@ -1282,6 +1286,7 @@ impl FileSystem for CachedFileSystem {
                     offset,
                     sort_by,
                     sort_order,
+                    directories_only,
                 )
                 .await;
         }
@@ -1295,6 +1300,7 @@ impl FileSystem for CachedFileSystem {
                 offset,
                 sort_by,
                 sort_order,
+                directories_only,
             )
             .await
     }

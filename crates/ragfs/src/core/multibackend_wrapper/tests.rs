@@ -152,7 +152,16 @@ async fn test_read_dir_redirect_entries_use_target_stat() {
             assert_eq!(names, vec!["real.txt"]);
 
             let tree = no_redirect_fs
-                .tree_directory("/local/acct", false, None, Some(3), None, None, None)
+                .tree_directory(
+                    "/local/acct",
+                    false,
+                    None,
+                    Some(3),
+                    None,
+                    None,
+                    None,
+                    false,
+                )
                 .await?;
             let paths: Vec<&str> = tree.iter().map(|entry| entry.path.as_str()).collect();
             assert!(!paths.contains(&"/local/acct/docs/ghost.pdf"));
@@ -212,6 +221,7 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
                     None,
                     None,
                     None,
+                    false,
                 )
                 .await?;
             let shallow_paths: Vec<&str> =
@@ -227,6 +237,7 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
                     None,
                     None,
                     None,
+                    false,
                 )
                 .await?;
             assert!(root_only.is_empty());
@@ -240,6 +251,7 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
                     None,
                     None,
                     None,
+                    false,
                 )
                 .await?;
             let deep_paths: Vec<&str> = deep.iter().map(|entry| entry.path.as_str()).collect();
@@ -260,6 +272,7 @@ async fn test_recursive_grep_finds_nested_redirected_files() {
                     None,
                     None,
                     None,
+                    false,
                 )
                 .await?;
             let capped_paths: Vec<&str> = capped.iter().map(|entry| entry.path.as_str()).collect();

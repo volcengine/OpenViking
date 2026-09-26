@@ -606,7 +606,11 @@ impl HttpClient {
         uri: &str,
         output: &str,
         abs_limit: i32,
+        include_abstract: Option<bool>,
+        include_overview: Option<bool>,
+        overview_limit: i32,
         show_all_hidden: bool,
+        directories_only: bool,
         node_limit: i32,
         level_limit: i32,
         offset: i32,
@@ -622,7 +626,17 @@ impl HttpClient {
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
             ("level_limit".to_string(), level_limit.to_string()),
+            ("overview_limit".to_string(), overview_limit.to_string()),
         ];
+        if let Some(value) = include_abstract {
+            params.push(("include_abstract".to_string(), value.to_string()));
+        }
+        if let Some(value) = include_overview {
+            params.push(("include_overview".to_string(), value.to_string()));
+        }
+        if directories_only {
+            params.push(("directories_only".to_string(), "true".to_string()));
+        }
         if offset != 0 {
             params.push(("offset".to_string(), offset.to_string()));
         }
@@ -2477,7 +2491,11 @@ mod tests {
                 "viking://resources",
                 "agent",
                 256,
+                Some(false),
+                Some(true),
+                512,
                 false,
+                true,
                 20,
                 3,
                 4,
@@ -2494,6 +2512,10 @@ mod tests {
         assert!(request.contains("node_limit=20"));
         assert!(request.contains("offset=4"));
         assert!(request.contains("limit=5"));
+        assert!(request.contains("include_abstract=false"));
+        assert!(request.contains("include_overview=true"));
+        assert!(request.contains("overview_limit=512"));
+        assert!(request.contains("directories_only=true"));
         assert!(!request.contains("tz="));
         assert!(!request.contains("include_mod_time_iso="));
 
@@ -2504,6 +2526,10 @@ mod tests {
                 "viking://resources",
                 "agent",
                 256,
+                None,
+                None,
+                4000,
+                false,
                 false,
                 20,
                 3,
@@ -2519,6 +2545,9 @@ mod tests {
             .await
             .expect("default request should be captured");
         assert!(!default_request.contains("offset="));
+        assert!(!default_request.contains("include_abstract="));
+        assert!(!default_request.contains("include_overview="));
+        assert!(!default_request.contains("directories_only="));
         assert!(!default_request.contains("&limit="));
     }
 

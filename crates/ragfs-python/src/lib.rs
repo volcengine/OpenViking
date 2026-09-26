@@ -2329,11 +2329,12 @@ impl RAGFSBindingClient {
     ///     show_hidden: Whether to include hidden files (default: False)
     ///     node_limit: Maximum number of nodes to return (default: None, no limit)
     ///     level_limit: Maximum depth relative to query root (default: None, no limit)
+    ///     directories_only: Whether to return only directory entries (default: False)
     ///     ctx: Optional FsContext dict (e.g. {"account_id": ...})
     ///
     /// Returns:
     ///     A list of dicts, each with keys: path, rel_path, info, extra
-    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None, ctx=None, *, offset=0, sort_by=None, sort_order=None))]
+    #[pyo3(signature = (path, show_hidden=false, node_limit=None, level_limit=None, ctx=None, *, offset=0, sort_by=None, sort_order=None, directories_only=false))]
     fn tree_directory(
         &self,
         py: Python<'_>,
@@ -2345,6 +2346,7 @@ impl RAGFSBindingClient {
         offset: i64,
         sort_by: Option<&str>,
         sort_order: Option<&str>,
+        directories_only: bool,
     ) -> PyResult<Py<PyAny>> {
         let fs_ctx = build_fs_context(ctx);
         let top = self.top.clone();
@@ -2364,6 +2366,7 @@ impl RAGFSBindingClient {
                     Some(offset),
                     sort_by,
                     sort_order,
+                    directories_only,
                 )
                 .await
             })

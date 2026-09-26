@@ -1032,6 +1032,7 @@ impl FileSystem for S3FileSystem {
         offset: Option<usize>,
         sort_by: Option<crate::core::ListSortBy>,
         sort_order: Option<crate::core::SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let normalized = Self::normalize_path(path);
         if sort_by.is_some() {
@@ -1045,6 +1046,7 @@ impl FileSystem for S3FileSystem {
                 level_limit,
                 sort_by,
                 sort_order,
+                directories_only,
                 &mut result,
             )
             .await?;
@@ -1061,13 +1063,16 @@ impl FileSystem for S3FileSystem {
 
         let objects = self.client.list_tree_objects(&prefix).await?;
 
-        let ordered = build_tree_entries_from_flat_listing(
+        let mut ordered = build_tree_entries_from_flat_listing(
             &normalized,
             &objects,
             show_hidden,
             level_limit,
             |key| self.client.strip_prefix(key),
         )?;
+        if directories_only {
+            ordered.retain(|entry| entry.info.is_dir);
+        }
 
         Ok(crate::core::filesystem::paginate_entries(
             ordered, offset, node_limit,

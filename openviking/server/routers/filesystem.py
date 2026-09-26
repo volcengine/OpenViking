@@ -125,8 +125,14 @@ async def ls(
 async def tree(
     uri: str = Query(..., description="Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
-    abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
+    abs_limit: int = Query(256, description="Maximum returned abstract length"),
+    include_abstract: Optional[bool] = Query(
+        None, description="Include directory L0 abstracts; defaults to the output format"
+    ),
+    include_overview: Optional[bool] = Query(None, description="Include directory L1 overviews"),
+    overview_limit: int = Query(4000, ge=1, description="Maximum overview length"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
+    directories_only: bool = Query(False, description="Only include directory entries"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     offset: int = Query(0, ge=0, description="Number of visible nodes to skip"),
     limit: Optional[int] = Query(None, ge=1, description="Alias for node_limit"),
@@ -149,7 +155,11 @@ async def tree(
             ctx=_ctx,
             output=output,
             abs_limit=abs_limit,
+            include_abstract=include_abstract,
+            include_overview=include_overview,
+            overview_limit=overview_limit,
             show_all_hidden=show_all_hidden,
+            directories_only=directories_only,
             node_limit=actual_node_limit,
             level_limit=level_limit,
             offset=offset,

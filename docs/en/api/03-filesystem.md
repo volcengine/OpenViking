@@ -165,8 +165,12 @@ Get directory tree structure.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
-| abs_limit | int | No | HTTP: 256; SDKs: 128 | Abstract length limit for `agent` output |
+| abs_limit | int | No | HTTP: 256; SDKs: 128 | Maximum returned abstract length |
+| include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
+| include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
+| overview_limit | int | No | 4000 | Maximum returned overview length |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
+| directories_only | bool | No | False | Return directory nodes only |
 | node_limit | int | No | 1000 | Maximum number of results |
 | offset | int | No | 0 | Number of visible results to skip |
 | limit | int | No | None | Alias for `node_limit` |
@@ -174,7 +178,7 @@ Get directory tree structure.
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+Directory filtering and `tags` are applied before `offset` and `limit`. Abstracts and overviews are attached to the selected directory nodes and do not count toward `node_limit`. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 
 **Python HTTP SDK**
@@ -196,7 +200,11 @@ console.log(tree);
 **Go SDK**
 
 ```go
-entries, err := client.Tree(ctx, "viking://resources/", nil)
+entries, err := client.Tree(ctx, "viking://resources/", &openviking.TreeOptions{
+    DirectoriesOnly: true,
+    IncludeAbstract: openviking.Bool(true),
+    IncludeOverview: openviking.Bool(true),
+})
 if err != nil {
     return err
 }
@@ -219,7 +227,8 @@ curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
 **CLI**
 
 ```bash
-openviking tree viking://resources/my-project/
+openviking tree viking://resources/my-project/ \
+  --directories-only --include-abstract --include-overview
 ```
 
 As with `ls`, the HTTP `result` remains a node array and `has_more` is returned at the top level. When `has_more=true`, the CLI appends a pagination hint to the tree output.

@@ -1988,6 +1988,7 @@ mod tests {
             _offset: Option<usize>,
             _sort_by: Option<crate::core::ListSortBy>,
             _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()
@@ -6126,6 +6127,7 @@ mod fast_path1_tests {
             _offset: Option<usize>,
             _sort_by: Option<crate::core::ListSortBy>,
             _sort_order: Option<crate::core::SortOrder>,
+            _directories_only: bool,
         ) -> Result<Vec<TreeEntry>> {
             let prefix = if path == "/" {
                 "/".to_string()

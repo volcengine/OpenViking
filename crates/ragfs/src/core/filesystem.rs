@@ -595,6 +595,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `offset` - Number of flattened DFS entries to skip
     /// * `sort_by` - Optional sibling sort field
     /// * `sort_order` - Optional sibling sort direction
+    /// * `directories_only` - Whether to return only directory entries
     ///
     /// # Returns
     /// A flat `Vec<TreeEntry>` in DFS order (directories before their children).
@@ -607,6 +608,7 @@ pub trait FileSystem: Send + Sync + Any {
         offset: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let normalized_path = normalize_prefix_path(path);
         let mut result = Vec::new();
@@ -620,6 +622,7 @@ pub trait FileSystem: Send + Sync + Any {
             level_limit,
             sort_by,
             sort_order,
+            directories_only,
             &mut result,
         )
         .await?;
@@ -647,7 +650,16 @@ pub trait FileSystem: Send + Sync + Any {
         }
 
         let entries = self
-            .tree_directory(path, show_hidden, None, level_limit, None, None, None)
+            .tree_directory(
+                path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                None,
+                None,
+                false,
+            )
             .await?;
 
         let mut matched = Vec::new();
@@ -696,6 +708,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `level_limit` - Maximum depth relative to base_path
     /// * `sort_by` - Optional sibling sort field
     /// * `sort_order` - Optional sibling sort direction
+    /// * `directories_only` - Whether to add only directory entries to the result
     /// * `result` - Accumulator for the flat result list
     async fn tree_directory_internal(
         &self,
@@ -706,6 +719,7 @@ pub trait FileSystem: Send + Sync + Any {
         level_limit: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
         result: &mut Vec<TreeEntry>,
     ) -> Result<()> {
         if node_limit.is_some_and(|limit| result.len() >= limit) {
@@ -746,12 +760,14 @@ pub trait FileSystem: Send + Sync + Any {
 
             let rel_path = relative_match_file(base_path, &entry_path);
 
-            result.push(TreeEntry {
-                path: entry_path.clone(),
-                rel_path,
-                info: entry.clone(),
-                extra: std::collections::HashMap::new(),
-            });
+            if entry.is_dir || !directories_only {
+                result.push(TreeEntry {
+                    path: entry_path.clone(),
+                    rel_path,
+                    info: entry.clone(),
+                    extra: std::collections::HashMap::new(),
+                });
+            }
 
             if entry.is_dir {
                 self.tree_directory_internal(
@@ -762,6 +778,7 @@ pub trait FileSystem: Send + Sync + Any {
                     level_limit,
                     sort_by,
                     sort_order,
+                    directories_only,
                     result,
                 )
                 .await?;
@@ -1123,6 +1140,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -1251,12 +1269,45 @@ mod tests {
                 Some(1),
                 Some(ListSortBy::Name),
                 Some(SortOrder::Asc),
+                false,
             )
             .await
             .unwrap();
 
         assert_eq!(entries.len(), 3);
         assert_tree_names(&entries, &["b.txt", "c.txt", "d.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_tree_directories_only_filters_before_pagination() {
+        let fs = TreeFS::default()
+            .with_dir_entries(
+                "/root",
+                vec![
+                    ("file-a.txt", false),
+                    ("dir-a", true),
+                    ("file-b.txt", false),
+                    ("dir-b", true),
+                ],
+            )
+            .with_dir_entries("/root/dir-a", vec![])
+            .with_dir_entries("/root/dir-b", vec![]);
+
+        let entries = fs
+            .tree_directory(
+                "/root",
+                false,
+                Some(1),
+                None,
+                Some(1),
+                Some(ListSortBy::Name),
+                Some(SortOrder::Asc),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_tree_names(&entries, &["dir-b"]);
     }
 
     #[tokio::test]
@@ -1354,7 +1405,7 @@ mod tests {
         let fs = TreeFS::default().with_dir_entries("/", vec![("a.txt", false), ("sub", true)]);
 
         let entries = fs
-            .tree_directory("/", false, None, None, None, None, None)
+            .tree_directory("/", false, None, None, None, None, None, false)
             .await
             .unwrap();
 
@@ -1373,7 +1424,7 @@ mod tests {
             .with_dir_entries("/a/b/c/d/e", vec![("f.txt", false)]);
 
         let entries = fs
-            .tree_directory("/a", false, None, None, None, None, None)
+            .tree_directory("/a", false, None, None, None, None, None, false)
             .await
             .unwrap();
 

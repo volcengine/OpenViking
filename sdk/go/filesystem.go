@@ -68,6 +68,10 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 	if absLimit == 0 {
 		absLimit = 128
 	}
+	overviewLimit := opts.OverviewLimit
+	if overviewLimit == 0 {
+		overviewLimit = 4000
+	}
 	nodeLimit := opts.NodeLimit
 	if nodeLimit == 0 {
 		nodeLimit = 1000
@@ -80,7 +84,17 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 	query.Set("uri", NormalizeURI(uri))
 	query.Set("output", output)
 	queryInt(query, "abs_limit", absLimit)
+	if opts.IncludeAbstract != nil {
+		queryBool(query, "include_abstract", *opts.IncludeAbstract)
+	}
+	if opts.IncludeOverview != nil {
+		queryBool(query, "include_overview", *opts.IncludeOverview)
+	}
+	queryInt(query, "overview_limit", overviewLimit)
 	queryBool(query, "show_all_hidden", opts.ShowAllHidden)
+	if opts.DirectoriesOnly {
+		query.Set("directories_only", "true")
+	}
 	queryInt(query, "node_limit", nodeLimit)
 	queryInt(query, "level_limit", levelLimit)
 	if opts.Offset != 0 {

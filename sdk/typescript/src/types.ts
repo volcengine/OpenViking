@@ -228,7 +228,11 @@ export interface ListOptions {
 export interface TreeOptions {
   output?: string;
   absLimit?: number;
+  includeAbstract?: boolean;
+  includeOverview?: boolean;
+  overviewLimit?: number;
   showAllHidden?: boolean;
+  directoriesOnly?: boolean;
   nodeLimit?: number;
   levelLimit?: number;
   offset?: number;
