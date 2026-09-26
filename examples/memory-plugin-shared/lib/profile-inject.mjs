@@ -102,13 +102,23 @@ function tokensToCharsBudget(content, maxTokens) {
   return Math.floor(maxTokens / Math.max(tokensPerChar, 0.25));
 }
 
-async function readProfile(fetchJSON, profileUri, actorPeerId = "") {
+async function readProfile(fetchJSON, profileUri, actorPeerId = "", log = () => {}) {
   const res = await fetchJSON(
     `/api/v1/content/read?uri=${encodeURIComponent(profileUri)}`,
     {},
     { actorPeerId },
   );
-  if (!res.ok || typeof res.result !== "string") return null;
+  if (!res.ok || typeof res.result !== "string") {
+    // 404 is a legitimate "this user has not written a profile yet" and must
+    // stay silent. Anything else is a real failure, and once it is collapsed to
+    // null it is indistinguishable from that absence — while the block is only
+    // built at session start and on compaction, so one bad request costs the
+    // whole session.
+    if (res.status !== 404) {
+      log("profile_read_failed", { uri: profileUri, status: res.status, ok: res.ok });
+    }
+    return null;
+  }
   const trimmed = res.result.trim();
   return trimmed || null;
 }
@@ -122,10 +132,15 @@ async function readProfile(fetchJSON, profileUri, actorPeerId = "") {
  * `rel_path` (e.g. "zhengxiao.wu/pr_workflow.md") is preserved as display name
  * to keep owner-namespacing visible and unambiguous when multiple owners exist.
  */
-async function lsDir(fetchJSON, dirUri, actorPeerId = "") {
+async function lsDir(fetchJSON, dirUri, actorPeerId = "", log = () => {}) {
   const url = `/api/v1/fs/ls?uri=${encodeURIComponent(dirUri)}&output=agent&recursive=true&abs_limit=512&node_limit=512`;
   const res = await fetchJSON(url, {}, { actorPeerId });
-  if (!res.ok || !Array.isArray(res.result)) return [];
+  if (!res.ok || !Array.isArray(res.result)) {
+    // Same as readProfile: an empty listing is a valid state, so a failed one
+    // has to be reported or it is silently read as "this user has no memories".
+    log("profile_ls_failed", { uri: dirUri, status: res.status, ok: res.ok });
+    return [];
+  }
   return res.result
     .filter((e) => !e.isDir)
     .map((e) => {
@@ -368,7 +383,7 @@ function formatSkillCatalog(groups, budgetTokens) {
  * }>}
  */
 export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerId = "", options = {}) {
-  const { skillCatalog = false, skillCatalogTokenBudget = 0, sessionStartMaxBytes = 0 } = options;
+  const { skillCatalog = false, skillCatalogTokenBudget = 0, sessionStartMaxBytes = 0, log = () => {} } = options;
   // Hosts that spill (Claude Code, Codex) or drop (ZCode) oversized hook output
   // get a byte cap. An estimated token is about 4 UTF-8 bytes at most, so the
   // token budgets shrink to fit under it.
@@ -382,9 +397,9 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   const entUri = `viking://user/${space}/memories/entities`;
 
   const [profile, prefs, ents, skillGroups] = await Promise.all([
-    readProfile(fetchJSON, profileUri, actorPeerId),
-    lsDir(fetchJSON, prefUri, actorPeerId),
-    lsDir(fetchJSON, entUri, actorPeerId),
+    readProfile(fetchJSON, profileUri, actorPeerId, log),
+    lsDir(fetchJSON, prefUri, actorPeerId, log),
+    lsDir(fetchJSON, entUri, actorPeerId, log),
     skillCatalog && skillBudget > 0
       ? fetchSkillCatalog(fetchJSON, actorPeerId)
       : [],
