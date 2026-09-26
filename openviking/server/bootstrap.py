@@ -4,6 +4,7 @@
 
 import argparse
 import asyncio
+import io
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,7 +40,7 @@ from openviking_cli.utils.logger import configure_uvicorn_logging
 @dataclass
 class BotProcess:
     process: subprocess.Popen
-    log_file: Optional[object] = None
+    log_thread: Optional[threading.Thread] = None
 
 
 def _get_version() -> str:
@@ -52,6 +54,75 @@ def _get_version() -> str:
 
 VIKINGBOT_DEFAULT_HOST = "127.0.0.1"
 VIKINGBOT_DEFAULT_PORT = 18790
+VIKINGBOT_LOG_MAX_BYTES = 10 * 1024 * 1024
+VIKINGBOT_LOG_BACKUP_COUNT = 3
+VIKINGBOT_LOG_READ_SIZE = 64 * 1024
+VIKINGBOT_LOG_THREAD_JOIN_TIMEOUT = 5
+
+
+def _rotate_bot_log(log_path: Path) -> None:
+    oldest = log_path.with_name(f"{log_path.name}.{VIKINGBOT_LOG_BACKUP_COUNT}")
+    oldest.unlink(missing_ok=True)
+    for index in range(VIKINGBOT_LOG_BACKUP_COUNT - 1, 0, -1):
+        source = log_path.with_name(f"{log_path.name}.{index}")
+        if source.exists():
+            source.replace(log_path.with_name(f"{log_path.name}.{index + 1}"))
+    if log_path.exists():
+        log_path.replace(log_path.with_name(f"{log_path.name}.1"))
+
+
+def _trim_bot_log(log_path: Path) -> None:
+    """Keep only the newest bytes from a log created before rotation existed."""
+    if log_path.stat().st_size <= VIKINGBOT_LOG_MAX_BYTES:
+        return
+    with open(log_path, "rb") as source:
+        source.seek(-VIKINGBOT_LOG_MAX_BYTES, os.SEEK_END)
+        tail = source.read()
+    with open(log_path, "wb") as destination:
+        destination.write(tail)
+
+
+def _drain_bot_output(stream: io.BufferedReader, log_path: Path) -> None:
+    """Copy the merged child stream into bounded binary log files."""
+    log_file = None
+    try:
+        log_file = open(log_path, "ab")
+        size = log_file.tell()
+        if size >= VIKINGBOT_LOG_MAX_BYTES:
+            log_file.close()
+            _trim_bot_log(log_path)
+            _rotate_bot_log(log_path)
+            log_file = open(log_path, "ab")
+            size = 0
+        while chunk := stream.read1(VIKINGBOT_LOG_READ_SIZE):
+            remaining = memoryview(chunk)
+            while remaining:
+                if size >= VIKINGBOT_LOG_MAX_BYTES:
+                    log_file.close()
+                    _rotate_bot_log(log_path)
+                    log_file = open(log_path, "ab")
+                    size = 0
+                write_size = min(len(remaining), VIKINGBOT_LOG_MAX_BYTES - size)
+                log_file.write(remaining[:write_size])
+                log_file.flush()
+                remaining = remaining[write_size:]
+                size += write_size
+    except OSError as exc:
+        print(f"Warning: Failed to write bot log: {exc}", file=sys.stderr)
+        while stream.read1(VIKINGBOT_LOG_READ_SIZE):
+            pass
+    finally:
+        if log_file is not None:
+            log_file.close()
+        stream.close()
+
+
+def _join_bot_log_thread(log_thread: Optional[threading.Thread]) -> None:
+    if log_thread is None:
+        return
+    log_thread.join(timeout=VIKINGBOT_LOG_THREAD_JOIN_TIMEOUT)
+    if log_thread.is_alive():
+        print("Warning: Vikingbot log writer did not stop", file=sys.stderr)
 
 
 def _abort_if_port_in_use(port: int, label: str) -> None:
@@ -432,27 +503,24 @@ def _start_vikingbot_gateway(
         vikingbot_cmd.extend(["--config", str(resolved_config)])
 
     # Prepare logging
-    log_file = None
     stdout_handler = None
     stderr_handler = None
-    log_file_path = None
+    log_file_path: Optional[Path] = None
 
     if enable_logging:
         try:
             os.makedirs(log_dir, exist_ok=True)
-            log_filename = "vikingbot.log"
-            log_file_path = os.path.join(log_dir, log_filename)
-            log_file = open(log_file_path, "a")
-            stdout_handler = log_file
-            stderr_handler = log_file
+            log_file_path = Path(log_dir) / "vikingbot.log"
+            with open(log_file_path, "ab"):
+                pass
+            stdout_handler = subprocess.PIPE
+            stderr_handler = subprocess.STDOUT
             print(f"Vikingbot logs will be written to: {log_file_path}")
         except Exception as e:
             print(f"Warning: Failed to setup bot logging: {e}")
-            if log_file:
-                log_file.close()
-                log_file = None
             stdout_handler = None
             stderr_handler = None
+            log_file_path = None
 
     # Keep the handshake outside the sandbox workspace and unique to this child.
     startup_directory = tempfile.TemporaryDirectory(prefix="vikingbot-startup-")
@@ -474,19 +542,28 @@ def _start_vikingbot_gateway(
             vikingbot_cmd,
             stdout=stdout_handler,
             stderr=stderr_handler,
-            text=True,
+            text=log_file_path is None,
             env=env,
             # Parent handles terminal signals and then shuts Gateway down once.
             # Avoid Ctrl+C cancelling child cleanup before its sandbox is released.
             start_new_session=os.name != "nt",
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
+        log_thread = None
+        if log_file_path is not None and process.stdout is not None:
+            log_thread = threading.Thread(
+                target=_drain_bot_output,
+                args=(process.stdout, log_file_path),
+                name="vikingbot-log-writer",
+                daemon=True,
+            )
+            log_thread.start()
 
         _wait_for_bot_ready(process, status_path)
 
         print(f"Vikingbot gateway started (PID: {process.pid})")
 
-        return BotProcess(process=process, log_file=log_file)
+        return BotProcess(process=process, log_thread=log_thread)
 
     except BaseException as e:
         if process is not None and process.poll() is None:
@@ -496,8 +573,7 @@ def _start_vikingbot_gateway(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        if log_file:
-            log_file.close()
+        _join_bot_log_thread(log_thread if "log_thread" in locals() else None)
         print(f"Failed to start vikingbot gateway: {e}")
         if log_file_path:
             print(f"VikingBot startup details: {log_file_path}")
@@ -529,12 +605,7 @@ def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
     except Exception as e:
         print(f"Error stopping vikingbot gateway: {e}")
     finally:
-        # Close the log file if it exists
-        if bot_process.log_file is not None:
-            try:
-                bot_process.log_file.close()
-            except Exception as e:
-                print(f"Error closing bot log file: {e}")
+        _join_bot_log_thread(bot_process.log_thread)
 
 
 if __name__ == "__main__":
