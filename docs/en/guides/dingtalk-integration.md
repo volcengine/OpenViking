@@ -2,6 +2,43 @@
 
 OpenViking can import DingTalk documents, folders, workspaces, spreadsheets, AI Tables, and ordinary files through server-configured DingTalk MCP services. The integration reads DingTalk content and passes it through the existing OpenViking parsing, summary, and indexing pipeline. It does not write changes back to DingTalk.
 
+## Import and refresh flow
+
+Manual imports and scheduled refreshes use the same resource pipeline. The diagram below can be viewed directly on GitHub.
+
+```mermaid
+flowchart TD
+    A["Studio / API / scheduled refresh"] --> B["Resolve target and server identity"]
+    B --> C["Read DingTalk nodes through MCP; compare and download content"]
+    C --> D{"Enumeration and limits valid?"}
+    D -->|No| X["Stop before committing resource content"]
+    D -->|Yes| E["Stage readable content and reuse metadata"]
+    E --> F["Queue import; parse new or changed content"]
+    F --> G["Include reused and retained outputs in the parse artifact"]
+    P["Previous local outputs and sync record"] -.-> C
+    P -.-> G
+    G --> H["Shared update planner commits resource changes"]
+    H --> I["Run required summary and vector work"]
+    I -->|Failure| Y["Task fails; do not mark the run reusable"]
+    I -->|Success| J["Complete task; mark eligible runs reusable"]
+```
+
+An unreadable child can be skipped while its readable siblings continue. Previously imported output for that child, or a node missing from the latest listing, is included before the shared planner calculates deletions. Structural failures stop the refresh; no readable or reusable content also means the import cannot proceed.
+
+Content commit happens before summary and vector work. If that later work fails, the run is not marked reusable, but already committed content is not rolled back. A successful task is not always eligible for source reuse: the completion record remains incomplete when warnings other than the supported unreadable-child warnings are present, including local parse skips and retained missing nodes.
+
+## Reviewer navigation
+
+| Review question | Implementation | Regression coverage |
+| --- | --- | --- |
+| Where are identities configured, and what can the browser see? | [Identity configuration](../../../openviking_cli/utils/config/dingtalk_config.py), [resource routes](../../../openviking/server/routers/resources.py) | [Identity response redaction](../../../tests/server/test_dingtalk_identities.py) |
+| How are nodes listed, downloaded, retried, and compared? | [DingTalk accessor](../../../openviking/parse/accessors/dingtalk_accessor.py), [MCP client](../../../openviking/parse/accessors/dingtalk_client.py) | [Accessor contracts and failure cases](../../../tests/parse/test_dingtalk_accessor.py) |
+| Why do missing or unreadable nodes keep their old content? | [Artifact preparation](../../../openviking/resource/dingtalk_import.py), [resource processor](../../../openviking/utils/resource_processor.py) | [Retention and real planner deletion actions](../../../tests/storage/test_dingtalk_sync_protection.py) |
+| When can a later run reuse previous output? | [Sync completion records](../../../openviking/resource/dingtalk_incremental.py), [queued import completion](../../../openviking/storage/queuefs/add_resource_processor.py) | [Reuse validation](../../../tests/resource/test_dingtalk_incremental.py), [descendant failure handling](../../../tests/storage/test_add_resource_processor_dingtalk.py) |
+| How does Studio submit an identity and sync limits? | [DingTalk form fields](../../../web-studio/src/routes/resources/-components/dingtalk-resource-options.tsx) | [Import form behavior](../../../web-studio/src/routes/resources/-components/add-resource-page.test.tsx) |
+
+For a concrete refresh, suppose the destination contains documents A and B. If the next listing contains updated A and new C but omits B, the import updates A, adds C, retains B, and reports the missing node. If listing the next page fails instead, it stops before applying that snapshot. The retention test linked above checks these rules using the shared planner rather than a separate DingTalk deletion algorithm.
+
 ## Configure an identity on the server
 
 Create a named identity in the OpenViking server configuration. The `doc` service is required. Add `sheets` and `ai_table` only when this identity must read those resource types.

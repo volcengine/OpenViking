@@ -2,6 +2,43 @@
 
 OpenViking 可以通过服务端配置的钉钉 MCP 服务导入文档、目录、知识空间、电子表格、AI 表格和普通文件。导入内容会进入 OpenViking 现有的解析、摘要和索引流程。此功能只读取钉钉内容，不会写回钉钉。
 
+## 导入和刷新流程
+
+手动导入和定时刷新使用同一套资源处理流程。下面的流程图可以直接在 GitHub 中查看。
+
+```mermaid
+flowchart TD
+    A["Studio / API / 定时刷新"] --> B["确定目标位置和服务端身份"]
+    B --> C["通过 MCP 读取钉钉节点，比较并下载内容"]
+    C --> D{"遍历完整且未超过限制？"}
+    D -->|否| X["停止，不提交本次资源内容"]
+    D -->|是| E["暂存可读内容和复用信息"]
+    E --> F["进入导入队列，解析新增或变化的内容"]
+    F --> G["将复用和需要保留的旧结果加入解析结果"]
+    P["上次本地内容和同步记录"] -.-> C
+    P -.-> G
+    G --> H["共享更新流程计算差异并写入资源"]
+    H --> I["执行需要的摘要和向量任务"]
+    I -->|失败| Y["任务失败，不将本次记录标为可复用"]
+    I -->|成功| J["完成任务，符合条件时标为可复用"]
+```
+
+不可读的子文件可以跳过，可读的同级内容继续导入。在共享流程计算删除操作之前，会先加入该子文件已有的旧结果，以及本次列表中缺失节点的旧结果。遍历结构不完整会停止刷新；没有任何可读或可复用内容时也无法继续导入。
+
+资源内容先写入，再执行摘要和向量任务。如果后续任务失败，本次记录不会被标为可复用，但已经写入的内容不会回滚。任务成功也不一定可以复用：除支持的“子文件不可读”提示之外，存在其他警告时不会完成复用记录，例如本地解析跳过、保留缺失节点。
+
+## 审核阅读索引
+
+| 审核问题 | 实现位置 | 回归测试 |
+| --- | --- | --- |
+| 身份在哪里配置，浏览器能看到哪些信息？ | [身份配置](../../../openviking_cli/utils/config/dingtalk_config.py)、[资源接口](../../../openviking/server/routers/resources.py) | [身份返回值不含凭证](../../../tests/server/test_dingtalk_identities.py) |
+| 如何列出、下载、重试和比较节点？ | [钉钉读取模块](../../../openviking/parse/accessors/dingtalk_accessor.py)、[MCP 客户端](../../../openviking/parse/accessors/dingtalk_client.py) | [来源读取和失败场景](../../../tests/parse/test_dingtalk_accessor.py) |
+| 缺失或不可读节点为什么不会误删旧内容？ | [解析结果准备](../../../openviking/resource/dingtalk_import.py)、[资源处理流程](../../../openviking/utils/resource_processor.py) | [保留旧结果及实际删除清单](../../../tests/storage/test_dingtalk_sync_protection.py) |
+| 后续运行什么时候能复用旧结果？ | [同步完成记录](../../../openviking/resource/dingtalk_incremental.py)、[队列任务完成处理](../../../openviking/storage/queuefs/add_resource_processor.py) | [复用条件](../../../tests/resource/test_dingtalk_incremental.py)、[后续任务失败处理](../../../tests/storage/test_add_resource_processor_dingtalk.py) |
+| Studio 如何提交身份和同步限制？ | [钉钉表单](../../../web-studio/src/routes/resources/-components/dingtalk-resource-options.tsx) | [导入表单行为](../../../web-studio/src/routes/resources/-components/add-resource-page.test.tsx) |
+
+例如目标中已有文档 A 和 B，下一次列表包含更新后的 A 和新增的 C，却没有 B：导入会更新 A、添加 C、保留 B，并报告缺失节点。如果读取下一页列表失败，则会在写入之前停止处理这次结果。上面的保留测试会调用共享更新流程验证这些规则，不另建一套钉钉删除逻辑。
+
 ## 在服务端配置身份
 
 在 OpenViking 服务端配置中创建一个命名身份。`doc` 服务必填；只有需要读取电子表格或 AI 表格时，才需要分别添加 `sheets` 和 `ai_table`。
