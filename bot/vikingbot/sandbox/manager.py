@@ -56,9 +56,16 @@ class SandboxManager:
             return sandbox
 
     async def _create_sandbox(self, workspace_id: str, workspace: Path) -> SandboxBackend:
-        """Create new sandbox instance."""
+        """Create new sandbox instance.
+
+        Workspace existence is snapshotted *before* ``instance.start()``,
+        because start() itself materialises the workspace directory on disk.
+        A post-start existence check would always see the directory present
+        and would therefore never copy bootstrap files into a fresh workspace.
+        """
         backend_options = {}
         managed = self.config.uses_managed_opensandbox
+        workspace_existed = workspace.exists()
         if managed:
             root = self.config.opensandbox_workspaces_path
             # Never mount credentials, the parent runtime directory, or a symlink escape.
@@ -72,12 +79,13 @@ class SandboxManager:
         instance = self._backend_cls(
             self.config.sandbox, workspace_id, workspace, **backend_options
         )
-        needs_bootstrap = not workspace.exists()
+        needs_bootstrap = not workspace_existed
         try:
             if needs_bootstrap and self.config.sandbox.backend == "opensandbox":
                 await self._copy_bootstrap_files(workspace)
             await instance.start()
-            if not workspace.exists():
+            if not workspace_existed and self.config.sandbox.backend != "opensandbox":
+                # Opensandbox backends were already bootstrapped before start().
                 await self._copy_bootstrap_files(workspace)
             if self.config.sandbox.backend == "opensandbox" and not managed:
                 # External services have no local mount; upload bootstrap inputs via APIs.
