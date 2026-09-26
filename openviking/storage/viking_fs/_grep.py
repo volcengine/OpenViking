@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from openviking.core.namespace import is_session_uri
 from openviking.pyagfs.exceptions import AGFSNotSupportedError
 from openviking.server.identity import RequestContext
+from openviking.storage.acl import is_acl_uri
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs._base import logger
 from openviking_cli.exceptions import PermissionDeniedError
@@ -265,9 +266,12 @@ class _GrepMixin:
         after_context=0,
     ):
         """Filesystem grep path: prefer native agfs grep and fall back if unavailable."""
+        acl_scope = not self._safe_uri_parts(uri) or is_acl_uri(uri)
+        acl_safe = not acl_scope or not await self._acl_enabled(ctx)
         native_safe = (
             content_transform is None
             and allowed_uris is None
+            and acl_safe
             and await self._session_native_grep_safe(uri, ctx)
         )
         if native_safe:

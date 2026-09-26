@@ -1218,6 +1218,56 @@ async def test_grep_applies_node_limit_to_backend_results(monkeypatch, fs):
     ]
 
 
+@pytest.mark.asyncio
+async def test_grep_acl_fallback_filters_before_node_limit(monkeypatch, fs):
+    denied_uri = "viking://resources/restricted/secret.md"
+    allowed_uri = "viking://resources/public.md"
+    ctx = RequestContext(user=UserIdentifier("account", "reader"), role=Role.USER)
+    monkeypatch.setattr(fs, "_acl_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        fs,
+        "_collect_grep_files",
+        AsyncMock(return_value=[denied_uri, allowed_uri]),
+    )
+
+    read_uris = []
+
+    async def fake_read(uri, ctx=None):
+        read_uris.append(uri)
+        if uri == denied_uri:
+            raise PermissionDeniedError("access denied", resource=uri)
+        return b"first public match\nsecond public match"
+
+    native_grep = AsyncMock(side_effect=AssertionError("native grep must not run with ACL"))
+    monkeypatch.setattr(fs, "read", fake_read)
+    monkeypatch.setattr(fs, "_grep_with_agfs", native_grep)
+
+    result = await fs._grep_fs(
+        uri="viking://resources",
+        pattern="match",
+        exclude_uri=None,
+        case_insensitive=False,
+        node_limit=1,
+        level_limit=10,
+        ctx=ctx,
+    )
+
+    assert result == {
+        "matches": [
+            {
+                "line": 1,
+                "uri": allowed_uri,
+                "content": "first public match",
+            },
+        ],
+        "count": 1,
+        "match_count": 1,
+        "files_scanned": 2,
+    }
+    native_grep.assert_not_awaited()
+    assert read_uris == [denied_uri, allowed_uri]
+
+
 class _RestrictedAclManager:
     """ACL manager stub: enabled, with per-URI effective ACLs from `resolve_many`."""
 
