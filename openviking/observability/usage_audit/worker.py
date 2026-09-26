@@ -116,10 +116,14 @@ class UsageAuditWorker:
         try:
             await self._store.record_batch(batch)
         except Exception as exc:  # noqa: BLE001
+            # Always include the traceback: flush failures are rare and usually
+            # indicate storage-level faults whose root cause must survive in
+            # the logs for post-mortems (a bare message loses the origin).
             logger.warning(
-                "Usage/Audit batch flush failed: %s",
+                "Usage/Audit batch flush failed (%d events): %s",
+                len(batch),
                 exc,
-                exc_info=logger.isEnabledFor(logging.DEBUG),
+                exc_info=True,
             )
 
     async def flush(self) -> None:
