@@ -7,6 +7,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { readRequestBody } from "../../memory-plugin-shared/testing/support.mjs";
+
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = dirname(SCRIPT_DIR);
 const SESSION_ID = "recall-branch-session";
@@ -308,3 +310,25 @@ test("the plugin keeps no ranking or transcript copy of its own", async () => {
 
   assert.deepEqual(hits, []);
 });
+
+for (const excludeUris of ["", "viking://user/default/skills, viking://agent/skills"]) {
+  test(`context recall forwards configured subtree exclusions ${JSON.stringify(excludeUris)}`, async () => {
+    const requests = [];
+    const { stdout, state } = await recallTurn({
+      env: { OPENVIKING_RECALL_EXCLUDE_URIS: excludeUris },
+      routes: {
+        ...HEALTHY,
+        "POST /api/v1/search/search": async (req) => {
+          requests.push(await readRequestBody(req));
+          return { body: { status: "ok", result: { rendered: "", entries: [], stats: {} } } };
+        },
+      },
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].mode, "context");
+    assert.deepEqual(requests[0].exclude_uris, excludeUris
+      ? ["viking://user/default/skills", "viking://agent/skills"] : undefined);
+    assert.equal(state.reason, "no_results");
+    assert.equal(injectedContext(stdout), null);
+  });
+}

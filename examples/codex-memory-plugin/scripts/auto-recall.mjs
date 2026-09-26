@@ -143,6 +143,7 @@ runHookStage({
     actorPeerId: effectivePeer.peerId, legacyPeerId: effectivePeer.legacyPeerId,
     sessionId: recallSessionId || "", runCompressor,
     localCompressorAvailable: Boolean(runCompressor),
+    excludeUris: cfg.recallExcludeUris,
     digestCachePath: RECALL_DIGEST_CACHE_PATH, log,
   });
   log("recall_complete", { stage: recalled.stage, chars: recalled.block.length });
