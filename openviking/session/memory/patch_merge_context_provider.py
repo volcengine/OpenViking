@@ -6,15 +6,19 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.merge_policy import MEMORY_MERGE_POLICY
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
 from openviking.session.memory.utils.language import resolve_output_language_from_text
+
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle
 
 _SYSTEM_HIDDEN_FIELDS = {
     "source_extraction_id",
@@ -123,8 +127,9 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         required_file_uris: list[str] | None = None,
         output_language: str | None = None,
         memory_registry: MemoryTypeRegistry | None = None,
+        vlm_config: VLMHandle | None = None,
     ):
-        super().__init__(messages=[])
+        super().__init__(messages=[], vlm_config=vlm_config)
         self.memory_type = memory_type
         self._registry = memory_registry
         self.required_file_uris = list(required_file_uris or [])
@@ -141,14 +146,18 @@ Do not call tools. Output JSON only.
 
 All memory content must be written in {output_language}.
 
-Reconcile independent extraction patch proposals: merge duplicate/overlapping
-memories into one canonical file patch, and keep distinct memories separate.
+Reconcile independent extraction patch proposals. Apply this shared policy before
+choosing a canonical file or deleting any proposal:
+
+{MEMORY_MERGE_POLICY}
+
 Normalize URI/path variants for directory/filename fields. Treat path segment
 fields as stable schema identifiers, not free-form labels. Reuse existing
 equivalent directories across singular/plural, synonym, or language/script
 variants. For new segments, use singular snake_case for English and one concise
 canonical term for Chinese; e.g. book not books, 书籍 not 书/图书. If a loser URI
-is an existing file, put it in delete_ids; if it is only a new proposal, omit it.
+is a verified duplicate existing file, put it in delete_ids with the fact-complete
+canonical replacement; if it is only a duplicate new proposal, omit it.
 """
 
     def get_tools(self) -> list[str]:

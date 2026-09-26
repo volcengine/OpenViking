@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
-import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -24,40 +25,6 @@ async function endedMarkerExists(dir, id) {
 
 function writeEndedMarker(dir, id, ts) {
   return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
-}
-
-
-function readRequestBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf-8");
-      try { resolve(raw ? JSON.parse(raw) : null); } catch (err) { reject(err); }
-    });
-    req.on("error", reject);
-  });
-}
-
-function writeJson(res, value) {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(value));
-}
-
-async function withMockOpenViking(handler, fn) {
-  const server = http.createServer((req, res) => {
-    Promise.resolve(handler(req, res)).catch((err) => {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "error", error: String(err?.stack || err) }));
-    });
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const { port } = server.address();
-    return await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
 }
 
 function runSessionEnd(input, env) {
@@ -196,6 +163,41 @@ test("session-end catches up the missing turns then commits", async () => {
     assert.equal(state.ovSessionId, null);
     assert.equal(state.capturedTurnCount, 4);
     assert.equal(await endedMarkerExists(stateDir, "s1"), false);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("session-end migrates a startup-inclusive cursor before catch-up and commit", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-startup-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  const startup = {
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [
+      { type: "input_text", text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nAnswer in Chinese.\n</INSTRUCTIONS>" },
+      { type: "input_text", text: "<environment_context>\n  <cwd>/tmp/project</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-09-25</current_date>\n  <timezone>Asia/Singapore</timezone>\n</environment_context>" },
+    ] },
+  };
+  try {
+    await writeState(stateDir, "startup-end", { capturedTurnCount: 2 });
+    await writeFile(transcriptPath, [
+      JSON.stringify(startup),
+      JSON.stringify({ type: "turn_context", payload: { turn_id: "first" } }),
+      turn("user", "Previously captured"),
+      turn("user", "New question"),
+    ].join("\n"));
+    await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+      await runSessionEnd(
+        { session_id: "startup-end", transcript_path: transcriptPath },
+        workerEnv(baseUrl, stateDir),
+      );
+    });
+    assert.deepEqual(sentMessages(calls).map((item) => item.parts?.[0]?.text ?? item.content), ["New question"]);
+    assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
+    const state = await readState(stateDir, "startup-end");
+    assert.equal(state.captureFormatVersion, 2);
+    assert.equal(state.capturedTurnCount, 2);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

@@ -5,6 +5,8 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from ._utils import _path_is_relative_to
+
 
 def zip_directory(dir_path: str) -> str:
     path = Path(dir_path)
@@ -19,7 +21,7 @@ def zip_directory(dir_path: str) -> str:
             if file_path.is_symlink():
                 continue
             if file_path.is_file():
-                if not file_path.resolve().is_relative_to(root):
+                if not _path_is_relative_to(file_path.resolve(), root):
                     continue
                 arcname = str(file_path.relative_to(path)).replace("\\", "/")
                 zipf.write(file_path, arcname=arcname)

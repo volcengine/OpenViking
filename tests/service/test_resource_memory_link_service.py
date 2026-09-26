@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for resource-memory linking service."""
 
+import asyncio
 import re
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -254,39 +256,63 @@ async def test_on_resource_added_bridges_reason_through_fixed_session(request_co
 
 @pytest.mark.asyncio
 async def test_on_resource_added_reuses_same_reason_session(request_context):
-    session_service = _FakeSessionService()
+    """Concurrent queue loops must serialize writes to the shared reason session."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    worker_waiting = threading.Event()
+
+    class BlockingSessionService(_FakeSessionService):
+        async def get(self, session_id, ctx, auto_create=False):
+            session = await super().get(session_id, ctx, auto_create=auto_create)
+            if len(self.got) == 1:
+                entered.set()
+                await release.wait()
+            return session
+
+    session_service = BlockingSessionService()
     service = ResourceMemoryLinkService(
         viking_fs=_FakeVikingFS({}),
         session_service=session_service,
     )
 
-    first = await service.on_resource_added(
-        ctx=request_context,
-        resource_uri="viking://resources/images/ryoma.jpeg",
-        reason="这是越前龙马的照片",
-        source_name="ryoma.jpeg",
-    )
-    second = await service.on_resource_added(
-        ctx=request_context,
-        resource_uri="viking://resources/images/fuji.jpeg",
-        reason="这是不二周助的照片",
-        source_name="fuji.jpeg",
-    )
+    async def add_reason(name):
+        return await service.on_resource_added(
+            ctx=request_context,
+            resource_uri=f"viking://resources/images/{name}.jpeg",
+            reason=f"这是{name}的照片",
+            source_name=f"{name}.jpeg",
+        )
 
-    assert first["session_id"] == _RESOURCE_REASON_SESSION_ID
-    assert second["session_id"] == _RESOURCE_REASON_SESSION_ID
-    assert [call["session_id"] for call in session_service.got] == [
-        _RESOURCE_REASON_SESSION_ID,
-        _RESOURCE_REASON_SESSION_ID,
-    ]
+    async def add_from_other_queue():
+        # Notify only after this coroutine has reached its first wait, so the
+        # first queue still holds the session while the other queue enters.
+        asyncio.get_running_loop().call_soon(worker_waiting.set)
+        return await add_reason("tezuka")
+
+    first = asyncio.create_task(add_reason("ryoma"))
+    await entered.wait()
+    second = asyncio.create_task(add_reason("fuji"))
+    await asyncio.sleep(0)
+    worker = asyncio.create_task(
+        asyncio.to_thread(lambda: asyncio.run(add_from_other_queue()))
+    )
+    try:
+        assert await asyncio.to_thread(worker_waiting.wait, 3)
+        assert len(session_service.got) == 1
+    finally:
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(first, second, worker), timeout=3)
+
+    assert all(result["status"] == "success" for result in results)
+    assert all(result["session_id"] == _RESOURCE_REASON_SESSION_ID for result in results)
     assert [call["session_id"] for call in session_service.committed] == [
-        _RESOURCE_REASON_SESSION_ID,
-        _RESOURCE_REASON_SESSION_ID,
-    ]
+        _RESOURCE_REASON_SESSION_ID
+    ] * 3
     assert session_service.deleted == []
     messages = [item["parts"][0].text for item in session_service.session.messages]
-    assert "这是越前龙马的照片" in messages[0]
-    assert "这是不二周助的照片" in messages[1]
+    assert len(messages) == 3
+    for name in ("ryoma", "fuji", "tezuka"):
+        assert any(f"这是{name}的照片" in message for message in messages)
 
 
 @pytest.mark.asyncio

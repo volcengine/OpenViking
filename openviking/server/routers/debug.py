@@ -26,12 +26,19 @@ router = APIRouter(prefix="/api/v1/debug", tags=["debug"])
 
 @router.get("/health")
 async def debug_health(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
-    """Quick health check."""
+    """Account-scoped health check."""
     service = get_service()
-    is_healthy = service.debug.is_healthy()
-    return Response(status="ok", result={"healthy": is_healthy})
+    try:
+        status = await service.debug.observer.account_system(ctx)
+        is_healthy = status.is_healthy
+    except Exception:
+        is_healthy = False
+    return Response(
+        status="ok",
+        result={"healthy": is_healthy, "account_id": ctx.account_id},
+    )
 
 
 @router.get("/vector/scroll")

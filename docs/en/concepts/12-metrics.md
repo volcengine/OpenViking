@@ -228,14 +228,67 @@ Notes:
 | `openviking_queue_errors_total` | Counter | `queue` | total error count per queue |
 | `openviking_queue_pending` | Gauge | `queue` | pending queue items |
 | `openviking_queue_in_progress` | Gauge | `queue` | in-progress queue items |
-| `openviking_lock_active` | Gauge | none | current active locks |
-| `openviking_lock_waiting` | Gauge | none | locks currently waiting |
-| `openviking_lock_stale` | Gauge | none | potentially stale locks |
+| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome` | handler execution time after a worker dequeues a message |
+| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome` | enqueue-to-handler-completion latency, including queue wait time |
+| `openviking_executor_max_workers` | Gauge | `pool, process_role, worker` | maximum workers in the asyncio default executor |
+| `openviking_executor_threads` | Gauge | `pool, process_role, worker` | threads created by the asyncio default executor |
+| `openviking_executor_active_tasks` | Gauge | `pool, process_role, worker` | default executor tasks currently running |
+| `openviking_executor_pending_tasks` | Gauge | `pool, process_role, worker` | default executor tasks waiting to run |
+| `openviking_executor_submitted_total` | Counter | `pool, process_role, worker` | total tasks submitted to the default executor |
+| `openviking_executor_completed_total` | Counter | `pool, process_role, worker` | default executor tasks that finished, including failed tasks |
+| `openviking_executor_failed_total` | Counter | `pool, process_role, worker` | default executor callables that raised exceptions |
+| `openviking_lock_active` | Gauge | none | current published lock leases |
+| `openviking_lock_waiting` | Gauge | none | requests currently waiting for locks |
+| `openviking_lock_stale` | Gauge | none | cumulative count of stale lock tokens removed |
+| `openviking_lock_conflicts_total` | Counter | none | observed lock conflicts |
+| `openviking_lock_stale_leases_released_total` | Counter | none | stale leases released |
+| `openviking_lock_descendant_scans_total` | Counter | none | completed descendant scans |
+| `openviking_lock_descendant_scan_duration_seconds_total` | Counter | none | cumulative descendant scan duration |
+
+The queue duration `outcome` label is one of `success`, `failed`, `requeued`, `cancelled`, or `exception`. `failed` means the handler returned a settled failure that can be acknowledged, while `exception` means processing raised and the current message is left unacknowledged.
 
 These help answer:
 
 - Is there queue backlog?
+- Which queue is slow, and is the latency caused by waiting or processing?
 - Is there lock contention or stale locking?
+- Is the default executor near its worker limit or building a queue?
+
+Executor metrics only cover `loop.run_in_executor(None, ...)` and
+`asyncio.to_thread(...)`. Calls using an explicit custom executor and Rust /
+RAGFS internal runtimes or threads are not included. `failed_total` counts
+callables that raise exceptions. If the caller catches that exception and treats
+it as a normal branch, it still counts here, so this is not the business request
+failure count.
+
+### RAGFS
+
+RAGFS exports filesystem, cache, multi-backend and lock metrics through one native
+`metrics()` call. The collector replaces Registry values directly without computing
+deltas. Durations are sampled in integer nanoseconds and exported as fractional
+seconds, for example `123 ns = 0.000000123 seconds`.
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_ragfs_operation_results_total` | Counter | `plugin, operation, status` | successful and failed operations |
+| `openviking_ragfs_operation_duration_seconds` | Histogram | `plugin, operation` | operation duration distribution |
+| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | file/directory cache hits and misses |
+| `openviking_ragfs_cache_backend_fallbacks_total` | Counter | none | backend loads after cache misses |
+| `openviking_ragfs_cache_operations_total` | Counter | `operation` | cache put/delete attempts |
+| `openviking_ragfs_cache_invalidations_total` | Counter | none | completed invalidations |
+| `openviking_ragfs_cache_errors_total` | Counter | none | cache errors hidden by bypass mode |
+| `openviking_ragfs_cache_policy_bypasses_total` | Counter | none | reads bypassing cache |
+| `openviking_ragfs_cache_bytes_total` | Counter | `source` | bytes from backend/cache |
+| `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | cumulative get/put/delete duration |
+| `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved counts |
+| `openviking_ragfs_multiwrite_background_tasks` | Gauge | none | background tasks, including the retry loop |
+| `openviking_ragfs_multiwrite_read_routes_total` | Counter | `route` | primary/backup/redirect/miss selections |
+
+These metrics have no `mount` or `account_id` label. Cache and multi-backend
+families are absent when those capabilities are not enabled. `status` is
+`success` or `error`; `exists=false` is successful and `replace` uses `rename`.
+Histogram buckets cover all outcomes, with finite bounds from 0.0001 to 10 seconds.
+Python `get_stats()` retains its microsecond fields.
 
 ### Tasks and Task Tracker
 
@@ -258,7 +311,6 @@ These help answer:
 | Metric Family | Type | Common Labels | Meaning |
 |---------------|------|---------------|---------|
 | `openviking_session_lifecycle_total` | Counter | `account_id, action, status` | session lifecycle event count |
-| `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used total |
 | `openviking_session_archive_total` | Counter | `account_id, status` | session archive count |
 
 ### Feedback

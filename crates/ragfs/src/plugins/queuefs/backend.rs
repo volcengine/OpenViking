@@ -4,7 +4,7 @@
 //! storage implementations (memory, SQLite, etc.) while maintaining a consistent interface.
 
 use crate::core::errors::{Error, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, types::ValueRef, Connection, Row};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -22,6 +22,8 @@ pub struct Message {
     pub data: Vec<u8>,
     /// Timestamp when the message was enqueued
     pub timestamp: SystemTime,
+    /// Whether `timestamp` came from a real persisted enqueue time.
+    pub timestamp_valid: bool,
 }
 
 impl Message {
@@ -31,8 +33,18 @@ impl Message {
             id: Uuid::new_v4().to_string(),
             data,
             timestamp: SystemTime::now(),
+            timestamp_valid: true,
         }
     }
+}
+
+/// Current queue occupancy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct QueueState {
+    /// Messages available for dequeue.
+    pub pending: usize,
+    /// Messages dequeued but not acknowledged.
+    pub processing: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,16 +61,21 @@ impl StoredMessage {
         Self {
             id: msg.id.clone(),
             data: msg.data.clone(),
-            // Prefer unix seconds for compatibility with older queue.db producers.
-            timestamp: Some(serde_json::Value::Number(unix_secs(msg.timestamp).into())),
+            // Older readers already accept RFC3339 strings; nanoseconds preserve latency accuracy.
+            timestamp: Some(serde_json::Value::String(
+                DateTime::<Utc>::from(msg.timestamp)
+                    .to_rfc3339_opts(SecondsFormat::Nanos, true),
+            )),
         }
     }
 
     pub(super) fn into_message(self) -> Message {
+        let (timestamp, timestamp_valid) = parse_stored_timestamp(self.timestamp);
         Message {
             id: self.id,
             data: self.data,
-            timestamp: parse_stored_timestamp(self.timestamp),
+            timestamp,
+            timestamp_valid,
         }
     }
 }
@@ -92,24 +109,26 @@ where
     }
 }
 
-fn parse_stored_timestamp(raw: Option<serde_json::Value>) -> SystemTime {
+fn parse_stored_timestamp(raw: Option<serde_json::Value>) -> (SystemTime, bool) {
     match raw {
         Some(serde_json::Value::String(ts)) => DateTime::parse_from_rfc3339(&ts)
-            .map(|dt| {
-                let secs = dt.timestamp();
-                let secs_u64 = if secs <= 0 { 0 } else { secs as u64 };
-                UNIX_EPOCH + Duration::from_secs(secs_u64)
-            })
-            .unwrap_or_else(|_| SystemTime::now()),
+            .ok()
+            .and_then(|dt| timestamp_from_parts(dt.timestamp(), dt.timestamp_subsec_nanos()))
+            .map(|timestamp| (timestamp, true))
+            .unwrap_or_else(|| (SystemTime::now(), false)),
         Some(serde_json::Value::Number(num)) => num
             .as_i64()
-            .map(|secs| {
-                let secs_u64 = if secs <= 0 { 0 } else { secs as u64 };
-                UNIX_EPOCH + Duration::from_secs(secs_u64)
-            })
-            .unwrap_or_else(SystemTime::now),
-        _ => SystemTime::now(),
+            .and_then(|secs| timestamp_from_parts(secs, 0))
+            .map(|timestamp| (timestamp, true))
+            .unwrap_or_else(|| (SystemTime::now(), false)),
+        _ => (SystemTime::now(), false),
     }
+}
+
+fn timestamp_from_parts(secs: i64, nanos: u32) -> Option<SystemTime> {
+    (secs > 0)
+        .then(|| Duration::new(secs as u64, nanos))
+        .and_then(|duration| UNIX_EPOCH.checked_add(duration))
 }
 
 fn unix_secs(time: SystemTime) -> i64 {
@@ -161,6 +180,9 @@ pub trait QueueBackend: Send + Sync {
     /// Get the number of messages in the queue
     fn size(&self, queue_name: &str) -> Result<usize>;
 
+    /// Get pending and processing message counts from one backend snapshot
+    fn status(&self, queue_name: &str) -> Result<QueueState>;
+
     /// List every unacknowledged message without changing queue state
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>>;
 
@@ -193,6 +215,7 @@ impl Default for SQLiteQueueOptions {
 /// A single queue with its messages
 struct Queue {
     messages: VecDeque<Message>,
+    processing: VecDeque<Message>,
     last_enqueue_time: SystemTime,
 }
 
@@ -200,6 +223,7 @@ impl Queue {
     fn new() -> Self {
         Self {
             messages: VecDeque::new(),
+            processing: VecDeque::new(),
             last_enqueue_time: SystemTime::UNIX_EPOCH,
         }
     }
@@ -271,7 +295,11 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
-        Ok(queue.messages.pop_front())
+        let message = queue.messages.pop_front();
+        if let Some(message) = &message {
+            queue.processing.push_back(message.clone());
+        }
+        Ok(message)
     }
 
     fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
@@ -292,12 +320,28 @@ impl QueueBackend for MemoryBackend {
         Ok(queue.messages.len())
     }
 
+    fn status(&self, queue_name: &str) -> Result<QueueState> {
+        let queue = self
+            .queues
+            .get(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
+        Ok(QueueState {
+            pending: queue.messages.len(),
+            processing: queue.processing.len(),
+        })
+    }
+
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
         let queue = self
             .queues
             .get(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
-        Ok(queue.messages.iter().cloned().collect())
+        Ok(queue
+            .messages
+            .iter()
+            .chain(queue.processing.iter())
+            .cloned()
+            .collect())
     }
 
     fn clear(&mut self, queue_name: &str) -> Result<()> {
@@ -307,6 +351,7 @@ impl QueueBackend for MemoryBackend {
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
         queue.messages.clear();
+        queue.processing.clear();
         Ok(())
     }
 
@@ -325,10 +370,9 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
-        // Find and remove message by ID
-        let original_len = queue.messages.len();
-        queue.messages.retain(|msg| msg.id != msg_id);
-        Ok(queue.messages.len() != original_len)
+        let original_len = queue.processing.len();
+        queue.processing.retain(|msg| msg.id != msg_id);
+        Ok(queue.processing.len() != original_len)
     }
 }
 
@@ -702,6 +746,30 @@ impl QueueBackend for SQLiteQueueBackend {
         Ok(count as usize)
     }
 
+    fn status(&self, queue_name: &str) -> Result<QueueState> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
+
+        Self::require_queue_exists(&conn, queue_name)?;
+
+        let (pending, processing): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0)
+                 FROM queue_messages WHERE queue_name = ?1",
+                params![queue_name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| Error::internal(format!("sqlite status query error: {}", e)))?;
+        Ok(QueueState {
+            pending: pending as usize,
+            processing: processing as usize,
+        })
+    }
+
     fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
         let conn = self
             .conn
@@ -866,11 +934,27 @@ mod tests {
 
         let dequeued1 = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(dequeued1.data, b"message 1");
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 1,
+                processing: 1,
+            }
+        );
+        assert!(backend.ack("test", &dequeued1.id).unwrap());
 
         let dequeued2 = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(dequeued2.data, b"message 2");
+        assert!(backend.ack("test", &dequeued2.id).unwrap());
 
         assert_eq!(backend.size("test").unwrap(), 0);
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 0,
+                processing: 0,
+            }
+        );
         assert!(backend.dequeue("test").unwrap().is_none());
     }
 
@@ -941,6 +1025,7 @@ mod tests {
         assert!(backend.dequeue("nonexistent").is_err());
         assert!(backend.peek("nonexistent").is_err());
         assert!(backend.size("nonexistent").is_err());
+        assert!(backend.status("nonexistent").is_err());
         assert!(backend.clear("nonexistent").is_err());
     }
 
@@ -955,14 +1040,35 @@ mod tests {
 
         backend.enqueue("test", msg1).unwrap();
         backend.enqueue("test", msg2).unwrap();
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 2,
+                processing: 0,
+            }
+        );
 
         let first = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(first.data, b"message 1");
         assert_eq!(backend.size("test").unwrap(), 1);
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 1,
+                processing: 1,
+            }
+        );
         let unacked = backend.list_unacked("test").unwrap();
         assert_eq!(unacked.len(), 2);
         assert_eq!(unacked[0].id, msg1_id);
         assert!(backend.ack("test", &msg1_id).unwrap());
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 1,
+                processing: 0,
+            }
+        );
 
         let second = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(second.data, b"message 2");
@@ -983,6 +1089,67 @@ mod tests {
 
         let dequeued = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(dequeued.data, payload);
+    }
+
+    #[test]
+    fn test_stored_message_preserves_timestamp_validity() {
+        let missing = StoredMessage {
+            id: "missing".to_string(),
+            data: b"payload".to_vec(),
+            timestamp: None,
+        }
+        .into_message();
+        assert!(!missing.timestamp_valid);
+
+        let invalid = StoredMessage {
+            id: "invalid".to_string(),
+            data: b"payload".to_vec(),
+            timestamp: Some(serde_json::Value::String("not-a-time".to_string())),
+        }
+        .into_message();
+        assert!(!invalid.timestamp_valid);
+
+        let valid = StoredMessage {
+            id: "valid".to_string(),
+            data: b"payload".to_vec(),
+            timestamp: Some(serde_json::Value::Number(1234.into())),
+        }
+        .into_message();
+        assert!(valid.timestamp_valid);
+        assert_eq!(unix_secs(valid.timestamp), 1234);
+
+        let precise_timestamp = UNIX_EPOCH + Duration::new(1_234, 567_890_123);
+        let precise = StoredMessage::from_message(&Message {
+            id: "precise".to_string(),
+            data: b"payload".to_vec(),
+            timestamp: precise_timestamp,
+            timestamp_valid: true,
+        })
+        .into_message();
+        assert!(precise.timestamp_valid);
+        assert_eq!(precise.timestamp, precise_timestamp);
+    }
+
+    #[test]
+    fn test_sqlite_backend_preserves_subsecond_enqueue_timestamp() {
+        let (_dir, _db_path, mut backend) = sqlite_backend();
+        backend.create_queue("test").unwrap();
+
+        let timestamp = UNIX_EPOCH + Duration::new(1_700_000_000, 987_654_321);
+        backend
+            .enqueue(
+                "test",
+                Message {
+                    id: "precise".to_string(),
+                    data: b"payload".to_vec(),
+                    timestamp,
+                    timestamp_valid: true,
+                },
+            )
+            .unwrap();
+
+        let dequeued = backend.dequeue("test").unwrap().unwrap();
+        assert_eq!(dequeued.timestamp, timestamp);
     }
 
     #[test]

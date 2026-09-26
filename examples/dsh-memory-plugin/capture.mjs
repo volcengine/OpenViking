@@ -1,10 +1,42 @@
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import {
-  extractPartsFromPayload,
   extractTextFromPayload,
-  shouldCaptureText,
+  shapeCapturePayload,
 } from "./shared/capture-utils.mjs";
 
 export const OPENVIKING_PLUGIN_SOURCE = "openviking-memory";
+export const OPENVIKING_PLUGIN_KIND = `plugin:${OPENVIKING_PLUGIN_SOURCE}`;
+
+export function pluginMessage(content, source) {
+  // dsh's own constructor: identity, normalization, and any future Message
+  // invariants come from the pinned peer instead of a hand-built object.
+  return createUserMessage({
+    content: [{ type: "text", text: content }],
+    source: {
+      kind: OPENVIKING_PLUGIN_KIND,
+      plugin: OPENVIKING_PLUGIN_SOURCE,
+      ...source,
+    },
+  });
+}
+
+export function isOpenVikingPluginMessage(message) {
+  const source = message?.source;
+  return source?.kind === OPENVIKING_PLUGIN_KIND
+    || (source?.kind === "plugin" && source.plugin === OPENVIKING_PLUGIN_SOURCE);
+}
+
+function isSyntheticUserMessage(message) {
+  const kind = message?.source?.kind;
+  if (kind === "plugin") return true;
+  if (typeof kind === "string" && kind.startsWith("plugin:")) return true;
+  // DSH's v4 migration gives first-party context producers their own kinds
+  // (for example, "time-context") instead of the retired plugin wrapper.
+  return message?.role === "user"
+    && typeof kind === "string"
+    && kind !== "user"
+    && kind !== "tool";
+}
 
 export function captureEvent(event, config, toolNames = new Map()) {
   if (!event || typeof event !== "object") return null;
@@ -28,11 +60,10 @@ export function captureEvent(event, config, toolNames = new Map()) {
 }
 
 function captureMessage(event, message, config, toolNames) {
-  // Whitelist by source: plugin-injected user messages (this plugin's recall
-  // blocks, time-context snapshots, any other plugin's context) are model
-  // input, not human input — mirroring them would launder synthetic text
-  // into memory as if a person said it.
-  if (message.source?.kind === "plugin") return null;
+  // DSH v4 gives producer-owned context messages their own kind. Treat
+  // user-role messages with an explicit non-user/tool kind as synthetic;
+  // untagged legacy messages stay capturable for backward compatibility.
+  if (isSyntheticUserMessage(message)) return null;
   if (message.role === "assistant" && config.captureAssistantTurns === false) {
     return null;
   }
@@ -42,27 +73,23 @@ function captureMessage(event, message, config, toolNames) {
 
   const role = message.role === "assistant" ? "assistant" : "user";
   const toolNameById = Object.fromEntries(toolNames);
-  const rawText = extractTextFromPayload(message, {
-    toolMaxChars: config.captureToolMaxChars,
-  });
-  const parts = extractPartsFromPayload(message, {
-    toolMaxChars: config.captureToolMaxChars,
+  const shaped = shapeCapturePayload(message, role, config, {
     toolNameById,
   });
-  const decision = shouldCaptureText(rawText, role, config);
-  const structuredParts = parts.filter(part => part?.type !== "text");
-  if (!decision.shouldCapture && structuredParts.length === 0) return null;
+  if (shaped.dropped) return null;
+  const structuredParts = shaped.parts.filter(part => part?.type !== "text");
+  if (!shaped.text && structuredParts.length === 0) return null;
 
-  const hasTextPart = parts.some(part => part?.type === "text");
+  const hasTextPart = shaped.parts.some(part => part?.type === "text");
   const bodyParts = [
-    ...(hasTextPart && decision.shouldCapture && decision.text
-      ? [{ type: "text", text: decision.text }]
+    ...(hasTextPart && shaped.text
+      ? [{ type: "text", text: shaped.text }]
       : []),
     ...structuredParts,
   ];
   const payload = bodyParts.length > 0
     ? { role, parts: bodyParts }
-    : { role, content: decision.text };
+    : { role, content: shaped.text };
   const createdAt = eventCreatedAt(event);
   if (createdAt) payload.created_at = createdAt;
   if (config.peerId) payload.peer_id = config.peerId;
@@ -71,10 +98,7 @@ function captureMessage(event, message, config, toolNames) {
 
 export function promptText(messages) {
   return (messages || [])
-    .filter(message => !(
-      message?.source?.kind === "plugin"
-      && message.source.plugin === OPENVIKING_PLUGIN_SOURCE
-    ))
+    .filter(message => !isOpenVikingPluginMessage(message))
     .map(message => extractTextFromPayload(message))
     .filter(Boolean)
     .join("\n\n")

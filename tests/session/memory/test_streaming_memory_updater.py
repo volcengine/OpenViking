@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -40,7 +41,37 @@ from openviking.session.memory.streaming_memory_updater import (
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
+
+
+class _TestVLMResolver:
+    model = "test-model"
+    max_tokens = None
+
+    async def get_vlm(self, account_id):
+        del account_id
+        return self
+
+
+def _patch_language_config(monkeypatch):
+    config = SimpleNamespace(
+        output_language_override="",
+        language_fallback="en",
+        memory=SimpleNamespace(
+            eager_prefetch=False,
+            prefetch_search_topn=5,
+            link_enabled=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.utils.language.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.session.memory.session_extract_context_provider.get_openviking_config",
+        lambda: config,
+    )
 
 
 class InMemoryVikingFS:
@@ -1041,6 +1072,277 @@ def test_enforce_merge_group_peer_enabled_false_keeps_self_scope():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "template_change",
+    [
+        "none",
+        "unrelated_type",
+        "description",
+        "field_description",
+        "body",
+        "renderer",
+    ],
+)
+async def test_template_snapshot_updates_same_uri(monkeypatch, template_change):
+    uri = "viking://user/u/memories/notes/profile.md"
+    original = "City: Beijing\nRole: engineer"
+    expected = "City: Shanghai\nRole: scientist"
+    old = MemoryFile(uri=uri, memory_type="notes", content=original)
+    raw = MemoryFileUtils.write(old)
+    fs = InMemoryVikingFS({uri: raw})
+    for module in ("streaming_memory_updater", "memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    requests = []
+    for index, replacement in enumerate(
+        ("City: Shanghai\nRole: engineer", "City: Beijing\nRole: scientist")
+    ):
+        registry = _registry()
+        if index == 1:
+            schema = registry.get("notes")
+            if template_change == "unrelated_type":
+                registry.get("cases").description = "Unrelated new description"
+            elif template_change == "description":
+                schema.description = "New description"
+            elif template_change == "field_description":
+                schema.fields[-1].description = "New field description"
+            elif template_change == "body":
+                schema.content_template = "# New body\n{{ content }}"
+            elif template_change == "renderer":
+                schema._account_content_template = True
+        requests.append(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[
+                        ResolvedOperation(
+                            memory_type="notes",
+                            uris=[uri],
+                            old_memory_file_content=old.model_copy(deep=True),
+                            memory_fields={
+                                "content": StrPatch(
+                                    blocks=[
+                                        SearchReplaceBlock(search=original, replace=replacement)
+                                    ]
+                                )
+                            },
+                        )
+                    ],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                messages=[],
+                ctx=_ctx(),
+                memory_registry=registry,
+                metadata={"session_id": f"s{index}"},
+            )
+        )
+
+    async def coordinated_merge(**kwargs):
+        # Deterministic substitute for the LLM; the real updater still writes the file.
+        assert kwargs["registry"] is requests[0].memory_registry
+        assert len(kwargs["operations"].upsert_operations) == 2
+        op = requests[0].operations.upsert_operations[0].model_copy(deep=True)
+        op.memory_fields["content"] = StrPatch(
+            blocks=[SearchReplaceBlock(search=original, replace=expected)]
+        )
+        return ResolvedOperations(upsert_operations=[op], delete_file_contents=[], errors=[])
+
+    merge = AsyncMock(side_effect=coordinated_merge)
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.merge_memory_operations", merge
+    )
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(max_operations_per_update=2),
+    )
+    try:
+        results = await asyncio.gather(
+            *(updater.submit(request) for request in requests), return_exceptions=True
+        )
+        if template_change in {"none", "unrelated_type"}:
+            merge.assert_awaited_once()
+            assert all(not result.apply_result.errors for result in results)
+            assert MemoryFileUtils.read(fs.files[uri]).plain_content() == expected
+        else:
+            assert all(isinstance(result, ConflictError) for result in results)
+            assert all(uri in str(result) and "Re-extract" in str(result) for result in results)
+            merge.assert_not_awaited()
+            assert fs.files == {uri: raw}
+            assert not fs.writes
+            # A new extraction with consistent current templates can be retried.
+            requests[0].memory_registry = requests[1].memory_registry = _registry()
+            retried = await asyncio.gather(*(updater.submit(request) for request in requests))
+            assert all(not result.apply_result.errors for result in retried)
+            assert MemoryFileUtils.read(fs.files[uri]).plain_content() == expected
+    finally:
+        await updater.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kinds", [("add", "add"), ("update", "delete"), ("delete", "update"), ("delete", "delete")]
+)
+async def test_template_snapshot_conflicts_cover_adds_and_deletes(monkeypatch, kinds):
+    uri = "viking://user/u/memories/notes/profile.md"
+    old = MemoryFile(uri=uri, memory_type="notes", content="Original")
+    fs = InMemoryVikingFS({uri: MemoryFileUtils.write(old)} if "add" not in kinds else {})
+    original_files = dict(fs.files)
+    for module in ("streaming_memory_updater", "memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    requests = []
+    for index, kind in enumerate(kinds):
+        registry = _registry()
+        registry.get("notes").description = f"Version {index}"
+        op = _note_op("profile")
+        if kind == "update":
+            op.old_memory_file_content = old.model_copy(deep=True)
+        requests.append(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[] if kind == "delete" else [op],
+                    delete_file_contents=[old] if kind == "delete" else [],
+                    errors=[],
+                ),
+                messages=[],
+                ctx=_ctx(),
+                memory_registry=registry,
+                metadata={"session_id": f"s{index}"},
+            )
+        )
+    updater = StreamingMemoryUpdater(
+        registry=_registry(), config=StreamingMemoryUpdaterConfig(max_operations_per_update=2)
+    )
+    try:
+        results = await asyncio.gather(
+            *(updater.submit(request) for request in requests), return_exceptions=True
+        )
+        assert all(isinstance(result, ConflictError) for result in results)
+        assert fs.files == original_files
+        assert not fs.writes
+    finally:
+        await updater.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", ["viking://user/memories/notes/profile.md", "case_variant"])
+async def test_template_snapshot_conflicts_compare_storage_paths(monkeypatch, alias):
+    fs = PathlockedInMemoryVikingFS()
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+    requests = []
+    for index in range(2):
+        registry = _registry()
+        registry.get("notes").description = f"Version {index}"
+        op = _note_op("profile")
+        if index:
+            op.uris = [
+                op.uris[0].replace("profile.md", "PROFILE.md") if alias == "case_variant" else alias
+            ]
+        requests.append(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[op], delete_file_contents=[], errors=[]
+                ),
+                messages=[],
+                ctx=_ctx(),
+                memory_registry=registry,
+            )
+        )
+    merge = AsyncMock()
+    monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", merge)
+    updater = StreamingMemoryUpdater(registry=_registry())
+    try:
+        with pytest.raises(ConflictError):
+            await updater._process_batch(MemoryMergeGroupKey(None, "notes"), requests, "count")
+        merge.assert_not_awaited()
+        assert not fs.writes
+    finally:
+        await updater.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["shared_new_target", "note0"])
+async def test_template_snapshot_conflicts_check_merged_targets_before_writes(monkeypatch, target):
+    requests = []
+    for index in range(2):
+        registry = _registry()
+        registry.get("notes").description = f"Version {index}"
+        requests.append(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[_note_op(f"note{index}")], delete_file_contents=[], errors=[]
+                ),
+                messages=[],
+                ctx=_ctx(),
+                memory_registry=registry,
+            )
+        )
+
+    async def retarget_merge(batch):
+        merged = batch[0].operations.model_copy(deep=True)
+        merged.upsert_operations[0].uris = [f"viking://user/u/memories/notes/{target}.md"]
+        return merged
+
+    merge = AsyncMock(side_effect=retarget_merge)
+    apply = AsyncMock()
+    monkeypatch.setattr(StreamingMemoryUpdater, "_merge_requests", merge)
+    monkeypatch.setattr(StreamingMemoryUpdater, "_apply_operations", apply)
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: None
+    )
+    updater = StreamingMemoryUpdater(registry=_registry())
+    try:
+        with pytest.raises(ConflictError):
+            await updater._process_batch(MemoryMergeGroupKey(None, "notes"), requests, "count")
+        assert merge.await_count == 2
+        apply.assert_not_awaited()
+    finally:
+        await updater.close()
+
+
+@pytest.mark.asyncio
+async def test_streaming_memory_updater_separates_template_snapshots(monkeypatch):
+    fs = InMemoryVikingFS({})
+    for module in ("streaming_memory_updater", "memory_updater"):
+        monkeypatch.setattr(f"openviking.session.memory.{module}.get_viking_fs", lambda: fs)
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=2,
+            max_wait_seconds=0.05,
+            timer_check_interval_seconds=0.01,
+        ),
+    )
+    requests = []
+    for index in (1, 2):
+        registry = _registry()
+        registry.get("notes").content_template = f"# Version {index}\n{{{{ content }}}}"
+        requests.append(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[_note_op(f"note{index}")],
+                    delete_file_contents=[],
+                    errors=[],
+                ),
+                messages=[],
+                ctx=_ctx(),
+                memory_registry=registry,
+                metadata={"session_id": f"s{index}"},
+            )
+        )
+    try:
+        results = await asyncio.gather(*(updater.submit(request) for request in requests))
+    finally:
+        await updater.close()
+    for index, result in enumerate(results, 1):
+        assert not result.apply_result.errors
+        uri = f"viking://user/u/memories/notes/note{index}.md"
+        content = MemoryFileUtils.read(fs.files[uri], uri=uri).content
+        assert f"# Version {index}" in content
+        assert f"# Version {3 - index}" not in content
+
+
+@pytest.mark.asyncio
 async def test_streaming_memory_updater_batches_per_merge_group(monkeypatch):
     fs = InMemoryVikingFS({})
     fs.search = AsyncMock(return_value=[])
@@ -1358,6 +1660,7 @@ async def test_render_operation_after_file_content_persists_source_trace_id():
 
 @pytest.mark.asyncio
 async def test_cross_extraction_merge_preserves_existing_uri_without_explicit_delete(monkeypatch):
+    _patch_language_config(monkeypatch)
     existing_uri = "viking://user/u/memories/notes/existing.md"
     winner_uri = "viking://user/u/memories/notes/winner.md"
     old_file = __import__(
@@ -1390,6 +1693,7 @@ async def test_cross_extraction_merge_preserves_existing_uri_without_explicit_de
     )
 
     async def fake_run(self):
+        assert isinstance(self.context_provider._vlm_config, _TestVLMResolver)
         return (
             ResolvedOperations(
                 upsert_operations=[new_op],
@@ -1420,6 +1724,7 @@ async def test_cross_extraction_merge_preserves_existing_uri_without_explicit_de
         messages=[],
         ctx=_ctx(),
         registry=_registry(),
+        vlm_resolver=_TestVLMResolver(),
     )
 
     assert [op.uris for op in merged.upsert_operations] == [[winner_uri]]
@@ -1428,12 +1733,14 @@ async def test_cross_extraction_merge_preserves_existing_uri_without_explicit_de
 
 @pytest.mark.asyncio
 async def test_force_merge_sends_delete_only_group_through_patch_merge(monkeypatch):
+    _patch_language_config(monkeypatch)
     delete_file = _note_delete_file("obsolete")
     replacement_uri = "viking://user/u/memories/notes/replacement.md"
     merge_called = False
 
     async def fake_run(self):
         nonlocal merge_called
+        assert isinstance(self.context_provider._vlm_config, _TestVLMResolver)
         merge_called = True
         return (
             ResolvedOperations(
@@ -1466,6 +1773,7 @@ async def test_force_merge_sends_delete_only_group_through_patch_merge(monkeypat
         ctx=_ctx(),
         registry=_registry(),
         force_merge=True,
+        vlm_resolver=_TestVLMResolver(),
     )
 
     assert merge_called is True
@@ -1497,6 +1805,7 @@ async def test_force_merge_does_not_drop_add_only_delete():
 
 @pytest.mark.asyncio
 async def test_patch_merge_uses_original_messages_for_output_language(monkeypatch):
+    _patch_language_config(monkeypatch)
     existing_uri = "viking://user/u/memories/notes/code.md"
     old_file = MemoryFile(
         uri=existing_uri,
@@ -1519,6 +1828,7 @@ async def test_patch_merge_uses_original_messages_for_output_language(monkeypatc
     captured_languages = []
 
     async def fake_run(self):
+        assert isinstance(self.context_provider._vlm_config, _TestVLMResolver)
         captured_languages.append(self.context_provider.get_output_language())
         return (
             ResolvedOperations(
@@ -1550,6 +1860,7 @@ async def test_patch_merge_uses_original_messages_for_output_language(monkeypatc
         messages=[Message(id="m1", role="user", parts=[TextPart("请保持中文记忆")])],
         ctx=_ctx(),
         registry=_registry(),
+        vlm_resolver=_TestVLMResolver(),
     )
 
     assert captured_languages == ["zh-CN"]

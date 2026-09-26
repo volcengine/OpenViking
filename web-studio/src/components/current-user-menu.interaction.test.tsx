@@ -229,4 +229,21 @@ describe('CurrentUserMenu', () => {
     })
     expect(adminMocks.fetchAdminUsers).not.toHaveBeenCalled()
   })
+
+  it('renders current user identity clearly even when manual switcher is available in trusted mode', () => {
+    connectionMocks.connection.adminApiKey = ''
+    renderMenu()
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'header.currentUser.openMenu' }),
+    )
+
+    const userTerm = screen.getByText('header.currentUser.user')
+    const userRow = userTerm.closest('div')
+    expect(userRow).toBeTruthy()
+    expect(userRow?.textContent).toContain('alice')
+    expect(
+      screen.getByPlaceholderText('header.currentUser.userIdPlaceholder'),
+    ).toBeTruthy()
+  })
 })

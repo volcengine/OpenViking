@@ -2,6 +2,10 @@
 
 The `cuvs` backend keeps OpenViking's embedded record store, scalar indexes, sparse retrieval, and recovery logic, while executing dense vector search with NVIDIA cuVS. cuVS 26.06 Python wheels require Python 3.11 or newer.
 
+## Requirements and installation
+
+Use Linux x86_64 or aarch64 with a supported NVIDIA GPU and a compatible CUDA driver. Check the [cuVS installation requirements](https://docs.nvidia.com/cuvs/installation) and [Python package guide](https://docs.nvidia.com/cuvs/installation/python) for the selected release. Current cuVS source builds require CUDA Toolkit 12.2 or newer and Ampere or newer GPUs; package requirements depend on the chosen release.
+
 Install the package matching the host CUDA major version:
 
 ```bash
@@ -13,6 +17,8 @@ pip install cuvs-cu12 'cupy-cuda12x[ctk]' --extra-index-url=https://pypi.nvidia.
 pip install -e .
 pip install cuvs-cu13 'cupy-cuda13x[ctk]' --extra-index-url=https://pypi.nvidia.com
 ```
+
+## Configuration
 
 Start with exact brute-force search:
 
@@ -37,6 +43,28 @@ Start with exact brute-force search:
 ```
 
 Set `algorithm` to `cagra` for approximate graph search. `build_params` and `search_params` are passed to cuVS `cagra.IndexParams` and `cagra.SearchParams` respectively.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "cuvs",
+      "cuvs": {
+        "algorithm": "cagra",
+        "build_params": {
+          "graph_degree": 64,
+          "intermediate_graph_degree": 128,
+          "build_algo": "nn_descent"
+        },
+        "search_params": {
+          "itopk_size": 64,
+          "search_width": 1
+        }
+      }
+    }
+  }
+}
+```
 
 ### Memory-aware auto mode
 
@@ -133,6 +161,8 @@ workloads can increase the peak. The delta also excludes the approximately
 This is why auto mode initializes the runtime first, reads the remaining free
 memory, and then applies a conservative safety factor and independent reserve
 rather than admitting from the vector payload alone.
+
+Cosine search L2-normalizes vectors before computing inner products. L2 scores use `1 - squared_l2`, so larger scores remain better matches.
 
 ## Data type and native-index behavior
 
@@ -256,8 +286,63 @@ store and repopulate cuVS after restart.
 The `[ctk]` CuPy extra installs the CUDA toolkit headers required by the cuVS
 Python interop path, even when the host provides a CUDA driver but no toolkit.
 
+## Minimal validation
+
 After installation, run `python examples/cuvs_smoke.py` for an exact
 GPU-backed write and filtered-search check, or
 `python examples/cuvs_smoke.py --algorithm cagra` to exercise the graph index.
 Add `--dtype float16` to either command to validate the lower-precision path.
 Neither command requires an embedding or VLM service.
+
+The core API calls are:
+
+```python
+from openviking.storage.vectordb.collection.local_collection import (
+    get_or_create_local_collection,
+)
+
+collection = get_or_create_local_collection(
+    meta_data={
+        "CollectionName": "cuvs_smoke",
+        "Fields": [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": 4},
+            {"FieldName": "account_id", "FieldType": "string"},
+            {"FieldName": "uri", "FieldType": "path"},
+        ],
+    },
+    config={
+        "dense_search": {
+            "backend": "cuvs",
+            "algorithm": "brute_force",
+            "fallback_to_native": True,
+        }
+    },
+)
+collection.create_index(
+    "default",
+    {
+        "IndexName": "default",
+        "VectorIndex": {"IndexType": "flat", "Distance": "cosine"},
+        "ScalarIndex": ["account_id", "uri"],
+    },
+)
+collection.upsert_data(
+    [
+        {"id": "a", "vector": [1, 0, 0, 0], "account_id": "demo", "uri": "/docs/a"},
+        {"id": "b", "vector": [0, 1, 0, 0], "account_id": "demo", "uri": "/docs/b"},
+    ]
+)
+result = collection.search_by_vector(
+    "default",
+    dense_vector=[1, 0, 0, 0],
+    limit=2,
+    filters={"op": "must", "field": "account_id", "conds": ["demo"]},
+)
+assert [item.id for item in result.data] == ["a", "b"]
+collection.close()
+```
+
+## Current limits
+
+The native prefilter preserves scalar DSL, `date_time`, `geo_point`, and path-depth semantics. cuVS only handles pure dense queries; sparse/hybrid fallback and snapshot maintenance follow the behavior described above. Treat brute-force as the functional baseline. Tune CAGRA graph and search parameters against recall, throughput, latency, and GPU memory for your workload.

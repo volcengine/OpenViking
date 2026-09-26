@@ -63,14 +63,19 @@ export async function nodeImagePathToDataURI(
 /** Read a Node.js file or zip a directory for temporary upload. */
 export async function nodePathToBlob(
   path: string,
-  options: { allowDirectory?: boolean } = {},
+  options: { allowDirectory?: boolean; allowInlineContent?: boolean } = {},
 ): Promise<{ blob: Blob; filename: string; sourceName?: string } | undefined> {
   // Keep built-in specifiers dynamic so bundled ESM and CommonJS outputs share
   // this implementation without eager filesystem initialization.
   const [fs, paths, stat] = await Promise.all([
     nodeFs(),
     nodePath(),
-    statOrUndefined(path),
+    statOrUndefined(path).catch((error: NodeJS.ErrnoException) => {
+      // Inline skill content can exceed filesystem filename limits.
+      if (options.allowInlineContent && error.code === "ENAMETOOLONG")
+        return undefined;
+      throw error;
+    }),
   ]);
   if (!stat) return undefined;
   if (stat.isFile())

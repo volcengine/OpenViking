@@ -296,8 +296,11 @@ enum AclCommands {
     },
     Set {
         uri: String,
-        #[arg(long = "entry", required = true)]
+        #[arg(long = "entry")]
         entries: Vec<String>,
+        /// Whether this node uses inherited grants or direct grants only
+        #[arg(long, value_parser = ["inherit", "restricted"])]
+        acl_mode: Option<String>,
     },
     Grant {
         uri: String,
@@ -350,7 +353,7 @@ enum Commands {
             conflicts_with_all = [
                 "add_type", "to", "parent", "parent_auto_create",
                 "strict_mode", "ignore_dirs", "include", "exclude",
-                "no_directly_upload_media", "tags", "tag_mode",
+                "no_directly_upload_media", "tags", "tag_mode", "acl",
                 "reason", "instruction"
             ]
         )]
@@ -452,44 +455,22 @@ enum Commands {
         /// Comma-separated k=v retrieval tags to apply after import
         #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tags is provided
+        /// Tag update mode; clear does not require --tags
         #[arg(
             long = "tag-mode",
             default_value = "replace",
-            value_parser = ["replace", "append"],
+            value_parser = ["replace", "append", "clear"],
             help_heading = "Common options"
         )]
         tag_mode: String,
         #[command(flatten)]
         upload_options: UploadCliOptions,
+        /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        acl: Option<serde_json::Value>,
     },
-    /// [Data] Add a skill into OpenViking
-    AddSkill {
-        /// Skill directory, SKILL.md, or raw content
-        #[arg(value_name = "skill-path-or-content")]
-        data: String,
-        /// Wait until processing is complete
-        #[arg(long, help_heading = "Common options")]
-        wait: bool,
-        /// Wait timeout in seconds
-        #[arg(
-            long,
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds",
-            help_heading = "Common options"
-        )]
-        timeout: Option<f64>,
-        /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
-        #[arg(
-            short = 'p',
-            long = "parent-auto-create",
-            value_name = "uri",
-            help_heading = "Skill options"
-        )]
-        parent: Option<String>,
-        #[command(flatten)]
-        upload_options: UploadCliOptions,
-    },
+    /// [Data] Add skills from a source (same as `skills add`)
+    AddSkill(SkillAddArgs),
     /// [Data] Manage installed skills
     Skills {
         #[command(subcommand)]
@@ -636,6 +617,9 @@ enum Commands {
         /// Initial directory description
         #[arg(long, value_name = "text", help_heading = "Common options")]
         description: Option<String>,
+        /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        acl: Option<serde_json::Value>,
     },
     /// [Data] Remove resource
     #[command(alias = "del", alias = "delete")]
@@ -768,9 +752,12 @@ enum Commands {
         /// Comma-separated k=v retrieval tags to write with the content
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
-        /// Tag update mode when --tags is provided
-        #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append"])]
+        /// Tag update mode; clear does not require --tags
+        #[arg(long = "tag-mode", default_value = "replace", value_parser = ["replace", "append", "clear"])]
         tag_mode: String,
+        /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
+        #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
+        acl: Option<serde_json::Value>,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]
@@ -962,6 +949,26 @@ enum Commands {
         /// Case insensitive
         #[arg(short, long, help_heading = "Common options")]
         ignore_case: bool,
+        /// Number of lines to show after each match
+        #[arg(
+            short = 'a',
+            long = "after-context",
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        after_context: i32,
+        /// Number of lines to show before each match
+        #[arg(
+            short = 'b',
+            long = "before-context",
+            default_value = "0",
+            value_parser = clap::value_parser!(i32).range(0..),
+            value_name = "n",
+            help_heading = "Common options"
+        )]
+        before_context: i32,
         /// Maximum number of results
         #[arg(
             short = 'n',
@@ -1164,27 +1171,12 @@ enum Commands {
         /// Skill directory or SKILL.md Viking URI
         #[arg(long, value_name = "uri")]
         skill: String,
-        /// Description of this organization task
+        /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
-        reason: Option<String>,
-        /// Wait for the Compile task to finish
-        #[arg(long)]
-        wait: bool,
-        /// Local wait timeout in seconds; does not cancel the task
-        #[arg(
-            long,
-            requires = "wait",
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds"
-        )]
-        timeout: Option<f64>,
-        /// Server-side runtime limit in seconds; reaching it saves partial resource output
-        #[arg(
-            long = "runtime-timeout",
-            value_parser = config::parse_positive_timeout,
-            value_name = "seconds"
-        )]
-        runtime_timeout: Option<f64>,
+        instruction: Option<String>,
+        /// Provider arguments as a JSON object
+        #[arg(long, value_name = "json")]
+        args: Option<String>,
     },
 
     // --- Status & Observability ---
@@ -1277,11 +1269,11 @@ enum Commands {
         /// Comma-separated k=v retrieval tags for rebuilt vector records
         #[arg(long = "tags", value_delimiter = ',', value_name = "k=v", help_heading = "Common options")]
         tags: Vec<String>,
-        /// Tag update mode when --tags is provided
+        /// Tag update mode; clear does not require --tags
         #[arg(
             long = "tag-mode",
             default_value = "replace",
-            value_parser = ["replace", "append"],
+            value_parser = ["replace", "append", "clear"],
             help_heading = "Common options"
         )]
         tag_mode: String,
@@ -1311,7 +1303,14 @@ impl Commands {
     }
 
     fn supports_upload_options(&self) -> bool {
-        matches!(self, Self::AddResource { .. } | Self::AddSkill { .. })
+        matches!(
+            self,
+            Self::AddResource { .. }
+                | Self::AddSkill(_)
+                | Self::Skills {
+                    action: SkillCommands::Add(_)
+                }
+        )
     }
 }
 
@@ -1321,7 +1320,7 @@ fn legacy_upload_option_error(
 ) -> Option<&'static str> {
     if options.is_set() && !command.supports_upload_options() {
         Some(
-            "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill.",
+            "--progress, --no-progress, and --verbose are only supported for add-resource, add-skill, and skills add.",
         )
     } else {
         None
@@ -1656,29 +1655,34 @@ enum SessionConfigCommands {
     },
 }
 
+#[derive(Args)]
+struct SkillAddArgs {
+    /// Local skill file/directory, Git repository or GitHub tree URL, or raw content
+    #[arg(value_name = "source")]
+    source: String,
+    /// Install only the named skill(s); use '*' to install all skills in a source
+    #[arg(short = 's', long = "skill", value_name = "NAME", num_args = 1.., value_delimiter = ',')]
+    skills: Vec<String>,
+    /// List available skills in the source without installing
+    #[arg(short = 'l', long = "list")]
+    list: bool,
+    /// Wait until processing is complete
+    #[arg(short = 'w', long)]
+    wait: bool,
+    /// Skip confirmation prompt
+    #[arg(short = 'y', long = "yes")]
+    yes: bool,
+    /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
+    #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
+    parent: Option<String>,
+    #[command(flatten)]
+    upload_options: UploadCliOptions,
+}
+
 #[derive(Subcommand)]
 enum SkillCommands {
     /// Add skills from a source
-    Add {
-        /// Skill source
-        #[arg(value_name = "source")]
-        source: String,
-        /// Install only the named skill(s); use '*' to install all skills in a source
-        #[arg(short = 's', long = "skill", value_name = "NAME", num_args = 1.., value_delimiter = ',')]
-        skills: Vec<String>,
-        /// List available skills in the source without installing
-        #[arg(short = 'l', long = "list")]
-        list: bool,
-        /// Wait until processing is complete
-        #[arg(short = 'w', long)]
-        wait: bool,
-        /// Skip confirmation prompt
-        #[arg(short = 'y', long = "yes")]
-        yes: bool,
-        /// Parent skill root URI (e.g. viking://agent/skills); defaults to user-private skills
-        #[arg(short = 'p', long = "parent-auto-create", value_name = "uri")]
-        parent: Option<String>,
-    },
+    Add(SkillAddArgs),
     /// List installed agent skills
     #[command(alias = "ls")]
     List {
@@ -3244,6 +3248,7 @@ async fn main() {
             timeout,
             tags,
             tag_mode,
+            acl,
             strict_mode,
             ignore_dirs,
             include,
@@ -3300,6 +3305,7 @@ async fn main() {
                     resource_args,
                     tags,
                     tag_mode,
+                    acl,
                     ctx,
                 )
                 .await
@@ -3309,41 +3315,12 @@ async fn main() {
                 ))
             }
         }
-        Commands::AddSkill {
-            data,
-            wait,
-            timeout,
-            parent,
-            upload_options,
-        } => {
-            let ctx =
-                ctx.with_upload_options(upload_options.merged_with_legacy(legacy_upload_options));
-            handlers::handle_add_skill(data, wait, timeout, parent, ctx).await
+        Commands::AddSkill(args) => {
+            handlers::handle_add_skill(args, legacy_upload_options, ctx).await
         }
         Commands::Skills { action } => match action {
-            SkillCommands::Add {
-                source,
-                skills,
-                list,
-                wait,
-                yes,
-                parent,
-            } => {
-                let client = ctx.get_client();
-                commands::skills::add(
-                    &client,
-                    &source,
-                    skills,
-                    list,
-                    wait,
-                    yes,
-                    ctx.should_show_progress(),
-                    ctx.is_verbose(),
-                    ctx.output_format,
-                    ctx.compact,
-                    parent.as_deref(),
-                )
-                .await
+            SkillCommands::Add(args) => {
+                handlers::handle_add_skill(args, legacy_upload_options, ctx).await
             }
             SkillCommands::List { node_limit, parent } => {
                 let client = ctx.get_client();
@@ -3613,7 +3590,11 @@ async fn main() {
             )
             .await
         }
-        Commands::Mkdir { uri, description } => handlers::handle_mkdir(uri, description, ctx).await,
+        Commands::Mkdir {
+            uri,
+            description,
+            acl,
+        } => handlers::handle_mkdir(uri, description, acl, ctx).await,
         Commands::Rm {
             uri,
             recursive,
@@ -3675,10 +3656,8 @@ async fn main() {
             from_uris,
             to,
             skill,
-            reason,
-            wait,
-            timeout,
-            runtime_timeout,
+            instruction,
+            args,
         } => {
             let client = ctx.get_client();
             commands::compile::run(
@@ -3686,10 +3665,8 @@ async fn main() {
                 from_uris,
                 to,
                 skill,
-                reason,
-                wait,
-                timeout,
-                runtime_timeout,
+                instruction,
+                args,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -3736,6 +3713,7 @@ async fn main() {
             timeout,
             tags,
             tag_mode,
+            acl,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -3754,6 +3732,7 @@ async fn main() {
                 processing_mode,
                 tags,
                 tag_mode,
+                acl,
                 ctx,
             )
             .await
@@ -3841,6 +3820,8 @@ async fn main() {
             exclude_uri,
             pattern,
             ignore_case,
+            after_context,
+            before_context,
             node_limit,
             level_limit,
             tags,
@@ -3851,6 +3832,8 @@ async fn main() {
                 exclude_uri,
                 pattern,
                 ignore_case,
+                after_context,
+                before_context,
                 node_limit,
                 level_limit,
                 tags,
@@ -4086,6 +4069,34 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_grep_context_lines() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "grep",
+            "--uri",
+            "viking://resources",
+            "-a",
+            "2",
+            "-b",
+            "3",
+            "needle",
+        ])
+        .expect("grep context should parse");
+
+        match cli.command {
+            Commands::Grep {
+                after_context,
+                before_context,
+                ..
+            } => {
+                assert_eq!(after_context, 2);
+                assert_eq!(before_context, 3);
+            }
+            _ => panic!("expected grep command"),
+        }
+    }
+
+    #[test]
     fn cli_find_and_search_reject_removed_peer_id_flag() {
         assert!(Cli::try_parse_from(["ov", "find", "invoice", "--peer-id", "peer-a"]).is_err());
         assert!(Cli::try_parse_from(["ov", "search", "invoice", "--peer-id", "peer-a"]).is_err());
@@ -4131,29 +4142,24 @@ mod tests {
             "viking://resources/wiki",
             "--skill",
             "viking://agent/skills/wiki",
-            "--wait",
-            "--timeout",
-            "10",
-            "--runtime-timeout",
-            "86400",
+            "--instruction",
+            "Keep supporting evidence.",
+            "--args",
+            r#"{"model_name":"endpoint-1"}"#,
         ])
         .expect("compile flags should parse");
         match cli.command {
             Commands::Compile {
                 from_uris,
                 skill,
-                reason,
-                wait,
-                timeout,
-                runtime_timeout,
+                instruction,
+                args,
                 ..
             } => {
                 assert_eq!(from_uris.len(), 3);
                 assert_eq!(skill, "viking://agent/skills/wiki");
-                assert!(reason.is_none());
-                assert!(wait);
-                assert_eq!(timeout, Some(10.0));
-                assert_eq!(runtime_timeout, Some(86_400.0));
+                assert_eq!(instruction.as_deref(), Some("Keep supporting evidence."));
+                assert_eq!(args.as_deref(), Some(r#"{"model_name":"endpoint-1"}"#));
             }
             _ => panic!("expected compile command"),
         }
@@ -4166,21 +4172,6 @@ mod tests {
                 "viking://resources/a",
                 "--to",
                 "viking://resources/wiki",
-            ])
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
-                "ov",
-                "compile",
-                "--from",
-                "viking://resources/a",
-                "--to",
-                "viking://resources/wiki",
-                "--skill",
-                "viking://agent/skills/wiki",
-                "--timeout",
-                "10",
             ])
             .is_err()
         );
@@ -4685,13 +4676,13 @@ mod tests {
         let add_skill = Cli::try_parse_from(["ov", "add-skill", "./skill", "--no-progress"])
             .expect("add-skill upload flags should parse");
         match add_skill.command {
-            Commands::AddSkill { upload_options, .. } => {
-                assert!(upload_options.no_progress);
+            Commands::AddSkill(args) => {
+                assert!(args.upload_options.no_progress);
             }
             _ => panic!("expected add-skill command"),
         }
 
-        assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_err());
+        assert!(Cli::try_parse_from(["ov", "skills", "add", "./skill", "--progress"]).is_ok());
         assert!(Cli::try_parse_from(["ov", "skills", "update", "--progress"]).is_err());
     }
 
@@ -4773,6 +4764,53 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_clear_tag_mode_without_tags() {
+        let add = Cli::try_parse_from([
+            "ov",
+            "add-resource",
+            "./README.md",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("add-resource clear mode should parse");
+        match add.command {
+            Commands::AddResource { tags, tag_mode, .. } => {
+                assert!(tags.is_empty());
+                assert_eq!(tag_mode, "clear");
+            }
+            _ => panic!("expected add-resource command"),
+        }
+
+        let write = Cli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/demo.md",
+            "--content",
+            "content",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("write clear mode should parse");
+        assert!(matches!(
+            write.command,
+            Commands::Write { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+        ));
+
+        let reindex = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--tag-mode",
+            "clear",
+        ])
+        .expect("reindex clear mode should parse");
+        assert!(matches!(
+            reindex.command,
+            Commands::Reindex { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+        ));
+    }
+
+    #[test]
     fn cli_parses_skills_command_group() {
         let list = Cli::try_parse_from(["ov", "skills", "list", "--limit", "25"])
             .expect("skills list should parse");
@@ -4828,35 +4866,35 @@ mod tests {
             _ => panic!("expected skills update"),
         }
 
-        let add_selected = Cli::try_parse_from([
-            "ov",
-            "skills",
-            "add",
-            "https://github.com/acme/skills.git",
-            "--skill",
-            "foo",
-            "bar",
-            "--list",
-            "--yes",
-        ])
-        .expect("skills add RFC flags should parse");
-        match add_selected.command {
-            Commands::Skills {
-                action:
-                    SkillCommands::Add {
-                        source,
-                        skills,
-                        list,
-                        yes,
-                        ..
-                    },
-            } => {
-                assert_eq!(source, "https://github.com/acme/skills.git");
-                assert_eq!(skills, vec!["foo", "bar"]);
-                assert!(list);
-                assert!(yes);
-            }
-            _ => panic!("expected skills add"),
+        for mut argv in [vec!["ov", "add-skill"], vec!["ov", "skills", "add"]] {
+            argv.extend([
+                "https://github.com/acme/skills.git",
+                "--skill",
+                "foo",
+                "bar",
+                "--list",
+                "--yes",
+                "--wait",
+                "--parent-auto-create",
+                "viking://agent/skills",
+                "--no-progress",
+            ]);
+            let add_selected = Cli::try_parse_from(argv)
+                .expect("both skill add commands should accept the same options");
+            let args = match add_selected.command {
+                Commands::AddSkill(args)
+                | Commands::Skills {
+                    action: SkillCommands::Add(args),
+                } => args,
+                _ => panic!("expected skill add command"),
+            };
+            assert_eq!(args.source, "https://github.com/acme/skills.git");
+            assert_eq!(args.skills, vec!["foo", "bar"]);
+            assert!(args.list);
+            assert!(args.yes);
+            assert!(args.wait);
+            assert_eq!(args.parent.as_deref(), Some("viking://agent/skills"));
+            assert!(args.upload_options.no_progress);
         }
 
         let show = Cli::try_parse_from([
@@ -4954,7 +4992,7 @@ mod tests {
         assert_eq!(
             legacy_upload_option_error(upload_options, &tree.command),
             Some(
-                "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill."
+                "--progress, --no-progress, and --verbose are only supported for add-resource, add-skill, and skills add."
             )
         );
 
@@ -4964,12 +5002,7 @@ mod tests {
 
         let skills_add = Cli::try_parse_from(["ov", "--progress", "skills", "add", "./skill"])
             .expect("hidden legacy flag still parses before runtime validation");
-        assert_eq!(
-            legacy_upload_option_error(upload_options, &skills_add.command),
-            Some(
-                "--progress, --no-progress, and --verbose are only supported for add-resource and add-skill."
-            )
-        );
+        assert!(legacy_upload_option_error(upload_options, &skills_add.command).is_none());
     }
 
     #[test]
@@ -5051,7 +5084,6 @@ mod tests {
     fn all_timeout_options_require_positive_finite_seconds() {
         let command_prefixes = [
             vec!["ov", "add-resource", "https://example.com", "--timeout"],
-            vec!["ov", "add-skill", "skill", "--timeout"],
             vec!["ov", "rm", "viking://resources/item", "--timeout"],
             vec![
                 "ov",
@@ -5059,18 +5091,6 @@ mod tests {
                 "viking://resources/item",
                 "--content",
                 "value",
-                "--timeout",
-            ],
-            vec![
-                "ov",
-                "compile",
-                "--from",
-                "viking://resources/source",
-                "--to",
-                "viking://resources/target",
-                "--skill",
-                "viking://user/skills/compiler",
-                "--wait",
                 "--timeout",
             ],
             vec!["ov", "wait", "--timeout"],

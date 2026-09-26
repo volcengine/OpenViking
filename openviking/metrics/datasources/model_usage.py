@@ -8,10 +8,15 @@ This file provides two categories of DataSource APIs:
 1) DomainStats (pull): `ModelUsageDataSource.read_model_usage()` reads aggregated cumulative
    usage from in-process model instances / shared token trackers. This is used by
    `ModelUsageCollector` which converts cumulative stats into Prometheus Counters via deltas.
+   The Service-backed pull snapshot is node-scoped: Account and Cluster trackers are aggregated
+   without adding an Account label. Standalone callers without a Service retain Cluster fallback.
 2) Event (push): `VLMEventDataSource`, `EmbeddingEventDataSource`, and
    `RerankEventDataSource` emit per-call events.
    These events are published to the shared observability event bus and consumed by metrics
    collectors and Usage/Audit subscribers.
+
+Account attribution for VLM usage is provided by the event-based `openviking_vlm_*` metrics,
+which carry the Account context on each call. The pull metrics intentionally remain aggregate.
 
 Note: DataSources are not allowed to write into MetricRegistry directly in this architecture.
 They only emit events or expose read APIs. Collectors are the only writers.
@@ -80,19 +85,38 @@ class ModelUsageDataSource(DomainStatsMetricDataSource):
         }
 
         try:
-            vlm = config.vlm.get_vlm_instance()
+            if self._service is None:
+                from openviking.config.vlm import ClusterVLMResolver
+
+                vlm = ClusterVLMResolver(lambda: config).get_vlm_sync().get_vlm_instance()
+                usage = vlm.get_token_usage()
+            else:
+                resolver = getattr(self._service, "vlm_resolver", None)
+                if resolver is None:
+                    raise RuntimeError("Account VLM resolver is not initialized")
+                usage = resolver.get_node_token_usage()
             result["vlm"] = {
                 "available": True,
-                "usage_by_model": _extract_usage_by_model(vlm.get_token_usage(), self),
+                "usage_by_model": _extract_usage_by_model(usage, self),
             }
         except Exception:
             pass
 
         try:
-            embedder = config.embedding.get_embedder()
+            from openviking.models.embedder.base import _get_token_tracker
+
+            if self._service is None:
+                # Keep the legacy aggregate tracker only for standalone callers
+                # that do not provide a Service/AccountEmbeddingProvider.
+                usage = _get_token_tracker().to_dict()
+            else:
+                provider = getattr(self._service, "embedding_provider", None)
+                if provider is None:
+                    raise RuntimeError("Account embedding provider is not initialized")
+                usage = provider.get_total_token_usage()
             result["embedding"] = {
                 "available": True,
-                "usage_by_model": _extract_usage_by_model(embedder.get_token_usage(), self),
+                "usage_by_model": _extract_usage_by_model(usage, self),
             }
         except Exception:
             pass

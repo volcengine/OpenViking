@@ -6,6 +6,40 @@
 
 > 关于各命令参数和响应结构的完整 API 参考，见 [多版本管理 API](../api/11-snapshot.md)。
 
+## 何时需要 commit
+
+普通 `write`、`rm` 等操作直接改变当前工作区，启用快照不代表每次写入都会自动生成版本。没有成功覆盖该路径的 snapshot commit，就不能通过快照找回它此前的内容。建议在导入完成、批量修改前后或一个业务阶段结束时提交，并保存返回的 `commit_oid`。
+
+Snapshot 保存文件树的版本，不会回滚当前 ACL，也不保存向量索引的历史。`restore` 写回文件后按需异步重建索引；它会修改工作区，执行前先用 `dry_run` 检查计划。
+
+`client.snapshot.commit()` 与会话的 `session.commit()` 职责不同：前者保存文件版本，后者归档对话并处理记忆。部分记忆流程会在更新 experience 后调用 snapshot，这不等于所有写入都自动快照。
+
+## 提交范围与并发
+
+USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 `project_dir`，给 `show` 传入文件 `path`。只有本地 ROOT 可以省略这些范围参数。对自己有写权限的项目目录提交，可以避免把无关资源纳入同一次快照。
+
+| `commit(paths=...)` 输入 | 含义 |
+| --- | --- |
+| 现存文件 URI | 处理该文件 |
+| 现存目录 URI | 递归处理当前文件，并记录此前快照中该子树内文件的删除 |
+| 缺失 URI | 记录此前快照中该路径及其子树的删除；此前也不存在则无改动 |
+| `[]` | 显式空范围，不产生改动 |
+| `None` / 省略 | 整棵账号树，仅限 ROOT |
+
+局部提交沿用分支上一次快照作为基础，范围外文件保留原快照版本。删除后仍要提交被删除 URI 或覆盖它的父目录；从 `paths` 中去掉该 URI 会漏记删除。路径末尾 `/` 不是文件/目录类型声明，当前接口没有逐目标的显式类型参数。
+
+非 ROOT 的显式路径提交先按当前状态选锁，再检查范围权限并生成快照：
+
+| 目标状态 | Filesystem PathLock | Cache（Redis）PathLock |
+| --- | --- | --- |
+| 现存文件 | Exact | Exact |
+| 现存目录 | Tree | Tree |
+| 缺失路径 | 跳过该目标的锁 | Tree |
+
+Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失的父目录链；该目标仍参与快照删除处理。此时并发重建同一路径可能被漏记或读到尚未写完的内容，后续提交才能记录最终状态。ROOT 不经过这段显式路径加锁流程。
+
+快照不能视为任意并发 I/O 的全局原子视图。需要确定的业务检查点时，应先结束该范围内的写入，再提交；锁只协调参与 [PathLock 协议](../concepts/09-transaction.md) 的操作。
+
 ## 前置条件
 
 - 已有可用的 `ov.conf`。
@@ -30,7 +64,7 @@
     "author_name": "viking-bot",
     "author_email": "bot@viking.local",
     "local": {
-      "base_dir": "",
+      "base_dir": ""
     }
   }
 }
@@ -141,9 +175,8 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
     mode="create",
-    wait=True,
 )
-v1 = client.snapshot.commit(message="v1 initial import")
+v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 print("v1:", v1["commit_oid"])
 
 # 2. 修改后再提交 v2
@@ -151,16 +184,15 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
     mode="replace",
-    wait=True,
 )
-v2 = client.snapshot.commit(message="v2 update")
+v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. 查看历史
-for c in client.snapshot.log(limit=10):
+for c in client.snapshot.log(limit=10, paths=[root]):
     print(c["oid"][:8], c["message"])
 
-# 4. 查看某个提交的元数据
-print(client.snapshot.show(v1["commit_oid"])["message"])
+# 4. 读取历史文件内容
+print(client.snapshot.show(v1["commit_oid"], path=f"{root}/guide.md"))
 
 # 5. 把工作区恢复到 v1（会在 v2 之上生成一个新的“正向”提交）
 client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], message="restore to v1")
@@ -174,13 +206,13 @@ CLI 子命令位于 `ov snapshot` 下：
 
 ```bash
 # 提交当前工作区状态
-ov snapshot commit -m "v1 initial import" -o json
+ov snapshot commit -m "v1 initial import" --paths viking://resources/my_project -o json
 
 # 回溯历史（最新在前）
-ov snapshot log --limit 10 -o json
+ov snapshot log --paths viking://resources/my_project --limit 10 -o json
 
-# 查看提交元数据
-ov snapshot show <commit_oid> -o json
+# 读取历史文件内容
+ov snapshot show <commit_oid> --path viking://resources/my_project/guide.md
 
 # 读取某个提交中的文件内容（默认输出到 stdout，可用 --out-file 写入本地文件）
 ov snapshot show <commit_oid> --path viking://resources/my_project/guide.md --out-file ./guide.md
@@ -199,14 +231,14 @@ ov snapshot restore <commit_oid> viking://resources/my_project --dry-run -o json
 curl -X POST "http://localhost:1933/api/v1/snapshot/commit" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"message": "v1 initial import"}'
+  -d '{"message": "v1 initial import", "paths": ["viking://resources/my_project"]}'
 
 # 回溯历史
-curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10" \
+curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10&paths=viking://resources/my_project" \
   -H "X-API-Key: your-key"
 
-# 查看提交元数据
-curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=<commit_oid>" \
+# 读取历史文件内容
+curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=<commit_oid>&path=viking://resources/my_project/guide.md" \
   -H "X-API-Key: your-key"
 
 # 恢复
@@ -264,7 +296,7 @@ client.snapshot.delete_gitignore()
 随后提交时，匹配规则的文件会被排除，响应里的 `ignored` 字段给出本次被排除的候选路径数：
 
 ```python
-v = client.snapshot.commit(message="with ignore")
+v = client.snapshot.commit(message="with ignore", paths=["viking://resources/my_project"])
 print(v["result"], v.get("ignored"))  # created, 1
 ```
 

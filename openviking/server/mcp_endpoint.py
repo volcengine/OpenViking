@@ -21,17 +21,20 @@ import contextvars
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import PurePosixPath
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
     AudioContent,
+    CallToolResult,
     ContentBlock,
     ImageContent,
     TextContent,
+    ToolAnnotations,
 )
 from pydantic import BaseModel, Field
 from starlette.requests import Request
@@ -39,6 +42,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from openviking.core.path_variables import resolve_path_variables
+from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.uri_validation import (
     validate_content_target_uri,
     validate_request_viking_uri,
@@ -47,9 +51,11 @@ from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
     DEFAULT_MAX_TOKENS,
+    MAX_EXCLUDE_URIS,
     AssembleParams,
     assemble_context,
 )
+from openviking.retrieve.skill_results import skill_root_uri
 from openviking.server.auth import (
     _build_request_context,
     _extract_api_key,
@@ -61,12 +67,21 @@ from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import (
     TEMP_FILE_ID_RE,
     is_remote_resource_source,
+    looks_like_local_path,
 )
 from openviking.server.resource_ingest import ingest_temp_upload
+from openviking.server.routers.search import context_only_fields_error
+from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import upload_token_store
+from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
-from openviking.utils.search_filters import SearchContextTypeInput, merge_search_filter
+from openviking.utils.search_filters import (
+    SearchContextTypeInput,
+    merge_search_filter,
+    resolve_context_types,
+)
+from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -74,6 +89,7 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
     UnauthenticatedError,
 )
+from openviking_cli.retrieve import ContextType
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -232,6 +248,81 @@ mcp = FastMCP(
     stateless_http=True,
 )
 
+# Each static profile describes the tool's most consequential supported mode.
+_READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=False,
+)
+_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
+
+class _MCPToolFailure(str):
+    """Mark a returned string as a whole-call tool execution failure."""
+
+
+def _mcp_failure(message: str) -> _MCPToolFailure:
+    return _MCPToolFailure(message)
+
+
+def _mcp_error_results(*, structured_output: bool = True):
+    """Adapt an already registered tool to return explicit MCP errors.
+
+    Apply this above ``@mcp.tool`` so the literal registration remains the
+    authoritative tool list. Direct Python calls keep the existing return value.
+    The registered MCP handler converts only ``_MCPToolFailure`` values to
+    ``CallToolResult(isError=True)``.
+    """
+
+    def decorator(func):
+        registered_tool = mcp._tool_manager.get_tool(func.__name__)
+        if registered_tool is None:
+            raise RuntimeError(f"MCP tool is not registered: {func.__name__}")
+
+        @wraps(func)
+        async def wire_handler(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            if not isinstance(result, _MCPToolFailure):
+                return result
+
+            message = str(result)
+            return CallToolResult(
+                content=[TextContent(type="text", text=message)],
+                structuredContent={"result": message} if structured_output else None,
+                isError=True,
+            )
+
+        # Keep the schema and metadata produced by the literal @mcp.tool
+        # registration. Only replace the callable used at the wire boundary.
+        registered_tool.fn = wire_handler
+
+        @wraps(func)
+        async def direct_handler(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            return str(result) if isinstance(result, _MCPToolFailure) else result
+
+        return direct_handler
+
+    return decorator
+
 
 # -- find / search ---------------------------------------------------------
 
@@ -245,7 +336,7 @@ def _resolve_context_type_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def find(
     query: str,
     target_uri: str = "",
@@ -255,24 +346,50 @@ async def find(
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills."""
     service = get_service()
     ctx = _get_ctx()
+    context_filter = _resolve_context_type_filter(context_type)
+    skill_only = resolve_context_types(context_type) == [ContextType.SKILL.value]
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
-    result = await service.search.find(
-        query=query,
-        ctx=ctx,
-        target_uri=target_uri,
-        limit=limit,
-        score_threshold=min_score,
-        filter=_resolve_context_type_filter(context_type),
-        level=level,
-    )
+    elif skill_only:
+        # The generic default targets stop at the user root and miss viking://agent/skills.
+        target_uri = default_target_directories(ctx, context_type=ContextType.SKILL)
+    # A query-less call is a filter-only listing, which package retrieval does not serve.
+    if skill_only and query.strip():
+        # A skill is indexed as a whole package, so an item-level find returns one hit per
+        # file. find_skills collapses those to the best hit per package.
+        result = await service.search.find_skills(
+            query=query,
+            ctx=ctx,
+            target_uri=target_uri,
+            limit=limit,
+            score_threshold=min_score,
+            level=level,
+        )
+    else:
+        result = await service.search.find(
+            query=query,
+            ctx=ctx,
+            target_uri=target_uri,
+            limit=limit,
+            score_threshold=min_score,
+            filter=context_filter,
+            level=level,
+        )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
-@mcp.tool()
+# This tool exposes two of the router's context-only fields as a pair each, so a caller
+# that sets either half has set the field the router names.
+_MCP_CONTEXT_ONLY_ALIASES = {
+    "detail_by_category": "detail",
+    "other_peer_penalties": "other_peer_penalty",
+}
+
+
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def search(
     query: str,
     target_uri: str = "",
@@ -283,18 +400,18 @@ async def search(
     context_type: Optional[Union[str, List[str]]] = None,
     mode: Literal["list", "context"] = "list",
     query_expansion: Literal["off", "auto"] = "auto",
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
     quotas: Optional[Dict[str, int]] = None,
     purpose: Optional[Literal["chat", "coding"]] = None,
     detail: Literal["auto", "abstract", "overview", "full"] = "auto",
     detail_by_category: Optional[Dict[str, str]] = None,
-    dedup_turns: int = 0,
-    exclude_uris: Optional[List[str]] = None,
+    dedup_turns: Annotated[int, Field(ge=0, le=100)] = 0,
+    exclude_uris: Annotated[Optional[List[str]], Field(max_length=MAX_EXCLUDE_URIS)] = None,
     peer_scope: Literal["actor", "all"] = "all",
     other_peer_penalty: Optional[float] = None,
     other_peer_penalties: Optional[Dict[str, float]] = None,
     rewrite: Literal["off", "auto"] = "off",
-    rewrite_max_bullets: int = 6,
+    rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
 ) -> str:
     """Deep semantic retrieval with optional session context and intent analysis.
@@ -354,6 +471,41 @@ async def search(
             return result.rendered
         return "No matching context found."
 
+    # POST /search rejects these in list mode and this tool did not, so the two faces of
+    # one feature disagreed about whether the request was valid. The list path calls
+    # SearchService.search, whose signature has no parameter for any of them, so passing
+    # one here did nothing at all -- for exclude_uris that means excluded URIs come back
+    # in the results with no error.
+    #
+    # The names and the wording come from the router rather than being restated here, so
+    # a field added to CONTEXT_ONLY_FIELDS reaches both faces at once. This tool splits
+    # two of those fields in two, and each half maps back onto the one the router knows.
+    supplied_by_caller = {
+        name: value
+        for name, (value, default) in {
+            "query_expansion": (query_expansion, "auto"),
+            "max_tokens": (max_tokens, DEFAULT_MAX_TOKENS),
+            "quotas": (quotas, None),
+            "purpose": (purpose, None),
+            "detail": (detail, "auto"),
+            "detail_by_category": (detail_by_category, None),
+            "dedup_turns": (dedup_turns, 0),
+            "exclude_uris": (exclude_uris, None),
+            "peer_scope": (peer_scope, "all"),
+            "other_peer_penalty": (other_peer_penalty, None),
+            "other_peer_penalties": (other_peer_penalties, None),
+            "rewrite": (rewrite, "off"),
+            "rewrite_max_bullets": (rewrite_max_bullets, 6),
+        }.items()
+        if value != default
+    }
+    as_named_by_caller: Dict[str, set] = {}
+    for name in supplied_by_caller:
+        as_named_by_caller.setdefault(_MCP_CONTEXT_ONLY_ALIASES.get(name, name), set()).add(name)
+    error = context_only_fields_error(as_named_by_caller, as_named_by_caller=as_named_by_caller)
+    if error:
+        raise InvalidArgumentError(error)
+
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
     session = None
@@ -374,18 +526,83 @@ async def search(
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
+def _hit_uri(ctx_type: str, uri: str) -> str:
+    """The URI an agent should read for a hit.
+
+    A skill is indexed as a whole package: the hit may be its .abstract.md, its
+    .overview.md, or any file inside the directory. The skill itself is the
+    package's SKILL.md.
+    """
+    if ctx_type == "skill":
+        root = skill_root_uri(uri)
+        if root:
+            return f"{root}/SKILL.md"
+    return uri
+
+
+def _package_abstract(uri: str, abstract: str) -> str:
+    """The skill's own frontmatter, or "" when the package has no usable abstract."""
+    text = (abstract or "").strip()
+    return "" if text == f"# {uri} [Directory abstract is not ready]" else text
+
+
+async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, ctx) -> None:
+    """Describe a skill by its own abstract, not by whichever file inside it matched."""
+    import asyncio
+
+    pending = {}
+    for item in items:
+        if item["type"] != "skill" or not item["uri"].endswith("/SKILL.md"):
+            continue
+        root = item["uri"][: -len("/SKILL.md")]
+        if item["hit_uri"] in (f"{root}/.abstract.md", f"{root}/.overview.md", item["uri"]):
+            continue
+        pending[root] = item
+
+    semaphore = asyncio.Semaphore(10)
+
+    async def _describe(root: str) -> None:
+        async with semaphore:
+            try:
+                abstract = _package_abstract(root, await service.fs.abstract(root, ctx=ctx))
+            except Exception:
+                return
+        if abstract:
+            pending[root]["abstract"] = abstract
+
+    await asyncio.gather(*(_describe(root) for root in pending))
+
+
 async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
-    items = []
+    items: List[Dict[str, Any]] = []
+    seen: dict[str, int] = {}
     for ctx_type, contexts in [
         ("memory", result.memories),
         ("resource", result.resources),
         ("skill", result.skills),
     ]:
         for m in contexts:
-            items.append((ctx_type, m))
+            uri = _hit_uri(ctx_type, m.uri)
+            item = {
+                "type": ctx_type,
+                "uri": uri,
+                "hit_uri": m.uri,
+                "score": getattr(m, "score", 0.0),
+                "abstract": getattr(m, "abstract", "") or getattr(m, "overview", ""),
+            }
+            # Several files of one skill package can match; keep the best-scored hit.
+            previous = seen.get(uri)
+            if previous is not None:
+                if item["score"] > items[previous]["score"]:
+                    items[previous] = item
+                continue
+            seen[uri] = len(items)
+            items.append(item)
 
     if not items:
         return "No matching context found."
+
+    await _describe_skills_by_package(items, service=service, ctx=ctx)
 
     contents: dict[str, str] = {}
     if read_content:
@@ -400,17 +617,15 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
                 except Exception:
                     pass
 
-        await asyncio.gather(*(_read(m.uri) for _, m in items))
+        await asyncio.gather(*(_read(item["uri"]) for item in items))
 
     lines = []
-    for ctx_type, m in items:
-        abstract = (
-            getattr(m, "abstract", "") or getattr(m, "overview", "") or "(no abstract)"
-        ).strip()
-        score = getattr(m, "score", 0.0)
-        line = f"- [{ctx_type} {score * 100:.0f}%] {m.uri}\n    {abstract}"
-        if m.uri in contents:
-            line += f"\n\n    {contents[m.uri]}"
+    for item in items:
+        abstract = (item["abstract"] or "(no abstract)").strip()
+        uri = item["uri"]
+        line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}\n    {abstract}"
+        if uri in contents:
+            line += f"\n\n    {contents[uri]}"
         lines.append(line)
 
     return (
@@ -497,9 +712,14 @@ def _mcp_media_download_hint(uri: str) -> str:
     )
 
 
-@mcp.tool(structured_output=False)
-async def read(uris: str | list[str]) -> str | list[ContentBlock]:
-    """Read one or more viking:// file URIs. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+@_mcp_error_results(structured_output=False)
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
+async def read(
+    uris: str | list[str],
+    offset: int = 0,
+    limit: int = -1,
+) -> str | list[ContentBlock]:
+    """Read one or more viking:// file URIs. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
     service = get_service()
@@ -507,7 +727,9 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
     uri_list = uris if isinstance(uris, list) else [uris]
     semaphore = asyncio.Semaphore(10)
 
-    async def _preflight_one(uri: str) -> tuple[str, Optional[int], Optional[str]]:
+    async def _preflight_one(
+        uri: str,
+    ) -> tuple[str, Optional[int], Optional[_MCPToolFailure]]:
         """Resolve a URI and stat media before any binary bytes are loaded."""
         try:
             resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -523,15 +745,19 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 return (
                     resolved_uri,
                     None,
-                    f"Cannot render {uri}: URI points to a directory. "
-                    "Use the list tool (or `ov ls` / `ov tree`) to browse its contents.",
+                    _mcp_failure(
+                        f"Cannot render {uri}: URI points to a directory. "
+                        "Use the list tool (or `ov ls` / `ov tree`) to browse its contents."
+                    ),
                 )
             if is_video:
                 return (
                     resolved_uri,
                     None,
-                    f"Cannot render {uri}: MCP has no standard VideoContent block. "
-                    f"{_mcp_media_download_hint(uri)}",
+                    _mcp_failure(
+                        f"Cannot render {uri}: MCP has no standard VideoContent block. "
+                        f"{_mcp_media_download_hint(uri)}"
+                    ),
                 )
 
             size = stat.get("size") if stat else None
@@ -539,25 +765,27 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 return (
                     resolved_uri,
                     None,
-                    f"Cannot render {uri}: file size is unavailable. "
-                    f"{_mcp_media_download_hint(uri)}",
+                    _mcp_failure(
+                        f"Cannot render {uri}: file size is unavailable. "
+                        f"{_mcp_media_download_hint(uri)}"
+                    ),
                 )
             return resolved_uri, size, None
         except OpenVikingError as exc:
-            return uri, None, str(exc)
+            return uri, None, _mcp_failure(str(exc))
 
     preflight = await asyncio.gather(*[_preflight_one(uri) for uri in uri_list])
-    checked: list[tuple[str, Optional[int], Optional[str]]] = []
+    checked: list[tuple[str, Optional[int], Optional[_MCPToolFailure]]] = []
     media_total = 0
     for uri, (resolved_uri, size, error) in zip(uri_list, preflight, strict=True):
         if error is None and size is not None:
             if size > _MCP_MEDIA_MAX_BYTES:
-                error = (
+                error = _mcp_failure(
                     f"Media file is too large to inline through MCP ({size} bytes; limit "
                     f"{_MCP_MEDIA_MAX_BYTES} bytes). {_mcp_media_download_hint(uri)}"
                 )
             elif media_total + size > _MCP_MEDIA_MAX_BYTES:
-                error = (
+                error = _mcp_failure(
                     f"Cannot inline {uri}: combined media size would exceed the MCP tool-call "
                     f"limit of {_MCP_MEDIA_MAX_BYTES} bytes. Read fewer media files at once. "
                     f"{_mcp_media_download_hint(uri)}"
@@ -567,7 +795,7 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
         checked.append((resolved_uri, size, error))
 
     async def _read_one(
-        uri: str, prepared: tuple[str, Optional[int], Optional[str]]
+        uri: str, prepared: tuple[str, Optional[int], Optional[_MCPToolFailure]]
     ) -> str | ContentBlock:
         async with semaphore:
             try:
@@ -579,7 +807,7 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                 if is_image or is_audio:
                     data = await service.fs.read_file_bytes(resolved_uri, ctx=ctx)
                     if declared_size is None or len(data) > declared_size:
-                        return (
+                        return _mcp_failure(
                             f"Cannot render {uri}: file changed after its size was checked. "
                             "Retry the read."
                         )
@@ -589,17 +817,22 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
                         else _sniff_mcp_audio_mime_type(data, resolved_uri)
                     )
                     if mime_type is None:
-                        return (
+                        return _mcp_failure(
                             f"Cannot render {uri}: its bytes do not match a supported media "
                             f"format. {_mcp_media_download_hint(uri)}"
                         )
                     if is_image:
                         return _mcp_image_content(data, mime_type)
                     return _mcp_audio_content(data, mime_type)
-                content = await service.fs.read_visible(resolved_uri, ctx=ctx)
+                content = await service.fs.read_visible(
+                    resolved_uri,
+                    ctx=ctx,
+                    offset=offset,
+                    limit=limit,
+                )
                 return content
             except OpenVikingError as exc:
-                return str(exc)
+                return _mcp_failure(str(exc))
 
     if len(uri_list) == 1:
         result = await _read_one(uri_list[0], checked[0])
@@ -623,15 +856,18 @@ async def read(uris: str | list[str]) -> str | list[ContentBlock]:
     parts = []
     for uri, text in zip(uri_list, results, strict=True):
         parts.append(f"=== {uri} ===\n{text}")
-    return "\n\n".join(parts)
+    combined = "\n\n".join(parts)
+    if results and all(isinstance(result, _MCPToolFailure) for result in results):
+        return _mcp_failure(combined)
+    return combined
 
 
 # -- list ------------------------------------------------------------------
 
 
-@mcp.tool(name="list")
+@mcp.tool(name="list", annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def ls(
-    uri: str,
+    uri: str = "viking://",
     recursive: bool = False,
     offset: int = 0,
     limit: int | None = None,
@@ -641,7 +877,7 @@ async def ls(
     """List one sorted page under a viking:// directory URI.
 
     Args:
-        uri: Directory URI to list.
+        uri: Directory URI to list; defaults to "viking://" like tree and glob.
         recursive: Whether to recursively list descendants.
         offset: Number of visible entries to skip.
         limit: Optional maximum number of entries.
@@ -672,7 +908,8 @@ async def ls(
     if sort_by is not None:
         options["sort_by"] = sort_by
         options["sort_order"] = sort_order
-    entries = await service.fs.ls(resolved_uri, **options)
+    page = await service.fs.ls(resolved_uri, **options)
+    entries = page.entries
     if not entries:
         return f"(no entries under {uri})"
 
@@ -685,13 +922,31 @@ async def ls(
             lines.append(f"[{'dir' if is_dir else 'file'}] {entry_uri}")
         else:
             lines.append(f"[{'dir' if is_dir else 'file'}] {name}")
+    if page.has_more:
+        lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
 
 
 # -- tree ------------------------------------------------------------------
 
+# Long enough to keep a full skill description (the Agent Skills limit is 1024 chars).
+_TREE_ABSTRACT_LIMIT = 1024
 
-@mcp.tool()
+
+def _tree_abstract(entry: Dict[str, Any]) -> str:
+    abstract = (entry.get("abstract") or "").strip()
+    # A directory with no generated .abstract.md (a skill's scripts/, say) comes back as a
+    # placeholder that carries no summary.
+    placeholders = (
+        "[.abstract.md is not ready]",
+        f"# {entry.get('uri', '')} [Directory abstract is not ready]",
+    )
+    if abstract in placeholders:
+        return ""
+    return " ".join(abstract.split())
+
+
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def tree(
     uri: str = "viking://",
     level_limit: int = 3,
@@ -706,7 +961,8 @@ async def tree(
         uri: Directory URI to traverse.
         level_limit: Maximum traversal depth.
         node_limit: Existing default result limit.
-        include_abstract: Whether to include file summaries.
+        include_abstract: Whether to include directory summaries (a skill directory's
+            summary is its name and description).
         offset: Number of visible nodes to skip.
         limit: Optional result limit that overrides node_limit.
 
@@ -724,16 +980,18 @@ async def tree(
     output = "agent" if include_abstract else "original"
     effective_limit = limit if limit is not None else node_limit
     try:
-        entries = await service.fs.tree(
+        page = await service.fs.tree(
             resolved_uri,
             ctx=ctx,
             output=output,
+            abs_limit=_TREE_ABSTRACT_LIMIT,
             node_limit=effective_limit,
             level_limit=level_limit,
             offset=offset,
         )
     except NotFoundError:
-        entries = []
+        page = None
+    entries = page.entries if page is not None else []
     if not entries:
         return f"(nothing under {uri})"
 
@@ -747,12 +1005,12 @@ async def tree(
         indent = "  " * max(0, depth - 1)
         if e.get("isDir"):
             lines.append(f"{indent}{name}/")
-            continue
-        lines.append(f"{indent}{name} ({e.get('size', 0)} B)")
-        abstract = (e.get("abstract") or "").strip().replace("\n", " ")
+        else:
+            lines.append(f"{indent}{name} ({e.get('size', 0)} B)")
+        abstract = _tree_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
-    if len(entries) >= effective_limit:
+    if page is not None and page.has_more:
         lines.append(
             f"(truncated at node_limit={effective_limit}; narrow the uri or raise node_limit to see more)"
         )
@@ -767,7 +1025,7 @@ class StoreMessage(BaseModel):
     content: str = Field(description="Message text content")
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def remember(messages: list[StoreMessage]) -> str:
     """Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting."""
     import uuid
@@ -792,7 +1050,7 @@ async def remember(messages: list[StoreMessage]) -> str:
 # -- write -----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def write(
     uri: str,
     content: str,
@@ -807,7 +1065,7 @@ async def write(
     - Any new file (whether created by "replace" or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; fails if the file does not exist.
 
-    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. The viking://~ home alias expands to the caller's user root. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
+    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. The viking://~ home alias expands to the caller's user root. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. Do not write inside a skill package under viking://agent/skills/ either: a plain write skips installation, so the skill's abstract, overview and source metadata go stale. Change a skill with the add_skill tool. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change."""
     service = get_service()
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -832,7 +1090,7 @@ async def write(
     return message + _indexing_hint(result)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def edit(
     uri: str,
     old_string: str,
@@ -843,7 +1101,9 @@ async def edit(
 ) -> str:
     """Replace an exact string with new text in an existing viking:// file. Use this for targeted changes instead of rewriting the whole file with the write tool. old_string must match the file's current content exactly, including indentation and newlines; use the read tool first to see it. The edit fails and the file is left unchanged if old_string is not found, or if it matches more than once and replace_all is false (pass more surrounding context to make it unique, or set replace_all=true to replace every occurrence). Pass new_string="" to delete old_string.
 
-    Editing a memory file preserves its metadata; after an edit, search indexes refresh in the background (pass wait=true to block until search reflects the change)."""
+    Editing a memory file preserves its metadata; after an edit, search indexes refresh in the background (pass wait=true to block until search reflects the change).
+
+    Do not edit files inside a skill package (.../skills/<name>/): read the skill's SKILL.md, revise the whole text, and install it again with the add_skill tool."""
     service = get_service()
     ctx = _get_ctx()
     uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -858,8 +1118,11 @@ async def edit(
         raise NotFoundError(uri, "file") from exc
     occurrences = current.count(old_string)
     if occurrences == 0:
+        hint = ""
+        if current.replace("\r\n", "\n").count(old_string.replace("\r\n", "\n")):
+            hint = " old_string matches only after normalizing CRLF/LF line endings."
         raise InvalidArgumentError(
-            f"old_string not found in {uri}. "
+            f"old_string not found in {uri}.{hint} "
             "Re-read the file with the read tool to get its current content."
         )
     if occurrences > 1 and not replace_all:
@@ -986,7 +1249,20 @@ async def _maybe_sitemap_hint(path: str) -> str:
         return ""
 
 
-@mcp.tool()
+def _resource_add_error(result: Any) -> _MCPToolFailure | None:
+    if not isinstance(result, dict) or result.get("status") != "error":
+        return None
+    errors = result.get("errors")
+    detail = (
+        result.get("message")
+        or (errors[0] if isinstance(errors, list) and errors else None)
+        or "resource processing failed"
+    )
+    return _mcp_failure(f"Error adding resource: {detail}")
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
@@ -1001,6 +1277,15 @@ async def add_resource(
     args: Optional[dict[str, Any]] = None,
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
+
+    For an agent skill, use add_skill instead: a skill added here is stored as an ordinary
+    resource and never becomes an installed skill.
+
+    Where it goes: ``viking://resources/`` is shared with the whole account and is the
+    default when ``to`` and ``parent`` are empty (unless a default add target is
+    configured). ``viking://~/resources/`` is the caller's own resources, visible only to
+    them; pass ``parent="viking://~/resources"`` to store it there. If the user has not
+    said, ask whether the resource is personal or shared with the account.
 
     Remote URL: pass ``path`` as an http(s)://, git@, ssh://, or git:// URL. A sitemap /
     RSS / Atom URL ingests the WHOLE site as one resource tree; pass ``args={"site": true}``
@@ -1026,17 +1311,20 @@ async def add_resource(
         processing_mode: "semantic_and_vectors" for normal semantic processing, or
             "vectors_only" to skip semantic understanding and only build vector indexes.
         to: Exact final URI including the leaf name (e.g.
-            "viking://resources/volcengine/OpenViking"). Written verbatim; an existing
+            "viking://resources/volcengine/OpenViking", or
+            "viking://~/resources/OpenViking" for a personal copy). Written verbatim; an existing
             target is synced to match the new source, so visible entries it does not
             contain are deleted. Required when ``add_type`` is set.
         parent: Existing directory to store the resource under, for remote or
-            local-file imports; the leaf name comes from the source. Never overwrites
+            local-file imports (e.g. "viking://~/resources" or "viking://resources");
+            the leaf name comes from the source. Never overwrites
             — a collision reserves the next free name ("name_1", "name_2", ...) and
             returns a warning. Mutually exclusive with ``to``; not supported when
             ``add_type`` is set. Leaving both empty derives the directory and the name
             from the source and handles collisions like ``parent``.
         tags: Optional explicit k=v retrieval tags to apply after ingestion.
-        tag_mode: Tag update mode, "replace" or "append". Defaults to "replace".
+        tag_mode: Tag update mode: "replace", "append", or "clear". Clear removes
+            existing tags without requiring ``tags``. Defaults to "replace".
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
             for native HTTPS Git imports and watches, {"feishu_access_token": "..."}
             for Feishu imports, {"site": true} for whole-site ingestion, or
@@ -1060,30 +1348,30 @@ async def add_resource(
                 field_name="parent",
             )
     except (InvalidArgumentError, PermissionDeniedError) as exc:
-        return f"Error: {exc}"
+        return _mcp_failure(f"Error: {exc}")
 
     try:
         mode = normalize_parse_mode((args or {}).get("parse_mode", ParseMode.DEFAULT))
     except InvalidArgumentError as exc:
-        return f"Error: {exc}"
+        return _mcp_failure(f"Error: {exc}")
 
     if watch_interval < 0:
-        return (
+        return _mcp_failure(
             "Error: watch_interval must be >= 0. Use 0 for one-shot add (no watch); "
             "use a positive number of minutes (>=1440 recommended) to subscribe to auto-refresh."
         )
 
     add_type = add_type.strip()
     if add_type and temp_file_id:
-        return "Error: add_type cannot be combined with temp_file_id."
+        return _mcp_failure("Error: add_type cannot be combined with temp_file_id.")
     if add_type and not path:
-        return "Error: add_type requires 'path'."
+        return _mcp_failure("Error: add_type requires 'path'.")
     if add_type and parent:
-        return "Error: add_type cannot be combined with parent."
+        return _mcp_failure("Error: add_type cannot be combined with parent.")
     if add_type and not to:
-        return "Error: add_type requires an exact 'to' target."
+        return _mcp_failure("Error: add_type requires an exact 'to' target.")
     if to and parent:
-        return "Error: Cannot specify both 'to' and 'parent' at the same time."
+        return _mcp_failure("Error: Cannot specify both 'to' and 'parent' at the same time.")
 
     # Branch 1: ingest by temp_file_id. Kept for backward compat / REST-style use — the
     # signed upload now auto-ingests server-side, so agents no longer need this second leg.
@@ -1106,19 +1394,12 @@ async def add_resource(
                 tag_mode=tag_mode,
             )
         except (PermissionDeniedError, InvalidArgumentError) as exc:
-            return f"Error: {exc}"
+            return _mcp_failure(f"Error: {exc}")
         except Exception as exc:
-            return f"Error adding resource: {exc}"
-        # add_resource returns a business-error dict (no raise) for parse/finalize failures;
-        # surface it instead of reporting a false success.
-        if isinstance(result, dict) and result.get("status") == "error":
-            errors = result.get("errors")
-            detail = (
-                result.get("message")
-                or (errors[0] if isinstance(errors, list) and errors else None)
-                or "resource processing failed"
-            )
-            return f"Error adding resource: {detail}"
+            return _mcp_failure(f"Error adding resource: {exc}")
+        error = _resource_add_error(result)
+        if error is not None:
+            return error
         root_uri = result.get("root_uri", "") if isinstance(result, dict) else ""
         return (
             f"Resource added: {root_uri}"
@@ -1127,11 +1408,13 @@ async def add_resource(
         )
 
     if not path:
-        return "Error: provide either 'path' (remote URL or local file) or 'temp_file_id'."
+        return _mcp_failure(
+            "Error: provide either 'path' (remote URL or local file) or 'temp_file_id'."
+        )
 
     # Branch 2: agent passed a temp_file_id-shaped string as `path` — guide them
     if TEMP_FILE_ID_RE.match(path):
-        return (
+        return _mcp_failure(
             f"Error: '{path}' looks like a temp_file_id, not a path. "
             f'Pass it as the temp_file_id kwarg: add_resource(temp_file_id="{path}")'
         )
@@ -1160,7 +1443,10 @@ async def add_resource(
                 tag_mode=tag_mode,
             )
         except Exception as exc:
-            return f"Error adding resource: {exc}"
+            return _mcp_failure(f"Error adding resource: {exc}")
+        error = _resource_add_error(result)
+        if error is not None:
+            return error
         root_uri = result.get("root_uri", "")
         task_id = result.get("task_id", "")
         if watch_interval > 0:
@@ -1217,8 +1503,16 @@ async def add_resource(
         "\n"
         f"  {upload_url}\n"
         "\n"
-        "The URL's token authorizes the upload (no API key needed); the server ingests "
-        "the file automatically once received — you do NOT need to call add_resource again.\n"
+        "The URL's token authorizes the upload against OpenViking itself (no OpenViking "
+        "API key needed); the server ingests the file automatically once received — you "
+        "do NOT need to call add_resource again.\n"
+        "\n"
+        "If the OpenViking server sits behind a private gateway or reverse proxy that "
+        "requires extra request headers (e.g. `openviking_name`, tenant/vault headers, "
+        "or a gateway API key), those headers are enforced on every request including "
+        "this upload — replay the same headers you use for MCP calls when POSTing the "
+        "file. A gateway rejection typically looks like HTTP 400/401/403 before the "
+        "token is even checked.\n"
         "\n"
         f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
     )
@@ -1237,6 +1531,189 @@ async def add_resource(
     return prose
 
 
+# -- add_skill -------------------------------------------------------------
+
+
+def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> str:
+    if result.get("status") == "error":
+        return _mcp_failure(
+            f"Error adding skill: {result.get('message') or 'skill processing failed'}"
+        )
+    if list_only:
+        found = result.get("skills") or []
+        lines = [f"Skills in the source ({len(found)}); nothing was installed:"]
+        for item in found:
+            description = " ".join(str(item.get("description") or "").split())
+            lines.append(f"- {item.get('name', '?')} ({item.get('path', '')}): {description}")
+        return "\n".join(lines)
+    installed = result.get("installed") if "installed" in result else [result]
+    lines = [f"Skill added: {item['root_uri']}" for item in installed]
+    lines.append(
+        "Read <uri>/SKILL.md to use it now; semantic search finds it once indexing completes."
+    )
+    return "\n".join(lines)
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
+async def add_skill(
+    data: str = "",
+    path: str = "",
+    skills: Optional[list[str]] = None,
+    target_uri: str = "",
+    list_only: bool = False,
+) -> str:
+    """Create, install, or replace an agent skill in OpenViking.
+
+    New skill: pass the full SKILL.md text (YAML frontmatter with ``name`` and
+    ``description``, then the Markdown body) as ``data``.
+
+    Git source: pass a repository URL or a GitHub ``.../tree/<ref>/<dir>`` URL as ``path``.
+    Every skill in the source is installed unless ``skills`` names some; ``list_only=true``
+    lists them without installing.
+
+    Local skill: pass the path of a SKILL.md, a skill directory, or a .zip as ``path``. The
+    response is an upload instruction — zip a directory first, then HTTP POST the file to the
+    returned URL and the server installs it; you do NOT need to call this tool again.
+
+    Installing under an existing name replaces that skill's SKILL.md and adds the new files;
+    files the new version no longer has are kept. Ask the user before installing from a
+    source they did not name.
+
+    This is the only MCP tool that creates or changes a skill. To update one, read its
+    SKILL.md, revise the whole text, and call add_skill again with the same name and the same
+    ``target_uri``; do not use the write or edit tools on files inside a skill package, and do
+    not use forget or a directory move to delete or rename one -- remove a skill with
+    ``ov skills remove <name>`` or ``DELETE /api/v1/skills/{name}``, and rename it by
+    installing it under the new name and removing the old one.
+
+    Args:
+        data: Full SKILL.md text of a skill to create or replace.
+        path: Git URL, or a local path to a SKILL.md, a skill directory, or a .zip.
+        skills: Names of the skill directories to install from a multi-skill source.
+        target_uri: Skill root to install under. Empty installs into the caller's own
+            skills; "viking://agent/skills" shares the skill with the whole account.
+        list_only: Describe the skills in a Git or local source without installing them.
+    """
+    ctx = _get_ctx()
+    path = path.strip()
+    if data.strip() and path:
+        return _mcp_failure("Error: pass either 'data' (SKILL.md text) or 'path', not both.")
+    if not data.strip() and not path:
+        return _mcp_failure(
+            "Error: provide 'data' (full SKILL.md text) or 'path' (Git URL or local path)."
+        )
+    if data.strip() and looks_like_local_path(data.strip()):
+        return _mcp_failure(
+            f"Error: 'data' looks like a file path. Pass it as add_skill(path=\"{data.strip()}\")."
+        )
+    if path.startswith("viking://"):
+        return _mcp_failure(
+            "Error: 'path' must be a Git URL or a local path. To copy a skill already in "
+            "OpenViking, read its SKILL.md and pass the text as 'data'."
+        )
+    is_git = path.startswith(GIT_SKILL_SOURCE_PREFIXES)
+    if path and not is_git and is_remote_resource_source(path):
+        return _mcp_failure(
+            f"Error: unsupported skill source '{path}'. Pass a Git URL "
+            f"({', '.join(GIT_SKILL_SOURCE_PREFIXES)}) or a local path."
+        )
+    try:
+        target = resolve_path_variables(target_uri).strip() if target_uri else ""
+        if target:
+            target = validate_content_target_uri(target, ctx, kind="skill", field_name="target_uri")
+            # Fail here, not after a one-time upload token is spent on a root the installer rejects.
+            target = SkillProcessor._resolve_skill_root_uri(ctx, target)  # noqa: SLF001
+    except (InvalidArgumentError, PermissionDeniedError) as exc:
+        return _mcp_failure(f"Error: {exc}")
+
+    if data.strip() or is_git:
+        try:
+            result = await install_skills(
+                data or path,
+                ctx,
+                names=skills,
+                list_only=list_only,
+                target_uri=target,
+                source_metadata=(
+                    {"type": "mcp", "source": "inline_content", "operation": "add"}
+                    if data.strip()
+                    else None
+                ),
+            )
+        except (InvalidArgumentError, PermissionDeniedError) as exc:
+            return _mcp_failure(f"Error: {exc}")
+        except Exception as exc:
+            return _mcp_failure(f"Error adding skill: {exc}")
+        return _format_skill_install_result(result, list_only=list_only)
+
+    server_config = get_server_config()
+    ttl_seconds = (
+        server_config.upload_signed_ttl_seconds
+        if server_config is not None
+        else _DEFAULT_UPLOAD_TTL_SECONDS
+    )
+    token, expires_at = upload_token_store.issue(
+        ctx.user.account_id,
+        ctx.user.user_id,
+        ttl_seconds=ttl_seconds,
+        actor_peer_id=ctx.actor_peer_id or "",
+        kind="skill",
+        skill_target_uri=target,
+        skill_names=skills,
+        list_only=list_only,
+    )
+    base_url, url_source = _resolve_public_base_url()
+    upload_url = f"{base_url}/api/v1/resources/temp_upload?token={quote(token, safe='')}"
+    expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat(timespec="seconds")
+    minutes = max(1, ttl_seconds // 60)
+
+    if list_only:
+        headline = "Local skill source detected — upload it to list the skills it contains.\n"
+        outcome = (
+            "The URL's token authorizes this one upload (no OpenViking API key needed). The "
+            "server only lists the skills in the file and installs nothing; the upload response "
+            "carries each skill's name, path, and description. To install, call add_skill again "
+            "without list_only (skills=[...] picks some) and upload to the new URL.\n"
+        )
+    else:
+        headline = "Local skill detected — upload it to install.\n"
+        outcome = (
+            "The URL's token authorizes this one upload (no OpenViking API key needed) and the "
+            "server installs the skill once the file arrives — you do NOT need to call add_skill "
+            "again. The upload response carries the installed skill URIs.\n"
+        )
+    prose = (
+        headline + "\n"
+        "A skill directory must be zipped first (a single SKILL.md can be uploaded as is). "
+        "Every file in the archive is stored with the skill, so leave out VCS data and "
+        "secrets, for example:\n"
+        "\n"
+        "  cd <parent dir> && rm -f /tmp/<name>.zip && zip -r /tmp/<name>.zip <name> "
+        "-x '*/.git/*' '*/.env*' '*/node_modules/*' '*/.DS_Store'\n"
+        "\n"
+        'Then HTTP POST the file (multipart/form-data, field name "file") to:\n'
+        "\n"
+        f"  {upload_url}\n"
+        "\n" + outcome + "\n"
+        "If the OpenViking server sits behind a private gateway or reverse proxy that "
+        "requires extra request headers, replay the same headers you use for MCP calls "
+        "when POSTing the file.\n"
+        "\n"
+        f"This upload URL expires in ~{minutes} minutes ({expires_iso})."
+    )
+    if url_source not in ("env", "config"):
+        prose += (
+            "\n\n"
+            "Note for the user: this upload URL was auto-detected from the incoming "
+            "request because OPENVIKING_PUBLIC_BASE_URL is not set on the server. "
+            "If the upload fails (connection refused, wrong host, TLS error), ask the "
+            "server operator to set OPENVIKING_PUBLIC_BASE_URL to the agent-facing "
+            "URL of the OpenViking server and retry."
+        )
+    return prose
+
+
 # -- watch management ------------------------------------------------------
 # MCP exposes the minimum closure: list + cancel. Pause/resume/trigger and
 # the unified `update` verb are intentionally NOT exposed — they're either
@@ -1245,17 +1722,18 @@ async def add_resource(
 # `resume`, `trigger`, `update --interval`, etc.) for those operations.
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
     ctx = _get_ctx()
     scheduler = getattr(service, "watch_scheduler", None)
     if scheduler is None or not scheduler.is_running:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     wm = scheduler.watch_manager
     if wm is None:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     # get_all_tasks does not raise PermissionDeniedError — it silently filters
     # tasks the caller cannot see (watch_manager.py:596-624), so we just
     # accept the filtered list.
@@ -1277,7 +1755,8 @@ async def list_watches() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def cancel_watch(to_uri: str) -> str:
     """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
@@ -1287,10 +1766,10 @@ async def cancel_watch(to_uri: str) -> str:
     to_uri = _resolve_mcp_workspace_uri(to_uri, ctx)
     scheduler = getattr(service, "watch_scheduler", None)
     if scheduler is None or not scheduler.is_running:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     wm = scheduler.watch_manager
     if wm is None:
-        return "Error: Watch scheduler not running"
+        return _mcp_failure("Error: Watch scheduler not running")
     task = await wm.get_task_by_uri(
         to_uri,
         ctx.account_id,
@@ -1298,7 +1777,7 @@ async def cancel_watch(to_uri: str) -> str:
         str(ctx.role),
     )
     if task is None:
-        return f"No watch task found for {to_uri}"
+        return _mcp_failure(f"No watch task found for {to_uri}")
     try:
         # Return value (bool) is intentionally ignored: delete_task returns
         # False only when the task was removed between our lookup and the
@@ -1313,14 +1792,15 @@ async def cancel_watch(to_uri: str) -> str:
             str(ctx.role),
         )
     except _wm_mod.PermissionDeniedError:
-        return f"Permission denied for {to_uri}"
+        return _mcp_failure(f"Permission denied for {to_uri}")
     return f"Watch cancelled: {to_uri}"
 
 
 # -- grep ------------------------------------------------------------------
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def grep(
     uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
 ) -> str:
@@ -1333,7 +1813,7 @@ async def grep(
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
-    async def _grep_one(p: str) -> tuple[str, list[dict]]:
+    async def _grep_one(p: str) -> tuple[str, list[dict], Optional[str]]:
         async with semaphore:
             try:
                 result = await service.fs.grep(
@@ -1343,21 +1823,39 @@ async def grep(
                     case_insensitive=case_insensitive,
                     node_limit=node_limit,
                 )
-                return (p, result.get("matches", []))
-            except Exception:
-                return (p, [])
+                return (p, result.get("matches", []), None)
+            except Exception as exc:
+                # One bad pattern must not cost the others their matches -- that is what
+                # the fan-out is for -- but an empty list is indistinguishable from a real
+                # miss, so carry the reason instead of dropping it. POST /search/grep maps
+                # and re-raises these; reporting them is what keeps the two faces agreeing
+                # about whether a failure is a result.
+                return (p, [], f"{type(exc).__name__}: {exc}")
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
     merged: dict[str, list[tuple]] = {}
     total = 0
-    for p, matches in results:
+    failures: list[tuple[str, str]] = []
+    for p, matches, error in results:
+        if error is not None:
+            failures.append((p, error))
         total += len(matches)
         for m in matches:
             m_uri = m.get("uri", "?")
             merged.setdefault(m_uri, []).append((m.get("line", "?"), m.get("content", ""), p))
 
+    failure_lines = [f"  {p}: {error}" for p, error in failures]
+
     if not merged:
+        if failures and len(failures) == len(results):
+            return _mcp_failure("grep failed for every pattern:\n" + "\n".join(failure_lines))
+        if failures:
+            successful = [p for p, _, error in results if error is None]
+            return (
+                f"No matches found for successful pattern(s): {', '.join(successful)}\n"
+                "Patterns that could not be searched:\n" + "\n".join(failure_lines)
+            )
         return f"No matches found for pattern(s): {', '.join(patterns)}"
 
     lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
@@ -1366,13 +1864,17 @@ async def grep(
         lines.append(f"\n{m_uri}")
         for line_no, content, p in hits:
             lines.append(f"  L{line_no} [{p}]: {content}")
+    if failures:
+        lines.append("\nPatterns that could not be searched:")
+        lines.extend(failure_lines)
     return "\n".join(lines)
 
 
 # -- glob ------------------------------------------------------------------
 
 
-@mcp.tool()
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
@@ -1382,7 +1884,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
     try:
         result = await service.fs.glob(pattern, ctx=ctx, uri=resolved_uri, node_limit=node_limit)
     except Exception as e:
-        return f"Error: {e}"
+        return _mcp_failure(f"Error: {e}")
 
     matches = result.get("matches", [])
     if not matches:
@@ -1398,9 +1900,12 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 # -- forget ----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def forget(uri: str, recursive: bool = False) -> str:
-    """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling."""
+    """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling.
+
+    Deleting a skill directory this way leaves the skill's stored privacy values behind:
+    remove a skill with ``ov skills remove <name>`` or ``DELETE /api/v1/skills/{name}``."""
     service = get_service()
     ctx = _get_ctx()
     resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
@@ -1411,7 +1916,7 @@ async def forget(uri: str, recursive: bool = False) -> str:
 # -- health ----------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def health() -> str:
     """Check whether the OpenViking server is healthy."""
     try:
@@ -1519,8 +2024,9 @@ async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
     async with mcp.session_manager.run():
         logger.info(
-            "MCP endpoint ready (15 tools: find, search, read, write, edit, list, "
-            "tree, remember, add_resource, list_watches, cancel_watch, grep, glob, forget, health)"
+            "MCP endpoint ready (16 tools: find, search, read, write, edit, list, tree, "
+            "remember, add_resource, add_skill, list_watches, cancel_watch, grep, glob, forget, "
+            "health)"
         )
         yield
 

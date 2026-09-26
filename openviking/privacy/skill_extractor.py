@@ -4,9 +4,9 @@
 
 from dataclasses import dataclass, field
 
+from openviking.config.vlm import VLMHandle
 from openviking.privacy.skill_placeholder import placeholderize_skill_content_with_blocks
 from openviking.prompts import render_prompt
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.llm import parse_json_from_response
 
 
@@ -24,7 +24,10 @@ async def extract_skill_privacy_values(
     skill_name: str,
     skill_description: str,
     content: str,
+    vlm: VLMHandle,
 ) -> SkillPrivacyExtractionResult:
+    if vlm is None:
+        raise ValueError("Skill privacy extraction requires an explicitly resolved VLM")
     prompt = render_prompt(
         "skill.privacy_extraction",
         {
@@ -33,7 +36,7 @@ async def extract_skill_privacy_values(
             "skill_content": content,
         },
     )
-    response = await get_openviking_config().vlm.get_completion_async(prompt)
+    response = await vlm.get_completion_async(prompt)
     data = parse_json_from_response(response) or {}
 
     values: dict[str, str] = {}

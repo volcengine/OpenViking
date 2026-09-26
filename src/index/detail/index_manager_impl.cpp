@@ -24,22 +24,21 @@ constexpr uint64_t kFilterLayoutInverseMaxSpanFactor = 4;
 constexpr uint32_t kMissingFilterLayoutOffset =
     std::numeric_limits<uint32_t>::max();
 
-IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json) {
-  int ret = 0;
+IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json,
+                                   bool normalize_vector) {
   std::filesystem::path dir(path_or_json);
   std::error_code ec;
   if (std::filesystem::exists(dir, ec)) {
     load_from_path(dir);
-    return;
-  }
-
-  JsonDoc json;
-  json.Parse(path_or_json.c_str());
-  if (!json.HasParseError()) {
+  } else {
+    JsonDoc json;
+    json.Parse(path_or_json.c_str());
+    if (json.HasParseError()) {
+      return;
+    }
     init_from_json(json);
-    return;
   }
-  return;
+  manager_meta_->vector_index_meta->normalize_vector = normalize_vector;
 }
 
 void IndexManagerImpl::init_from_json(const JsonDoc& json) {
@@ -625,7 +624,7 @@ int IndexManagerImpl::delete_data(
 
 int IndexManagerImpl::rebuild_scalar_index(
     const std::string& scalar_index_json,
-    const std::vector<AddDataRequest>& data_list) {
+    const std::function<bool(std::vector<AddDataRequest>&)>& read_batch) {
   JsonDoc scalar_index_doc;
   scalar_index_doc.Parse(scalar_index_json.c_str());
   if (scalar_index_doc.HasParseError() || !scalar_index_doc.IsArray()) {
@@ -637,30 +636,30 @@ int IndexManagerImpl::rebuild_scalar_index(
     throw std::invalid_argument("Invalid scalar index metadata");
   }
 
-  std::vector<FieldsDict> parsed_fields(data_list.size());
-  for (size_t i = 0; i < data_list.size(); ++i) {
-    if (parsed_fields[i].parse_from_json(data_list[i].fields_str) != 0) {
-      throw std::runtime_error(
-          "Failed to parse scalar fields for label=" +
-          std::to_string(data_list[i].label));
-    }
-  }
-
   auto next_scalar_index = std::make_shared<ScalarIndex>(next_meta);
   std::unique_lock<std::shared_mutex> lock(rw_mutex_);
-  for (size_t i = 0; i < data_list.size(); ++i) {
-    const int offset = vector_index_->get_offset_by_label(data_list[i].label);
-    if (offset < 0) {
-      SPDLOG_WARN("IndexManagerImpl::rebuild_scalar_index label={} not found",
-                  data_list[i].label);
-      continue;
+  std::vector<AddDataRequest> batch;
+  while (read_batch(batch)) {
+    for (const auto& data : batch) {
+      FieldsDict fields;
+      if (fields.parse_from_json(data.fields_str) != 0) {
+        throw std::runtime_error(
+            "Failed to parse scalar fields for label=" +
+            std::to_string(data.label));
+      }
+      const int offset = vector_index_->get_offset_by_label(data.label);
+      if (offset < 0) {
+        SPDLOG_WARN("IndexManagerImpl::rebuild_scalar_index label={} not found",
+                    data.label);
+        continue;
+      }
+      if (next_scalar_index->add_row_data(offset, fields, FieldsDict{}) != 0) {
+        throw std::runtime_error(
+            "Failed to rebuild scalar fields for label=" +
+            std::to_string(data.label));
+      }
     }
-    if (next_scalar_index->add_row_data(offset, parsed_fields[i],
-                                        FieldsDict{}) != 0) {
-      throw std::runtime_error(
-          "Failed to rebuild scalar fields for label=" +
-          std::to_string(data_list[i].label));
-    }
+    batch.clear();
   }
 
   scalar_index_ = std::move(next_scalar_index);

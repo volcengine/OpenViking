@@ -22,6 +22,7 @@ describe("recall resource type registry", () => {
       "agent",
     ]);
     expect(() => normalizeRecallResourceTypes(["user", "project"])).toThrow("invalid resourceTypes: project");
+    expect(() => normalizeRecallResourceTypes(["session", "user"])).toThrow("invalid resourceTypes: session");
   });
 
   it("builds context-type search plans without deprecated agent/session URI paths", () => {

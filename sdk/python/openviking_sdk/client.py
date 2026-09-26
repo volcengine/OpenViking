@@ -9,12 +9,12 @@ import uuid
 import zipfile
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Type, Union
 from urllib.parse import quote
 
 import httpx
 
-from ._utils import run_async
+from ._utils import _path_is_relative_to, run_async
 from .actor_peer import _request_actor_peer_headers
 from .config import resolve_client_config
 from .errors import (
@@ -47,6 +47,7 @@ from .options import (
     BatchAddMessagesOptions,
     BatchWriteOptions,
     CommitSessionOptions,
+    CompileOptions,
     CreateSessionOptions,
     ExperienceOutcomeOptions,
     ExperienceTrajectoryOptions,
@@ -90,6 +91,14 @@ ERROR_CODE_TO_EXCEPTION = {
 GATEWAY_MARKER_HEADER = "X-VikingBot-Gateway"
 GATEWAY_TOKEN_HEADER = "X-Gateway-Token"
 _SESSION_CONFIG_UNSET = object()
+
+
+def _option_keys(options_type: Type[Any]) -> set[str]:
+    optional_keys = getattr(options_type, "__optional_keys__", None)
+    required_keys = getattr(options_type, "__required_keys__", None)
+    if optional_keys is not None and required_keys is not None:
+        return set(optional_keys) | set(required_keys)
+    return set(getattr(options_type, "__annotations__", {}))
 
 
 def _image_mime_type(file_name: str = "") -> str:
@@ -543,7 +552,7 @@ class AsyncHTTPClient:
         protected: Optional[set[str]] = None,
     ) -> Dict[str, Any]:
         option_values = dict(options or {})
-        allowed = set(options_type.__optional_keys__) | set(options_type.__required_keys__)
+        allowed = _option_keys(options_type)
         unknown = sorted(set(option_values) - allowed)
         if unknown:
             raise TypeError(
@@ -581,7 +590,7 @@ class AsyncHTTPClient:
                 option_values["context_type"]
             )
 
-        allowed = set(options_type.__optional_keys__) | set(options_type.__required_keys__)
+        allowed = _option_keys(options_type)
         allowed.discard("image")
         allowed.add("image_url")
         proxy_type = type(
@@ -681,7 +690,7 @@ class AsyncHTTPClient:
                 if file_path.is_symlink():
                     continue
                 if file_path.is_file():
-                    if not file_path.resolve().is_relative_to(root):
+                    if not _path_is_relative_to(file_path.resolve(), root):
                         continue
                     arcname = str(file_path.relative_to(dir_path)).replace("\\", "/")
                     zipf.write(file_path, arcname=arcname)
@@ -1148,10 +1157,14 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def mkdir(self, uri: str, description: Optional[str] = None) -> None:
+    async def mkdir(
+        self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
+    ) -> None:
         payload = {"uri": VikingURI.normalize(uri)}
         if description is not None:
             payload["description"] = description
+        if acl is not None:
+            payload["acl"] = acl
         response = await self._request("POST", "/api/v1/fs/mkdir", json=payload)
         self._handle_response(response)
 
@@ -1313,10 +1326,23 @@ class AsyncHTTPClient:
         response = await self._http.get("/api/v1/acl", params={"uri": VikingURI.normalize(uri)})
         return self._handle_response_data(response).get("result", {})
 
-    async def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
+    async def acl_set(
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]] = None,
+        *,
+        acl_mode: Optional[Literal["inherit", "restricted"]] = None,
+    ) -> Dict[str, Any]:
+        if entries is None and acl_mode is None:
+            raise ValueError("Either entries or acl_mode must be provided")
+        payload: Dict[str, Any] = {"uri": VikingURI.normalize(uri)}
+        if entries is not None:
+            payload["entries"] = entries
+        if acl_mode is not None:
+            payload["acl_mode"] = acl_mode
         response = await self._http.put(
             "/api/v1/acl",
-            json={"uri": VikingURI.normalize(uri), "entries": entries},
+            json=payload,
         )
         return self._handle_response_data(response).get("result", {})
 
@@ -1543,6 +1569,21 @@ class AsyncHTTPClient:
             return None
         return self._handle_response(response)
 
+    async def compile(
+        self,
+        from_uris: List[str],
+        to: str,
+        skill: str,
+        options: Optional[CompileOptions] = None,
+    ) -> Dict[str, Any]:
+        payload = self._build_options_payload(
+            options,
+            CompileOptions,
+            fixed={"from": list(from_uris), "to": to, "skill": skill},
+        )
+        response = await self._request("POST", "/api/v1/compile", json=payload)
+        return self._handle_response(response)
+
     async def cancel_task(self, task_id: str) -> Dict[str, Any]:
         response = await self._request("POST", f"/api/v1/tasks/{task_id}/cancel")
         return self._handle_response(response)
@@ -1756,20 +1797,32 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    async def _get_queue_status(self) -> Dict[str, Any]:
-        response = await self._request("GET", "/api/v1/observer/queue")
+    async def _get_queue_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        params = {"format": format} if format is not None else None
+        response = await self._request("GET", "/api/v1/observer/queue", params=params)
         return self._handle_response(response)
 
-    async def _get_vikingdb_status(self) -> Dict[str, Any]:
-        response = await self._request("GET", "/api/v1/observer/vikingdb")
+    async def _get_vikingdb_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        params = {"format": format} if format is not None else None
+        response = await self._request("GET", "/api/v1/observer/vikingdb", params=params)
         return self._handle_response(response)
 
-    async def _get_models_status(self) -> Dict[str, Any]:
-        response = await self._request("GET", "/api/v1/observer/models")
+    async def _get_models_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        params = {"format": format} if format is not None else None
+        response = await self._request("GET", "/api/v1/observer/models", params=params)
         return self._handle_response(response)
 
-    async def _get_system_status(self) -> Dict[str, Any]:
-        response = await self._request("GET", "/api/v1/observer/system")
+    async def _get_system_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        params = {"format": format} if format is not None else None
+        response = await self._request("GET", "/api/v1/observer/system", params=params)
         return self._handle_response(response)
 
     async def admin_create_account(
@@ -1796,6 +1849,7 @@ class AsyncHTTPClient:
         name: Optional[str] = None,
         limit: Optional[int] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
         params: Dict[str, Any] = {}
         if name is not None:
@@ -1803,6 +1857,8 @@ class AsyncHTTPClient:
         if limit is not None:
             params["limit"] = limit
             params["page"] = page
+        if query is not None:
+            params["query"] = query
         response = await self._request("GET", "/api/v1/admin/accounts", params=params)
         return self._handle_response(response)
 
@@ -1837,6 +1893,7 @@ class AsyncHTTPClient:
         name: Optional[str] = None,
         role: Optional[str] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
         params: Dict[str, Any] = {}
         if limit is not None:
@@ -1846,6 +1903,8 @@ class AsyncHTTPClient:
             params["name"] = name
         if role is not None:
             params["role"] = role
+        if query is not None:
+            params["query"] = query
         response = await self._request(
             "GET", f"/api/v1/admin/accounts/{account_id}/users", params=params
         )
@@ -2015,8 +2074,25 @@ class AsyncHTTPClient:
         )
         return self._handle_response(response)
 
-    def get_status(self) -> Dict[str, Any]:
-        return run_async(self._get_system_status())
+    def queue_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return run_async(self._get_queue_status(format=format))
+
+    def vikingdb_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return run_async(self._get_vikingdb_status(format=format))
+
+    def models_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return run_async(self._get_models_status(format=format))
+
+    def get_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return run_async(self._get_system_status(format=format))
 
     def is_healthy(self) -> bool:
         return self.observer.is_healthy()
@@ -2446,8 +2522,10 @@ class SyncHTTPClient:
     def attrs(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.attrs(uri))
 
-    def mkdir(self, uri: str, description: Optional[str] = None) -> None:
-        run_async(self._async_client.mkdir(uri, description=description))
+    def mkdir(
+        self, uri: str, description: Optional[str] = None, *, acl: Optional[Dict[str, Any]] = None
+    ) -> None:
+        run_async(self._async_client.mkdir(uri, description=description, acl=acl))
 
     def rm(
         self,
@@ -2520,8 +2598,14 @@ class SyncHTTPClient:
     def acl_get(self, uri: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_get(uri))
 
-    def acl_set(self, uri: str, entries: List[Dict[str, str]]) -> Dict[str, Any]:
-        return run_async(self._async_client.acl_set(uri, entries))
+    def acl_set(
+        self,
+        uri: str,
+        entries: Optional[List[Dict[str, str]]] = None,
+        *,
+        acl_mode: Optional[Literal["inherit", "restricted"]] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.acl_set(uri, entries, acl_mode=acl_mode))
 
     def acl_grant(self, uri: str, principal: str, level: str) -> Dict[str, Any]:
         return run_async(self._async_client.acl_grant(uri, principal, level))
@@ -2664,6 +2748,15 @@ class SyncHTTPClient:
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return run_async(self._async_client.get_task(task_id))
 
+    def compile(
+        self,
+        from_uris: List[str],
+        to: str,
+        skill: str,
+        options: Optional[CompileOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(self._async_client.compile(from_uris, to, skill, options))
+
     def cancel_task(self, task_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.cancel_task(task_id))
 
@@ -2802,8 +2895,11 @@ class SyncHTTPClient:
         name: Optional[str] = None,
         limit: Optional[int] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
-        return run_async(self._async_client.admin_list_accounts(name=name, limit=limit, page=page))
+        return run_async(
+            self._async_client.admin_list_accounts(name=name, limit=limit, page=page, query=query)
+        )
 
     def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.admin_delete_account(account_id))
@@ -2833,10 +2929,11 @@ class SyncHTTPClient:
         name: Optional[str] = None,
         role: Optional[str] = None,
         page: int = 1,
+        query: Optional[str] = None,
     ) -> List[Any]:
         return run_async(
             self._async_client.admin_list_users(
-                account_id, limit=limit, name=name, role=role, page=page
+                account_id, limit=limit, name=name, role=role, page=page, query=query
             )
         )
 
@@ -2919,8 +3016,25 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(self._async_client.preflight_openviking_asset(name, repo_url, options))
 
-    def get_status(self) -> Dict[str, Any]:
-        return self._async_client.get_status()
+    def queue_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return self._async_client.queue_status(format=format)
+
+    def vikingdb_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return self._async_client.vikingdb_status(format=format)
+
+    def models_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return self._async_client.models_status(format=format)
+
+    def get_status(
+        self, format: Optional[Literal["table", "json"]] = None
+    ) -> Dict[str, Any]:
+        return self._async_client.get_status(format=format)
 
     def is_healthy(self) -> bool:
         return self._async_client.is_healthy()

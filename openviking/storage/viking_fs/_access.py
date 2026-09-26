@@ -23,6 +23,9 @@ from openviking.storage.acl import (
     AclAction,
     AclEntry,
     AclLevel,
+    AclMode,
+    AclSpec,
+    AclUpdate,
     acl_allows,
     acl_ancestors,
     has_implicit_manage,
@@ -30,9 +33,10 @@ from openviking.storage.acl import (
     normalize_acl_level,
     normalize_acl_principal,
 )
-from openviking.storage.internal_names import STORAGE_INTERNAL_ENTRY_NAMES
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking_cli.exceptions import (
     FailedPreconditionError,
+    InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
 )
@@ -52,7 +56,7 @@ class _AccessMixin:
 
     # First path segments that the Rust git enumerate.rs prunes from snapshots,
     # plus the runtime lock name. Mirrors INTERNAL_FIRST_SEGMENTS in
-    # crates/ragfs/src/git/enumerate.rs and VikingFS._INTERNAL_NAMES so that
+    # crates/ragfs/src/git/enumerate.rs so that
     # callers fail fast in Python with a clear error rather than passing a
     # path that the Rust side will silently drop.
     _GIT_INTERNAL_FIRST_SEGMENTS = frozenset(
@@ -82,8 +86,8 @@ class _AccessMixin:
     }
     _NO_VECTOR_DERIVED = frozenset({".relations.json", ".ovgitignore"})
 
-    def set_user_deletion_guard(self, guard: Optional[Callable[[str, str], bool]]) -> None:
-        self._user_deletion_guard = guard
+    def set_deletion_guard(self, guard: Optional[Callable[[str, str], bool]]) -> None:
+        self._deletion_guard = guard
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -94,6 +98,14 @@ class _AccessMixin:
             return ctx
         bound = self._bound_ctx.get()
         return bound or self._default_ctx()
+
+    def _require_request_context(self, ctx: Optional[RequestContext]) -> RequestContext:
+        """Resolve an account context without inventing the default account."""
+        if ctx is None and self._bound_ctx.get() is None:
+            raise RuntimeError(
+                "Account request context is required for account-scoped operations"
+            )
+        return self._ctx_or_default(ctx)
 
     @contextmanager
     def bind_request_context(self, ctx: RequestContext):
@@ -175,7 +187,7 @@ class _AccessMixin:
                 valid.append(uri)
 
         acl_manager = self.acl_manager
-        if acl_manager is None or not acl_manager.is_enabled(real_ctx.account_id):
+        if acl_manager is None or not await acl_manager.is_enabled(real_ctx.account_id):
             result.update({uri: self._is_accessible(uri, real_ctx) for uri in valid})
             return result
 
@@ -194,11 +206,7 @@ class _AccessMixin:
 
         effective = await acl_manager.resolve_many(pending, real_ctx) if pending else {}
         for uri in pending:
-            acl = effective[uri]
-            if not acl.enabled:
-                result[uri] = self._is_accessible(uri, real_ctx)
-            else:
-                result[uri] = acl_allows(acl, real_ctx, action)
+            result[uri] = acl_allows(effective[uri], real_ctx, action)
         return result
 
     async def _ensure_access(
@@ -226,7 +234,7 @@ class _AccessMixin:
         if action is AclAction.READ:
             return
 
-        self._ensure_user_not_deleting(real_ctx)
+        self._ensure_identity_not_deleting(real_ctx)
         for uri in uris:
             self._safe_uri_parts(uri)
             if uri == "viking://" and real_ctx.role == Role.USER:
@@ -259,13 +267,15 @@ class _AccessMixin:
 
     async def _ensure_retrieval_scope(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._safe_uri_parts(uri)
-        if self._acl_enabled(ctx) and is_acl_uri(uri):
+        if await self._acl_enabled(ctx) and is_acl_uri(uri):
             return
         await self._ensure_access(uri, ctx)
 
-    def _acl_enabled(self, ctx: Optional[RequestContext]) -> bool:
+    async def _acl_enabled(self, ctx: Optional[RequestContext]) -> bool:
         real_ctx = self._ctx_or_default(ctx)
-        return self.acl_manager is not None and self.acl_manager.is_enabled(real_ctx.account_id)
+        return self.acl_manager is not None and await self.acl_manager.is_enabled(
+            real_ctx.account_id
+        )
 
     async def _ensure_acl_manage(self, uri: str, ctx: Optional[RequestContext]) -> RequestContext:
         if self.acl_manager is None:
@@ -275,18 +285,36 @@ class _AccessMixin:
         acl_ancestors(uri)
         if has_implicit_manage(real_ctx, uri):
             return real_ctx
-        effective = await self.acl_manager.resolve(uri, real_ctx)
-        if effective.enabled and acl_allows(effective, real_ctx, AclAction.MANAGE):
-            return real_ctx
+        if await self.acl_manager.is_enabled(real_ctx.account_id):
+            effective = await self.acl_manager.resolve(uri, real_ctx)
+            if acl_allows(effective, real_ctx, AclAction.MANAGE):
+                return real_ctx
         raise PermissionDeniedError(f"ACL management denied for {uri}", resource=uri)
 
-    async def _ensure_acl_target_exists(self, uri: str, ctx: RequestContext) -> None:
+    async def _ensure_acl_target_exists(self, uri: str, ctx: RequestContext) -> bool:
+        """Return whether the ACL target is a directory; raise if it is missing."""
         try:
-            await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
+            stat = await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
         except Exception as exc:
             if is_not_found_error(exc):
                 raise NotFoundError(uri, "resource") from exc
             raise
+        return bool(stat.get("isDir", False)) if isinstance(stat, dict) else False
+
+    async def _acquire_acl_target_lock(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Lock an existing ACL target: Exact for a file, Tree for a directory.
+
+        The existence check runs before the lock so a missing target returns
+        NotFound instead of materializing a directory for lock metadata.
+        """
+        is_dir = await self._ensure_acl_target_exists(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        acquire = (
+            self._async_agfs.pathlock_acquire_tree
+            if is_dir
+            else self._async_agfs.pathlock_acquire_exact
+        )
+        return await acquire(path)
 
     async def get_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         real_ctx = await self._ensure_acl_manage(uri, ctx)
@@ -294,19 +322,33 @@ class _AccessMixin:
         effective = await self.acl_manager.resolve(uri, real_ctx)
         return self.acl_manager.to_report(uri, effective)
 
+    async def prepare_acl_update(
+        self,
+        uri: str,
+        acl: AclSpec | Mapping[str, Any],
+        ctx: RequestContext,
+    ) -> AclUpdate:
+        """Authorize an explicit ACL against the permissions before the write."""
+        spec = AclSpec.model_validate(acl)
+        if len(acl_ancestors(uri)) == 1:
+            raise InvalidArgumentError("ACL cannot be set on viking://resources")
+        await self._ensure_acl_manage(uri, ctx)
+        return AclUpdate(uri=uri, acl=spec)
+
     async def set_acl(
         self,
         uri: str,
-        entries: Sequence[AclEntry | Mapping[str, Any]],
+        entries: Sequence[AclEntry | Mapping[str, Any]] | None = None,
         ctx: Optional[RequestContext] = None,
+        *,
+        acl_mode: AclMode | None = None,
     ) -> Dict[str, Any]:
         real_ctx = await self._ensure_acl_manage(uri, ctx)
-        path = self._uri_to_path(uri, ctx=real_ctx)
-        lease = await self._async_agfs.pathlock_acquire_tree(path)
+        lease = await self._acquire_acl_target_lock(uri, real_ctx)
         try:
             await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
-            effective = await self.acl_manager.set_direct(uri, entries, real_ctx)
+            effective = await self.acl_manager.set_acl(uri, entries, real_ctx, acl_mode=acl_mode)
             return self.acl_manager.to_report(uri, effective)
         finally:
             await self._async_agfs.pathlock_release(lease)
@@ -338,8 +380,7 @@ class _AccessMixin:
         principal = normalize_acl_principal(principal)
         normalized_level = normalize_acl_level(level) if level is not None else None
         real_ctx = await self._ensure_acl_manage(uri, ctx)
-        path = self._uri_to_path(uri, ctx=real_ctx)
-        lease = await self._async_agfs.pathlock_acquire_tree(path)
+        lease = await self._acquire_acl_target_lock(uri, real_ctx)
         try:
             await self._ensure_acl_manage(uri, real_ctx)
             await self._ensure_acl_target_exists(uri, real_ctx)
@@ -349,18 +390,18 @@ class _AccessMixin:
                 entries.pop(principal, None)
             else:
                 entries[principal] = AclEntry(principal, normalized_level)
-            effective = await self.acl_manager.set_direct(uri, list(entries.values()), real_ctx)
+            effective = await self.acl_manager.set_acl(uri, list(entries.values()), real_ctx)
             return self.acl_manager.to_report(uri, effective)
         finally:
             await self._async_agfs.pathlock_release(lease)
 
     async def delete_acl(self, uri: str, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
-        return await self.set_acl(uri, [], ctx=ctx)
+        return await self.set_acl(uri, [], acl_mode=AclMode.INHERIT, ctx=ctx)
 
-    def _ensure_user_not_deleting(self, ctx: RequestContext) -> None:
-        guard = getattr(self, "_user_deletion_guard", None)
+    def _ensure_identity_not_deleting(self, ctx: RequestContext) -> None:
+        guard = getattr(self, "_deletion_guard", None)
         if ctx.role != Role.ROOT and guard is not None and guard(ctx.account_id, ctx.user.user_id):
-            raise FailedPreconditionError("User deletion is in progress")
+            raise FailedPreconditionError("Identity deletion is in progress")
 
     def _ensure_supported_delete_namespace(self, normalized_uri: str) -> None:
         parts = [p for p in normalized_uri[len("viking://") :].strip("/").split("/") if p]
@@ -376,10 +417,6 @@ class _AccessMixin:
                 resource=normalized_uri,
             )
         if parts == ["agent"]:
-            # Parity with _ensure_supported_write_namespace, which forbids the
-            # account-shared viking://agent root: deleting it would recursively
-            # wipe every account's agent skills/endpoints/tools/payments. Concrete
-            # sub-paths (viking://agent/skills/...) remain deletable.
             raise PermissionDeniedError(
                 "Deleting viking://agent root is not supported; use a concrete "
                 "agent sub-path (e.g. viking://agent/skills/...) instead.",
@@ -399,17 +436,6 @@ class _AccessMixin:
                 f"Writing {normalized_uri} is not supported; use user-owned namespaces instead.",
                 resource=normalized_uri,
             )
-        if parts and parts[0] == "agent":
-            if len(parts) >= 2 and parts[1] not in {"skills", "endpoints", "tools", "payments"}:
-                raise PermissionDeniedError(
-                    "viking://agent/{agent_id} is deprecated. Use viking://user/.../peers/{agent_id} instead.",
-                    resource=normalized_uri,
-                )
-            if len(parts) < 2:
-                raise PermissionDeniedError(
-                    "Writing to viking://agent root is not supported.",
-                    resource=normalized_uri,
-                )
 
     def _pathlock_fs_ctx(
         self,
@@ -440,7 +466,7 @@ class _AccessMixin:
         parts = [p for p in parent_path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return name in VikingURI.LISTABLE_SCOPES
-        return name not in STORAGE_INTERNAL_ENTRY_NAMES
+        return not is_storage_internal_name(name)
 
     def _ancestor_is_filtered(self, entry_path: str, base_path: str) -> bool:
         """Check if any ancestor directory of entry_path would be filtered by _ls_entries.
@@ -460,7 +486,13 @@ class _AccessMixin:
         return False
 
     def _is_path_entry_visible(
-        self, entry_path: str, name: str, base_path: str, ctx: RequestContext
+        self,
+        entry_path: str,
+        name: str,
+        base_path: str,
+        ctx: RequestContext,
+        *,
+        acl_enabled: bool,
     ) -> bool:
         """Check visibility for one flattened path entry returned by Rust."""
         if self._ancestor_is_filtered(entry_path, base_path):
@@ -473,7 +505,7 @@ class _AccessMixin:
             if not self._is_name_visible_at_path(name, parent_path):
                 return False
 
-        if not self._acl_enabled(ctx):
+        if not acl_enabled:
             uri = self._path_to_uri(entry_path, ctx=ctx)
             if not self._is_accessible(uri, ctx):
                 return False
@@ -481,13 +513,24 @@ class _AccessMixin:
         return True
 
     def _is_tree_entry_visible(
-        self, entry: Dict[str, Any], base_path: str, ctx: RequestContext
+        self,
+        entry: Dict[str, Any],
+        base_path: str,
+        ctx: RequestContext,
+        *,
+        acl_enabled: bool,
     ) -> bool:
         """Check visibility for a single TreeEntry returned by Rust tree_directory."""
         entry_path = entry["path"]
         entry_info = entry.get("info", {})
         name = entry_info.get("name") or entry_path.rstrip("/").rsplit("/", 1)[-1]
-        return self._is_path_entry_visible(entry_path, name, base_path, ctx)
+        return self._is_path_entry_visible(
+            entry_path,
+            name,
+            base_path,
+            ctx,
+            acl_enabled=acl_enabled,
+        )
 
     def _glob_page_size(self, node_limit: Optional[int]) -> int:
         """Return the backend page size used by glob_directory."""
@@ -527,7 +570,7 @@ class _AccessMixin:
         raw_limit = None if node_limit is None else max(node_limit, 256)
         remaining_offset = offset
         yielded = 0
-        acl_enabled = self._acl_enabled(real_ctx)
+        acl_enabled = await self._acl_enabled(real_ctx)
         expose_resource_names = acl_enabled and is_acl_uri(uri)
         denied_directories: set[str] = set()
 
@@ -546,7 +589,12 @@ class _AccessMixin:
 
             candidates: List[tuple] = []
             for entry in raw_entries:
-                if not self._is_tree_entry_visible(entry, path, real_ctx):
+                if not self._is_tree_entry_visible(
+                    entry,
+                    path,
+                    real_ctx,
+                    acl_enabled=acl_enabled,
+                ):
                     continue
                 if not await self._read_path_visible(uri, entry["path"], primary_path, real_ctx):
                     continue
@@ -640,10 +688,6 @@ class _AccessMixin:
         parts = self._safe_uri_parts(uri)
         if parts[:1] == ["session"]:
             raise ValueError(f"Legacy session URI is not accepted internally: {uri}")
-        if parts and parts[0] == "agent" and self._is_legacy_agent_id_uri(uri):
-            # Old format: viking://agent/{agent_id}/... — direct mapping for read-only compat
-            safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
-            return f"/local/{account_id}/{'/'.join(safe_parts)}"
         if not parts:
             return f"/local/{account_id}"
 
@@ -679,15 +723,6 @@ class _AccessMixin:
 
     def _is_session_root_uri(self, uri: str) -> bool:
         return self._legacy_session_alias(uri) == "viking://session"
-
-    def _is_legacy_agent_id_uri(self, uri: str) -> bool:
-        parts = self._safe_uri_parts(uri)
-        return bool(
-            parts
-            and parts[0] == "agent"
-            and len(parts) >= 2
-            and parts[1] not in {"skills", "endpoints", "tools", "payments"}
-        )
 
     def _read_paths(self, uri: str, ctx: Optional[RequestContext] = None) -> List[str]:
         """Return read candidates for a URI, including legacy alias fallbacks."""
@@ -726,13 +761,8 @@ class _AccessMixin:
         ctx: Optional[RequestContext],
     ) -> str:
         base = base_path.rstrip("/")
-        request_parts = self._safe_uri_parts(request_uri)
         request_root = request_uri if request_uri == "viking://" else request_uri.rstrip("/")
-        preserve_request_alias = request_uri in {"viking://", "viking://user"} or bool(
-            request_parts
-            and request_parts[0] == "agent"
-            and self._is_legacy_agent_id_uri(request_uri)
-        )
+        preserve_request_alias = request_uri in {"viking://", "viking://user"}
         rel_path = entry_path[len(base) :].strip("/") if entry_path.startswith(base) else ""
         if entry_path.startswith(base):
             separator = "" if request_root.endswith("://") else "/"
@@ -926,8 +956,6 @@ class _AccessMixin:
         raw_count = 0
 
         for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
             try:
                 entries = await self._ls_entries(
                     path,
@@ -943,6 +971,11 @@ class _AccessMixin:
                     last_not_found = exc
                     continue
                 raise
+
+            # Missing legacy directories need no owner probes. Check visibility
+            # before merging entries from a directory that actually exists.
+            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
+                continue
 
             found_path = True
             raw_count += len(entries)
@@ -1017,14 +1050,6 @@ class _AccessMixin:
             return ctx.role == Role.ROOT
         if scope == "_system":
             return False
-        if scope == "agent":
-            # New format: agent/skills/..., agent/endpoints/... — globally readable (account scope)
-            if len(parts) >= 2 and parts[1] in {"skills", "endpoints", "tools", "payments"}:
-                return True
-            # Old format: agent/{agent_id}/... — actor_peer_id match for read-only access
-            if not ctx.actor_peer_id or len(parts) < 2:
-                return True
-            return parts[1] == ctx.actor_peer_id
         return namespace_is_accessible(uri, ctx)
 
     def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:

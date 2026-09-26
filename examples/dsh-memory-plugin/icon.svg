@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="OpenViking" focusable="false">
+  <title>OpenViking</title>
+  <style>
+    /* Monochrome mark. The plugin card renders this file as an image document,
+       which cannot read the page palette, so the two inks are declared here and
+       the scheme flip comes from the only signal an image document gets:
+       prefers-color-scheme. The base fill attribute keeps the black ink in
+       renderers that lack that query, and the class is named after the product
+       to stay unique if this file is ever inlined. */
+    @media (prefers-color-scheme: dark) {
+      .openviking-mark { fill: #ffffff; }
+    }
+  </style>
+  <path class="openviking-mark" fill="#000000" d="M21.9136 11.2875C21.8311 15.6708 18.953 19.691 14.5292 21.0217C10.1055 22.3524 5.48691 20.587 3 16.9758L6.35328 15.9668C8.52232 18.6563 12.1802 19.9123 15.6932 18.8558C19.2062 17.7993 21.5646 14.7335 21.8903 11.2938L21.9136 11.2867V11.2875Z"/>
+  <path class="openviking-mark" fill="#000000" d="M11.9754 2.26476C14.2745 3.4155 19.0247 7.27598 19.1416 14.5217L9.68011 17.3709C10.3938 16.4998 11.0303 15.5158 11.5546 14.4446L15.4019 13.2751C16.6438 8.11275 14.2504 4.18838 11.9941 2.3115C11.9878 2.29592 11.9816 2.28034 11.9754 2.26398V2.26476ZM11.9941 2.31228C13.7548 6.71269 13.2274 11.0251 11.5546 14.4446L8.98047 15.2268C12.4085 10.0457 12.4865 5.64375 11.9699 2.29125C11.9785 2.29826 11.9863 2.30527 11.9941 2.3115V2.31228Z"/>
+  <path class="openviking-mark" fill="#000000" d="M11.9909 2.31144C13.7517 6.71185 13.2243 11.0242 11.5515 14.4437L8.97656 15.2259C12.4046 10.0449 12.4826 5.64291 11.966 2.29041C11.9746 2.29742 11.9824 2.30443 11.9902 2.31066L11.9909 2.31144Z"/>
+</svg>

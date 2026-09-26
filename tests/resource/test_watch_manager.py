@@ -604,6 +604,41 @@ class TestWatchManager:
         assert tasks[0].is_active is True
 
     @pytest.mark.asyncio
+    async def test_get_all_tasks_admin_scoped_to_own_tasks(
+        self, watch_manager: WatchManager
+    ):
+        """ADMIN is scoped to its own tasks; ROOT still sees the whole account."""
+        await watch_manager.create_task(path="/test/alice1", user_id="alice")
+        await watch_manager.create_task(path="/test/bob1", user_id="bob")
+        await watch_manager.create_task(path="/test/alice2", user_id="alice")
+
+        # ROOT keeps the system-wide view.
+        all_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="root", role="root"
+        )
+        assert len(all_tasks) == 3
+
+        # ADMIN no longer sees the whole account — only its own tasks.
+        alice_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="alice", role="admin"
+        )
+        assert {task.user_id for task in alice_tasks} == {"alice"}
+        assert len(alice_tasks) == 2
+
+    @pytest.mark.asyncio
+    async def test_get_all_tasks_isolates_same_account_users(
+        self, watch_manager: WatchManager
+    ):
+        """Same account, different user_id → each caller sees only its own tasks."""
+        await watch_manager.create_task(path="/test/alice1", user_id="alice")
+        await watch_manager.create_task(path="/test/bob1", user_id="bob")
+
+        bob_tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID, user_id="bob", role="user"
+        )
+        assert {task.user_id for task in bob_tasks} == {"bob"}
+
+    @pytest.mark.asyncio
     async def test_get_task_by_uri(self, watch_manager: WatchManager):
         """Test getting a task by URI."""
         task = await watch_manager.create_task(
@@ -846,7 +881,9 @@ class TestWatchManagerConcurrency:
                 to_uri=f"viking://resources/test{index}",
             )
 
-        tasks = await asyncio.gather(*[create_task(i) for i in range(10)])
+        tasks = await asyncio.gather(
+            *[asyncio.to_thread(lambda i=i: asyncio.run(create_task(i))) for i in range(10)]
+        )
 
         assert len(tasks) == 10
         assert len({task.task_id for task in tasks}) == 10
@@ -860,28 +897,33 @@ class TestWatchManagerConcurrency:
 
     @pytest.mark.asyncio
     async def test_concurrent_read_write(self, watch_manager: WatchManager):
-        """Test concurrent read and write operations."""
+        """A background result must preserve a concurrent HTTP pause, including on disk."""
         task = await watch_manager.create_task(path="/test/path")
 
-        async def update_task(index: int):
+        async def pause_task():
             await watch_manager.update_task(
                 task_id=task.task_id,
                 account_id=TEST_ACCOUNT_ID,
                 user_id=TEST_USER_ID,
                 role=TEST_ROLE,
-                reason=f"Update {index}",
+                is_active=False,
             )
 
-        async def read_task():
-            return await watch_manager.get_task(task.task_id)
-
-        operations = [update_task(i) for i in range(5)] + [read_task() for _ in range(5)]
-        results = await asyncio.gather(*operations, return_exceptions=True)
-
-        assert all(not isinstance(r, Exception) for r in results)
-
-        final_task = await watch_manager.get_task(task.task_id)
+        await asyncio.gather(
+            pause_task(),
+            asyncio.to_thread(
+                lambda: asyncio.run(
+                    watch_manager.record_execution(task.task_id, status="completed")
+                )
+            ),
+        )
+        restored = WatchManager(viking_fs=watch_manager._viking_fs)
+        await restored.initialize()
+        final_task = await restored.get_task(task.task_id)
         assert final_task is not None
+        assert final_task.is_active is False
+        assert final_task.last_status == "completed"
+        assert final_task.next_execution_time is None
 
 
 _CONNECTOR_AUTH = {"provider": "connector_encrypted", "ciphertext": "unused"}
@@ -933,7 +975,7 @@ class TestSharedConnectorTargets:
             ("carol", "user", ()),
             ("bob", "user", (2,)),
             ("alice", "user", (0, 1)),
-            ("bob", "admin", (0, 1, 2)),
+            ("bob", "admin", (2,)),
             ("bob", "root", (0, 1, 2)),
         ],
     )

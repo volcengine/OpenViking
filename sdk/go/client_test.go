@@ -398,6 +398,26 @@ func TestReindexSendsExplicitEmptyTags(t *testing.T) {
 	}
 }
 
+func TestReindexSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"status": "completed"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Reindex(context.Background(), "resources/demo", &ReindexOptions{
+		TagMode: "clear",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReindexSendsExtraAndRejectsOverrides(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
@@ -665,6 +685,26 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 		TagMode:        "replace",
 		Wait:           true,
 		Extra:          map[string]any{"future_flag": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
+		TagMode: "clear",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1162,6 +1202,26 @@ func TestAddResourceSendsTagsAndTagMode(t *testing.T) {
 	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
 		Tags:    []string{"team=search"},
 		TagMode: "append",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddResourceSendsClearWithoutTags(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if _, ok := body["tags"]; ok {
+			t.Fatalf("tags = %#v", body["tags"])
+		}
+		if body["tag_mode"] != "clear" {
+			t.Fatalf("tag_mode = %#v", body["tag_mode"])
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/demo.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.AddResource(context.Background(), "https://example.com/demo.md", &AddResourceOptions{
+		TagMode: "clear",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1666,26 +1726,58 @@ func TestSessionExistsHandlesNotFound(t *testing.T) {
 	}
 }
 
-func TestListTasksRequest(t *testing.T) {
+func TestCompileAndListTasksRequests(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %s", r.Method)
-		}
-		if r.URL.Path != "/api/v1/tasks" {
+		switch r.URL.Path {
+		case "/api/v1/compile":
+			if r.Method != http.MethodPost {
+				t.Fatalf("method = %s", r.Method)
+			}
+			body := readJSONBody(t, r)
+			if !reflect.DeepEqual(body["from"], []any{"viking://resources/source"}) ||
+				body["to"] != "viking://resources/output" ||
+				body["skill"] != "viking://agent/skills/wiki" ||
+				body["instruction"] != "Keep supporting evidence." ||
+				!reflect.DeepEqual(body["args"], map[string]any{"model_name": "endpoint-1"}) {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
+		case "/api/v1/tasks":
+			if r.Method != http.MethodGet {
+				t.Fatalf("method = %s", r.Method)
+			}
+			query := r.URL.Query()
+			if query.Get("task_type") != "session_commit" ||
+				query.Get("status") != "running" ||
+				query.Get("resource_id") != "session-1" ||
+				query.Get("limit") != "20" {
+				t.Fatalf("query = %s", r.URL.RawQuery)
+			}
+			writeOK(t, w, []map[string]any{
+				{"task_id": "task-1", "status": "running"},
+			})
+		default:
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		query := r.URL.Query()
-		if query.Get("task_type") != "session_commit" ||
-			query.Get("status") != "running" ||
-			query.Get("resource_id") != "session-1" ||
-			query.Get("limit") != "20" {
-			t.Fatalf("query = %s", r.URL.RawQuery)
-		}
-		writeOK(t, w, []map[string]any{
-			{"task_id": "task-1", "status": "running"},
-		})
 	}))
 	defer closeServer()
+
+	compiled, err := client.Compile(
+		context.Background(),
+		[]string{"viking://resources/source"},
+		"viking://resources/output",
+		"viking://agent/skills/wiki",
+		&CompileOptions{
+			Instruction: "Keep supporting evidence.",
+			Args:        map[string]any{"model_name": "endpoint-1"},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled["task_id"] != "cmp_1" {
+		t.Fatalf("compiled = %#v", compiled)
+	}
 
 	tasks, err := client.ListTasks(context.Background(), &ListTasksOptions{
 		TaskType:   "session_commit",
@@ -1719,6 +1811,65 @@ func TestHealth(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("expected healthy")
+	}
+}
+
+func TestObserverStatusSupportsOptionalFormat(t *testing.T) {
+	requests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			if r.URL.Path != "/api/v1/observer/system" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"is_healthy": true})
+		case 2:
+			if r.URL.Path != "/api/v1/observer/queue" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "json" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "queue"})
+		case 3:
+			if r.URL.Path != "/api/v1/observer/models" {
+				t.Fatalf("path = %s", r.URL.Path)
+			}
+			if got := r.URL.Query().Get("format"); got != "table" {
+				t.Fatalf("format = %q", got)
+			}
+			writeOK(t, w, map[string]any{"name": "models"})
+		default:
+			t.Fatalf("unexpected request %d: %s", requests, r.URL.String())
+		}
+	}))
+	defer closeServer()
+
+	status, err := client.GetStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, err := client.QueueStatus(context.Background(), ObserverStatusOptions{Format: "json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := client.ModelsStatus(context.Background(), ObserverStatusOptions{Format: "table"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if status["is_healthy"] != true {
+		t.Fatalf("status = %#v", status)
+	}
+	if queue["name"] != "queue" {
+		t.Fatalf("queue = %#v", queue)
+	}
+	if models["name"] != "models" {
+		t.Fatalf("models = %#v", models)
 	}
 }
 

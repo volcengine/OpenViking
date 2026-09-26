@@ -124,8 +124,7 @@ class TestUriToTreePath:
     def test_session_uri(self, vfs):
         ctx = _make_ctx()
         assert (
-            vfs._uri_to_tree_path("viking://user/user1/sessions", ctx=ctx)
-            == "user/user1/sessions"
+            vfs._uri_to_tree_path("viking://user/user1/sessions", ctx=ctx) == "user/user1/sessions"
         )
 
     def test_trailing_slash_kept_as_directory(self, vfs):
@@ -627,6 +626,21 @@ class _SpyExecutor:
         return 0
 
 
+def _patch_reindex_executor(monkeypatch, vfs, spy):
+    import openviking.service.reindex_executor as reindex_mod
+
+    vlm_resolver, vector_resolver = object(), object()
+    monkeypatch.setattr(vfs, "_vlm_resolver", vlm_resolver)
+    monkeypatch.setattr(vfs, "_vector_config_resolver", vector_resolver)
+
+    def factory(*, vlm_resolver, vector_config_resolver):
+        assert vlm_resolver is vfs._vlm_resolver
+        assert vector_config_resolver is vfs._vector_config_resolver
+        return spy
+
+    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
+
+
 @pytest.mark.asyncio
 async def test_restore_schedules_reindex_for_derived_only_change(vfs, monkeypatch):
     """When a restore only changes a directory `.abstract.md` (source file
@@ -635,9 +649,7 @@ async def test_restore_schedules_reindex_for_derived_only_change(vfs, monkeypatc
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_derived_only")
     await vfs.write_file("viking://resources/proj/x.md", b"body", ctx=ctx)
@@ -678,9 +690,7 @@ async def test_restore_schedules_marker_and_files_independently(vfs, monkeypatch
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_dedup")
     await vfs.write_file("viking://resources/proj/x.md", b"v1", ctx=ctx)
@@ -718,9 +728,7 @@ async def test_restore_schedules_siblings_independently(vfs, monkeypatch):
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_subsume_sibling")
     # proj_a: source file + directory marker
@@ -761,9 +769,7 @@ async def test_restore_deletes_marker_and_source_vectors(vfs, monkeypatch):
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_del_marker")
     await vfs.write_file("viking://resources/keep/k.md", b"keep", ctx=ctx)
@@ -799,9 +805,7 @@ async def test_restore_relations_json_has_no_vector_side_effect(vfs, monkeypatch
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_relations")
     await vfs.write_file("viking://resources/proj/.relations.json", b'{"v":1}', ctx=ctx)
@@ -836,9 +840,7 @@ async def test_restore_returns_pollable_task_id(vfs, monkeypatch):
     """
     spy = _SpyExecutor()
 
-    import openviking.service.reindex_executor as reindex_mod
-
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     from openviking.service.task_tracker import (
         TaskTracker,
@@ -908,9 +910,8 @@ async def test_restore_concurrent_same_dir_is_rejected(vfs, monkeypatch):
     from openviking.storage.errors import ResourceBusyError
 
     spy = _SpyExecutor()
-    import openviking.service.reindex_executor as reindex_mod
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_lock_same")
     await vfs.write_file("viking://resources/proj/a.md", b"v1", ctx=ctx)
@@ -969,9 +970,8 @@ async def test_restore_concurrent_sibling_dirs_do_not_block(vfs, monkeypatch):
     concurrently — neither blocks the other.
     """
     spy = _SpyExecutor()
-    import openviking.service.reindex_executor as reindex_mod
 
-    monkeypatch.setattr(reindex_mod, "get_reindex_executor", lambda: spy)
+    _patch_reindex_executor(monkeypatch, vfs, spy)
 
     ctx = _make_ctx(account="acct_lock_sibling")
     await vfs.write_file("viking://resources/proj_a/x.md", b"v1", ctx=ctx)
@@ -1107,3 +1107,43 @@ async def test_vikingfs_get_gitignore_maps_non_utf8_to_invalid_operation(vfs):
     with pytest.raises(AGFSInvalidOperationError) as excinfo:
         await vfs.get_gitignore(ctx=ctx)
     assert "utf-8" in str(excinfo.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_restore_dry_run_for_user_does_not_take_tree_lock(vfs, monkeypatch):
+    """A dry run only plans; locking would recreate a deleted project_dir."""
+    from openviking.server.identity import Role
+
+    root = _make_ctx(account="acct_dry_user")
+    user = RequestContext(user=UserIdentifier("acct_dry_user", "user1"), role=Role.USER)
+    await vfs.write_file("viking://resources/proj/a.md", b"v1", ctx=root)
+    c1 = await vfs.commit(message="v1", paths=["viking://resources/proj/a.md"], ctx=root)
+    await vfs.write_file("viking://resources/proj/a.md", b"v2", ctx=root)
+    await vfs.commit(message="v2", paths=["viking://resources/proj/a.md"], ctx=root)
+
+    tree_locks = []
+    orig_tree = vfs._async_agfs.pathlock_acquire_tree
+
+    async def spy_tree(path, *args, **kwargs):
+        tree_locks.append(path)
+        return await orig_tree(path, *args, **kwargs)
+
+    monkeypatch.setattr(vfs._async_agfs, "pathlock_acquire_tree", spy_tree)
+
+    result = await vfs.restore(
+        project_dir="viking://resources/proj",
+        source_commit=c1["commit_oid"],
+        dry_run=True,
+        ctx=user,
+    )
+    assert result["result"] == "dry_run"
+    assert any(item["path"] == "a.md" for item in result["diff"]["to_write"])
+    assert tree_locks == []
+
+    applied = await vfs.restore(
+        project_dir="viking://resources/proj",
+        source_commit=c1["commit_oid"],
+        ctx=user,
+    )
+    assert applied["result"] == "applied"
+    assert tree_locks == ["/local/acct_dry_user/resources/proj"]

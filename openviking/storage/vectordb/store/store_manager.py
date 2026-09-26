@@ -227,6 +227,14 @@ class StoreManager:
         """
         return list(self.iter_all_cands_data())
 
+    def iter_all_cands_fields(self) -> Iterator[Tuple[int, str]]:
+        """Scan labels and scalar fields without decoding stored vectors."""
+        for _, bytes_data in self.storage.iter_all(StoreManager.CandsTable):
+            yield (
+                CandidateData.bytes_row.deserialize_field(bytes_data, "label"),
+                CandidateData.bytes_row.deserialize_field(bytes_data, "fields"),
+            )
+
     def iter_all_cands_data(self) -> Iterator[CandidateData]:
         """Iterate candidates without retaining deserialized full tables.
 
@@ -241,21 +249,13 @@ class StoreManager:
         """Clear all data from the store."""
         self.storage.clear()
 
-    def get_delta_data_after_ts(self, ns_ts: int) -> List[DeltaRecord]:
-        """Get delta records created after a specific timestamp.
-
-        Args:
-            ns_ts (int): Timestamp in nanoseconds.
-
-        Returns:
-            List[DeltaRecord]: List of delta records.
-        """
-        delta_kv_list = self.storage.seek_to_end(
-            str(ns_ts),
-            StoreManager.DeltaTable,
-        )
-        delta_list = [DeltaRecord.from_bytes(data=data[1]) for data in delta_kv_list]
-        return delta_list
+    def get_delta_data_after_ts(self, ns_ts: int) -> Iterator[DeltaRecord]:
+        """Lazily deserialize delta records so a large delta table can be replayed on
+        memory-constrained hosts without materializing the whole list."""
+        for _, bytes_data in self.storage.iter_seek_to_end(
+            str(ns_ts), StoreManager.DeltaTable
+        ):
+            yield DeltaRecord.from_bytes(data=bytes_data)
 
     def delete_delta_data_before_ts(self, ns_ts: int) -> List[DeltaRecord]:
         """Delete delta records created before a specific timestamp.

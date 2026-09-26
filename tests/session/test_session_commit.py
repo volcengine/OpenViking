@@ -115,6 +115,45 @@ class TestCommit:
         # Wait for semantic/embedding queues
         await service.resources.wait_processed(timeout=60.0)
 
+    async def test_phase2_splits_with_the_committed_auto_commit_policy(
+        self,
+        session_with_messages: Session,
+        monkeypatch,
+    ):
+        await session_with_messages.update_config(
+            auto_commit_policy={
+                "pending_token_threshold": 0,
+                "message_count_threshold": 1,
+            },
+            update_auto_commit_policy=True,
+        )
+        working_memory_batches = []
+
+        async def generate_summary(
+            _session,
+            messages,
+            latest_archive_overview="",
+            checkpoint_requests=None,
+        ):
+            del checkpoint_requests
+            working_memory_batches.append([message.id for message in messages])
+            return f"{latest_archive_overview}\n{messages[0].id}"
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", generate_summary)
+        extract_long_term = AsyncMock(return_value=[])
+        session_with_messages._session_compressor.extract_long_term_memories = extract_long_term
+
+        result = await session_with_messages.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert len(working_memory_batches) == 4
+        assert all(len(batch) == 1 for batch in working_memory_batches)
+        assert extract_long_term.await_count == 4
+        assert all(len(call.kwargs["messages"]) == 1 for call in extract_long_term.await_args_list)
+        phase1 = await session_with_messages._read_phase1_meta(result["archive_uri"])
+        assert phase1["queue_message"]["auto_commit_policy"]["message_count_threshold"] == 1
+
     async def test_commit_task_reports_intentionally_skipped_memory_operations(
         self,
         session_with_messages: Session,
@@ -685,48 +724,6 @@ class TestCommit:
         assert task_result["status"] == "completed"
         assert seen["summary"] == previous_overview
         assert seen["extract"] == previous_overview
-
-    async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
-        service, client_ctx, uri = client_with_resource_sync
-        vikingdb = service.vikingdb_manager
-
-        # Look up the record by URI
-        records_before = await vikingdb.get_context_by_uri(
-            uri=uri,
-            limit=1,
-            ctx=client_ctx,
-        )
-        assert records_before, f"Resource not found for URI: {uri}"
-        count_before = records_before[0].get("active_count") or 0
-
-        # Mark as used and commit
-        session = service.sessions.session(
-            client_ctx,
-            session_id="active_count_regression_test",
-        )
-        await session.ensure_exists()
-        session._session_compressor.extract_long_term_memories = AsyncMock(return_value=[])
-        session.add_message("user", [TextPart("Query")])
-        session.used(contexts=[uri])
-        session.add_message("assistant", [TextPart("Answer")])
-        result = await session.commit_async()
-
-        # Wait for background task to complete (active_count is updated there)
-        task_result = await _wait_for_task(result["task_id"])
-        assert task_result["status"] == "completed"
-        assert task_result["result"]["active_count_updated"] == 1
-
-        # Verify the count actually changed in storage
-        records_after = await vikingdb.get_context_by_uri(
-            uri=uri,
-            limit=1,
-            ctx=client_ctx,
-        )
-        assert records_after, f"Record disappeared after commit for URI: {uri}"
-        count_after = records_after[0].get("active_count") or 0
-        assert count_after == count_before + 1, (
-            f"active_count not incremented: before={count_before}, after={count_after}"
-        )
 
     async def test_commit_failed_after_long_term_extraction_failure_does_not_block(self, client):
         """Binary archive outcome: if long-term extraction fails (after retries),

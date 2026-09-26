@@ -204,11 +204,16 @@
       "advanced": true,
       "help": "Auto-commit triggers once estimated pending tokens reach this fraction (0-1) of the model context window (e.g. 0.5 = 50%). Set to 0 to commit every turn."
     },
+    "commitRetentionMode": {
+      "label": "Commit Retention Mode",
+      "advanced": true,
+      "help": "Auto-commit only: message_count (default) keeps recent messages; turn_budget uses the server's turn-aware defaults. Manual commit and compact still archive everything."
+    },
     "commitKeepRecentCount": {
       "label": "Commit Keep Recent Count",
       "placeholder": "10",
       "advanced": true,
-      "help": "WM v2: number of most-recent messages kept live after an afterTurn commit. Compact path always uses 0."
+      "help": "Number of most-recent messages kept live after an afterTurn commit in message_count mode; ignored in turn_budget mode. Compact path always uses 0."
     },
     "emitStandardDiagnostics": {
       "label": "Standard diagnostics (diag JSON lines)",
@@ -267,8 +272,15 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "recallCompress": {
+        "type": "string",
+        "enum": ["off", "server", "auto"],
+        "default": "off",
+        "description": "Cloud recall compression. auto delegates to the server; off preserves raw context."
+      },
       "mode": {
         "type": "string",
+        "enum": ["local", "remote"],
         "description": "Legacy field kept for backward compatibility. Only 'remote' is supported."
       },
       "baseUrl": {
@@ -345,7 +357,8 @@
         "type": "boolean"
       },
       "captureMode": {
-        "type": "string"
+        "type": "string",
+        "enum": ["semantic", "keyword"]
       },
       "captureMaxLength": {
         "type": "number"
@@ -404,6 +417,10 @@
         "type": "number",
         "minimum": 0,
         "maximum": 1
+      },
+      "commitRetentionMode": {
+        "type": "string",
+        "enum": ["message_count", "turn_budget"]
       },
       "commitKeepRecentCount": {
         "type": "number",

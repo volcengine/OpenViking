@@ -456,9 +456,9 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
         SchemaExport, BytesRowExport = Schema, BytesRow
 
     class IndexEngine:
-        def __init__(self, path_or_json: str):
+        def __init__(self, path_or_json: str, normalize_vector: bool = False):
             self._backend = backend
-            self._handle = backend._new_index_engine(path_or_json)
+            self._handle = backend._new_index_engine(path_or_json, normalize_vector)
 
         def add_data(self, data_list: list[AddDataRequest]) -> int:
             return int(
@@ -475,13 +475,13 @@ def build_abi3_exports(backend: Any) -> dict[str, Any]:
             )
 
         def rebuild_scalar_index(
-            self, scalar_index_json: str, data_list: list[AddDataRequest]
+            self, scalar_index_json: str, data_list: Iterable[AddDataRequest]
         ) -> int:
             return int(
                 self._backend._index_engine_rebuild_scalar_index(
                     self._handle,
                     scalar_index_json,
-                    _request_list_to_backend(data_list),
+                    data_list,
                 )
             )
 

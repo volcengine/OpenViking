@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -24,40 +25,6 @@ async function endedMarkerExists(dir, id) {
 
 function writeEndedMarker(dir, id, ts) {
   return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
-}
-
-
-function readRequestBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf-8");
-      try { resolve(raw ? JSON.parse(raw) : null); } catch (err) { reject(err); }
-    });
-    req.on("error", reject);
-  });
-}
-
-function writeJson(res, value) {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(value));
-}
-
-async function withMockOpenViking(handler, fn) {
-  const server = http.createServer((req, res) => {
-    Promise.resolve(handler(req, res)).catch((err) => {
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "error", error: String(err?.stack || err) }));
-    });
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const { port } = server.address();
-    return await fn(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
 }
 
 function runPreCompact(input, env) {
@@ -178,6 +145,34 @@ test("pre-compact catches up, commits and keeps the cursor", async () => {
   }
 });
 
+test("pre-compact does not create or commit a startup-only session", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-startup-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  try {
+    await writeFile(transcriptPath, [
+      JSON.stringify({ type: "response_item", payload: {
+        type: "message", role: "user", content: [{ type: "input_text",
+          text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse Chinese.\n</INSTRUCTIONS>" }],
+      } }),
+      JSON.stringify({ type: "turn_context", payload: {} }),
+    ].join("\n"));
+    await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+      await runPreCompact(
+        { session_id: "startup-only", transcript_path: transcriptPath, trigger: "manual" },
+        baseEnv(baseUrl, stateDir),
+      );
+    });
+    assert.equal(calls.some((call) => call.path.endsWith("/messages/batch")), false);
+    assert.equal(calls.some((call) => call.path.endsWith("/commit")), false);
+    const state = JSON.parse(await readFile(join(stateDir, "startup-only.json"), "utf-8"));
+    assert.equal(state.ovSessionId, null);
+    assert.equal(state.capturedTurnCount, 0);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("pre-compact leaves state untouched when the session lock is held", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-lock-"));
   const transcriptPath = join(stateDir, "transcript.jsonl");
@@ -214,10 +209,8 @@ test("pre-compact leaves state untouched when the session lock is held", async (
 test("pre-compact does not commit when the catch-up append fails entirely", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-fail-"));
   const transcriptPath = join(stateDir, "transcript.jsonl");
-  const calls = [];
   const handler = async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
-    calls.push({ method: req.method, path: url.pathname });
     if (req.method === "GET" && url.pathname === "/health") {
       writeJson(res, { status: "ok", result: { ok: true } });
       return;
@@ -241,15 +234,18 @@ test("pre-compact does not commit when the catch-up append fails entirely", asyn
       turn("assistant", "turn-3"),
     ].join("\n"));
 
-    await withMockOpenViking(handler, async (baseUrl) => {
+    await withMockOpenViking(handler, async (baseUrl, requests) => {
       const { output } = await runPreCompact(
         { session_id: "pc3", transcript_path: transcriptPath, trigger: "manual" },
         baseEnv(baseUrl, stateDir),
       );
       assert.match(output.systemMessage, /catch-up append incomplete for cx-pc3/);
+      assert.ok(
+        !requests.some(({ path }) => path.endsWith("/commit")),
+        "must not commit with turns still unsent",
+      );
     });
 
-    assert.ok(!calls.some((c) => c.path.endsWith("/commit")), "must not commit with turns still unsent");
     const state = JSON.parse(await readFile(join(stateDir, "pc3.json"), "utf-8"));
     assert.equal(state.ovSessionId, "cx-pc3");
     assert.equal(state.capturedTurnCount, 2);

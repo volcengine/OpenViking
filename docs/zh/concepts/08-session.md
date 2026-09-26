@@ -110,8 +110,7 @@ commit() 分两阶段执行：
 5. 生成结构化摘要（LLM）→ 写入 `.abstract.md` 和 `.overview.md`
 6. 提取长期记忆
 7. 写入 `memory_diff.json`（记忆变更审计日志）到归档目录
-8. 更新 active_count
-9. 写入 `.done` 完成标记
+8. 写入 `.done` 完成标记
 
 ### 摘要格式
 

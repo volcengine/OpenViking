@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, Optional
 
 import requests
+from requests.adapters import HTTPAdapter
 
 import openviking
 from openviking.storage.errors import ConnectionError
@@ -14,6 +15,10 @@ DEFAULT_TIMEOUT = 30
 
 # VikingDB API Version
 VIKING_DB_VERSION = "2025-06-09"
+
+# Connection pool sizing for the per-client keep-alive session.
+_POOL_CONNECTIONS = 16
+_POOL_MAXSIZE = 32
 
 # SDK Action to VikingDB API path and method mapping
 VIKINGDB_APIS = {
@@ -58,6 +63,13 @@ class VikingDBClient:
         if not self.host:
             raise ValueError("Host is required for VikingDBClient")
 
+        # One long-lived session per client so repeated data-plane calls reuse
+        # keep-alive connections instead of re-handshaking on every request.
+        self._session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=_POOL_CONNECTIONS, pool_maxsize=_POOL_MAXSIZE)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
+
     def do_req(
         self,
         method: str,
@@ -89,7 +101,7 @@ class VikingDBClient:
         headers.update(self.headers)
 
         try:
-            response = requests.request(
+            response = self._session.request(
                 method=method,
                 url=url,
                 headers=headers,

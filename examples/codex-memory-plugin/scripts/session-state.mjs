@@ -115,6 +115,7 @@ function lockPath(codexSessionId) {
 // outlive that rule; bump this whenever the derivation changes. The rest of the
 // state (ovSessionId, capture progress) stays valid across a bump and is kept.
 export const PEER_PIN_VERSION = 3;
+export const CAPTURE_FORMAT_VERSION = 2;
 
 function defaultState(codexSessionId) {
   const now = Date.now();
@@ -127,6 +128,7 @@ function defaultState(codexSessionId) {
     // catch up turns for a session whose own workers never ran.
     transcriptPath: null,
     capturedTurnCount: 0,
+    captureFormatVersion: CAPTURE_FORMAT_VERSION,
     createdAt: now,
     lastUpdatedAt: now,
   };
@@ -137,6 +139,9 @@ export async function loadState(codexSessionId) {
     const raw = await readFile(statePath(codexSessionId), "utf-8");
     const parsed = JSON.parse(raw);
     const state = { ...defaultState(codexSessionId), ...parsed };
+    // A missing marker means capturedTurnCount still counts Codex's startup
+    // context as a turn. Migration needs the rollout and happens under lock.
+    if (parsed?.captureFormatVersion == null) state.captureFormatVersion = 1;
     if (parsed?.peerPinVersion !== PEER_PIN_VERSION) {
       state.workspacePeerId = "";
       state.peerPinVersion = PEER_PIN_VERSION;

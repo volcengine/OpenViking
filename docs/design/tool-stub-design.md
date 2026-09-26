@@ -45,7 +45,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### 1. 选择哪些输出需要 externalize
 
-入口在 [session.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/session.py#L685) 的 `_externalize_large_tool_output_group()`。
+入口在 [tool_output_externalizer.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_output_externalizer.py) 的 `ToolOutputExternalizer.externalize_group()`。
 
 当前按两类条件触发：
 
@@ -56,7 +56,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 
 ### 2. 外置原始结果并替换 ToolPart
 
-入口在 [session.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/session.py#L606) 的 `_externalize_tool_part()`。
+入口在 [tool_output_externalizer.py](https://github.com/volcengine/OpenViking/blob/main/openviking/session/tool_output_externalizer.py) 的 `ToolOutputExternalizer._externalize_tool_part()`。
 
 这一步会：
 

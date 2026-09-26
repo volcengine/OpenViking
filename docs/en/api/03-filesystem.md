@@ -131,6 +131,7 @@ openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=se
 
 `-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
 
+The HTTP `result` remains an entry array. `has_more=true` means more matching nodes remain after visibility, tags, offset, and limit are applied. The Python, TypeScript, and Go SDKs continue to return the `result` array. When more nodes are available, the CLI appends a pagination hint to its output.
 
 **Response**
 
@@ -147,6 +148,7 @@ openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=se
       "uri": "viking://resources/docs/"
     }
   ],
+  "has_more": true,
   "time": 0.1
 }
 ```
@@ -220,6 +222,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
 openviking tree viking://resources/my-project/
 ```
 
+As with `ls`, the HTTP `result` remains a node array and `has_more` is returned at the top level. When `has_more=true`, the CLI appends a pagination hint to the tree output.
 
 **Response**
 
@@ -242,6 +245,7 @@ openviking tree viking://resources/my-project/
       "uri": "viking://resources/docs/api.md"
     }
   ],
+  "has_more": true,
   "time": 0.1
 }
 ```
@@ -559,7 +563,7 @@ client.rm(uri="viking://resources/old-project/", recursive=True)
 **TypeScript SDK**
 
 ```typescript
-await client.remove("viking://resources/docs/old.md", { wait: true });
+await client.remove("viking://resources/docs/old.md");
 ```
 
 **Go SDK**
@@ -709,7 +713,7 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 `semantic_status: "queued"` means the copy has already committed and the destination parent's overview and abstract will be rebuilt asynchronously from summaries available at the destination. The API does not wait for that refresh. A refresh enqueue failure may return `semantic_status: "failed"` and `semantic_error`; it does not roll back the completed file and vector copy.
 
-Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when a path lock is busy, `FAILED_PRECONDITION` when a directory is copied without `recursive=true`, and `INVALID_ARGUMENT` for invalid source/destination relationships or file/directory type conflicts.
+Common errors include `NOT_FOUND` when the source or destination parent is missing, `CONFLICT` when a path lock is busy, and `INVALID_ARGUMENT` (HTTP 400) when a directory is copied or removed without `recursive=true`, a directory operation targets a file, or the source/destination relationship or file/directory types are invalid.
 
 ---
 

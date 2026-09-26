@@ -8,7 +8,7 @@ import base64
 import binascii
 import os
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, Optional
 
 from openviking.core.namespace import (
@@ -37,8 +37,9 @@ from openviking.storage.abstract_overview import (
     plan_abstract_overview_refresh,
     prepare_abstract_overview_write,
 )
-from openviking.storage.acl import AclAction, CreatorAclGrant
+from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
@@ -46,9 +47,13 @@ from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.resource_summary import build_queue_status_payload
+from openviking.utils.content_hash import content_md5
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
 from openviking.utils.ingest_options import IngestOptions
-from openviking.utils.path_safety import validate_safe_viking_uri_path
+from openviking.utils.path_safety import (
+    normalize_storage_target_uri,
+    validate_safe_viking_uri_path,
+)
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -95,7 +100,9 @@ class _BatchRefreshOutcome:
     embedding_requested: bool = False
 
     def statuses(self, *, wait: bool) -> tuple[str, str]:
-        if self.semantic_actions:
+        if FreshnessAction.NOOP in self.semantic_actions:
+            semantic_status = "skipped"
+        elif self.semantic_actions:
             semantic_status = (
                 "deferred"
                 if all(action is FreshnessAction.MARK_PENDING for action in self.semantic_actions)
@@ -128,13 +135,21 @@ class ContentWriteCoordinator:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
+        acl: AclSpec | Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
-        normalized_uri = self._validate_uri_path(uri, field_name="uri")
+        normalized_uri = normalize_storage_target_uri(
+            self._validate_uri_path(uri, field_name="uri")
+        )
         self._ensure_content_write_policy(normalized_uri)
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
+        if acl is not None:
+            ingest_options = replace(
+                ingest_options,
+                acl_update=await self._viking_fs.prepare_acl_update(normalized_uri, acl, ctx),
+            )
 
         if mode == "create":
             return await self._create_and_write(
@@ -215,8 +230,8 @@ class ContentWriteCoordinator:
 
         Each operation follows the same create/replace/append semantics as ``write``;
         ``upsert`` is available for callers that already hold the desired final tree.
-        Refresh runs only after every write and after releasing the tree lock, so derived
-        summaries are generated once per batch.
+        All target files stay locked from state validation through the last write,
+        while unrelated files remain writable. Refresh starts after the locks are released.
         """
         normalized_root = self._validate_uri_path(root_uri, field_name="root_uri")
         await self._validate_batch_root(normalized_root, ctx=ctx)
@@ -224,9 +239,12 @@ class ContentWriteCoordinator:
             normalized_root, operations, ctx=ctx
         )
 
-        root_path = self._viking_fs._uri_to_path(normalized_root, ctx=ctx)
+        target_paths = [
+            self._viking_fs._uri_to_path(operation["uri"], ctx=ctx)
+            for operation in normalized_operations
+        ]
         try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_tree(root_path)
+            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact_batch(target_paths)
         except LockAcquisitionError as exc:
             raise ResourceBusyError(
                 f"resource is busy and cannot be written now: {normalized_root}",
@@ -237,6 +255,8 @@ class ContentWriteCoordinator:
         updated: list[str] = []
         unchanged: list[str] = []
         refresh_kinds: dict[str, str] = {}
+        file_md5s: dict[str, str] = {}
+        file_abstracts: dict[str, str] = {}
         sidecar_directories: set[str] = set()
         pending: list[tuple[dict[str, Any], bool, str]] = []
         write_error: Exception | None = None
@@ -265,16 +285,32 @@ class ContentWriteCoordinator:
                     raise NotFoundError(uri, "file")
                 pending.append((operation, exists, write_mode))
 
+            file_abstracts = await self._load_file_abstracts(
+                [
+                    operation["uri"]
+                    for operation, existed, _ in pending
+                    if existed
+                    and context_type_for_uri(operation["uri"]) in {"resource", "skill"}
+                    and not is_abstract_overview_uri(operation["uri"])
+                ],
+                ctx=ctx,
+            )
+
             for operation, existed, write_mode in pending:
                 uri = operation["uri"]
                 try:
-                    await self._write_in_place(
+                    final_content = await self._write_in_place(
                         uri,
                         operation["content"],
                         mode=write_mode,
                         ctx=ctx,
                         lease_ref=lease,
                     )
+                    if context_type_for_uri(uri) in {
+                        "resource",
+                        "skill",
+                    } and not is_abstract_overview_uri(uri):
+                        file_md5s[uri] = content_md5(final_content)
                 except Exception as exc:
                     write_error = exc
                     break
@@ -314,6 +350,8 @@ class ContentWriteCoordinator:
                             wait=wait,
                             timeout=timeout,
                             telemetry_id=telemetry_id,
+                            file_md5s=file_md5s,
+                            file_abstracts=file_abstracts,
                         )
                         if refresh_kinds
                         else (
@@ -501,6 +539,8 @@ class ContentWriteCoordinator:
         wait: bool,
         timeout: Optional[float],
         telemetry_id: str,
+        file_md5s: dict[str, str] | None = None,
+        file_abstracts: dict[str, str] | None = None,
     ) -> _BatchRefreshOutcome:
         resource_groups: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(
             lambda: {"added": [], "modified": []}
@@ -523,6 +563,18 @@ class ContentWriteCoordinator:
                 changes=changes,
                 ctx=ctx,
                 force_refresh=wait,
+                file_md5s={
+                    uri: file_md5s[uri]
+                    for values in changes.values()
+                    for uri in values
+                    if file_md5s and uri in file_md5s
+                },
+                file_abstracts={
+                    uri: file_abstracts[uri]
+                    for values in changes.values()
+                    for uri in values
+                    if file_abstracts and uri in file_abstracts
+                },
             )
             semantic_actions.append(action)
 
@@ -575,22 +627,30 @@ class ContentWriteCoordinator:
         recursive: bool = False,
         force_refresh: bool = False,
         ingest_options: IngestOptions | None = None,
+        file_md5s: dict[str, str] | None = None,
+        file_abstracts: dict[str, str] | None = None,
     ) -> FreshnessAction:
         changed_entries = len({uri for values in changes.values() for uri in values})
         semantic_config = get_openviking_config().semantic
-        decision = await plan_abstract_overview_refresh(
-            viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=changed_entries,
-            ctx=ctx,
-            overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-            refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-            force_refresh=force_refresh,
-        )
-        aggregate_directory = decision.action is FreshnessAction.REFRESH_NOW
+        try:
+            decision = await plan_abstract_overview_refresh(
+                viking_fs=self._viking_fs,
+                dir_uri=root_uri,
+                changed_entries=changed_entries,
+                ctx=ctx,
+                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
+                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
+                force_refresh=force_refresh,
+            )
+            action = decision.action
+        except LockAcquisitionError:
+            # Parent aggregation is best-effort; changed-file work must still run.
+            logger.info("Skipping busy parent semantic refresh: %s", root_uri)
+            action = FreshnessAction.NOOP
+        aggregate_directory = action is FreshnessAction.REFRESH_NOW
         has_live_files = any(changes.get(kind) for kind in ("added", "modified"))
         if not aggregate_directory and not has_live_files:
-            return decision.action
+            return action
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry = get_current_telemetry()
@@ -623,6 +683,8 @@ class ContentWriteCoordinator:
             },
             generation_trigger="content_write",
             aggregate_directory=aggregate_directory,
+            file_md5s=file_md5s,
+            file_abstracts=file_abstracts,
         )
         if msg.telemetry_id:
             get_request_wait_tracker().register_semantic_root(msg.telemetry_id, msg.id)
@@ -632,7 +694,7 @@ class ContentWriteCoordinator:
             if msg.telemetry_id:
                 get_request_wait_tracker().mark_semantic_failed(msg.telemetry_id, msg.id, str(exc))
             raise
-        return decision.action
+        return action
 
     @staticmethod
     def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
@@ -787,6 +849,8 @@ class ContentWriteCoordinator:
             ) from exc
 
         previous_content: Optional[str] = None
+        final_content = content.encode("utf-8")
+        file_abstract = ""
         content_written = False
         post_process_started = False
         lock_released = False
@@ -799,9 +863,15 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(
                     f"cannot create generated abstract overview directly: {uri}"
                 )
+            if (
+                mode != "create"
+                and not is_abstract_overview_uri(uri)
+                and processing_mode != VECTORS_ONLY
+            ):
+                file_abstract = (await self._load_file_abstracts([uri], ctx=ctx)).get(uri, "")
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
-            await self._write_in_place(
+            written_content = await self._write_in_place(
                 uri,
                 content,
                 mode=mode,
@@ -809,6 +879,8 @@ class ContentWriteCoordinator:
                 lease_ref=lease,
                 existing_raw=previous_content,
             )
+            if written_content is not None:
+                final_content = written_content
             content_written = True
             if is_abstract_overview_uri(uri):
                 vector_enqueued = await self._vectorize_abstract_overview(
@@ -820,8 +892,8 @@ class ContentWriteCoordinator:
                     uri=uri,
                     context_type=context_type,
                     ctx=ctx,
-                    creator_acl_grant=(CreatorAclGrant.DIRECT if mode == "create" else None),
                     ingest_options=ingest_options,
+                    file_md5=content_md5(final_content),
                 )
                 post_process_started = True
             else:
@@ -833,8 +905,14 @@ class ContentWriteCoordinator:
                     change_type="added" if mode == "create" else "modified",
                     force_refresh=wait,
                     ingest_options=ingest_options,
+                    file_md5=content_md5(final_content),
+                    file_abstract=file_abstract,
                 )
                 post_process_started = True
+            if ingest_options and ingest_options.acl_update:
+                await self._viking_fs.acl_manager.apply_indexed_update(
+                    ingest_options.acl_update, ctx
+                )
             await self._viking_fs._async_agfs.pathlock_release(lease)
             lock_released = True
             queue_status = (
@@ -865,19 +943,21 @@ class ContentWriteCoordinator:
                     "semantic_status": "skipped",
                     "vector_status": vector_status,
                 }
-            elif refresh_action is FreshnessAction.MARK_PENDING:
+            elif refresh_action in {FreshnessAction.MARK_PENDING, FreshnessAction.NOOP}:
                 # Changed-file semantic/vector work may still be queued, while
-                # the directory aggregation itself is intentionally deferred.
+                # directory aggregation is deferred or skipped on contention.
                 _, vector_status = self._refresh_statuses(wait=wait, queue_status=queue_status)
                 result_kwargs = {
-                    "semantic_status": "deferred",
+                    "semantic_status": (
+                        "skipped" if refresh_action is FreshnessAction.NOOP else "deferred"
+                    ),
                     "vector_status": vector_status,
                 }
             return self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
                 context_type=context_type,
-                mode=mode,
+                mode=response_mode or mode,
                 written_bytes=written_bytes,
                 wait=wait,
                 queue_status=queue_status,
@@ -928,8 +1008,8 @@ class ContentWriteCoordinator:
         uri: str,
         context_type: str,
         ctx: RequestContext,
-        creator_acl_grant: CreatorAclGrant | None = None,
         ingest_options: IngestOptions | None = None,
+        file_md5: str | None = None,
     ) -> bool:
         parent = VikingURI(uri).parent
         if parent is None:
@@ -941,8 +1021,8 @@ class ContentWriteCoordinator:
             parent_uri=parent.uri,
             context_type=context_type,
             ctx=ctx,
-            creator_acl_grant=creator_acl_grant,
             ingest_options=ingest_options,
+            file_md5=file_md5,
         )
 
     async def _vectorize_abstract_overview(
@@ -1010,6 +1090,10 @@ class ContentWriteCoordinator:
         name = uri.rstrip("/").split("/")[-1]
         if name in _DERIVED_FILENAMES:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
+        if any(is_storage_internal_name(part) for part in uri_parts(uri)):
+            # Ancestors must also be checked: creating parents could otherwise
+            # create hidden directories using storage metadata names.
+            raise InvalidArgumentError(f"cannot write storage internal file directly: {uri}")
         if is_watch_task_control_uri(uri):
             raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
 
@@ -1108,13 +1192,13 @@ class ContentWriteCoordinator:
     async def _write_in_place(
         self,
         uri: str,
-        content: str,
+        content: str | bytes,
         *,
         mode: str,
         ctx: RequestContext,
         lease_ref: Optional[Dict[str, Any]] = None,
-        existing_raw: Optional[str] = None,
-    ) -> None:
+        existing_raw: str | bytes | None = None,
+    ) -> bytes:
         if is_abstract_overview_uri(uri):
             current_raw = (
                 existing_raw
@@ -1128,7 +1212,7 @@ class ContentWriteCoordinator:
                 mode=mode,
             )
             await self._viking_fs.write_file(uri, rendered, ctx=ctx, lease_ref=lease_ref)
-            return
+            return rendered.encode("utf-8")
 
         if context_type_for_uri(uri) == "memory":
             if mode == "replace":
@@ -1142,25 +1226,50 @@ class ContentWriteCoordinator:
             else:
                 mf = MemoryFileUtils.read(content, uri=uri)
             sync_memory_resource_refs(mf, source=RESOURCE_REF_SOURCE_CONTENT_WRITE)
+            rendered = MemoryFileUtils.write(mf)
             await self._viking_fs.write_file(
                 uri,
-                MemoryFileUtils.write(mf),
+                rendered,
                 ctx=ctx,
                 lease_ref=lease_ref,
             )
-            return
+            return rendered.encode("utf-8")
 
         if mode == "append":
             # Plain concatenation for resource/skill files: MEMORY_FIELDS is a
             # reserved trailer of memory namespaces only (see content_visibility),
             # so non-memory appends must not round-trip through MemoryFileUtils
             # (which strips trailing newlines and injects a metadata trailer).
-            existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            await self._viking_fs.write_file(
-                uri, existing_raw + content, ctx=ctx, lease_ref=lease_ref
+            existing_raw = (
+                existing_raw
+                if existing_raw is not None
+                else await self._viking_fs.read_file(uri, ctx=ctx)
             )
-            return
+            if not isinstance(existing_raw, str) or not isinstance(content, str):
+                raise InvalidArgumentError(f"append only supports text content: {uri}")
+            final_content = existing_raw + content
+            await self._viking_fs.write_file(uri, final_content, ctx=ctx, lease_ref=lease_ref)
+            return final_content.encode("utf-8")
         await self._viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
+        return content if isinstance(content, bytes) else content.encode("utf-8")
+
+    async def _load_file_abstracts(self, uris: list[str], *, ctx: RequestContext) -> dict[str, str]:
+        vector_store = self._vikingdb
+        if vector_store is None:
+            get_vector_store = getattr(self._viking_fs, "_get_vector_store", None)
+            vector_store = get_vector_store() if callable(get_vector_store) else None
+        if vector_store is None or not uris:
+            return {}
+        try:
+            records = await vector_store.get_l2_diff_records_by_uris(sorted(set(uris)), ctx=ctx)
+        except Exception as exc:
+            logger.warning("Failed to load existing file abstracts: %s", exc)
+            return {}
+        return {
+            uri: str(record.get("abstract") or "")
+            for uri, record in records.items()
+            if uri in uris and record.get("abstract") is not None
+        }
 
     @staticmethod
     def _prepare_abstract_overview_content(
@@ -1183,6 +1292,8 @@ class ContentWriteCoordinator:
         recursive: bool = False,
         force_refresh: bool = False,
         ingest_options: IngestOptions | None = None,
+        file_md5: str | None = None,
+        file_abstract: str = "",
     ) -> FreshnessAction:
         return await self._enqueue_semantic_refresh_changes(
             root_uri=root_uri,
@@ -1193,6 +1304,8 @@ class ContentWriteCoordinator:
             recursive=recursive,
             force_refresh=force_refresh,
             ingest_options=ingest_options,
+            file_md5s={changed_uri: file_md5} if file_md5 else None,
+            file_abstracts={changed_uri: file_abstract} if file_abstract else None,
         )
 
     async def _wait_for_queues(self, *, timeout: Optional[float]) -> Dict[str, Any]:
@@ -1510,7 +1623,7 @@ class ContentWriteCoordinator:
                 if anchor_to_parent:
                     # Content writes anchor the semantic refresh at the written file's
                     # direct parent directory, so the changed file is a direct child of
-                    # the DAG run root: its own L2 vector and the parent's L0/L1 are
+                    # the semantic-tree root: its own L2 vector and the parent's L0/L1 are
                     # (re)generated from a single-directory run, while ancestor summaries
                     # refresh via the existing parent bubble. Collapsing to the project
                     # root instead would force the run to traverse the whole project

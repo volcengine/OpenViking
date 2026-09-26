@@ -382,6 +382,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 label: "ov acl grant viking://resources/project-a --principal user:bob --level read",
                 description: "Grant read access to a user.",
             },
+            HelpItem {
+                label: "ov acl set viking://resources/project-a --acl-mode restricted",
+                description: "Ignore inherited permissions without deleting them.",
+            },
         ],
         next_steps: &[HelpItem {
             label: "ov find \"query\" -u <uri>",
@@ -867,11 +871,11 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Use a required VikingBot Skill to compile OpenViking materials into Wiki pages or a Skill package.",
         examples: &[
             HelpItem {
-                label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki --wait",
+                label: "ov compile --from viking://resources/weekly --to viking://resources/wiki --skill viking://agent/skills/monthly_wiki",
                 description: "Compile one source directory into Wiki pages.",
             },
             HelpItem {
-                label: "ov compile --from viking://resources/weekly --to viking://agent/skills --skill viking://agent/skills/skill-creator --wait",
+                label: "ov compile --from viking://resources/weekly --to viking://agent/skills --skill viking://agent/skills/skill-creator",
                 description: "Generate or update one shared Skill package.",
             },
         ],

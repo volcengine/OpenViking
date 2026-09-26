@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+from openviking.config.vlm import VLMHandle
 from openviking.prompts import render_prompt
 from openviking_cli.utils.extractor import ImageInfo, TableInfo
 from openviking_cli.utils.llm import parse_json_from_response
@@ -43,18 +44,23 @@ class VLMProcessor:
 
     def __init__(
         self,
+        *,
+        vlm: VLMHandle,
         max_images_per_call: int = 10,
         max_sections_per_call: int = 20,
     ):
         """Initialize VLM processor."""
+        if vlm is None:
+            raise ValueError("VLMProcessor requires an explicitly resolved VLM")
         self.max_images_per_call = max_images_per_call
         self.max_sections_per_call = max_sections_per_call
+        self._vlm = vlm
 
     def _get_vlm(self):
-        """Get VLM singleton."""
-        from openviking_cli.utils.config import get_openviking_config
-
-        return get_openviking_config().vlm
+        """Return the explicitly resolved VLM configuration."""
+        if self._vlm is None:
+            raise RuntimeError("VLMProcessor requires an explicitly resolved VLM")
+        return self._vlm
 
     async def understand_image(
         self,

@@ -18,6 +18,7 @@ use futures::stream::{self, StreamExt};
 use regex::Regex;
 use serde_json::Value;
 use tokio::sync::{Mutex, Notify};
+use tracing::warn;
 
 use super::context::{FsContext, FS_CTX};
 use super::encryption_wrapper::EncryptionWrappedFS;
@@ -27,9 +28,9 @@ use super::filesystem::{
     relative_match_file, FileSystem,
 };
 use super::types::{
-    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepResult, ListSortBy,
-    OperationItemConfig, RedirectEntry, RedirectPolicy, SortOrder, SyncLogEntry, SyncOp, SyncType,
-    TreeEntry, WriteFlag,
+    BackendRole, BackendSyncState, FileInfo, GlobEntry, GlobPage, GrepOptions, GrepResult,
+    ListSortBy, OperationItemConfig, RedirectEntry, RedirectPolicy, SortOrder, SyncLogEntry,
+    SyncOp, SyncType, TreeEntry, WriteFlag,
 };
 use crate::core::glob::{
     compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob,
@@ -573,6 +574,11 @@ impl MultiWriteWrappedFSBuilder {
 }
 
 impl MultiWriteWrappedFS {
+    /// Return this wrapper's current background task count without scanning metadata.
+    pub(crate) fn background_task_count(&self) -> usize {
+        self.inner.background_tasks.load(Ordering::SeqCst)
+    }
+
     /// Start building a multi-write wrapper from a primary backend.
     pub fn builder(primary_backend: Arc<dyn FileSystem>) -> MultiWriteWrappedFSBuilder {
         MultiWriteWrappedFSBuilder {
@@ -814,9 +820,10 @@ impl Inner {
         };
 
         if let Some((dir, name, seq)) = prepared_entry {
+            let mut commit_superseded = false;
             inner
                 .meta_store
-                .update_dir_meta(&dir, &ctx, move |_redirect, sync_log| {
+                .update_dir_meta(&dir, &ctx, |_redirect, sync_log| {
                     let entry = sync_log.entries.get_mut(&name).ok_or_else(|| {
                         Error::internal(format!(
                             "prepared sync log entry missing while committing '{}'",
@@ -824,15 +831,24 @@ impl Inner {
                         ))
                     })?;
                     if entry.latest_seq != seq {
-                        return Err(Error::internal(format!(
-                            "prepared sync log entry seq mismatch while committing '{}'",
-                            name
-                        )));
+                        warn!(
+                            path = %path,
+                            name = %name,
+                            expected_seq = seq,
+                            actual_seq = entry.latest_seq,
+                            "prepared sync log entry was superseded while committing; skip stale backup fanout"
+                        );
+                        commit_superseded = true;
+                        return Ok(());
                     }
                     entry.mark_primary_committed();
                     Ok(())
                 })
                 .await?;
+            if commit_superseded {
+                inner.refresh_pending_dir(&dir, &ctx).await?;
+                return Ok(result);
+            }
             inner.mark_pending_dir(&dir).await;
         }
 
@@ -1549,29 +1565,24 @@ impl FileSystem for MultiWriteWrappedFS {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         let inner = &self.inner;
         let path_owned = path.to_string();
         let pattern_owned = pattern.to_string();
-        let exclude_owned = exclude_path.map(|s| s.to_string());
+        let exclude_owned = options.exclude_path.map(str::to_string);
+        let options = GrepOptions {
+            exclude_path: exclude_owned.as_deref(),
+            ..options
+        };
+        let recursive = options.recursive;
+        let node_limit = options.node_limit;
+        let level_limit = options.level_limit;
 
         let mut result = inner
             .primary()
             .backend
-            .grep(
-                &path_owned,
-                &pattern_owned,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_owned.as_deref(),
-                level_limit,
-            )
+            .grep(&path_owned, &pattern_owned, options)
             .await?;
 
         // Filter out multi-write internal metadata files from grep results.
@@ -1626,22 +1637,26 @@ impl FileSystem for MultiWriteWrappedFS {
                     .grep(
                         &entry.path,
                         &pattern_owned,
-                        false,
-                        case_insensitive,
-                        node_limit.map(|limit| limit.saturating_sub(result.count)),
-                        None,
-                        None,
+                        GrepOptions {
+                            recursive: false,
+                            node_limit: node_limit.map(|limit| limit.saturating_sub(result.count)),
+                            exclude_path: None,
+                            level_limit: None,
+                            ..options
+                        },
                     )
                     .await
                 {
                     Ok(found) => found,
                     Err(_) => continue,
                 };
-                for m in target_result.matches {
+                for mut m in target_result.matches {
                     if node_limit.is_some_and(|limit| result.count >= limit) {
                         break;
                     }
-                    result.add_match(rel_path.clone(), m.line, m.content);
+                    m.file = rel_path.clone();
+                    result.matches.push(m);
+                    result.count += 1;
                 }
             }
             return Ok(result);
@@ -1661,20 +1676,23 @@ impl FileSystem for MultiWriteWrappedFS {
                             .grep(
                                 &redirect_path,
                                 &pattern_owned,
-                                false,
-                                case_insensitive,
-                                node_limit,
-                                None,
-                                None,
+                                GrepOptions {
+                                    recursive: false,
+                                    exclude_path: None,
+                                    level_limit: None,
+                                    ..options
+                                },
                             )
                             .await
                         {
                             let rel_path = relative_match_file(&path_owned, &redirect_path);
-                            for m in target_result.matches {
+                            for mut m in target_result.matches {
                                 if node_limit.is_some_and(|limit| result.count >= limit) {
                                     break;
                                 }
-                                result.add_match(rel_path.clone(), m.line, m.content);
+                                m.file = rel_path.clone();
+                                result.matches.push(m);
+                                result.count += 1;
                             }
                         }
                     }

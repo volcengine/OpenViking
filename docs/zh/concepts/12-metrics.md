@@ -231,14 +231,65 @@ scrape_configs:
 | `openviking_queue_errors_total` | Counter | `queue` | 队列累计错误量 |
 | `openviking_queue_pending` | Gauge | `queue` | 队列待处理数 |
 | `openviking_queue_in_progress` | Gauge | `queue` | 队列执行中数量 |
-| `openviking_lock_active` | Gauge | 无 | 当前活跃锁数量 |
-| `openviking_lock_waiting` | Gauge | 无 | 当前等待中的锁数量 |
-| `openviking_lock_stale` | Gauge | 无 | 可能 stale 的锁数量 |
+| `openviking_queue_process_duration_seconds` | Histogram | `queue, outcome` | 消息被 worker 取出后到 handler 结束的处理耗时 |
+| `openviking_queue_end_to_end_duration_seconds` | Histogram | `queue, outcome` | 消息从入队到 handler 结束的端到端耗时，包含排队时间 |
+| `openviking_executor_max_workers` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 最大 worker 数 |
+| `openviking_executor_threads` | Gauge | `pool, process_role, worker` | asyncio 默认 executor 已创建线程数 |
+| `openviking_executor_active_tasks` | Gauge | `pool, process_role, worker` | 默认 executor 当前执行中的任务数 |
+| `openviking_executor_pending_tasks` | Gauge | `pool, process_role, worker` | 默认 executor 当前等待执行的任务数 |
+| `openviking_executor_submitted_total` | Counter | `pool, process_role, worker` | 默认 executor 累计提交任务数 |
+| `openviking_executor_completed_total` | Counter | `pool, process_role, worker` | 默认 executor 累计执行结束任务数，失败也计入 |
+| `openviking_executor_failed_total` | Counter | `pool, process_role, worker` | 默认 executor callable 抛异常次数 |
+| `openviking_lock_active` | Gauge | 无 | 当前已发布的锁租约数 |
+| `openviking_lock_waiting` | Gauge | 无 | 当前等待锁的请求数 |
+| `openviking_lock_stale` | Gauge | 无 | 累计已清理的过期锁 token 数 |
+| `openviking_lock_conflicts_total` | Counter | 无 | 累计锁冲突次数 |
+| `openviking_lock_stale_leases_released_total` | Counter | 无 | 已释放的过期租约数 |
+| `openviking_lock_descendant_scans_total` | Counter | 无 | 已完成的后代锁扫描次数 |
+| `openviking_lock_descendant_scan_duration_seconds_total` | Counter | 无 | 后代锁扫描累计耗时 |
+
+队列耗时指标中的 `outcome` 可取 `success`、`failed`、`requeued`、`cancelled`、`exception`。其中 `failed` 表示 handler 返回了可确认的失败结果，`exception` 表示处理过程抛出异常，当前消息不会 ACK。
 
 这些指标适合回答：
 
 - 是否有队列堆积？
+- 哪个队列处理慢，以及耗时是否主要来自排队？
 - 是否有锁竞争或 stale lock？
+- 默认 executor 是否接近线程上限或出现排队？
+
+executor 指标只统计 `loop.run_in_executor(None, ...)` 和 `asyncio.to_thread(...)`。
+显式传入自定义 executor 的调用、Rust / RAGFS 内部 runtime 或线程不计入。
+`failed_total` 统计 callable 抛异常的次数。如果异常被上层捕获并作为正常分支处理，
+也会计入该指标，因此它不等同于业务请求失败数。
+
+
+### RAGFS
+
+RAGFS 通过一次原生 `metrics()` 调用读取文件系统、Cache、multi-backend
+和 Lock 指标。Collector 直接覆盖 Registry 当前值，不计算差分。
+内部以整数纳秒采样，导出为小数秒，例如 `123 ns = 0.000000123 seconds`。
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_ragfs_operation_results_total` | Counter | `plugin, operation, status` | 操作成功和失败次数 |
+| `openviking_ragfs_operation_duration_seconds` | Histogram | `plugin, operation` | 操作耗时分布 |
+| `openviking_ragfs_cache_requests_total` | Counter | `kind, result` | 文件和目录缓存命中、未命中次数 |
+| `openviking_ragfs_cache_backend_fallbacks_total` | Counter | 无 | 缓存未命中后的后端读取次数 |
+| `openviking_ragfs_cache_operations_total` | Counter | `operation` | 缓存 put/delete 尝试次数 |
+| `openviking_ragfs_cache_invalidations_total` | Counter | 无 | 已完成的缓存失效次数 |
+| `openviking_ragfs_cache_errors_total` | Counter | 无 | 旁路模式下忽略的缓存错误数 |
+| `openviking_ragfs_cache_policy_bypasses_total` | Counter | 无 | 绕过缓存的读取次数 |
+| `openviking_ragfs_cache_bytes_total` | Counter | `source` | 来自后端和缓存的字节数 |
+| `openviking_ragfs_cache_operation_duration_seconds_total` | Counter | `operation` | get/put/delete 累计耗时 |
+| `openviking_ragfs_cache_inflight_events_total` | Counter | `event` | leader/follower/backend_saved 次数 |
+| `openviking_ragfs_multiwrite_background_tasks` | Gauge | 无 | 后台任务数，包含重试循环 |
+| `openviking_ragfs_multiwrite_read_routes_total` | Counter | `route` | primary/backup/redirect/miss 路由选择次数 |
+
+这些指标不带 `mount` 和 `account_id` 标签。未启用 Cache 或 multi-backend
+时，不生成对应指标族。`status` 为 `success` 或 `error`。
+`exists=false` 计为成功；`replace` 使用 `rename` 操作标签。
+Histogram 包含全部操作结果，有限桶边界范围为 0.0001 至 10 秒。
+Python `get_stats()` 保留原有微秒字段。
 
 ### 任务与 Task Tracker
 
@@ -261,7 +312,6 @@ scrape_configs:
 | 指标族 | 类型 | 常见标签 | 含义 |
 |--------|------|----------|------|
 | `openviking_session_lifecycle_total` | Counter | `account_id, action, status` | session 生命周期事件次数 |
-| `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used 累计量 |
 | `openviking_session_archive_total` | Counter | `account_id, status` | session archive 次数 |
 
 ### Feedback

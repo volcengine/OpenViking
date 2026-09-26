@@ -10,7 +10,7 @@ definitions, with discriminator support for polymorphic fields.
 import re
 from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 
-from pydantic import BaseModel, Field, WithJsonSchema, create_model, model_validator
+from pydantic import BaseModel, Field, WithJsonSchema, create_model
 from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import (
@@ -22,7 +22,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
-from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking.session.memory.utils.description_template import render_description_template
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -91,15 +91,7 @@ class SchemaModelGenerator:
         self._operations_model: Optional[Type[BaseModel]] = None
 
     def _render_description(self, description: str) -> str:
-        if not description:
-            return description
-        if "{{" not in description and "{%" not in description and "{#" not in description:
-            return description
-        return TemplateUtils.render(
-            description,
-            self._template_context,
-            strip=False,
-        )
+        return render_description_template(description, self._template_context, strip=False)
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
@@ -380,9 +372,7 @@ class SchemaPromptGenerator:
         self._template_context = dict(template_context or {})
 
     def _render_description(self, description: str) -> str:
-        if not description:
-            return description
-        return TemplateUtils.render(description, self._template_context)
+        return render_description_template(description, self._template_context)
 
     def generate_type_descriptions(self) -> str:
         """
@@ -395,7 +385,7 @@ class SchemaPromptGenerator:
 
         for mt in self.schemas:
             lines.append(f"\n### {mt.memory_type}")
-            lines.append(f"{self._render_description(mt.description)}")
+            lines.append(self._render_description(mt.description))
 
             # Add URI format information
             if mt.directory or mt.filename_template:
@@ -418,7 +408,8 @@ class SchemaPromptGenerator:
                 lines.append("\n**Fields:**")
                 for field in mt.fields:
                     lines.append(
-                        f"- `{field.name}` ({field.field_type.value}): {self._render_description(field.description)}"
+                        f"- `{field.name}` ({field.field_type.value}): "
+                        f"{self._render_description(field.description)}"
                     )
 
         return "\n".join(lines)

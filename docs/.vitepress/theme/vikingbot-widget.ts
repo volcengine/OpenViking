@@ -34,6 +34,7 @@ type WidgetApi = {
   toggle: () => void
   close: () => void
   unmount: () => void
+  setLocale?: (locale: WidgetLocale) => void
 }
 
 declare global {
@@ -128,17 +129,12 @@ export function initVikingBotWidget() {
   })
 }
 
-/**
- * Switching locale is a client-side route change, so a widget mounted in the
- * other language would keep its old strings for the rest of the session.
- * Remount it — the visitor just asked for a different language, and their
- * conversation is keyed on the browser, not on this mount.
- */
+/** Update a compatible widget in place, leaving older instances intact. */
 export function syncVikingBotLocale() {
   const locale = currentLocale()
   if (!mountedLocale || mountedLocale === locale) return
   const widget = window.VikingBotWidget
   if (!widget) return
-  widget.unmount()
-  mount(locale)
+  widget.setLocale?.(locale)
+  mountedLocale = locale
 }

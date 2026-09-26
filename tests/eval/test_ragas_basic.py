@@ -59,7 +59,7 @@ def test_async_record_writer_drains_records_before_stop_sentinel():
 
 def test_pipeline_query_consumes_http_result_and_generates_answer():
     class Client:
-        def search(self, **kwargs):
+        def search(self, query, **kwargs):
             return {
                 "memories": [
                     {

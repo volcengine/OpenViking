@@ -493,21 +493,6 @@ class OpenVikingAPIClient:
             },
         )
 
-    def session_used(
-        self,
-        session_id: str,
-        contexts: Optional[list] = None,
-        skill: Optional[Dict[str, Any]] = None,
-    ) -> requests.Response:
-        endpoint = f"/api/v1/sessions/{session_id}/used"
-        url = self._build_url(self.server_url, endpoint)
-        payload = {}
-        if contexts:
-            payload["contexts"] = contexts
-        if skill:
-            payload["skill"] = skill
-        return self.session.post(url, json=payload)
-
     def session_commit(self, session_id: str) -> requests.Response:
         endpoint = f"/api/v1/sessions/{session_id}/commit"
         url = self._build_url(self.server_url, endpoint)

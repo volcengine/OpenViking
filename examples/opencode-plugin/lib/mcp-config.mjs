@@ -11,6 +11,19 @@ export function createOpenVikingMcpConfig(pluginRoot) {
   }
 }
 
+export function createOpenVikingV2McpConfig(pluginRoot) {
+  return {
+    type: "local",
+    command: ["node", resolvePath(pluginRoot, "servers", "mcp-proxy.mjs")],
+    codemode: false,
+    timeout: {
+      startup: 15000,
+      catalog: 15000,
+      execution: 15000,
+    },
+  }
+}
+
 export function injectOpenVikingMcpConfig(config, pluginRoot, enabled = true) {
   if (!config || typeof config !== "object") return false
   if (!enabled) return false

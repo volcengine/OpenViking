@@ -15,9 +15,10 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import ListingResponse, Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
+from openviking.storage.acl import AclSpec
 from openviking.storage.expr import And, Eq, In
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
@@ -94,7 +95,7 @@ async def ls(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.ls(
+        page = await service.fs.ls(
             uri,
             ctx=_ctx,
             recursive=recursive,
@@ -117,7 +118,7 @@ async def ls(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
 @router.get("/tree")
@@ -143,7 +144,7 @@ async def tree(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.tree(
+        page = await service.fs.tree(
             uri,
             ctx=_ctx,
             output=output,
@@ -163,7 +164,7 @@ async def tree(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
 @router.get("/stat")
@@ -180,7 +181,7 @@ async def stat(
     else:
         resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.stat(resolved, ctx=_ctx)
+        result = await service.fs.stat(resolved, ctx=_ctx, include_lock_status=True)
         # URI requests use the canonical validated URI. ID requests are resolved
         # inside VikingFS, which returns the corresponding canonical URI.
         response_uri = result.get("uri", resolved)
@@ -249,6 +250,7 @@ class MkdirRequest(BaseModel):
 
     uri: str
     description: Optional[str] = None
+    acl: AclSpec | None = None
 
 
 @router.post("/mkdir")
@@ -261,7 +263,12 @@ async def mkdir(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
-        await service.fs.mkdir(uri, ctx=_ctx, description=request.description)
+        await service.fs.mkdir(
+            uri,
+            ctx=_ctx,
+            description=request.description,
+            **({"acl": request.acl} if request.acl is not None else {}),
+        )
     except AGFSClientError as e:
         mapped = map_exception(e, resource=uri, resource_type="file")
         if mapped is not None:

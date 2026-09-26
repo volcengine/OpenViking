@@ -225,7 +225,7 @@ class HttpCollection(ICollection):
             "CollectionName": self.collection_name,
             "IndexName": index_name,
         }
-        if scalar_index:
+        if scalar_index is not None:
             data["ScalarIndex"] = json.dumps(scalar_index)
         if description is not None:
             data["Description"] = description
@@ -523,20 +523,24 @@ class HttpCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         url = self.url_prefix + "api/vikingdb/data/search/random"
+        payload = {
+            "project": self.project_name,
+            "collection_name": self.collection_name,
+            "index_name": index_name,
+            "filter": json.dumps(filters) if filters else None,
+            "output_fields": json.dumps(output_fields) if output_fields else None,
+            "limit": limit,
+            "offset": offset,
+            "advance": json.dumps(advance) if advance else None,
+        }
+        payload = {k: v for k, v in payload.items() if v is not None}
         response = requests.post(
             url,
             headers=headers,
-            json={
-                "project": self.project_name,
-                "collection_name": self.collection_name,
-                "index_name": index_name,
-                "filter": json.dumps(filters) if filters else None,
-                "output_fields": json.dumps(output_fields) if output_fields else None,
-                "limit": limit,
-                "offset": offset,
-            },
+            json=payload,
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"SearchByRandom response: {response.text}")
@@ -631,8 +635,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"SearchByScalar response: {response.text}")
-        if response.status_code != 200:
-            return SearchResult()
+        response.raise_for_status()
 
         data = json.loads(response.text).get("data", {})
         result = SearchResult()
@@ -671,8 +674,7 @@ class HttpCollection(ICollection):
             },
             timeout=DEFAULT_TIMEOUT,
         )
-        if response.status_code != 200:
-            return AggregateResult(agg={}, op=op, field=field)
+        response.raise_for_status()
         result = json.loads(response.text)
         data = result.get("data", {})
         return self._parse_aggregate_result(data, op, field)

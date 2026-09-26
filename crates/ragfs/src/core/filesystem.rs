@@ -13,7 +13,8 @@ use std::path::{Component, Path};
 use super::errors::{Error, Result};
 use super::glob::{compare_rel_paths, decode_offset_token, encode_offset_token, PreparedGlob};
 use super::types::{
-    FileInfo, GlobEntry, GlobPage, GrepResult, ListSortBy, SortOrder, TreeEntry, WriteFlag,
+    FileInfo, GlobEntry, GlobPage, GrepMatch, GrepOptions, GrepResult, ListSortBy, SortOrder,
+    TreeEntry, WriteFlag,
 };
 
 /// Reject virtual paths that can escape a mounted backend lexically.
@@ -427,11 +428,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// # Arguments
     /// * `path` - The path to search (file or directory)
     /// * `pattern` - The regular expression pattern to search for
-    /// * `recursive` - Whether to search recursively in subdirectories
-    /// * `case_insensitive` - Whether to perform case-insensitive matching
-    /// * `node_limit` - Maximum number of matches to return (None means no limit)
-    /// * `exclude_path` - Optional path prefix to exclude from search
-    /// * `level_limit` - Optional maximum depth relative to query root
+    /// * `options` - Search behavior and result limits
     ///
     /// # Returns
     /// A GrepResult containing all matches found
@@ -443,26 +440,23 @@ pub trait FileSystem: Send + Sync + Any {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
-        let re = compile_grep_regex(pattern, case_insensitive)?;
+        let re = compile_grep_regex(pattern, options.case_insensitive)?;
 
         let mut result = GrepResult::new();
         let normalized_path = normalize_prefix_path(path);
-        let normalized_exclude = exclude_path.map(normalize_prefix_path);
+        let normalized_exclude = options.exclude_path.map(normalize_prefix_path);
+        let normalized_options = GrepOptions {
+            exclude_path: normalized_exclude.as_deref(),
+            ..options
+        };
 
         self.grep_internal(
             normalized_path.as_str(),
             normalized_path.as_str(),
             &re,
-            recursive,
-            node_limit,
-            normalized_exclude.as_deref(),
-            level_limit,
+            normalized_options,
             &mut result,
         )
         .await?;
@@ -476,17 +470,17 @@ pub trait FileSystem: Send + Sync + Any {
         base_path: &str,
         current_path: &str,
         re: &Regex,
-        recursive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
         result: &mut GrepResult,
     ) -> Result<()> {
-        if node_limit.is_some_and(|limit| result.count >= limit) {
+        if options
+            .node_limit
+            .is_some_and(|limit| result.count >= limit)
+        {
             return Ok(());
         }
 
-        if let Some(exclude) = exclude_path {
+        if let Some(exclude) = options.exclude_path {
             if is_excluded_path(current_path, exclude) {
                 return Ok(());
             }
@@ -495,11 +489,11 @@ pub trait FileSystem: Send + Sync + Any {
         let stat = self.stat(current_path).await?;
 
         if stat.is_dir {
-            if !recursive && current_path != base_path {
+            if !options.recursive && current_path != base_path {
                 return Ok(());
             }
 
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(base_path, current_path);
                 let depth = relative_depth(&rel);
                 // Directories at depth >= limit cannot contain files within the limit.
@@ -511,7 +505,10 @@ pub trait FileSystem: Send + Sync + Any {
             let entries = self.read_dir(current_path, None, None, None, None).await?;
 
             for entry in entries {
-                if node_limit.is_some_and(|limit| result.count >= limit) {
+                if options
+                    .node_limit
+                    .is_some_and(|limit| result.count >= limit)
+                {
                     break;
                 }
 
@@ -521,20 +518,11 @@ pub trait FileSystem: Send + Sync + Any {
                     format!("{}/{}", current_path, entry.name)
                 };
 
-                self.grep_internal(
-                    base_path,
-                    &entry_path,
-                    re,
-                    recursive,
-                    node_limit,
-                    exclude_path,
-                    level_limit,
-                    result,
-                )
-                .await?;
+                self.grep_internal(base_path, &entry_path, re, options, result)
+                    .await?;
             }
         } else {
-            if let Some(limit) = level_limit {
+            if let Some(limit) = options.level_limit {
                 let rel = relative_match_file(base_path, current_path);
                 let depth = relative_depth(&rel);
                 if depth > limit {
@@ -542,7 +530,7 @@ pub trait FileSystem: Send + Sync + Any {
                 }
             }
 
-            self.grep_file(base_path, current_path, re, node_limit, result)
+            self.grep_file(base_path, current_path, re, options, result)
                 .await?;
         }
 
@@ -555,26 +543,39 @@ pub trait FileSystem: Send + Sync + Any {
         base_path: &str,
         path: &str,
         re: &Regex,
-        node_limit: Option<usize>,
+        options: GrepOptions<'_>,
         result: &mut GrepResult,
     ) -> Result<()> {
-        if node_limit.is_some_and(|limit| result.count >= limit) {
+        if options
+            .node_limit
+            .is_some_and(|limit| result.count >= limit)
+        {
             return Ok(());
         }
 
         let content = self.read(path, 0, 0).await?;
 
         let content_str = String::from_utf8_lossy(&content);
-
         let rel_file = relative_match_file(base_path, path);
+        let lines: Vec<_> = content_str.lines().collect();
 
-        for (line_num, line) in content_str.lines().enumerate() {
-            if node_limit.is_some_and(|limit| result.count >= limit) {
+        for (line_index, line) in lines.iter().enumerate() {
+            if options
+                .node_limit
+                .is_some_and(|limit| result.count >= limit)
+            {
                 break;
             }
 
             if re.is_match(line) {
-                result.add_match(rel_file.clone(), (line_num + 1) as u64, line.to_string());
+                result.matches.push(GrepMatch::from_lines(
+                    rel_file.clone(),
+                    &lines,
+                    line_index,
+                    options.before_context,
+                    options.after_context,
+                ));
+                result.count += 1;
             }
         }
 
@@ -991,13 +992,53 @@ mod tests {
             .with_file("/root/sub/b.txt", "hello\n");
 
         let out = fs
-            .grep("/root", "hello", true, false, None, None, None)
+            .grep(
+                "/root",
+                "hello",
+                GrepOptions {
+                    recursive: true,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 
         let files: Vec<String> = out.matches.into_iter().map(|m| m.file).collect();
         assert!(files.contains(&"a.txt".to_string()));
         assert!(files.contains(&"sub/b.txt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_default_grep_includes_bounded_context() {
+        let fs = TreeFS::default().with_file("/root/a.txt", "first\nbefore\nhit\nafter\n");
+
+        let out = fs
+            .grep(
+                "/root/a.txt",
+                "hit",
+                GrepOptions {
+                    recursive: false,
+                    before_context: 2,
+                    after_context: 2,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(out.count, 1);
+        let matched = &out.matches[0];
+        assert_eq!(matched.line, 3);
+        let before = matched.before_context.as_ref().unwrap();
+        assert_eq!(before.len(), 2);
+        assert_eq!(before[0].line, 1);
+        assert_eq!(before[0].content, "first");
+        assert_eq!(before[1].line, 2);
+        assert_eq!(before[1].content, "before");
+        let after = matched.after_context.as_ref().unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].line, 4);
+        assert_eq!(after[0].content, "after");
     }
 
     #[tokio::test]
@@ -1013,11 +1054,12 @@ mod tests {
             .grep(
                 "/root",
                 "hit",
-                true,
-                false,
-                Some(1),
-                Some("/root/excluded"),
-                None,
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    exclude_path: Some("/root/excluded"),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -1035,7 +1077,16 @@ mod tests {
             .with_file("/root/deep/b.txt", "hit\n");
 
         let out = fs
-            .grep("/root", "hit", true, false, Some(1), None, Some(1))
+            .grep(
+                "/root",
+                "hit",
+                GrepOptions {
+                    recursive: true,
+                    node_limit: Some(1),
+                    level_limit: Some(1),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
 

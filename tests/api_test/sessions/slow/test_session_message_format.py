@@ -216,60 +216,6 @@ class TestSessionMessageFormat:
             if session_id:
                 api_client.delete_session(session_id)
 
-    def test_session_used_contexts_format(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            api_client.add_message(session_id, "user", "Used format test")
-
-            test_contexts = [
-                "viking://resources/ctx_a",
-                "viking://resources/ctx_b",
-            ]
-            used_resp = api_client.session_used(
-                session_id,
-                contexts=test_contexts,
-            )
-            assert used_resp.status_code == 200
-            result = used_resp.json().get("result", {})
-
-            contexts_used = result.get("contexts_used", [])
-            assert isinstance(contexts_used, (list, int)), (
-                f"contexts_used should be list or int, got {type(contexts_used)}"
-            )
-            for ctx in contexts_used if isinstance(contexts_used, list) else []:
-                assert isinstance(ctx, str), f"each context should be str, got {type(ctx)}: {ctx}"
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
-    def test_session_used_skills_format(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            api_client.add_message(session_id, "user", "Skill format test")
-
-            used_resp = api_client.session_used(
-                session_id,
-                skill={"name": "test-skill", "uri": "viking://~/skills/test"},
-            )
-            assert used_resp.status_code == 200
-            result = used_resp.json().get("result", {})
-
-            skills_used = result.get("skills_used", [])
-            assert isinstance(skills_used, (list, int)), (
-                f"skills_used should be list or int, got {type(skills_used)}"
-            )
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
     def test_commit_result_archived_field(self, api_client):
         session_id = None
         try:

@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from openviking.connector.auth import OAUTH_REF_ARG, project_auth_config
 from openviking.connector.client import ConnectorClient
 from openviking.connector.routing import (
     CONNECTOR_ARGS_AUTH_CONFIG_KEY,
@@ -566,6 +567,10 @@ class ConnectorDelegate:
                 str(key): str(value) for key, value in (declared_auth or {}).items() if value
             }
 
+        if add_type in {"meego", "feishu_project"} and OAUTH_REF_ARG in (connector_args or {}):
+            auth_config = await project_auth_config(connector_args or {}, ctx)
+            forwarded_args.pop(OAUTH_REF_ARG, None)
+
         tos_path: Optional[str] = None
         param_config: Optional[Dict[str, Any]] = None
         if add_type == "tos":
@@ -628,11 +633,15 @@ class ConnectorDelegate:
             account_id=ctx.account_id,
         )
         extra_params = None
-        if tags is not None:
-            extra_params = {
-                "tags": normalize_search_tags(tags),
-                "tag_mode": tag_mode,
-            }
+        if tag_mode == "clear":
+            extra_params = {"tag_mode": tag_mode}
+        elif tags is not None:
+            normalized_tags = normalize_search_tags(tags)
+            if normalized_tags:
+                extra_params = {
+                    "tags": normalized_tags,
+                    "tag_mode": tag_mode,
+                }
 
         task_tracker = get_task_tracker()
         task = await task_tracker.create(

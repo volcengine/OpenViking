@@ -87,7 +87,21 @@ def test_native_packed_filter_abi_has_exact_little_endian_layout_and_shapes():
         {"FieldName": "uri", "FieldType": "path"},
         {"FieldName": "schema_flag", "FieldType": "bool"},
     ]
-    assert index.rebuild_scalar_index(json.dumps(scalar_meta), requests) == 0
+
+    def interrupted_rows():
+        for row in range(1100):
+            request = engine.AddDataRequest()
+            request.label = labels[row % len(labels)]
+            request.fields_str = '{"uri":"/replacement","schema_flag":true}'
+            yield request
+        raise ValueError("Store scan interrupted")
+
+    # Even after a batch has been built, a failed scan must keep the old index.
+    with pytest.raises(ValueError, match="Store scan interrupted"):
+        index.rebuild_scalar_index(json.dumps(scalar_meta), interrupted_rows())
+    assert index.evaluate_filter(keep_filter).bitset_words == expected_words
+
+    assert index.rebuild_scalar_index(json.dumps(scalar_meta), iter(requests)) == 0
     assert index.set_filter_layout(labels) == 0
     rebuilt = index.evaluate_filter(
         json.dumps({"op": "must", "field": "schema_flag", "conds": [True]})

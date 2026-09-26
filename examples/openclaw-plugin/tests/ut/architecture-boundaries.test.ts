@@ -73,7 +73,7 @@ describe("architecture boundaries", () => {
     const violations = collectSourceFiles(join(rootDir, "tests"), [".ts", ".tsx", ".js", ".mjs", ".cjs"])
       .flatMap((file) => {
         const source = readFileSync(file, "utf8");
-        const relativePath = relative(rootDir, file);
+        const relativePath = relative(rootDir, file).replace(/\\/g, "/");
         if (relativePath === "tests/ut/architecture-boundaries.test.ts") {
           return [];
         }
@@ -870,7 +870,6 @@ describe("architecture boundaries", () => {
   it("keeps auto-recall helper tests off the index compatibility facade", () => {
     const violations = [
       "tests/ut/build-memory-lines.test.ts",
-      "tests/context-bloat-730.test.ts",
       "tests/ut/index-utils.test.ts",
     ].flatMap((file) => {
       const source = readFileSync(join(rootDir, file), "utf8");

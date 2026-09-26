@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 import openai
+from openviking_cli.utils import get_logger
 
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
@@ -14,10 +15,13 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -140,7 +144,10 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.extra_body = extra_body
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
-        self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
+        self._client_kwargs: Dict[str, Any] = {
+            "api_key": self.api_key or "no-key",
+            "max_retries": 0,
+        }
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
@@ -153,19 +160,31 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             self._client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
-            self.client = openai.AzureOpenAI(
-                http_client=openai.DefaultHttpxClient(limits=self._http_limits()),
-                **self._client_kwargs,
+            sync_kwargs = dict(self._client_kwargs)
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultHttpxClient,
+                limits=self._http_limits(),
             )
+            if http_client is None:
+                http_client = openai.DefaultHttpxClient(limits=self._http_limits())
+            sync_kwargs["http_client"] = http_client
+            self.client = openai.AzureOpenAI(**sync_kwargs)
         else:
             if self.api_base:
                 self._client_kwargs["base_url"] = self.api_base
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
-            self.client = openai.OpenAI(
-                http_client=openai.DefaultHttpxClient(limits=self._http_limits()),
-                **self._client_kwargs,
+            sync_kwargs = dict(self._client_kwargs)
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultHttpxClient,
+                limits=self._http_limits(),
             )
+            if http_client is None:
+                http_client = openai.DefaultHttpxClient(limits=self._http_limits())
+            sync_kwargs["http_client"] = http_client
+            self.client = openai.OpenAI(**sync_kwargs)
         self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension
@@ -328,16 +347,18 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
     def _get_async_client(self):
         def _build_async_client():
-            http_client = openai.DefaultAsyncHttpxClient(limits=self._http_limits())
-            if self._provider == "azure":
-                return openai.AsyncAzureOpenAI(
-                    http_client=http_client,
-                    **self._client_kwargs,
-                )
-            return openai.AsyncOpenAI(
-                http_client=http_client,
-                **self._client_kwargs,
+            kwargs = dict(self._client_kwargs)
+            http_client = create_optional_async_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultAsyncHttpxClient,
+                limits=self._http_limits(),
             )
+            if http_client is None:
+                http_client = openai.DefaultAsyncHttpxClient(limits=self._http_limits())
+            kwargs["http_client"] = http_client
+            if self._provider == "azure":
+                return openai.AsyncAzureOpenAI(**kwargs)
+            return openai.AsyncOpenAI(**kwargs)
 
         return self._async_client_cache.get(_build_async_client)
 

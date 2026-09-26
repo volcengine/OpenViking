@@ -36,13 +36,15 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 | 类型 | 资源名 | 说明 |
 |------|--------|------|
 | 图片 | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | 多种图片格式，通过 VLM 生成描述（实验特性） |
-| 视频 | `*.mp4`, `*.avi`, `*.mov` ... | 提取关键帧后使用 VLM 分析（规划） |
-| 音频 | `*.mp3`, `*.wav`, `*.m4a` ... | 进行语音转录处理（规划） |
+| 视频 | `*.mp4`, `*.avi`, `*.mov` ... | 保存原文件；可选 VLM 内容理解需要兼容的媒体配置 |
+| 音频 | `*.mp3`, `*.wav`, `*.m4a` ... | 保存原文件；可选 VLM 内容理解需要兼容的媒体配置 |
+
+音视频解析器负责校验并保存原文件。内容理解在后续语义处理阶段执行，默认关闭（`vlm.media.enabled=false`），需启用兼容的供应商和模型；理解支持的格式与大小限制和导入格式不同。这不代表内置了 Whisper 转写或本地关键帧提取流程。详见[音视频配置](../guides/01-configuration.md)。
 
 云文档类
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret` |
+| 飞书/Lark | URL 方式，支持 doc/docx、wiki、sheets、bitable、mindnote/mindnotes、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret`。Mindnote 及 Wiki 中的 Mindnote 要求本次使用的 token 具备 `mindnote:node:read` |
 
 网页类（递归网页爬虫）
 | 类型 | 资源名 | 说明 |
@@ -91,7 +93,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 #### 阶段 4：语义处理 (Semantic Processing)
 - **摘要生成**：`Summarizer` 生成 L0（摘要）和 L1（概述）
 - **向量索引**：将内容向量化用于语义搜索
-- 通过 `SemanticQueue` 异步处理，可通过 `wait=True` 等待完成
+- 通过 `SemanticQueue` 异步处理，使用返回的 `task_id` 查询完成状态
 
 #### 非等待 Git 仓库导入
 - 对 Git 仓库来源使用 `wait=false` 时，OpenViking 会先校验仓库、解析目标 URI、预占最终 `root_uri`，然后在 clone/parse/finalize 完成前返回。
@@ -105,7 +107,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 #### 监控任务创建
 - 调用 `add_resource` 时，为 URL、sitemap、RSS 等可重新读取的来源设置 `watch_interval > 0`（单位：分钟），即可创建监控任务
-- `temp_file_id` 引用的上传内容只会作为一次性快照处理，不能创建监控任务；本地来源变化后请重新添加
+- `temp_file_id` 引用的上传内容是一次性快照，不能创建监控任务。Python HTTP SDK 也会将本地文件/目录上传为快照，因此本地路径不能与 `watch_interval > 0` 组合使用；本地来源变化后请重新添加
 - 可指定 `to` 参数确定目标 URI；未指定时，系统会使用本次导入返回的 `root_uri` 作为监控目标
 - 把监控对象设为 sitemap/RSS/Atom URL，即可让**整站**保持同步：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
 - `WatchManager` 负责任务持久化存储
@@ -137,7 +139,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 #### 1. API 实现介绍
 
-此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
+此接口是资源管理的核心入口，支持多种来源的资源添加，默认返回 `task_id` 供调用方查询处理状态。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
 
 **处理流程**：
 1. 识别并校验资源来源（URL 或上传的临时文件）
@@ -145,7 +147,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 3. 调用对应格式 Parser；`args.parse_mode` 控制转换后的 Markdown 正文是否允许拆分
 4. 构建目录树并写入 AGFS
 5. 按 `processing_mode` 执行入库后的处理：`semantic_and_vectors` 生成语义产物和向量；`vectors_only` 跳过语义理解，只提交文件向量化
-6. `wait=true` 时等待语义处理/向量化完成；`wait=false` 时返回 `task_id` 用于队列跟踪
+6. 默认返回 `task_id`；调用方通过任务 API 确认处理完成
 7. 如果 `reason` 非空，将其追加到固定的资源 reason session 并 commit，复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
 8. 如指定 `--watch-interval`，设置定时更新任务
 
@@ -178,10 +180,11 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 | preserve_structure | bool | 否 | None | 是否保留目录结构 |
 | args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。原生 HTTPS Git 导入和 Watch 可通过 `args.auth_config={"username":"oauth2","token":"..."}` 在 TLS 上传递 HTTP Basic 凭据；`username` 默认为 `oauth2`。Git 的 `branch` 或 `commit` 仍放在 `args` 顶层。通过 HTTP(S) URL 导入私有 TOS 对象时，二选一传入非空字符串：`args.tos_signature`（映射为 `X-Tos-Signature`）或 `args.tos_access`（映射为 `X-Tos-Access`）。TOS 凭证只用于当前 HEAD/GET 抓取；资源会先保存为快照，凭证不会写入资源元数据或队列任务。`args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
 | watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 按目标占用规则为可重新读取的来源创建新 Watch；通过 `temp_file_id` 上传的一次性快照不能创建 Watch。≤0 不创建 Watch：原生导入显式指定 `to` 时暂停唯一可访问的任务（存在歧义时返回 409），Connector 导入不影响已有 Watch。显式 `to` 优先，否则绑定本次导入的 `root_uri`。 |
-| is_active | bool | 否 | True | Watch 初始调度状态。设为 `false` 时要求 `watch_interval > 0`，并在 `to`、`parent` 中二选一。`parent` 仅支持原生飞书 URL 导入；Connector 仍要求精确的 `to`。首次导入仍执行一次，随后保持暂停 |
+| is_active | bool | 否 | True | Watch 初始调度状态。设为 `false` 时要求 `watch_interval > 0`，并在 `to`、`parent` 中二选一。`parent` 支持原生飞书 URL 和 Git 导入；Connector 仍要求精确的 `to`。首次导入仍执行一次，随后保持暂停 |
 | processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
 | tags | string[] | 否 | None | 导入时写入向量检索记录的显式检索标签，格式必须是 `k=v`，例如 `["team=search", "env=test"]`。搜索接口可用同名 `tags` 参数过滤召回 |
-| tag_mode | string | 否 | `"replace"` | `tags` 的写入模式，可选 `replace` 或 `append`。导入新资源时会随本次生成的每条向量记录写入；不会在完成后额外调用 `set_tags`，响应也不返回 `tags_result` |
+| tag_mode | string | 否 | `"replace"` | 标签写入模式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空。`clear` 不要求传 `tags`；`replace` 配合空数组不会修改已有标签。导入时标签会随本次生成的每条向量记录写入；不会在完成后额外调用 `set_tags`，响应也不返回 `tags_result` |
+| acl | object | 否 | None | 设置最终导入根节点的直接 ACL，要求 manage；省略时保留已有权限。见 [ACL API](12-acl.md)。 |
 | telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
 **补充说明**：
@@ -191,7 +194,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
 - 资源目标可以使用公共 `viking://resources/...`、家目录别名 `viking://~/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。家目录别名会按请求身份展开为 canonical 路径；无 uid 的写法 `viking://user/resources/...` 会被拒绝，并提示改用 `viking://~/resources/...`。
 - `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
-- `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
+- `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp-upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
 - `tags` 会在资源解析后、向量记录写入时同步写入底层向量库。`add_resource(tags=...)` 不返回 `tags_result`；需要验证时，可在 `/api/v1/search/find` 或 `/api/v1/search/search` 中传相同 `tags` 过滤召回。
 - 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
 - 原生 HTTPS Git 的 `args.auth_config` 在 `watch_interval <= 0` 时只用于本次请求；当 `watch_interval > 0` 时，OpenViking 会把与仓库 URL 绑定的 username/token 保存到 Watch 私有鉴权状态，并只在后续 Git 拉取时恢复使用。凭据不会进入普通持久队列，也不会出现在 Watch API/MCP/CLI 返回中。Git PAT 没有通用刷新流程，过期或撤销后需要重建 Watch 来更换 token。为兼容已有用法，系统仍接受 `https://user:token@host/repo.git` 形式的 URL 内嵌凭据并原样传递；由于该 URL 同时也是资源来源标识，它可能被记录到进程参数、日志、队列、资源元数据和 Watch 状态中。新接入建议使用 `args.auth_config`。`args.auth_config` 的明文 HTTP 鉴权和带鉴权重定向仍会被拒绝。
@@ -202,8 +205,10 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - `processing_mode=vectors_only` 不调用 VLM 语义理解阶段，也不会生成或刷新 `.abstract.md` / `.overview.md`。对已存在目标，它会保留旧的语义产物和旧的语义向量；仍会更新资源树，在 `build_index=true` 时向量化当前非隐藏文件，并清理由本次刷新删除的文件 detail 向量。
 - `processing_mode` 只属于 `add_resource`。管理员维护已有数据时，`reindex` API/CLI 仍使用 `mode`（`vectors_only`、`semantic_and_vectors`、`prune_orphans`）。
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
-- Connector 导入设置 `is_active=false` 时会在提交前创建暂停状态的 Watch；原生飞书导入会通过资源队列透传 `is_active`，解析出最终资源 URI 后再创建 Watch。两种情况下首次导入均执行一次，周期调度保持关闭。
+- Connector 导入设置 `is_active=false` 时会在提交前创建暂停状态的 Watch；原生飞书和 Git 导入会通过资源队列透传 `is_active`，解析出最终资源 URI 后再创建 Watch。两种情况下首次导入均执行一次，周期调度保持关闭。
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
+- 飞书/Lark Mindnote URL 支持 `/mindnote/{token}` 和 `/mindnotes/{token}`；Wiki URL 若解析为 `obj_type=mindnote` 也走同一读取流程。Mindnote 使用与其他飞书导入一致的认证选择：传入 `args.feishu_access_token` 时使用用户 token，否则回退到配置的 app/tenant token。本次使用的 token 需具备 `mindnote:node:read`。
+- Mindnote 节点图片通过飞书 Drive 素材接口下载，并沿用本次 Mindnote 导入的 token 类型。用户 token 导入会向媒体下载透传用户 token；app-token 导入使用配置的应用凭证。本次使用的 token 需具备 `docs:document.media:download`。媒体下载不可用时，正文仍会成功导入并保留原始图片引用。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
 - 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。还可同时传入 `feishu_app_id` 和 `feishu_app_secret`；OpenViking 会将其保存在 watch task 私有状态中，并用于刷新该 watch 的用户 token。
 - 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
@@ -216,6 +221,8 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 - 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
 #### 3. 使用示例
+
+以下示例使用默认异步模式，不设置等待参数。提交后保存 `task_id`，通过 [任务 API](17-tasks.md) 查询状态；只有任务为 `completed` 时，才读取摘要或检索本次导入的内容。
 
 **HTTP API**
 
@@ -231,8 +238,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation",
-    "wait": true
+    "reason": "User guide documentation"
   }'
 
 # 导入并定时同步 HTTPS 私有 Git 仓库
@@ -259,8 +265,7 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d '{
     "path": "https://example.com/guide.md",
     "to": "viking://resources/guide",
-    "processing_mode": "vectors_only",
-    "wait": true
+    "processing_mode": "vectors_only"
   }'
 
 # 递归抓取网页：从入口页沿同域链接展开，depth 控制层数，max_pages 限制页数
@@ -269,8 +274,6 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://docs.openviking.ai/zh/getting-started/01-introduction",
-    "wait": true,
-    "timeout": 60,
     "args": { "depth": 1, "max_pages": 10 }
   }'
 
@@ -308,7 +311,6 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -d "{
     \"temp_file_id\": \"$TEMP_FILE_ID\",
     \"to\": \"viking://resources/tagged-guide.md\",
-    \"wait\": true,
     \"tags\": [\"team=search\", \"env=test\"],
     \"tag_mode\": \"replace\"
   }"
@@ -319,6 +321,17 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.feishu.cn/docx/doc_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
+# 添加飞书 Mindnote（也可传底层类型为 Mindnote 的 Wiki URL）
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/mindnote/mindnote_token",
     "args": {
       "feishu_access_token": "u-..."
     }
@@ -354,7 +367,7 @@ result = client.add_resource(
     path="./documents/guide.md",
     options={"reason": "User guide documentation"},
 )
-print(f"Added: {result['root_uri']}")
+print(f"Task ID: {result['task_id']}")
 
 ## 正常解析并转换为 Markdown，但每个文档正文不拆分
 result = client.add_resource(
@@ -372,8 +385,6 @@ result = client.add_resource(
 ## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
 result = client.add_resource(
     path="https://docs.openviking.ai/zh/getting-started/01-introduction",
-    wait=True,
-    timeout=180,
     options={
         "args": {"depth": 1, "max_pages": 10},
     },
@@ -402,12 +413,12 @@ result = client.add_resource(
     },
 )
 
-## 等待处理完成
-client.wait_processed()
+## 查询最近一次导入任务；状态为 completed 后再使用处理结果
+print(client.get_task(result["task_id"]))
 
-## 开启定时更新
+## 为可重复读取的 URL 开启定时更新
 client.add_resource(
-    path="./documents/guide.md",
+    path="https://example.com/guide.md",
     to="viking://resources/guide.md",
     options={
         "watch_interval": 60,  # 每60分钟更新一次
@@ -417,6 +428,12 @@ client.add_resource(
 # 使用一次性用户 access token 添加飞书文档
 client.add_resource(
     path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
+)
+
+# 使用显式用户 token 添加飞书 Mindnote
+client.add_resource(
+    path="https://example.feishu.cn/mindnote/mindnote_token",
     options={"args": {"feishu_access_token": "u-..."}},
 )
 
@@ -441,10 +458,9 @@ client.add_resource(
 ```typescript
 const task = await client.addResource("https://example.com/docs", {
   to: "viking://resources/docs/",
-  wait: true,
   args: { parse_mode: "no_split" },
 });
-console.log(task);
+console.log(task.task_id);
 ```
 
 **Go SDK**
@@ -452,13 +468,12 @@ console.log(task);
 ```go
 result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
     Reason: "User guide documentation",
-    Wait:   true,
     Args:   map[string]any{"parse_mode": "no_split"},
 })
 if err != nil {
     return err
 }
-fmt.Println(result["root_uri"])
+fmt.Println(result["task_id"])
 ```
 
 **CLI**
@@ -485,8 +500,8 @@ ov add-resource "https://docs.openviking.ai/" \
 ov add-resource "https://example.com/docs" \
   --args="depth:1,max_pages:20,skip_download_links:false"
 
-# 等待处理完成
-ov add-resource ./documents/guide.md --wait
+# 使用提交时返回的 task_id 查询进度
+ov task status TASK_ID
 
 # 开启定时更新（每60分钟检测一次）
 ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 60
@@ -531,31 +546,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 #### 4. 响应示例
 
-**HTTP API 响应 (JSON, `wait=true`)**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "status": "success",
-    "root_uri": "viking://resources/guide.md",
-    "temp_uri": "viking://temp/username/04291108_b62dc7/guide.md",
-    "source_path": "./documents/guide.md",
-    "meta": {},
-    "errors": [],
-    "queue_status": {
-      "pending": 5,
-      "processing": 2,
-      "completed": 10
-    }
-  },
-  "telemetry": {
-    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
-  }
-}
-```
-
-**HTTP API 响应 (JSON, 非 Git `wait=false`)**
+**HTTP API 响应（默认异步模式）**
 
 ```json
 {
@@ -574,7 +565,7 @@ ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 
 ```
 Note: Resource is being processed in the background.
-Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+Use 'ov task status <task_id>' to check progress, or 'ov task list' to see all tasks.
 status       accepted
 root_uri     viking://resources/01-overview
 task_id      uuid-xxx
@@ -644,7 +635,7 @@ task_id      uuid-xxx
 
 ### temp_upload
 
-上传临时文件，用于后续通过 [add_resource](#add_resource) 或 [add_skill](#add_skill) 导入本地文件。
+上传临时文件，用于后续通过 [add_resource](#add-resource) 或 [add_skill](04-skills.md#add-skill) 导入本地文件。
 
 #### 1. API 实现介绍
 

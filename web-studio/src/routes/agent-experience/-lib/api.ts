@@ -54,6 +54,49 @@ export async function fetchExperiences(options: {
   }
 }
 
+/** Search indexed experience files in this user's experience directory. */
+export async function searchExperiences(options: {
+  experiencesUri: string
+  keyword: string
+  signal?: AbortSignal
+}): Promise<ExperiencePage> {
+  const { experiencesUri, keyword, signal } = options
+  const result = await getOvResult<unknown>(
+    ovClient.client.post({
+      body: {
+        query: keyword,
+        target_uri: experiencesUri,
+        context_type: 'memory',
+        level: 2,
+        limit: 100,
+      },
+      signal,
+      url: '/api/v1/search/find',
+    }),
+  )
+  const memories =
+    result && typeof result === 'object' && 'memories' in result
+      ? (result as { memories?: unknown }).memories
+      : undefined
+  const prefix = `${experiencesUri.replace(/\/$/, '')}/`
+  const items = Array.isArray(memories)
+    ? memories.flatMap((match) => {
+        if (
+          !match ||
+          typeof match !== 'object' ||
+          typeof match.uri !== 'string'
+        )
+          return []
+        const uri = match.uri as string
+        const name = uri.startsWith(prefix) ? uri.slice(prefix.length) : ''
+        return name && !name.includes('/') && name.endsWith('.md')
+          ? [{ name, uri }]
+          : []
+      })
+    : []
+  return { items, hasMore: false, page: 1, pageSize: items.length }
+}
+
 export async function fetchContent(
   uri: string,
   signal?: AbortSignal,
@@ -147,41 +190,45 @@ export async function fetchSourceTrajectories(
   return normalizeSourceTrajectoryLinks(result)
 }
 
-export async function fetchAgentEvolutionStatus(
-  signal?: AbortSignal,
-): Promise<AgentEvolutionStatus> {
-  const result = await getOvResult<unknown>(
-    ovClient.client.get({ signal, url: '/api/v1/admin/agent-evolution' }),
-  )
-  const record =
-    result && typeof result === 'object'
-      ? (result as Record<string, unknown>)
-      : {}
+type AccountSettingsResult = {
+  account_id?: string
+  settings?: { agent_evolution?: { enabled?: boolean } }
+}
+
+function normalizeAgentEvolutionStatus(
+  result: AccountSettingsResult,
+): AgentEvolutionStatus {
   return {
-    enabled: record.enabled === true,
+    enabled: result.settings?.agent_evolution?.enabled === true,
     accountId:
-      typeof record.account_id === 'string' ? record.account_id : undefined,
+      typeof result.account_id === 'string' ? result.account_id : undefined,
   }
 }
 
-export async function setAgentEvolutionEnabled(
-  enabled: boolean,
+export async function fetchAgentEvolutionStatus(
+  accountId: string,
+  signal?: AbortSignal,
 ): Promise<AgentEvolutionStatus> {
-  const result = await getOvResult<unknown>(
-    ovClient.client.put({
-      body: { enabled },
-      url: '/api/v1/admin/agent-evolution',
+  const result = await getOvResult<AccountSettingsResult>(
+    ovClient.client.get({
+      signal,
+      url: `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/settings`,
     }),
   )
-  const record =
-    result && typeof result === 'object'
-      ? (result as Record<string, unknown>)
-      : {}
-  return {
-    enabled: record.enabled === true,
-    accountId:
-      typeof record.account_id === 'string' ? record.account_id : undefined,
-  }
+  return normalizeAgentEvolutionStatus(result)
+}
+
+export async function setAgentEvolutionEnabled(
+  accountId: string,
+  enabled: boolean,
+): Promise<AgentEvolutionStatus> {
+  const result = await getOvResult<AccountSettingsResult>(
+    ovClient.client.patch({
+      body: { agent_evolution: { enabled } },
+      url: `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/settings`,
+    }),
+  )
+  return normalizeAgentEvolutionStatus(result)
 }
 
 export const fetchTrajectoryContent = fetchContent
