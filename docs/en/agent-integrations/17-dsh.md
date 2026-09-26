@@ -57,7 +57,7 @@ If nothing appears, set `OV_DEBUG_LOG=/tmp/ov-dsh.log` and check that file.
 
 ## How it works
 
-The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so it follows the session in-process. At session start it injects your OpenViking profile block, an index of available memories, and an `<available-skills>` catalog of your OpenViking skills. Before every model step it searches OpenViking with the current input and appends what it finds to that step as a durable message, so the injection replays with the session and is visible to compaction. It captures user, assistant, and (optionally) tool-result messages straight from DSH's event stream, and commits to OpenViking once pending tokens cross the threshold, keeping the ten most recent messages live. Writes that fail land in a pending queue and replay at the next session start.
+The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so it follows the session in-process. At session start it injects your OpenViking profile block, an index of available memories, and an `<available-skills>` catalog of your OpenViking skills. Before every model step it searches OpenViking with the current input and appends what it finds to that step as a durable message, so the injection replays with the session and is visible to compaction. It captures user, assistant, and (optionally) tool-result messages straight from DSH's event stream, and commits to OpenViking once pending tokens cross the threshold, keeping the ten most recent messages live. When DSH compacts a session it appends a durable `compaction/start` event before rewriting the transcript, and the bundle commits unconditionally at that boundary — the same pre-rewrite commit the Claude Code integration performs in its PreCompact hook. A successful boundary commit also appends a `user/message` notice (marker `OpenViking boundary commit`) that client-side visualization can decorate; self-sourced plugin messages are never captured again, and a skipped or failed boundary stays silent. Writes that fail land in a pending queue and replay at the next session start.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking, and every subagent gets its own session.
 
@@ -112,7 +112,7 @@ Credentials given in the patch win over the environment. Behavior knobs resolve 
 | Recall is empty | `curl http://localhost:1933/health`; check the endpoint and that the prompt is longer than the minimum query length (3 characters) |
 | 401 / 403 from OpenViking | Verify `OPENVIKING_API_KEY`; for trusted-mode deployments also verify `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` |
 | Memories from other projects leak in | Set `OPENVIKING_RECALL_PEER_SCOPE=actor` |
-| Nothing committed after a crash | Commit runs on a token threshold and at teardown; queued writes replay at the next session start |
+| Nothing committed after a crash | Commit runs on a token threshold, at the compaction boundary, and at teardown; queued writes replay at the next session start |
 
 ## See also
 

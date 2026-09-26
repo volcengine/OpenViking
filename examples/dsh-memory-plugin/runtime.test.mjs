@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { enqueue, listPending } from "./shared/pending-queue.mjs";
 import { deriveWorkspacePeerId } from "./shared/workspace-peer.mjs";
-import { OPENVIKING_PLUGIN_KIND } from "./capture.mjs";
+import { OPENVIKING_BOUNDARY_NOTICE_MARKER, OPENVIKING_PLUGIN_KIND } from "./capture.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 
 const originalPendingDir = process.env.OPENVIKING_PENDING_DIR;
@@ -112,6 +112,360 @@ test("a retryable threshold commit failure is queued", async () => {
   assert.deepEqual((await listPending()).map(item => item.entry.type), [
     "commitSession",
   ]);
+});
+
+test("a compaction boundary commits below-threshold messages unconditionally", async () => {
+  let commitCalls = 0;
+  let commitOptions;
+  const runtime = new OpenVikingRuntime({
+    async commitSession(_sessionId, _peerId, options) {
+      commitCalls += 1;
+      commitOptions = options;
+      return { ok: true, result: { trace_id: "compaction" } };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(commitCalls, 1);
+  // No teardown deadline applies mid-session, so the client's full commit
+  // timeout is used rather than dispose's short one.
+  assert.equal(commitOptions, undefined);
+});
+
+test("only the compaction start boundary commits", async () => {
+  let commitCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction-events", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/end" });
+  runtime.maybeCommit(session, { type: "turn/start" });
+  await runtime.flush(session);
+
+  assert.equal(commitCalls, 0);
+});
+
+test("a retryable compaction-boundary commit failure is queued", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compact-503-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const runtime = new OpenVikingRuntime({
+    async commitSession() {
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction-failure", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.deepEqual((await listPending()).map(item => item.entry.type), [
+    "commitSession",
+  ]);
+});
+
+test("a permanent compaction-boundary commit failure is dropped without throwing", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compact-400-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const debugLines = [];
+  const runtime = new OpenVikingRuntime({
+    async commitSession() {
+      return { ok: false, status: 400, error: { code: "FAILED" } };
+    },
+  }, config(), { debug: line => debugLines.push(line) });
+  const session = { id: "compaction-permanent", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.deepEqual(await listPending(), []);
+  assert.equal(debugLines.some(line => line.includes("write_error")), false,
+    "a permanent boundary failure logs and drops; the write chain must not surface an error");
+});
+
+test("a compaction boundary appends a notice event on successful flush", async () => {
+  const appends = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      return { pending_tokens: 25 };
+    },
+    async commitSession() {
+      return { ok: true, result: { trace_id: "compaction" } };
+    },
+  }, config(), { debug() {} });
+  const session = {
+    id: "compaction-notice",
+    header: { cwd: "/workspace" },
+    append(type, data) {
+      appends.push({ type, data });
+    },
+  };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(appends.length, 1);
+  assert.equal(appends[0].type, "user/message");
+  assert.deepEqual(appends[0].data.source, {
+    kind: OPENVIKING_PLUGIN_KIND,
+    plugin: "openviking-memory",
+    form: "notice",
+    summary: "OpenViking boundary commit: 25 pending token(s) archived to memory before compaction",
+  });
+  assert.match(appends[0].data.content[0].text, /OpenViking boundary commit: 25 pending token/);
+  assert.equal(appends[0].data.source.summary, appends[0].data.content[0].text,
+    "the collapsed-row summary must repeat the notice sentence verbatim (dsh notice-summary + ov-viz contract)");
+});
+
+test("a boundary commit with nothing pending stays silent", async () => {
+  const appends = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      return { pending_tokens: 0 };
+    },
+    async commitSession() {
+      return { ok: true, result: { status: "skipped" } };
+    },
+  }, config(), { debug() {} });
+  const session = {
+    id: "compaction-silent",
+    header: { cwd: "/workspace" },
+    append(type, data) {
+      appends.push({ type, data });
+    },
+  };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(appends.length, 0);
+});
+
+test("a failed metadata read still commits and stays silent", async () => {
+  let commitCalls = 0;
+  const appends = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      throw new Error("metadata unreachable");
+    },
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true, result: { trace_id: "compaction" } };
+    },
+  }, config(), { debug() {} });
+  const session = {
+    id: "compaction-meta-fail",
+    header: { cwd: "/workspace" },
+    append(type, data) {
+      appends.push({ type, data });
+    },
+  };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(commitCalls, 1);
+  assert.equal(appends.length, 0);
+});
+
+test("capture skips this plugin's own session messages", async () => {
+  let addCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async addMessage() {
+      addCalls += 1;
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "sanitize", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+  // The notice appends with the canonical producer-owned kind; the legacy
+  // wrapper stays covered so a replayed older session behaves the same.
+  for (const kind of [OPENVIKING_PLUGIN_KIND, "plugin"]) {
+    runtime.capture(session, {
+      type: "user/message",
+      data: {
+        role: "user",
+        content: [{ type: "text", text: "OpenViking boundary commit: 25 pending token(s)" }],
+        source: { kind, plugin: "openviking-memory", form: "notice" },
+      },
+    });
+    await runtime.flush(session);
+  }
+
+  assert.equal(addCalls, 0, "self-sourced plugin messages must never be captured");
+});
+
+test("a failing notice append never breaks the committed boundary flush", async () => {
+  const debugLines = [];
+  const appends = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      return { pending_tokens: 25 };
+    },
+    async commitSession() {
+      return { ok: true, result: { trace_id: "compaction" } };
+    },
+  }, config(), { debug: line => debugLines.push(line) });
+  const session = {
+    id: "compaction-notice-fail",
+    header: { cwd: "/workspace" },
+    append() {
+      throw new Error("host append failed");
+    },
+  };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(appends.length, 0);
+  assert.equal(debugLines.some(line => line.includes("boundary_notice_error")), true,
+    "the notice failure is logged as boundary_notice_error, not surfaced as write_error");
+  assert.equal(debugLines.some(line => line.includes("write_error")), false,
+    "the write chain must survive a notice append failure");
+});
+
+test("a retryable boundary failure queues the commit and emits no notice", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compact-notice-503-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const appends = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      return { pending_tokens: 25 };
+    },
+    async commitSession() {
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    },
+  }, config(), { debug() {} });
+  const session = {
+    id: "compaction-retryable-notice",
+    header: { cwd: "/workspace" },
+    append(type, data) {
+      appends.push({ type, data });
+    },
+  };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(appends.length, 0, "a failed commit never claims a flush");
+  assert.deepEqual((await listPending()).map(item => item.entry.type), [
+    "commitSession",
+  ]);
+});
+
+test("the notice text starts with the pinned cross-repo marker constant", async () => {
+  const appends = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      return { pending_tokens: 7 };
+    },
+    async commitSession() {
+      return { ok: true, result: { trace_id: "compaction" } };
+    },
+  }, config(), { debug() {} });
+  const session = {
+    id: "compaction-marker-binding",
+    header: { cwd: "/workspace" },
+    append(type, data) {
+      appends.push({ type, data });
+    },
+  };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(appends.length, 1);
+  assert.equal(
+    appends[0].data.content[0].text.startsWith(OPENVIKING_BOUNDARY_NOTICE_MARKER),
+    true,
+    "the ov-viz client module classifies rows by this exact marker",
+  );
+});
+
+test("a compaction boundary while the server never becomes ready drops the commit", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compact-unready-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  let commitCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    },
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction-unready", header: { cwd: "/workspace" } };
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  // Mirrors dispose: nothing commits until the session initializes; replayed
+  // messages reach the queue through capture, not through the boundary.
+  assert.equal(commitCalls, 0);
+  assert.deepEqual(await listPending(), []);
+});
+
+test("a compaction boundary during a pending outage queues the commit behind the messages", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compact-latch-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const runtime = new OpenVikingRuntime({
+    async addMessage() {
+      return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
+    },
+    async commitSession() {
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction-latched", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.capture(session, userEvent("Queued before the compaction."));
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.deepEqual((await listPending()).map(item => item.entry.type), [
+    "addMessage",
+    "commitSession",
+  ]);
+});
+
+test("syncTurns false skips the compaction-boundary commit", async () => {
+  let commitCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true };
+    },
+  }, { ...config(), syncTurns: false }, { debug() {} });
+  const session = { id: "compaction-off", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(commitCalls, 0);
 });
 
 test("once a write is queued, later messages and the final commit stay ordered on disk", async () => {

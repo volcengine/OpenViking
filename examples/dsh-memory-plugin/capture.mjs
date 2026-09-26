@@ -7,6 +7,11 @@ import {
 export const OPENVIKING_PLUGIN_SOURCE = "openviking-memory";
 export const OPENVIKING_PLUGIN_KIND = `plugin:${OPENVIKING_PLUGIN_SOURCE}`;
 
+// Cross-repo UI contract: the dsh-ov-viz client module pins the same string
+// (client.js BOUNDARY_MARKER) and classifies the notice row by it. Change both
+// sides together.
+export const OPENVIKING_BOUNDARY_NOTICE_MARKER = "OpenViking boundary commit";
+
 export function pluginMessage(content, source) {
   // dsh's own constructor: identity, normalization, and any future Message
   // invariants come from the pinned peer instead of a hand-built object.

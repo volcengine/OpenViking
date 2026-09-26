@@ -357,7 +357,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | trae / trae-cn | 每个有内容的 Stop 都 commit（无阈值），keep 0 | — | 无（上游无 PreCompact 事件） |
 | zcode | 同 trae（每 Stop 都 commit，keep 0；rollout 增量游标保守推进，若有漏掉的轮次，将在同会话的下个 Stop 补齐） | — | 无（上游无 PreCompact 事件） |
 | opencode | v1 `session.idle` / v2 execution 结束：flush 后 `pending_tokens ≥ 20000` 才 commit，keep 10 | `session.deleted` / v1 `session.error`：强制 commit；v1 dispose / v2 cleanup：强制 commit | v1 在 compacting 前与 compacted 后触发；v2 只在 `session.compaction.ended` 后触发 |
-| dsh | `turn/end`：`pending_tokens ≥ 20000`（30s 超时），keep 10 | teardown（见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | 无（不监听 compaction 事件） |
+| dsh | `turn/end`：`pending_tokens ≥ 20000`（30s 超时），keep 10 | teardown（见 [§3.3.3](#_3-3-3-关闭方式-×-harness-终局矩阵)） | `compaction/start`：无条件 commit（keep 10；DSH 在改写转录前追加持久事件，覆盖与 Claude Code PreCompact 钩子相同的边界） |
 | pi（takeover 默认开） | `onTurnSynced`：本地估算 `pendingTokens ≥ 30000` 且 `lastSeenUserTurns > 3` 时，执行 commitAndAdvance（keep 3；overview 15×2s 轮询，拿不到则边界不推进，但 pendingTokens 会清零，重新累计后重试） | 手动执行 `/viking commit` | `session_before_compact`（需 `firstKeptEntryId` 非空） |
 | pi（takeover off） | syncBranch 执行后：服务端 `pending_tokens ≥ 20000`，keep 10 | `session_shutdown`：无条件 commit；手动执行 `/viking commit` | `session_before_compact`：无条件 commit |
 | openclaw | afterTurn：`pending_tokens ≥ floor(tokenBudget × 0.5)`（ratio 默认 0.5，tokenBudget 缺省 128000，即阈值 ~64000），wait=false，keep 10 | `before_reset`（执行 `/new` `/reset`）：wait=true，keep 0；`memory_store` 工具：wait=true，keep 0 | `compact()`：wait=true，keep 0（Phase2 轮询上限 5 分钟） |
@@ -426,7 +426,7 @@ JS 系 harness 的召回逻辑均由 `recall-core.mjs` 中的三级降级链处�
 | codex / trae-cli | 不接管 | PreCompact 补齐未捕获轮次 → 全量 commit → `ovSessionId=null`（补齐不全时不 commit，留待重试）；无 PostCompact 接线，依靠 Stop 的转录收缩做防御性纠偏 | resume 时注入 archive digest |
 | cursor / trae×2 / zcode | 不接管 | cursor：preCompact 无条件 commit（trae×2/zcode 上游无该事件） | — |
 | opencode | 不接管 | v1 compacting 前 flush+commit；v2 在压缩前捕获对话 | v1 `session.compacted` 再提交一次；v2 `session.compaction.ended` 后提交一次 |
-| dsh | 不感知（不监听 compaction 事件；注入走 pre-step user 消息，随宿主压缩一起收缩，profile 不重投） | — | — |
+| dsh | 不接管。插件在持久的 `compaction/start` 事件上无条件 commit，先于宿主改写转录；注入走 pre-step user 消息，随宿主压缩一起收缩，profile 不重投。 | — | — |
 | pi | **takeover 双层接管**（默认开，[§3.4.2](#_3-4-2-pi-takeover)） | `session_before_compact`：flush → commit → pollOverview。成功则返回自定义 compaction 摘要覆盖 pi 的；失败则 fail-open 回退到 pi 默认压缩 | 成功后 resetBoundary |
 | openclaw | **全接管**：`ownsCompaction: true`，宿主不再跑自己的摘要（[§3.4.3](#_3-4-3-openclaw-contextengine)） | `compact()` = commit(wait=true, keep 0) → 读回 overview 当 summary | 主 assemble 用 `[Session History Summary]` 重建上下文 |
 | hermes | 不接管（`on_pre_compress` 接口预留，当前不参与压缩摘要） | fork 型压缩边界会触发旧会话 commit；原地压缩不动 | — |
