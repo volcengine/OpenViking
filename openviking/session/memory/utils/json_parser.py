@@ -362,6 +362,94 @@ def parse_value_with_tolerance(value, annotation):
         raise e
 
 
+# Conventional values for required identity fields that models routinely omit.
+# Only applied when the field is absent or empty - never overwrites real data.
+_REQUIRED_FIELD_DEFAULTS = {
+    "user": "default",
+    "category": "general",
+}
+
+# New memory items must carry a page_id; the extraction prompt reserves
+# values >= 100 for newly created pages.
+_MIN_GENERATED_PAGE_ID = 100
+
+
+def _collect_existing_page_ids(parsed_data: Any, props: Any) -> set:
+    """Return every ``page_id`` the model already supplied in this payload.
+
+    Generated ids must not collide with these: a duplicate page_id makes link
+    resolution order-dependent, because ``links`` entries reference pages by id
+    and two pages sharing one id cannot be told apart.
+    """
+    seen = set()
+    for field in props:
+        value = parsed_data.get(field)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            page_id = item.get("page_id")
+            if isinstance(page_id, bool):
+                continue
+            if isinstance(page_id, int):
+                seen.add(page_id)
+            elif isinstance(page_id, str):
+                try:
+                    seen.add(int(page_id.strip()))
+                except (TypeError, ValueError):
+                    continue
+    return seen
+
+
+def _fill_required_identity_defaults(parsed_data: Any, model_class: Any) -> None:
+    """Fill well-known missing REQUIRED fields on memory items, in place.
+
+    Models routinely omit boilerplate identity fields (``user`` on preferences,
+    ``category`` on entities, ``page_id`` on newly created items) while getting
+    the actual memory content right.  Pydantic then rejects the item, and the
+    per-field tolerance fallback silently drops the whole list while still
+    reporting ``error=None`` - the extraction reports success and stores nothing.
+
+    Supplying the conventional defaults keeps the model's real content instead
+    of discarding it.  Fields that already carry a value are never touched.
+    """
+    if not isinstance(parsed_data, dict) or model_class is None:
+        return
+    try:
+        schema = model_class.model_json_schema()
+    except Exception:
+        return
+    defs = schema.get("$defs") or {}
+    props = schema.get("properties") or {}
+    # Never reuse an id the model already assigned: a collision would make link
+    # resolution order-dependent, since links reference pages by id alone.
+    used_page_ids = _collect_existing_page_ids(parsed_data, props)
+    next_page_id = _MIN_GENERATED_PAGE_ID
+    for field, spec in props.items():
+        value = parsed_data.get(field)
+        if not isinstance(value, list):
+            continue
+        ref = ((spec.get("items") or {}).get("$ref") or "").rsplit("/", 1)[-1]
+        required = set((defs.get(ref) or {}).get("required") or [])
+        if not required:
+            continue
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            for name in required:
+                if item.get(name) not in (None, ""):
+                    continue
+                if name == "page_id":
+                    while next_page_id in used_page_ids:
+                        next_page_id += 1
+                    item[name] = next_page_id
+                    used_page_ids.add(next_page_id)
+                    next_page_id += 1
+                elif name in _REQUIRED_FIELD_DEFAULTS:
+                    item[name] = _REQUIRED_FIELD_DEFAULTS[name]
+
+
 def parse_json_with_stability(
     content: str,
     model_class: Optional[Type] = None,
@@ -441,6 +529,10 @@ def parse_json_with_stability(
         return parsed_data, None
 
     # Layer 4 & 5: Validate with model
+    # Supply conventional values for required identity fields the model omitted;
+    # otherwise a single absent boilerplate field makes pydantic reject the item
+    # and the per-field tolerance below silently empties the whole list.
+    _fill_required_identity_defaults(parsed_data, model_class)
     try:
         # First try direct model validation
         return model_class.model_validate(parsed_data, strict=False), None
