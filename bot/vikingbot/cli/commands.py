@@ -609,6 +609,7 @@ def gateway(
             signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(current.cancel)
         )
         tasks = []
+        agent_loop_task = None
 
         async def report_ready(server_task):
             while not getattr(server, "started", False):
@@ -626,8 +627,9 @@ def gateway(
                 asyncio.create_task(report_ready(server_task)),
                 asyncio.create_task(heartbeat.start()),
                 asyncio.create_task(channels.start_all()),
-                asyncio.create_task(agent_loop.run()),
             ]
+            agent_loop_task = asyncio.create_task(agent_loop.run())
+            tasks.append(agent_loop_task)
             if cron is not None:
                 tasks.append(asyncio.create_task(cron.start()))
             combined = asyncio.gather(*tasks)
@@ -637,6 +639,9 @@ def gateway(
             else:
                 await server_task
         finally:
+            agent_loop.stop()
+            if agent_loop_task is not None:
+                await asyncio.gather(agent_loop_task, return_exceptions=True)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -1049,7 +1054,11 @@ def chat(
                 tasks.append(channels.start_all())
                 tasks.append(agent_loop.run())
 
-                await asyncio.gather(*tasks)
+                try:
+                    await asyncio.gather(*tasks)
+                except asyncio.CancelledError:
+                    agent_loop.stop()
+                    raise
         finally:
             await agent_loop.close_mcp()
 
