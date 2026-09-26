@@ -28,7 +28,7 @@ except Exception:
     VikingClient = None
     ov = None
 
-_global_clients: dict[tuple[str, int, int], Any] = {}
+_global_clients: dict[tuple[str, int], Any] = {}
 
 
 async def get_global_client(workspace_id: str | None, config: Any = None) -> VikingClient:
@@ -42,7 +42,6 @@ async def get_global_client(workspace_id: str | None, config: Any = None) -> Vik
     cache_key = (
         str(workspace_id or "__default__"),
         id(asyncio.get_running_loop()),
-        id(config),
     )
     client = _global_clients.get(cache_key)
     if client is None:
