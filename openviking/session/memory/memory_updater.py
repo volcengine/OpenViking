@@ -30,6 +30,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.merge_op.base import StrPatch
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.utils.memory_file_utils import (
     MemoryFileUtils,
@@ -944,6 +945,13 @@ class MemoryUpdater:
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
+        # Guard against silent same-URI folds (issue #5279): when several upsert
+        # ops in one batch resolve to a single-file memory (e.g. profile.md) and
+        # carry plain-string content, each op wholesale-replaces the previous
+        # one, so only the last fact survives. Report the folded ops and apply
+        # only the first instead of silently losing them.
+        applicable_upserts = self._report_same_uri_folds(applicable_upserts, result)
+
         # Apply unified operations - _apply_edit returns True if edited, False if written
         for resolved_op in applicable_upserts:
             try:
@@ -1347,6 +1355,67 @@ class MemoryUpdater:
                     )
             except Exception as exc:
                 logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
+
+    def _report_same_uri_folds(
+        self,
+        applicable_upserts: List[ResolvedOperation],
+        result: MemoryUpdateResult,
+    ) -> List[ResolvedOperation]:
+        """Report/block silent folds of multiple upserts onto the same URI.
+
+        A fold is only reported when it would actually lose data: the ops
+        resolve to the same single URI and their ``content`` patch would take
+        the "simple full replacement" path (plain string, non-empty), not a
+        true SEARCH/REPLACE StrPatch. Other shapes (multiple distinct URIs,
+        StrPatch blocks, absent content) pass through unchanged.
+
+        Returns the upserts that are still safe to apply: for each folding
+        group only the first op survives; the rest are recorded as skipped so
+        the task result surfaces them instead of hiding the loss.
+        """
+        first_op_by_uri: Dict[str, ResolvedOperation] = {}
+        keep: List[ResolvedOperation] = []
+        for resolved_op in applicable_upserts:
+            uris = list(resolved_op.uris or [])
+            single_uri = len(uris) == 1
+            content_value = resolved_op.memory_fields.get("content")
+            plain_string_replace = (
+                isinstance(content_value, str)
+                and content_value != ""
+                and not isinstance(content_value, StrPatch)
+            )
+            if not (single_uri and plain_string_replace):
+                keep.append(resolved_op)
+                if single_uri:
+                    first_op_by_uri.setdefault(uris[0], resolved_op)
+                continue
+            uri = uris[0]
+            if uri not in first_op_by_uri:
+                first_op_by_uri[uri] = resolved_op
+                keep.append(resolved_op)
+                continue
+            skipped = SkippedMemoryOperation(
+                memory_type=resolved_op.memory_type,
+                page_id=resolved_op.page_id,
+                uri=uri,
+                reason_code=MemoryOperationSkipCode.SAME_URI_BATCH_FOLD,
+                reason=(
+                    "Skipped upsert because another op in the same batch already "
+                    f"targets {uri} with a plain-string content update; applying "
+                    "it would wholesale-replace the earlier update (issue #5279). "
+                    "Emit one op carrying the complete content, or use "
+                    "SEARCH/REPLACE blocks."
+                ),
+                source=getattr(resolved_op, "source", None),
+            )
+            result.add_skipped(skipped)
+            logger.warning(
+                "Skipping same-URI fold: memory_type=%s page_id=%s uri=%s",
+                resolved_op.memory_type,
+                resolved_op.page_id,
+                uri,
+            )
+        return keep
 
     async def _apply_upsert(
         self,
