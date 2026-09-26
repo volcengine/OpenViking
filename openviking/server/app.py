@@ -804,7 +804,13 @@ def create_app(
             return match, child_scope
 
     app.routes.append(
-        _ScopedRoute("/mcp", endpoint=create_mcp_app(), methods=["GET", "POST", "DELETE"])
+        _ScopedRoute(
+            "/mcp",
+            endpoint=create_mcp_app(
+                max_request_body_size=config.mcp_max_request_body_size_bytes,
+            ),
+            methods=["GET", "POST", "DELETE"],
+        )
     )
 
     return app

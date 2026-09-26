@@ -17,9 +17,11 @@ These tests take no service fixture. A stub service records what the list path f
 which is also how the "these never reach the search service" half is pinned.
 """
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.dependencies import set_service
@@ -45,6 +47,13 @@ CONTEXT_ONLY_ARGS = {
     "rewrite": "auto",
     "rewrite_max_bullets": 2,
 }
+
+
+@contextmanager
+def _raises_invalid_argument(match=None):
+    with pytest.raises(ToolError, match=match) as exc_info:
+        yield exc_info
+    assert isinstance(exc_info.value.__cause__, InvalidArgumentError)
 
 
 class _SearchCalled(Exception):
@@ -74,7 +83,7 @@ def _identity_and_stub_service():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,value", sorted(CONTEXT_ONLY_ARGS.items()))
 async def test_list_mode_refuses_a_context_only_argument(name, value):
-    with pytest.raises(InvalidArgumentError, match=rf"\b{name}\b.*mode='context'"):
+    with _raises_invalid_argument(match=rf"\b{name}\b.*mode='context'"):
         await mcp_endpoint.search(query="anything", **{name: value})
 
 
@@ -82,7 +91,7 @@ async def test_list_mode_refuses_a_context_only_argument(name, value):
 async def test_list_mode_names_every_context_only_argument_it_refuses():
     # One error listing all of them beats making the caller discover them one call at a
     # time, which is what a per-argument raise would do.
-    with pytest.raises(InvalidArgumentError) as excinfo:
+    with _raises_invalid_argument() as excinfo:
         await mcp_endpoint.search(query="anything", **CONTEXT_ONLY_ARGS)
 
     message = str(excinfo.value)
@@ -114,10 +123,10 @@ async def test_context_mode_still_accepts_them():
 
 @pytest.mark.asyncio
 async def test_context_mode_still_refuses_list_only_arguments():
-    with pytest.raises(InvalidArgumentError, match="only supported in mode='list'"):
+    with _raises_invalid_argument(match="only supported in mode='list'"):
         await mcp_endpoint.search(query="anything", mode="context", read_content=True)
 
-    with pytest.raises(InvalidArgumentError, match="not supported in mode='context'"):
+    with _raises_invalid_argument(match="not supported in mode='context'"):
         await mcp_endpoint.search(
             query="anything", mode="context", target_uri="viking://user/test_user"
         )
@@ -167,11 +176,13 @@ def test_the_refusal_names_what_the_caller_typed():
     """The tool splits two router fields in two, and the caller has to hear their own name."""
     from openviking.server.routers.search import context_only_fields_error
 
-    message = context_only_fields_error({"detail": {"detail_by_category"}},
-                                        as_named_by_caller={"detail": {"detail_by_category"}})
+    message = context_only_fields_error(
+        {"detail": {"detail_by_category"}}, as_named_by_caller={"detail": {"detail_by_category"}}
+    )
     assert "detail_by_category" in message
 
-    both = context_only_fields_error({"detail": {"detail", "detail_by_category"}},
-                                     as_named_by_caller={"detail": {"detail", "detail_by_category"}})
+    both = context_only_fields_error(
+        {"detail": {"detail", "detail_by_category"}},
+        as_named_by_caller={"detail": {"detail", "detail_by_category"}},
+    )
     assert "detail_by_category" in both and "detail" in both
-

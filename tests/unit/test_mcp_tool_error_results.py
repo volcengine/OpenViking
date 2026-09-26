@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.types import CallToolRequest, CallToolRequestParams
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.identity import RequestContext, Role
@@ -27,11 +26,8 @@ def _set_mcp_identity():
 
 
 async def _call_tool(name: str, arguments: dict) -> dict:
-    handler = mcp_endpoint.mcp._mcp_server.request_handlers[CallToolRequest]
-    request = CallToolRequest(
-        params=CallToolRequestParams(name=name, arguments=arguments),
-    )
-    return (await handler(request)).root.model_dump(by_alias=True, exclude_none=True)
+    result = await mcp_endpoint.mcp.call_tool(name, arguments)
+    return result.model_dump(by_alias=True, exclude_none=True)
 
 
 @pytest.mark.parametrize(

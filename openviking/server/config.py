@@ -31,6 +31,8 @@ from openviking_cli.utils.config.consts import (
 
 logger = get_logger(__name__)
 
+DEFAULT_MCP_MAX_REQUEST_BODY_SIZE_BYTES = 4 * 1024 * 1024
+
 
 def _normalize_config_uri(value: Optional[str], field_name: str) -> Optional[str]:
     if value is None:
@@ -322,6 +324,11 @@ class ServerConfig(BaseModel):
     # connections the client still believes are reusable, causing sporadic
     # connection-reset / EOF errors.
     timeout_keep_alive: int = 5
+    mcp_max_request_body_size_bytes: int = Field(
+        DEFAULT_MCP_MAX_REQUEST_BODY_SIZE_BYTES,
+        gt=0,
+        description="Maximum accepted MCP Streamable HTTP POST body size in bytes.",
+    )
     auth_mode: Optional[str] = None  # If None, auto-detect based on root_api_key
     root_api_key: Optional[str] = None
     # OIDC/LDAP authentication configuration
