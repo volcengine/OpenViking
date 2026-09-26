@@ -194,6 +194,7 @@ async def test_search_tools_expose_only_context_type_parameter():
     for tool_name in ("find", "search"):
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
+        assert "include_timestamps" in properties
         assert "filter" not in properties
 
 
@@ -651,9 +652,43 @@ async def test_find_tool_inlines_visible_content_when_requested(service, monkeyp
     assert "Use the read tool" not in result
 
 
+async def test_find_tool_formats_timestamps_only_when_requested(service, monkeypatch):
+    async def fake_find(**kwargs):
+        del kwargs
+        return SimpleNamespace(
+            memories=[],
+            resources=[
+                SimpleNamespace(
+                    uri="viking://resources/visible.md",
+                    abstract="summary",
+                    overview="",
+                    score=0.9,
+                    created_at="2026-09-01T01:02:03.004Z",
+                    updated_at="2026-09-02T05:06:07.008Z",
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    default_result = await mcp_endpoint.find(query="visible")
+    timestamped_result = await mcp_endpoint.find(query="visible", include_timestamps=True)
+
+    assert "Created: " not in default_result
+    assert "Updated: " not in default_result
+    assert "Created: 2026-09-01T01:02:03.004Z" in timestamped_result
+    assert "Updated: 2026-09-02T05:06:07.008Z" in timestamped_result
+
+
 async def test_search_tool_rejects_read_content_in_context_mode():
     with pytest.raises(InvalidArgumentError, match="read_content"):
         await mcp_endpoint.search(query="visible", mode="context", read_content=True)
+
+
+async def test_search_tool_rejects_include_timestamps_in_context_mode():
+    with pytest.raises(InvalidArgumentError, match="include_timestamps"):
+        await mcp_endpoint.search(query="visible", mode="context", include_timestamps=True)
 
 
 async def test_search_tool_calls_context_aware_search_with_session(service, monkeypatch):

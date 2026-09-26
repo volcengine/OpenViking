@@ -672,6 +672,30 @@ async def test_convert_to_matched_contexts_propagates_search_tags():
 
 
 @pytest.mark.asyncio
+async def test_convert_to_matched_contexts_preserves_indexed_timestamps():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            _result(
+                "viking://resources/file-a",
+                1.0,
+                created_at="2026-09-01T01:02:03.004Z",
+                updated_at="2026-09-02T05:06:07.008Z",
+            )
+        ],
+        ctx=_ctx(),
+    )
+
+    assert result[0].created_at == "2026-09-01T01:02:03.004Z"
+    assert result[0].updated_at == "2026-09-02T05:06:07.008Z"
+
+
+@pytest.mark.asyncio
 async def test_convert_to_matched_contexts_defaults_tags_and_body_previews():
     retriever = HierarchicalRetriever(
         storage=DummyStorage(),

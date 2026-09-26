@@ -86,6 +86,20 @@ def test_matched_context_from_record_keeps_tags_and_zero_score():
     assert matched.match_reason == "filter"
 
 
+def test_matched_context_from_record_keeps_indexed_timestamps():
+    matched = build_matched_context_from_record(
+        {
+            "uri": "viking://user/default/memories/s/a.md",
+            "context_type": "memory",
+            "created_at": "2026-09-01T01:02:03.004Z",
+            "updated_at": "2026-09-02T05:06:07.008Z",
+        }
+    )
+
+    assert matched.created_at == "2026-09-01T01:02:03.004Z"
+    assert matched.updated_at == "2026-09-02T05:06:07.008Z"
+
+
 def test_matched_context_from_record_without_uri_is_dropped():
     assert build_matched_context_from_record({"context_type": "memory"}) is None
 

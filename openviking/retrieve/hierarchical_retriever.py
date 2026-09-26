@@ -651,6 +651,8 @@ class HierarchicalRetriever:
                     abstract=abstract,
                     category=c.get("category", ""),
                     score=final_score,
+                    created_at=c.get("created_at"),
+                    updated_at=c.get("updated_at"),
                     search_tags=normalize_search_tags(
                         c.get("search_tags"), discard_invalid=True
                     ),

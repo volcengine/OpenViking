@@ -205,6 +205,34 @@ func TestFindSendsAndDecodesReadContentWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestFindSendsAndDecodesTimestampsWhenEnabled(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if body["include_timestamps"] != true {
+			t.Fatalf("include_timestamps = %#v", body["include_timestamps"])
+		}
+		writeOK(t, w, map[string]any{
+			"resources": []map[string]any{{
+				"uri":        "viking://resources/auth.md",
+				"created_at": "2026-09-01T01:02:03.004Z",
+				"updated_at": "2026-09-02T05:06:07.008Z",
+			}},
+		})
+	}))
+	defer closeServer()
+
+	enabled := true
+	result, err := client.Find(context.Background(), "auth", &FindOptions{IncludeTimestamps: &enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Resources) != 1 ||
+		result.Resources[0].CreatedAt != "2026-09-01T01:02:03.004Z" ||
+		result.Resources[0].UpdatedAt != "2026-09-02T05:06:07.008Z" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestFindUsesDefaultLimitAndPreservesEmptyValues(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)

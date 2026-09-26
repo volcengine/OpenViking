@@ -172,3 +172,43 @@ class TestMatchedContextSearchTags:
         }
         result = FindResult.from_dict(payload)
         assert result.resources[0].search_tags == ["team=infra"]
+
+
+class TestMatchedContextTimestamps:
+    def _make_find_result(self) -> FindResult:
+        ctx = MatchedContext(
+            uri="viking://resources/docs/arch.md",
+            context_type=ContextType.RESOURCE,
+            level=2,
+        )
+        ctx.created_at = "2026-09-01T01:02:03.004Z"
+        ctx.updated_at = "2026-09-02T05:06:07.008Z"
+        return FindResult(memories=[], resources=[ctx], skills=[])
+
+    def test_context_to_dict_exposes_timestamps_only_when_requested(self):
+        result = self._make_find_result()
+
+        default_item = result.to_dict()["resources"][0]
+        timestamped_item = result.to_dict(include_timestamps=True)["resources"][0]
+
+        assert "created_at" not in default_item
+        assert "updated_at" not in default_item
+        assert timestamped_item["created_at"] == "2026-09-01T01:02:03.004Z"
+        assert timestamped_item["updated_at"] == "2026-09-02T05:06:07.008Z"
+
+    def test_from_dict_preserves_timestamps(self):
+        payload = {
+            "resources": [
+                {
+                    "uri": "viking://resources/docs/arch.md",
+                    "context_type": "resource",
+                    "created_at": "2026-09-01T01:02:03.004Z",
+                    "updated_at": "2026-09-02T05:06:07.008Z",
+                }
+            ]
+        }
+
+        result = FindResult.from_dict(payload)
+
+        assert result.resources[0].created_at == "2026-09-01T01:02:03.004Z"
+        assert result.resources[0].updated_at == "2026-09-02T05:06:07.008Z"

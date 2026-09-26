@@ -320,6 +320,33 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("forwards includeTimestamps for ranked retrieval", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      ok({
+        resources: [
+          {
+            uri: "viking://resources/auth.md",
+            created_at: "2026-09-01T01:02:03.004Z",
+            updated_at: "2026-09-02T05:06:07.008Z",
+          },
+        ],
+      }),
+    );
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    const result = await client.find("hello", { includeTimestamps: true });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      query: "hello",
+      include_timestamps: true,
+    });
+    expect(result.resources?.[0]?.created_at).toBe("2026-09-01T01:02:03.004Z");
+    expect(result.resources?.[0]?.updated_at).toBe("2026-09-02T05:06:07.008Z");
+  });
+
   it("sends dry_run for prune_orphans reindex requests", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

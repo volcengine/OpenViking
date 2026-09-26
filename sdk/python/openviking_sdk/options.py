@@ -20,6 +20,7 @@ class FindOptions(_ExtraOptions, total=False):
     filter: Dict[str, Any]
     context_type: Any
     include_provenance: bool
+    include_timestamps: bool
     tags: List[str]
     since: str
     until: str
