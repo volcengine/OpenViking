@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import os
@@ -114,6 +115,9 @@ class _BatchRefreshOutcome:
         vector_work = bool(self.semantic_actions) or self.embedding_requested
         vector_status = ("complete" if wait else "queued") if vector_work else "skipped"
         return semantic_status, vector_status
+
+
+_REQUEST_WAIT_DEFAULT_TIMEOUT_SECONDS = 300.0
 
 
 class ContentWriteCoordinator:
@@ -822,6 +826,31 @@ class ContentWriteCoordinator:
         vector_status = "failed" if _has_errors("Embedding") else "complete"
         return semantic_status, vector_status
 
+    async def _release_direct_write_lease(self, lease: Any) -> None:
+        """Release a direct write lease, finishing the release even on cancellation."""
+        release_task = asyncio.create_task(
+            self._viking_fs._async_agfs.pathlock_release(lease)
+        )
+        try:
+            await asyncio.shield(release_task)
+        except asyncio.CancelledError:
+            try:
+                await asyncio.shield(release_task)
+            except BaseException:
+                logger.error("Failed to release direct write lock", exc_info=True)
+            raise
+
+    async def _acquire_direct_write_lease(self, uri: str, *, ctx: RequestContext) -> Any:
+        """Acquire the exact-path lease, reporting contention as ResourceBusyError."""
+        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        try:
+            return await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
+        except LockAcquisitionError as exc:
+            raise ResourceBusyError(
+                f"resource is busy and cannot be written now: {uri}",
+                uri=uri,
+            ) from exc
+
     async def _write_direct_with_refresh(
         self,
         *,
@@ -839,144 +868,150 @@ class ContentWriteCoordinator:
         processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE,
         ingest_options: IngestOptions | None = None,
     ) -> Dict[str, Any]:
-        lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
-        try:
-            lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(lock_path)
-        except LockAcquisitionError as exc:
-            raise ResourceBusyError(
-                f"resource is busy and cannot be written now: {uri}",
-                uri=uri,
-            ) from exc
+        request_registered = False
+        if wait and telemetry_id:
+            # Register the wait state before the path lock is requested so a
+            # queue completion belonging to this request cannot land while the
+            # write is still contending for the lock.
+            get_request_wait_tracker().register_request(telemetry_id)
+            request_registered = True
 
-        previous_content: Optional[str] = None
-        final_content = content.encode("utf-8")
-        file_abstract = ""
-        content_written = False
-        post_process_started = False
-        lock_released = False
-        vector_enqueued = False
-        refresh_action: Optional[FreshnessAction] = None
         try:
-            if mode != "create":
-                previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
-            elif is_abstract_overview_uri(uri):
-                raise InvalidArgumentError(
-                    f"cannot create generated abstract overview directly: {uri}"
-                )
-            if (
-                mode != "create"
-                and not is_abstract_overview_uri(uri)
-                and processing_mode != VECTORS_ONLY
-            ):
-                file_abstract = (await self._load_file_abstracts([uri], ctx=ctx)).get(uri, "")
-            if wait and telemetry_id:
-                get_request_wait_tracker().register_request(telemetry_id)
-            written_content = await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=ctx,
-                lease_ref=lease,
-                existing_raw=previous_content,
-            )
-            if written_content is not None:
-                final_content = written_content
-            content_written = True
-            if is_abstract_overview_uri(uri):
-                vector_enqueued = await self._vectorize_abstract_overview(
-                    uri=uri, ctx=ctx, ingest_options=ingest_options
-                )
-                post_process_started = True
-            elif processing_mode == VECTORS_ONLY:
-                vector_enqueued = await self._vectorize_written_file(
-                    uri=uri,
-                    context_type=context_type,
-                    ctx=ctx,
-                    ingest_options=ingest_options,
-                    file_md5=content_md5(final_content),
-                )
-                post_process_started = True
-            else:
-                refresh_action = await self._enqueue_semantic_refresh(
-                    root_uri=root_uri,
-                    changed_uri=uri,
-                    context_type=context_type,
-                    ctx=ctx,
-                    change_type="added" if mode == "create" else "modified",
-                    force_refresh=wait,
-                    ingest_options=ingest_options,
-                    file_md5=content_md5(final_content),
-                    file_abstract=file_abstract,
-                )
-                post_process_started = True
-            if ingest_options and ingest_options.acl_update:
-                await self._viking_fs.acl_manager.apply_indexed_update(
-                    ingest_options.acl_update, ctx
-                )
-            await self._viking_fs._async_agfs.pathlock_release(lease)
-            lock_released = True
-            queue_status = (
-                await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
-                if wait
-                else None
-            )
-            result_kwargs = {}
-            if is_abstract_overview_uri(uri):
-                _, vector_status = (
-                    self._refresh_statuses(wait=wait, queue_status=queue_status)
-                    if vector_enqueued
-                    else ("skipped", "skipped")
-                )
-                result_kwargs = {
-                    "semantic_status": "skipped",
-                    "vector_status": vector_status,
-                }
-            elif processing_mode == VECTORS_ONLY:
-                if vector_enqueued:
-                    _, vector_status = self._refresh_statuses(
-                        wait=wait,
-                        queue_status=queue_status,
+            lease = await self._acquire_direct_write_lease(uri, ctx=ctx)
+
+            previous_content: Optional[str] = None
+            final_content = content.encode("utf-8")
+            file_abstract = ""
+            content_written = False
+            post_process_started = False
+            lock_released = False
+            vector_enqueued = False
+            refresh_action: Optional[FreshnessAction] = None
+            try:
+                if mode != "create":
+                    previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
+                elif is_abstract_overview_uri(uri):
+                    raise InvalidArgumentError(
+                        f"cannot create generated abstract overview directly: {uri}"
                     )
-                else:
-                    vector_status = "skipped"
-                result_kwargs = {
-                    "semantic_status": "skipped",
-                    "vector_status": vector_status,
-                }
-            elif refresh_action in {FreshnessAction.MARK_PENDING, FreshnessAction.NOOP}:
-                # Changed-file semantic/vector work may still be queued, while
-                # directory aggregation is deferred or skipped on contention.
-                _, vector_status = self._refresh_statuses(wait=wait, queue_status=queue_status)
-                result_kwargs = {
-                    "semantic_status": (
-                        "skipped" if refresh_action is FreshnessAction.NOOP else "deferred"
-                    ),
-                    "vector_status": vector_status,
-                }
-            return self._build_write_result(
-                uri=uri,
-                root_uri=root_uri,
-                context_type=context_type,
-                mode=response_mode or mode,
-                written_bytes=written_bytes,
-                wait=wait,
-                queue_status=queue_status,
-                **result_kwargs,
-            )
-        except Exception:
-            if not post_process_started and content_written:
-                await self._rollback_direct_write(
-                    uri=uri,
-                    previous_content=previous_content,
+                if (
+                    mode != "create"
+                    and not is_abstract_overview_uri(uri)
+                    and processing_mode != VECTORS_ONLY
+                ):
+                    file_abstract = (await self._load_file_abstracts([uri], ctx=ctx)).get(uri, "")
+                written_content = await self._write_in_place(
+                    uri,
+                    content,
                     mode=mode,
                     ctx=ctx,
                     lease_ref=lease,
+                    existing_raw=previous_content,
                 )
-            if not lock_released:
-                await self._viking_fs._async_agfs.pathlock_release(lease)
-            raise
+                if written_content is not None:
+                    final_content = written_content
+                content_written = True
+                if is_abstract_overview_uri(uri):
+                    vector_enqueued = await self._vectorize_abstract_overview(
+                        uri=uri, ctx=ctx, ingest_options=ingest_options
+                    )
+                    post_process_started = True
+                elif processing_mode == VECTORS_ONLY:
+                    vector_enqueued = await self._vectorize_written_file(
+                        uri=uri,
+                        context_type=context_type,
+                        ctx=ctx,
+                        ingest_options=ingest_options,
+                        file_md5=content_md5(final_content),
+                    )
+                    post_process_started = True
+                else:
+                    refresh_action = await self._enqueue_semantic_refresh(
+                        root_uri=root_uri,
+                        changed_uri=uri,
+                        context_type=context_type,
+                        ctx=ctx,
+                        change_type="added" if mode == "create" else "modified",
+                        force_refresh=wait,
+                        ingest_options=ingest_options,
+                        file_md5=content_md5(final_content),
+                        file_abstract=file_abstract,
+                    )
+                    post_process_started = True
+                if ingest_options and ingest_options.acl_update:
+                    await self._viking_fs.acl_manager.apply_indexed_update(
+                        ingest_options.acl_update, ctx
+                    )
+                lock_released = True
+                await self._release_direct_write_lease(lease)
+                queue_status = (
+                    await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
+                    if wait
+                    else None
+                )
+                result_kwargs = {}
+                if is_abstract_overview_uri(uri):
+                    _, vector_status = (
+                        self._refresh_statuses(wait=wait, queue_status=queue_status)
+                        if vector_enqueued
+                        else ("skipped", "skipped")
+                    )
+                    result_kwargs = {
+                        "semantic_status": "skipped",
+                        "vector_status": vector_status,
+                    }
+                elif processing_mode == VECTORS_ONLY:
+                    if vector_enqueued:
+                        _, vector_status = self._refresh_statuses(
+                            wait=wait,
+                            queue_status=queue_status,
+                        )
+                    else:
+                        vector_status = "skipped"
+                    result_kwargs = {
+                        "semantic_status": "skipped",
+                        "vector_status": vector_status,
+                    }
+                elif refresh_action in {FreshnessAction.MARK_PENDING, FreshnessAction.NOOP}:
+                    # Changed-file semantic/vector work may still be queued, while
+                    # directory aggregation is deferred or skipped on contention.
+                    _, vector_status = self._refresh_statuses(wait=wait, queue_status=queue_status)
+                    result_kwargs = {
+                        "semantic_status": (
+                            "skipped" if refresh_action is FreshnessAction.NOOP else "deferred"
+                        ),
+                        "vector_status": vector_status,
+                    }
+                return self._build_write_result(
+                    uri=uri,
+                    root_uri=root_uri,
+                    context_type=context_type,
+                    mode=response_mode or mode,
+                    written_bytes=written_bytes,
+                    wait=wait,
+                    queue_status=queue_status,
+                    **result_kwargs,
+                )
+            except BaseException:
+                if not post_process_started and content_written:
+                    try:
+                        await self._rollback_direct_write(
+                            uri=uri,
+                            previous_content=previous_content,
+                            mode=mode,
+                            ctx=ctx,
+                            lease_ref=lease,
+                        )
+                    except BaseException:
+                        logger.error("Failed to rollback direct content write", exc_info=True)
+                if not lock_released:
+                    try:
+                        await self._release_direct_write_lease(lease)
+                    except BaseException:
+                        logger.error("Failed to release direct write lock", exc_info=True)
+                raise
         finally:
-            if wait and telemetry_id:
+            if request_registered:
                 get_request_wait_tracker().cleanup(telemetry_id)
 
     async def _rollback_direct_write(
@@ -1325,10 +1360,18 @@ class ContentWriteCoordinator:
         if not telemetry_id:
             return await self._wait_for_queues(timeout=timeout)
         tracker = get_request_wait_tracker()
+        wait_timeout = timeout
+        if wait_timeout is None:
+            wait_timeout = _REQUEST_WAIT_DEFAULT_TIMEOUT_SECONDS
+            logger.warning(
+                "No request wait timeout provided for telemetry_id=%s; using %.1fs max wait",
+                telemetry_id,
+                wait_timeout,
+            )
         try:
-            await tracker.wait_for_request(telemetry_id, timeout=timeout)
+            await tracker.wait_for_request(telemetry_id, timeout=wait_timeout)
         except TimeoutError as exc:
-            raise DeadlineExceededError("queue processing", timeout) from exc
+            raise DeadlineExceededError("queue processing", wait_timeout) from exc
         return tracker.build_queue_status(telemetry_id)
 
     async def _write_memory_with_refresh(
