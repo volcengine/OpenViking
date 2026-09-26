@@ -33,10 +33,10 @@ OpenViking 相关操作分属**两个不同的面**，各用各的 Key，混用�
 ## 总体原则
 
 - 按顺序完成前置检查：AgentPlan APIKey → 控制面能力 → 创建/选择 OV 库 →
-  获取并记录库的 OpenViking APIKey 与 user 身份 → 飞书 CLI。
+  配置库的 OpenViking APIKey 并记录 user 身份 → 飞书 CLI。
 - 不在对话中展示、复述、记录 APIKey、Token、Cookie 等敏感凭据明文；配置凭据
   优先走环境变量或配置文件，不要求用户把 Key 粘贴进聊天。
-- **建库是计费动作**，且每账号最多 20 个库：创建前必须向用户确认。
+- **建库会产生费用**：创建前说明计费方式并取得用户确认。库数量上限以当前控制台和服务返回为准。
 - 默认创建**个人版**库，除非用户明确要求团队版。
 - 示例中避免真实客户名，统一用"某客户 / 某商机 / 某项目"等泛化表达。
 
@@ -45,7 +45,7 @@ OpenViking 相关操作分属**两个不同的面**，各用各的 Key，混用�
 1. 检查环境（如 `AGENTPLAN_API_KEY` 环境变量、已安全记录的凭据、会话安全上下文）
    中是否已有 AgentPlan APIKey。只判断"是否存在/是否可用"，不要输出明文。
 2. 有 Key 时，用一次**只读**控制面调用验证可用性（`list_collections` 或
-   `ov-cp list`）——只读操作不消耗 AgentPlan 额度。
+   `ov-cp list`）。这一步验证控制面权限；费用和额度以当前服务规则为准。
 3. 没有 Key 时，引导用户去方舟控制台购买 AgentPlan 并新建 APIKey：
    https://console.volcengine.com/ark/region:cn-beijing/subscription/agent-plan?projectName=default
    然后暂停建库及之后的流程，等用户配置好再继续。
@@ -67,7 +67,8 @@ CLI 在同一个包里），境内网络给 uv 配 PyPI 镜像即可，不依赖
 
    ```bash
    # 境内网络可加：export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
-   AGENTPLAN_API_KEY=<已配置的key> uvx --from mcp-server-openviking-controlplane ov-cp list
+   # 先通过凭据管理工具或环境配置设置 AGENTPLAN_API_KEY
+   uvx --from mcp-server-openviking-controlplane ov-cp list
    ```
 
 2. **安装为 MCP（适合长期使用）**：向用户展示将写入 `.mcp.json` 的内容，
@@ -96,24 +97,23 @@ CLI 在同一个包里），境内网络给 uv 配 PyPI 镜像即可，不依赖
 
 1. 询问库名（不要自行编造）。库名建议用**英文/下划线**（如
    `sales_opportunity_kb`），中文名可能不被接受；可另记一个中文别名用于展示。
-2. 建库前向用户确认：这是计费动作，且每账号最多 20 个库。
+2. 建库前确认库名、版本和计费方式，并检查当前账号配额。个人 AgentPlan 与企业席位的计费参数不同，不能只凭 Key 存在就采用默认计费。
 3. 用户确认后调用 `create_collection`（或 `ov-cp create --name <库名>`）。
-   个人版走默认参数即可，模型配置会自动回落到 AgentPlan。
+   默认计费是个人 AgentPlan；企业席位需按[控制面说明](https://github.com/volcengine/mcp-server/tree/main/server/mcp_server_openviking_controlplane#cli-usage)显式指定计费方式和席位。模型凭据使用 AgentPlan Key。
 4. 创建返回 `ResourceID`（形如 `ov-xxxxxxxx`），**此时库还没就绪，返回结果里
    也没有 OpenViking APIKey**——这是正常的，进入 Step 4。
 
 ## Step 4：等库就绪，获取并记录 OpenViking APIKey 与 user 身份
 
 库创建后处于 `INIT` 状态，需要轮询到 `READY` 才能取凭据（INIT 阶段取
-api-key 会超时，不是故障，等一会重试即可）：
+api-key 可能超时，先查状态再决定是否重试）：
 
 1. 用 `get_collection`（或 `ov-cp get <ResourceID>`）轮询 `Status`，
    直到 `READY`（通常几分钟内）。
 2. 调 `get_collection_api_key`（或 `ov-cp api-key <ResourceID>`），返回
    `{UserID, Role, ApiKey}` —— 这里的 `ApiKey` 就是该库的
    **OpenViking APIKey**，`UserID` 就是 user 身份。
-3. 安全记录：库名、`ResourceID`、`UserID`、OpenViking APIKey。回复中只说明
-   "已安全记录"，不展示明文。
+3. 记录库名、`ResourceID`、`UserID`；OpenViking APIKey 仅写入凭据管理器或受保护的本地配置，不写入普通记忆、文档或日志。确认写入成功后再回复凭据已配置，不展示明文。
 4. 之后数据面 MCP 读写该库（上传、查询、沉淀）一律用这把 Key。
 
 **控制台兜底路径**（MCP 不可用、api-key 调用被拦、或用户已有存量库时同样适用）：
@@ -143,7 +143,7 @@ APIKey。让用户把 Key 配置到数据面工具的环境变量/配置中，�
 已完成：
 1. AgentPlan APIKey 可用（用于建库、联网、数据集查询）。
 2. OpenViking 个人库「[库名]」已就绪（READY）。
-3. 该库的 OpenViking APIKey 与 user 身份已安全记录（用于读写库数据）。
+3. 该库的 OpenViking APIKey 与 user 身份已配置（用于读写库数据）。
 4. 飞书 CLI 已就绪。
 
 你可以直接这样说：
@@ -196,7 +196,7 @@ APIKey。让用户把 Key 配置到数据面工具的环境变量/配置中，�
 
 1. 询问同步范围（当前会话 / 指定项目 / 最近 N 天 / 关键词）和频率
    （每天、每周、会话结束后、指定时间）。
-2. 用定时任务能力创建任务；执行时用 OpenViking APIKey 上传摘要或全文。
+2. 检查宿主是否提供持久化定时任务能力，再创建任务并返回任务标识。未提供时说明只能手动触发，不宣称已设置自动同步。执行时用 OpenViking APIKey 上传摘要或全文。
 3. 上传内容带元信息：时间、主题、关联商机、来源会话、摘要、待办。
 4. 不上传无关闲聊、敏感凭据或用户明确排除的内容。
 5. 告知用户定时任务可暂停、可删除、可改频率。
@@ -218,13 +218,13 @@ APIKey。让用户把 Key 配置到数据面工具的环境变量/配置中，�
 |---|---|---|
 | 无 AgentPlan APIKey | 未购买/未配置 | 给控制台链接，暂停建库 |
 | create 返回 `ProductUnordered` | 未开通 AgentPlan 抵扣 | 引导控制台开通抵扣，不要重试 |
-| create 返回超限 | 已达 20 库上限 | 让用户删除闲置库或复用现有库 |
-| api-key 调用超时 | 库还在 INIT | 轮询 `get_collection` 到 READY 再取 |
+| create 返回超限 | 已达当前账号配额 | 先检查并复用合适的现有库；删除库需单独确认数据备份和删除范围 |
+| api-key 调用超时 | 库可能未就绪，也可能是网络或服务异常 | 查询库状态；INIT 时等待，READY 后仍超时则检查端点和服务错误 |
 | 控制面 MCP / `ov-cp` 不可用 | 缺控制面能力 | 走 Step 2 征求安装同意，或控制台手工建库 |
 | 拿不到 OpenViking APIKey | — | 控制台「鉴权管理 → 显示鉴权凭证」兜底 |
 | 数据面读写鉴权失败 | 可能 Key 用混了 | 确认用的是该库的 OpenViking APIKey |
 | 飞书 CLI 不可用 | — | 给官方安装链接，等待安装/授权 |
-| 查询无结果 | 库里没有相关内容 | 说明未找到，建议上传哪些文档 |
+| 查询无结果 | 本次检索未命中 | 检查库、身份、检索范围和索引任务状态，再调整查询或补充资料 |
 
 ## 安全与合规
 

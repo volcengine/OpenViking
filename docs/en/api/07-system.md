@@ -8,7 +8,7 @@ The OpenViking System API provides health, readiness, consistency, and multi-wri
 
 #### 1. API Implementation Overview
 
-Basic health check endpoint. No authentication required. Returns service version and health status. If authentication is provided, also returns auth mode and identity information.
+Basic liveness check; no authentication is required. Returns the service version, health status, and auth mode. Supplied credentials trigger identity resolution; successful resolution adds identity fields. Invalid credentials can still receive a healthy response with no identity fields, so `/health` is not proof that a key can access data.
 
 In trusted mode, a complete `X-OpenViking-Account` and `X-OpenViking-User` header pair
 requests identity resolution, including on localhost deployments with `root_api_key`
@@ -19,7 +19,7 @@ Anonymous health probes return basic liveness information.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:health_check` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.health` - SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.health` - SDK entry
 - `crates/ov_cli/src/commands/system.rs` - CLI command
 
 #### 2. Interface and Parameters
@@ -137,7 +137,7 @@ ov --profile health
 
 #### 1. API Implementation Overview
 
-Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManager, and Ollama (if configured) status. Returns 200 when all configured subsystems are ready and 503 otherwise. No authentication required (designed for Kubernetes probes).
+Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManager, embedding, and Ollama (if configured). Returns 200 when all configured subsystems are ready and 503 otherwise. No authentication required (designed for Kubernetes probes).
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:readiness_check` - HTTP route
@@ -147,9 +147,10 @@ Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManage
 No parameters.
 
 **Check Item Descriptions**:
-- `agfs`: Whether Viking filesystem is accessible
+- `agfs`: Nested filesystem and multi-write sync checks
 - `vectordb`: Whether vector database is healthy
 - `api_key_manager`: Whether API key manager is loaded
+- `embedding`: Sends a small embedding request with a 10-second probe timeout; this is a real provider call
 - `ollama`: Whether Ollama service is reachable (only if configured)
 
 #### 3. Usage Examples
@@ -170,9 +171,10 @@ curl -X GET http://localhost:1933/ready
 {
   "status": "ready",
   "checks": {
-    "agfs": "ok",
+    "agfs": {"status": "ok", "checks": {"filesystem": "ok", "multiwrite_sync": "not_supported"}},
     "vectordb": "ok",
     "api_key_manager": "ok",
+    "embedding": "ok",
     "ollama": "not_configured"
   }
 }
@@ -188,7 +190,6 @@ Get system status including initialization state and authenticated user info. `r
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:system_status` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.get_status` - SDK entry
 - `crates/ov_cli/src/commands/system.rs` - CLI command
 
 #### 2. Interface and Parameters
@@ -208,18 +209,7 @@ curl -X GET http://localhost:1933/api/v1/system/status \
   -H "X-API-Key: your-key"
 ```
 
-**Python SDK**
-
-```python
-status = client.get_status()
-print(status)
-```
-
-**TypeScript SDK**
-
-```typescript
-console.log(await client.getStatus());
-```
+The public SDK `get_status()` / `getStatus()` / `GetStatus()` methods return aggregate Observer status, not this endpoint’s identity payload. Use HTTP for this endpoint; see [Observer](18-observer.md) for those SDK methods.
 
 **CLI**
 
@@ -235,8 +225,7 @@ ov system status
   "result": {
     "initialized": true,
     "user": "alice"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -258,7 +247,7 @@ records; `missing_records_truncated` is `true` when more missing records exist.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:check_consistency` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.check_consistency` - SDK entry
 - `crates/ov_cli/src/commands/system.rs:consistency` - CLI command
 
 #### 2. Interface and Parameters
@@ -319,11 +308,11 @@ ov system consistency viking://resources/my-project
 {
   "status": "ok",
   "result": {
-	    "ok": false,
-	    "expected_count": 3,
-	    "missing_record_count": 1,
-	    "missing_records_truncated": false,
-	    "missing_records": [
+    "ok": false,
+    "expected_count": 3,
+    "missing_record_count": 1,
+    "missing_records_truncated": false,
+    "missing_records": [
       {
         "uri": "viking://resources/my-project/README.md",
         "path": "README.md",
@@ -341,11 +330,11 @@ ov system consistency viking://resources/my-project
 
 #### 1. API Implementation Overview
 
-Wait for all asynchronous processing (embedding, semantic generation) to complete. This method blocks until all queued tasks are processed or timeout occurs.
+Wait until the processing queues are drained, or until the timeout. This check is not scoped to the caller’s last request and does not cover every asynchronous API. Check the returned `error_count` and `errors`; empty queues do not prove that every operation succeeded. To confirm one import or commit, poll its [task ID](17-tasks.md) instead.
 
 **Code Entry Points**:
 - `openviking/server/routers/system.py:wait_processed` - HTTP route
-- `openviking_cli/client/sync_http.py:SyncHTTPClient.wait_processed` - SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.wait_processed` - SDK entry
 - `crates/ov_cli/src/commands/system.rs` - CLI command
 
 #### 2. Interface and Parameters
@@ -376,12 +365,9 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
 **Python SDK**
 
 ```python
-# Add resources
-client.add_resource(path="./docs/")
-
-# Wait for all processing to complete
+# Wait for the current processing queues to drain
 status = client.wait_processed(timeout=60.0)
-print(f"Processing complete: {status}")
+print(status)  # Inspect each queue’s error_count and errors
 ```
 
 **TypeScript SDK**
@@ -426,8 +412,7 @@ ov system wait --timeout 60
       "error_count": 0,
       "errors": []
     }
-  },
-  "time": 0.1
+  }
 }
 ```
 

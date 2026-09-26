@@ -96,20 +96,18 @@ It uses the same identity headers and response envelope as the Python and Go
 HTTP clients. See [`sdk/typescript/README.md`](../../../sdk/typescript/README.md)
 for package-level examples.
 
-When `url` is not explicitly provided, the HTTP client automatically reads connection information from `ovcli.conf`. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
+The Python HTTP client reads connection information from `ovcli.conf`; explicit constructor values override the corresponding settings. `ovcli.conf` is a configuration file shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
 
 ```bash
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
-Configuration file example:
+Configuration file example using a user/admin key:
 
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-key",
-  "account": "acme",
-  "user": "alice"
+  "api_key": "your-user-or-admin-key"
 }
 ```
 
@@ -119,8 +117,8 @@ Configuration field description:
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API Key | `null` (no auth) |
-| `account` | Default account header for tenant-scoped requests | `null` |
-| `user` | Default user header for tenant-scoped requests | `null` |
+| `account` | Account header; used in trusted and dev modes, ignored in api_key mode | `null` |
+| `user` | User header; used in trusted and dev modes, ignored in api_key mode | `null` |
 | `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
@@ -166,7 +164,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 #### CLI Mode
 
-The OpenViking CLI command is `ov` (installed with `npm install -g @openviking/cli`). It connects to an OpenViking server and exposes all operations as shell commands. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
+The OpenViking CLI command is `ov` (installed with `npm install -g @openviking/cli`). It connects to an OpenViking server and provides shell commands for common operations. The CLI also reads connection information from `ovcli.conf` (shared with the HTTP client).
 
 Basic usage:
 
@@ -214,20 +212,19 @@ See the [Authentication Guide](../guides/04-authentication.md) for full details.
 
 - **Authorization Bearer** header: `Authorization: Bearer your-key` (recommended)
 - **X-API-Key** header: `X-API-Key: your-key`
-- If the server doesn't have an API Key configured, authentication is skipped.
+- Authentication is skipped only in dev mode, which is selected automatically when `server.root_api_key` is unset and `auth_mode` is not set. Other modes (api_key, trusted, OIDC, LDAP) resolve identity according to their configuration.
 - The `/health` and `/ready` endpoints never require authentication.
 
 ## Response Format
 
-All HTTP API responses follow a unified format:
+Regular JSON API responses use the following envelope. File downloads, SSE, Metrics, and WebDAV use the formats documented for those endpoints:
 
 ### Success Response
 
 ```json
 {
   "status": "ok",
-  "result": { ... },
-  "time": 0.123
+  "result": { ... }
 }
 ```
 
@@ -241,8 +238,7 @@ The top-level `status` describes whether the HTTP API request succeeded. Some su
   "error": {
     "code": "NOT_FOUND",
     "message": "Resource not found: viking://resources/nonexistent/"
-  },
-  "time": 0.01
+  }
 }
 ```
 
@@ -307,8 +303,8 @@ JSON output - error:
 
 ### Special Cases
 
-- **String results** (`read`, `abstract`, `overview`): printed directly as plain text
-- **None results** (`mkdir`, `rm`, `mv`): no output
+- In table mode, `read`, `abstract`, and `overview` print text directly. `mkdir`, `rm`, and `mv` print a confirmation message.
+- In JSON mode, these commands use the JSON output format described above.
 
 ### Exit Codes
 
@@ -359,7 +355,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Basic health check (no authentication) |
-| GET | `/ready` | AGFS, VectorDB, and API key manager readiness (no authentication) |
+| GET | `/ready` | AGFS, VectorDB, API key manager, and embedding readiness (no authentication) |
 | GET | `/api/v1/system/status` | System status |
 | POST | `/api/v1/system/wait` | Wait for background processing |
 | POST | `/api/v1/system/consistency` | Check filesystem and vector-index consistency |
@@ -403,7 +399,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/content/overview` | Read an overview (L1) |
 | GET | `/api/v1/content/download` | Download original file bytes |
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
-| POST | `/api/v1/content/batch-write` | Apply preconditioned multi-file writes |
+| POST | `/api/v1/content/batch-write` | Write multiple files and refresh their indexes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
@@ -561,9 +557,11 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 ---
 
-## Documentation Reading Plan
+<a id="documentation-reading-plan"></a>
 
-The sidebar is organized by responsibility rather than historical file size:
+## Find an API by Task
+
+Choose a reference page by operation type:
 
 | Group | What to look for |
 |-------|------------------|

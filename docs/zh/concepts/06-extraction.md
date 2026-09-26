@@ -1,17 +1,15 @@
 # 上下文提取
 
-OpenViking 采用三层异步架构处理文档解析和上下文提取。
+资源导入依次经过解析、目标路径确定、内容写入、语义生成和向量化。记忆和技能有各自的入口，也会使用语义处理和向量索引。
 
 ## 概览
 
-```
-输入文件 → Parser → TreeBuilder → SemanticQueue → 向量库
-           ↓           ↓              ↓
-        解析转换    文件移动     L0/L1 生成
-        (无 LLM)   入队语义      (LLM 异步)
+```text
+输入 → Parser → TreeBuilder → 内容写入 → SemanticQueue → EmbeddingQueue → 向量库
+        解析产物    目标 URI                 L0/L1 生成
 ```
 
-**设计原则**：解析与语义分离，Parser 不调用 LLM，语义生成异步进行。
+解析与目录语义生成分开处理。具体解析器可能调用模型或外部解析服务，因此不能把解析阶段视为一律不使用 LLM。导入接口通常先返回任务 ID；需要立即检索时，应先确认该任务完成，见[任务管理](../api/17-tasks.md)。
 
 ## Parser（解析器）
 
@@ -26,70 +24,40 @@ Parser 负责文档格式转换和结构化，在临时目录创建文件结构�
 | PDF | PDFParser | .pdf | 已支持 |
 | HTML | HTMLParser | .html, .htm | 已支持 |
 | 代码 | CodeRepositoryParser | github 代码仓库等 | 遵循 `.gitignore` 并忽略常见非代码目录 |
-| 图片 | ImageParser | .png, .jpg 等 |  |
-| 视频 | VideoParser | .mp4, .avi, .mov, .mkv, .webm, .flv, .wmv |  |
-| 音频 | AudioParser | .mp3, .wav, .ogg, .flac, .aac, .m4a, .opus |  |
+| 图片 | ImageParser | .png, .jpg 等 | 已支持；处理依赖媒体配置 |
+| 视频 | VideoParser | .mp4, .avi, .mov, .mkv, .webm, .flv, .wmv, .ts（仅 MPEG-TS 内容） | 已支持；处理依赖媒体配置 |
+| 音频 | AudioParser | .mp3, .wav, .ogg, .flac, .aac, .m4a, .opus, .ac3 | 已支持；处理依赖媒体配置 |
 
-### 核心流程 (以文档为例)
+### 解析产物
 
-```python
-# 1. 解析文件
-parse_result = registry.parse("/path/to/doc.md")
+内部 `registry.parse()` 是异步接口，返回 `ParseResult`。解析产物可以存放在本地临时目录或 AGFS；`temp_dir_path` 不一定是 Viking URI，`artifact_ref` 用来标识其存储后端。这些是服务端实现细节，客户端应使用资源导入 API。
 
-# 2. 返回临时目录 URI
-parse_result.temp_dir_path  # viking://temp/abc123
-```
+| 字段 | 含义 |
+| --- | --- |
+| `root` | 解析后的资源树根节点 |
+| `temp_dir_path` | 临时产物位置 |
+| `artifact_ref` | 产物后端及根路径 |
+| `source_format` / `parser_name` | 源格式和解析器名称 |
+| `parse_time` | 解析耗时（秒） |
+| `meta` / `warnings` | 元数据及解析警告 |
 
-### 智能分割
+### 文档分节
 
-```
-如果 document_tokens <= 1024:
-    → 保存为单文件
-否则:
-    → 按标题分割
-    → 小节 < 512 tokens → 合并
-    → 大节 > 1024 tokens → 创建子目录
-```
+Markdown 解析器按标题和大小组织章节，合并较短小节，拆分过长内容。默认 `max_section_size` 为 2048 tokens，`max_section_chars` 为 6000 字符；`section_size_flexibility` 默认为 0.3，允许为保持内容连贯而适度超出 token 目标。过长的单个表格行可以保持完整。这些值是分节目标，不能当作每个输出文件的绝对上限。
 
-### 返回结果
-
-```python
-ParseResult(
-    temp_dir_path: str,    # 临时目录 URI
-    source_format: str,    # pdf/markdown/html
-    parser_name: str,      # 解析器名称
-    parse_time: float,     # 耗时（秒）
-    meta: Dict,            # 元数据
-)
-```
+不同解析器和 `parse_mode` 的行为不同。需要保持单文件时，可在支持的导入中使用 `parse_mode="no_split"`，详见[资源管理](../api/02-resources.md)。
 
 ## TreeBuilder（树构建器）
 
-TreeBuilder 负责将临时目录移动到 AGFS，并入队语义处理。
+`TreeBuilder.finalize_from_temp()` 检查解析产物并确定最终 URI，返回包含根节点和临时位置的 `BuildingTree`。它本身不复制文件、不清理产物，也不提交语义任务。
 
-### 核心流程
+### 导入中的后续步骤
 
-```python
-building_tree = tree_builder.finalize_from_temp(
-    temp_dir_path="viking://temp/abc123",
-    scope="resources",  # resources/user
-)
-```
+1. 根据解析产物、`to` 或 `parent` 确定目标 URI，并检查目标路径。
+2. 导入处理器将内容写入最终存储，处理资源锁和已有内容更新。
+3. 提交后续语义处理和向量化，按产物所属后端清理临时数据。
 
-### 5 阶段处理
-
-1. **查找文档根目录**：确保临时目录下恰好 1 个子目录
-2. **确定目标 URI**：根据 scope 映射基础 URI
-3. **递归移动目录树**：复制所有文件到 AGFS
-4. **清理临时目录**：删除临时文件
-5. **入队语义生成**：提交 SemanticMsg 到队列
-
-### URI 映射
-
-| scope | 基础 URI |
-|-------|----------|
-| resources | `viking://resources` |
-| user | `viking://user` |
+默认资源根目录是 `viking://resources`。个人资源应显式指定 `viking://~/resources/...`；`viking://user` 是用户空间容器，不能当作自己的资源根。
 
 ## SemanticQueue（语义队列）
 
@@ -97,14 +65,16 @@ SemanticQueue 异步处理 L0/L1 生成和向量化。
 
 ### 消息结构
 
-```python
-SemanticMsg(
-    id: str,           # UUID
-    uri: str,          # 目录 URI
-    context_type: str, # resource/memory/skill
-    status: str,       # pending/processing/completed
-)
-```
+下面列出部分内部消息字段，不是客户端提交格式：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 消息 UUID |
+| `uri` | 待处理目录 |
+| `context_type` | resource、memory、skill 或 session |
+| `status` | 队列处理状态 |
+| `recursive` | 是否处理子目录 |
+| `propagate_to_parent` | 完成后是否允许安排父目录刷新 |
 
 ### 处理流程（自底向上）
 
@@ -114,7 +84,7 @@ SemanticMsg(
 
 ### 单目录处理步骤
 
-1. **并发生成文件摘要**：限制并发数 10
+1. **并发生成文件摘要**：并发上限由 `vlm.max_concurrent` 控制
 2. **收集子目录摘要**：读取已生成的 .abstract.md
 3. **生成 .overview.md**：LLM 生成 L1 概览
 4. **提取 .abstract.md**：从 overview 提取 L0 摘要
@@ -131,10 +101,10 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `max_concurrent_llm` | 10 | 并发 LLM 调用数 |
-| `max_images_per_call` | 10 | 单次 VLM 最大图片数 |
-| `max_sections_per_call` | 20 | 单次 VLM 最大章节数 |
-| `overview_sample_limit` | 32 | 单个目录摘要使用的直接子项样本上限 |
+| `vlm.max_concurrent` | 32 | 语义处理并发上限，传入 `SemanticProcessor.max_concurrent_llm` |
+| `max_images_per_call` | 10 | `VLMProcessor` 构造参数：单次最大图片数，非 `ov.conf` 字段 |
+| `max_sections_per_call` | 20 | `VLMProcessor` 构造参数：单次最大章节数，非 `ov.conf` 字段 |
+| `semantic.overview_sample_limit` | 32 | 单个目录摘要使用的直接子项样本上限 |
 
 ## 代码骨架提取
 
@@ -160,16 +130,17 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 
 | 环节 | Resource | Memory | Skill |
 |------|----------|--------|-------|
-| **Parser** | 通用流程 | 通用流程 | 通用流程 |
+| **入口** | 资源解析器 | 会话提取、记忆更新 | 技能导入 |
 | **基础 URI** | `viking://resources` | `viking://~/memories` | `viking://~/skills` |
-| **TreeBuilder scope** | resources | user | user |
 | **SemanticMsg type** | resource | memory | skill |
+
+以下示例使用已配置的同步 Python SDK 客户端 `client`。
 
 ### 资源提取
 
 ```python
 # 添加资源
-await client.add_resource(
+client.add_resource(
     path="/path/to/doc.pdf",
     options={"reason": "API 文档"},
 )
@@ -181,10 +152,10 @@ await client.add_resource(
 
 ```python
 # 添加技能
-await client.add_skill(
+client.add_skill(
     data={
         "name": "search-web",
-        "content": "# search-web\\n...",
+        "content": "# search-web\n...",
     },
 )
 
@@ -195,7 +166,7 @@ await client.add_skill(
 
 ```python
 # 记忆从会话自动提取
-await session.commit()
+client.commit_session(session_id)
 
 # 流程: SessionCompressorV3 → ExtractLoop → MemoryUpdater → SemanticQueue
 ```

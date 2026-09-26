@@ -118,7 +118,9 @@ Git assets support:
 | `connector` | Yes | v1 supports only `git`. |
 | `description` | No | Human-readable purpose of the asset. |
 | `params.repo_url` | Yes | Git clone URL. |
-| `params.branch` | No | Branch to ingest; it cannot be empty when set. |
+| `params.branch` | No | Branch to ingest; non-empty when set and mutually exclusive with `params.commit`. |
+| `params.commit` | No | Full 40-character hexadecimal SHA for a pinned revision; mutually exclusive with `params.branch`. |
+| `to` | No | Exact resource destination URI. Must agree with an existing State mapping for the same asset; selected assets cannot share a destination. |
 | `auth_ref` | No | Overrides `defaults.git.auth_ref`. |
 | `watch_interval` | No | Overrides `defaults.git.watch_interval`. |
 
@@ -166,7 +168,7 @@ assets:
   - requests
 ```
 
-The team maintains one Catalog; editing an asset there updates every Manifest that selects it.
+The team maintains one Catalog. Each Manifest uses its latest definitions the next time it is applied; editing the file alone does not change ingested resources.
 Because the two documents share a shape, a Catalog can also be applied directly with
 `ov add-resource -m catalog.yaml`, which ingests everything it defines.
 
@@ -191,8 +193,7 @@ slashes, and lowercases the host. HTTPS, SSH, and SCP-style URLs for the same re
 normally produce the same locator, while different branches produce different assets.
 
 The asset name is not part of the identity. Renaming an asset without changing its source and
-branch keeps it associated with the existing resource. Changing the source or branch produces a
-new asset and leaves the previous one as an orphan.
+ref keeps it associated with the existing resource. Changing the source, branch, or pinned commit produces a new asset identity. Without an explicit `to`, the previous entry becomes an orphan. With `to`, the CLI can adopt the single existing State entry at that destination and sync it under the new identity.
 
 For safety, clone URLs cannot:
 
@@ -246,6 +247,8 @@ ov add-resource --manifest manifest.yaml --args dry_run:true
 If any repository is unreadable, dry-run exits immediately with `PERMISSION_DENIED` and does not
 produce an executable plan.
 
+For a pinned `params.commit`, preflight checks repository access through HEAD; fetch/checkout verifies the exact SHA during import. A passing dry-run does not prove that the pinned commit is available.
+
 ### Apply the Manifest
 
 Remove `dry_run` after reviewing the plan:
@@ -257,6 +260,8 @@ ov add-resource --manifest manifest.yaml
 The repository contains a complete example — a shared Catalog plus a Manifest that selects from
 it — under
 [`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets).
+
+Without `--wait`, successful submission does not mean parsing, semantic processing, and indexing have finished. Use `--wait` or inspect the returned task before validating retrieval. A branch follows changing content; pin `params.commit` and use `watch_interval: 0` when you need a fixed source revision.
 
 ## Credentials
 
@@ -337,7 +342,9 @@ Application rules:
 | State has no resource URI for the `asset_id` | Create a new resource. |
 | State has an existing resource URI | Sync by passing the URI as `to` to `add_resource`. |
 | An asset is no longer selected | Report it as an orphan; keep its resource and State entry. |
-| The source or branch changes the `asset_id` | Create a new asset and report the old one as an orphan. |
+| Source or ref changes, with no explicit `to` | Create a new asset and report the old one as an orphan. |
+| A new identity declares `to` matching one State entry | Adopt that destination and sync under the new identity. |
+| An existing identity declares a different `to` | Fail before submission; reconcile the resource and State mapping first. |
 
 State belongs to one execution environment and is not part of the Catalog or Manifest protocol.
 A repository that shares Manifests should normally add this to its `.gitignore`:
@@ -360,7 +367,7 @@ managed by OpenViking Watches and connectors.
 3. `defaults.git.watch_interval`;
 4. `0`, which disables automatic refresh.
 
-Temporarily apply a 60-minute interval to every selected asset:
+Apply a 60-minute refresh interval to every selected asset; the resulting Watch continues on the server:
 
 ```bash
 ov add-resource --manifest manifest.yaml --watch-interval 60

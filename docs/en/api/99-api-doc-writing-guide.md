@@ -11,6 +11,15 @@ This document defines the unified structure and writing conventions for API modu
 - Link to official documentation for external tools and services. Describe only the setup needed here instead of duplicating their manuals.
 - Before submitting, run `npm run check:docs`, `npm run check:api`, and `npm run docs:build` from `docs/`. Automated checks cover structure and examples, not factual correctness or translation quality.
 
+## Editorial Standards
+
+- Start with what the API does, its prerequisites, and the result. Explain implementation details after the reader can decide what to do next.
+- Use concrete actions and objects. Avoid vague claims about intelligence, transformation, or seamless workflows, and preserve conditions when shortening prose.
+- Do not promise unmeasured quality, performance, costs, or security. Verify defaults, supported behavior, and failures against the implementation; label illustrative values.
+- Distinguish accepted from completed, optional from required, and implemented from planned. Keep the overview, parameter tables, examples, and troubleshooting consistent.
+- Write natural prose in each language while preserving the same facts and limits; avoid word-for-word translation.
+- Preserve useful section links. Check old anchors when changing headings and add compatibility anchors where needed.
+
 ## Directory Structure
 
 API documentation is organized by module, with one file per module, using a two-digit numerical prefix.
@@ -32,14 +41,9 @@ Brief introduction explaining the main features and purpose of this module.
 
 ### API Method Name 1
 
-#### 1. API Implementation Introduction
+#### 1. Purpose and Prerequisites
 
-Explain the purpose of this API, point to the corresponding code entry, and briefly describe the principles and workflow.
-
-**Code Entry**:
-- `openviking/<module>/<file>.py:<ClassName>.<MethodName>` - Core implementation
-- `openviking/server/routers/<router-file>.py` - HTTP router
-- `crates/ov_cli/src/commands/<command-file>.rs` - CLI command
+Explain what the operation does, when to use it, and the required permissions or existing resources.
 
 #### 2. Interface and Parameter Description
 
@@ -101,6 +105,10 @@ Explain the purpose of this API, point to the corresponding code entry, and brie
 
 Every public operation must document its successful return value. JSON endpoints need at least one response-envelope example that matches the implementation. Non-JSON endpoints such as file downloads, SSE, and WebDAV must document the HTTP status, important response headers, body, or event format. A prose-only list of returned fields is not sufficient. Error and exception examples remain optional.
 
+#### 5. Implementation Details (Optional)
+
+Explain the processing steps and link to the implementation, router, or CLI handler when these help readers understand behavior or troubleshoot a failure.
+
 ---
 
 ### API Method Name 2
@@ -125,18 +133,15 @@ Every public operation must document its successful return value. JSON endpoints
 
 ### API Reference Section
 
-Each API is organized in the following three parts:
+Use the following sections for each API. Add implementation details after the response contract when they help explain behavior. Existing pages still use the legacy `API Implementation Overview` section with code entries; follow this structure for new pages and when migrating a page.
 
-#### 1. API Implementation Introduction
+<a id="1-api-implementation-introduction"></a>
 
-- Explain the purpose of this API
-- Provide code entry paths for readers to reference the source code
-- Briefly describe the implementation principles and processing workflow
+#### 1. Purpose and Prerequisites
 
-**Code Entry Notes**:
-- Core implementation: points to the main business logic code
-- HTTP router: points to the FastAPI route definition
-- CLI command: points to the CLI command implementation (if available)
+- Explain the operation and its intended use.
+- State required permissions, configuration, and existing resources.
+- Describe effects that matter before calling it, including replacement or deletion of existing data.
 
 #### 2. Interface and Parameter Description
 
@@ -159,8 +164,8 @@ Example tabs are generated from bold labels. Put each invocation label in its ow
 paragraph and use one of these fixed base forms: `**Python SDK**`, `**TypeScript SDK**`,
 `**Go SDK**`, `**HTTP API**`, or `**CLI**`. When a transport qualifier is useful,
 put it inside the same bold label with ASCII parentheses, for example
-`**Python HTTP SDK**`. Do not put the qualifier after the bold label
-or use full-width parentheses. Show only surfaces that are actually
+`**Python SDK (HTTP)**`. Do not put the qualifier after the bold label or use
+full-width parentheses. A label such as `**Python HTTP SDK**` does not render as a tab. Show only surfaces that are actually
 implemented. If an SDK or CLI does not expose the capability, omit that tab and
 briefly identify the available alternative. Do not wrap a handwritten HTTP request
 and present it as a nonexistent SDK method.
@@ -179,23 +184,9 @@ adding language-owned sections to API module pages.
 ````markdown
 ### add_resource()
 
-#### 1. API Implementation Introduction
+#### 1. Purpose and Prerequisites
 
 Add resources to the knowledge base, supporting various sources such as local files, directories, URLs, etc.
-
-**Processing Workflow**:
-1. Identify resource type (local file/directory/URL)
-2. Call corresponding parser to parse content
-3. Build directory tree and write to AGFS
-4. Asynchronously generate L0/L1 semantic abstracts
-5. Build vector index
-
-**Code Entry**:
-- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource()` - Async SDK entry
-- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.add_resource()` - Sync SDK entry
-- `openviking/service/resource_service.py:ResourceService.add_resource()` - Core implementation
-- `openviking/server/routers/resources.py:add_resource()` - HTTP router
-- `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI handler
 
 #### 2. Interface and Parameter Description
 
@@ -204,14 +195,14 @@ Add resources to the knowledge base, supporting various sources such as local fi
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | path | str | Yes | - | Local path, directory path, or URL |
-| to | str | No | None | Target Viking URI (must be within the resources scope) |
+| to | str | No | None | Final resource URI; an existing target is replaced |
 | reason | str | No | "" | Reason for adding this resource |
 | wait | bool | No | False | Whether to wait for semantic processing completion |
 
 **Notes**
 
 - SDK/CLI can directly pass local paths; raw HTTP requires `temp_upload` first
-- When `to` is specified and the target already exists, an incremental update process is used
+- An existing `to` target is replaced. For a directory, files absent from the new import may be removed; unchanged content is reused for semantic and vector processing. Use `parent` to add a new resource below an existing directory.
 
 #### 3. Usage Examples
 
@@ -250,23 +241,37 @@ print(client.get_task(result["task_id"]))
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+ov add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
-**Response Example**
+#### 4. Response Contract
 
 ```json
 {
   "status": "ok",
   "result": {
-    "status": "success",
-    "root_uri": "viking://resources/documents/guide.md",
-    "task_id": "uuid-xxx",
-    "errors": []
-  },
-  "time": 0.123
+    "status": "accepted",
+    "root_uri": "viking://resources/guide",
+    "task_id": "uuid-xxx"
+  }
 }
 ```
+
+#### 5. Implementation Details
+
+**Processing Workflow**:
+1. Identify resource type (local file/directory/URL)
+2. Call corresponding parser to parse content
+3. Build directory tree and write to AGFS
+4. Asynchronously generate L0/L1 semantic abstracts
+5. Build vector index
+
+**Code Entry**:
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource()` - Async SDK entry
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.add_resource()` - Sync SDK entry
+- `openviking/service/resource_service.py:ResourceService.add_resource()` - Core implementation
+- `openviking/server/routers/resources.py:add_resource()` - HTTP router
+- `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI handler
 
 ---
 ````
@@ -275,7 +280,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 
 When adding or modifying API documentation, please check:
 
-- [ ] Implementation introduction is clear and code entry paths are correct
+- [ ] Purpose, prerequisites, and effects are clear; any code entry paths are correct
 - [ ] Parameter table is complete and accurate
 - [ ] Example code is concise and runnable
 - [ ] Invocation examples use fixed bold labels and every SDK/CLI tab maps to a real implementation

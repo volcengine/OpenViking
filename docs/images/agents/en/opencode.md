@@ -16,7 +16,7 @@
 
 1. Restart OpenCode.
 2. Run `/mcps` and confirm the list shows `openviking connected`.
-3. Ask OpenCode to recall related memories in a conversation, and verify that it can automatically call tools such as `openviking_search`, `openviking_read`, and `openviking_remember`.
+3. Explicitly ask OpenCode to call `openviking_search` and `openviking_read` to verify tool access. Automatic recall runs through hooks without those model tool calls; check it separately by asking about stored information in a new session.
 
 ## Troubleshoot
 

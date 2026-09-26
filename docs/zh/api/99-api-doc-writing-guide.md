@@ -11,6 +11,15 @@
 - 外部工具和服务引用官方文档，只介绍当前任务需要的配置，不复制整套手册。
 - 提交前在 `docs/` 运行 `npm run check:docs`、`npm run check:api` 和 `npm run docs:build`。自动检查覆盖结构与示例，不能替代事实核验和翻译 review。
 
+## 文案标准
+
+- 先说明接口做什么、适用条件和调用结果，再解释实现。读者应能据此决定下一步。
+- 用具体动作和对象代替“赋能”“闭环”“智能升级”等空泛表述。术语保留准确含义，不为缩短句子省掉前提。
+- 不写无依据的效果、性能、费用或安全承诺。默认值、支持范围和失败行为以当前实现为准；示例值明确标注。
+- 区分已提交与已完成、可选与必需、当前能力与规划。总览、参数表、示例和排障说明应一致。
+- 中文按自然语序写，英文按英文习惯写；两者保持相同的事实和限制，不逐词硬译。
+- 保留有用的章节链接；改标题时检查旧锚点，必要时添加兼容锚点。
+
 ## 目录结构
 
 API 文档按模块组织，每个模块一个文件，使用两位数字序号前缀。
@@ -32,14 +41,9 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 ### <API 方法名 1>
 
-#### 1. API 实现介绍
+#### 1. 用途与前置条件
 
-<介绍该 API 的用途，指向对应的代码入口，简单介绍原理和流程>
-
-**代码入口**：
-- `openviking/<模块>/<文件>.py:<类名>.<方法名>` - 核心实现
-- `openviking/server/routers/<路由文件>.py` - HTTP 路由
-- `crates/ov_cli/src/commands/<命令文件>.rs` - CLI 命令
+<说明接口的操作、适用场景，以及需要的权限、配置或已有资源>
 
 #### 2. 接口和参数说明
 
@@ -100,6 +104,10 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 每个公开操作都必须说明成功返回值。JSON 接口至少给出一个与实现一致的响应包示例；文件下载、SSE、WebDAV 等非 JSON 接口必须说明 HTTP 状态、关键响应头、响应体或事件格式。不能只写“返回某些字段”而不展示结构。错误和异常处理示例可按需补充。
 
+#### 5. 实现细节（可选）
+
+按需解释处理流程，并链接到核心实现、HTTP 路由或 CLI 处理函数，帮助读者理解行为或排查问题。
+
 ---
 
 ### <API 方法名 2>
@@ -124,18 +132,15 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 ### API 参考章节
 
-每个接口按以下三个部分组织：
+每个接口按以下章节组织。实现细节放在响应契约之后，仅保留有助于理解行为或排障的内容。现有页面仍使用旧的“API 实现介绍”章节和代码入口；新页面及迁移页面时按本结构编写。
 
-#### 1. API 实现介绍
+<a id="1-api-实现介绍"></a>
 
-- 说明该 API 的用途
-- 提供代码入口路径，方便读者查阅源码
-- 简单介绍实现原理和处理流程
+#### 1. 用途与前置条件
 
-**代码入口说明**：
-- 核心实现：指向主要业务逻辑代码
-- HTTP 路由：指向 FastAPI 路由定义
-- CLI 命令：指向 CLI 命令实现（如有）
+- 说明接口做什么、适合什么场景。
+- 列出必需的权限、配置和已有资源。
+- 提前说明调用会产生的影响，包括覆盖或删除已有数据。
 
 #### 2. 接口和参数说明
 
@@ -156,8 +161,8 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 示例切换由加粗标签自动生成。调用方式标签必须单独成段，并使用以下固定基础写法：
 `**Python SDK**`、`**TypeScript SDK**`、`**Go SDK**`、`**HTTP API**`、`**CLI**`。
-需要区分调用形态时，可以在同一个加粗标签内追加半角括号限定词，例如
-`**Python HTTP SDK**`；不要把限定词写在加粗标签外，也不要使用全角括号。
+需要区分调用形态时，把限定词用半角括号写在同一个加粗标签内，例如
+`**Python SDK (HTTP)**`；不要把限定词写在加粗标签外，也不要使用全角括号。`**Python HTTP SDK**` 这类写法不会生成 Tab。
 只展示实现中真实存在的调用方式；某个 SDK 或 CLI 没有对应能力时应省略该 Tab，并简短说明
 可用的替代入口。不要把手写 HTTP 请求包装成不存在的 SDK 方法。
 
@@ -173,23 +178,9 @@ API 文档应按 API 模块和具体接口组织，而不是按客户端语言�
 ````markdown
 ### add_resource()
 
-#### 1. API 实现介绍
+#### 1. 用途与前置条件
 
 向知识库添加资源，支持本地文件、目录、URL 等多种来源。
-
-**处理流程**：
-1. 识别资源类型（本地文件/目录/URL）
-2. 调用对应 Parser 解析内容
-3. 构建目录树并写入 AGFS
-4. 异步生成 L0/L1 语义摘要
-5. 建立向量索引
-
-**代码入口**：
-- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource()` - 异步 SDK 入口
-- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.add_resource()` - 同步 SDK 入口
-- `openviking/service/resource_service.py:ResourceService.add_resource()` - 核心实现
-- `openviking/server/routers/resources.py:add_resource()` - HTTP 路由
-- `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI 处理函数
 
 #### 2. 接口和参数说明
 
@@ -198,14 +189,14 @@ API 文档应按 API 模块和具体接口组织，而不是按客户端语言�
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | path | str | 是 | - | 本地路径、目录路径或 URL |
-| to | str | 否 | None | 目标 Viking URI（必须在 resources 作用域内） |
+| to | str | 否 | None | 最终资源 URI；目标已存在时会覆盖 |
 | reason | str | 否 | "" | 添加该资源的原因 |
 | wait | bool | 否 | False | 是否等待语义处理完成 |
 
 **说明**
 
 - SDK/CLI 可直接传本地路径；裸 HTTP 需要先用 `temp_upload` 上传
-- 当指定 `to` 且目标已存在时，走增量更新流程
+- 已存在的 `to` 目标会被覆盖。目标为目录时，本次导入未生成的旧文件可能被删除；未变化的内容在语义和向量处理中会复用。向已有目录新增资源时使用 `parent`。
 
 #### 3. 使用示例
 
@@ -244,23 +235,37 @@ print(client.get_task(result["task_id"]))
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+ov add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
-**响应示例**
+#### 4. 响应契约
 
 ```json
 {
   "status": "ok",
   "result": {
-    "status": "success",
-    "root_uri": "viking://resources/documents/guide.md",
-    "task_id": "uuid-xxx",
-    "errors": []
-  },
-  "time": 0.123
+    "status": "accepted",
+    "root_uri": "viking://resources/guide",
+    "task_id": "uuid-xxx"
+  }
 }
 ```
+
+#### 5. 实现细节
+
+**处理流程**：
+1. 识别资源类型（本地文件/目录/URL）
+2. 调用对应 Parser 解析内容
+3. 构建目录树并写入 AGFS
+4. 异步生成 L0/L1 语义摘要
+5. 建立向量索引
+
+**代码入口**：
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource()` - 异步 SDK 入口
+- `sdk/python/openviking_sdk/client.py:SyncHTTPClient.add_resource()` - 同步 SDK 入口
+- `openviking/service/resource_service.py:ResourceService.add_resource()` - 核心实现
+- `openviking/server/routers/resources.py:add_resource()` - HTTP 路由
+- `crates/ov_cli/src/handlers.rs:handle_add_resource()` - CLI 处理函数
 
 ---
 ````
@@ -269,7 +274,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 
 新增或修改 API 文档时，请检查：
 
-- [ ] 实现介绍清晰，代码入口路径正确
+- [ ] 用途、前置条件和调用影响清楚，引用的代码入口路径正确
 - [ ] 参数表完整且准确
 - [ ] 示例代码简洁且可运行
 - [ ] 调用示例使用固定加粗标签，并且每个 SDK/CLI Tab 都有真实实现

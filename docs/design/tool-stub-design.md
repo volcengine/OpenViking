@@ -7,26 +7,11 @@
 
 ## 概述
 
-OpenViking 原生已经支持 tool result preview。原有链路能够在 session 写入阶段把过大的 tool output externalize，并在 `ToolPart` 中留下一个 preview stub，同时保留 ref 供后续回溯。
+Session 写入阶段会将超过阈值的 tool output 保存到 `ToolResultStore`，把原 `ToolPart.tool_output` 替换为 stub 文本并保留 `tool_output_ref`，之后可通过 `read/search/list` 按 ref 回溯原文。这套 externalize 链路在本次改动前已存在。
 
-这次工作的重点不是新建 externalize 机制，而是在现有能力上优化 preview 的生成方式：从偏 `head + tail` 的直接截断，升级为按内容类型输出更稳定、更可读的规则化摘要。
+本次改动只替换 stub 中的 preview 生成方式：从 `head + tail` 截断改为按内容类型和 MIME 生成规则化摘要（JSON、表格、代码等）。externalize 的触发条件、存储位置和回溯方式不变。
 
-换句话说，本次改动保持下面这些基础能力不变：
-
-1. 哪些 tool output 需要 externalize，仍由 session 写入阶段决定。
-2. 原始内容仍写入 `ToolResultStore`。
-3. `ToolPart` 仍保留 stub 和 `tool_output_ref`。
-4. 原文回溯方式仍是 `read/search/list`。
-
-这次变化主要集中在 preview 生成层：
-
-1. 在 session 写入阶段识别哪些 tool output 需要 externalize。
-2. 原始输出写入 session 下的 tool result store。
-3. preview 从简单截断优化为基于内容和 MIME 的 deterministic synopsis。
-4. 把原始 `ToolPart.tool_output` 替换成 stub 文本，并保留 `tool_output_ref`。
-5. 后续通过 `read/search/list` 工具按 ref 回溯原文。
-
-`text` 类型只做规则化摘要，不接 LLM。
+摘要生成不调用 LLM。`preview_chars` 仅用于无法规则化时的 head/tail 回退。
 
 ---
 
@@ -302,7 +287,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 12. `synopsis`
 13. `storage_uri`
 14. `output_uri`
-16. `offset_unit=unicode_code_point`
+15. `offset_unit=unicode_code_point`
 
 ### 读取方式
 
@@ -330,7 +315,7 @@ OpenViking 原生已经支持 tool result preview。原有链路能够在 sessio
 2. [test_tool_result_externalization.py](https://github.com/volcengine/OpenViking/blob/main/tests/session/test_tool_result_externalization.py#L1)：覆盖 externalization、stub 替换、阈值边界、aggregate budget、ref 回溯等端到端流程。
 3. [test_api_sessions.py](https://github.com/volcengine/OpenViking/blob/main/tests/server/test_api_sessions.py#L190)：覆盖 HTTP API 层的 tool result externalization、stub 文案、`read/list/search` 回溯，以及 `synopsis_kind` / `synopsis.kind` 元数据透出。
 
-当前相关测试共 29 个用例通过，可作为后续继续补齐真实输出回归用例的基础。
+本文撰写时，相关测试共 29 个用例通过，可作为后续继续补齐真实输出回归用例的基础。
 
 ---
 

@@ -4,6 +4,8 @@ OpenViking provides Unix-like file system operations for managing context.
 
 <a id="webdav"></a><a id="webdav-phase-1"></a>
 
+For reading and writing file contents, see [Content](12-content.md). [WebDAV](20-webdav.md) provides file access through WebDAV clients.
+
 ## API Reference
 
 <a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
@@ -28,9 +30,10 @@ List directory contents.
 | sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before pagination; directories remain first |
 | sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
+| include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`). HTTP `simple=true` returns paths only. The CLI fetches entry objects when combining `--simple` with `--fields`.
 
 **Entry Structure**
 
@@ -67,7 +70,7 @@ discoverable-name behavior applies only to the shared
 existing hiding rules.
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 entries = client.ls(
@@ -124,16 +127,16 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f FIELDS]
-openviking tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
-openviking glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
+ov ls viking://resources/ [--simple] [--recursive] [--tags team=search,env=prod] [-f FIELDS]
+ov tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
+ov glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
 ```
 
-`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
+`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, each line contains a URI. If none of `name`, `uri`, or `path` is selected, the CLI adds `name` for lists or `path` for trees. Selected columns request the corresponding `extra_fields`; the `tags` column requests `include_tags=true`.
 
 The HTTP `result` remains an entry array. `has_more=true` means more matching nodes remain after visibility, tags, offset, and limit are applied. The Python, TypeScript, and Go SDKs continue to return the `result` array. When more nodes are available, the CLI appends a pagination hint to its output.
 
-**Response**
+**Response (`output=original`)**
 
 ```json
 {
@@ -148,8 +151,7 @@ The HTTP `result` remains an entry array. `has_more=true` means more matching no
       "uri": "viking://resources/docs/"
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
 
@@ -172,12 +174,13 @@ Get directory tree structure.
 | limit | int | No | None | Alias for `node_limit` |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
 | extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
+| include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`). HTTP `simple=true` returns paths only. The CLI fetches entry objects when combining `--simple` with `--fields`.
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 entries = client.tree(uri="viking://resources/", offset=100, limit=100)
@@ -219,12 +222,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
 **CLI**
 
 ```bash
-openviking tree viking://resources/my-project/
+ov tree viking://resources/my-project/
 ```
 
 As with `ls`, the HTTP `result` remains a node array and `has_more` is returned at the top level. When `has_more=true`, the CLI appends a pagination hint to the tree output.
 
-**Response**
+**Response (`output=original`)**
 
 ```json
 {
@@ -245,8 +248,7 @@ As with `ls`, the HTTP `result` remains a node array and `has_more` is returned 
       "uri": "viking://resources/docs/api.md"
     }
   ],
-  "has_more": true,
-  "time": 0.1
+  "has_more": true
 }
 ```
 
@@ -263,7 +265,7 @@ Get file or directory status information. For directories, returns the count of 
 | uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 info = client.stat(uri="viking://resources/docs/api.md")
@@ -307,8 +309,8 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 **CLI**
 
 ```bash
-openviking stat viking://resources/my-project/docs/api.md
-openviking stat viking://resources/my-project/docs
+ov stat viking://resources/my-project/docs/api.md
+ov stat viking://resources/my-project/docs
 ```
 
 
@@ -326,8 +328,7 @@ openviking stat viking://resources/my-project/docs
     "isLocked": false,
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -345,12 +346,11 @@ openviking stat viking://resources/my-project/docs
     "isLocked": false,
     "uri": "viking://resources/docs",
     "count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
-The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. It returns `false` when the LockManager is unavailable or the lookup fails. This is an advisory check, not a lock reservation: another writer may acquire a lock after the check, so writes must still handle `ResourceBusyError`.
 
 The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
 
@@ -414,14 +414,14 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
 **CLI**
 
 ```bash
-openviking attrs get viking://resources/docs/api.md
-openviking attrs get viking://resources/docs/api.md tags
-openviking attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
-openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
-openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs get viking://resources/docs/api.md
+ov attrs get viking://resources/docs/api.md tags
+ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
+ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
+ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
 ```
 
-Directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
+For `set-tags`, directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
 
 
 **Response (Resource)**
@@ -476,7 +476,7 @@ Create a directory.
 | description | str | No | `null` | Initial directory description. When omitted, the directory name is used as the default L0; when provided, this description is used. Both forms write `.abstract.md` and queue L0 vectorization. |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.mkdir(uri="viking://resources/new-project/")
@@ -516,8 +516,8 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
 **CLI**
 
 ```bash
-openviking mkdir viking://resources/new-project/
-openviking mkdir viking://resources/new-project/ --description "API docs directory"
+ov mkdir viking://resources/new-project/
+ov mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
 
@@ -528,8 +528,7 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
   "status": "ok",
   "result": {
     "uri": "viking://resources/new-project/"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -540,17 +539,19 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
 Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
 
 `rm` is idempotent: removing a valid URI that does not exist still succeeds.
-Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_URI`.
+Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or `queue` return `INVALID_URI`.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to remove |
+| wait | bool | No | False | Wait for the semantic refresh after deletion |
+| timeout | float | No | None | Refresh timeout in seconds when `wait=true` |
 | recursive | bool | No | False | Remove directory recursively |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 # Remove single file
@@ -596,7 +597,7 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 **CLI**
 
 ```bash
-openviking rm viking://resources/old.md [--recursive]
+ov rm viking://resources/old.md [--recursive]
 ```
 
 
@@ -607,8 +608,7 @@ openviking rm viking://resources/old.md [--recursive]
   "status": "ok",
   "result": {
     "uri": "viking://resources/docs/old.md"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -620,8 +620,7 @@ openviking rm viking://resources/old.md [--recursive]
   "result": {
     "uri": "viking://resources/old-project/",
     "estimated_deleted_count": 42
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -731,7 +730,7 @@ Files use two Exact Locks; directories use Tree Locks on the source and destinat
 | to_uri | str | Yes | - | Destination Viking URI |
 
 
-**Python HTTP SDK**
+**Python SDK (HTTP)**
 
 ```python
 client.mv(
@@ -776,7 +775,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
 **CLI**
 
 ```bash
-openviking mv viking://resources/old-name/ viking://resources/new-name/
+ov mv viking://resources/old-name/ viking://resources/new-name/
 ```
 
 
@@ -788,8 +787,7 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
   "result": {
     "from": "viking://resources/old-name/",
     "to": "viking://resources/new-name/"
-  },
-  "time": 0.1
+  }
 }
 ```
 

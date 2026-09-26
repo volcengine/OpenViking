@@ -59,6 +59,11 @@ openviking-server doctor
 
 ```bash
 redis-server
+```
+
+在另一个终端启动 OpenViking：
+
+```bash
 openviking-server --config ~/.openviking/ov.conf
 ```
 
@@ -82,7 +87,7 @@ openviking-server
 将 `storage.agfs.pathlock.provider` 设为 `cache`，即可通过共享 Redis
 CacheRuntime 协调多个 OpenViking 进程的路径锁。`pathlock.namespace`
 为必填项，同一 OpenViking 部署的所有进程必须使用相同值。Cache PathLock
-只支持内置 Redis Provider。
+只支持内置 Redis Provider。独立部署应使用不同 namespace；分布式路径锁不会解除 CachedFileSystem 的单写者前提。
 
 Redis HASH key 按逻辑路径 scope 拆分：
 
@@ -155,7 +160,7 @@ Provider 发布物应注明 ABI 版本、目标 OS/CPU、最低运行时版本�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `provider` | str | `"filesystem"` | `filesystem`、`memory` 或 `cache` |
-| `namespace` | str 或 null | `null` | `provider=cache` 时必填的 OpenViking 实例名 |
+| `namespace` | str 或 null | `null` | `provider=cache` 时必填，同一部署的协作进程共享此命名空间 |
 | `lock_expire_secs` | float | `30.0` | 锁 stale 超时；不得小于 `1.0` |
 
 Redis 配置：
@@ -322,4 +327,6 @@ RAGFS 会自动绕过不适合缓存的路径：
 4. 先缓存摘要文件和 raw `read_dir`，再扩展到更多普通小文件。
 5. 将锁、控制面和权限敏感路径加入 `bypass_prefixes`。
 
-一句话总结：RAGFS 缓存负责“按文件系统语义正确失效”，Provider 负责“把缓存对象放在哪里”。只要 backend 是事实来源，缓存命中就必须先通过 envelope 和 generation 校验。
+RAGFS 缓存负责按文件系统语义失效，Provider 负责决定缓存对象放在哪里。backend 仍是事实来源，缓存命中必须先通过 envelope 和 generation 校验才会返回。
+
+启用后，将重复读取和文件更新后的失效行为与基线比较。确认返回内容保持最新，再判断命中率提升是否带来收益。

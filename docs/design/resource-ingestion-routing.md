@@ -7,7 +7,7 @@
 1. 对外只有一个资源添加入口：`ResourceService.add_resource`。SDK、HTTP API、MCP 最终都应调用它；Worker 不再拿后台任务冒充一次新的资源添加请求。
 2. Connector 是一条独立的端到端导入链；Understanding 只是标准链里的一个 Parser 后端。
 3. 普通文件只做一次 Parser 选择。选择依据是 Accessor 获取资源后冻结的 `resolved_extension`，不是临时文件名，也不会在队列消费者里重新猜；原始飞书 URL 是一个显式例外，可在 Accessor 前按配置直达 Understanding。
-4. 目录、网站目录以及内部 Parser 遍历出的子文件不逐个调用 Understanding，统一留在内置 Parser 链内处理。
+4. 目录及其子文件由 DirectoryParser 组织处理；启用内容拆分且命中外部解析配置的叶子文件可进入 Understanding，不为每个叶子重新发起一次公开 add_resource。
 5. Watch 是一次新的来源刷新，会重新走提交分流，但不会创建、取消或覆盖自身的 Watch 任务。
 
 ## 总流程
@@ -284,7 +284,7 @@ ResourceService
 
 Connector 不返回本地 `ParseResult`，也不调用当前进程的 `TreeBuilder`。OpenViking 只负责校验这次请求能否无损委派、提交任务、返回 OpenViking `task_id`，再把 Connector 的终态同步到任务记录。
 
-Connector 当前要求提供精确 `to`，不接受 `parent`；也不支持 `wait=true`、watch、instruction、关闭建索引、摘要、strict、include/exclude 等。无凭证的 Git 请求可回退到标准链；带 Connector 专用凭证的 Git 和 Connector-only 来源会立即报错，避免凭证落入本地持久化任务。
+Connector 当前要求提供精确 `to`，不接受 `parent`；支持通过 `watch_interval` 创建 Connector Watch，但不支持 `wait=true`、instruction、关闭建索引、摘要、strict、include/exclude 等。Watch 的共享目标与重试语义见[资源 API](../zh/api/02-resources.md)。无凭证的 Git 请求可回退到标准链；带 Connector 专用凭证的 Git 和 Connector-only 来源会立即报错，避免凭证落入本地持久化任务。
 
 ## `wait` 的准确含义
 
@@ -331,4 +331,4 @@ Connector 当前要求提供精确 `to`，不接受 `parent`；也不支持 `wai
 - Understanding 返回结果：先转成 `ParseResult`，仍由本地 TreeBuilder 落盘。
 - Connector 返回结果：只返回任务标识，不经过本地 `ParseResult`。
 - 普通 Markdown 且 `wait=false`：返回前 Markdown 已解析并落盘，只是不等待后续语义队列。
-- 网站抓取出的目录：进入 DirectoryParser，页面子文件不会逐个调用 Understanding。
+- 网站抓取出的目录：进入 DirectoryParser；是否对叶子使用 Understanding，取决于内容拆分、已归一化状态和解析配置。

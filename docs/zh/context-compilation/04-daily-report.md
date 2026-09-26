@@ -4,21 +4,23 @@
 
 Skill 源码：[examples/compile/ov-compile-skills/daily-report](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/daily-report)
 
+先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
+
 ## 第一步：准备来源
 
 日报的来源通常是已经在 OpenViking 里的会话、消息或文档。如果要从本地导入一批记录：
 
 ```bash
-ov add-resource ./work-logs --to viking://resources/work-logs
+ov add-resource ./work-logs --to viking://resources/work-logs --wait
 ov ls -r viking://resources/work-logs
 ```
 
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/daily-report
+ov add-skill examples/compile/ov-compile-skills/daily-report -p viking://agent/skills --wait
 ov skills list
-# → viking://agent/skills/daily-report  （或 viking://user/<你>/skills/daily-report）
+# → viking://agent/skills/daily-report
 ```
 
 ## 第三步：执行编译
@@ -30,7 +32,7 @@ ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --instruction "生成 2026-08-20 的日报，聚焦我的工作产出与决策"
+  --instruction "按 Asia/Shanghai 时区生成 2026-08-20 的日报，聚焦我的工作产出与决策"
 ```
 
 一次生成多天，把日期范围写进 `--instruction` 即可（每天仍是独立一页）：
@@ -40,7 +42,7 @@ ov compile \
   --from viking://resources/work-logs \
   --to viking://resources/daily-report \
   --skill viking://agent/skills/daily-report \
-  --instruction "生成 2026-08-18 至 2026-08-20 每天一份日报"
+  --instruction "按 Asia/Shanghai 时区生成 2026-08-18 至 2026-08-20 每天一份日报"
 ```
 
 命令会立刻返回 `task_id`：
@@ -50,7 +52,7 @@ ov task status cmp_01abc      # 查看进度与最终结果
 ov task cancel cmp_01abc      # 协作式取消
 ```
 
-## 第四步：看看产物
+## 第四步：查看产物
 
 日报是纯 Markdown，直接读即可：
 

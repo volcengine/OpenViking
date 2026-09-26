@@ -1,10 +1,10 @@
 # MCP 客户端
 
-任何兼容 [MCP](https://modelcontextprotocol.io/) 的客户端都可以直接连接 OpenViking 内置的 `/mcp` 端点——无需安装插件或启动额外进程。适用于 Cursor、Trae、Manus、Claude Desktop、ChatGPT 等。
+支持 [MCP](https://modelcontextprotocol.io/) Streamable HTTP 的客户端可直接连接 OpenViking 的 `/mcp` 端点。仅支持 stdio 的客户端可使用 [Agent Plugins 包](./15-agent-plugins.md)中的代理。
 
 ## 快速配置
 
-大多数 MCP 客户端使用标准 `mcpServers` 格式：
+以下示例适用于接受 `mcpServers` 和自定义请求头的客户端。其他客户端按下方对应说明配置：
 
 ```json
 {
@@ -19,7 +19,7 @@
 }
 ```
 
-本地服务未配置 `root_api_key` 时（dev 模式）无需认证。
+服务运行在 `dev` 模式时无需认证，应仅监听本机回环地址。认证模式下，即使从本机访问也需要凭据。
 
 ## 各平台注意事项
 
@@ -37,9 +37,15 @@ claude mcp add --transport http openviking \
 
 > 如果你需要免工具调用的自动召回与自动捕获，请使用 [Claude Code 记忆插件](./02-claude-code.md)。
 
-### Trae / Cursor / ChatGPT
+<a id="trae-cursor-chatgpt"></a>
 
-使用上面的标准 `mcpServers` 配置即可——均已通过 API Key 鉴权验证。
+### Trae / Cursor
+
+在客户端的 MCP 配置中添加上述服务 URL 和 API Key。
+
+### ChatGPT
+
+通过开发者模式创建自定义 App，再完成 OAuth 授权，见 [OAuth 指南](../guides/11-oauth.md#chatgpt)。
 
 ### Codex
 
@@ -67,9 +73,9 @@ Codex 请使用 [Codex 记忆插件](./04-codex.md)。插件通过 manifest 提�
 
 ### Claude Desktop / Claude.ai (OAuth)
 
-这些客户端要求 OAuth 2.1——无法直接传 API Key。OpenViking 自带原生 OAuth 2.1 实现，无需外部代理。
+托管的远程连接器流程使用 OpenViking 原生 OAuth；在授权页填写已有的 OpenViking User/Admin Key。Claude Desktop 的本地 stdio 配置是另一种接入方式。
 
-如果你已经为 OpenViking 服务配好了 HTTPS，直接连接 `https://your-server.com/mcp` 端点即可——客户端会自动引导你完成 OAuth 授权流程。
+在服务端启用 `oauth.enabled` 并配置 HTTPS 后，让客户端连接 `https://your-server.com/mcp`，在浏览器中完成授权。
 
 HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../guides/11-oauth.md) 和 [公网访问指南](../guides/12-public-access.md)。
 
@@ -82,7 +88,7 @@ HTTPS 配置、部署模板和完整授权流程详见 [OAuth 2.1 指南](../gui
 | 现象 | 修复 |
 |------|------|
 | 连接被拒绝 | 确认 `openviking-server` 正在运行：`curl http://localhost:1933/health` |
-| 认证错误 | 确保客户端配置中的 API Key 与服务端一致。见 [鉴权指南](../guides/04-authentication.md) |
+| 认证错误 | 检查客户端是否使用有效的 user/admin key。见 [鉴权指南](../guides/04-authentication.md) |
 
 ## 参见
 

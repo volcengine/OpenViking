@@ -35,28 +35,17 @@ OpenViking 可以作为多种 Agent 运行时的长期记忆与上下文后端�
 
 ## 低延迟召回
 
-查询扩展和召回结果压缩是两个独立的可选模型调用。需要优先保证响应速度时，可以在 Agent 插件端同时关闭它们；语义检索、预算控制、档位降级和跨轮去重仍会正常工作。
-
-下面这组环境变量同时适用于 Claude Code 和 Codex。查询扩展在所有经共享加载器解析配置的记忆插件上都可以关闭；压缩只有 Claude Code 和 Codex 支持。
+查询扩展和召回压缩都会增加模型调用。优先考虑响应速度时，可以关闭这两项；检索、预算控制和跨轮去重仍然保留：
 
 ```bash
 export OPENVIKING_RECALL_QUERY_EXPANSION=off
 export OPENVIKING_RECALL_COMPRESS=off
 ```
 
-两个插件都有本地压缩逻辑，但配置模型不同：
-
-- Claude Code 默认使用 `recallCompress=auto`：优先调用本地 `claude -p`（Sonnet + low），本地 CLI 不可用时回落到 OpenViking 服务端生成 digest。`client` 强制只用本地，`server` 强制只用服务端。
-- Codex 默认调用本地 `codex exec`，模型顺序为 `gpt-5.3-codex-spark`，其次 `gpt-5.6-luna` + low。它不会启用服务端压缩。
-
-两端的共同默认配置是 `recallCompress=auto`。`OPENVIKING_RECALL_COMPRESS=off` 会同时关闭两端压缩；Codex 将 `auto` 或 `client` 解释为启用本地压缩。旧的 Claude Code 变量 `OPENVIKING_RECALL_REWRITE` 仍可兼容，但新配置请使用统一名称。
-
-也可以把同样的设置写进 `~/.openviking/ovcli.conf`：
+也可以在 `~/.openviking/ovcli.conf` 中配置：
 
 ```json
 {
-  "url": "https://openviking.example.com",
-  "api_key": "your-api-key",
   "plugin": {
     "recallQueryExpansion": "off",
     "recallCompress": "off"
@@ -64,8 +53,23 @@ export OPENVIKING_RECALL_COMPRESS=off
 }
 ```
 
-环境变量优先于 `ovcli.conf`。修改后重启对应的 Agent，让 hook 进程重新加载配置。上述设置属于插件客户端，不需要修改服务端的 `ov.conf`。
+### 选择压缩方式
 
-`plugin` 段由每个记忆插件读取——claude-code、codex、cursor、trae、trae-cn、zcode、kimicode、opencode、dsh 和 pi；`plugin.<harness>` 对象只覆盖其中某一个 harness 的共享键，两种写法都认（`claude_code` 或 `claude-code`、`trae_cn` 或 `trae-cn`）。压缩是例外：其余 harness 认 `recallQueryExpansion`，但忽略 `recallCompress` 及其配套项——它们都不会请求服务端 digest。
+| 值 | 行为 |
+| --- | --- |
+| `off` | 不压缩召回结果 |
+| `server` | 请求 OpenViking 服务端压缩 |
+| `client` | 只用本地压缩器，适用于 Claude Code 和 Codex |
+| `auto` | 有本地压缩器时优先使用，否则请求服务端自动处理 |
 
-context 请求的等待时间比普通请求更长，因为客户端提前中断会丢掉整个响应，而不只是超时的那一段。服务端流水线是串行的，每个可选阶段各有保险丝：先是查询扩展（`retrieval.recall_intent_timeout_s`，5 秒），然后是检索、正文读取和预算规划，最后才是 digest 重写（`retrieval.recall_rewrite_timeout_s`，30 秒）。因此这个上限按请求实际启用的阶段决定——带 session、会走查询扩展时取 15 秒，同时还要 digest 时取 45 秒，两者都不涉及时沿用插件自身的普通超时。可以用 `OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS`（或 `plugin.recallContextTimeoutMs`）指定这个上限，取值应高于该请求会用到的保险丝、低于 Agent 自身的 hook 超时。
+Claude Code 和 Codex 默认使用 `auto`，本地压缩器分别是 `claude -p` 和 `codex exec`，见 [§3.2.5](./16-capability-reference.md#_3-2-5-召回再摘要)。其他支持云端压缩的集成默认保持 `off`，需要显式开启。服务端压缩适用于 Claude Code、Codex、OpenCode、DSH、pi、Cursor、TRAE、TRAE CN、ZCode、OpenClaw 和 Hermes，要求服务端支持 context-search rewrite。
+
+这些设置控制自动召回。模型主动调用 MCP `search` 时，使用该次调用传入的参数。完整规则与旧服务端回退行为见[共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)。
+
+共享插件读取 `ovcli.conf` 的 `plugin` 段；`plugin.<harness>` 可覆盖某个客户端的配置。环境变量优先级更高；旧变量 `OPENVIKING_RECALL_REWRITE` 仍可作为 `OPENVIKING_RECALL_COMPRESS` 的别名使用，详见[插件配置](../configuration/02-client.md#插件配置)。修改后重启对应 Agent，使 hook 进程加载新配置。这些都是插件客户端配置，不需要修改服务端的 `ov.conf`。
+
+### 请求超时
+
+查询扩展、检索和 digest 压缩依次执行。查询扩展默认超时为 5 秒（`retrieval.recall_intent_timeout_s`），digest 默认超时为 30 秒（`retrieval.recall_rewrite_timeout_s`）。
+
+`OPENVIKING_RECALL_CONTEXT_TIMEOUT_MS` 或 `plugin.recallContextTimeoutMs` 控制客户端等待整个 context 请求的上限。未设置时沿用插件的普通超时；请求带 session（会走查询扩展）时至少 15 秒，请求 digest 时至少 45 秒。自定义值应高于该请求会用到的服务端超时，并低于宿主 hook 的超时；客户端提前结束会丢失整个响应。

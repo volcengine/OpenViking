@@ -1,12 +1,12 @@
 # Codex 记忆插件
 
-本插件旨在为 [Codex](https://developers.openai.com/codex) 提供持久化的跨会话（session）记忆功能。只需安装一次，即可实现：在会话开始时加载 OpenViking profile、记忆索引和 skill 清单，在每次用户输入前自动召回相关记忆，在每轮对话结束后进行增量捕获，并在上下文压缩（compaction）前将完整记录提交给记忆抽取器。同时，该插件将 Codex 连接至 OpenViking 的 `/mcp` 端点，使模型能够直接调用 `find`、`search`、`read`、`remember` 等工具来主动管理记忆。
+为 [Codex](https://developers.openai.com/codex) 提供跨会话记忆。插件通过 hooks 自动召回、捕获和提交对话，通过 MCP 提供检索、读取和记忆管理工具。
 
 源码：[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) | [博客：动机与效果展示](https://blog.openviking.ai/post/openviking-coding-agent/)
 
 ## 安装
 
-Claude Code 和 Codex 共用同一个安装脚本。它会依次询问界面语言（English/中文）、要安装的 harness、下载源和 OpenViking 凭据；所有步骤幂等，可安全地重复执行。
+Claude Code 和 Codex 共用同一个安装脚本。它会依次询问界面语言（English/中文）、要安装的 harness、下载源和 OpenViking 凭据；安装步骤支持重复执行。
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)
@@ -33,7 +33,7 @@ codex
 
 ### 首次启动：信任 hooks
 
-插件的 hooks 对 Codex 是新的，启动时会先停在一次信任确认上，选 **Trust all and continue**；想先看一眼 hook 命令就选 Review hooks：
+安装插件不会自动信任它的 hooks。首次启动时 Codex 会显示类似下面的审阅提示，具体界面随 Codex 版本变化。选 **Trust all and continue**，或先选 **Review hooks** 查看命令。选 *Continue without trusting* 后 hooks 不会运行，直到在 `/hooks` 中开启。
 
 ```text
 Hooks need review
@@ -45,14 +45,9 @@ Hooks can run outside the sandbox after you trust them.
   3. Continue without trusting (hooks won't run)
 ```
 
-全新安装会一次列出插件注册的全部 6 个 hook。之后每次插件更新只要动了 hook，Codex 都会再拦一次，数字是这次新增或改动的条数（比如只改了一个就是 `1 hook is new or changed`），同样选 Trust all and continue。
+也可以在 `/hooks` 中检查 OpenViking 命令，信任并启用准备使用的条目；同时在 `/plugins` 中确认 `openviking-memory` 已启用。当前插件声明了 6 个 hook，新增或修改定义后需要重新审阅，规则见[官方 hook 信任说明](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)。
 
-选第 3 项或错过这一步，hooks 就不会运行：MCP 工具仍能调用，但自动召回和捕获全部停摆。要恢复，得让两个彼此独立的开关都处于开启状态：
-
-- `/hooks` — hook 的信任与开关，把标着 *New hook - review required* 或 *Modified since last trusted* 的条目信任并打开。
-- `/plugins` — 插件本身的启用状态，确认 `openviking-memory` 是 enabled。
-
-任何一边是关着的，自动召回和捕获都不会发生。
+Hook 关闭时，MCP 工具仍可能正常使用。自动召回需要 `UserPromptSubmit`，捕获需要 `Stop`，其余生命周期提交见下表。之前跳过设置的，可以回到 `/hooks` 启用相关条目。
 
 <details>
 <summary><b>手动安装</b></summary>
@@ -79,7 +74,18 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 
 ## 工作原理
 
-本插件深度挂载于 Codex 的生命周期之中：在 `SessionStart`（`startup`、`clear` 或 `resume`）阶段，它会复用其他 coding-agent 集成共用的 CJK-aware profile 构建逻辑，注入 `profile.md`、`preferences/` 与 `entities/` 的 URI 和摘要索引，以及列出你的 OpenViking skill 的 `<available-skills>` 清单；在每次用户输入前，它会搜索 OpenViking 并注入相关的记忆（触发 `UserPromptSubmit`）；在每轮对话结束后，会将新的对话追加至当前会话（触发 `Stop`）；在上下文压缩前，补齐并提交（commit）完整的对话记录（触发 `PreCompact`）；在线程正常退出时提交整段会话（触发 `SessionEnd`），以确保记忆抽取器能够在完整的上下文环境中运行。shell 命令执行前（`Bash` 上的 `PreToolUse`），插件会检查命令里是否带 `viking://` URI：命令照常执行，模型会收到一条提示，建议改用 OpenViking MCP 工具；如果该 URI 是有意传入的数据（例如 `ov` 命令参数），模型可以忽略这条提示。此外，在启动新会话时，插件还会清扫前次运行遗留的孤儿会话（orphan session）。恢复已有会话时，固定 profile 背景还会与最新的 archive digest 合并注入。
+插件按以下事件处理记忆：
+
+| Codex 事件 | 插件行为 |
+| --- | --- |
+| `SessionStart`（`startup`、`clear`、`resume`） | 注入 `profile.md`、`preferences/` 和 `entities/` 的 URI 与摘要索引，以及 `<available-skills>` 清单。复用支持中日韩文本的公共 profile 构建逻辑；恢复会话时还可注入最新 archive digest。 |
+| `UserPromptSubmit` | 搜索并注入与当前输入相关的记忆。 |
+| `Stop` | 将新增对话追加到 OpenViking 会话。 |
+| `PreCompact` | 补齐并提交压缩前的完整对话记录。 |
+| `SessionEnd` | 正常退出时提交会话，触发后续记忆提取。 |
+| `PreToolUse`（`Bash`） | 检查命令中的 `viking://` URI，并提示模型使用 OpenViking MCP 工具。命令仍会执行；URI 是 `ov` 参数等有意传入的数据时，可以忽略提示。 |
+
+新会话启动时还会清理上次运行遗留、已超过闲置 TTL 的孤儿会话。
 
 > **已知局限**：`SessionEnd` 需要 Codex 0.145 及以上版本，且只在正常退出时触发（`/quit`、`/exit`、连按两次 `Ctrl-C`、EOF、`codex exec` 运行结束）。`SIGTERM`、直接关闭终端、`kill -9` 或崩溃都不会触发；当 TUI 挂在 `codex app-server` 守护进程上时，该事件会被延后。这些会话——以及 Codex 低于 0.145 的所有会话（以及没有该事件的 TraeCode CLI 版本）——由下一次 `SessionStart` 的闲置 TTL（生存时间，默认为 30 分钟）清扫回收。
 
@@ -110,7 +116,7 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，作用于每个被捕获的回合（同一套语法） |
 | `OPENVIKING_DEBUG` | `false` | 是否将日志写入 `~/.openviking/logs/codex-hooks.log` |
 
-这些旋钮大多也可以写在 `ovcli.conf` 的 `plugin` 段下——见[插件配置](../configuration/02-client.md#插件配置)。两个过滤器 knob 尤其建议写在那里，用 JSON 数组，因为环境变量形式会按逗号切分。
+这些配置大多也可以写在 `ovcli.conf` 的 `plugin` 段下——见[插件配置](../configuration/02-client.md#插件配置)。两个过滤器建议使用 JSON 数组，避免环境变量中的逗号被当作分隔符。
 
 如果更看重召回响应速度，请参阅[低延迟召回](./01-overview.md#低延迟召回)，其中说明了如何通过环境变量或 `ovcli.conf` 关闭查询扩展与 Codex 本地结果压缩。
 
@@ -130,8 +136,8 @@ TraeCode CLI 2.0 用户启动 `trae-cli`，并可用 `trae-cli plugin list` 确�
 |------|------|------|
 | MCP 工具调用报认证错误 | 当前 ovcli 配置没有 authenticated server 所需的有效 `api_key` | 修正 `~/.openviking/ovcli.conf`（或运行 `node <插件目录>/scripts/setup.mjs`）后重启 Codex；stdio 代理会在启动时和认证失败后重新读取配置 |
 | MCP 工具调用报连接错误 | 服务器不可达或 URL 配置错误 | 执行 `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` 检查服务器状态 |
-| `6 hooks need review`，或插件已装但 hook 不生效 | 全新安装要信任全部 6 个 hook，之后每次插件更新改动到 hook 时还会再问一次；当时选了 *Continue without trusting* 或直接跳过，hooks 就一直不会运行 | `/hooks` 里信任并开启相关条目，`/plugins` 里确认 `openviking-memory` 已启用——两个开关相互独立，都要是开着的 |
-| `ov config switch` 后插件仍指向旧服务器 | 上个会话的代理进程仍在运行 | 重启 Codex；代理在启动时解析凭据 |
+| 提示审阅 hook，或插件已装但没有自动召回/捕获 | 相关 hook 未信任、未启用，或插件被禁用 | 在 `/hooks` 审阅并启用相关条目，再到 `/plugins` 确认插件已启用。 |
+| `ov config switch` 后插件仍指向旧服务器 | 原代理仍保留连接，或凭据环境变量覆盖了选中的配置 | 重启 Codex，并检查凭据环境变量与 `OPENVIKING_CLI_CONFIG_FILE`。远程调用会在认证失败后检查文件变化，不会在每次成功请求时重载 |
 | Hook 与 MCP 指向不同服务器 | 某一侧残留了过期的 `OPENVIKING_*` 凭据环境变量（默认环境变量优先于 ovcli.conf） | 清除过期环境变量（让 ovcli.conf 同时驱动两者）、设置 `OPENVIKING_CREDENTIAL_SOURCE=cli`，或保证环境变量一致 |
 
 ## 参见

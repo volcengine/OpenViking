@@ -1,14 +1,10 @@
 # OAuth 2.1 Guide
 
-OpenViking server ships a native OAuth 2.1 implementation. Any client that
-needs OAuth — including MCP clients (Claude.ai, Claude Desktop, ChatGPT,
-Cursor) and any future first-party browser app — can authorize against the
-server directly, without a third-party proxy. The protocol surface (DCR,
-authorize, token, metadata) is provided by the official `mcp.server.auth`
-SDK and is otherwise standards-compliant OAuth 2.1, so non-MCP OAuth clients
-work just as well.
+OpenViking provides native OAuth authorization for clients that support its discovery, dynamic registration, and PKCE flow, including MCP clients such as Claude.ai, Claude Desktop, ChatGPT, and Cursor. The protocol endpoints (registration, authorize, token, metadata) come from the official `mcp.server.auth` SDK, so non-MCP OAuth clients can use the same flow. Users authorize access through Studio, and clients receive opaque access and refresh tokens. API Key authentication remains available.
 
 ## Recommended setup
+
+Configure API Key mode and create the account and user/admin key first, as described in [Authentication](04-authentication.md). OAuth consent needs this registered identity; enabling OAuth alone does not create it. Merge the excerpts below into the existing configuration.
 
 > **Prerequisite**: public HTTPS. OAuth 2.1 (and the MCP SDK) **requires
 > HTTPS** for any non-localhost issuer. See the
@@ -34,24 +30,13 @@ work just as well.
    dialog; then click **Authorize** on the consent card. Claude.ai gets the
    token and the connector is live.
 
-That's the whole production path. The rest of this guide explains why each
-piece exists, how to test locally without HTTPS, and how to verify with curl
-when something doesn't work.
+After connecting, confirm the client can discover tools and read a permitted URI. The sections below cover local testing, token behavior, and troubleshooting.
 
 ---
 
 ## Why native OAuth
 
-Some MCP clients only accept OAuth 2.1, not API keys. Until now the only path
-was to deploy the community [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth)
-Cloudflare Worker proxy that translates OAuth into an API-Key bearer. Native
-support removes:
-
-- The extra deployment unit (CF Worker + KV namespaces)
-- The third-party trust boundary (the proxy operator can decrypt the upstream API key)
-- The copy-paste UX where users paste the API key into a browser textbox
-
-API-Key auth still works as before — OAuth layers on top.
+Use OAuth when a client expects browser authorization and token refresh. Before native support, such clients needed the community [MCP-Key2OAuth](https://github.com/t0saki/MCP-Key2OAuth) Cloudflare Worker proxy, which translates OAuth into an API-key bearer. Native authorization removes that extra deployment and the proxy operator's access to the upstream API key. The first Studio sign-in still needs a registered user/admin API key; later approvals can reuse the Studio identity.
 
 ---
 
@@ -106,6 +91,8 @@ visiting the authorize page.
 
 ## Quick start (HTTP, local only)
 
+Use the same API Key mode and registered user/admin key described above. Do not use unauthenticated dev mode as the consent identity.
+
 The fastest way to verify OAuth is wired correctly is on `127.0.0.1`. The MCP
 SDK accepts `http://127.0.0.1` and `http://localhost` as issuer URLs without
 HTTPS — but Claude.ai and Claude Desktop themselves require **public HTTPS**
@@ -156,11 +143,10 @@ OAuth 2.1 **requires HTTPS** for any non-localhost issuer. The
 nginx, docker compose, CDN — in detail. The short version:
 
 1. Follow [Public Access Guide § Adding HTTPS](12-public-access.md#adding-https-for-public-access)
-   to get `https://your-domain.com` serving port 1934 over TLS.
+   to expose `https://your-domain.com` on 443 with the proxy forwarding to the OpenViking port (1933 by default).
 2. Enable OAuth: `{ "oauth": { "enabled": true } }` in `ov.conf`.
-3. Restart: `docker compose restart openviking`.
-4. Set `OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com` in `.env` (the
-   server uses this as the issuer in OAuth metadata and `WWW-Authenticate`).
+3. Set `OPENVIKING_PUBLIC_BASE_URL=https://your-domain.com` in the Compose `.env` file.
+4. Run `docker compose up -d` to apply changed container environment variables. A plain `restart` does not apply `.env` changes.
 
 Once HTTPS + OAuth are both up, connect clients as described below.
 
@@ -198,11 +184,11 @@ claude mcp add --transport http openviking https://my.ov/mcp \
 If you want Claude Code to drive OAuth, the connector flow is identical to
 Claude.ai's once configured.
 
-### ChatGPT (Codex, Plus, Enterprise)
+<a id="chatgpt-codex-plus-enterprise"></a>
 
-Connector setup is via Settings → Beta features → Custom Connectors. Enter
-the MCP URL; ChatGPT discovers the OAuth endpoints from the
-`/.well-known/...` documents and walks the same authorize → token flow.
+### ChatGPT
+
+Create a custom App in ChatGPT developer mode, enter the MCP URL, and complete OAuth authorization in the browser. Availability and admin controls depend on the plan and workspace settings; follow the [official OpenAI instructions](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt). For Codex plugins and MCP configuration, see the [Codex integration](../agent-integrations/04-codex.md).
 
 ### Cursor
 
@@ -216,39 +202,53 @@ URL via Cursor's MCP settings.
 
 You can drive the entire flow without a real MCP client:
 
+Set `OV_OAUTH_ORIGIN` to your HTTPS origin and `API_KEY` to a registered user/admin key. This example needs `curl`, `jq`, OpenSSL, and Python 3. Copy the pending ID and returned authorization code from the browser where indicated.
+
 ```bash
-# 1. Register a client
-curl -X POST -H "Content-Type: application/json" \
-     -d '{"redirect_uris":["http://127.0.0.1:9999/cb"],"client_name":"test","token_endpoint_auth_method":"none"}' \
-     https://my.ov/register
-# → {"client_id":"...", ...}
+OV_OAUTH_ORIGIN=https://my.ov
+CID=$(curl -fsS "$OV_OAUTH_ORIGIN/register" \
+  -H "Content-Type: application/json" \
+  -d '{"redirect_uris":["http://127.0.0.1:9999/cb"],"client_name":"test","token_endpoint_auth_method":"none"}' \
+  | jq -er '.client_id')
 
-# 2. PKCE pair
-VERIFIER=$(openssl rand -base64 64 | tr -d '=+/' | head -c 64)
-CHALLENGE=$(printf "%s" "$VERIFIER" | openssl dgst -sha256 -binary | basenc --base64url | tr -d '=')
+VERIFIER=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')
+CHALLENGE=$(printf "%s" "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+STATE=$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')
+printf '%s\n' "$OV_OAUTH_ORIGIN/authorize?response_type=code&client_id=$CID&redirect_uri=http://127.0.0.1:9999/cb&code_challenge=$CHALLENGE&code_challenge_method=S256&state=$STATE"
 
-# 3. Open the authorize URL in a browser. The page shows a 6-char code.
-echo "https://my.ov/authorize?response_type=code&client_id=$CID&redirect_uri=http://127.0.0.1:9999/cb&code_challenge=$CHALLENGE&code_challenge_method=S256&state=xyz"
+# Open the URL in a browser; approve in Studio or supply its pending ID here.
+curl -fsS "$OV_OAUTH_ORIGIN/api/v1/auth/oauth-verify" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"pending_id":"<pending-id>","decision":"approve"}'
 
-# 4. Approve from the Studio consent page (or via API).
-#    - Studio path uses pending_id (?pending=... from the authorize URL).
-#    - Cross-device path uses the 6-char display_code.
-curl -X POST -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-     -d '{"pending_id":"<pending-id-from-authorize-url>","decision":"approve"}' \
-     https://my.ov/api/v1/auth/oauth-verify
+# From the redirect URL, verify state matches $STATE and copy the code.
+# The callback page need not load for this manual test.
+AUTH_CODE='<code-from-callback-url>'
+TOKEN_RESPONSE=$(curl -fsS "$OV_OAUTH_ORIGIN/token" \
+  --data-urlencode "grant_type=authorization_code" \
+  --data-urlencode "code=$AUTH_CODE" \
+  --data-urlencode "client_id=$CID" \
+  --data-urlencode "code_verifier=$VERIFIER" \
+  --data-urlencode "redirect_uri=http://127.0.0.1:9999/cb")
+ACCESS_TOKEN=$(printf '%s' "$TOKEN_RESPONSE" | jq -er '.access_token')
 
-# 5. The browser auto-redirects to /cb?code=ovac_...&state=xyz. Copy the code.
+curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"manual-test","version":"1"}}}'
 
-# 6. Exchange the auth code for tokens.
-curl -X POST \
-     -d "grant_type=authorization_code&code=ovac_...&client_id=$CID&code_verifier=$VERIFIER&redirect_uri=http://127.0.0.1:9999/cb" \
-     https://my.ov/token
-# → {"access_token":"ovat_...","refresh_token":"ovrt_...","expires_in":3600}
+curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
-# 7. Call MCP with the access token.
-curl -X POST -H "Authorization: Bearer ovat_..." \
-     -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' \
-     https://my.ov/mcp
+curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":2}'
 ```
 
 ---
@@ -288,15 +288,13 @@ Environment variables:
 | Authorization code | `secrets.token_urlsafe(40)` | `ovac_` | 5 minutes | SQLite (SHA-256 indexed) |
 | Display code (page) | 6-char alphanumeric (no O/0/I/1) | — | 10 minutes | SQLite (`oauth_pending_authorizations`) |
 
-All tokens are opaque; OpenViking does **not** issue JWTs. There is no
-cryptographic key to manage on the server side. Token claims are looked up
+All tokens are opaque; OpenViking does **not** issue JWTs. OAuth does not require a JWT signing key. The deployment still needs API credentials, protected token storage, and any configured storage-encryption keys. Token claims are looked up
 from SQLite on every request, so revoking a token is a single `UPDATE`.
 
 ### Token = identity
 
 Each issued token is bound to a single `(account_id, user_id, role)` triple
-recorded at authorization time. An OAuth token grants the same permissions
-as the API key that produced it — *not* more, *not* less.
+recorded at authorization time. The token carries that identity and remains subject to current resource ACLs and key validity. A later role promotion does not upgrade an already issued token; role downgrade checks can reject it. OAuth-issued tokens cannot approve new OAuth clients.
 
 ### OAuth lifetime ≤ authorizing key lifetime
 
@@ -380,3 +378,5 @@ curl -i https://my.ov/mcp -d '{}' -H 'Content-Type: application/json' | grep -i 
 - [RFC 7591 — Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591)
 - [RFC 7636 — PKCE](https://datatracker.ietf.org/doc/html/rfc7636)
 - [OpenViking MCP Integration Guide](06-mcp-integration.md)
+
+[Compose restart behavior](https://docs.docker.com/reference/cli/docker/compose/restart/).

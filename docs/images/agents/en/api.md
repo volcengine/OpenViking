@@ -1,6 +1,6 @@
 ## Step 1: Add a resource
 
-Refer to the resource write example from GitHub and fill in the API Key and domain automatically:
+Install `requests` in your Python environment (`python -m pip install requests`). Replace the local file path and use an unused complete target URI; the page supplies the service URL and API key.
 
 ```python
 import json
@@ -56,15 +56,10 @@ print(json.dumps(result, ensure_ascii=False, indent=2))
 
 ## Step 2: Add memory
 
-Refer to the memory write example from GitHub and fill in the API Key and domain automatically:
+Reuse the imports, connection settings, and `post_json` helper from Step 1. Add a message to a new session and submit memory extraction:
 
 ```python
 text = "[TODO]your-message-text"  # e.g. I am a developer
-
-def post_json(path: str, payload: dict, timeout: float):
-    response = requests.post(f"{url}{path}", headers=headers, json=payload, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
 
 # Create a session.
 session = post_json("/api/v1/sessions", {}, 360.0)
@@ -88,3 +83,5 @@ result = post_json(
 )
 print(json.dumps(result, ensure_ascii=False, indent=2))
 ```
+
+Resource import and session commit may return before processing finishes. If `result["result"]` contains a `task_id`, query `GET /api/v1/tasks/{task_id}` with the same authorization header until it is `completed`, `failed`, or `cancelled`. Handle failures before reading or searching the result. A no-op commit may return no task.

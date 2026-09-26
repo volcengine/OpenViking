@@ -56,7 +56,7 @@ Create a new session. Sessions are containers for conversations, storing message
 | `keep_recent_count` | int | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
 | `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
-All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`.
+All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
 
 #### 3. Usage Examples
 
@@ -163,8 +163,7 @@ ov session new
       "user_id": "alice"
     },
     "auto_commit_policy": null
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -253,8 +252,7 @@ ov session list
       "uri": "viking://user/alice/sessions/e5f6g7h8",
       "is_dir": true
     }
-  ],
-  "time": 0.1
+  ]
 }
 ```
 
@@ -465,7 +463,7 @@ curl -X PATCH http://localhost:1933/api/v1/sessions/a1b2c3d4/config \
 **Python SDK**
 
 ```python
-result = client.update_session_config(
+result = await client.update_session_config(
     session_id="a1b2c3d4",
     options={
         "memory_extraction_config": {
@@ -692,12 +690,12 @@ Get the assembled session context used for LLM context building. This endpoint r
 **Return Fields Description:**
 - `latest_archive_overview`: The `overview` of the latest completed archive, when it fits the token budget
 - `pre_archive_abstracts`: Kept for backward compatibility, returns empty array
-- `messages`: All incomplete archive messages after the latest completed archive, plus current live session messages
+- `messages`: Incomplete archive messages after the latest completed archive and current live messages, limited to the token budget
 - `estimatedTokens`: Estimated total tokens
-- `stats`: Statistics
+- `stats`: Statistics. `includedArchives` counts entries in `pre_archive_abstracts`, which is currently empty; check `latest_archive_overview` itself to see whether an overview is included
 
 **Token Budget Allocation Strategy:**
-1. First allocate to current live messages
+1. Fit the messages into the budget first, dropping or truncating messages when needed, then calculate the remaining budget
 2. Remaining budget prioritizes the latest archive overview
 3. Pre-archive abstracts are not currently returned
 
@@ -714,7 +712,7 @@ Get the assembled session context used for LLM context building. This endpoint r
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID |
-| token_budget | int | No | 128000 | Non-negative token budget for assembled archive payload after active `messages` |
+| token_budget | int | No | 128000 | Non-negative budget for the entire returned context; messages are budgeted first, then the archive overview uses the remainder |
 
 #### 3. Usage Examples
 
@@ -793,8 +791,8 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
     "estimatedTokens": 160,
     "stats": {
       "totalArchives": 2,
-      "includedArchives": 1,
-      "droppedArchives": 0,
+      "includedArchives": 0,
+      "droppedArchives": 2,
       "failedArchives": 0,
       "activeTokens": 98,
       "archiveTokens": 62
@@ -929,7 +927,7 @@ If the archive does not exist, is incomplete, or does not belong to the session,
 
 #### 1. API Implementation Introduction
 
-Delete a session and all its data, including messages, archive history, memories, etc. Deletion is irreversible.
+Delete the session directory, including messages, archives, and session audit records. Long-term memories already extracted into user or Peer memory directories remain; locate and delete those URIs separately when needed. This endpoint has no automatic undo.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP route
@@ -996,8 +994,7 @@ ov session delete a1b2c3d4
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4"
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1029,8 +1026,8 @@ Add a message to the session. Supports two modes: simple text mode and Parts mod
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID |
 | role | str | Yes | - | Message role: "user" or "assistant" |
-| parts | List[dict \| MessagePart] | Conditional | - | SDK part dictionaries or `TextPart`/`ContextPart`/`ImagePart`/`ToolPart` objects; HTTP API accepts dictionaries only; mutually exclusive with content |
-| content | str | Conditional | - | Message text content (simple mode; mutually exclusive with parts) |
+| parts | List[dict \| MessagePart] | Conditional | - | SDK part dictionaries or `TextPart`/`ContextPart`/`ImagePart`/`ToolPart` objects; HTTP API accepts dictionaries only; use instead of content |
+| content | str | Conditional | - | Message text content (simple mode; use instead of parts) |
 | peer_id | str | No | None | Optional stable interaction peer identity |
 | options | AddMessageOptions | No | None | Advanced message options such as `created_at`, `telemetry`, `turn_id`, `message_kind`, and `source_message_ids` |
 
@@ -1206,8 +1203,7 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
   "result": {
     "session_id": "a1b2c3d4",
     "message_count": 2
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1217,7 +1213,7 @@ ov session add-message a1b2c3d4 --role user --content "How do I authenticate use
 
 #### 1. API Implementation Introduction
 
-Add multiple messages to a session in a single request. Suitable for scenarios that require writing a large number of messages at once (e.g., importing conversation history, memory extraction), offering significantly better performance than calling `add_message()` repeatedly.
+Add multiple messages to a session in one request, for example when importing conversation history. Batching reduces the number of requests compared with calling `add_message()` for each message.
 
 **Difference from `add_message()`**:
 - `add_message()`: Add 1 message per request
@@ -1237,7 +1233,7 @@ Add multiple messages to a session in a single request. Suitable for scenarios t
 |------|------|------|--------|------|
 | session_id | str | Yes | - | Session ID |
 | messages | List[AddMessageRequest] | Yes | - | List of messages, each following the same format as `add_message()`, max 100 |
-| options | BatchAddMessagesOptions | No | None | Advanced batch options such as `telemetry`; pass `options={"telemetry": true}` to include operation telemetry data |
+| options | BatchAddMessagesOptions | No | None | Advanced batch options such as `telemetry`; pass `options={"telemetry": True}` to include operation telemetry data |
 
 > **Note**: Each message follows the exact same format as `add_message()`, supporting both `content` (simple mode) and `parts` (Parts mode). If you need to add more than 100 messages, call in batches.
 
@@ -1325,8 +1321,7 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
     "session_id": "a1b2c3d4",
     "message_count": 5,
     "added": 3
-  },
-  "time": 0.1
+  }
 }
 ```
 
@@ -1336,14 +1331,14 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 #### 1. API Implementation Introduction
 
-Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
+Commit a session. Message archiving (Phase 1) completes before the response returns. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
 
 **Two-Phase Commit Flow:**
-- **Phase 1 (Synchronous)**: Snapshot current messages, clear live session, create archive directory, write original messages
+- **Phase 1 (Synchronous)**: Split messages according to the retention policy, persist the archive and recovery records, enqueue Phase 2, and write retained messages back to the live session
 - **Phase 2 (Asynchronous)**: Generate summaries (L0/L1) and extract long-term memories
 
 **Notes:**
-- Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
+- Consecutive commits are accepted; only requests that produce an archive return a separate `task_id`. No-op commits do not create tasks.
 - Empty sessions, or commits where all messages remain inside `keep_recent_count`, complete synchronously with `archived: false`.
 - Background Phase 2 work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
 - If an earlier archive failed and left no `.done`, later commit requests fail with `FAILED_PRECONDITION` until that failure is resolved.
@@ -1365,7 +1360,7 @@ Commit a session. Message archiving (Phase 1) completes immediately. Summary gen
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
 | reset_context | bool | No | false | HTTP API: archive all live messages, then append a boundary archive containing only a `.done` marker with `context_reset`. Keeps the session ID and raw history, clears injected context and stops future summaries from inheriting pre-reset overviews. Requires `keep_recent_count=0` and no `retention_mode`. |
 
-`reset_context` is used by the OpenClaw plugin reset hook and `Session.commit_async()`. It also creates a boundary when there are no live messages, unless the newest archive is already a reset boundary. Memory extraction for older archives can finish independently; long-term memories are preserved. SDK/CLI convenience options are not added in this change.
+`reset_context` is used by the OpenClaw plugin reset hook and `Session.commit_async()`. It also creates a boundary when there are no live messages, unless the newest archive is already a reset boundary. Memory extraction for older archives can finish independently; long-term memories are preserved. The SDK and CLI do not expose a dedicated `reset_context` option; use the HTTP API when needed.
 
 
 The effective policy is resolved in this order: Session `.meta.json`, latest
@@ -1399,17 +1394,18 @@ import openviking_sdk as ov
 client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
-# Commit returns immediately with task_id; summary + memory extraction runs in background
+# Commit finishes Phase 1; summary and memory extraction run in the background
 result = await client.commit_session(session_id="a1b2c3d4")
 print(f"Status: {result['status']}")
 print(f"Task ID: {result['task_id']}")
 
-# Poll background task status
-task = await client.get_task(task_id=result["task_id"])
-if task["status"] == "completed":
-    memories = task["result"]["memories_extracted"]
-    total = sum(memories.values())
-    print(f"Memories extracted: {total}")
+# Check once; poll again if the task is still pending or running
+task_id = result.get("task_id")
+if task_id:
+    task = await client.get_task(task_id=task_id)
+    print(task["status"])
+    if task["status"] == "completed":
+        print(task["result"]["memories_extracted"])
 ```
 
 **TypeScript SDK**
@@ -1430,11 +1426,13 @@ if err != nil {
 fmt.Println(commit["status"], commit["task_id"])
 
 taskID, _ := commit["task_id"].(string)
-task, err := client.GetTask(ctx, taskID)
-if err != nil {
-    return err
+if taskID != "" {
+    task, err := client.GetTask(ctx, taskID)
+    if err != nil {
+        return err
+    }
+    fmt.Println(task["status"])
 }
-fmt.Println(task["status"])
 ```
 
 **CLI**
@@ -1480,7 +1478,7 @@ ov session commit a1b2c3d4
 
 #### 1. API Implementation Introduction
 
-Trigger memory extraction immediately for an existing session without creating a new commit task.
+Extract memories from the existing session’s current live messages and wait for the extraction result. This does not create a commit task or replace archiving; previously archived history is not included again as live input.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:extract_session()` - HTTP route
@@ -1509,7 +1507,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
 
 **Response Example**
 
-The endpoint returns the extracted memory write results as a JSON list. The exact item shape depends on which memories were produced for that session.
+The response’s `result` field contains the list of extracted memory writes. The exact item shape depends on which memories were produced for that session.
 
 <a id="get_task"></a><a id="list_tasks"></a>
 
@@ -1549,7 +1547,7 @@ viking://user/{user_id}/sessions/{session_id}/
 
 ### memory_diff.json Structure
 
-When long-term memory extraction runs successfully, the commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and rollback:
+When long-term memory extraction runs successfully, the commit writes a `memory_diff.json` to the archive directory, recording all memory changes for auditing and reviewing changes:
 
 ```json
 {
@@ -1558,23 +1556,23 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
   "operations": {
     "adds": [
       {
-        "uri": "memory/user/xxx/identity.md",
-        "memory_type": "identity",
+        "uri": "viking://user/alice/memories/profile.md",
+        "memory_type": "profile",
         "after": "Newly created file content"
       }
     ],
     "updates": [
       {
-        "uri": "memory/user/xxx/context/project.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/preferences/project.md",
+        "memory_type": "preferences",
         "before": "Content before modification",
         "after": "Content after modification"
       }
     ],
     "deletes": [
       {
-        "uri": "memory/user/xxx/context/old.md",
-        "memory_type": "context",
+        "uri": "viking://user/alice/memories/preferences/old.md",
+        "memory_type": "preferences",
         "deleted_content": "Deleted file content"
       }
     ]
@@ -1618,56 +1616,68 @@ An empty `memory_diff.json` (all counts zero) is written when long-term memory e
 **Python SDK**
 
 ```python
+import asyncio
+
 from openviking_sdk import AsyncHTTPClient, ContextPart, TextPart
 
 # Initialize client
 client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
-# Create new session
-session_result = await client.create_session()
-session_id = session_result["session_id"]
-print(f"Session created: {session_id}")
+try:
+    # Create new session
+    session_result = await client.create_session()
+    session_id = session_result["session_id"]
+    print(f"Session created: {session_id}")
 
-# Add user message
-await client.add_message(
-    session_id=session_id,
-    role="user",
-    content="How do I configure embedding?",
-)
-
-# Search with session context
-results = await client.search(
-    query="embedding configuration",
-    session_id=session_id,
-)
-
-# Add assistant message with context reference
-resources = results.get("resources", [])
-if resources:
-    resource = resources[0]
+    # Add user message
     await client.add_message(
         session_id=session_id,
-        role="assistant",
-        parts=[
-            TextPart(text="Based on the documentation, you can configure embedding..."),
-            ContextPart(
-                uri=resource["uri"],
-                context_type="resource",
-                abstract=resource.get("abstract", ""),
-            ),
-        ],
+        role="user",
+        content="How do I configure embedding?",
     )
-# Commit session (returns immediately; summary + memory extraction runs in background)
-commit_result = await client.commit_session(session_id=session_id)
-print(f"Task ID: {commit_result['task_id']}")
 
-# Optional: poll for completion
-task = await client.get_task(task_id=commit_result["task_id"])
-if task and task["status"] == "completed":
-    memories = task["result"]["memories_extracted"]
-    total = sum(memories.values())
-    print(f"Memories extracted: {total}")
+    # Search with session context
+    results = await client.search(
+        query="embedding configuration",
+        session_id=session_id,
+    )
+
+    # Add assistant message with context reference
+    resources = results.get("resources", [])
+    if resources:
+        resource = resources[0]
+        await client.add_message(
+            session_id=session_id,
+            role="assistant",
+            parts=[
+                TextPart(text="Based on the documentation, you can configure embedding..."),
+                ContextPart(
+                    uri=resource["uri"],
+                    context_type="resource",
+                    abstract=resource.get("abstract", ""),
+                ),
+            ],
+        )
+    # Commit session; summary and memory extraction run in the background
+    commit_result = await client.commit_session(session_id=session_id)
+    print(f"Task ID: {commit_result['task_id']}")
+
+    # Optional: poll for completion
+    task_id = commit_result.get("task_id")
+    if task_id:
+        for _ in range(30):
+            task = await client.get_task(task_id=task_id)
+            if task and task["status"] == "completed":
+                print(task.get("result"))
+                break
+            if task and task["status"] in {"failed", "cancelled"}:
+                raise RuntimeError(task)
+            await asyncio.sleep(1)
+        else:
+            print(f"Still pending: {task_id}; check this task again later")
+finally:
+    await client.close()
 ```
 
 **HTTP API**
@@ -1697,13 +1707,13 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "X-API-Key: your-key" \
   -d '{"role": "assistant", "content": "Based on the documentation, you can configure embedding..."}'
 
-# Step 5: Commit session (returns immediately with task_id)
+# Step 5: Commit session (an archived commit returns a task_id)
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
 # Returns: {"status": "ok", "result": {"status": "accepted", "task_id": "uuid-xxx", ...}}
 
-# Step 7: Poll background task status (optional)
+# Step 6: Check the background task; poll again if it has not finished
 curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
   -H "X-API-Key: your-key"
 ```
@@ -1722,7 +1732,7 @@ if session_info["message_count"] > 10:
 ### Use Session Context for Search
 
 ```python
-# Better search results with conversation context
+# Interpret the query using session context; results depend on relevance and query-planning settings
 results = await client.search(query=query, session_id=session_id)
 ```
 

@@ -1,10 +1,10 @@
 # 示例：知识蒸馏
 
-把一个或多个知识库、文档集合**蒸馏**成按主题组织、有出处的高层次知识：跨来源的发现、趋势、变化、驱动因素、对比、影响和不确定性。
+从一个或多个知识库中提炼结论，按主题组织，并保留出处与不确定性。
 
-典型用途：蒸馏一个知识库、对比多个集合，如从一叠财报里推导出「跨报告期的变化」这类高阶洞察。
+例如，对比多期财报，分析营收、利润和风险随时间的变化。
 
-产物是一棵按主题组织的浅层工件树，每个主题目录是一个持久的语义领域，每一页是一条独立有用的高层次结论：
+输出按主题分目录，每页说明一条结论：
 
 ```text
 revenue-quality/
@@ -16,23 +16,25 @@ risk/
   customer-concentration-increased.md
 ```
 
-> 上面只是形态示例——真实的主题和结论由你给的领域决定。
+> 以上仅展示目录结构。实际主题和结论由来源与指令决定，文件名概括结论。
 
 Skill 源码：[examples/compile/ov-compile-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-distillation)
+
+先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
 
 ## 第一步：准备来源
 
 ```bash
-ov add-resource ./finance-reports --to viking://resources/finance-reports
+ov add-resource ./finance-reports --to viking://resources/finance-reports --wait
 ov ls -r viking://resources/finance-reports
 ```
 
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-distillation
+ov add-skill examples/compile/ov-compile-skills/knowledge-distillation -p viking://agent/skills --wait
 ov skills list
-# → viking://agent/skills/knowledge-distillation  （或 viking://user/<user_name>/skills/knowledge-distillation）
+# → viking://agent/skills/knowledge-distillation
 ```
 
 ## 第三步：执行编译
@@ -64,14 +66,16 @@ ov task status cmp_01abc      # 查看进度与最终结果
 ov task cancel cmp_01abc      # 协作式取消
 ```
 
-## 第四步：看看产物
+## 第四步：查看产物
 
-先看主题树，再钻进具体结论页：
+先查看目录，再读取实际生成的结论页。下面的文件名仅为示例：
 
 ```bash
 ov tree viking://resources/finance-insights
 ov read viking://resources/finance-insights/revenue-quality/growth-shifted-from-volume-to-pricing.md
 ```
+
+默认不生成 `index.md`；需要导航页时，在 `--instruction` 中明确要求。再次编译同一主题时，Skill 会要求更新已有分析页，并标注可能随时间变化的结论。
 
 ## 相关文档
 

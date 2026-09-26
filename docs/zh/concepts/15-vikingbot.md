@@ -114,7 +114,7 @@ VikingBot 根据当前可信 `actor_peer_id` 读取 Peer Profile，并按类型�
 - `entities`：人、项目和组织等实体信息；
 - `preferences`：用户偏好、习惯和约束。
 
-这使不同用户共享同一个 Gateway 时，仍能使用各自隔离的上下文。
+隔离范围取决于 OpenViking 连接身份。`actor_peer_id` 限制同一 user 下的 peer 集合；如果多个聊天用户共用一个 user key，该用户自己的记忆和共享资源仍可见。独立用户隔离需要不同的 user 身份。
 
 ### Experience：可复用任务经验
 

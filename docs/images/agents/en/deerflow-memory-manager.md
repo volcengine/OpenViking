@@ -1,5 +1,7 @@
 DeerFlow can use OpenViking as a long-term memory backend through MemoryManager. After the integration is enabled, DeerFlow writes conversation messages to OpenViking, recalls relevant memories before model calls, and injects them into the context.
 
+This setup supports one DeerFlow user with an ordinary OpenViking USER API key in `api_key` mode. `owner_user_id: default` applies when DeerFlow authentication is disabled; otherwise set the authenticated DeerFlow user's ID. It does not provision separate credentials for multiple users. Remove old trusted-mode identity defaults before switching. See [DeerFlow's authentication and migration notes](https://github.com/bytedance/deer-flow/blob/main/docs/OPENVIKING.md#authentication-boundary).
+
 ## Step 1: Configure OpenViking credentials
 
 Edit the `.env` file in the DeerFlow project root and add the API key:
@@ -60,7 +62,7 @@ HTTP Request: GET {{OPENVIKING_BASE_URL}}/health "HTTP/1.1 200 OK"
 
 ## Step 5: Verify memory write and recall
 
-Use the following logs to confirm that write and recall are working:
+These logs show accepted requests and injected context. After extraction finishes, start another conversation as the same user and ask about a distinctive fact from the previous session to verify memory recall:
 
 ```bash
 grep -Ei "messages/batch|commit|search/find|has_memory" logs/gateway.log | tail -100

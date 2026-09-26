@@ -32,11 +32,11 @@
        └ openviking MCP · ✔ connected
    ```
 
-3. 执行 `/mcp` 命令，确认显示如下信息：
+3. 执行 `/mcp`，确认 OpenViking 显示为 connected。工具数量随服务端版本变化：
 
    ```text
    Built-in MCPs (always available)
-     ❯ plugin:openviking-memory:openviking · ✔ connected · 10 tools
+     ❯ plugin:openviking-memory:openviking · ✔ connected
    ```
 
 4. 执行 `/openviking-memory:ov` 命令，确认服务状态正常：

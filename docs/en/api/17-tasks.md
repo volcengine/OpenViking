@@ -150,9 +150,13 @@ Request `GET /api/v1/tasks/{task_id}?include_events=true` to also receive `resul
 
 History retains at most 64 events and 32 KiB of serialized event data. Older entries are removed first, `dropped_count` counts removed entries, and retained sequence numbers are not reset. Events expire with the task. Legacy tasks return `execution_events: null`; if an active legacy task later emits an event, `started_mid_task` is true. No earlier events are reconstructed. An older server can omit the field even when requested. Studio explains these cases and retains task metadata, results and errors.
 
+::: details Extending events and downgrade compatibility
+
 To instrument another execution point, register its kind in `openviking/service/task_events.py`, add Studio translations, and call `await tracker.record_event(task_id, kind, account_id=..., user_id=..., operation=...)`. This internal API records a fact without changing status or stage; it accepts bounded operation identifiers, not arbitrary log payloads. Existing lifecycle methods automatically record their accepted transitions.
 
 Persisted task files now contain `execution_events`. Rolling back requires a version that preserves unknown task fields (commit `a5166386` or later); older readers may reject these files. Rolling back also stops event reporting, so history for tasks active during a downgrade may be incomplete.
+
+:::
 
 **Response Example (completed)**
 
@@ -205,6 +209,8 @@ Repeated cancellation of a task in `cancelling` or `cancelled` is idempotent.
 
 **Supported Task Types:**
 - `add_resource`
+- `add_skill`
+- `compile`
 - `session_commit`
 - `admin_reindex`
 - `snapshot_restore_reindex`
@@ -311,7 +317,12 @@ List background tasks visible to the current caller, supporting filtering by typ
 | status | str | No | None | Filter by task status: `pending`, `running`, `cancelling`, `completed`, `failed`, `cancelled` |
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
 | include_internal | bool | No | false | Include internal child tasks created by Connector imports |
-| limit | int | No | 50 | Maximum number of task records to return |
+| limit | int | No | 50 | Maximum records per response, 1–200 |
+| pagination | str | No | None | HTTP-only; `cursor` returns a paginated result object |
+| cursor | str | No | None | HTTP-only; continuation token from `next_cursor`, used with `pagination=cursor` |
+| q | str | No | None | HTTP-only, cursor mode; case-insensitive substring match on task ID and Compile request `skill`, `to`, and `from` |
+
+With `pagination=cursor`, `result` contains `items`, `has_more`, and `next_cursor` instead of an array. Pass `next_cursor` unchanged on the next request and keep the same filters and identity. Without cursor mode, `q` and `cursor` do not affect the result.
 
 By default, only user-visible tasks are returned. Pass `include_internal=true` when diagnosing a Connector import to include its internal `add_resource` child tasks.
 

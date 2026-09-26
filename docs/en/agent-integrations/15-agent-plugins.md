@@ -36,7 +36,7 @@ OpenViking already speaks streamable HTTP at `/mcp`, but a `streamable-http` ent
 
 ## Credential resolution
 
-Highest to lowest priority — the same chain as the `ov` CLI and the other OpenViking plugins:
+This package resolves credentials from the following sources, highest to lowest priority. It shares credential files with the CLI; plugin-specific fallbacks are listed explicitly:
 
 1. Environment variables: `OPENVIKING_URL` (or `OPENVIKING_BASE_URL`), `OPENVIKING_MCP_URL`, `OPENVIKING_API_KEY` (or `OPENVIKING_BEARER_TOKEN`), `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, `OPENVIKING_PEER_ID`, `OPENVIKING_AUTH_MODE`
 2. `~/.openviking/ovcli.conf` (`url`, `api_key`, `account` / `account_id`, `user` / `user_id`, `actor_peer_id` / `peer_id`), then its `plugin.agent_plugins` and shared `plugin` keys (`apiKey`, `accountId`, `userId`, `authMode`) — override the path with `OPENVIKING_CLI_CONFIG_FILE`
@@ -57,6 +57,8 @@ Highest to lowest priority — the same chain as the `ov` CLI and the other Open
 }
 ```
 
+Use a User/Admin key for `/mcp`. The legacy `server.root_api_key` fallback does not make a root key valid for MCP access.
+
 Config file changes are picked up by the running proxy without a restart.
 
 Debugging: set `OPENVIKING_DEBUG=1` to write JSON lines to `~/.openviking/logs/agent-plugins.log` (override the path with `OPENVIKING_DEBUG_LOG`). Set `OPENVIKING_TIMEOUT_MS` to change the 15s per-request timeout.
@@ -71,9 +73,9 @@ The bundled `ov-experience-memory` skill has the model search `viking://~/memori
 
 The bundled `openviking-skills` skill covers the skills stored in OpenViking itself: finding one with `find(context_type="skill")`, reading and following its `SKILL.md`, creating or replacing one with `add_skill`, installing one from Git or a local folder, sharing one with the account, and moving local skill folders into OpenViking. Without a session-start hook there is no `<available-skills>` catalog here, so the skill has the model search for a skill rather than read it off a list.
 
-**If your harness has its own hook system, prefer the dedicated plugin.** Hook-driven recall and capture happen without the model spending tool calls or deciding to remember, which is both cheaper and more reliable than the skill-driven loop. Use this Agent Plugins package for harnesses that have no hooks, or when you want one package that works across many clients.
+**If your harness has its own hook system, prefer the dedicated plugin.** Hook-driven recall and capture happen without the model spending tool calls or deciding to remember, so they use fewer tokens than the skill-driven loop and do not depend on the model's judgment. Use this Agent Plugins package for harnesses that have no hooks, or when you want one package that works across many clients.
 
-One installer covers Claude Code, Codex, Cursor, TRAE / TRAE CN, ZCode, OpenCode, and pi. It asks for your language, which harnesses to install, the download source, and your OpenViking credentials, and every step is idempotent:
+One installer covers Claude Code, Codex, Cursor, TRAE / TRAE CN, ZCode, OpenCode, and pi. It asks for your language, which harnesses to install, the download source, and your OpenViking credentials, and the installation steps support repeated runs:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh)

@@ -62,9 +62,9 @@ openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 
 ## 配置
 
-服务端从 `ov.conf` 读取所有配置。配置文件各段详情见 [配置指南](01-configuration.md)。
+服务端从 `ov.conf` 读取配置，也支持相应环境变量和启动参数覆盖。配置文件各段详情见 [配置指南](01-configuration.md)。
 
-`ov.conf` 中的 `server` 段控制服务端行为：
+以下是服务监听、认证和存储的配置片段，需要与已有 Embedding/VLM 配置合并：
 
 ```json
 {
@@ -230,7 +230,9 @@ Docker 镜像默认会同时启动：
 }
 ```
 
-未设置时服务将拒绝启动。如需自定义绑定地址，可通过环境变量 `OPENVIKING_SERVER_HOST` 覆盖。
+未设置 `root_api_key` 时，服务会自动进入 dev 模式，而 dev 模式监听非回环地址会拒绝启动。上面的示例用于 API Key 认证，其他认证方式见[认证指南](04-authentication.md)。如需自定义绑定地址，可通过 `OPENVIKING_SERVER_HOST` 覆盖。
+
+镜像默认启用 Bot。API Key 模式下，Bot 还需要在 `bot.ov_server.api_key` 中配置可用的 User/Admin key，不能把 root key 当数据访问凭据。只部署 OpenViking Server 时使用下文的 `--without-bot`，需要 Bot 时按[VikingBot 配置](17-vikingbot.md)完成身份设置。
 
 **从旧镜像升级：** 运行目录为 `/app` 的旧镜像会把 `./data` 解析为默认挂载之外的 `/app/data`。删除旧容器前，先停止容器并备份其实际工作区（例如 `docker cp openviking:/app/data ./openviking-data-backup`）。启动替换容器前，将备份恢复到挂载的宿主机工作区，通常为 `~/.openviking/data`。若目标工作区已存在，先确认要保留的数据，不要直接覆盖。绝对工作区路径不变；其他相对路径现在以 `/app/.openviking` 为基准。
 
@@ -238,7 +240,7 @@ Docker 镜像默认会同时启动：
 ```bash
 docker stop openviking
 docker pull ghcr.io/volcengine/openviking:latest
-docker rm -f openviking
+docker rm openviking
 # 然后重新 docker run ...
 ```
 
@@ -321,12 +323,12 @@ docker compose up -d
 #### 配置管理
 
 - **首次生成配置**：模板在 `OPENVIKING_CONF_CONTENT` 中预置了完整配置并引用 `${OPENAI_API_KEY}`。该变量仅在首次启动且 `ov.conf` 尚不存在时生效。
-- **后续修改配置**：首次启动后，请通过 `railway ssh` 或 `railway service files upload --overwrite` 直接修改持久卷上的 `ov.conf`；也可以删除 `ov.conf` 后重新部署，让服务按当前 `OPENVIKING_CONF_CONTENT` 重新生成配置文件。
+- **后续修改配置**：首次启动后，请通过 `railway ssh` 或 `railway volume files` 直接修改持久卷上的 `ov.conf`；需要重新生成时，先备份原配置并核对 `OPENVIKING_CONF_CONTENT`，再移走原配置并重新部署；生成后检查存储和认证设置。
 
 #### 资源与费用参考
 
-- **推荐配置**：长期运行建议选择 **Hobby** 计划（$5/月，包含 $5 用量抵扣）。以 ~0.5 GB 常驻内存估算，月均成本通常在 $5–$7 左右。
-- **免费额度说明**：Railway Free 计划（$1/月额度）不足以支持服务常驻运行；Trial 赠金适合短期体验评估，额度到期 30 天后持久卷将被清理，请注意按需备份数据。
+- **费用估算**：Railway 按套餐和 CPU、内存、存储、网络等实际用量计费。先用自己的文档规模和请求量试跑，再根据用量面板估算持续运行成本。套餐和计费规则见 [Railway 官方说明](https://docs.railway.com/pricing)。
+- **试用与数据保留**：Trial 提供一次性 $5 额度，最多持续 30 天，之后转为每月 $1 额度的 Free 计划。是否够用取决于实际资源消耗。Trial 账户的持久卷会在额度到期 30 天后删除，提前升级或备份；规则见[Railway 试用说明](https://docs.railway.com/pricing/free-trial)。
 
 > **安全提示**：服务部署后默认监听并暴露于公网。请妥善保管 `OPENVIKING_ROOT_API_KEY`，在对外开放前请阅读[公网访问安全指南](12-public-access.md)。
 
@@ -418,7 +420,7 @@ helm install openviking ./deploy/helm/openviking \
 
 | 端点 | 认证 | 用途 |
 |------|------|------|
-| `GET /health` | 否 | 存活探针 — 立即返回 `{"status": "ok"}` |
+| `GET /health` | 否 | 进程存活检查；正常时返回 `status: ok`、`healthy: true`，不验证模型凭据 |
 | `GET /ready` | 否 | 就绪探针 — 检查 AGFS、VectorDB、APIKeyManager、Embedding、Ollama |
 
 ```bash
@@ -427,10 +429,10 @@ curl http://localhost:1933/health
 
 # 就绪探针
 curl http://localhost:1933/ready
-# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok", "embedding": "ok", "ollama": "ok"}}
+# {"status":"ready","checks":{"agfs":{"status":"ok","checks":{"filesystem":"ok","multiwrite_sync":"not_supported"}},"vectordb":"ok","api_key_manager":"ok","embedding":"ok","ollama":"not_configured"}}
 ```
 
-在 Kubernetes 中，使用 `/health` 作为存活探针，`/ready` 作为就绪探针。
+在 Kubernetes 中，使用 `/health` 作为存活探针，`/ready` 作为就绪探针。`/ready` 包含实际 Embedding 探测，详细状态和缓存语义见[系统 API](../api/07-system.md)。
 
 ## 相关文档
 

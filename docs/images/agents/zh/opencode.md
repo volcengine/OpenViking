@@ -16,7 +16,7 @@
 
 1. 重启 OpenCode。
 2. 输入 `/mcps` 命令，确认列表中显示 `openviking connected`。
-3. 在对话中请求 OpenCode 召回相关记忆，验证是否会自动调用 `openviking_search`、`openviking_read`、`openviking_remember` 等工具。
+3. 在对话中明确要求调用 `openviking_search` 和 `openviking_read`，验证工具可用。自动召回由 hook 完成，不需要模型调用这些工具；可另开会话，询问已保存的信息来检查。
 
 ## 故障排查
 

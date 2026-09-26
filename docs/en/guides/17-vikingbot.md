@@ -19,7 +19,7 @@ uv tool install "openviking[bot]" --upgrade
 ```
 
 ```bash [pip]
-pip install "openviking[bot]" --upgrade --force-reinstall
+pip install "openviking[bot]" --upgrade
 ```
 
 ```bash [pipx]
@@ -37,6 +37,8 @@ Verify the installation:
 ```bash
 vikingbot --version
 ```
+
+Use a virtual environment for the pip option. Source installation also requires the [development build dependencies](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING.md).
 
 ### Install from Source
 
@@ -94,6 +96,8 @@ openviking-server doctor
 
 See the [OpenViking Configuration Guide](01-configuration.md) for details. VikingBot inherits the root-level `vlm` as its Agent model by default, so you normally do not need to configure `bot.agents` again.
 
+For an `api_key` server, register a User/Admin key and set it in `bot.ov_server.api_key` before starting the Bot; the root management key cannot serve as that user key. See [Authentication](04-authentication.md). In inherited `trusted` mode the Bot uses the server’s trusted identity configuration.
+
 ### 2. Start Both Services
 
 ```bash
@@ -112,6 +116,8 @@ ov find "my response preference"
 ```
 
 The URL configured by `ov config` should point to the current OpenViking Server, which defaults to `http://127.0.0.1:1933`. If authentication is enabled, also configure the current caller's User/Admin API Key.
+
+Memory extraction runs asynchronously after a commit. An immediate `ov find` may return no result; check that the memory task completed before using retrieval as a persistence check.
 
 ## Scenario B: Debug the Agent Locally
 
@@ -186,7 +192,7 @@ vikingbot chat
 vikingbot chat --session my-session
 ```
 
-When no OpenViking Server is available, VikingBot runs in standalone mode. Local files, Shell, Web, and Skills remain available, but OpenViking resource retrieval and long-term memory are disabled.
+Without an explicit `bot.ov_server.server_url`, an unavailable inherited server allows standalone mode. An explicitly configured server that is unavailable, or a reachable server with an authentication mismatch, stops startup. Local files, Shell, Web, and Skills remain available, but OpenViking resource retrieval and long-term memory are disabled.
 
 ## Scenario C: Use the Gateway as a Unified Entry Point
 
@@ -210,6 +216,7 @@ The following example connects the Gateway to an existing OpenViking Server:
     },
     "ov_server": {
       "server_url": "https://openviking.example.com",
+      "api_key_type": "user",
       "api_key": "<bot-openviking-user-api-key>"
     }
   }

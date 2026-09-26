@@ -19,6 +19,8 @@ The server reads the file at startup. Restart the server after changing models, 
 
 ## Configuration Structure
 
+This outline shows common top-level groups, not a runnable configuration. For a first deployment, start with the [minimal example](#minimal-example) and supply your models and credentials. Merge later snippets into the same `ov.conf`.
+
 ```json
 {
   "embedding": {},
@@ -46,7 +48,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `default_user` | string | `"default"` | Default user for the service context |
 | `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
-| `query_planner` | object / `null` | `null` | Retrieval intent model; falls back to `vlm` |
+| `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode runs only when `query_planner` is set |
 | `rerank` | object | disabled | Retrieval result reranking |
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
@@ -352,13 +354,15 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
-| `custom_templates_dir` | path | `""` | Additional memory template directory |
+| `custom_templates_dir` | path | `""` | Custom memory template directory; a matching `memory_type` overrides the loaded template |
 | `experimental_memory_switch` | boolean | `false` | Enable experimental templates |
 | `eager_prefetch` | boolean | `true` | Search and read memories before extraction |
 | `prefetch_search_topn` | integer, `>= 1` | `5` | Results read during prefetch |
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
+
+Automatic commits require a separate policy; enabling memory extraction does not make sessions commit automatically. See `memory.session_auto_commit` in [Configuration](../guides/01-configuration.md) and the [Sessions API](../api/05-sessions.md). For template loading order and when changes take effect, see the [Prompt Guide](../guides/10-prompt-guide.md).
 
 ## Parser Settings
 

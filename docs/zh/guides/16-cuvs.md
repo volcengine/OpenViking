@@ -10,6 +10,8 @@ OpenViking 的 `cuvs` 后端保留本地后端的记录持久化、标量索引�
 
 按所选版本核对 [cuVS 安装要求](https://docs.nvidia.com/cuvs/installation) 和 [Python 包安装指南](https://docs.nvidia.com/cuvs/installation/python)。当前 cuVS 源码构建要求 CUDA Toolkit 12.2+ 和 Ampere 或更新架构的 GPU；安装包要求取决于所选版本。
 
+先进入 OpenViking 源码根目录并激活 Python 虚拟环境，再按宿主机 CUDA 大版本选择下面一组命令。
+
 CUDA 12：
 
 ```bash
@@ -123,10 +125,10 @@ dense query 仍固定使用 cuVS。
 `auto_background_rebuild` 默认关闭。开启后，连续 mutation 会按
 `auto_rebuild_debounce_ms` 合并，worker 在不持有跨后端 mutation 锁的情况下构建
 新的 immutable GPU snapshot。默认 500 ms 用于避免普通 ingest 的中间 batch
-反复触发构建。对于边界明确、由多次调用组成的 bulk load，可把所有写入放在
+反复触发构建。使用内部 vector backend 的代码，可以把边界明确的批量写入放在
 `async with backend.bulk_ingest(ctx=ctx):` scope 内：native 可见性和持久化仍按
 每次调用推进，但 derived GPU maintenance 会延迟到最外层 scope 退出后只调度一次。
-该 scope 只是 maintenance hint，不提供事务或原子性；退出 scope 只负责调度 rebuild，
+这是内部 API，HTTP SDK 不提供该 scope。它只是 maintenance hint，不提供事务或原子性；退出 scope 只负责调度 rebuild，
 本身不等待 GPU ready。vector backend benchmark 会额外在正式计时 search 前显式等待
 最终 snapshot；无法识别 bulk 边界的调用方仍可按实际 batch 间隔调整 debounce。Auto
 仍为显式启用；未开启 Auto/background rebuild 时，该 scope 对派生维护为 no-op，不改变
@@ -142,8 +144,7 @@ dense query 仍固定使用 cuVS。
 保存 graph，构建期间可能需要 `N * intermediate_graph_degree * 4` bytes 的
 intermediate graph。每个缓存 filter bitset 约占 `ceil(N / 32) * 4` bytes。
 
-之前的 index-only 测试使用 `cudaMemGetInfo` 记录 build 前后的显存增量；下表每项
-均为 5 个干净进程的中位数：
+[历史索引测试](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/PRELIMINARY_RESULTS.md) 使用 NVIDIA H20、cuVS 26.06、CuPy 14.1.1 和 CUDA runtime 12.9，测试时尚未加入请求微批处理。下表通过 `cudaMemGetInfo` 记录构建前后的显存增量，每项取 5 个干净进程的中位数。部署容量需要使用[测试工具](https://github.com/volcengine/OpenViking/blob/main/benchmark/cuvs/README.md) 按自己的配置重新测量：
 
 | 数据集 | cuVS 算法 | 实测 GPU 增量 |
 | --- | --- | ---: |
@@ -178,8 +179,9 @@ record shadow 保存预处理后的 Python 浮点值；仅在创建 device datas
 Benchmark 必须同时报告两边的数据类型和 Recall@K，不能将结果描述为
 equal-dtype 或 equal-memory。
 这是首版 opt-in 集成的有意边界，现有 CPU 行为保持不变。auto 模式会根据 filter
-候选阈值在两种表示之间选择；要求固定数值表示的应用应使用显式 backend，或将
-native 路由阈值设为 0。
+候选阈值在两种表示之间选择。需要为 dense query 固定数值表示时，应显式选择
+backend 和 dtype。将阈值设为 0 只会关闭候选数路由；auto 模式仍可能因显存不足、
+GPU 不可用或快照待重建而回退。
 
 GPU 低精度存储是显式能力，不做隐式 cast。设置 `dtype: "float16"` 会把 cuVS
 dataset 和每个 query 同时 cast 为 float16，brute-force 与 CAGRA 都不使用混合

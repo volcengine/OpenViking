@@ -115,7 +115,7 @@ VikingBot reads the Peer Profile for the trusted current `actor_peer_id` and rec
 - `entities`: people, projects, organizations, and other entities;
 - `preferences`: user preferences, habits, and constraints.
 
-This identity model allows users sharing one Gateway to retain isolated personal context.
+Isolation depends on the OpenViking connection identity. `actor_peer_id` restricts a user's peer collection; chat users sharing one user key can still see that user's own memories and shared resources. Separate user isolation requires distinct user identities.
 
 ### Experience: Reusable Task Knowledge
 

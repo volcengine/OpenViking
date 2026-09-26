@@ -1,5 +1,7 @@
 # OpenViking 本地 Embedding Llama-cpp 设计文档
 
+> **设计范围：** 本文为 2026-04-11 的设计记录。默认模型 `bge-small-zh-v1.5-f16`、`local-embed` extra 和 rebuild 报错已实现（见 `openviking/models/embedder/local_embedders.py`、`pyproject.toml`、`openviking/storage/errors.py`）。具体配置字段以[模型配置指南](../zh/guides/01-configuration.md)为准。
+
 Date: 2026-04-11
 Status: 已批准进入实现
 

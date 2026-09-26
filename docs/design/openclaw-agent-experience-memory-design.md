@@ -1,5 +1,7 @@
 # OpenClaw 接入 OpenViking Agent Experience Recall 设计
 
+> **版本范围：** 本文记录 2026-05-28 的经验召回接入方案，文中的 hook、默认配置及服务端后续计划保留当时语境。当前安装与配置见 [OpenClaw 接入](../zh/agent-integrations/03-openclaw.md)。
+
 日期：2026-05-28
 
 ## 当前结论

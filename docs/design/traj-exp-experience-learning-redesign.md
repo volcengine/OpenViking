@@ -28,7 +28,7 @@ CaseLoader
 
 <img src="https://gist.githubusercontent.com/chenjw/c2de3083d0e1dac3a192c74f98c020c7/raw/502e01c5e207ce8b2b4076a6cd84b8fe9dc06543/train-execution-details.svg" alt="OpenViking session.train 训练执行细节" width="100%">
 
-这张图强调三个实现边界：
+这张图强调四个实现边界：
 
 - **并行边界**：case rollout、rollout analysis、gradient estimation 可以并行。
 - **串行边界**：`ExperienceSet.lock()` 内的 `reload -> PolicyOptimizer.plan -> PolicyUpdater.apply` 必须串行。
@@ -1063,7 +1063,7 @@ POST /v1/rollouts/execute
 - `policy_set.root_uri` 告诉 runtime 当前 experiences 根目录；tau2 rollout 期间
   VikingBot 会通过 OpenViking recall 读取这里的最新经验。
 - `execution_context.policy_snapshot_id` 必须原样写入返回的 `Rollout.policy_snapshot_id`，
-  用于追踪这次 rollout 使用的是哪次 policy snapshot。
+  用于追踪这次 rollout 使用的是哪次 policy snapshot（rollout 前 ExperienceSet 的内容哈希）。若 runtime 读取的是实时 memories，这个标识本身不能保证使用了不可变的内容快照；可复现评测还需固定数据版本并隔离并发写入。
 
 tau2 中对应实现是：
 

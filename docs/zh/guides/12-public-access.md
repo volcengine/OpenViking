@@ -92,13 +92,15 @@ volumes:
   caddy_config:
 ```
 
+只通过代理提供公网入口时，删除 OpenViking 的宿主机端口映射，或绑定到 `127.0.0.1`。旧的 `1934:1934` 映射也应删除或仅绑定 localhost。Caddy 仍可通过 Compose 网络访问 `openviking:1933`。
+
 ### 4. 启动
 
 ```bash
 docker compose up -d
 ```
 
-首次 HTTPS 请求触发 ACME 证书签发，后续使用缓存。Caddy 自动续期。
+Caddy 会为配置的域名申请并续期证书，签发失败时查看 Caddy 日志。按请求触发签发需要单独配置，见 [Caddy 自动 HTTPS](https://caddyserver.com/docs/automatic-https)。
 
 ### 5. 验证
 
@@ -120,9 +122,12 @@ OV 服务的 1933 端口。
 
 ### nginx
 
+示例假设 nginx 与 OpenViking 在同一宿主机。超时值需按最长请求调整；关闭响应缓冲可及时传递 MCP 流式响应，见 [nginx 代理缓冲](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_buffering)。
+
 ```nginx
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
+    http2 on;  # nginx < 1.25.1：删除此行，改用 `listen 443 ssl http2;`
     server_name ov.your-domain.com;
 
     ssl_certificate     /etc/letsencrypt/live/ov.your-domain.com/fullchain.pem;
@@ -130,6 +135,9 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:1933;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
         proxy_set_header Host              $host;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host  $host;
@@ -153,27 +161,26 @@ ov.your-domain.com {
 
 ### Cloudflare / CDN
 
-CDN 源站指向 `http://your-server-ip:1933`。设置
-`OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com` 让服务端知道自己的
-公网地址。确保 CDN 转发 `Host`、`X-Forwarded-Proto`、`X-Forwarded-Host` 头。
+配置验证证书的 HTTPS 源站或私有源站隧道，限制源站只接受代理访问。设置 `OPENVIKING_PUBLIC_BASE_URL=https://ov.your-domain.com`，转发公网 host/protocol 请求头，并核对代理能否保留流式响应、允许所需请求时长和上传大小。
 
 ## 告诉服务端公网 URL
 
-OAuth 元数据、`WWW-Authenticate` 头、资源 URL 都需要包含公网 origin。
-解析顺序（**优先级从高到低**）：
+OAuth 元数据和 `WWW-Authenticate` 头需要包含公网 origin。OAuth 地址辅助函数的解析顺序（**优先级从高到低**）：
 
 1. `OPENVIKING_PUBLIC_BASE_URL` 环境变量
 2. `ov.conf` 里的 `oauth.issuer`
 3. `X-Forwarded-Proto` + `X-Forwarded-Host` 请求头
 4. 请求的 `Host` 头
 
-在反代后面，务必显式设置选项 1：
+MCP 上传 URL 的配置回退项是 `server.public_base_url`，并非 `oauth.issuer`。统一设置环境变量可让两者使用同一地址；若同时设置 `oauth.issuer`，保持 origin 一致。
+
+使用反向代理时，在服务端进程环境中设置选项 1：
 
 ```bash
 export OPENVIKING_PUBLIC_BASE_URL="https://ov.your-domain.com"
 ```
 
-或者 `ov.conf`：
+Compose 部署应修改 `.env` 并运行 `docker compose up -d`，在其他 shell 中执行 `export` 不会更新已有容器。只配置 OAuth issuer 时也可以使用 `ov.conf`：
 
 ```jsonc
 {
@@ -188,7 +195,7 @@ export OPENVIKING_PUBLIC_BASE_URL="https://ov.your-domain.com"
 
 `docker compose up` 默认在 1934 端口启一个 Caddy 反代，单纯 `reverse_proxy
 openviking:1933`，**仅为兼容已经书签到 1934 的旧部署保留**。新部署直接连
-1933 即可，没有任何路由价值；不需要这个入口可以从 `docker-compose.yml` 注释
+私网中的 1933，公网客户端使用上面的 HTTPS 入口；不需要这个入口可以从 `docker-compose.yml` 注释
 掉 caddy 服务和 1934 端口映射。
 
 ## 相关文档

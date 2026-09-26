@@ -22,14 +22,14 @@ OpenViking 采用双层存储架构，分离内容存储和索引存储。
 | 存储层 | 职责 | 存储内容 |
 |--------|------|----------|
 | **AGFS** | 内容存储 | L0/L1/L2 完整内容、多媒体文件 |
-| **向量库** | 索引存储 | URI、向量、元数据（不存文件内容） |
+| **向量库** | 索引存储 | URI、向量、元数据和摘要等检索文本 |
 
 ### 设计优势
 
-1. **职责清晰**：向量库只负责检索，AGFS 负责存储
-2. **内存优化**：向量库不存储文件内容，节省内存
-3. **单一数据源**：所有内容从 AGFS 读取，向量库只存引用
-4. **独立扩展**：向量库和 AGFS 可分别扩展
+AGFS 保存源文件，向量库存储检索需要的 URI 引用、向量、元数据和摘要。记忆记录会把正文保存在向量记录的 abstract 字段（上限 50,000 字节），因此向量库中也可能包含可读文本。
+
+两类后端可以分别配置。文件 API 从 AGFS 读取内容，检索则可直接返回索引中的文本，无需逐个回读源文件。备份和访问控制需要覆盖两类存储。
+
 > 注：AGFS 已经重写为 Rust 实现（RAGFS）
 
 ## VikingFS 虚拟文件系统
@@ -82,7 +82,7 @@ AGFS 提供 POSIX 风格的文件操作，支持多种后端。
 
 ### 目录结构
 
-每个上下文目录遵循统一结构：
+完成语义处理的目录通常有以下结构。处理前或仅创建 L0 时，部分摘要文件可能尚不存在：
 
 ```
 viking://resources/docs/auth/
@@ -125,6 +125,8 @@ viking://resources/docs/auth/
 
 ### 索引策略
 
+以下为索引元数据示例；可用选项取决于向量后端：
+
 ```python
 index_meta = {
     "IndexType": "flat_hybrid",  # 混合索引
@@ -143,19 +145,19 @@ index_meta = {
 
 ## 向量同步
 
-VikingFS 自动维护向量库与 AGFS 的一致性。
+文件系统操作协调文件与向量记录的变更。目录摘要可能继续异步刷新，失败也可能留下部分变更；各操作的具体行为见[文件系统 API](../api/03-filesystem.md)。下面的示例使用已初始化的同步 Python SDK 客户端。
 
 ### 删除同步
 
 ```python
-viking_fs.rm("viking://resources/docs/auth", recursive=True)
+client.rm("viking://resources/docs/auth", recursive=True)
 # 自动递归删除向量库中所有 uri 以此开头的记录
 ```
 
 ### 移动同步
 
 ```python
-viking_fs.mv(
+client.mv(
     "viking://resources/docs/auth",
     "viking://resources/docs/authentication"
 )

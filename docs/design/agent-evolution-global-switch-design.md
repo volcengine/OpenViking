@@ -1,5 +1,7 @@
 # Global Agent Evolution Switch Design
 
+> **Historical design:** This records the earlier deployment-only switch. The current runtime configuration supports Cluster defaults and Account overrides; see [Runtime Configuration Design](./runtime-configuration-design.md) and the [configuration guide](../en/guides/01-configuration.md). The deployment-only guarantee below is not the current configuration contract.
+
 ## Scope
 
 Agent Evolution is controlled by one deployment-level switch for the entire

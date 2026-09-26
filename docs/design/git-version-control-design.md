@@ -1,6 +1,8 @@
 # OpenViking 多版本管理技术方案 — 基于 Gitoxide 的 in-process Git 集成
 
-> 💡 **一句话摘要**：在现有 OpenViking 的 RAGFS Rust 实现中嵌入一套基于 `gitoxide` 的 in-process Git 服务，以 **账号(account\_id)粒度** 提供 `commit / restore / show` 三个版本管理原语;通过 PyO3 binding 直接被 `VikingFS` Python 层调用,全程零 HTTP、零额外进程,Git 对象/Ref 后端复用现有 `localfs`/`s3fs` 客户端,实现"本地或远程"对称配置。
+> **阅读范围：** 本文记录 Git 快照的技术设计与取舍。部署配置、可用接口、备份范围及恢复步骤以当前[快照与恢复指南](../zh/guides/15-snapshot.md)为准。
+
+> 💡 **一句话摘要**：在现有 OpenViking 的 RAGFS Rust 实现中嵌入一套基于 `gitoxide` 的 in-process Git 服务，以 **账号(account\_id)粒度** 提供 `commit / restore / show` 三个版本管理原语;通过 PyO3 binding 直接被 `VikingFS` Python 层调用,全程零 HTTP、零额外进程,Git 对象/Ref 后端分别使用 `tokio::fs` 和 `aws_sdk_s3`,实现"本地或远程"对称配置。
 
 # 1. 背景与目标
 
@@ -14,7 +16,7 @@ OpenViking 现有存储架构是一套以 `viking://` URI 为入口的双层抽�
 
 - **显式版本化**：用户/Agent 通过 API 显式触发 commit/restore/show,不引入隐式 hook,避免影响现有写链路的延迟与一致性语义
 - **账号粒度仓库**：每个 `account_id` 一个逻辑 Git 仓库,跨 scope (resources/agent/user/session) 共享同一棵 root tree,支持跨 scope 的原子快照
-- **多后端对称**：Git objects / refs 的实际存储类型与 resources 目录一致,可在配置中切换本地(local)或远程(s3),运维心智零增量
+- **多后端对称**：Git objects / refs 的实际存储类型与 resources 目录一致,可在配置中切换本地(local)或远程(s3),统一配置结构，但切换后端仍需迁移并验证历史数据
 - **零进程膨胀**：Git 服务以 in-process binding 形式嵌入现有 RAGFS,共享 Tokio runtime 与配置加载链路,不引入新 HTTP server
 - **对现有代码侵入最小**：不修改 `content_write.py`、`viking_fs.write/rm/mv` 等核心写链路,仅在 `VikingFS` 上增加 3 个新方法
 - **定向恢复 (restore)**：支持以 **(project\_dir, commit\_id)** 为输入，将指定 project 目录恢复到目标 commit 的快照状态，并以 HEAD 为父节点*正向生成一个新 commit*。非目标 project 目录保持当前最新状态不动。
@@ -35,7 +37,7 @@ OpenViking 现有存储架构是一套以 `viking://` URI 为入口的双层抽�
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | **单 Repo per account\_id**     | 同一账号下的 `resources/`、`agent/`、`user/`、`session/` 全部在一棵 root tree 之下;一次 commit 可覆盖任意 scope 的子集                                | per-resource repo 会产生 N×账号数量的索引数据,跨 resource 的"事务性快照"需要协调多 repo,复杂度高     |
 | **纯 API 触发,不接 hook**           | `content_write.py` / `viking_fs.write/rm/mv` 完全不动;Git 仅通过 `VikingFS.commit/restore/show` 三个新方法被显式调用                         | hook 模式会让每次小写入都触发 Git 写入,放大延迟、放大冲突窗口、放大 ref CAS 失败率;首版优先简单               |
-| **Git 存储后端与 resources 同构**     | 定义 `ObjectStore` / `RefStore` trait,提供 local 与 s3 两种实现,直接复用 `plugins::localfs::LocalFileSystem` 和 `plugins::s3fs::S3Client` | 独立实现 Git 存储后端会重复造轮子;走 `MountableFS` 又会让 Git 数据进入用户命名空间                   |
+| **Git 存储后端与 resources 同构**     | 定义 `ObjectStore` / `RefStore` trait,提供 local 与 s3 两种实现,分别使用 `tokio::fs` 和 `aws_sdk_s3`，不经过用户文件树路由 | 独立实现 Git 存储后端会重复造轮子;走 `MountableFS` 又会让 Git 数据进入用户命名空间                   |
 | **嵌入为 crates/ragfs 子模块**       | 新增 `crates/ragfs/src/git/` 模块,与 `core/`、`plugins/`、`server/` 平级;PyO3 binding 在 `RAGFSBindingClient` 上加 3 个方法                | 独立 crate 会引入额外配置、额外 runtime、额外鉴权;`ServicePlugin` 又无法表达 commit 这种非文件操作的语义 |
 | **暴露方式 = PyO3 binding,非 HTTP** | 三个新方法挂在现有 `RAGFSBindingClient` 上,通过 `AsyncAGFSClient.run` 由 `VikingFS` 调用,与 `ls/read/write` 一致                              | HTTP server 路径在 OpenViking 当前架构中已是 legacy,生产路径是 in-process binding       |
 
@@ -45,18 +47,20 @@ OpenViking 现有存储架构是一套以 `viking://` URI 为入口的双层抽�
 
 ## 3.1 分层与依赖关系
 
+下图统一使用最终的 `restore` 命名。第 6–9 节的代码是设计节选，省略了部分校验、锁、错误处理和索引优化，不能直接替换当前实现。
+
 ```mermaid
 flowchart TB
     subgraph Py[Python 层]
         VFS["VikingFS
-commit / checkout / show"]
+commit / restore / show"]
         Async["AsyncAGFSClient
 (asyncio.to_thread)"]
     end
 
     subgraph BindCrate["crates/ragfs-python (PyO3 cdylib)"]
         RBC["RAGFSBindingClient
-+ git_commit / git_checkout / git_show"]
++ git_commit / git_restore / git_show"]
     end
 
     subgraph CoreCrate[crates/ragfs]
@@ -79,13 +83,13 @@ GitService · ObjectStore · RefStore"]
     Async --> RBC
     RBC --> MFS
     RBC --> GitMod
-    GitMod -- "checkout 写回阶段" --> MFS
+    GitMod -- "restore 写回阶段" --> MFS
     MFS --> Plugins
     Plugins --> Local
     Plugins --> S3
-    GitMod -- "直接持有 struct
+    GitMod -- "tokio::fs
 (不经过 MountableFS)" --> Local
-    GitMod -- "直接持有 struct
+    GitMod -- "aws_sdk_s3::Client
 (不经过 MountableFS)" --> S3
 ```
 
@@ -128,10 +132,10 @@ sequenceDiagram
     B-->>V: bytes
     V-->>U: bytes
 
-    Note over U,R: --- checkout (写回 VFS) ---
-    U->>V: checkout(ref, paths)
-    V->>B: git_checkout(account, ref, paths, dry_run)
-    B->>G: GitService::checkout
+    Note over U,R: --- restore (写回 VFS) ---
+    U->>V: restore(source_commit, project_dir)
+    V->>B: git_restore(account, source_commit, project_dir, dry_run)
+    B->>G: GitService::restore
     G->>O: 加载 commit → root tree → 递归列 (path, blob_oid)
     G->>M: stat / read 对比当前态
     G->>M: write / remove (走完整 VFS 语义)
@@ -144,7 +148,7 @@ sequenceDiagram
 
 > 💡 **Git 数据不进 viking 命名空间**
 >
-> Git 模块直接持有 `LocalFileSystem`/`S3Client` 实例,**不**通过 `MountableFS` 路由。Git 数据存到 `git/{account}/objects/...`,用户在 `viking://` 下看不到、也改不到。
+> Git 模块直接访问本地文件系统或 S3 客户端,**不**通过 `MountableFS` 路由。Git 数据存到 `git/{account}/objects/...`,用户在 `viking://` 下看不到、也改不到。
 
 > 💡 **LocalObjectStore 和 S3ObjectStore 直接调用 tokio::fs 和 Arc\<aws\_sdk\_s3::Client>, 不复用 LocalFileSystem/S3Client**
 >
@@ -506,7 +510,7 @@ impl RefStore for S3RefStore {
 
 # 8. GitService 主流程
 
-## 8.1 commit 完整实现
+## 8.1 commit 流程与伪代码
 
 commit 主流程:**枚举 → 读 blob → 构建 tree → 构建 commit → CAS 更新 ref**。所有 ObjectStore 写入按账号粒度幂等(同 oid 多次 put 安全),tree 写入由 `TreeEditor` 自底向上完成。tree 未变 → 不创建空 commit(no-op 优化)。绝大多数 commit 场景下，被调用方声明为 "改动" 的文件里仍有大量未真正修改，需要通过三级 fast path 层层过滤，保证只有真正变化的字节才进入 streaming hash 与 blob 写入。
 
@@ -589,7 +593,7 @@ pub async fn commit(&self, req: CommitRequest) -> Result<CommitResponse> {
 
 > **关于 retry:** 当前实现中 `commit()` 内部 **不包含 CAS 重试循环**(代码中明确注释 `// There is intentionally no retry loop inside commit().`)。冲突直接以 `ConcurrentCommit` 上抛,由 Python 层或上游业务决定重试策略;这与 §11.3 旧版描述的"内部最多重试 3 次"不一致,以本节为准。
 
-## 8.2 restore 完整实现
+## 8.2 restore 流程与伪代码
 
 restore 主流程:**解析目标 commit → 提取该 commit 中 project\_dir 子树 → 与当前 HEAD 中同路径子树 diff → 通过 MountableFS.write/rm 回写 → 删除回写后空目录 → 以当前 HEAD 为 parent 生成新 commit → CAS 更新 ref → 把受影响路径返回给调用方**。`dry_run` 模式只计算差异不写,用于预检。
 
@@ -708,12 +712,12 @@ pub async fn restore(&self, req: RestoreRequest) -> Result<RestoreResponse> {
 > - **空目录清理(步骤 6b)**：删除完文件后会沿祖先链 rmdir 至 `project_dir` 或第一个非空目录,避免 VFS 残留空目录。
 > - **幂等删除**：`vfs.rm` 返回 NotFound 视为成功,使 restore 可以在已被并发清理的路径上继续推进。
 > - **written\_paths / deleted\_paths**：`Applied` 响应除了 `written/deleted` 计数外,还返回**全量受影响路径(已加 project\_dir 前缀)**;Python 层按 marker / 源文件分类,精确触发 L0/L1/DETAIL 向量更新,不再依赖广义的 `_trigger_vector_rebuild(paths)`。
-> - **没有 commit\_index 刷新**：对应 §8.1 的 Fast Path 1 未实现,restore 末尾也无须刷新 index。
+> - **commit index**：Fast Path 1 已实现；索引与 parent OID 绑定，恢复生成新 commit 后，后续 commit 不会复用与 parent 不匹配的旧索引。
 > - **回写并发度**：当前硬编码 `buffer_unordered(32)`，尚未提供配置项。
 >
 > ✅ **推荐:** 生产环境调用前先以 `dry_run=true` 跑一遍取得差异列表,再让用户确认,避免误覆盖未提交的本地变更。
 
-## 8.3 show 完整实现
+## 8.3 show 流程与伪代码
 
 show 是**纯读路径**,无任何 VFS 写入或 ref 变更,易于实现与验证。支持两种模式:`path=None` 返回 commit 元信息(用于 log 列表);`path=Some(p)` 返回该 path 的 blob 字节(零拷贝 `Bytes` 切片)。
 
@@ -1027,7 +1031,7 @@ blob_exists_precheck_enabled = true # Fast Path 3 总开关(默认 true)
 | Python 调用方 | 无                                                     |
 | 数据迁移       | 一次性脚本:本地 `{base_dir}` 全量上传至 S3 key prefix(保持目录结构)     |
 
-> 💡 从本地切到远程的全部成本 = 修改 `backend = "local"` → `backend = "s3"` + 填 `[git.s3]` 块。Service 代码、Python 调用方完全无感。这与 resources 目录"`plugins.localfs_resources` ↔ `plugins.s3fs_resources`"的切换体验完全对称。
+> 切换配置不会自动迁移历史对象和 refs。先暂停相关写入、备份并迁移历史数据，验证旧 commit 可读取后再切换；保留原后端作为回退来源。
 
 ***
 
@@ -1068,7 +1072,7 @@ current=commit_a]
 ## 11.3 重试策略
 
 - **幂等部分(blob/tree/commit 写)**: 同 oid 多次 put 安全;后端层面通过 `If-None-Match: *`(S3)与 `try_exists`(local)短路重复写;service 层不额外做 retry。
-- **CAS 冲突**: **当前实现** GitService::commit/restore **内部不做自动重试,直接以 GitError::ConcurrentCommit 上抛给 Python 层,由调用方决定是否 re-read parent 重建 tree 重新提交。后续若实现内部重试，再增加对应调优配置。
+- **CAS 冲突**: 当前实现 GitService::commit/restore 内部不做自动重试,直接以 GitError::ConcurrentCommit 上抛给 Python 层,由调用方决定是否 re-read parent 重建 tree 重新提交。后续若实现内部重试，再增加对应调优配置。
 - **跨账号**: 不同 account\_id 的 ref 路径不同,天然无冲突,可完全并行
 
 ***
@@ -1237,7 +1241,7 @@ current=commit_a]
 
 # 19. 后续演进方向
 
-1. **Pack file 支持**: 引入 `gix-pack`,对历史 commit 做 delta 压缩,降低存储成本 80%+
+1. **Pack file 支持**: 引入 `gix-pack`,对历史 commit 做 delta 压缩,降低存储占用；具体收益取决于历史内容的重复率和压缩效果
 2. **Auto-commit hook**: 在 `content_write.ContentWriteCoordinator` 末尾追加可选 hook,实现"每次写自动 commit"模式(Phase 2 重新评估)
 3. **Branch / Tag 管理**: 暴露 `branch_create / branch_delete / tag` API
 4. **Diff API**: `diff(ref_a, ref_b)` 返回结构化差异,供 UI 渲染
@@ -1266,5 +1270,3 @@ current=commit_a]
 - [volcengine/OpenViking](https://github.com/volcengine/OpenViking)
 - [OpenViking 存储架构文档](../zh/concepts/05-storage.md)
 - [Git Pack Format (后续 Phase 参考)](https://git-scm.com/docs/gitformat-pack)
-
-> 💡 **文档完成**。如需对某一章节细化(如某后端实现细节、某测试用例代码、迁移脚本),请告知具体目标。

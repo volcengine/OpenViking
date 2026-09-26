@@ -10,7 +10,8 @@ This page is for OpenViking server setup. For client-only CLI setup, use the [Op
 
 - Default to the normal end-user installation path; do not default to source builds
 - Default to prebuilt packages; do not assume Go / Rust / C++ / CMake are required
-- If configuration is uncertain, ask the user first; do not guess provider, model, api_base, api_key, or workspace
+- Read existing configuration and supplied requirements first; ask the user about missing or uncertain values. Do not guess provider, model, api_base, api_key, or workspace
+- Preserve existing configuration and unrelated fields; inspect the actual changes before updating it
 - Only move to the source-build path when installation clearly falls back to local compilation, or when the user explicitly asks for a source install
 
 ## SOP
@@ -40,9 +41,10 @@ Use this path if any of the following is true:
 - The user does not want to fill in many model settings manually
 
 Execution path:
-1. Run `openviking-server init`
-2. Run `openviking-server doctor`
-3. Start `openviking-server`
+1. Install the OpenViking Python package and make sure Ollama is running
+2. Run `openviking-server init` and select local models
+3. Run `openviking-server doctor`
+4. Start `openviking-server`
 
 #### C. Docker install
 Use this path if any of the following is true:
@@ -76,16 +78,16 @@ Only use this path if one of the following is true:
 - The user explicitly wants to modify or rebuild low-level native components
 
 Only then explain the required toolchain:
-- Go 1.22+
+- Go 1.22+ only for `sdk/go` development; the Python server build does not require Go
 - Rust 1.91.1+
 - A C++ compiler
 - CMake
 
 ### 2. Ask questions
 
-If the user has not provided a complete model configuration, ask first. Do not write the config file yet.
+Check configuration files, environment variables, and choices already supplied. Use the following as an information checklist and ask only about missing values that affect installation. Have the user configure API keys locally or through an existing credential mechanism, rather than paste them into chat.
 
-#### Required questions
+#### Required information
 
 1. Which model provider do you want to use?
    - `openai`
@@ -132,7 +134,7 @@ If the user has not provided a complete model configuration, ask first. Do not w
 - whether Ollama is already installed
 - which local embedding / VLM models they want to use
 
-#### Extra required questions for Docker
+#### Docker information
 
 If the user chooses Docker, also confirm:
 - whether they want `docker run` or `docker compose`
@@ -140,7 +142,7 @@ If the user chooses Docker, also confirm:
 - whether they want to mount host `~/.openviking` to container `/app/.openviking`
 - whether they want to inject the full JSON config through `OPENVIKING_CONF_CONTENT`
 
-#### Extra required questions for Windows
+#### Windows information
 
 If the user is on Windows, also confirm:
 - whether they use PowerShell or cmd.exe
@@ -149,7 +151,7 @@ If the user is on Windows, also confirm:
 
 ### 3. Generate the config
 
-Only write `~/.openviking/ov.conf` after the user has confirmed all required values.
+Only write or update `~/.openviking/ov.conf` after the user has confirmed all required values, and keep a copy of existing configuration. The placeholder values below are not a working configuration.
 
 #### Minimal config shape
 
@@ -195,8 +197,10 @@ Only add these when the provider requires them, when the README examples explici
 
 #### Path A: Standard minimal install
 
+Use a Python 3.10+ virtual environment, or follow the [Quick Start](02-quickstart.md) with `uv tool install`. In an activated virtual environment:
+
 ```bash
-pip install openviking --upgrade --force-reinstall
+python -m pip install --upgrade openviking
 ```
 
 After the user confirms the configuration, write `~/.openviking/ov.conf`, then run:
@@ -207,6 +211,8 @@ openviking-server
 ```
 
 #### Path B: Local-model install (Ollama)
+
+Complete the package installation from Path A and start Ollama, then run:
 
 ```bash
 openviking-server init
@@ -222,7 +228,8 @@ If the user already has a local config directory, prefer:
 
 ```bash
 docker run --rm \
-  -p 1933:1933 \
+  --name openviking \
+  -p 127.0.0.1:1933:1933 \
   -v ~/.openviking:/app/.openviking \
   ghcr.io/volcengine/openviking:latest
 ```
@@ -252,20 +259,23 @@ docker compose up -d
 If the user does not yet have `ov.conf`, there are two options:
 
 1. Generate it on the host first and mount it into the container
-2. Start the container, then run:
+2. Initialize the same mounted directory with a one-off container, then start the service using Option 1:
 
 ```bash
-docker exec -it openviking openviking-server init
+docker run --rm -it \
+  -v ~/.openviking:/app/.openviking \
+  ghcr.io/volcengine/openviking:latest openviking-server init
 ```
 
 The Dockerfile also supports injecting the full JSON config via `OPENVIKING_CONF_CONTENT` on first start. Only use that if the user explicitly wants it and all config values have already been confirmed.
 
 ##### Docker validation
 
-After startup, verify:
+`/health` only confirms a responsive process; a container without configuration returns `503 pending_initialization`, so receiving a curl response alone does not establish health. Check logs and `/ready`:
 
 ```bash
 curl http://localhost:1933/health
+curl http://localhost:1933/ready
 ```
 
 #### Path D: Windows install
@@ -273,7 +283,7 @@ curl http://localhost:1933/health
 Prefer the prebuilt-wheel path first:
 
 ```bat
-pip install openviking --upgrade --force-reinstall
+python -m pip install --upgrade openviking
 ```
 
 After the config file is ready, set environment variables using the user’s shell.
@@ -313,7 +323,7 @@ set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
 
 #### Path E: Source build
 
-Only after you have confirmed that the source-build path is necessary should you ask the user to prepare Go / Rust / C++ / CMake.
+Prepare Rust, C++, and CMake only when a source build is needed. Go is only needed for Go SDK development. See CONTRIBUTING.md in the repository for the full build steps.
 
 ### 5. Triage
 
@@ -373,7 +383,7 @@ Handling rule:
 - first try a standard reinstall:
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+python -m pip install --upgrade --force-reinstall openviking
 ```
 
 - if it still fails, then decide whether to move to the source-build path
@@ -387,7 +397,7 @@ Confirm first whether this is because:
 - prebuilt artifacts are unavailable
 
 Handling rule:
-- only after confirming the source-build path should you add Go / Rust / C++ / CMake
+- only after confirming the source-build path should you add Rust / C++ / CMake
 - on Windows, local compilation usually means CMake and MinGW become relevant first
 - do not present source-build dependencies as the default install prerequisites
 

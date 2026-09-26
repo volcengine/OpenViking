@@ -4,37 +4,42 @@
 
 ### OpenViking 是什么？解决什么问题？
 
-OpenViking 是一个专为 AI Agent 设计的开源上下文数据库。它解决了构建 AI Agent 时的核心痛点：
+OpenViking 用文件系统组织 Agent 的资源、记忆和技能，支持按路径浏览、语义检索和按需读取。应用可以把会话中提取的偏好与经验保存下来，在后续任务中复用。
 
-- **上下文碎片化**：记忆、资源、技能散落各处，难以统一管理
-- **检索效果不佳**：传统 RAG 平铺式存储缺乏全局视野，难以理解完整语境
-- **上下文不可观测**：隐式检索链路如同黑箱，出错时难以调试
-- **记忆迭代有限**：缺乏 Agent 相关的任务记忆和自我进化能力
+它针对构建 Agent 时的四个常见问题：
 
-OpenViking 通过文件系统范式统一管理所有上下文，实现分层供给与自我迭代。
+- **上下文碎片化**：记忆、资源、技能分散在不同位置，难以统一管理
+- **检索效果不佳**：平铺式分块存储丢失了周边结构，检索结果缺少完整语境
+- **上下文不可观测**：隐式检索链路出错时难以排查
+- **记忆迭代有限**：缺少可跨会话积累的任务记忆
+
+例如，用户让 Agent 修改部署方案时，Agent 可以检索项目文档，再读取相关配置；上次会话中已确认的部署约束，如果已提取为记忆，也可以在这次任务中检索和复用。应用需要接入检索与会话提交流程，安装数据库本身不会让 Agent 自动获得这些上下文。首次使用可从[导入一份资料并检索](../getting-started/02-quickstart.md)开始，再按需要接入[Agent 工具](../agent-integrations/01-overview.md)。
 
 ### OpenViking 和传统向量数据库有什么本质区别？
 
-| 维度 | 传统向量数据库 | OpenViking |
-|------|---------------|------------|
-| **存储模型** | 扁平化向量存储 | 层级化文件系统（AGFS） |
-| **检索方式** | 单一向量相似度搜索 | 目录递归检索 + 意图分析 + Rerank |
-| **输出形式** | 原始分块 | 结构化上下文（L0 摘要/L1 概览/L2 详情） |
-| **记忆能力** | 不支持 | 内置多种可扩展的记忆类型，支持自动提取和持续迭代 |
-| **可观测性** | 黑箱 | 检索轨迹完整可追溯 |
-| **上下文类型** | 仅文档 | Resource + Memory + Skill 三种类型 |
+向量数据库主要提供向量存储和相似度检索。OpenViking 在向量检索之上，提供上下文目录、分层摘要、资源导入、会话和记忆管理。已有向量数据库的能力因产品而异，选型时应按具体需求比较。
+
+| 需求 | OpenViking 提供的能力 |
+| --- | --- |
+| 组织上下文 | 用 `viking://` 路径管理资源、记忆和技能 |
+| 检索内容 | 结合向量检索、目录遍历，以及可配置的意图分析和 Rerank |
+| 控制读取量 | 先读目录摘要或概览，再按需读取详细内容 |
+| 复用会话经验 | 提交会话后，按记忆策略提取和更新记忆 |
+| 排查检索问题 | 使用日志与 telemetry 查看处理和检索过程 |
+
+如果应用只需要对已有向量做相似度查询，应先评估现有数据库是否够用。需要目录浏览、摘要与详情分层读取，或跨会话记忆管理时，再评估 OpenViking。用自己的资料和代表性问题比较召回内容、读取量、延迟和处理成本；收益取决于数据、模型与配置。
 
 ### 什么是 L0/L1/L2 分层模型？为什么需要它？
 
-L0/L1/L2 是 OpenViking 的渐进式内容加载机制，解决了"海量上下文一次性塞入提示词"的问题：
+Agent 可以先读摘要定位内容，再按需读全文，减少不相关内容进入上下文。
 
-| 层级 | 名称 | Token 限制 | 用途 |
-|------|------|-----------|------|
-| **L0** | 摘要 | ~100 tokens | 向量搜索召回、快速过滤、列表展示 |
-| **L1** | 概览 | ~2000 tokens | Rerank 精排、内容导航、决策参考 |
-| **L2** | 详情 | 无限制 | 完整原始内容、按需深度加载 |
+| 层级 | 内容 | 默认正文上限 | 用途 |
+| --- | --- | --- | --- |
+| L0 | 目录摘要 `.abstract.md` | 256 字符 | 检索与快速筛选 |
+| L1 | 目录概览 `.overview.md` | 4,000 字符 | 导航与精排 |
+| L2 | 原始文件或解析后的内容 | 无统一上限 | 按需读取详情 |
 
-这种设计让 Agent 可以先浏览摘要快速定位，再按需加载详情，显著节省 Token 消耗。
+L0/L1 是目录级附属文件，是否可用取决于处理状态和配置。上限按字符计算，可通过 `semantic.abstract_max_chars` 和 `semantic.overview_max_chars` 调整，详见[上下文层级](../concepts/03-context-layers.md)。
 
 ### Viking URI 是什么？有什么作用？
 
@@ -70,14 +75,14 @@ viking://
 
 ### OpenViking 是如何访问 AGFS 文件系统的？
 
-OpenViking 通过 Rust 绑定（`ragfs_python` / `RAGFSBindingClient`）在 Python 进程内直接运行 RAGFS 文件系统逻辑。优点是性能极高、无网络延迟；前提是本地需要有编译好的 RAGFS 共享库（预编译 Wheel 包内置，或从源码编译）。
+OpenViking 通过 Rust 绑定（`ragfs_python` / `RAGFSBindingClient`）在 Python 进程内直接运行 RAGFS 文件系统逻辑。文件系统调用在进程内完成；使用远程存储后端时仍会访问网络。RAGFS 共享库随预编译 wheel 提供，也可从源码构建。
 
 > [!WARNING]
 > OpenViking 已不再支持 AGFS HTTP client 模式。当前 AGFS / RAGFS 文件系统访问仅通过 Rust binding（`RAGFSBindingClient`）在进程内完成。这不影响 OpenViking server 的 HTTP API、`ov` CLI，或 `AsyncHTTPClient` / `SyncHTTPClient` 访问 OpenViking 服务端的能力。
 
 ### 遇到 "AGFS binding library not found" 错误怎么办？
 
-这通常是因为本地没有可用的 RAGFS 共享库。在项目根目录运行 `pip install -e . --force-reinstall` 重新编译安装即可（需要 Rust 工具链）。
+这通常表示 RAGFS 共享库缺失或无法加载。先检查 Python 版本和平台是否有对应的预编译 wheel，并尝试重新安装。只有平台缺少 wheel 或需要修改源码时才[从源码构建](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)，届时需准备原生编译工具链。
 
 ### 如何安装 OpenViking？
 
@@ -87,7 +92,7 @@ pip install openviking --upgrade --force-reinstall
 
 ### 如何配置 OpenViking？
 
-在项目目录创建 `~/.openviking/ov.conf` 配置文件：
+在用户主目录下创建 `~/.openviking/ov.conf`，将示例中的模型和凭据替换为实际配置：
 
 ```json
 {
@@ -163,8 +168,8 @@ Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` �
 # 添加单个文件
 await client.add_resource(
     path="./document.pdf",
-    parent="viking://resources/docs",  # 存到这个目录下面，文件名由来源决定
-    options={"reason": "项目技术文档"},  # 描述资源用途，提升检索质量
+    parent="viking://resources",  # 存到这个目录下面，文件名由来源决定
+    options={"reason": "项目技术文档"},  # 未传 instruction 时用于生成 L0/L1 摘要，也用于资源相关的记忆提取
 )
 
 # 添加网页
@@ -204,8 +209,8 @@ await client.wait_processed()
 
 | 特性 | `find()` | `search()` |
 |------|----------|------------|
-| **会话上下文** | 不需要 | 需要 |
-| **意图分析** | 不使用 | 使用 LLM 分析生成 0-5 个查询 |
+| **会话上下文** | 不使用 | 可选，传入 `session_id` 时使用 |
+| **意图分析** | 不使用 | 有会话内容且启用意图分析时使用 LLM |
 | **延迟** | 低 | 较高 |
 | **适用场景** | 简单语义搜索 | 复杂任务、需要理解上下文 |
 
@@ -254,7 +259,7 @@ await session.commit()
 
 ### OpenViking 支持哪些记忆类型？
 
-OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`、`soul`、`cases`、`trajectories`、`experiences`、`tools` 和 `skills` 等记忆类型。提交会话后，系统会按当前记忆策略提取适用内容；也可以根据业务需要扩展或调整记忆类型。
+OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`、`soul`、`cases`、`trajectories`、`experiences` 等记忆类型。提交会话后，系统会按当前记忆策略提取适用内容；也可以根据业务需要扩展或调整记忆类型。
 
 记忆存储在当前用户或 Peer 命名空间，不存在当前可写的 `viking://agent/memories` 目录。完整类型与路径见 [上下文类型](../concepts/02-context-types.md)。
 
@@ -278,33 +283,33 @@ overview = await client.overview(uri="viking://resources")
 
 ### 如何提升检索质量？
 
-1. **使用 Rerank 模型**：配置 Rerank 可显著提升精排效果
-2. **提供有意义的 `reason`**：添加资源时描述用途，帮助系统理解资源价值
-3. **合理组织目录结构**：使用 `target` 参数将相关资源放在一起
-4. **使用会话上下文**：`search()` 会利用会话历史进行意图分析
-5. **选择合适的 Embedding 模式**：多模态内容使用 `multimodal` 输入
+1. **检查摘要**：确认 L0/L1 是否准确反映来源；需要调整时使用导入的 `instruction` 或摘要模板
+2. **组织目录结构**：导入时用 `parent` 指定现有父目录，或用 `to` 指定最终 URI
+3. **使用会话上下文**：保持 `retrieval.enable_intent` 开启（默认），并向 `search()` 传入有内容的会话
+4. **选择合适的 Embedding 模式**：多模态内容使用 `multimodal` 输入
+5. **评估 Rerank 模型**：对代表性查询比较启用前后的排序结果，再决定是否启用。可以尝试用 Jev（TypeSafe System One）做 rerank：它对每个候选单独判断与查询的相关性，各候选分数互不竞争；配置见[配置指南](../guides/01-configuration.md#rerank)
 
 ### 检索结果的分数是如何计算的？
 
-OpenViking 使用分数传播机制：
+目录递归检索会传播父目录分数。传播权重由 `retrieval.score_propagation_alpha` 配置，默认值为 `1.0`，即只使用当前候选自身的分数：
 
 ```
-最终分数 = 0.5 × Embedding 相似度 + 0.5 × 父目录分数
+传播分数 = α × 当前候选分数 + (1 − α) × 父目录分数
 ```
 
-这种设计让高分目录下的内容获得加成，体现了"上下文语境"的重要性。
+当前候选分数可来自向量检索或 Rerank，取决于检索模式和配置。最终排序还可能受热度等因素影响，不能仅用这一公式解释所有返回分数。详见[检索机制](../concepts/07-retrieval.md)。
 
 ### 什么是目录递归检索？
 
-目录递归检索是 OpenViking 的创新检索策略：
+目录递归检索先定位相关目录，再向下查找：
 
-1. **意图分析**：分析查询生成多个检索条件
+1. **准备查询**：`find()` 直接使用查询，`search()` 可先分析意图
 2. **初始定位**：向量检索定位高分目录
 3. **精细探索**：在高分目录下进行二次检索
 4. **递归下探**：逐层递归直到收敛
 5. **结果汇总**：返回最相关的上下文
 
-这种策略能找到语义匹配的片段，同时理解信息的完整语境。
+目录分数参与下层候选排序。实际召回效果取决于来源组织、摘要、模型和查询。
 
 ## 故障排除
 
@@ -314,9 +319,10 @@ OpenViking 使用分数传播机制：
 
 1. **未等待处理完成**
    ```python
-   await client.add_resource(path="./doc.pdf")
-   await client.wait_processed()  # 必须等待
+   result = await client.add_resource(path="./doc.pdf", wait=True)
+   print(result)
    ```
+   新导入时可用 `wait=True` 等待。排查已经提交的导入时，用返回的 `task_id` 查询任务，不必重复导入。状态仍为 `pending` 或 `running` 时需要继续等待；`failed` 或 `cancelled` 时查看任务详情。请求超时也不能据此判断后台任务已经失败，详见[异步任务](../api/17-tasks.md)。
 
 2. **Embedding 模型配置错误**
    - 检查 `~/.openviking/ov.conf` 中的 `api_key` 是否正确
@@ -326,20 +332,20 @@ OpenViking 使用分数传播机制：
    - 检查文件扩展名是否在支持列表中
    - 确认文件内容有效且未损坏
 
-4. **查看处理日志**
-   ```python
-   import logging
-   logging.basicConfig(level=logging.DEBUG)
-   ```
+4. **查看服务端处理日志**
+   在运行服务端的终端或日志系统中查看对应任务的错误。客户端的 Python 日志设置不会开启远程服务端日志。
 
 ### 搜索没有返回预期结果
 
 **排查步骤**：
 
-1. **确认资源已处理完成**
+1. **确认资源存在，再查询导入任务状态**
+   用导入时返回的 `task_id` 查询任务；`completed` 表示处理完成，`failed` 或 `cancelled` 需先检查原因。
    ```python
    # 检查资源是否存在
    items = await client.ls(uri="viking://resources/")
+   task = await client.get_task("<导入时返回的 task_id>")
+   print(task["status"])
    ```
 
 2. **检查 `target_uri` 过滤条件**
@@ -373,19 +379,16 @@ OpenViking 使用分数传播机制：
    - 闲聊内容可能不会产生记忆
    - 需要包含可提取的信息（偏好、实体、事件等）
 
-4. **查看提取的记忆**
+4. **查看记忆目录**
    ```python
-   memories = await client.find(
-       query="",
-       target_uri="viking://~/memories/",
-   )
+   memories = await client.ls(uri="viking://~/memories/")
    ```
 
 ### 性能问题
 
 **优化建议**：
 
-1. **批量处理**：一次添加多个资源比逐个添加更高效
+1. **定位瓶颈**：先检查处理队列、模型延迟和存储耗时，再调整并发
 2. **合理设置 `batch_size`**：Embedding 配置中调整批处理大小
 3. **使用本地存储**：开发阶段使用 `local` 后端减少网络延迟
 4. **异步操作**：充分利用 `AsyncHTTPClient` 的异步特性
@@ -394,12 +397,12 @@ OpenViking 使用分数传播机制：
 
 ### OpenViking 是开源的吗？
 
-是的，OpenViking 完全开源，主体采用 AGPLv3 许可证，详见 README.md 说明。
+OpenViking 主体采用 AGPLv3，CLI 和大部分示例采用 Apache 2.0。各组件及例外见仓库的[许可证说明](https://github.com/volcengine/OpenViking#license)。
 
 ## 相关文档
 
 - [简介](../getting-started/01-introduction.md) - 了解 OpenViking 的设计理念
-- [快速开始](../getting-started/02-quickstart.md) - 5 分钟上手教程
+- [快速开始](../getting-started/02-quickstart.md) - 首次导入与检索
 - [架构概述](../concepts/01-architecture.md) - 深入理解系统设计
 - [检索机制](../concepts/07-retrieval.md) - 检索流程详解
 - [配置指南](../guides/01-configuration.md) - 完整配置参考

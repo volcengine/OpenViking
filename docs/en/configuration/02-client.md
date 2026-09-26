@@ -2,9 +2,9 @@
 
 `ovcli.conf` is the client configuration file for the `ov` CLI. It stores the server connection, authentication identity, and command defaults.
 
-Agent plugins for Codex, Claude Code, OpenCode, and other clients also read their own `OPENVIKING_*` environment variables for Recall, Capture, diagnostics, and other behavior. Those variables are not part of `ovcli.conf`; configure them in the corresponding [Agent Integration](../agent-integrations/01-overview.md) documentation.
+Agent plugins using the shared configuration loader also read the `plugin` section, workspace settings, and `OPENVIKING_*` environment variables for recall, conversation capture, and diagnostics. This page distinguishes CLI settings from plugin settings. See [Agent Integrations](../agent-integrations/01-overview.md) for host-specific support.
 
-Use `ov config` to create and maintain configurations. Use `ov config show` to inspect the active configuration with secrets redacted.
+Use `ov config` to manage CLI connections and `ov config show` to inspect the active configuration with secrets redacted. Editing or renaming a configuration preserves extra top-level fields such as `plugin`. On a switch, fields explicitly present in the incoming profile take precedence; if it omits `plugin`, the active file’s existing plugin settings are retained.
 
 Default path:
 
@@ -25,8 +25,6 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
   "url": "https://openviking.example.com",
   "api_key": "<user-or-admin-key>",
   "root_api_key": "<root-key>",
-  "account": "acme",
-  "user": "alice",
   "actor_peer_id": "agent:research-assistant",
   "timeout": 60,
   "output": "table",
@@ -49,7 +47,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 }
 ```
 
-Omit fields you do not need. A local server in `dev` mode usually needs only `url`.
+This example uses API key mode. Omit fields you do not need; a local server in `dev` mode usually needs only `url`. Trusted deployments additionally configure `account`, `user`, and the required credentials as described in [Authentication](../guides/04-authentication.md). In API key mode, the server takes identity from the key and ignores these fields.
 
 ## Connection and Authentication
 
@@ -58,8 +56,6 @@ Omit fields you do not need. A local server in `dev` mode usually needs only `ur
   "url": "https://openviking.example.com",
   "api_key": "<user-or-admin-key>",
   "root_api_key": "<root-key>",
-  "account": "acme",
-  "user": "alice",
   "actor_peer_id": "agent:research-assistant",
   "extra_headers": {
     "X-Tenant": "acme"
@@ -136,7 +132,7 @@ Local directory uploads also honor `.gitignore`. Command-line `--include` and `-
 
 ## Plugin Settings
 
-Behaviour knobs for the memory plugins live under `plugin`. Keys directly under it apply to every harness; a nested object named after a harness — `claude_code` or `codex` — overrides them for that one.
+Settings for memory plugins live under `plugin`. Keys directly under it provide defaults for plugins using the shared loader; a nested object named after a harness, such as `claude_code`, `codex`, or `opencode`, overrides them for that one.
 
 ```json
 {
@@ -152,11 +148,11 @@ Behaviour knobs for the memory plugins live under `plugin`. Keys directly under 
 }
 ```
 
-Each key is the camelCase counterpart of an `OPENVIKING_*` tuning variable — `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. The mapping does not go both ways: a few variables are deliberately environment-only, such as the one-shot `OPENVIKING_BYPASS_SESSION`. The full list lives in the plugin READMEs: [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) and [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
+Many settings have a corresponding `OPENVIKING_*` environment variable: `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. A few variables are environment-only, such as the one-shot `OPENVIKING_BYPASS_SESSION`. The full list lives in the plugin READMEs: [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) and [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
 
-Resolution order, highest first: environment variables → the [workspace layers](#workspace-configuration) → `plugin.<harness>` → `plugin` → the legacy per-harness block in `ov.conf` → built-in defaults. Hook processes read the file on every invocation, so an edit takes effect on the next turn; changing an `OPENVIKING_*` variable instead needs the agent restarted, since hooks inherit its environment.
+Resolution order, highest first: environment variables → the [workspace layers](#workspace-configuration) → `plugin.<harness>` → `plugin` → the legacy per-harness block in `ov.conf` → built-in defaults. Separately launched hook processes reread the file on each invocation. Reload behavior for persistent plugins depends on the host; restart the agent when uncertain. Environment changes also require a restart because hooks inherit the agent’s environment.
 
-Only the Claude Code and Codex plugins read this section today, so an entry named after any other harness is inert. `ov-memory-doctor` prints what it resolved and warns about keys it does not recognise, naming the closest real one.
+Memory plugins using the shared configuration loader read this section. See the corresponding [integration guide](../agent-integrations/01-overview.md) for supported fields and defaults. `ov-memory-doctor` prints what it resolved and warns about keys it does not recognise, naming the closest real one.
 
 ## Workspace Configuration
 
@@ -168,7 +164,7 @@ A repository can carry its own plugin settings, so the memory behavior of a proj
 ~/.openviking/workspaces/<slot>.json        # per-machine registry, one file per workspace
 ```
 
-The workspace root is the nearest ancestor directory holding a `.git`, or one holding `.openviking/config.json` (or `config.local.json`) — whichever the walk upward reaches first; `$HOME` and the filesystem root are never workspace roots. A directory that is neither is not a workspace at all: no configuration layer, no registry entry, and no peer of its own. The registry slot name combines the root's directory name with a hash of its full path, so two clones of one repository on one machine never share an entry. These layers are read by the Claude Code and Codex plugins, not by `ov` commands.
+The workspace root is the nearest ancestor directory holding a `.git`, or one holding `.openviking/config.json` (or `config.local.json`) — whichever the walk upward reaches first; `$HOME` and the filesystem root are never workspace roots. A directory that is neither is not a workspace at all: no configuration layer, no registry entry, and no peer of its own. The registry slot name combines the root's directory name with a hash of its full path, so two clones of one repository on one machine never share an entry. Memory plugins using the shared configuration loader read these layers; `ov` commands do not.
 
 ### Precedence
 
@@ -217,7 +213,7 @@ No command writes the registry file. Create it by hand at the path `ov-memory-do
 | `bypass.session_patterns` | list of globs | A session whose id or working directory matches skips recall and capture |
 | `labels` | object | Free-form metadata for humans; not read by the plugins |
 
-An out-of-range number is clamped to the nearest bound and reported; an unrecognized enum value is ignored. Keys outside this list are kept in the file and ignored.
+An out-of-range number is clamped to the nearest bound and reported; an unrecognized enum value is ignored. The table lists common fields; `config-schema.mjs` defines the full shared schema. Unrecognized keys do not take effect.
 
 ### Workspace Peer
 
@@ -233,7 +229,7 @@ Create `.openviking/config.json` in the directory:
 {"version": 1, "peer": {"id": "my-project"}}
 ```
 
-That directory and everything below it now writes to the peer `my-project`, repository or not. The id names no path, so it survives a move, a rename and a second machine — and two directories carrying the same id share one memory, which is how you merge them on purpose.
+Memories captured by the plugin in that directory and its subdirectories are written under the peer `my-project`, whether or not it is a Git repository. The id names no path, so it survives a move, a rename and a second machine — and two directories using the same server, account, user, and peer id share the same memory scope, which is how you merge them on purpose.
 
 The other ways to set it, highest precedence first:
 
@@ -271,7 +267,7 @@ In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with `origin` `git@git
 | A long-lived directory that is not a repository | Create `.openviking/config.json` with a `peer.id` |
 | One subproject of a monorepo needing its own memory | Put a `config.json` in the subdirectory with `peer.source: "{git_remote}-{dir}"`. A marker file alone keeps the repository's peer, because `{git_remote}` resolves first |
 | A throwaway task directory (a dated folder an app creates, an unpacked archive) | Nothing. Its memories go to your user-level space |
-| Each agent keeping its own memory of one repository | `peer.source: "{git_remote}-{harness}"`. Not the default — one shared project memory across agents is usually what you want, so this one is opt-in |
+| Each agent keeping its own memory of one repository | `peer.source: "{git_remote}-{harness}"`. Set this explicitly; the default shares project memory across agents |
 | Several directories sharing one memory | Write the same `peer.id` in each |
 | Not wanting per-project separation at all | `peer.source: "none"` (the same as `OPENVIKING_WORKSPACE_PEER=0`) |
 
@@ -281,10 +277,10 @@ In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with `origin` `git@git
 
 | `recall.peer_scope` | What recall reads |
 |---|---|
-| `"all"` (default) | User-level memories and this workspace's peer at full weight, plus a sweep across the user's other peers whose hits are demoted by category — the server's `other_peer_penalty` defaults to 0.1 for events and entities, 0.02 for preferences, experiences, resources and skills. Another project can therefore only ever come last |
+| `"all"` (default) | User-level memories and this workspace's peer at full weight, plus a sweep across the user's other peers whose hits are demoted by category — the server's `other_peer_penalty` defaults to 0.1 for events and entities, 0.02 for preferences, experiences, resources and skills. The penalty lowers other-project scores but does not guarantee that they always rank last |
 | `"actor"` | User-level memories and this workspace's peer only. The plugin additionally asks once for the peer the pre-`git` rule would have derived here, so nothing written by an earlier release is lost |
 
-User-level memories are read at full weight under both, and that is the cost of sending no peer outside a repository: what a throwaway task teaches is recalled in every project afterwards. For stronger separation, give such a directory a `peer.id` of its own, or switch to `"actor"`.
+User-level memories are read at full weight under both, and that is the cost of sending no peer outside a repository: what a throwaway task teaches is recalled in every project afterwards. To separate future memories from such a directory, give it a `peer.id` and use `"actor"` to limit cross-peer recall. The actor scope still reads existing user-level memories; it does not reassign or hide them.
 
 Switching to the `git` default needs no migration and moves nothing: memories written under the earlier cwd-derived peer stay where they are, and recall keeps reaching them — through the cross-peer sweep under `"all"`, and through the extra query under `"actor"`. `peer_scope` is a per-request parameter; against a server too old to know it, the plugin records the downgrade once and warns rather than silently reading everything.
 
@@ -318,7 +314,7 @@ The `ov` CLI directly uses only a small set of environment variables:
 
 The `--api-key-env <name>` and `--root-api-key-env <name>` options for `ov config add` and `ov config edit` read keys from a named environment variable and write them to the configuration.
 
-Variables such as `OPENVIKING_AUTO_RECALL`, `OPENVIKING_RECALL_LIMIT`, `OPENVIKING_AUTO_CAPTURE`, and `OPENVIKING_DEBUG` are read by Agent plugin processes and are not `ovcli.conf` fields.
+Agent plugins read environment variables such as `OPENVIKING_AUTO_RECALL`, `OPENVIKING_RECALL_LIMIT`, `OPENVIKING_AUTO_CAPTURE`, and `OPENVIKING_DEBUG`. Do not use the environment-variable names as JSON keys; supported file settings use their corresponding fields under `plugin`.
 
 ## Multiple Servers
 

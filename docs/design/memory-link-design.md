@@ -3,6 +3,7 @@
 > 日期: 2026-04-23
 > 状态: Draft
 > 分支: feat/memory_isolation
+> 阅读范围：本文保留 2026 年 4 月的调研和目标设计。竞品描述限于当时分析的版本；未提供可复现依据的性能数字不作为当前产品对比。T+1 整理、PPR 和示例配置也不代表默认启用的能力。当前记忆接口见[记忆 API](../zh/api/16-memory.md)。
 
 ## 1. 概述
 
@@ -52,8 +53,8 @@ flowchart TB
     gb_page --> gb_links[links 数据库表]
     gb_addlink --> gb_links
     gb_timeline --> gb_pages
-    gb_page --> gb_dream[Dream Cycle\n每夜四阶段]
-    gb_dream --> gb_page2[整理产物\n重编译页面 + 富化实体]
+    gb_page --> gb_dream[Dream Cycle\n每夜六阶段]
+    gb_dream --> gb_page2[维护产物\n链接检查 + 索引刷新]
     gb_page --> gb_embed[写入时\n分块 + embedding + 全文索引]
     gb_links --> gb_search[搜索 + backlink boost]
     gb_pages --> gb_search
@@ -203,7 +204,7 @@ Dream Cycle，通过 cron + skills 实现的 6 阶段维护管道（从 GBrain v
 
 #### 关键取舍
 
-- 建链依赖 LLM 行为指令（skill markdown），没有代码级 hook 保证执行——agent 可能跳过建链
+- 手动 `add_link` 依赖 LLM 行为指令，agent 可能跳过；`put_page` 内的 auto-link hook 仍会执行确定性建链
 - backlink boost 是简单排序加分，不做图传播，无法发现种子文件多跳之外的关联
 - auto-link post-hook 基于正则提取，无法验证目标页面是否存在（可能产生悬空链接）
 - 正文 Markdown 链接不会随 slug 改名自动更新，stale-link reconciliation 修复内容修改引起的失效，但 slug rename 场景未完全解决
@@ -616,7 +617,7 @@ memory core最终输出的为MEMORY.md及history/2026-04-26.md
         "kind": "source",
         "id": "source.小王周报.2026w17",
         "updatedAt": "2026-04-22T18:00:00.000Z",
-        "freshness": "aging",
+        "freshness": "fresh",
         "claimCount": 0,
         "questionCount": 0,
         "contradictionCount": 0,
@@ -936,7 +937,7 @@ flowchart TB
 |------|------|
 | 分词搜索 | 本地文件扫描，分数计算：文件名精确匹配（+200）> 标题包含短语（+50）> 正文包含短语（每次+20，最多10次）> 标题token匹配（每个+5）> 正文token匹配（每个+1） |
 | 向量搜索 | 可选（LanceDB），返回 top10 语义相似结果 |
-| RRF 融合 | `fused(p) = 1/(60 + token_rank) + 1/(60 + vector_rank) |
+| RRF 融合 | `fused(p) = 1/(60 + token_rank) + 1/(60 + vector_rank)` |
 | 去重排序 | 按 RRF 分数降序，同分按路径字母顺序，取前 20 条 |
 
 
@@ -1120,8 +1121,8 @@ PageIndex 使用无向量（vectorless）的推理式检索——通过层级树
 
 ### 2.5 竞品启发与设计决策
 
-**1. PageIdMap 消除死链（vs GBrain auto-link + check-backlinks / OpenKB 编译时回链）**
-GBrain 在 `put_page` 时通过 auto-link post-hook 自动提取实体引用并创建链接，还通过 `check-backlinks` 命令检查并修复回链，用 pg_trgm 模糊 slug matching 缓解读取端问题。但 auto-link 基于正则提取，无法验证目标页面是否存在（可能产生悬空链接）。OpenKB 在编译时通过代码级 `_backlink_summary` / `_backlink_concepts` 保证双向链接，但仅在编译时刻执行，手动编辑或 slug 变更后链接可能断裂，且无 stale-link reconciliation。OV 的 PageIdMap 从结构上杜绝死链——page_id 只分配给上下文中确认存在的文件，链接不可能指向不存在的页面。
+**1. PageIdMap 约束链接目标（vs GBrain auto-link + check-backlinks / OpenKB 编译时回链）**
+GBrain 在 `put_page` 时通过 auto-link post-hook 自动提取实体引用并创建链接，还通过 `check-backlinks` 命令检查并修复回链，用 pg_trgm 模糊 slug matching 缓解读取端问题。但 auto-link 基于正则提取，无法验证目标页面是否存在（可能产生悬空链接）。OpenKB 在编译时通过代码级 `_backlink_summary` / `_backlink_concepts` 保证双向链接，但仅在编译时刻执行，手动编辑或 slug 变更后链接可能断裂，且无 stale-link reconciliation。OV 的 PageIdMap 限制模型引用本轮已读取或计划新建的页面，减少凭空生成的目标。目标仍可能因写入失败、删除、移动或并发修改而失效，需要在写入和读取时校验。
 
 **2. 延迟渲染替代写入时链接（vs GBrain 正文 Markdown 链接 / OpenKB [[wikilink]] 正文链接）**
 GBrain 的 auto-link post-hook 有 stale-link reconciliation 功能，在内容修改时自动移除失效链接。但正文中的 Markdown 链接（如 `[张三](../people/zhangsan.md)`）不会随 slug 改名自动更新，仍是断裂风险点。OpenKB 同样把链接写在正文中（`[[wikilink]]`），编译时生成，无 reconciliation 机制，slug 变更直接导致断链。OV 的 content 保持纯净，链接存在 `links` 元数据中，检索时按需渲染 match_text。target_uri 变化只改元数据，content 不动。
@@ -1169,7 +1170,7 @@ OpenKB 的编译管线是精心设计的多步 LLM 调用链：摘要 → 概念
 
 三种场景统一走 ExtractLoop，LLM 按 schema 输出记忆操作 + links
 
-**链接机制：** 链接存在文件元数据 JSON（VikingFS）中，content 保持纯净。6 种 LinkType 枚举约束，weight 表达关联强度，t_line_ranges 行号级精度。一条链接写入 from 端 links + to 端 backlinks，两侧记录完全相同。PageIdMap 从结构上杜绝死链。
+**链接机制：** 链接存在文件元数据 JSON（VikingFS）中，content 保持纯净。6 种 LinkType 枚举约束，weight 表达关联强度，t_line_ranges 行号级精度。一条链接写入 from 端 links + to 端 backlinks，两侧记录完全相同。PageIdMap 约束本轮可引用的页面，持久化后仍需处理失效目标。
 
 **T+1整理：** 主题整合。从已有记忆中发现问题（新记忆无关联 report / CONTRADICTS 链接 / report_candidate），逐主题调用 ExtractLoop（DreamContextProvider）生成 report。暴露 CLI 供 Bot 通过 Cron 触发。report_candidate 来源：session 中提到的研究主题 / CLI 提交研究主题 / 基于搜索结果分布。
 
@@ -1536,7 +1537,7 @@ class LinkType(str, Enum):
 - DERIVED_FROM + backlinks → 已有报告的源记忆是否更新，决定重新研究
 - EVOLVED_FROM + backlinks → 旧版本是否被新记忆替代，决定更新报告
 
-##### 3.2.7.4 PPR 配置表 （# TODO 这一章挪到ppr实现那边讲吧）
+##### 3.2.7.4 PPR 配置表 （设计参数）
 
 | (link_type, links/backlinks) | 传播权重 | 是否继续 | 最大深度 | 说明 |
 |---|---|---|---|---|
@@ -1620,7 +1621,7 @@ MemoryUpdater.apply_operations():
 
 所有链接天然双向，一条 WikiLink 同时写入 from 端的 `links` 和 to 端的 `backlinks`，两侧记录内容完全相同。
 
-**死链不可能存在**：page_id 只在 ExtractLoop 上下文中产生，对应文件一定存在（已有文件已读入，新建文件即将写入）。
+**目标有效性**：page_id 只在 ExtractLoop 上下文中产生。已有页面可能随后被删除，新页面也可能写入失败；解析成功不等于目标已经持久化。写入前应校验目标，读取时应容忍失效链接。
 
 **一趟写入策略：**
 - `resolve_operations()` 阶段将链接分发：from 端链接写入 from 文件的 `MEMORY_FIELDS.links`，to 端反向链接写入 to 文件的 `MEMORY_FIELDS.backlinks`
@@ -1770,7 +1771,7 @@ content_template: |
   {% endif %}
 ```
 
-**实时阶段已保证：** 死链不存在（PageIdMap）、双向链接强制分发，外部 Bot T+1 整理无需做全局健康检查。
+**一致性边界：** PageIdMap 和双向分发减少无效引用，但不替代持久化后的健康检查。外部删除、移动和部分写入失败仍可能需要对账或修复。
 
 ### 3.5 链接消费
 
@@ -1832,9 +1833,9 @@ PPR 传播 (damping=0.85, 按 3.2.7.4 配置表):
 
 结果:
   caroline.md:     0.7×0.85 = 0.60  (补充召回，向量未命中)
-  old_style.md:    0.3×0.85 = 0.26  (低于 min_ppr_score，丢弃)
+  old_style.md:    0.3×0.85 = 0.26  (高于默认 min_ppr_score=0.05，保留)
 
-返回 [code_review.md, Python_style.md, caroline.md]
+返回 [code_review.md, Python_style.md, caroline.md, old_style.md]
   caroline.md 是向量未命中但 PPR 补充召回的高关联文件
 ```
 
@@ -1928,12 +1929,12 @@ PPR 传播（多种子叠加，按 3.2.7.4 配置表）:
 | 知识可信度 | 无 | Claims + 矛盾检测 + 新鲜度评估 | Lint 检查（结构+语义） | links 已覆盖矛盾/演变/权重/溯源，不引入独立 claims 层 |
 
 **OpenViking 的差异化：**
-- 唯一支持链接权重（weight），支持更精细的关联强度
-- 唯一支持行号级链接精度（target_ranges），检索时可只读目标行范围，减少 token 消耗
-- 唯一支持 hook 攒批提取 + 资源目录提取双模式在线写入
-- 唯一支持链接类型枚举约束（GBrain link_type 为自由文本，LLM 手动填写可能产生同义歧义如 knows vs familiar_with）
-- 唯一支持 PPR 图增强检索（GBrain backlink boost 是简单排序加分，不做图传播；nashsu_llm_wiki 4 信号图扩展权重硬编码）
-- 唯一支持外部 Bot T+1 触发主题整合（GBrain Dream Cycle 是纯维护管道不做知识整合；nashsu_llm_wiki 无定时整理）
+- 支持链接权重（weight），支持更精细的关联强度
+- 支持行号级链接精度（target_ranges），检索时可只读目标行范围，减少 token 消耗
+- 支持 hook 攒批提取 + 资源目录提取双模式在线写入
+- 支持链接类型枚举约束（GBrain link_type 为自由文本，LLM 手动填写可能产生同义歧义如 knows vs familiar_with）
+- 支持 PPR 图增强检索（GBrain backlink boost 是简单排序加分，不做图传播；nashsu_llm_wiki 4 信号图扩展权重硬编码）
+- 支持外部 Bot T+1 触发主题整合（GBrain Dream Cycle 是纯维护管道不做知识整合；nashsu_llm_wiki 无定时整理）
 
 **核心差异：**
 
