@@ -1482,6 +1482,40 @@ async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wait", [True, False])
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "viking://",
+        "viking://user",
+        "viking://user/alice",
+        "viking://user/alice/skills",
+        "viking://agent/skills",
+    ],
+)
+async def test_reindex_rejects_non_recursive_namespace_before_starting_work(monkeypatch, uri, wait):
+    from openviking.service.reindex_executor import ReindexExecutor
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    def unexpected_tracker():
+        pytest.fail("unsupported non-recursive reindex must not start task tracking")
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_task_tracker", unexpected_tracker)
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role(Role.ROOT),
+    )
+    with pytest.raises(InvalidArgumentError, match="recursive=false.*namespace"):
+        await ReindexExecutor().execute(
+            uri=uri,
+            mode="semantic_and_vectors",
+            recursive=False,
+            wait=wait,
+            ctx=ctx,
+        )
+
+
+@pytest.mark.asyncio
 async def test_reindex_resource_non_recursive_limits_semantics_and_vectors(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 

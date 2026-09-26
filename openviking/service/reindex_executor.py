@@ -213,6 +213,15 @@ class ReindexExecutor:
     ) -> dict[str, Any]:
         object_type = self._infer_target_type(uri)
         self._validate_mode(object_type, mode)
+        if (
+            mode == "semantic_and_vectors"
+            and not recursive
+            and object_type in {"global_namespace", "user_namespace", "skill_namespace"}
+        ):
+            raise InvalidArgumentError(
+                "recursive=false is not supported for namespace reindex targets. "
+                "Select a resource, memory, or skill directory instead."
+            )
         if dry_run and mode != "prune_orphans":
             raise InvalidArgumentError("dry_run is only supported for prune_orphans reindex mode.")
         ingest_options = self._resolve_ingest_options(
