@@ -40,12 +40,13 @@ def test_queue_concurrency_uses_separate_configured_values() -> None:
         agfs=object(),
         max_concurrent_external_parse=9,
         max_concurrent_add_resource=7,
+        max_concurrent_reindex=6,
         max_concurrent_session_commit=5,
     )
 
     assert manager._max_concurrent_for_queue(manager.EXTERNAL_PARSE) == 9
     assert manager._max_concurrent_for_queue(manager.ADD_RESOURCE) == 7
-    assert manager._max_concurrent_for_queue(manager.REINDEX) == 1
+    assert manager._max_concurrent_for_queue(manager.REINDEX) == 6
     assert manager._max_concurrent_for_queue(manager.SESSION_COMMIT) == 5
 
 
@@ -144,9 +145,7 @@ async def test_skill_shutdown_releases_lock_after_embedding_worker_exits(
         object(), max_concurrent_semantic=concurrency, max_concurrent_embedding=concurrency
     )
     manager._poll_interval = 0.001
-    manager.set_vlm_resolver(
-        SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
-    )
+    manager.set_vlm_resolver(SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace())))
     manager.setup_standard_queues(object(), start=False)
     semantic = manager._queues[manager.SEMANTIC]._dequeue_handler
     manager._queues = {

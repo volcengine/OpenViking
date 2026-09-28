@@ -232,6 +232,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 
 `max_concurrent` 控制相互独立的 AddResource 作业并发，`file_operation_concurrency` 控制单个 AddResource 作业内文件提交和 fallback 比较操作的并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。
 
+### `queue_workers.reindex`
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | 同时消费的完整 Reindex root 作业数，必须大于 `0`；修改后需重启服务 |
+
+该配置限制相互独立的异步 reindex 请求并发。URI 范围重叠的请求仍由 path lock 保护；VLM 和 embedding 仍分别遵守各自的并发限制。
+
 ### `queue_workers.session_commit`
 
 | 字段 | 类型 | 默认值 | 说明 |

@@ -152,6 +152,7 @@ class OpenVikingService:
             max_concurrent_semantic=cluster_vlm.max_concurrent,
             max_concurrent_external_parse=config.queue_workers.external_parse.max_concurrent,
             max_concurrent_add_resource=config.queue_workers.add_resource.max_concurrent,
+            max_concurrent_reindex=config.queue_workers.reindex.max_concurrent,
             max_concurrent_session_commit=config.queue_workers.session_commit.max_concurrent,
             max_concurrent_external_task=config.queue_workers.external_task.max_concurrent,
             binding_config=binding_config,
@@ -165,6 +166,7 @@ class OpenVikingService:
         max_concurrent_semantic: int = 32,
         max_concurrent_external_parse: int = 4,
         max_concurrent_add_resource: int = 4,
+        max_concurrent_reindex: int = 4,
         max_concurrent_session_commit: int = 8,
         max_concurrent_external_task: int = 10,
         binding_config: Any = None,
@@ -189,6 +191,7 @@ class OpenVikingService:
                 max_concurrent_semantic=max_concurrent_semantic,
                 max_concurrent_external_parse=max_concurrent_external_parse,
                 max_concurrent_add_resource=max_concurrent_add_resource,
+                max_concurrent_reindex=max_concurrent_reindex,
                 max_concurrent_session_commit=max_concurrent_session_commit,
                 max_concurrent_external_task=max_concurrent_external_task,
             )
@@ -444,6 +447,7 @@ class OpenVikingService:
                 max_concurrent_add_resource=(
                     self._config.queue_workers.add_resource.max_concurrent
                 ),
+                max_concurrent_reindex=self._config.queue_workers.reindex.max_concurrent,
                 max_concurrent_session_commit=(
                     self._config.queue_workers.session_commit.max_concurrent
                 ),

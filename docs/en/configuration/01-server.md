@@ -233,6 +233,14 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 
 `max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
 
+### `queue_workers.reindex`
+
+| Field | Type | Default | Description |
+|---|---|---:|---|
+| `max_concurrent` | integer | `4` | Number of complete Reindex root jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
+
+This setting limits independent asynchronous reindex requests. URI-overlapping requests remain protected by path locks, while VLM and embedding work continue to use their respective concurrency limits.
+
 ### `queue_workers.session_commit`
 
 | Field | Type | Default | Description |

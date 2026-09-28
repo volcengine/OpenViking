@@ -130,6 +130,7 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
 
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
+    assert config.queue_workers.reindex.max_concurrent == 4
     assert config.queue_workers.add_resource.file_operation_concurrency == 16
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
     assert config.queue_workers.session_commit.max_concurrent == 8
@@ -154,6 +155,7 @@ def test_runtime_concurrency_accepts_separate_values():
                     "file_operation_concurrency": 20,
                     "file_vectorization_concurrency": 12,
                 },
+                "reindex": {"max_concurrent": 6},
                 "session_commit": {"max_concurrent": 50},
                 "external_task": {"max_concurrent": 11},
             },
@@ -163,6 +165,7 @@ def test_runtime_concurrency_accepts_separate_values():
 
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
+    assert config.queue_workers.reindex.max_concurrent == 6
     assert config.queue_workers.add_resource.file_operation_concurrency == 20
     assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
     assert config.queue_workers.session_commit.max_concurrent == 50
@@ -173,7 +176,7 @@ def test_runtime_concurrency_accepts_separate_values():
 @pytest.mark.parametrize("value", [0, -1])
 def test_queue_worker_concurrency_rejects_non_positive_value(value):
     with pytest.raises(ValueError) as exc_info:
-        QueueWorkersConfig(add_resource={"max_concurrent": value})
+        QueueWorkersConfig(reindex={"max_concurrent": value})
 
     assert exc_info.value.errors()[0]["type"] == "greater_than"
 
