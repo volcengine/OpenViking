@@ -108,6 +108,67 @@ async def test_reindex_processor_terminalizes_root_after_descendants(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_reindex_processor_restores_root_telemetry_for_executor(monkeypatch):
+    from openviking.storage.queuefs.reindex_processor import ReindexProcessor
+    from openviking.telemetry import (
+        OperationTelemetry,
+        get_current_telemetry,
+        register_telemetry,
+        unregister_telemetry,
+    )
+
+    tracker = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.RUNNING)),
+        start=AsyncMock(),
+        complete=AsyncMock(),
+        fail=AsyncMock(),
+        wait_for_descendants=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.reindex_processor.get_task_tracker", Mock(return_value=tracker)
+    )
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: SimpleNamespace(_vlm_resolver=None, _vector_config_resolver=None),
+    )
+    telemetry = OperationTelemetry(operation="content_reindex", enabled=True)
+    telemetry_id = telemetry.telemetry_id
+    register_telemetry(telemetry)
+    seen = {}
+
+    async def capture_telemetry(_self, **_kwargs):
+        seen["telemetry_id"] = get_current_telemetry().telemetry_id
+        return {"status": "completed"}
+
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.ReindexExecutor._run",
+        capture_telemetry,
+    )
+    processor = ReindexProcessor(
+        SimpleNamespace(_async_agfs=SimpleNamespace(pathlock_release=AsyncMock()))
+    )
+    processor._adopt_or_reacquire = AsyncMock(return_value={"lease": "root"})
+    message = ReindexMsg(
+        task_id="task-1",
+        uri="viking://resources/demo",
+        object_type="resource",
+        mode="semantic_and_vectors",
+        account_id="account-1",
+        user_id="user-1",
+        role="admin",
+        telemetry_id=telemetry_id,
+    )
+
+    try:
+        outcome = await processor.on_dequeue({"id": "queue-1", "data": message.to_dict()})
+    finally:
+        unregister_telemetry(telemetry_id)
+
+    assert outcome.outcome.value == "success"
+    assert seen["telemetry_id"] == telemetry_id
+
+
+@pytest.mark.asyncio
 async def test_reindex_processor_replay_of_completed_task_skips_force_rebuild(monkeypatch):
     from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 

@@ -13,6 +13,13 @@ from openviking.service.task_work_index import bind_task_context, extract_task_m
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.reindex_msg import ReindexMsg
+from openviking.telemetry import (
+    OperationTelemetry,
+    bind_telemetry,
+    register_telemetry,
+    resolve_telemetry,
+    unregister_telemetry,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
@@ -85,6 +92,7 @@ class ReindexProcessor(DequeueHandlerBase):
             TaskStatus.FAILED,
             TaskStatus.CANCELLED,
         }:
+            unregister_telemetry(msg.telemetry_id or "")
             return ProcessResult.success()
         lease = None
         try:
@@ -98,7 +106,18 @@ class ReindexProcessor(DequeueHandlerBase):
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
             )
+            unregister_telemetry(msg.telemetry_id or "")
             return ProcessResult.failed(f"Invalid lock_handoff: {exc}")
+
+        telemetry_id = msg.telemetry_id or ""
+        telemetry = resolve_telemetry(telemetry_id) if telemetry_id else None
+        if telemetry is None:
+            telemetry = OperationTelemetry(operation="reindex_job", enabled=True)
+            if telemetry_id:
+                telemetry.telemetry_id = telemetry_id
+            else:
+                telemetry_id = telemetry.telemetry_id
+            register_telemetry(telemetry)
         try:
             await tracker.start(
                 msg.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id, stage="queued"
@@ -111,7 +130,10 @@ class ReindexProcessor(DequeueHandlerBase):
                 vlm_resolver=service._vlm_resolver,
                 vector_config_resolver=service._vector_config_resolver,
             )
-            with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
+            with (
+                bind_telemetry(telemetry),
+                bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id),
+            ):
                 # _run owns an existing lease and releases or hands it off on
                 # every exit path. Clear this consumer's reference before the
                 # call so an exception cannot release the same lease twice.
@@ -143,6 +165,7 @@ class ReindexProcessor(DequeueHandlerBase):
         finally:
             if lease is not None:
                 await self._viking_fs._async_agfs.pathlock_release(lease)
+            unregister_telemetry(telemetry_id)
 
     async def on_cancelled(self, data: Optional[Dict[str, Any]]) -> ProcessResult:
         """Release the root lock handoff before QueueFS ACKs cancelled work."""
