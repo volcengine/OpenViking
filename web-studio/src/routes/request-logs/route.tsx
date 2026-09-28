@@ -54,6 +54,8 @@ function RequestLogsRoute() {
 
   const logs = zeroResult ? [] : (audit.data?.items ?? [])
   const disabled = audit.data?.enabled === false
+  const hasMetrics =
+    zeroResult || (!isConnectionRoleLoading && audit.isSuccess && !disabled)
   const total = zeroResult ? 0 : (audit.data?.total ?? 0)
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const identityParts = [connection.accountId, connection.userId].filter(
@@ -110,12 +112,16 @@ function RequestLogsRoute() {
           <div className="grid gap-3 md:grid-cols-2">
             <MetricCard
               label={t('metrics.total')}
-              value={total >= 1000 ? '999+' : total}
+              value={hasMetrics ? (total >= 1000 ? '999+' : total) : '—'}
               icon={<ActivityIcon className="size-4" />}
             />
             <MetricCard
               label={t('metrics.successRate')}
-              value={formatPercent(zeroResult ? 0 : audit.data?.success_rate)}
+              value={
+                hasMetrics
+                  ? formatPercent(zeroResult ? 0 : audit.data?.success_rate)
+                  : '—'
+              }
               icon={<BarChart3Icon className="size-4" />}
             />
           </div>
@@ -127,7 +133,9 @@ function RequestLogsRoute() {
             filters={filters}
             isError={audit.isError}
             isFetching={audit.isFetching}
-            isLoading={isConnectionRoleLoading || audit.isLoading}
+            isLoading={
+              isConnectionRoleLoading || (!zeroResult && audit.isPending)
+            }
             logs={logs}
             onDraftFiltersChange={setDraftFilters}
             onLogTypeChange={handleLogTypeChange}

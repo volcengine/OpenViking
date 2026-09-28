@@ -3,12 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchAgentEvolutionStatus,
   fetchExperiences,
+  searchExperiences,
   setAgentEvolutionEnabled,
 } from './api'
 
-const { get, patch } = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn() }))
+const { get, patch, post } = vi.hoisted(() => ({
+  get: vi.fn(),
+  patch: vi.fn(),
+  post: vi.fn(),
+}))
 vi.mock('#/lib/ov-client', () => ({
-  ovClient: { client: { get, patch } },
+  ovClient: { client: { get, patch, post } },
   getOvResult: (result: unknown) => result,
   isOvClientError: () => false,
 }))
@@ -78,6 +83,43 @@ describe('experience listing server pagination', () => {
       pageSize: 50,
     })
     expect(result).toEqual({ items: [], hasMore: false, page: 3, pageSize: 50 })
+  })
+})
+
+describe('experience search', () => {
+  beforeEach(() => post.mockReset())
+
+  it('searches the experience directory with find and returns direct files without pagination', async () => {
+    post.mockResolvedValue({
+      memories: [
+        { uri: `${experiencesUri}/matching.md` },
+        { uri: `${experiencesUri}/nested/other.md` },
+        { uri: 'viking://user/other/memories/experiences/leak.md' },
+      ],
+    })
+    const signal = new AbortController().signal
+    const result = await searchExperiences({
+      experiencesUri,
+      keyword: 'matching',
+      signal,
+    })
+    expect(post).toHaveBeenCalledWith({
+      url: '/api/v1/search/find',
+      body: {
+        query: 'matching',
+        target_uri: experiencesUri,
+        context_type: 'memory',
+        level: 2,
+        limit: 100,
+      },
+      signal,
+    })
+    expect(result).toEqual({
+      items: [file('matching.md')],
+      hasMore: false,
+      page: 1,
+      pageSize: 1,
+    })
   })
 })
 

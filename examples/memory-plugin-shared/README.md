@@ -1,7 +1,12 @@
 # Memory Plugin Shared Library
 
-This directory contains shared JavaScript modules that are vendored into the
-Claude Code, Codex, OpenCode, and pi memory plugins by `sync.mjs`.
+For contributor guidance on adding and maintaining hook + MCP integrations, see the [Agent plugin development and maintenance standard](../../docs/en/agent-integrations/18-plugin-development.md) ([中文](../../docs/zh/agent-integrations/18-plugin-development.md)). When using a coding agent, have it read and follow this standard before making changes.
+
+This directory contains shared JavaScript modules. `sync.mjs` vendors each module into the plugins whose code imports it — Claude Code, Codex, OpenCode, dsh, pi, openclaw and the bundled `agent-plugins` servers — together with the matching `lib/*.d.mts` declaration for the targets written in TypeScript. cursor, trae, trae-cn and zcode vendor nothing: the installer copies the modules `lib/MANIFEST` names — the same sync writes it — to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`, and they import it from there.
+
+`lib/install/` is the exception: it holds the installer's own JavaScript — the JSONC editor OpenCode's config needs and the hooks/mcp merge cursor, trae, trae-cn and zcode install through — which runs from `install.sh` and never from a hook. No shared module imports it, so it stays out of every closure and out of `lib/MANIFEST`.
+
+When the copies are made follows how the plugin is delivered. Claude Code, Codex and `agent-plugins` are installed by pointing a host at a directory in this repository, so their copies are committed and a push to main regenerates them. OpenCode, dsh and openclaw publish as npm packages and pi is tarred by the installer, so those build their copies at pack time and keep none in git — run `node examples/memory-plugin-shared/sync.mjs` once in a fresh checkout before running their tests.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
 > caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
@@ -36,7 +41,7 @@ Every clone of one repository therefore shares one peer: project memory follows 
 
 Resolution order is:
 
-1. Explicit peer: `OPENVIKING_PEER_ID`, `peer.id` in a workspace layer, `actor_peer_id` / `peer_id` in `ovcli.conf`, or the harness-specific legacy peer config.
+1. Explicit peer: `OPENVIKING_PEER_ID`, then `peer.id` in a workspace layer or `peerId` in `ovcli.conf`'s `plugin` section, then `actor_peer_id` / `peer_id` in `ovcli.conf`, then the harness's own section of `ov.conf`.
 2. The peer derived by `peer.source`, when `workspacePeer` is not `false`.
 3. No peer.
 
@@ -58,6 +63,12 @@ For deployments where one bot serves multiple real people, such as zouk,
 vikingbot, or AstrBot, configure an explicit actor peer and use the isolation
 mode so one person's memories are not recalled into another person's session.
 
+## Skill Catalog
+
+`lib/profile-inject.mjs` ends the session-start block with `<available-skills>`, built from one `GET /api/v1/skills?node_limit=200`, which caps each root rather than the merged list: the user's own skills first, then the ones shared under `viking://agent/skills` (a shared skill whose name the user also owns is left out), each description cut to about 40 tokens. Nothing trims the list again on this side; the token budget decides what fits. Callers turn it on by passing their resolved config as `buildProfileBlock()`'s fourth argument, and claude-code, codex, cursor, trae, trae-cn, zcode, opencode, dsh and pi all do, so they build it the same way; openclaw and hermes inject no profile, and `pi-experimental-context-management` calls `buildProfileBlock()` without that argument.
+
+`skillCatalog` (default `true`, `OPENVIKING_SKILL_CATALOG`) switches it, and `skillCatalogTokenBudget` (default `1200`, range 0-20000, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`) sizes it on its own, apart from `profileTokenBudget`; a budget of `0` also switches it off. When the descriptions do not fit, the block lists names only, ending with a `... +N more` tail if even the names do not all fit; when not even one name fits, it becomes a one-line count. With no skills, or a server without the endpoint, there is no block.
+
 ## Workspace Configuration
 
 `lib/workspace-config.mjs` and `lib/workspace-registry.mjs` give a repository three configuration layers of its own: `<repo-root>/.openviking/config.json`, which the team commits, `<repo-root>/.openviking/config.local.json`, which stays private and gitignored, and a per-machine entry at `~/.openviking/workspaces/<slot>.json`. Precedence, highest first:
@@ -68,11 +79,33 @@ mode so one person's memories are not recalled into another person's session.
 4. `.openviking/config.json`
 5. `ovcli.conf` `plugin.<harness>`
 6. `ovcli.conf` `plugin`
-7. the harness block in `ov.conf` (legacy)
+7. the block in `ov.conf` named after the harness (legacy). Both its credential fields and its tuning knobs reach every harness, and for dsh it sits under the settings the cordis host hands the plugin
 8. built-in defaults
+
+Every harness resolves every knob through that order: claude-code, codex, cursor, trae, trae-cn, zcode, opencode, dsh and pi. One `plugin` section therefore configures all of them, and `ov config switch` moves behaviour along with credentials. Inside `plugin`, a per-harness override is found under either spelling of the harness name, so `claude_code` and `claude-code`, `trae_cn` and `trae-cn` both reach the same object.
+
+The knobs themselves are declared once in `lib/config-schema.mjs`, with each one's type, default, range, `OPENVIKING_*` variable and older spellings. An older spelling keeps working: `syncTurns` sets `autoCapture`, `bypassPatterns` sets `bypassSessionPatterns`, `recallRewrite` sets `recallCompress`, `requestTimeoutMs` sets `timeoutMs`, `recallBudget` sets `recallTokenBudget`, `recallScoreThreshold` sets `scoreThreshold`, `recallMinQueryLength` sets `minQueryLength`, `profileBudget` sets `profileTokenBudget`, `recallCompressReasoningEffort` sets `recallCompressThinking`, `auth_mode` sets `authMode`, and `peer_id` sets `peerId`.
 
 Every file declares `version: 1`; one declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` clears what was inherited. Unknown keys are kept and ignored.
 
 Workspace files are trusted without a prompt: a hook is non-interactive, and an approval gate would degrade into one command per workspace. What is refused instead is structural — connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in these files. What a committed file switches off is announced in `ov-memory-doctor` rather than blocked.
 
 `.gitignore` must not ignore all of `.openviking/`, or `config.json` can never be committed. Narrow the rule to `.openviking/media/` and `.openviking/downloads/`; doctor warns while it is still blanket.
+
+## Cloud recall compression
+
+`OPENVIKING_RECALL_COMPRESS=server` enables cloud compression across Claude Code,
+Codex, OpenCode, DSH, Pi, the Cursor/Trae/Trae CN/ZCode hooks, OpenClaw, and Hermes.
+The context-search request sends `rewrite: true`; the server digest is preferred
+over raw rendered context, and `stats.rewrite: "no_relevant"` suppresses injection.
+
+Claude Code and Codex also support `client` for local-only compression. Their
+`auto` mode uses local compression when available and otherwise sends
+`rewrite: "auto"`. Harnesses without local compressors send `rewrite: "auto"`
+directly. Their existing default remains `off`; cloud compression is opt-in.
+`off` omits rewrite. The legacy boolean aliases `1` and `0` mean `auto` and `off`.
+
+These settings apply to automatic recall. Explicit MCP search calls retain the
+arguments supplied by the caller. Cloud compression requires a server that
+supports the context-search rewrite API; older-server fallback behavior remains
+specific to each integration.

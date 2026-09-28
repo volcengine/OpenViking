@@ -184,6 +184,7 @@ async def test_media_concurrency_bounds_staging_and_inference(monkeypatch):
                 f"viking://resources/video/clip-{index}.mp4",
                 f"clip-{index}.mp4",
                 llm_sem=asyncio.Semaphore(64),
+                vlm=config_vlm,
             )
         )
         for index in range(4)
@@ -220,6 +221,7 @@ async def test_image_summary_downsamples_large_model_input(monkeypatch):
     result = await media_utils.generate_image_summary(
         "viking://resources/docs/large.jpg",
         "large.jpg",
+        vlm=vlm,
     )
 
     assert result == {"name": "large.jpg", "summary": "image summary"}
@@ -248,6 +250,7 @@ async def test_unknown_size_media_stops_at_hard_staging_limit(
     result = await media_utils.generate_video_summary(
         "viking://resources/video/unknown-size.mp4",
         "unknown-size.mp4",
+        vlm=client,
     )
 
     assert result == {
@@ -272,6 +275,7 @@ async def test_media_summary_stat_skips_directory_vector_count(monkeypatch):
     await media_utils.generate_video_summary(
         "viking://resources/video/clip.mp4",
         "clip.mp4",
+        vlm=client,
     )
 
     fs.stat.assert_awaited_once_with(
@@ -298,6 +302,7 @@ async def test_success_normalizes_markdown_and_filename_heading(
     result = await media_utils.generate_video_summary(
         "viking://resources/video/quarterly.mov",
         "quarterly.mov",
+        vlm=client,
     )
 
     assert result["summary"].startswith("# quarterly\n\nA useful overview paragraph.")
@@ -323,6 +328,7 @@ async def test_provider_failure_returns_empty_summary(monkeypatch):
     result = await media_utils.generate_video_summary(
         "viking://resources/video/clip.mp4",
         "clip.mp4",
+        vlm=client,
     )
 
     assert result == {"name": "clip.mp4", "summary": ""}

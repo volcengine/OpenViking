@@ -1,25 +1,31 @@
 {
   "name": "@openviking/dsh-memory-plugin",
-  "version": "0.3.1",
+  "version": "0.5.8",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
+  "icon": "./icon.svg",
   "type": "module",
   "main": "index.mjs",
   "exports": {
-    ".": "./index.mjs"
+    ".": "./index.mjs",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
+    "icon.svg",
     "index.mjs",
     "client.mjs",
     "config.mjs",
     "capture.mjs",
     "lifecycle.mjs",
     "mcp.mjs",
+    "mcp-env.mjs",
     "runtime.mjs",
     "skills.mjs",
     "uri-guard.mjs",
     "servers/",
     "shared/",
     "skills/",
+    "locale/",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -29,21 +35,23 @@
     }
   },
   "scripts": {
+    "prepack": "node ../memory-plugin-shared/sync.mjs",
     "check": "for f in *.mjs shared/*.mjs; do node --check \"$f\" || exit 1; done && npm run check:version",
     "check:version": "node --input-type=module -e \"import {readFileSync} from 'node:fs'; const {PLUGIN_VERSION} = await import('./config.mjs'); const v = JSON.parse(readFileSync('package.json','utf8')).version; if (PLUGIN_VERSION !== v) throw new Error('PLUGIN_VERSION ' + PLUGIN_VERSION + ' does not match package.json version ' + v);\"",
     "test": "node --test *.test.mjs",
-    "prepublishOnly": "npm run check && npm test"
+    "prepublishOnly": "npm run prepack && npm run check && npm test"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.2.0",
-    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.6 <0.2.0",
-    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.0-rc.6 <0.2.0"
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2",
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.0-rc.6 <0.2.0 || ^0.1.5-rc.1 || ^0.1.7-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
     "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
     "@deepseek-ai/dsh-skill-filesystem": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "semver": "7.8.5"
   },
   "overrides": {
     "@deepseek-ai/dsh-agent": "0.1.0-rc.6",

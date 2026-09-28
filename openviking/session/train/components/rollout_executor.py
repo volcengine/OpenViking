@@ -10,11 +10,11 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from openviking.config.vlm import VLMResolver
 from openviking.message import Message, TextPart
 from openviking.session.train.context import ExecutionContext
 from openviking.session.train.domain import Case, ExperienceSet, Rollout
 from openviking.telemetry import tracer
-from openviking_cli.utils.config import get_openviking_config
 
 PromptBuilder = Callable[[Case, ExperienceSet, ExecutionContext], str]
 
@@ -31,6 +31,7 @@ class SingleTurnLLMRolloutExecutor:
     vlm: Any = None
     prompt_builder: PromptBuilder | None = None
     thinking: bool | None = None
+    vlm_resolver: VLMResolver | None = None
 
     @tracer("train.rollout_executor.single_turn.execute", ignore_result=True, ignore_args=True)
     async def execute(
@@ -39,7 +40,28 @@ class SingleTurnLLMRolloutExecutor:
         policy_set: ExperienceSet,
         context: ExecutionContext,
     ) -> list[Rollout]:
-        vlm = self.vlm or get_openviking_config().vlm
+        vlm = self.vlm
+        if vlm is None:
+            from openviking.service.task_work_index import get_task_context
+
+            task_context = get_task_context()
+            policy_context = getattr(policy_set, "request_context", None)
+            account_id = (
+                getattr(policy_context, "account_id", None)
+                or context.metadata.get("account_id")
+                or (task_context.account_id if task_context is not None else None)
+            )
+            if self.vlm_resolver is None:
+                raise RuntimeError(
+                    "SingleTurnLLMRolloutExecutor requires an explicitly resolved "
+                    "VLM or VLM resolver"
+                )
+            if not account_id:
+                raise RuntimeError(
+                    "SingleTurnLLMRolloutExecutor requires account_id when using "
+                    "a VLM resolver"
+                )
+            vlm = await self.vlm_resolver.get_vlm(str(account_id))
         rollouts: list[Rollout] = []
         for case in cases:
             prompt = self._build_prompt(case, policy_set, context)

@@ -16,7 +16,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
-    create_default_registry,
+    get_default_registry,
 )
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
 from openviking.session.memory.schema_model_generator import (
@@ -83,7 +83,7 @@ class TestSchemaModelGenerator:
     @pytest.fixture
     def real_registry(self):
         """Create a registry with real schemas."""
-        return create_default_registry()
+        return get_default_registry()
 
 
     def test_peer_enabled_false_omits_peer_id_field(self):

@@ -60,6 +60,8 @@ def serializable(cls):
     Optional field metadata:
         - field_type: Override the auto-inferred type with FieldType enum (e.g., FieldType.int64 vs FieldType.uint64)
         - default_value: Override the default value
+        - legacy_field_type: Read unversioned STRING records after upgrading a
+          field to TEXT. BytesRow writes and reads the versioned format directly.
 
     Example:
         @serializable
@@ -99,6 +101,9 @@ def serializable(cls):
         # Optional default value override
         if f.metadata and "default_value" in f.metadata:
             field_def["default_value"] = f.metadata["default_value"]
+
+        if "legacy_field_type" in f.metadata:
+            field_def["legacy_data_type"] = f.metadata["legacy_field_type"]
 
         field_list.append(field_def)
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Any
 
 from openviking.metrics.core.base import ReadEnvelope
-from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import run_async
 
 from .base import DomainStatsMetricDataSource, StateMetricDataSource
@@ -57,33 +56,6 @@ class ObserverStateDataSource(DomainStatsMetricDataSource):
             return self.as_dict(components)
 
         return self.safe_read(_read, default={})
-
-
-class LockStateDataSource(StateMetricDataSource):
-    """
-    Read lock-manager counters from the pathlock observe snapshot.
-
-    The datasource reads the ``pathlock_observe()`` snapshot to derive active,
-    waiting, and stale lock counts.
-    """
-
-    def read_lock_state(self) -> ReadEnvelope[tuple[int, int, int]]:
-        """
-        Read active, waiting, and stale lock counts from the pathlock observe snapshot.
-
-        Returns:
-            A tuple of ``(active_locks, waiting_locks, stale_locks_removed)``.
-        """
-
-        def _read() -> tuple[int, int, int]:
-            viking_fs = get_viking_fs()
-            snapshot = run_async(viking_fs._async_agfs.pathlock_observe())
-            active = int(snapshot.get("active_locks", 0))
-            waiting = int(snapshot.get("waiting_locks", 0))
-            stale = int(snapshot.get("stale_locks_removed", 0))
-            return active, waiting, stale
-
-        return self.safe_read(_read, default=(0, 0, 0))
 
 
 class VikingDBStateDataSource(StateMetricDataSource):

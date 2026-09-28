@@ -290,16 +290,16 @@ for (let i = 0; i < argv.length; i++) {
   if (arg === "--peer-role") {
     const val = argv[i + 1]?.trim();
     if (!val) { console.error("--peer-role requires a value"); process.exit(1); }
-    const role = normalizePeerRole(val);
-    if (!role) { console.error('--peer-role must be "none", "assistant", or "sender" (legacy alias: "person")'); process.exit(1); }
+    const role = normalizePeerRoleInput(val);
+    if (!role) { console.error('--peer-role must be "none", "assistant", or "sender" ("person" was renamed to "sender")'); process.exit(1); }
     remotePeerRole = role;
     peerRoleExplicit = true;
     i += 1;
     continue;
   }
   if (arg.startsWith("--peer-role=")) {
-    const role = normalizePeerRole(arg.slice("--peer-role=".length));
-    if (!role) { console.error('--peer-role must be "none", "assistant", or "sender" (legacy alias: "person")'); process.exit(1); }
+    const role = normalizePeerRoleInput(arg.slice("--peer-role=".length));
+    if (!role) { console.error('--peer-role must be "none", "assistant", or "sender" ("person" was renamed to "sender")'); process.exit(1); }
     remotePeerRole = role;
     peerRoleExplicit = true;
     continue;
@@ -343,6 +343,10 @@ for (let i = 0; i < argv.length; i++) {
   }
 }
 
+if (remotePeerRole === "person") {
+  console.error('OPENVIKING_PEER_ROLE must be "none", "assistant", or "sender" ("person" was renamed to "sender")');
+  process.exit(1);
+}
 remotePeerRole = normalizePeerRole(remotePeerRole) || "none";
 if (!isValidPeerPrefixInput(remotePeerPrefix)) {
   console.error("--peer-prefix may only contain letters, digits, underscores, and hyphens");
@@ -373,7 +377,7 @@ function printHelp() {
   console.log("  --uninstall, --remove    Uninstall OpenViking plugin from OpenClaw (backup config, remove plugin entries)");
   console.log("  --base-url=URL           OpenViking server URL (default: $OPENVIKING_BASE_URL or http://127.0.0.1:1933)");
   console.log("  --api-key=KEY            OpenViking API key (default: $OPENVIKING_API_KEY)");
-  console.log("  --peer-role=ROLE         Memory scope: none (shared), assistant (per assistant), sender (per sender); person is a legacy alias (default: $OPENVIKING_PEER_ROLE or none)");
+  console.log("  --peer-role=ROLE         Memory scope: none (shared), assistant (per assistant), sender (per sender) (default: $OPENVIKING_PEER_ROLE or none)");
   console.log("  --peer-prefix=PREFIX     Prefix for assistant peer_id values (default: $OPENVIKING_PEER_PREFIX)");
   console.log("  --account-id=ID          Account ID for root API key (default: $OPENVIKING_ACCOUNT_ID)");
   console.log("  --user-id=ID             User ID for root API key (default: $OPENVIKING_USER_ID)");
@@ -525,6 +529,12 @@ function normalizePeerRole(value) {
   return role === "none" || role === "assistant" || role === "sender" ? role : null;
 }
 
+// `person` survives only in existing configs; installer input must say `sender`.
+function normalizePeerRoleInput(value) {
+  const role = String(value || "").trim().toLowerCase();
+  return role === "person" ? null : normalizePeerRole(role);
+}
+
 function parseJsonObjectFromOutput(output) {
   const text = String(output || "").trim();
   if (!text) return null;
@@ -550,21 +560,21 @@ async function questionPeerRole(defaultValue = "none") {
   info(tr(
     "Memory scope — none (default): viking://user/<user_id>/memories, shared across all conversations; "
       + "assistant: viking://user/<user_id>/peers/<assistant_id>/memories; "
-      + "sender: viking://user/<user_id>/peers/<sender_id>/memories (legacy alias: person).",
+      + "sender: viking://user/<user_id>/peers/<sender_id>/memories.",
     "记忆归属 —— none（默认）：viking://user/<user_id>/memories，所有对话共享；"
       + "assistant：viking://user/<user_id>/peers/<assistant_id>/memories；"
-      + "sender：viking://user/<user_id>/peers/<sender_id>/memories（兼容旧值 person）。",
+      + "sender：viking://user/<user_id>/peers/<sender_id>/memories。",
   ));
   while (true) {
     const answer = await question(
       tr("Memory scope (none/assistant/sender)", "记忆归属（none/assistant/sender）"),
       defaultValue,
     );
-    const role = normalizePeerRole(answer);
+    const role = normalizePeerRoleInput(answer);
     if (role) return role;
     warn(tr(
-      'Memory scope must be "none", "assistant", or "sender" (legacy "person" is also accepted).',
-      '记忆归属必须是 "none"、"assistant" 或 "sender"（也兼容旧值 "person"）。',
+      'Memory scope must be "none", "assistant", or "sender" ("person" was renamed to "sender").',
+      '记忆归属必须是 "none"、"assistant" 或 "sender"（"person" 已更名为 "sender"）。',
     ));
   }
 }

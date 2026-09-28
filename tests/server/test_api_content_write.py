@@ -77,6 +77,13 @@ async def test_write_allows_existing_semantic_sidecar_but_rejects_relations(clie
     )
     assert overview_resp.status_code == 200
 
+    malformed_resp = await client.post(
+        "/api/v1/content/write",
+        json={"uri": f"{uri}/.overview.md", "content": "---\n"},
+    )
+    assert malformed_resp.status_code == 400
+    assert malformed_resp.json()["error"]["code"] == "INVALID_ARGUMENT"
+
     relations_resp = await client.post(
         "/api/v1/content/write",
         json={"uri": f"{uri}/.relations.json", "content": "new content"},

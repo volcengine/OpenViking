@@ -71,11 +71,11 @@ def _user_config_from_payload(payload: Any) -> UserConfig:
 def validate_user_memory_policy(memory_policy: Optional[dict[str, Any]]) -> None:
     if memory_policy is None:
         return
-    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+    from openviking.session.memory.memory_type_registry import get_default_registry
     from openviking.session.memory_policy import MemoryPolicy
 
     MemoryPolicy.from_dict(memory_policy).validate_memory_types(
-        set(MemoryTypeRegistry().list_names(include_disabled=False))
+        set(get_default_registry().list_names(include_disabled=False))
     )
 
 

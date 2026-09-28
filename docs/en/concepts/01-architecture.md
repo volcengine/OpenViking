@@ -26,7 +26,7 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 │    │  Retrieve   │          │   Session   │          │    Parse    │      │
 │    │  (Context   │          │  (Session   │          │  (Context   │      │
 │    │  Retrieval) │          │  Management)│          │  Extraction)│      │
-│    │ search/find │          │ add/used    │          │ Doc parsing │      │
+│    │ search/find │          │ add         │          │ Doc parsing │      │
 │    │ Intent      │          │ commit      │          │ L0/L1/L2    │      │
 │    │ Rerank      │          │ commit      │          │ Tree build  │      │
 │    └──────┬──────┘          └──────┬──────┘          └──────┬──────┘      │

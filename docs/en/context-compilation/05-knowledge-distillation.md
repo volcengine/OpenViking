@@ -23,14 +23,14 @@ Skill source: [examples/compile/ov-compile-skills/knowledge-distillation](https:
 ## Step 1: Prepare the sources
 
 ```bash
-ov add-resource ./finance-reports --to viking://resources/finance-reports --wait
+ov add-resource ./finance-reports --to viking://resources/finance-reports
 ov ls -r viking://resources/finance-reports
 ```
 
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-distillation --wait
+ov add-skill examples/compile/ov-compile-skills/knowledge-distillation
 ov skills list
 # → viking://agent/skills/knowledge-distillation  (or viking://user/<user_name>/skills/knowledge-distillation)
 ```

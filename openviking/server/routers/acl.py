@@ -1,9 +1,7 @@
 """ACL endpoints."""
 
-from typing import Literal
-
 from fastapi import APIRouter, Body, Depends, Query
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -11,7 +9,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking.storage.acl import AclLevel, AclMode
+from openviking.storage.acl import AclLevel, AclSpec
 
 router = APIRouter(prefix="/api/v1/acl", tags=["acl"])
 
@@ -20,21 +18,8 @@ class _AclRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class AclEntryRequest(_AclRequest):
-    principal: str
-    level: AclLevel
-
-
-class SetAclRequest(_AclRequest):
+class SetAclRequest(AclSpec):
     uri: str
-    entries: list[AclEntryRequest] | None = None
-    acl_mode: Literal[AclMode.INHERIT, AclMode.RESTRICTED] | None = None
-
-    @model_validator(mode="after")
-    def require_acl_update(self) -> "SetAclRequest":
-        if self.entries is None and self.acl_mode is None:
-            raise ValueError("entries or acl_mode must be provided")
-        return self
 
 
 class GrantAclRequest(_AclRequest):
@@ -66,11 +51,7 @@ async def set_acl(
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     result = await get_service().fs.set_acl(
         uri,
-        (
-            [entry.model_dump() for entry in request.entries]
-            if request.entries is not None
-            else None
-        ),
+        ([entry.to_dict() for entry in request.entries] if request.entries is not None else None),
         acl_mode=request.acl_mode,
         ctx=_ctx,
     )

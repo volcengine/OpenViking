@@ -21,14 +21,14 @@ Skill source: [examples/compile/ov-compile-skills/knowledge-graph](https://githu
 ## Step 1: Prepare the sources
 
 ```bash
-ov add-resource ./journal-to-the-west --to viking://resources/journal --wait
+ov add-resource ./journal-to-the-west --to viking://resources/journal
 ov ls -r viking://resources/journal
 ```
 
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-graph --wait
+ov add-skill examples/compile/ov-compile-skills/knowledge-graph
 ov skills list
 # → viking://agent/skills/knowledge-graph
 ```

@@ -24,9 +24,20 @@ def _processor(monkeypatch, resource: LocalResource) -> UnifiedResourceProcessor
 
 
 @pytest.mark.asyncio
-async def test_prepare_rejects_and_cleans_up_a_temporary_empty_file(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("content", "reject"),
+    [
+        (b"", True),
+        (b"\n", True),
+        (b" \t\r\n" * 4096, True),
+        (b" \t\r\n" * 4096 + b"key=value\n", False),
+    ],
+)
+async def test_prepare_rejects_and_cleans_up_a_temporary_empty_file(
+    monkeypatch, tmp_path, content, reject
+):
     downloaded = tmp_path / "tmp9f3a21"
-    downloaded.write_bytes(b"")
+    downloaded.write_bytes(content)
     resource = LocalResource(
         path=downloaded,
         source_type=SourceType.HTTP,
@@ -35,6 +46,11 @@ async def test_prepare_rejects_and_cleans_up_a_temporary_empty_file(monkeypatch,
         is_temporary=True,
     )
     processor = _processor(monkeypatch, resource)
+
+    if not reject:
+        assert await processor.prepare(resource.original_source) is resource
+        assert downloaded.read_bytes() == content
+        return
 
     with pytest.raises(InvalidArgumentError) as excinfo:
         await processor.prepare("https://example.com/quarterly-report.pdf")

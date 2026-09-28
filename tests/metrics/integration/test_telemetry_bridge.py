@@ -3,7 +3,32 @@
 
 from openviking.metrics.datasources.telemetry_bridge import TelemetryBridgeEventDataSource
 from openviking.metrics.global_api import init_metrics_from_server_config, shutdown_metrics
+from openviking.observability.events import try_publish_event
 from openviking.server.config import MetricsConfig, ObservabilityConfig, ServerConfig
+
+
+def test_queue_duration_event_is_wired_to_metrics_registry(registry, render_prometheus):
+    init_metrics_from_server_config(
+        ServerConfig(observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))),
+        app=None,
+        registry=registry,
+    )
+    try:
+        try_publish_event(
+            "queue.processed",
+            {
+                "queue": "SessionCommit",
+                "outcome": "success",
+                "process_duration_seconds": 3.0,
+                "end_to_end_duration_seconds": 9.0,
+            },
+        )
+        text = render_prometheus(registry)
+        labels = 'outcome="success",queue="SessionCommit"'
+        assert f"openviking_queue_process_duration_seconds_count{{{labels}}} 1" in text
+        assert f"openviking_queue_end_to_end_duration_seconds_count{{{labels}}} 1" in text
+    finally:
+        shutdown_metrics()
 
 
 def test_telemetry_bridge_records_operation_and_resource_metrics(registry, render_prometheus):

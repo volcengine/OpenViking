@@ -15,27 +15,32 @@ from openviking.resource.feishu_watch_auth import (
     FeishuAppCredentials,
     FeishuOAuthClient,
     FeishuRefreshedToken,
+    FeishuTokenRefreshError,
     apply_feishu_refreshed_token,
     create_feishu_auth_state,
     feishu_auth_state_needs_refresh,
 )
+from openviking_cli.utils.config.parser_config import FeishuConfig
 
 
 def test_oauth_client_uses_watch_app_credentials(monkeypatch):
     seen = {}
 
-    def fake_load_credentials(*, app_id=None, app_secret=None):
-        seen.update(app_id=app_id, app_secret=app_secret)
+    def fake_load_credentials(*, config=None, app_id=None, app_secret=None):
+        seen.update(app_id=config.app_id, app_secret=config.app_secret)
         return FeishuAppCredentials(
-            app_id=app_id,
-            app_secret=app_secret,
+            app_id=config.app_id,
+            app_secret=config.app_secret,
             domain="https://open.feishu.cn",
             request_timeout=30,
         )
 
     monkeypatch.setattr(feishu_watch_auth, "load_feishu_app_credentials", fake_load_credentials)
 
-    client = FeishuOAuthClient.from_auth_state({"app_id": "cli-test", "app_secret": "secret-test"})
+    client = FeishuOAuthClient.from_auth_state(
+        {"app_id": "cli-test", "app_secret": "secret-test"},
+        config=FeishuConfig(),
+    )
 
     assert seen == {"app_id": "cli-test", "app_secret": "secret-test"}
     assert client._credentials.app_id == "cli-test"
@@ -62,6 +67,25 @@ def test_feishu_auth_state_refresh_window():
         "expires_at": (now + timedelta(minutes=4)).isoformat(),
     }
     assert feishu_auth_state_needs_refresh(near_expiry, now=now) is True
+
+
+def test_account_default_watch_state_does_not_pin_app_secret():
+    credentials = FeishuAppCredentials(
+        app_id="account-app",
+        app_secret="account-secret",
+        domain="https://open.feishu.cn",
+        request_timeout=30,
+    )
+
+    state = create_feishu_auth_state(
+        "u-token",
+        "r-token",
+        credentials,
+        persist_app_secret=False,
+    )
+
+    assert state["app_id"] == "account-app"
+    assert "app_secret" not in state
 
 
 @pytest.mark.parametrize(
@@ -114,6 +138,33 @@ def test_refresh_user_token_uses_oauth_v3_and_rotates_refresh_token(monkeypatch,
     )
 
 
+def test_refresh_user_token_marks_invalid_client_as_permanent(monkeypatch):
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda *_args, **_kwargs: httpx.Response(
+            401,
+            json={
+                "error": "invalid_client",
+                "error_description": "client authentication failed",
+            },
+        ),
+    )
+    client = FeishuOAuthClient(
+        FeishuAppCredentials(
+            app_id="old-app",
+            app_secret="new-app-secret",
+            domain="https://open.feishu.cn",
+            request_timeout=12,
+        )
+    )
+
+    with pytest.raises(FeishuTokenRefreshError, match="client authentication failed") as exc_info:
+        client._refresh_user_access_token_sync("header.payload.signature")
+
+    assert exc_info.value.permanent is True
+
+
 def test_refresh_user_token_keeps_legacy_endpoint_for_ur_tokens(monkeypatch):
     response = MagicMock()
     response.success.return_value = True
@@ -160,10 +211,14 @@ def test_refresh_user_token_keeps_legacy_endpoint_for_ur_tokens(monkeypatch):
 
 
 def test_get_tenant_access_token_uses_configured_app(monkeypatch):
+    from lark_oapi.core.token import TokenManager
+
+    monkeypatch.setattr(TokenManager, "cache", TokenManager.cache)
     seen = {}
 
     def fake_get_token(config):
         seen["config"] = config
+        seen["cache"] = TokenManager.cache
         return " t-test "
 
     monkeypatch.setattr(
@@ -184,3 +239,4 @@ def test_get_tenant_access_token_uses_configured_app(monkeypatch):
     assert seen["config"].app_secret == "secret-test"
     assert seen["config"].domain == "https://open.feishu.cn"
     assert seen["config"].timeout == 12
+    assert seen["cache"] is client._tenant_token_cache

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 package openviking
 
 import (
@@ -22,6 +25,7 @@ type Config struct {
 
 // AddResourceOptions controls AddResource.
 type AddResourceOptions struct {
+	ACL                 *ACLSpec
 	To                  string
 	Parent              string
 	CreateParent        *bool
@@ -154,6 +158,11 @@ type WaitProcessedOptions struct {
 	Timeout *float64 `json:"timeout,omitempty"`
 }
 
+// ObserverStatusOptions controls observer status formatting.
+type ObserverStatusOptions struct {
+	Format string
+}
+
 // ListWatchesOptions controls ListWatches.
 type ListWatchesOptions struct {
 	ActiveOnly bool
@@ -194,15 +203,19 @@ type ListOptions struct {
 
 // TreeOptions controls Tree.
 type TreeOptions struct {
-	Output        string
-	AbsLimit      int
-	ShowAllHidden bool
-	NodeLimit     int
-	LevelLimit    *int
-	Offset        int
-	Limit         int
-	Tags          []string
-	IncludeTags   bool
+	Output          string
+	AbsLimit        int
+	IncludeAbstract *bool
+	IncludeOverview *bool
+	OverviewLimit   int
+	ShowAllHidden   bool
+	DirectoriesOnly bool
+	NodeLimit       int
+	LevelLimit      *int
+	Offset          int
+	Limit           int
+	Tags            []string
+	IncludeTags     bool
 }
 
 // RemoveOptions controls Remove.
@@ -214,6 +227,7 @@ type RemoveOptions struct {
 
 // WriteOptions controls Write.
 type WriteOptions struct {
+	ACL            *ACLSpec
 	Mode           string
 	Wait           bool
 	Timeout        *float64

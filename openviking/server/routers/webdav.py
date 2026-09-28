@@ -18,7 +18,7 @@ from fastapi.responses import Response as FastAPIResponse
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.storage.internal_names import WEBDAV_RESERVED_FILENAMES
+from openviking.storage.internal_names import WEBDAV_RESERVED_FILENAMES, is_storage_internal_name
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils.uri import VikingURI
@@ -65,7 +65,7 @@ def _ensure_exposed_path(resource_path: str) -> None:
     if not resource_path:
         return
     parts = resource_path.split("/")
-    if any(part in WEBDAV_RESERVED_FILENAMES for part in parts):
+    if any(part in WEBDAV_RESERVED_FILENAMES or is_storage_internal_name(part) for part in parts):
         raise NotFoundError(resource_path, "resource")
 
 
@@ -199,7 +199,7 @@ def _exposed_child_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]
         name = str(entry.get("name", "") or "")
         if not name or name in {".", ".."}:
             continue
-        if name in WEBDAV_RESERVED_FILENAMES:
+        if name in WEBDAV_RESERVED_FILENAMES or is_storage_internal_name(name):
             continue
         exposed.append(entry)
     return exposed
@@ -234,14 +234,14 @@ async def propfind(
 
     entries = [_entry_from_stat(request, normalized_path, stat)]
     if _depth_header(request) > 0 and stat.get("isDir", False):
-        children = await service.fs.ls(
+        page = await service.fs.ls(
             uri,
             ctx=_ctx,
             output="original",
             show_all_hidden=True,
             node_limit=10000,
         )
-        for child in _exposed_child_entries(children):
+        for child in _exposed_child_entries(page.entries):
             child_name = str(child["name"])
             child_path = child_name if not normalized_path else f"{normalized_path}/{child_name}"
             entries.append(_entry_from_stat(request, child_path, child))

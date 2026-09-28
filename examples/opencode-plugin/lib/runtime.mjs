@@ -1,24 +1,17 @@
-import { log, makeToast, normalizeEndpoint } from "./utils.mjs"
+import { fetchJSON, getResponseErrorMessage, log, makeToast } from "./utils.mjs"
 
+// The probe used to send a User-Agent and nothing else, so a server that wants
+// a key reported itself as down and the plugin disabled itself on startup.
 export async function checkServiceHealth(config, timeoutMs = 3000) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const response = await fetch(`${normalizeEndpoint(config.endpoint)}/health`, {
-      method: "GET",
-      headers: config.userAgent ? { "User-Agent": config.userAgent } : undefined,
-      signal: controller.signal,
-    })
-    return response.ok
-  } catch (error) {
-    log("WARN", "health", "OpenViking health check failed", {
-      endpoint: config.endpoint,
-      error: error?.message,
-    })
-    return false
-  } finally {
-    clearTimeout(timeout)
-  }
+  const res = await fetchJSON(config, "/health", { method: "GET" }, { timeoutMs })
+  if (res.ok) return true
+
+  log("WARN", "health", "OpenViking health check failed", {
+    endpoint: config.endpoint,
+    status: res.status,
+    error: getResponseErrorMessage(res.error),
+  })
+  return false
 }
 
 export async function initializeRuntime(config, client) {

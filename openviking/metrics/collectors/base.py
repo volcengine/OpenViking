@@ -369,13 +369,14 @@ class DomainStatsMetricCollector(MetricCollector, Refreshable, ABC):
         """Return the collector category identifier."""
         return cls.KIND
 
-    def collect(self, registry) -> None:
+    def collect(self, registry) -> bool | None:
         """
         Read domain-statistics input and delegate metric emission through subclass hooks.
 
         Concrete domain collectors define how aggregate input is read and how it becomes
         registry output. Read failures are delegated to `collect_error_hook(...)` so collectors
         can emit stale/invalid gauges when that matches their contract.
+        Return None after completion; overrides may return False to report a skipped refresh.
         """
         writer = CollectorMetricWriter(registry)
         try:

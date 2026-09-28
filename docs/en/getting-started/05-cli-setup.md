@@ -2,7 +2,7 @@
 
 This guide helps you install the OpenViking CLI, configure it, and verify that it can connect to OpenViking.
 
-`ov` is the client CLI. It connects to an existing OpenViking server or to OpenViking Service (VolcEngine Cloud). It does not replace server setup. If you still need to install or start a custom OpenViking server, follow the [Quick Start](02-quickstart.md) or the [Server Mode guide](03-quickstart-server.md) first.
+`ov` is the client CLI. It connects to an existing OpenViking server or to OpenViking Service (VolcEngine Cloud). It does not replace server setup. If you still need to install or start a custom OpenViking server, follow the [Quick Start](02-quickstart.md) first.
 
 Use this page in either of two ways:
 
@@ -43,7 +43,7 @@ Choose this when you connect to a custom OpenViking server hosted somewhere othe
 
 - Server URL is provided by the user or server administrator.
 - API key may be required.
-- Root-key-only configs require `--account` and `--user`.
+- Root-key-only data access requires a `trusted` server and explicit `--account` and `--user`; `api_key` servers require a user/admin key for data access.
 
 ### Local Custom
 
@@ -53,7 +53,7 @@ Choose this only when the user wants to connect to a custom OpenViking server on
 - API key is usually not needed for a local unauthenticated server.
 - Agents should not probe local ports, curl local health endpoints, or start server commands unless the user chose local custom setup.
 
-> **Note:** Recent CLI versions (v0.3.23+) require a saved display language before most commands will run. In an interactive terminal the CLI prompts you on first use; in a non-interactive shell (agent or CI) any non-exempt command exits `2` until you run `ov language en` or `ov language zh-CN`. Only `ov language`/`ov lang`, `ov config add|edit|delete|list`, and `ov config switch <name>` are exempt, so run `ov language <code>` before the `ov config validate`, `ov health`, and `ov status` checks above.
+> **Note:** Recent CLI versions (v0.3.23+) require a saved display language before most commands will run. In an interactive terminal the CLI prompts you on first use; in a non-interactive shell (agent or CI) any non-exempt command exits `2` until you run `ov language en` or `ov language zh-CN`. Only `ov language`/`ov lang`, `ov config add|edit|delete|list`, and `ov config switch <name>` are exempt, so run `ov language <code>` before the `ov config validate`, `ov health`, and `ov status` checks below.
 
 ## Before You Start
 
@@ -98,13 +98,7 @@ Or build the Rust CLI from source:
 cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
-The npm package is the simplest standalone CLI install. If you also want the Python SDK or server package, the Python package exposes `ov` too:
-
-```bash
-uv tool install openviking --upgrade
-# or
-pip install openviking --upgrade --force-reinstall
-```
+The npm package is the simplest standalone CLI install. The Python SDK is a separate package — install `openviking-sdk` only where Python code imports it; it does not provide the `ov` command. If the machine already runs the server (`uv tool install openviking`), that install ships `ov` as well, so no extra CLI install is needed there.
 
 Verify:
 
@@ -125,7 +119,7 @@ On macOS and Linux, the global npm binary directory is usually `$(npm prefix -g)
 OpenViking CLI configs can hold a user key, a root key, or both.
 
 - User key: use this for normal data commands such as `ov add-resource`, `ov find`, and `ov tree`. The server derives the identity from the key, so you usually do not pass `--account` or `--user`. This is what most users want.
-- Root key: use this for admin work and commands that require `--sudo`. A root key has no built-in tenant identity. If a config only has a root key, it must also include `--account` and `--user`; that root key then serves normal commands for that identity and `--sudo` commands.
+- Root key: use this for admin work and commands that require `--sudo`. In `api_key` mode, root keys cannot access tenant data, even with `--account` and `--user`. Only a `trusted` server accepts those identity headers for root-key-authenticated data access.
 - User key plus root key: use this when the same config should support daily data work and occasional admin work. Normal commands use the user key. `--sudo` commands use the root key with the configured account and user.
 
 ## Manual Setup
@@ -284,7 +278,7 @@ For a local unauthenticated server:
 ov config add custom --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
-If the local server is not running, guide the user to start it first. See the [Server Mode guide](03-quickstart-server.md).
+If the local server is not running, guide the user to start it first. See the [Deployment Guide](../guides/03-deployment.md).
 
 ### Add a Remote Custom Server
 
@@ -302,13 +296,13 @@ printf '%s' "$API_KEY" | ov config add custom --name <CONFIG-NAME> --url <REMOTE
 
 Write the API key to stdin. If the key is already in the shell environment, use `--api-key-env <API-KEY-ENV-VAR>` instead.
 
-For a custom server where the user gives you only a root API key, include the target account and user:
+For a custom server in `trusted` mode, a root-only config must include the target account and user. For an `api_key` server, obtain a user/admin key for normal data commands instead:
 
 ```bash
 ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
-Write the root API key to stdin. Root keys require explicit `--account` and `--user` so normal CLI commands know which identity to use.
+Write the trusted deployment's root API key to stdin. The account and user identify the caller for trusted data requests.
 
 For a custom server where the user has both a user key and a root key, store both in one config:
 
@@ -431,7 +425,7 @@ Use this only when the user chose local custom setup. Then verify the server:
 curl http://127.0.0.1:1933/health
 ```
 
-If it fails, start the server before configuring `ov`. See the [Server Mode guide](03-quickstart-server.md).
+If it fails, start the server before configuring `ov`. See the [Deployment Guide](../guides/03-deployment.md).
 
 ### API Key Validation Fails
 

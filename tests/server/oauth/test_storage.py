@@ -301,7 +301,7 @@ async def test_access_token_expired_invisible(store):
 
 
 @pytest.mark.asyncio
-async def test_revoke_user_tokens_cascades(store):
+async def test_revoke_tokens_cascades(store):
     """Revoking a user wipes their access, refresh, and unused codes."""
     await store.insert_access(
         token_plain="at-1",
@@ -372,7 +372,7 @@ async def test_revoke_user_tokens_cascades(store):
         verified_key_fp=_FP_OTHER,
     )
 
-    counts = await store.revoke_user_tokens(account_id="acct", user_id="alice")
+    counts = await store.revoke_tokens(account_id="acct", user_id="alice")
     assert counts["access_tokens_revoked"] == 1
     assert counts["refresh_tokens_revoked"] == 1
     assert counts["codes_revoked"] == 1
@@ -384,6 +384,12 @@ async def test_revoke_user_tokens_cascades(store):
     assert await store.consume_auth_code("code-alice") is None
     assert await store.load_pending_authorization(alice_pending) is None
     assert await store.load_pending_authorization(bob_pending) is not None
+
+    account_counts = await store.revoke_tokens(account_id="acct")
+    assert account_counts["access_tokens_revoked"] == 1
+    assert account_counts["pending_authorizations_revoked"] == 1
+    assert await store.load_access("at-other") is None
+    assert await store.load_pending_authorization(bob_pending) is None
 
 
 @pytest.mark.asyncio

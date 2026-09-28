@@ -3,11 +3,17 @@
 
 """Focused tests for HTTP server exception-to-error mapping."""
 
+import pytest
+
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
+    AGFSDirectoryNotEmptyError,
     AGFSHTTPError,
+    AGFSInternalError,
     AGFSIsADirectoryError,
+    AGFSNotADirectoryError,
     AGFSNotSupportedError,
+    AGFSPluginError,
     AGFSResourceExhaustedError,
     GitConcurrentCommitError,
 )
@@ -75,19 +81,32 @@ def test_agfs_http_status_keeps_storage_mapping():
     assert mapped.message == "File not found: viking://missing"
 
 
-def test_agfs_is_directory_maps_to_structured_invalid_argument():
+@pytest.mark.parametrize(
+    ("error", "expected_details"),
+    [
+        (AGFSIsADirectoryError("is a directory"), {"expected": "file", "actual": "directory"}),
+        (IsADirectoryError("is a directory"), {"expected": "file", "actual": "directory"}),
+        (AGFSNotADirectoryError("not a directory"), {}),
+        (NotADirectoryError("not a directory"), {}),
+        (AGFSPluginError("plugin error: not a directory: /resources/file.md"), {}),
+        (AGFSClientError("not a directory"), {}),
+        (ValueError("not a directory"), {}),
+        (AGFSDirectoryNotEmptyError("directory not empty"), {}),
+    ],
+)
+def test_file_directory_misuse_maps_to_invalid_argument(error, expected_details):
     mapped = map_exception(
-        AGFSIsADirectoryError("Cannot read directory as file: viking://resources/docs"),
+        error,
         resource="viking://resources/docs",
         resource_type="file",
     )
 
     assert isinstance(mapped, InvalidArgumentError)
     assert mapped.code == "INVALID_ARGUMENT"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 400
     assert mapped.details == {
         "resource": "viking://resources/docs",
-        "expected": "file",
-        "actual": "directory",
+        **expected_details,
     }
 
 
@@ -210,20 +229,32 @@ def test_resource_busy_maps_to_structured_conflict():
     }
 
 
-def test_lock_acquisition_maps_to_structured_conflict():
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_status"),
+    [
+        (LockAcquisitionError("Failed to acquire exact lock"), "CONFLICT", 409),
+        (AGFSInternalError("invalid lock token: missing ':' in token"), "INTERNAL", 500),
+        (AGFSInternalError("lock I/O error: failed to create lock dir"), "INTERNAL", 500),
+        (AGFSInternalError("AES-GCM authentication failed: aead::Error"), "INTERNAL", 500),
+        (AGFSPluginError("plugin error: backend connection lost"), "UNAVAILABLE", 503),
+    ],
+)
+def test_storage_conflicts_remain_distinct_from_failures(error, expected_code, expected_status):
     mapped = map_exception(
-        LockAcquisitionError("Failed to acquire exact lock"),
+        error,
         resource="viking://resources/docs/a.md",
     )
 
     assert mapped is not None
-    assert mapped.code == "CONFLICT"
-    assert mapped.details == {
-        "resource": "viking://resources/docs/a.md",
-        "uri": "viking://resources/docs/a.md",
-        "conflict_type": "path_busy",
-        "retryable": True,
-    }
+    assert mapped.code == expected_code
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == expected_status
+    if expected_code == "CONFLICT":
+        assert mapped.details == {
+            "resource": "viking://resources/docs/a.md",
+            "uri": "viking://resources/docs/a.md",
+            "conflict_type": "path_busy",
+            "retryable": True,
+        }
 
 
 def test_git_concurrent_commit_maps_to_conflict():
@@ -232,3 +263,19 @@ def test_git_concurrent_commit_maps_to_conflict():
     assert mapped is not None
     assert mapped.code == "CONFLICT"
     assert ERROR_CODE_TO_HTTP_STATUS.get(mapped.code) == 409
+
+
+def test_git_auth_failure_remains_a_client_error():
+    from openviking.server.responses import error_response, response_from_result
+    from openviking.utils.git_auth import GIT_AUTH_FAILED, raise_git_auth_error
+    from openviking_cli.exceptions import OpenVikingError
+
+    with pytest.raises(OpenVikingError) as caught:
+        raise_git_auth_error(b"fatal: Authentication failed")
+    error = map_exception(caught.value)
+    assert error.code == GIT_AUTH_FAILED
+    assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
+    assert error_response(error.code, error.message).status_code == 400
+    assert response_from_result(
+        {"status": "error", "code": error.code, "errors": [error.message]}
+    ).status_code == 400

@@ -37,6 +37,7 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
         request_id: str | None = None,
         user_id: str | None = None,
         url_path: str | None = None,
+        result_count: int | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
         error_details: dict[str, Any] | None = None,
@@ -60,6 +61,8 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
             payload["user_id"] = str(user_id)
         if url_path is not None:
             payload["url_path"] = str(url_path)
+        if result_count is not None:
+            payload["result_count"] = max(int(result_count), 0)
         if error_code is not None:
             payload["error_code"] = str(error_code)
         if error_message is not None:

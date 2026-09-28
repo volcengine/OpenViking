@@ -2,7 +2,7 @@
 
 本文介绍如何安装 OpenViking CLI、完成配置，并验证它可以连接到 OpenViking。
 
-`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 OpenViking Service（火山引擎云）。它不是服务端安装命令。如果你还没有安装或启动自定义 OpenViking 服务端，请先阅读[快速开始](02-quickstart.md)或[服务端模式](03-quickstart-server.md)。
+`ov` 是客户端 CLI。它连接到已经存在的 OpenViking 服务端，或连接到 OpenViking Service（火山引擎云）。它不是服务端安装命令。如果你还没有安装或启动自定义 OpenViking 服务端，请先阅读[快速开始](02-quickstart.md)。
 
 你可以用两种方式阅读本文：
 
@@ -43,7 +43,7 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 
 - 服务端 URL 由用户或服务端管理员提供。
 - 可能需要 API Key。
-- 只有 root key 的配置需要 `--account` 和 `--user`。
+- 仅用 root key 访问数据需要服务端采用 `trusted` 模式，并显式配置 `--account` 和 `--user`；`api_key` 模式的数据访问需要 user/admin key。
 
 ### 本地自定义
 
@@ -53,7 +53,7 @@ CLI 使用 `~/.openviking/ovcli.conf` 作为 active 客户端连接配置。
 - 本地无鉴权服务通常不需要 API Key。
 - 除非用户选择本地自定义配置，否则 Agent 不应探测本地端口、curl 本地 health endpoint，或运行启动服务端的命令。
 
-> **注意：** 最近的 CLI 版本（v0.3.23+）要求在运行大多数命令前先保存一个显示语言。在交互式终端中，CLI 会在首次使用时提示你选择；在非交互式 shell（Agent 或 CI）中，任何非豁免命令都会以 `2` 退出，直到你运行 `ov language en` 或 `ov language zh-CN`。只有 `ov language`/`ov lang`、`ov config add|edit|delete|list` 和 `ov config switch <name>` 是豁免的，因此请在上面的 `ov config validate`、`ov health` 和 `ov status` 之前先运行 `ov language <code>`。
+> **注意：** 最近的 CLI 版本（v0.3.23+）要求在运行大多数命令前先保存一个显示语言。在交互式终端中，CLI 会在首次使用时提示你选择；在非交互式 shell（Agent 或 CI）中，任何非豁免命令都会以 `2` 退出，直到你运行 `ov language en` 或 `ov language zh-CN`。只有 `ov language`/`ov lang`、`ov config add|edit|delete|list` 和 `ov config switch <name>` 是豁免的，因此请在下面的 `ov config validate`、`ov health` 和 `ov status` 检查之前先运行 `ov language <code>`。
 
 ## 开始前
 
@@ -98,13 +98,7 @@ npm i -g @openviking/cli
 cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
-npm 包是最轻量的独立 CLI 安装方式。如果你同时需要 Python SDK 或服务端包，Python 包也会提供 `ov`：
-
-```bash
-uv tool install openviking --upgrade
-# 或
-pip install openviking --upgrade --force-reinstall
-```
+npm 包是最轻量的独立 CLI 安装方式。Python SDK 是独立的包——只在有 Python 代码要 import 的地方安装 `openviking-sdk`，它不提供 `ov` 命令。如果这台机器本身跑服务端（`uv tool install openviking`），该安装自带 `ov`，无需再装 CLI。
 
 验证：
 
@@ -125,7 +119,7 @@ npm prefix -g
 OpenViking CLI 配置可以包含 user key、root key，或同时包含两者。
 
 - User key：用于普通数据命令，例如 `ov add-resource`、`ov find` 和 `ov tree`。服务端会从 key 推导身份，所以通常不需要传 `--account` 或 `--user`。这是大多数用户需要的方式。
-- Root key：用于管理操作和需要 `--sudo` 的命令。Root key 自身不包含租户身份。如果一个配置只有 root key，就必须同时包含 `--account` 和 `--user`；这个 root key 会同时服务于该身份下的普通命令和 `--sudo` 命令。
+- Root key：用于管理操作和需要 `--sudo` 的命令。`api_key` 模式下，即使传入 `--account` 和 `--user`，root key 也不能访问租户数据。只有 `trusted` 服务端接受 root key 认证的数据请求通过这些 header 指定身份。
 - User key + root key：适合一个配置同时支持日常数据操作和偶尔的管理操作。普通命令使用 user key，`--sudo` 命令使用 root key，并带上配置中的 account 和 user。
 
 ## 手动配置
@@ -284,7 +278,7 @@ ov config add ov-service --name <CONFIG-NAME> --api-key-env <API-KEY-ENV-VAR> --
 ov config add custom --name <CONFIG-NAME> --url http://127.0.0.1:1933 --activate -o json
 ```
 
-如果本地服务没有运行，请先引导用户启动服务端。参见[服务端模式](03-quickstart-server.md)。
+如果本地服务没有运行，请先引导用户启动服务端。参见[部署指南](../guides/03-deployment.md)。
 
 ### 添加远程自定义服务
 
@@ -302,13 +296,13 @@ printf '%s' "$API_KEY" | ov config add custom --name <CONFIG-NAME> --url <REMOTE
 
 把 API Key 写入 stdin。如果 key 已经存在于当前 shell 环境变量中，可以改用 `--api-key-env <API-KEY-ENV-VAR>`。
 
-如果用户只提供 root API key，需要同时提供目标 account 和 user：
+对于 `trusted` 模式的自建服务，仅配置 root key 时还需提供目标 account 和 user。若服务端采用 `api_key` 模式，普通数据命令应改用 user/admin key：
 
 ```bash
 ov config add custom --name <CONFIG-NAME> --url <REMOTE-OPENVIKING-URL> --root-api-key-stdin --account <ACCOUNT-ID> --user <USER-ID> --activate -o json
 ```
 
-把 root API key 写入 stdin。Root key 需要显式 `--account` 和 `--user`，这样普通 CLI 命令才知道以哪个身份执行。
+把 trusted 部署的 root API key 写入 stdin；account 和 user 用于指定 trusted 数据请求的调用者身份。
 
 如果用户同时拥有 user key 和 root key，可以把两者放在同一个配置里：
 
@@ -431,7 +425,7 @@ npm prefix -g
 curl http://127.0.0.1:1933/health
 ```
 
-如果失败，先启动服务端再配置 `ov`。参见[服务端模式](03-quickstart-server.md)。
+如果失败，先启动服务端再配置 `ov`。参见[部署指南](../guides/03-deployment.md)。
 
 ### API Key 校验失败
 

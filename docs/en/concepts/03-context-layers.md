@@ -144,17 +144,13 @@ API authentication guide covering OAuth 2.0, JWT tokens, and API keys.
 - `total_entries`: total direct files and direct subdirectories contributing to directory semantics.
 - `sampled_entries`: direct entries used for this summary.
 - `unsampled_entries`: direct entries not sampled, with `sampled + unsampled = total`.
-- `pending_child_changes`: known changed direct entries not yet reflected in the current body.
+- `pending_child_changes`: direct-child change events not yet reflected in the current body (repeated changes to one child count separately).
 
 When the direct-entry count exceeds `semantic.overview_sample_limit` (32 by default), OpenViking uses deterministic, order-preserving stable sampling. Repeated refreshes of an unchanged tree choose the same sample, avoiding noisy body rewrites and Git diffs.
 
 `pending_child_changes > 0` means the body is still readable but is known to lag behind lower-level changes. A successful parent refresh resets the value to 0 as part of the new coverage metadata.
 
-Currently, every successful resource/skill semantic task schedules the next parent refresh and marks the parent pending before enqueue, continuing to the namespace-root boundary.
-
-> **TODO: control bubbling frequency with freshness**
->
-> The current implementation attempts to bubble after every successful resource/skill semantic task, even when the newly generated child summary is unchanged. This is not the intended final scheduling policy. A future implementation should use `freshness` to coalesce, threshold, or time-window parent refreshes—for example by considering `pending_child_changes`, sampling coverage, direct-child change volume, and recent refresh state. The goal is to reduce repeated refreshes and upward write amplification in hot directories while preserving eventual consistency.
+Resource/skill parent refreshes are freshness-aware. An unchanged child L0 body does not trigger propagation. A changed body triggers an immediate refresh when the parent has no freshness baseline, or its direct-entry count is at most `semantic.overview_sample_limit`. Larger directories accumulate `pending_child_changes` and refresh when its ratio to `total_entries` reaches `semantic.freshness_refresh_ratio` (default `0.10`). Manual refresh/import bypasses the threshold for its requested root, not every ancestor. Propagation stops at the namespace-root boundary. Below the threshold, the parent stays readable but pending; the threshold policy does not promise a timed refresh.
 
 ## Write Protection
 

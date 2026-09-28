@@ -24,22 +24,21 @@ constexpr uint64_t kFilterLayoutInverseMaxSpanFactor = 4;
 constexpr uint32_t kMissingFilterLayoutOffset =
     std::numeric_limits<uint32_t>::max();
 
-IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json) {
-  int ret = 0;
+IndexManagerImpl::IndexManagerImpl(const std::string& path_or_json,
+                                   bool normalize_vector) {
   std::filesystem::path dir(path_or_json);
   std::error_code ec;
   if (std::filesystem::exists(dir, ec)) {
     load_from_path(dir);
-    return;
-  }
-
-  JsonDoc json;
-  json.Parse(path_or_json.c_str());
-  if (!json.HasParseError()) {
+  } else {
+    JsonDoc json;
+    json.Parse(path_or_json.c_str());
+    if (json.HasParseError()) {
+      return;
+    }
     init_from_json(json);
-    return;
   }
-  return;
+  manager_meta_->vector_index_meta->normalize_vector = normalize_vector;
 }
 
 void IndexManagerImpl::init_from_json(const JsonDoc& json) {

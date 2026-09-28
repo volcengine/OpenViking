@@ -1,3 +1,5 @@
+/// <reference types="vitest/config" />
+
 import { defineConfig } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
@@ -19,6 +21,9 @@ const config = defineConfig({
     }),
     viteReact(),
   ],
+  test: {
+    setupFiles: ['./src/test/setup.ts'],
+  },
 })
 
 export default config

@@ -46,12 +46,23 @@ def test_to_dict_carries_creation_timestamp():
 
 def test_from_dict_preserves_stored_timestamp():
     msg = SemanticMsg.from_dict(
-        {"uri": "viking://res/a", "context_type": "resource", "timestamp": 1234567890}
+        {
+            "uri": "viking://res/a",
+            "context_type": "resource",
+            "account_id": "default",
+            "timestamp": 1234567890,
+        }
     )
     assert msg.timestamp == 1234567890
 
 
 def test_from_dict_without_timestamp_still_gets_fresh_one():
-    msg = SemanticMsg.from_dict({"uri": "viking://res/a", "context_type": "resource"})
+    msg = SemanticMsg.from_dict(
+        {
+            "uri": "viking://res/a",
+            "context_type": "resource",
+            "account_id": "default",
+        }
+    )
     assert "timestamp" in msg.__dict__
     assert abs(msg.timestamp - _now_epoch()) <= 5

@@ -40,8 +40,10 @@ class UserPrivacyConfigService:
 
     async def exists(self, ctx: RequestContext, category: str, target_key: str) -> bool:
         try:
+            # A Skill update may retain an empty directory solely for its
+            # lock. Only persisted configuration makes the target readable.
             await self._viking_fs.stat(
-                self.get_config_root(ctx, category, target_key),
+                current_uri(self._user_space(ctx), category, target_key),
                 ctx=ctx,
                 skip_count=True,
             )
@@ -49,13 +51,43 @@ class UserPrivacyConfigService:
         except (NotFoundError, FileNotFoundError):
             return False
 
-    async def delete(self, ctx: RequestContext, category: str, target_key: str) -> bool:
+    async def delete(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        *,
+        owner_lease_ref: Optional[dict[str, Any]] = None,
+    ) -> bool:
         root_uri = self.get_config_root(ctx, category, target_key)
-        async with self._config_lock(ctx, category, target_key) as lease:
-            if not await self.exists(ctx, category, target_key):
+        async with self._config_lock(
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+        ) as lease:
+            if not await self._viking_fs.exists(root_uri, ctx=ctx):
                 return False
-            await self._viking_fs.rm(root_uri, recursive=True, ctx=ctx, lease_ref=lease)
+            if owner_lease_ref is not None:
+                # An enclosing Skill update still needs this root's lock for
+                # rollback. Its final cleanup removes the root if left empty.
+                await self._clear_contents(ctx, category, target_key, lease)
+            else:
+                await self._viking_fs.rm(root_uri, recursive=True, ctx=ctx, lease_ref=lease)
             return True
+
+    async def _clear_contents(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        lease_ref: Optional[dict[str, Any]],
+    ) -> None:
+        """Clear config data under an existing lock, preserving the locked root."""
+        root = self.get_config_root(ctx, category, target_key)
+        for name in (".meta.json", "current.json", "history"):
+            uri = f"{root}/{name}"
+            if await self._viking_fs.exists(uri, ctx=ctx):
+                await self._viking_fs.rm(
+                    uri, recursive=name == "history", ctx=ctx, lease_ref=lease_ref
+                )
 
     async def _ensure_root(
         self,
@@ -75,7 +107,12 @@ class UserPrivacyConfigService:
 
     @asynccontextmanager
     async def _config_lock(
-        self, ctx: RequestContext, category: str, target_key: str
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        *,
+        owner_lease_ref: Optional[dict[str, Any]] = None,
     ) -> AsyncIterator[Optional[dict[str, Any]]]:
         uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
         agfs = getattr(self._viking_fs, "_async_agfs", None)
@@ -87,6 +124,7 @@ class UserPrivacyConfigService:
         lease = await acquire(
             uri_to_path(self.get_config_root(ctx, category, target_key), ctx=ctx),
             timeout_secs=30.0,
+            **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
         )
         try:
             yield lease
@@ -181,8 +219,12 @@ class UserPrivacyConfigService:
         updated_by: str = "",
         change_reason: str = "",
         labels: Optional[dict[str, Any]] = None,
+        *,
+        owner_lease_ref: Optional[dict[str, Any]] = None,
     ) -> UserPrivacyConfigVersion:
-        async with self._config_lock(ctx, category, target_key) as lease:
+        async with self._config_lock(
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+        ) as lease:
             await self._ensure_root(ctx, category, target_key, lease)
             now = get_current_timestamp()
             meta = await self.get_meta(ctx, category, target_key)
@@ -250,8 +292,12 @@ class UserPrivacyConfigService:
         target_key: str,
         version: int,
         updated_by: str = "",
+        *,
+        owner_lease_ref: Optional[dict[str, Any]] = None,
     ) -> UserPrivacyConfigVersion:
-        async with self._config_lock(ctx, category, target_key) as lease:
+        async with self._config_lock(
+            ctx, category, target_key, owner_lease_ref=owner_lease_ref
+        ) as lease:
             meta = await self.get_meta(ctx, category, target_key)
             snapshot = await self.get_version(ctx, category, target_key, version)
             if meta is None or snapshot is None:

@@ -67,7 +67,7 @@ async def test_ls_sorts_before_applying_offset_and_node_limit(client, service):
     assert mtime_response.json()["result"][0]["name"] == "zz-newest"
     assert response.status_code == 200
     entries = response.json()["result"]
-    assert [entry["name"] for entry in entries] == ["a-299", "a-298"]
+    assert [entry["name"] for entry in entries] == ["tasks", "a-299"]
 
     filtered_page = await client.get(
         "/api/v1/fs/ls",
@@ -81,7 +81,8 @@ async def test_ls_sorts_before_applying_offset_and_node_limit(client, service):
     )
     filtered_entries = filtered_page.json()["result"]
     assert len(filtered_entries) == 256
-    assert all(entry["name"] != "tasks" for entry in filtered_entries)
+    # A user directory named "tasks" below the account root is ordinary content.
+    assert any(entry["name"] == "tasks" for entry in filtered_entries)
 
     invalid_offset = await client.get(
         "/api/v1/fs/ls",

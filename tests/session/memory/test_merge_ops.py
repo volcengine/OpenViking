@@ -377,13 +377,20 @@ class TestApplyStrPatch:
         result = apply_str_patch(original, patch)
         assert result == original
 
-    def test_simple_replace(self):
-        """Simple replace."""
-        original = "hello world"
-        patch = StrPatch(blocks=[SearchReplaceBlock(search="hello world", replace="hello there")])
-        result = apply_str_patch(original, patch)
-        # Directly test apply_str_patch
-        assert result == "hello there"
+    @pytest.mark.parametrize(
+        ("original", "search", "expected"),
+        [
+            ("hello world", "hello world", "updated"),
+            ("hello world", "hello worle", "updated"),
+            ("hello world\nhello world", "hello worle", "hello world\nupdated"),
+            ("标题：‘天气’晴朗🌞", "标题：'天气'晴朗🌞", "updated"),
+            ("alpha\nbeta\nalpha\nbeta", "alpha\nbetx", "alpha\nbeta\nupdated"),
+        ],
+    )
+    def test_simple_replace(self, original, search, expected):
+        """Exact and fuzzy replacement preserve normalization and match selection."""
+        patch = StrPatch(blocks=[SearchReplaceBlock(search=search, replace="updated")])
+        assert apply_str_patch(original, patch) == expected
 
     @pytest.mark.parametrize(
         ("original", "delete", "expected"),

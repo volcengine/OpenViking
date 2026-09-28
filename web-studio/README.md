@@ -63,6 +63,10 @@ curl http://127.0.0.1:1933/bot/v1/health
 
 ### 2. Start Web Studio
 
+Use Node.js 22.x for local development, builds, and tests, matching the Studio build workflow.
+
+With the current Vitest/jsdom versions, Node.js 26 can cause `localStorage` errors during tests. If this occurs, switch to Node.js 22.x and run `npm ci && npm test` in `web-studio/`.
+
 ```bash
 cd web-studio
 npm install
@@ -342,6 +346,7 @@ Do not set `VITE_OV_BASE_URL` to `https://ov.example.com/web-studio`. `/web-stud
 The official OpenViking image can be used as the API server dependency:
 
 ```bash
+# Prefer ghcr.io. If it is hard to reach, use openviking-cn-beijing.cr.volces.com/volcengine/openviking:latest
 docker run -d \
   --name openviking \
   -p 1933:1933 \

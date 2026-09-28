@@ -1,0 +1,91 @@
+name: Hermes Plugin Tests
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'examples/hermes-plugin/**'
+      - '.github/workflows/hermes-plugin-tests.yml'
+      - 'scripts/check-hermes-plugin-install.py'
+  push:
+    branches: [main, develop]
+    paths:
+      - 'examples/hermes-plugin/**'
+      - '.github/workflows/hermes-plugin-tests.yml'
+      - 'scripts/check-hermes-plugin-install.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-plugin-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hermes-plugin-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Check out the reviewed Hermes test host
+        uses: actions/checkout@v6
+        with:
+          repository: NousResearch/hermes-agent
+          ref: 58d146e961108e84f41bfed59f586121ecb3372c
+          path: .ci/hermes-agent
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.12.3'
+          enable-cache: true
+          cache-dependency-glob: |
+            .ci/hermes-agent/uv.lock
+            examples/hermes-plugin/pyproject.toml
+
+      - name: Install the host and plugin test dependencies
+        working-directory: .ci/hermes-agent
+        run: |
+          uv sync --frozen --group dev --no-install-project
+          uv export --frozen --group dev --no-emit-project --no-hashes \
+            --output-file "$RUNNER_TEMP/hermes-plugin-constraints.txt"
+          # Keep plugin dependencies within the reviewed host pins. PyYAML
+          # is used by the test fixtures; its version matches Hermes's lock.
+          uv pip install --python .venv/bin/python \
+            --constraint "$RUNNER_TEMP/hermes-plugin-constraints.txt" \
+            --requirement "$GITHUB_WORKSPACE/examples/hermes-plugin/pyproject.toml" \
+            'PyYAML==6.0.3'
+
+      - name: Run the external memory provider tests
+        working-directory: .ci/hermes-agent
+        env:
+          HERMES_TEST_FILE_RETRIES: '0'
+          HERMES_TEST_WORKERS: '2'
+        run: |
+          HERMES_PYTHON="$PWD/.venv/bin/python" scripts/run_tests.sh \
+            "$GITHUB_WORKSPACE/examples/hermes-plugin/tests" \
+            --confcutdir="$GITHUB_WORKSPACE/examples/hermes-plugin/tests" -p no:cacheprovider -q
+
+      - name: Check real plugin installation and activation
+        working-directory: .ci/hermes-agent
+        run: |
+          .venv/bin/python "$GITHUB_WORKSPACE/scripts/check-hermes-plugin-install.py" \
+            --hermes-root "$PWD" \
+            --output-dir "$RUNNER_TEMP/hermes-plugin-install"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hermes-plugin-install-logs
+          path: |
+            ${{ runner.temp }}/hermes-plugin-install/*.log
+            ${{ runner.temp }}/hermes-plugin-install/evidence.json
+          if-no-files-found: ignore

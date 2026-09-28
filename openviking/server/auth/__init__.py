@@ -127,15 +127,19 @@ def _build_request_context(
         api_key=api_key,
     )
     manager = getattr(request.app.state, "api_key_manager", None)
-    is_user_deleting = getattr(manager, "is_user_deleting", None)
+    is_deleting = getattr(manager, "is_deleting", None)
     if (
         ctx.role != Role.ROOT
-        and callable(is_user_deleting)
-        and is_user_deleting(ctx.account_id, ctx.user.user_id)
+        and callable(is_deleting)
+        and is_deleting(ctx.account_id, ctx.user.user_id)
     ):
-        deletion = manager.get_user_deletion(ctx.account_id, ctx.user.user_id) or {}
+        deletion = (
+            manager.get_deletion(ctx.account_id)
+            or manager.get_deletion(ctx.account_id, ctx.user.user_id)
+            or {}
+        )
         raise FailedPreconditionError(
-            "User deletion is in progress",
+            "Identity deletion is in progress",
             details={"task_id": deletion.get("task_id")},
         )
     update_root_span_identity(

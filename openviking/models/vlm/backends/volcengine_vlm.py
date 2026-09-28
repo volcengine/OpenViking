@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VolcEngine VLM backend implementation."""
 
-import asyncio
 import base64
 import json
 import time
@@ -10,8 +9,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
+from openviking.utils.model_retry import retry_async
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
@@ -113,12 +117,19 @@ class VolcEngineVLM(OpenAIVLM):
                 raise ImportError(
                     "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
                 )
-            self._sync_client = volcenginesdkarkruntime.Ark(
+            kwargs = dict(
                 api_key=self.api_key,
                 base_url=self.api_base,
                 timeout=self.timeout,
                 max_retries=0,
             )
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                timeout=self.timeout,
+            )
+            if http_client is not None:
+                kwargs["http_client"] = http_client
+            self._sync_client = volcenginesdkarkruntime.Ark(**kwargs)
         return self._sync_client
 
     def _build_async_client(self):
@@ -129,12 +140,19 @@ class VolcEngineVLM(OpenAIVLM):
             raise ImportError(
                 "Please install volcenginesdkarkruntime: pip install volcenginesdkarkruntime"
             )
-        return volcenginesdkarkruntime.AsyncArk(
+        kwargs = dict(
             api_key=self.api_key,
             base_url=self.api_base,
             timeout=self.timeout,
             max_retries=0,
         )
+        http_client = create_optional_async_httpx_client(
+            self.api_base,
+            timeout=self.timeout,
+        )
+        if http_client is not None:
+            kwargs["http_client"] = http_client
+        return volcenginesdkarkruntime.AsyncArk(**kwargs)
 
     def supports_media(
         self,
@@ -189,6 +207,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if tools:
@@ -231,6 +251,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
         if tools:
@@ -248,30 +270,29 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_async_client()
 
-        last_error = None
-        for attempt in range(self.max_retries + 1):
+        async def _call() -> Union[str, VLMResponse]:
+            t0 = time.perf_counter()
             try:
-                t0 = time.perf_counter()
                 response = await client.chat.completions.create(**kwargs)
-                elapsed = time.perf_counter() - t0
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
-                result = self._build_vlm_response(response, has_tools=bool(tools))
-                if tools:
-                    return result
-                content = self._clean_response(str(result))
-                if content:
-                    tracer.info(f"message.content={content}")
-                return content
-            except Exception as e:
-                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=e)
-                last_error = e
-                if attempt < self.max_retries:
-                    await asyncio.sleep(2**attempt)
+            except Exception as error:
+                self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
+                raise
+            elapsed = time.perf_counter() - t0
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            result = self._build_vlm_response(response, has_tools=bool(tools))
+            if tools:
+                return result
+            content = self._clean_response(str(result))
+            if content:
+                tracer.info(f"message.content={content}")
+            return content
 
-        if last_error:
-            raise last_error
-        else:
-            raise RuntimeError("Unknown error in async completion")
+        return await retry_async(
+            _call,
+            max_retries=self.max_retries,
+            logger=logger,
+            operation_name="VolcEngine VLM async completion",
+        )
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -415,6 +436,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if tools:
@@ -463,6 +486,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if tools:

@@ -10,6 +10,11 @@ OpenViking 系统 API 提供健康检查、就绪检查、一致性检查和多�
 
 基础健康检查端点，无需认证。返回服务版本号和健康状态。如果提供认证信息，还会返回认证模式和身份信息。
 
+Trusted 模式下，完整的 `X-OpenViking-Account` 和 `X-OpenViking-User` 请求头会触发身份解析，
+包括省略 `root_api_key` 的 localhost 部署。配置了 Root 密钥的服务继续校验认证请求中的密钥。
+可选布尔字段 `root_api_key_required` 表示 Trusted 服务配置的密钥要求，解析得到的 `role`
+表示调用者权限。较早版本可能省略该字段。匿名健康探测返回基础存活信息。
+
 **代码入口**:
 - `openviking/server/routers/system.py:health_check` - HTTP 路由
 - `openviking_cli/client/sync_http.py:SyncHTTPClient.health` - SDK 入口
@@ -57,7 +62,7 @@ curl -G http://localhost:1933/health \
 **Python SDK**
 
 ```python
-import openviking as ov
+import openviking_sdk as ov
 
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 client.initialize()

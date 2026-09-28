@@ -6,12 +6,12 @@ Intent analyzer for OpenViking retrieval.
 Analyzes session context to generate query plans.
 """
 
-from typing import Any, List, Optional
+from typing import List, Optional
 
+from openviking.config.vlm import VLMHandle
 from openviking.message import Message
 from openviking.prompts import render_prompt
 from openviking_cli.retrieve.types import ContextType, QueryPlan, TypedQuery
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.llm import parse_json_from_response
 from openviking_cli.utils.logger import get_logger
 
@@ -27,7 +27,7 @@ QUERY_PLANNER_PROMPT_BY_MODEL: dict[str, str] = {
 }
 
 
-def resolve_intent_analysis_prompt_id(query_planner: Any) -> str:
+def resolve_intent_analysis_prompt_id(query_planner: VLMHandle) -> str:
     """Return the prompt id expected by the configured query-planner model."""
     model = getattr(query_planner, "model", None)
     if not isinstance(model, str):
@@ -48,9 +48,12 @@ class IntentAnalyzer:
     # Limit content length (about 10000 tokens)
     MAX_COMPRESSION_SUMMARY_CHARS = 30000
 
-    def __init__(self, max_recent_messages: int = 5):
+    def __init__(self, max_recent_messages: int = 5, *, query_planner: VLMHandle):
         """Initialize intent analyzer."""
+        if query_planner is None:
+            raise ValueError("IntentAnalyzer requires an explicitly resolved query planner")
         self.max_recent_messages = max_recent_messages
+        self.query_planner = query_planner
 
     async def analyze(
         self,
@@ -69,9 +72,7 @@ class IntentAnalyzer:
             context_type: Constrained context type (only generate queries for this type)
             target_abstract: Target directory abstract for more precise queries
         """
-        # Call the lightweight query planner when configured; otherwise keep using VLM.
-        config = get_openviking_config()
-        query_planner = config.get_query_planner()
+        query_planner = self.query_planner
 
         # Build context prompt. Some fine-tuned planner models expect a compact
         # prompt/output contract, selected by exact model mapping above.

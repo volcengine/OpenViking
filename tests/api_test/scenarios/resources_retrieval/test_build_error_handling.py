@@ -51,9 +51,10 @@ class TestBuildErrorHandling:
             assert (
                 "resolve" in error_msg
                 or "hostname" in error_msg
+                or "host does not exist" in error_msg
                 or "dns" in error_msg
                 or "error" in error_msg
-            ), f"DNS失败错误信息应包含 resolve/hostname/dns/error, 实际: {error_msg}"
+            ), f"DNS失败错误信息应包含 resolve/hostname/host does not exist/dns/error, 实际: {error_msg}"
             print("✓ TC-E08 DNS解析失败处理通过(返回error)")
             return
 

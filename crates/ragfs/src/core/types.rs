@@ -28,6 +28,39 @@ pub enum SortOrder {
     Desc,
 }
 
+/// Options for a grep operation.
+#[derive(Debug, Clone, Copy)]
+pub struct GrepOptions<'a> {
+    /// Whether to search recursively in subdirectories.
+    pub recursive: bool,
+    /// Whether matching is case-insensitive.
+    pub case_insensitive: bool,
+    /// Maximum number of matches to return.
+    pub node_limit: Option<usize>,
+    /// Optional path prefix to exclude.
+    pub exclude_path: Option<&'a str>,
+    /// Optional maximum depth relative to the query root.
+    pub level_limit: Option<usize>,
+    /// Number of lines to include before each match.
+    pub before_context: usize,
+    /// Number of lines to include after each match.
+    pub after_context: usize,
+}
+
+impl Default for GrepOptions<'_> {
+    fn default() -> Self {
+        Self {
+            recursive: false,
+            case_insensitive: false,
+            node_limit: None,
+            exclude_path: None,
+            level_limit: None,
+            before_context: 0,
+            after_context: 0,
+        }
+    }
+}
+
 /// Grep match result
 ///
 /// Represents a single match found during a grep operation.
@@ -41,6 +74,62 @@ pub struct GrepMatch {
 
     /// Content of the matched line
     pub content: String,
+
+    /// Lines immediately before the match
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_context: Option<Vec<GrepContextLine>>,
+
+    /// Lines immediately after the match
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_context: Option<Vec<GrepContextLine>>,
+}
+
+/// One line included as grep context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrepContextLine {
+    /// Line number (1-based)
+    pub line: u64,
+
+    /// Line content
+    pub content: String,
+}
+
+impl GrepMatch {
+    /// Build a grep match and slice optional context from already-read lines.
+    pub fn from_lines(
+        file: String,
+        lines: &[&str],
+        line_index: usize,
+        before_context: usize,
+        after_context: usize,
+    ) -> Self {
+        let before = (before_context > 0).then(|| {
+            let start = line_index.saturating_sub(before_context);
+            (start..line_index)
+                .map(|index| GrepContextLine {
+                    line: (index + 1) as u64,
+                    content: lines[index].to_string(),
+                })
+                .collect()
+        });
+        let after = (after_context > 0).then(|| {
+            let end = lines.len().min(line_index + after_context + 1);
+            (line_index + 1..end)
+                .map(|index| GrepContextLine {
+                    line: (index + 1) as u64,
+                    content: lines[index].to_string(),
+                })
+                .collect()
+        });
+
+        Self {
+            file,
+            line: (line_index + 1) as u64,
+            content: lines[line_index].to_string(),
+            before_context: before,
+            after_context: after,
+        }
+    }
 }
 
 /// Grep operation result
@@ -130,6 +219,8 @@ impl GrepResult {
             file,
             line,
             content,
+            before_context: None,
+            after_context: None,
         });
         self.count += 1;
     }

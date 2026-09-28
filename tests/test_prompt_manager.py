@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import yaml
 
 from openviking.prompts.manager import PromptManager
+from openviking.session.memory import memory_type_registry as registry_module
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking_cli.utils.config import (
     OPENVIKING_CONFIG_ENV,
@@ -170,9 +173,7 @@ def test_prompt_manager_falls_back_to_bundled_template_when_custom_dir_is_partia
     assert bundled_template.metadata.id == "vision.image_understanding"
 
 
-def test_memory_type_registry_loads_schemas_from_prompt_manager_resolved_templates_root(
-    tmp_path, monkeypatch
-):
+def test_default_memory_registry_reuses_templates_until_restart(tmp_path, monkeypatch):
     resolved_templates_dir = tmp_path / "resolved-prompts"
     memory_dir = resolved_templates_dir / "memory"
     memory_dir.mkdir(parents=True)
@@ -183,7 +184,7 @@ def test_memory_type_registry_loads_schemas_from_prompt_manager_resolved_templat
                 "description": "custom schema from resolved prompt root",
                 "directory": "viking://user/{{ user_space }}/memories/custom",
                 "filename_template": "custom.md",
-                "fields": [],
+                "fields": [{"name": "summary", "type": "string", "init_value": "initial"}],
             }
         ),
         encoding="utf-8",
@@ -201,9 +202,36 @@ def test_memory_type_registry_loads_schemas_from_prompt_manager_resolved_templat
         ),
     )
 
-    registry = MemoryTypeRegistry(load_schemas=True)
+    monkeypatch.setattr(registry_module, "_default_registry", None)
+    barrier = Barrier(8)
 
-    assert registry.get("custom_memory") is not None
+    def get_registry(_):
+        barrier.wait(timeout=10)
+        return registry_module.get_default_registry()
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        registries = list(pool.map(get_registry, range(8)))
+    registry = registries[0]
+    assert all(item is registry for item in registries)
+    assert registry.get("custom_memory").fields[0].init_value == "initial"
+
+    custom_registry = MemoryTypeRegistry()
+    custom_registry.get("custom_memory").fields[0].init_value = "private change"
+    assert registry.get("custom_memory").fields[0].init_value == "initial"
+
+    schema_path = memory_dir / "custom.yaml"
+    updated = json.loads(schema_path.read_text(encoding="utf-8"))
+    updated["fields"][0]["init_value"] = "updated template"
+    schema_path.write_text(json.dumps(updated), encoding="utf-8")
+    assert registry_module.get_default_registry() is registry
+    assert registry.get("custom_memory").fields[0].init_value == "initial"
+
+    # A fresh process starts without a cached registry and sees the edited file.
+    monkeypatch.setattr(registry_module, "_default_registry", None)
+    assert (
+        registry_module.get_default_registry().get("custom_memory").fields[0].init_value
+        == "updated template"
+    )
 
 
 def test_memory_type_registry_prefers_custom_memory_dir_over_prompt_manager_templates_root(

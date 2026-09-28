@@ -149,7 +149,7 @@ Choose `--peer-role` from what the OpenViking user represents:
 | `assistant` | `viking://user/alice/peers/main/memories/...` | The OpenViking user is a human and assistant-attributed peer memory should be separated by OpenClaw assistant. |
 | `sender` | `viking://user/support-agent/peers/customer-42/memories/...` | The OpenViking user is an agent and sender-attributed peer memory should be separated by human sender. |
 
-`person` is still accepted as a legacy alias for `sender`. New configuration should use `sender`.
+Setup and the installer accept only `sender`. An existing config that still says `person` keeps working as `sender`.
 
 For example, give each assistant its own peer memory and optionally namespace the assistant id:
 
@@ -329,7 +329,7 @@ Useful backup/source flags:
 | `--current-version` | Print the version tracked by the helper |
 | `--base-url URL` | OpenViking server URL (enables non-interactive mode) |
 | `--api-key KEY` | OpenViking API key |
-| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender`; legacy `person` is accepted as `sender` |
+| `--peer-role ROLE` | Memory scope: `none`, `assistant`, or `sender` |
 | `--peer-prefix PREFIX` | Prefix for assistant `peer_id` / actor peer values |
 | `--update` | Update an existing helper-managed install |
 

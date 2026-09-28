@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Legacy agent/session data migration to user-owned namespaces."""
+"""Legacy session data migration to user-owned namespaces."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.vector_migration import (
     VectorMigrationResult,
-    copy_vector_records,
     delete_vector_records,
 )
 from openviking.storage.viking_fs import VikingFS
@@ -20,22 +19,11 @@ from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier, validate_user_id
 
 
-# Reserved sub-directories of viking://agent/ that belong to the new public
-# scope layout (skills, endpoints, tools, payments). They must not be treated
-# as legacy ``agent_id`` directories by either the migration planner or the
-# cleanup planner.
-_AGENT_RESERVED_SUBDIRS = frozenset({"skills", "endpoints", "tools", "payments"})
-
-
 @dataclass(frozen=True)
 class TreeCopy:
     source_path: str
     target_path: str
     category: str
-    source_uri: str
-    target_uri: str
-    skip_tree_if_target_exists: bool = False
-    copy_contents: bool = False
 
 
 @dataclass(frozen=True)
@@ -51,15 +39,11 @@ class MigrationPlan:
     account_users: dict[str, set[str]] = field(default_factory=dict)
     created_users: set[tuple[str, str]] = field(default_factory=set)
     operations: list[TreeCopy] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    skipped: list[dict[str, Any]] = field(default_factory=list)
     errors: list[dict[str, Any]] = field(default_factory=list)
 
     def to_preflight_result(self) -> dict[str, Any]:
         return {
             "errors": list(self.errors),
-            "warnings": list(self.warnings),
-            "skipped": list(self.skipped),
             "created_users": [
                 {"account_id": account_id, "user_id": user_id}
                 for account_id, user_id in sorted(self.created_users)
@@ -73,32 +57,12 @@ class LegacyCleanupPlan:
     targets: list[LegacyCleanupTarget] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class VectorCopyScope:
-    source_uri: str
-    target_uri: str
-    recursive: bool
-
-
-@dataclass
-class CopyResult:
-    copied: bool = False
-    vector_scopes: list[VectorCopyScope] = field(default_factory=list)
-
-    def extend(self, other: "CopyResult") -> None:
-        self.copied = self.copied or other.copied
-        self.vector_scopes.extend(other.vector_scopes)
-
-
 @dataclass
 class MigrationResult:
     files: int = 0
     directories: int = 0
-    vector_records: int = 0
-    skipped_vector_records: int = 0
     operations: dict[str, int] = field(default_factory=dict)
     skipped: list[dict[str, Any]] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
     created_users: list[dict[str, Any]] = field(default_factory=list)
 
     def mark_operation(self, category: str) -> None:
@@ -109,12 +73,9 @@ class MigrationResult:
             "migrated": {
                 "files": self.files,
                 "directories": self.directories,
-                "vector_records": self.vector_records,
-                "skipped_vector_records": self.skipped_vector_records,
                 "operations": dict(sorted(self.operations.items())),
             },
             "skipped": self.skipped,
-            "warnings": self.warnings,
             "created_users": self.created_users,
         }
 
@@ -147,7 +108,7 @@ def target_to_dict(target: LegacyCleanupTarget) -> dict[str, str]:
 
 
 class LegacyDataMigration:
-    """Plan and execute legacy agent/session migration."""
+    """Plan and execute legacy session migration."""
 
     def __init__(self, *, viking_fs: VikingFS, api_key_manager: Any, service: Any):
         if api_key_manager is None:
@@ -162,7 +123,7 @@ class LegacyDataMigration:
         registry_accounts = self._registry_account_ids()
         physical_accounts = await self._physical_account_ids()
         for account_id in sorted(physical_accounts - registry_accounts):
-            if await self._account_has_legacy_data(account_id):
+            if await self._exists(f"/local/{account_id}/session"):
                 plan.errors.append(
                     {
                         "account_id": account_id,
@@ -176,13 +137,10 @@ class LegacyDataMigration:
             plan.account_users[account_id] = set()
             for user_id in sorted(self._registry_user_ids(account_id)):
                 self._ensure_plan_user(account_id, user_id, plan)
-            if await self._account_has_legacy_data(account_id):
+            if await self._exists(f"/local/{account_id}/session"):
                 for user_id in sorted(await self._physical_user_ids(account_id)):
                     self._ensure_plan_user(account_id, user_id, plan)
-            await self._plan_user_agent_data(account_id, plan)
-            await self._plan_agent_user_data(account_id, plan)
             await self._plan_sessions(account_id, plan)
-            await self._plan_shared_agent_data(account_id, plan)
         return plan
 
     async def run(self) -> dict[str, Any]:
@@ -193,10 +151,7 @@ class LegacyDataMigration:
                 details=plan.to_preflight_result(),
             )
 
-        result = MigrationResult(
-            skipped=list(plan.skipped),
-            warnings=list(plan.warnings),
-        )
+        result = MigrationResult()
         for account_id, user_id in sorted(plan.created_users):
             if self._has_user(account_id, user_id):
                 continue
@@ -206,40 +161,17 @@ class LegacyDataMigration:
             result.created_users.append({"account_id": account_id, "user_id": user_id})
 
         for operation in plan.operations:
-            copied = await self._copy_tree(operation, result)
-            if copied.copied:
+            if await self._copy_path(operation.source_path, operation.target_path, result):
                 result.mark_operation(operation.category)
-            await self._copy_vectors(operation, copied, result)
         return result.to_dict()
 
     async def cleanup_preflight(self) -> LegacyCleanupPlan:
         plan = LegacyCleanupPlan()
         for account_id in sorted(await self._physical_account_ids()):
-            agent_path = f"/local/{account_id}/agent"
-            if await self._exists(agent_path):
-                for entry in await self._ls(agent_path):
-                    if not entry["is_dir"]:
-                        continue
-                    if entry["name"] in _AGENT_RESERVED_SUBDIRS:
-                        continue
-                    legacy_path = f"{agent_path}/{entry['name']}"
-                    plan.targets.append(
-                        self._cleanup_target(account_id, legacy_path, "agent")
-                    )
-
             session_path = f"/local/{account_id}/session"
             if await self._exists(session_path):
                 plan.targets.append(self._cleanup_target(account_id, session_path, "session"))
 
-            user_root = f"/local/{account_id}/user"
-            for user_entry in await self._ls(user_root):
-                if not user_entry["is_dir"]:
-                    continue
-                user_agent_path = f"{user_root}/{user_entry['name']}/agent"
-                if await self._exists(user_agent_path):
-                    plan.targets.append(
-                        self._cleanup_target(account_id, user_agent_path, "user_agent")
-                    )
         return plan
 
     async def cleanup(self) -> dict[str, Any]:
@@ -293,17 +225,6 @@ class LegacyDataMigration:
     async def _physical_user_ids(self, account_id: str) -> set[str]:
         entries = await self._ls(f"/local/{account_id}/user")
         return {entry["name"] for entry in entries if entry["is_dir"]}
-
-    async def _account_has_legacy_data(self, account_id: str) -> bool:
-        for leaf in ("agent", "session"):
-            if await self._exists(f"/local/{account_id}/{leaf}"):
-                return True
-        user_root = f"/local/{account_id}/user"
-        for user_entry in await self._ls(user_root):
-            agent_root = f"{user_root}/{user_entry['name']}/agent"
-            if user_entry["is_dir"] and await self._exists(agent_root):
-                return True
-        return False
 
     async def _plan_sessions(self, account_id: str, plan: MigrationPlan) -> None:
         session_root = f"/local/{account_id}/session"
@@ -375,9 +296,6 @@ class LegacyDataMigration:
                 source_path=source_path,
                 target_path=target_path,
                 category="sessions",
-                source_uri=self._path_to_uri(account_id, source_path),
-                target_uri=f"viking://user/{owner}/sessions/{session_id}",
-                skip_tree_if_target_exists=False,
             )
         )
 
@@ -401,148 +319,6 @@ class LegacyDataMigration:
             if await self._exists(f"{path}/{leaf}"):
                 return True
         return False
-
-    async def _plan_user_agent_data(self, account_id: str, plan: MigrationPlan) -> None:
-        user_root = f"/local/{account_id}/user"
-        for user_entry in await self._ls(user_root):
-            if not user_entry["is_dir"]:
-                continue
-            user_id = user_entry["name"]
-            agent_root = f"{user_root}/{user_id}/agent"
-            if not await self._exists(agent_root):
-                continue
-            if not self._ensure_plan_user(account_id, user_id, plan):
-                continue
-            for agent_entry in await self._ls(agent_root):
-                if agent_entry["is_dir"]:
-                    await self._plan_agent_tree(
-                        account_id,
-                        agent_id=agent_entry["name"],
-                        source_agent_path=f"{agent_root}/{agent_entry['name']}",
-                        user_ids=[user_id],
-                        plan=plan,
-                    )
-
-    async def _plan_agent_user_data(self, account_id: str, plan: MigrationPlan) -> None:
-        agent_root = f"/local/{account_id}/agent"
-        for agent_entry in await self._ls(agent_root):
-            if not agent_entry["is_dir"]:
-                continue
-            agent_id = agent_entry["name"]
-            if agent_id in _AGENT_RESERVED_SUBDIRS:
-                continue
-            user_root = f"{agent_root}/{agent_id}/user"
-            for user_entry in await self._ls(user_root):
-                if not user_entry["is_dir"]:
-                    continue
-                user_id = user_entry["name"]
-                if not self._ensure_plan_user(account_id, user_id, plan):
-                    continue
-                await self._plan_agent_tree(
-                    account_id,
-                    agent_id=agent_id,
-                    source_agent_path=f"{user_root}/{user_id}",
-                    user_ids=[user_id],
-                    plan=plan,
-                )
-
-    async def _plan_shared_agent_data(self, account_id: str, plan: MigrationPlan) -> None:
-        agent_root = f"/local/{account_id}/agent"
-        user_ids = sorted(plan.account_users.setdefault(account_id, set()))
-        for agent_entry in await self._ls(agent_root):
-            if not agent_entry["is_dir"]:
-                continue
-            agent_id = agent_entry["name"]
-            if agent_id in _AGENT_RESERVED_SUBDIRS:
-                continue
-            source_agent_path = f"{agent_root}/{agent_id}"
-            if not user_ids:
-                plan.warnings.append(
-                    f"Skipped shared legacy agent {agent_id!r} "
-                    f"in account {account_id!r}: no users exist."
-                )
-                continue
-            await self._plan_agent_tree(
-                account_id,
-                agent_id=agent_id,
-                source_agent_path=source_agent_path,
-                user_ids=user_ids,
-                plan=plan,
-            )
-
-    async def _plan_agent_tree(
-        self,
-        account_id: str,
-        *,
-        agent_id: str,
-        source_agent_path: str,
-        user_ids: list[str],
-        plan: MigrationPlan,
-    ) -> None:
-        memories_path = f"{source_agent_path}/memories"
-        if await self._exists(memories_path):
-            for user_id in user_ids:
-                plan.operations.append(
-                    TreeCopy(
-                        source_path=memories_path,
-                        target_path=f"/local/{account_id}/user/{user_id}/peers/{agent_id}/memories",
-                        category="agent_memories",
-                        source_uri=self._path_to_uri(account_id, memories_path),
-                        target_uri=f"viking://user/{user_id}/peers/{agent_id}/memories",
-                        copy_contents=True,
-                    )
-                )
-
-        skills_path = f"{source_agent_path}/skills"
-        if await self._exists(skills_path):
-            await self._plan_agent_skills(account_id, agent_id, skills_path, user_ids, plan)
-
-        instructions_path = f"{source_agent_path}/instructions"
-        if await self._exists(instructions_path):
-            plan.warnings.append(
-                f"Skipped legacy instructions for agent {agent_id!r} in account {account_id!r}."
-            )
-
-    async def _plan_agent_skills(
-        self,
-        account_id: str,
-        agent_id: str,
-        skills_path: str,
-        user_ids: list[str],
-        plan: MigrationPlan,
-    ) -> None:
-        for skill_entry in await self._ls(skills_path):
-            if not skill_entry["is_dir"]:
-                continue
-            skill_name = skill_entry["name"]
-            source_skill_path = f"{skills_path}/{skill_name}"
-            for user_id in user_ids:
-                target_skill_path = f"/local/{account_id}/user/{user_id}/skills/{skill_name}"
-                if await self._exists(target_skill_path):
-                    plan.skipped.append(
-                        {
-                            "type": "skill",
-                            "source": self._path_to_uri(account_id, source_skill_path),
-                            "target": f"viking://user/{user_id}/skills/{skill_name}",
-                            "reason": "target skill already exists",
-                        }
-                    )
-                    continue
-                plan.operations.append(
-                    TreeCopy(
-                        source_path=source_skill_path,
-                        target_path=target_skill_path,
-                        category="agent_skills",
-                        source_uri=self._path_to_uri(account_id, source_skill_path),
-                        target_uri=f"viking://user/{user_id}/skills/{skill_name}",
-                        skip_tree_if_target_exists=True,
-                    )
-                )
-        if not await self._ls(skills_path):
-            plan.warnings.append(
-                f"Legacy skills directory for agent {agent_id!r} "
-                f"in account {account_id!r} is empty."
-            )
 
     def _ensure_plan_user(self, account_id: str, user_id: str, plan: MigrationPlan) -> bool:
         if error := validate_user_id(user_id):
@@ -575,88 +351,29 @@ class LegacyDataMigration:
             category=category,
         )
 
-    async def _copy_tree(self, operation: TreeCopy, result: MigrationResult) -> CopyResult:
-        if operation.skip_tree_if_target_exists and await self._exists(operation.target_path):
-            result.skipped.append(
-                {
-                    "type": operation.category,
-                    "source": operation.source_uri,
-                    "target": operation.target_uri,
-                    "reason": "target already exists; kept existing target",
-                }
-            )
-            return CopyResult()
-        account_id = self._account_id_from_path(operation.source_path)
-        if operation.copy_contents:
-            copied = CopyResult()
-            created_root = await self._mkdir_if_missing(operation.target_path)
-            for entry in await self._ls(operation.source_path):
-                source = f"{operation.source_path}/{entry['name']}"
-                target = f"{operation.target_path}/{entry['name']}"
-                child_result = await self._copy_path(
-                    source,
-                    target,
-                    result,
-                    account_id=account_id,
-                    collect_vectors=not created_root,
-                )
-                copied.extend(child_result)
-            if created_root and copied.copied:
-                copied.vector_scopes.append(
-                    VectorCopyScope(
-                        source_uri=operation.source_uri,
-                        target_uri=operation.target_uri,
-                        recursive=True,
-                    )
-                )
-            return copied
-        return await self._copy_path(
-            operation.source_path,
-            operation.target_path,
-            result,
-            account_id=account_id,
-            collect_vectors=True,
-        )
-
     async def _copy_path(
         self,
         source_path: str,
         target_path: str,
         result: MigrationResult,
-        *,
-        account_id: str,
-        collect_vectors: bool,
-    ) -> CopyResult:
+    ) -> bool:
         stat = await self._stat(source_path)
         if not stat:
             result.skipped.append(
                 {"type": "path", "source": source_path, "target": target_path, "reason": "missing"}
             )
-            return CopyResult()
+            return False
         if stat["is_dir"]:
-            created = await self._mkdir_if_missing(target_path)
-            copied = CopyResult(copied=created)
-            if created:
+            copied = await self._mkdir_if_missing(target_path)
+            if copied:
                 result.directories += 1
             for entry in await self._ls(source_path):
-                source = f"{source_path}/{entry['name']}"
-                target = f"{target_path}/{entry['name']}"
-                child_result = await self._copy_path(
-                    source,
-                    target,
+                child_copied = await self._copy_path(
+                    f"{source_path}/{entry['name']}",
+                    f"{target_path}/{entry['name']}",
                     result,
-                    account_id=account_id,
-                    collect_vectors=collect_vectors and not created,
                 )
-                copied.extend(child_result)
-            if collect_vectors and created and copied.copied:
-                copied.vector_scopes.append(
-                    VectorCopyScope(
-                        source_uri=self._path_to_uri(account_id, source_path),
-                        target_uri=self._path_to_uri(account_id, target_path),
-                        recursive=True,
-                    )
-                )
+                copied = copied or child_copied
             return copied
         if await self._exists(target_path):
             result.skipped.append(
@@ -667,20 +384,11 @@ class LegacyDataMigration:
                     "reason": "target already exists; kept existing target",
                 }
             )
-            return CopyResult()
+            return False
         await self._ensure_parent_dirs(target_path)
         await self._agfs.write(target_path, await self._agfs.read(source_path))
         result.files += 1
-        copied = CopyResult(copied=True)
-        if collect_vectors:
-            copied.vector_scopes.append(
-                VectorCopyScope(
-                    source_uri=self._path_to_uri(account_id, source_path),
-                    target_uri=self._path_to_uri(account_id, target_path),
-                    recursive=False,
-                )
-            )
-        return copied
+        return True
 
     async def _read_json_file(self, path: str) -> Any:
         try:
@@ -697,36 +405,6 @@ class LegacyDataMigration:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
-
-    async def _copy_vectors(
-        self,
-        operation: TreeCopy,
-        copied: CopyResult,
-        result: MigrationResult,
-    ) -> None:
-        if operation.category == "sessions" or not copied.vector_scopes:
-            return
-        vector_store = getattr(self._service, "vikingdb_manager", None)
-        account_id = self._account_id_from_path(operation.source_path)
-        vector_result = VectorMigrationResult()
-        seen: set[tuple[str, str, bool]] = set()
-        for scope in copied.vector_scopes:
-            key = (scope.source_uri, scope.target_uri, scope.recursive)
-            if key in seen:
-                continue
-            seen.add(key)
-            vector_result.extend(
-                await copy_vector_records(
-                    vector_store,
-                    account_id=account_id,
-                    source_uri=scope.source_uri,
-                    target_uri=scope.target_uri,
-                    recursive=scope.recursive,
-                )
-            )
-        result.vector_records += vector_result.copied
-        result.skipped_vector_records += vector_result.skipped
-        result.warnings.extend(vector_result.warnings)
 
     async def _delete_vectors(self, target: LegacyCleanupTarget) -> VectorMigrationResult:
         vector_store = getattr(self._service, "vikingdb_manager", None)
@@ -792,9 +470,3 @@ class LegacyDataMigration:
         if path.startswith(prefix):
             return "viking://" + path[len(prefix) :].strip("/")
         return path
-
-    def _account_id_from_path(self, path: str) -> str:
-        parts = [part for part in path.strip("/").split("/") if part]
-        if len(parts) >= 2 and parts[0] == "local":
-            return parts[1]
-        return ""

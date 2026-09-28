@@ -29,8 +29,6 @@ class OIDCConfig(BaseModel):
     # Identity mapping
     identity: IdentityMappingConfig = Field(default_factory=IdentityMappingConfig)
 
-    model_config = {"extra": "forbid"}
-
     @field_validator("issuer")
     @classmethod
     def validate_issuer(cls, v: str) -> str:

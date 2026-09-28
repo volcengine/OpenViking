@@ -260,7 +260,8 @@ def _project_http_request(
             status,
         )
         prev_count, prev_results = retrieval_rows[retrieval_key]
-        retrieval_rows[retrieval_key] = (prev_count + 1, prev_results)
+        result_count = max(safe_int(payload.get("result_count")), 0) if status == "success" else 0
+        retrieval_rows[retrieval_key] = (prev_count + 1, prev_results + result_count)
 
     context_operation = context_write_operation_for_http(method, route, status_code)
     if context_operation:

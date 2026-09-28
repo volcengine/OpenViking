@@ -15,9 +15,10 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import ListingResponse, Response
 from openviking.server.routers.content import SetTagsRequest
 from openviking.server.routers.content import set_tags as content_set_tags
+from openviking.storage.acl import AclSpec
 from openviking.storage.expr import And, Eq, In
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.storage.vikingdb_manager import VikingDBManagerProxy
@@ -94,7 +95,7 @@ async def ls(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.ls(
+        page = await service.fs.ls(
             uri,
             ctx=_ctx,
             recursive=recursive,
@@ -117,15 +118,21 @@ async def ls(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
 @router.get("/tree")
 async def tree(
     uri: str = Query(..., description="Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
-    abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
+    abs_limit: int = Query(256, description="Maximum returned abstract length"),
+    include_abstract: Optional[bool] = Query(
+        None, description="Include directory L0 abstracts; defaults to the output format"
+    ),
+    include_overview: Optional[bool] = Query(None, description="Include directory L1 overviews"),
+    overview_limit: int = Query(4000, ge=1, description="Maximum overview length"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
+    directories_only: bool = Query(False, description="Only include directory entries"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     offset: int = Query(0, ge=0, description="Number of visible nodes to skip"),
     limit: Optional[int] = Query(None, ge=1, description="Alias for node_limit"),
@@ -143,12 +150,16 @@ async def tree(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        result = await service.fs.tree(
+        page = await service.fs.tree(
             uri,
             ctx=_ctx,
             output=output,
             abs_limit=abs_limit,
+            include_abstract=include_abstract,
+            include_overview=include_overview,
+            overview_limit=overview_limit,
             show_all_hidden=show_all_hidden,
+            directories_only=directories_only,
             node_limit=actual_node_limit,
             level_limit=level_limit,
             offset=offset,
@@ -163,7 +174,7 @@ async def tree(
         if mapped is not None:
             raise mapped from e
         raise
-    return Response(status="ok", result=result)
+    return ListingResponse(status="ok", result=page.entries, has_more=page.has_more)
 
 
 @router.get("/stat")
@@ -249,6 +260,7 @@ class MkdirRequest(BaseModel):
 
     uri: str
     description: Optional[str] = None
+    acl: AclSpec | None = None
 
 
 @router.post("/mkdir")
@@ -261,7 +273,12 @@ async def mkdir(
     # Resolve path variables
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     try:
-        await service.fs.mkdir(uri, ctx=_ctx, description=request.description)
+        await service.fs.mkdir(
+            uri,
+            ctx=_ctx,
+            description=request.description,
+            **({"acl": request.acl} if request.acl is not None else {}),
+        )
     except AGFSClientError as e:
         mapped = map_exception(e, resource=uri, resource_type="file")
         if mapped is not None:

@@ -25,24 +25,26 @@ Quit Cursor completely and restart it after installation.
 ## What gets installed
 
 - Lifecycle Hooks for profile loading, prompt recall, conversation capture, session commit, and `viking://` URI protection.
-- The OpenViking MCP server with tools such as `search`, `read`, and `remember`; `search` with `mode="context"` returns assembled context.
-- An always-on Rule and memory Skill that tell the Agent how to use injected context and memory tools.
+- The OpenViking MCP server with tools such as `search`, `read`, `remember`, and `add_skill`; `search` with `mode="context"` returns assembled context.
+- An always-on Rule and the `openviking-memory` Skill, which tell the Agent how to use injected context and memory tools, plus the `openviking-skills` Skill for finding, using, creating (`add_skill`), sharing, and migrating skills stored in OpenViking.
 
 ## Verify
 
 1. Restart Cursor and create a new Agent session.
-2. Open **Cursor Settings → Hooks** and confirm that the OpenViking lifecycle Hooks execute `cursor-hook.mjs` and its URI protection Hooks execute `uri-guard.mjs`.
+2. Open **Cursor Settings → Hooks** and confirm that the OpenViking lifecycle Hooks execute `scripts/hook.mjs` and its URI protection Hook executes `scripts/uri-guard.mjs`.
 3. Check that the `beforeSubmitPrompt` output contains `additional_context`. This confirms that recall reaches the Agent without requiring an MCP call first.
 4. Open **Cursor Settings → Tools & MCPs** and confirm that `openviking` is connected.
 5. Tell Cursor a temporary preference, wait for the response to finish, then create a new session and ask for that preference to verify capture and cross-session recall.
 
 ## How it works
 
-- `sessionStart` loads your profile and the current project's memory index.
-- `beforeSubmitPrompt` recalls context for the current request and injects it through `additional_context`.
-- `beforeReadFile` and `beforeShellExecution` redirect accidental local access to `viking://` paths back to OpenViking MCP tools.
+- `sessionStart` loads your profile, the current project's memory index, and an `<available-skills>` catalog of your OpenViking skills.
+- `beforeSubmitPrompt` recalls context for the current request, including your own skills and those shared with your account under `viking://agent/skills`, and injects it through `additional_context`.
+- `beforeReadFile` denies reading a `viking://` path as a local file and points the Agent to OpenViking MCP tools. Shell commands are not checked.
 - `stop` incrementally captures new user and assistant messages.
 - `preCompact` and `sessionEnd` commit pending messages for memory extraction.
+
+The skill catalog lists your own skills first, then those shared with your account, leaving out a shared skill whose name you also own; each description is cut to about 40 tokens. It has its own token budget, `skillCatalogTokenBudget` (default `1200`), separate from the profile budget. When not every description fits, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, it shrinks to a one-line skill count. Set `skillCatalog` to `false` or the budget to `0` to turn it off, either in the `plugin` or `plugin.cursor` section of `~/.openviking/ovcli.conf` ([Plugin Settings](../configuration/02-client.md#plugin-settings)) or through `OPENVIKING_SKILL_CATALOG` and `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`. Without any skills, or on a server without `GET /api/v1/skills`, the catalog is left out.
 
 Project identity uses Cursor's `workspace_roots`, keeping workspace peers separate. Hooks and MCP share credentials from `~/.openviking/ovcli.conf`.
 
@@ -60,7 +62,7 @@ bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shar
   --harness cursor --uninstall --yes
 ```
 
-Uninstall removes only OpenViking-managed Cursor Hooks, MCP, Rule, Skill, and runtime files. Other configuration is preserved.
+Uninstall removes only OpenViking-managed Cursor Hooks, MCP, Rule, Skills, and runtime files. Other configuration is preserved.
 
 ## Troubleshooting
 

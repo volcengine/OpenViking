@@ -46,8 +46,6 @@ class MappingSource(BaseModel):
     # For list sources (try claims in order)
     claims: Optional[List[str]] = None
 
-    model_config = {"extra": "forbid"}
-
 
 # Forward reference update
 MappingSource.model_rebuild()
@@ -71,8 +69,6 @@ class AccountMappingConfig(BaseModel):
     normalize: Optional[Literal["lowercase", "uppercase", "trim"]] = None
     claims: Optional[List[str]] = None
 
-    model_config = {"extra": "forbid"}
-
 
 class UserMappingConfig(BaseModel):
     """User ID mapping configuration."""
@@ -89,8 +85,6 @@ class UserMappingConfig(BaseModel):
     fallback: Optional[str] = None
     normalize: Optional[Literal["lowercase", "uppercase", "trim"]] = None
     claims: Optional[List[str]] = None
-
-    model_config = {"extra": "forbid"}
 
 
 class RoleMappingConfig(BaseModel):
@@ -109,8 +103,6 @@ class RoleMappingConfig(BaseModel):
     # Fallback
     default: str = Role.USER
 
-    model_config = {"extra": "forbid"}
-
 
 class IdentityMappingConfig(BaseModel):
     """Complete identity mapping configuration."""
@@ -118,8 +110,6 @@ class IdentityMappingConfig(BaseModel):
     account_id: AccountMappingConfig = Field(default_factory=AccountMappingConfig)
     user_id: UserMappingConfig = Field(default_factory=UserMappingConfig)
     role: RoleMappingConfig = Field(default_factory=RoleMappingConfig)
-
-    model_config = {"extra": "forbid"}
 
 
 class IdentityMapper:

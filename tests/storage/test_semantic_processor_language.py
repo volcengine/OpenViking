@@ -21,6 +21,15 @@ from openviking.session.memory.utils.language import (
 )
 
 
+class _TestVLMResolver:
+    def __init__(self, vlm):
+        self._vlm = vlm
+
+    async def get_vlm(self, account_id):
+        del account_id
+        return self._vlm
+
+
 class TestLanguageDetection:
     """语言检测功能测试。"""
 
@@ -216,7 +225,9 @@ class TestOverviewGenerationFlow:
             "openviking.storage.queuefs.semantic_processor.get_openviking_config",
             return_value=config,
         ):
-            await SemanticProcessor()._generate_overview(
+            await SemanticProcessor(
+                vlm_resolver=_TestVLMResolver(config.vlm)
+            )._generate_overview(
                 "viking://resources/example/client",
                 [{"name": "client.go", "summary": description + "\n" + skeleton}],
                 [],
@@ -442,7 +453,7 @@ class TestGenerateTextSummaryOutputLanguage:
                 return_value=mock_config,
             ),
         ):
-            processor = SemanticProcessor()
+            processor = SemanticProcessor(vlm_resolver=_TestVLMResolver(mock_vlm))
             processor._current_ctx = MagicMock()
 
             result = await processor._generate_text_summary(
@@ -491,7 +502,7 @@ class TestGenerateTextSummaryOutputLanguage:
                 return_value=mock_config,
             ),
         ):
-            processor = SemanticProcessor()
+            processor = SemanticProcessor(vlm_resolver=_TestVLMResolver(mock_vlm))
             processor._current_ctx = MagicMock()
 
             result = await processor._generate_text_summary(

@@ -22,7 +22,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, Field, WithJsonSchema, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, WithJsonSchema, model_validator
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
@@ -221,6 +221,10 @@ class MemoryField(BaseModel):
 
 class MemoryTypeSchema(BaseModel):
     """Memory type schema definition."""
+
+    # True only for account bodies differing from server-owned deployment defaults.
+    # Recomputed by the loader, never serialized or accepted as a client trust flag.
+    _account_content_template: bool = PrivateAttr(default=False)
 
     memory_type: str = Field(..., description="Memory type name")
     description: str = Field("", description="Type description")

@@ -8,6 +8,7 @@ from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.utils.content_hash import content_md5
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     InvalidArgumentError,
@@ -23,8 +24,8 @@ class _PathLockClient:
         self.held = False
         self.releases = 0
 
-    async def pathlock_acquire_tree(self, path):
-        del path
+    async def pathlock_acquire_exact_batch(self, paths):
+        del paths
         self.held = True
         return {"lease_ref": "lock-1"}
 
@@ -156,7 +157,7 @@ async def test_batch_validates_all_modes_before_any_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatch):
+async def test_batch_releases_file_locks_before_one_aggregated_refresh(monkeypatch):
     root = "viking://resources/wiki"
     a = f"{root}/a.md"
     b = f"{root}/b.md"
@@ -185,6 +186,45 @@ async def test_batch_releases_tree_lock_before_one_aggregated_refresh(monkeypatc
     assert result["created"] == [a, b]
     assert calls == [{a: "added", b: "added"}]
     assert locks.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_passes_final_md5s_and_old_abstracts_to_refresh(monkeypatch):
+    root = "viking://resources/wiki"
+    existing = f"{root}/existing.md"
+    created = f"{root}/new.md"
+    vfs = _VFS(root, {existing: "old"})
+
+    class _VikingDB:
+        async def get_l2_diff_records_by_uris(self, uris, *, ctx):
+            assert uris == [existing]
+            return {existing: {"abstract": "old abstract", "md5": "old-md5"}}
+
+    coordinator = ContentWriteCoordinator(vfs, vikingdb=_VikingDB())
+    captured = {}
+
+    async def refresh(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    await coordinator.batch_write(
+        root_uri=root,
+        operations=[
+            {"uri": existing, "content": "new", "mode": "replace"},
+            {"uri": created, "content": "created", "mode": "create"},
+        ],
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert captured["file_md5s"] == {
+        existing: content_md5(b"new"),
+        created: content_md5(b"created"),
+    }
+    assert captured["file_abstracts"] == {existing: "old abstract"}
 
 
 @pytest.mark.asyncio
@@ -230,20 +270,15 @@ async def test_batch_replace_memory_preserves_metadata(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypatch):
+async def test_batch_reports_skipped_directory_and_queued_file_vectors(monkeypatch):
     root = "viking://resources/wide"
     page = f"{root}/page.md"
     coordinator = ContentWriteCoordinator(_VFS(root))
 
-    async def resolve_root(uri, **kwargs):
-        del uri, kwargs
-        return root
-
     async def enqueue(**kwargs):
         del kwargs
-        return FreshnessAction.MARK_PENDING
+        return FreshnessAction.NOOP
 
-    monkeypatch.setattr(coordinator, "_resolve_root_uri", resolve_root)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
@@ -260,7 +295,7 @@ async def test_batch_reports_deferred_directory_and_queued_file_vectors(monkeypa
         wait=False,
     )
 
-    assert result["semantic_status"] == "deferred"
+    assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "queued"
     assert result["queue_status"] is None
 
@@ -274,7 +309,10 @@ async def test_batch_upserts_binary_content(monkeypatch):
     vfs = _VFS(root, {image: original})
     coordinator = ContentWriteCoordinator(vfs)
 
+    refresh_calls = []
+
     async def refresh(**kwargs):
+        refresh_calls.append(kwargs)
         return None
 
     monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
@@ -289,6 +327,7 @@ async def test_batch_upserts_binary_content(monkeypatch):
     )
     assert result["updated"] == [image]
     assert vfs.files[image] == replacement
+    assert refresh_calls[0]["file_md5s"] == {image: content_md5(replacement)}
 
     retry = await coordinator.batch_write(
         root_uri=root, operations=[operation], ctx=ctx, wait=False

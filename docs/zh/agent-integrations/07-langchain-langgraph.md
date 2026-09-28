@@ -292,11 +292,11 @@ commit 策略。如果后续批次或写入后的 commit 失败，`OpenVikingPar
 仓库内提供了可直接运行的最小示例，使用内存测试客户端，无需模型凭证：
 
 ```bash
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
-uv run --project integrations/langchain --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
+uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/rag/quick_app.py
+uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/context-backend/quick_app.py
+uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langchain/message-history/quick_app.py
+uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langgraph/agent/quick_app.py
+uv run --project examples/langchain --extra langgraph python examples/langchain-langgraph/langgraph/middleware/quick_app.py
 ```
 
 连接真实 OpenViking 服务和 OpenAI 兼容模型的示例见 [live LangGraph app](https://github.com/volcengine/OpenViking/blob/main/examples/langchain-langgraph/langgraph/agent/live_app.py)。

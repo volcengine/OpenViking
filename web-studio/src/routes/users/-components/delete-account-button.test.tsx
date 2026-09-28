@@ -66,7 +66,7 @@ function renderButton() {
 }
 
 beforeEach(() => {
-  adminMocks.deleteAdminAccount.mockResolvedValue(undefined)
+  adminMocks.deleteAdminAccount.mockResolvedValue('cleanup-task')
   adminMocks.fetchAdminAccounts.mockResolvedValue([
     { accountId: 'account-b', userCount: 1 },
   ])
@@ -108,7 +108,7 @@ describe('DeleteAccountButton', () => {
     expect(connectionMocks.switchManagementAccount).toHaveBeenCalledWith(
       'account-b',
     )
-    expect(toastMocks.success).toHaveBeenCalledWith('toast.accountDeleted')
+    expect(toastMocks.success).toHaveBeenCalledWith('toast.accountDeletionStarted')
   })
 
   it('clears the deleted identity and opens settings when no account remains', async () => {

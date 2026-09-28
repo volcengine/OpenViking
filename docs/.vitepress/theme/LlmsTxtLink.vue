@@ -14,11 +14,10 @@ const copied = ref(false)
 const copyFailed = ref(false)
 let resetTimer: ReturnType<typeof window.setTimeout> | undefined
 
-const isZh = computed(() => page.value.relativePath.startsWith('zh/'))
 const copyLabel = computed(() => {
-  if (copyFailed.value) return isZh.value ? '链接复制失败' : 'Copy failed'
-  if (copied.value) return isZh.value ? '链接已复制' : 'Link copied'
-  return isZh.value ? '复制链接' : 'Copy link'
+  if (copyFailed.value) return 'Copy failed'
+  if (copied.value) return 'Link copied'
+  return 'Copy link'
 })
 
 async function writeClipboard(text: string) {
@@ -60,7 +59,7 @@ async function copyLlmsLink() {
 
 <template>
   <div v-if="isDoc" class="llms-link-wrap">
-    <a :href="llmsUrl" target="_blank" rel="noopener" class="llms-link">
+    <a :href="llmsUrl" target="_blank" rel="noopener" class="llms-link" title="English plain text">
       <svg
         xmlns="http://www.w3.org/2000/svg"
         width="14"

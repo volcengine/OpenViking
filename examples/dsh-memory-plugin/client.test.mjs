@@ -26,6 +26,7 @@ test("client sends OpenViking identity headers and preserves response trace ids"
     apiKey: "secret",
     account: "account-a",
     user: "user-a",
+    sendIdentityHeaders: true,
     peerId: "peer-a",
     userAgent: "openviking-memory-dsh/0.1.0",
     requestTimeoutMs: 1000,
@@ -62,95 +63,8 @@ test("per-session actor peer overrides the process default", async () => {
     commitKeepRecentCount: 10,
   });
 
-  await client.ensureSession("dsh-2", "workspace-peer");
+  await client.ensureSessionResult("dsh-2", "workspace-peer");
   assert.equal(headers["X-OpenViking-Actor-Peer"], "workspace-peer");
-});
-
-test("existing OpenViking sessions are reusable on DSH resume", async () => {
-  globalThis.fetch = async () => new Response(JSON.stringify({
-    status: "error",
-    error: { code: "ALREADY_EXISTS", message: "session exists" },
-  }), {
-    status: 409,
-    headers: { "Content-Type": "application/json" },
-  });
-  const client = new OpenVikingClient({
-    endpoint: "http://127.0.0.1:1933",
-    apiKey: "",
-    account: "",
-    user: "",
-    peerId: "",
-    userAgent: "",
-    requestTimeoutMs: 1000,
-    commitKeepRecentCount: 10,
-  });
-
-  assert.equal(await client.ensureSession("dsh-resume"), true);
-});
-
-test("directory listing requests the raw array contract", async () => {
-  let seenUrl;
-  globalThis.fetch = async (url) => {
-    seenUrl = url;
-    return new Response(JSON.stringify({
-      status: "ok",
-      result: [{ name: "notes.md", isDir: false }],
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  };
-  const client = new OpenVikingClient({
-    endpoint: "http://127.0.0.1:1933",
-    apiKey: "",
-    account: "",
-    user: "",
-    peerId: "",
-    userAgent: "",
-    requestTimeoutMs: 1000,
-    commitKeepRecentCount: 10,
-  });
-
-  assert.deepEqual(await client.list("viking://resources"), [
-    { name: "notes.md", isDir: false },
-  ]);
-  assert.equal(
-    seenUrl,
-    "http://127.0.0.1:1933/api/v1/fs/ls?uri=viking%3A%2F%2Fresources&output=original",
-  );
-});
-
-test("archive lookup uses the dedicated session archive endpoint", async () => {
-  let seenUrl;
-  globalThis.fetch = async (url) => {
-    seenUrl = url;
-    return new Response(JSON.stringify({
-      status: "ok",
-      result: { archive_id: "archive_001", messages: [] },
-    }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  };
-  const client = new OpenVikingClient({
-    endpoint: "http://127.0.0.1:1933",
-    apiKey: "",
-    account: "",
-    user: "",
-    peerId: "",
-    userAgent: "",
-    requestTimeoutMs: 1000,
-    commitKeepRecentCount: 10,
-  });
-
-  assert.deepEqual(
-    await client.getSessionArchive("dsh session", "archive/001"),
-    { archive_id: "archive_001", messages: [] },
-  );
-  assert.equal(
-    seenUrl,
-    "http://127.0.0.1:1933/api/v1/sessions/dsh%20session/archives/archive%2F001",
-  );
 });
 
 test("client normalizes non-2xx OpenViking envelopes", async () => {

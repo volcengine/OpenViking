@@ -195,7 +195,7 @@ class LiteLLMVLMProvider(VLMBase):
         """Resolve model name by applying provider prefixes."""
         if _has_litellm_prefix(model, EXPLICIT_LITELLM_PREFIXES):
             return model
-        if model.lower().startswith("openai/"):
+        if model.lower().startswith(("openai/", *OLLAMA_LITELLM_PREFIXES)):
             return model
 
         provider = self._detected_provider or detect_provider_by_model(model)
@@ -315,9 +315,16 @@ class LiteLLMVLMProvider(VLMBase):
         # truncates long prompts to its 4096-token default; thinking models left
         # in thinking mode emit only reasoning and stall on CPU. Set safe
         # defaults, but let extra_request_body override either.
+        #
+        # ``num_ctx`` must be a top-level argument, not part of ``extra_body``:
+        # LiteLLM forwards ``extra_body`` verbatim as top-level JSON while Ollama
+        # only reads ``num_ctx`` from ``options``, so an ``extra_body`` value is
+        # silently ignored and the window stays at the 4096 default. ``think`` is
+        # accepted top-level by Ollama either way.
         if _has_litellm_prefix(model, OLLAMA_LITELLM_PREFIXES):
             extra = kwargs.get("extra_body", {})
-            extra.setdefault("num_ctx", OLLAMA_DEFAULT_NUM_CTX)
+            num_ctx = extra.pop("num_ctx", None)
+            kwargs["num_ctx"] = num_ctx if num_ctx is not None else OLLAMA_DEFAULT_NUM_CTX
             extra.setdefault("think", self._effective_thinking(thinking))
             kwargs["extra_body"] = extra
 

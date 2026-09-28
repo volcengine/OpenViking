@@ -9,7 +9,7 @@ Multi-write lives inside RAGFS. The Python SDK, HTTP API, and CLI usage remain u
 - You already have a working `ov.conf`.
 - The primary backend has been verified to read and write correctly.
 - If you plan to use S3-compatible storage, prepare the bucket, endpoint, and access credentials first.
-- If you need to migrate existing data, migrate that dataset before enabling multi-write.
+- For existing data, follow the [OVPack multi-write migration workflow](./09-ovpack.md#working-with-multi-write-storage); enabling backups alone does not copy historical files.
 
 ## Minimal Configuration
 
@@ -359,16 +359,7 @@ Rules:
 
 Multi-write only replicates writes that happen after it is enabled. It does not automatically copy historical files.
 
-Recommended migration flow:
-
-1. Stop writes or freeze the write window.
-2. Use OVPack or another controlled tool to migrate historical data to the target backup.
-3. Validate the target backend's data integrity.
-4. Configure and enable `storage.agfs.backups`.
-5. Resume writes.
-6. Observe sync state and error logs.
-
-If freezing writes is not possible, do one full migration first, then a short write pause for incremental validation, and only then enable multi-write.
+For OVPack migration, follow [Working with Multi-Write Storage](./09-ovpack.md#working-with-multi-write-storage): configure multi-write on the clean target before restoring through that server, then verify each replica before resuming writes. That guide also covers target account initialization and restore conflict handling.
 
 ## Verifying the Configuration
 
@@ -382,8 +373,7 @@ After startup, verify with ordinary file APIs:
 
 ```bash
 openviking write viking://resources/multiwrite-check.txt \
-  --content "multi-write check" \
-  --wait
+  --content "multi-write check"
 
 openviking read viking://resources/multiwrite-check.txt
 ```
@@ -409,7 +399,7 @@ Backups are write-only by default. To make a backup serve reads, configure:
 
 ### Why do historical files not appear in the backup after enabling multi-write?
 
-Multi-write only handles new writes after it is enabled. Historical data must be migrated separately through OVPack, object-storage copy workflows, or future backfill capabilities.
+Multi-write only handles new writes after it is enabled. For historical data, follow the [OVPack migration workflow](./09-ovpack.md#working-with-multi-write-storage); enabling backups does not backfill it.
 
 ### Can async mode guarantee that the newest data is immediately readable from a backup?
 

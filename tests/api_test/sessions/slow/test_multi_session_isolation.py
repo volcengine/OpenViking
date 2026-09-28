@@ -47,34 +47,6 @@ class TestMultiSessionIsolation:
             if sid2:
                 api_client.delete_session(sid2)
 
-    def test_used_does_not_cross_sessions(self, api_client):
-        sid1 = None
-        sid2 = None
-        try:
-            r1 = api_client.create_session()
-            sid1 = r1.json()["result"]["session_id"]
-            r2 = api_client.create_session()
-            sid2 = r2.json()["result"]["session_id"]
-
-            api_client.session_used(sid1, contexts=["viking://resources/ctx_a"])
-
-            get1 = api_client.get_session(sid1)
-            get2 = api_client.get_session(sid2)
-
-            used1 = get1.json().get("result", {}).get("contexts_used", 0)
-            used2 = get2.json().get("result", {}).get("contexts_used", 0)
-
-            if isinstance(used1, int) and used1 > 0:
-                assert used1 >= 1, f"session 1 should have contexts_used >= 1, got {used1}"
-            assert used2 == 0, (
-                f"session 2 should have contexts_used == 0 (not affected by session 1 used), got {used2}"
-            )
-        finally:
-            if sid1:
-                api_client.delete_session(sid1)
-            if sid2:
-                api_client.delete_session(sid2)
-
     def test_pending_tokens_independent_between_sessions(self, api_client):
         sid1 = None
         sid2 = None

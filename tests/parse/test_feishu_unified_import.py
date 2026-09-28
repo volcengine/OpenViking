@@ -15,8 +15,23 @@ from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.understanding_api import UnderstandingAPI
 from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.utils.config.parser_config import FeishuConfig
 from tests.parse.test_add_directory import FakeVikingFS
 from tests.parse.test_directory_understanding_routing import _configure_understanding
+
+
+def _runtime_config_manager(feishu_config=None):
+    config = feishu_config or FeishuConfig()
+
+    async def resolve_account(_account_id, resolver):
+        return resolver(
+            SimpleNamespace(
+                account=SimpleNamespace(feishu=None),
+                cluster=SimpleNamespace(feishu=config),
+            )
+        )
+
+    return SimpleNamespace(resolve_account=resolve_account)
 
 
 @pytest.mark.parametrize(
@@ -48,7 +63,11 @@ async def test_downloaded_file_routes_by_extension_but_normalized_markdown_does_
             tmp_path / name,
             SourceType.FEISHU,
             "https://example.feishu.cn/file/t",
-            meta={"feishu_content_kind": kind},
+            meta={
+                "feishu_content_kind": kind,
+                "resolved_extension": Path(name).suffix,
+                "resolved_name": name,
+            },
         )
         await router.parse(resource)
     api.parse.assert_awaited_once()
@@ -107,7 +126,6 @@ async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     fs = FakeVikingFS()
     parser = DirectoryParser()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/import")
     calls = []
 
     async def parse_api(self, source, **options):
@@ -143,8 +161,8 @@ async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     assert calls[0][1].get("understanding_response_id") == ("old" if resume else None)
     save.assert_awaited_once_with(plan.entries[0].checkpoint_key(plan.root), "response-1")
     assert result.meta["failed_files"] == []
-    assert "viking://temp/import/Folder/nested/Cloud/0.md" in fs.files
-    assert "viking://temp/import/Folder/empty" not in fs.dirs
+    assert f"{result.temp_dir_path}/Folder/nested/Cloud/0.md" in fs.files
+    assert f"{result.temp_dir_path}/Folder/empty" not in fs.dirs
     assert "secret" not in str(result.meta)
 
 
@@ -172,7 +190,6 @@ async def test_directory_omits_source_directories_without_imported_content(
     fs = FakeVikingFS()
     parser = DirectoryParser()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/empty-filter")
     parse = AsyncMock(side_effect=ValueError("document parse failed"))
     monkeypatch.setattr(DirectoryParser, "_parse_file_with_parser", parse)
     result = await parser.parse(
@@ -186,7 +203,7 @@ async def test_directory_omits_source_directories_without_imported_content(
     assert result.meta["file_count"] == 1
     assert len(result.meta["failed_files"]) == 1
     assert result.meta["failed_files"][0]["path"] == "failed/Broken.md"
-    target = "viking://temp/empty-filter/Folder"
+    target = f"{result.temp_dir_path}/Folder"
     assert fs.files[f"{target}/kept/nested/data.json"] == b'{"body": "keep"}'
     assert [entry["name"] for entry in await fs.ls(target)] == ["kept"]
 
@@ -199,7 +216,6 @@ async def test_directory_virtual_url_obeys_include_filter(monkeypatch, tmp_path)
     parser = DirectoryParser()
     fs = FakeVikingFS()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/filter")
     parse = AsyncMock(side_effect=AssertionError("excluded URL was submitted"))
     monkeypatch.setattr(UnderstandingAPI, "parse", parse)
     result = await parser.parse(tmp_path, _feishu_import_plan=plan, include="*.pdf")
@@ -247,6 +263,11 @@ async def test_async_source_plan_does_not_submit_collection_or_file_url(
             should_use_understanding_directly=router.should_use_understanding_directly,
             submit_understanding=submit,
         ),
+        runtime_config_manager=_runtime_config_manager(),
+    )
+    monkeypatch.setattr(
+        "openviking.service.resource_service.is_git_repo_url",
+        Mock(return_value=False),
     )
     preflight = AsyncMock(
         return_value=SimpleNamespace(
@@ -272,6 +293,52 @@ async def test_async_source_plan_does_not_submit_collection_or_file_url(
     assert plan.task_auth["access_token"] == "secret"
     if recursive:
         assert preflight.await_args.kwargs["feishu_recursive"]
+
+
+@pytest.mark.asyncio
+async def test_direct_understanding_receives_effective_account_feishu_config(monkeypatch):
+    from openviking.parse.mode import ParseMode
+    from openviking.server.identity import RequestContext, Role
+    from openviking.service.resource_service import ResourceService
+    from openviking_cli.session.user_id import UserIdentifier
+    config = FeishuConfig(app_id="account-app", app_secret="account-secret")
+    seen = {}
+
+    def should_submit(source, **kwargs):
+        seen["route"] = kwargs["feishu_config"]
+        return True
+
+    async def submit(source, **kwargs):
+        seen["submit"] = kwargs["feishu_config"]
+        return "response-1"
+
+    monkeypatch.setattr("openviking.service.resource_service.is_git_repo_url", lambda _path: False)
+    monkeypatch.setattr(
+        FeishuAccessor,
+        "preflight_source",
+        AsyncMock(return_value=SimpleNamespace(source_format="file", source_name="Doc")),
+    )
+    service = ResourceService(
+        viking_fs=SimpleNamespace(),
+        skill_processor=SimpleNamespace(),
+        resource_processor=SimpleNamespace(
+            should_use_understanding_directly=should_submit,
+            submit_understanding=submit,
+        ),
+        runtime_config_manager=_runtime_config_manager(config),
+    )
+    plan = await service._prepare_standard_source_plan(
+        path="https://example.feishu.cn/docx/doc",
+        ctx=RequestContext(user=UserIdentifier("account", "user"), role=Role.USER),
+        mode=ParseMode.DEFAULT,
+        allow_local_path_resolution=False,
+        processor_kwargs={},
+        watch_auth_state=None,
+    )
+
+    assert seen == {"route": config, "submit": config}
+    assert plan.understanding_response_id == "response-1"
+    assert "feishu_config" not in plan.processor_args
 
 
 @pytest.mark.asyncio
@@ -308,6 +375,10 @@ async def test_different_extensions_cannot_share_an_output_name(monkeypatch, tmp
         "_download_drive_file",
         lambda *a, **k: (b"%PDF-1.7", "application/pdf", "Report.pdf"),
     )
+    accessor = accessor._new_operation(
+        "https://example.feishu.cn/docx/doc",
+        config=FeishuConfig(),
+    )
     plan = FeishuImportPlan(tmp_path, use_understanding=True)
     await accessor._write_import_content("docx", "doc", "Report", "", tmp_path, plan)
     await accessor._write_import_content("file", "pdf", "Report.pdf", "", tmp_path, plan)
@@ -327,10 +398,8 @@ def test_pagination_budget_stops_before_next_page(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", [None, "understanding"])
 async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, backend):
-    _configure_understanding(monkeypatch, ["pdf"])
-    from openviking_cli.utils.config.open_viking_config import get_openviking_config
-
-    get_openviking_config().parser_api.enable_feishu_url = True
+    config = _configure_understanding(monkeypatch, ["pdf"])
+    config.parser_api.enable_feishu_url = True
     accessor = FeishuAccessor()
     monkeypatch.setattr(accessor, "_drive_folder_display_name", lambda *a, **k: "Root")
     monkeypatch.setattr(
@@ -374,7 +443,6 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
     processor._accessor_registry = SimpleNamespace(access=access)
     fs = FakeVikingFS()
     monkeypatch.setattr(DirectoryParser, "_get_viking_fs", lambda self: fs)
-    monkeypatch.setattr(DirectoryParser, "_create_temp_uri", lambda self: "viking://temp/tree")
     calls = []
 
     async def parse_api(self, source, **options):
@@ -414,9 +482,9 @@ async def test_folder_processor_routes_each_content_and_keeps_tree(monkeypatch, 
         )
         assert "feishu_access_token" not in binary_options
         assert "lark_file" not in binary_options
-        assert "viking://temp/tree/Root/Root/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Leaf/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Report/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Root/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Leaf/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Report/0.md" in fs.files
     finally:
         for resource in resources:
             resource.is_temporary = True
@@ -484,7 +552,7 @@ async def test_resume_polls_original_response_without_resubmitting():
 @pytest.mark.asyncio
 async def test_drive_wiki_reference_resolves_backing_content(monkeypatch, tmp_path):
     accessor = FeishuAccessor()
-    monkeypatch.setattr(accessor, "_resolve_wiki_node", lambda *a: ("base", "app", "Table"))
+    monkeypatch.setattr(accessor, "_resolve_wiki_node", lambda *a, **k: ("base", "app", "Table"))
     plan = FeishuImportPlan(tmp_path, use_understanding=True)
     url = "https://example.feishu.cn/wiki/ref?table=t&view=v"
     await accessor._write_import_content("wiki", "ref", "Table", url, tmp_path, plan)
@@ -568,7 +636,6 @@ async def test_directory_failure_cleans_unmerged_artifacts(
     fs = FakeVikingFS()
     parser = DirectoryParser()
     monkeypatch.setattr(parser, "_get_viking_fs", lambda: fs)
-    monkeypatch.setattr(parser, "_create_temp_uri", lambda: "viking://temp/import")
 
     async def parse_api(self, source, **options):
         name = source.rsplit("/", 1)[-1]
@@ -614,10 +681,8 @@ async def test_directory_failure_cleans_unmerged_artifacts(
 async def test_feishu_collection_obeys_understanding_depth(
     monkeypatch, tmp_path, kind, extensions, depth
 ):
-    from openviking_cli.utils.config.open_viking_config import get_openviking_config
-
-    _configure_understanding(monkeypatch, extensions, max_depth=1)
-    get_openviking_config().parser_api.enable_feishu_url = True
+    config = _configure_understanding(monkeypatch, extensions, max_depth=1)
+    config.parser_api.enable_feishu_url = True
     parent = tmp_path.joinpath(*[f"level-{i}" for i in range(depth)])
     parent.mkdir(parents=True)
     plan = FeishuImportPlan(tmp_path, use_understanding=kind == "url")
@@ -814,14 +879,13 @@ async def test_wiki_failed_root_enumeration_is_not_an_empty_success(monkeypatch)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", [None, "understanding"])
 async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monkeypatch, backend):
-    _configure_understanding(monkeypatch, ["pdf"])
-    from openviking_cli.utils.config.open_viking_config import get_openviking_config
-
-    get_openviking_config().parser_api.enable_feishu_url = True
+    config = _configure_understanding(monkeypatch, ["pdf"])
+    config.parser_api.enable_feishu_url = True
     accessor, _ = wiki_accessor(monkeypatch)
     resources = []
 
     async def access(source, **options):
+        options.pop("feishu_config", None)
         resource = await accessor.access(source, **options)
         resources.append(resource)
         return resource
@@ -830,7 +894,6 @@ async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monke
     processor._accessor_registry = SimpleNamespace(access=access)
     fs = FakeVikingFS()
     monkeypatch.setattr(DirectoryParser, "_get_viking_fs", lambda self: fs)
-    monkeypatch.setattr(DirectoryParser, "_create_temp_uri", lambda self: "viking://temp/tree")
     calls = []
 
     async def parse_api(self, source, **options):
@@ -849,12 +912,16 @@ async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monke
         return result
 
     monkeypatch.setattr(UnderstandingAPI, "parse", parse_api)
+    account_feishu = FeishuConfig(
+        app_id="account-app", app_secret="account-secret"
+    )
     try:
         result = await processor.process(
             "https://example.larksuite.com/wiki/root?table=t&view=v",
             feishu_recursive=True,
             feishu_access_token="secret",
             parser_backend=backend,
+            feishu_config=account_feishu,
         )
         assert result.meta["failed_files"] == []
         assert result.meta["file_count"] == 3
@@ -866,14 +933,15 @@ async def test_recursive_wiki_processor_routes_each_content_and_keeps_tree(monke
             "https://example.larksuite.com/wiki/leaf",
         }
         assert all(options["feishu_access_token"] == "secret" for _, options in cloud_calls)
+        assert all(options["feishu_config"] is account_feishu for _, options in cloud_calls)
         binary_options = next(
             options for source, options in calls if not source.startswith("https:")
         )
         assert "feishu_access_token" not in binary_options
         assert "lark_file" not in binary_options
-        assert "viking://temp/tree/Root/Root/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Leaf/0.md" in fs.files
-        assert "viking://temp/tree/Root/Report/Report/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Root/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Leaf/0.md" in fs.files
+        assert f"{result.temp_dir_path}/Root/Report/Report/0.md" in fs.files
     finally:
         for resource in resources:
             resource.is_temporary = True

@@ -16,9 +16,10 @@ from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.responses import response_from_result
-from openviking.server.skill_source_metadata import persist_skill_source_metadata
+from openviking.server.skill_ingest import ingest_temp_upload_skill, install_skills
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.storage.acl import AclSpec
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -71,7 +72,7 @@ class AddResourceRequest(BaseModel):
             create no Watch: native imports with explicit ``to`` pause a single accessible
             Watch (409 if ambiguous); Connector imports leave Watches untouched.
             See the endpoint's Watch ownership rules.
-        is_active: Initial Watch state for Connector and native Feishu imports. When false,
+        is_active: Initial Watch state for Connector, native Feishu, and native Git imports. When false,
             requires watch_interval > 0 and an explicit to or parent target and creates the Watch
             paused; it stays paused until updated, regardless of the import result.
     """
@@ -103,6 +104,7 @@ class AddResourceRequest(BaseModel):
     processing_mode: ProcessingMode = DEFAULT_PROCESSING_MODE
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
+    acl: AclSpec | None = None
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
@@ -138,8 +140,8 @@ class AddSkillRequest(BaseModel):
     """Request model for add_skill.
 
     Attributes:
-        data: Inline skill content or structured skill data. HTTP requests do not treat
-            string values as host filesystem paths.
+        data: Git skill URL, inline skill content, or structured skill data.
+            HTTP requests do not treat strings as host filesystem paths.
         temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
         wait: Whether to wait for skill processing to complete.
         timeout: Timeout in seconds when wait=True.
@@ -149,6 +151,8 @@ class AddSkillRequest(BaseModel):
 
     data: Any = None
     temp_file_id: Optional[str] = None
+    skills: list[str] = Field(default_factory=list)
+    list_only: bool = False
     wait: bool = False
     timeout: Optional[float] = None
     source_metadata: Optional[Dict[str, Any]] = None
@@ -177,7 +181,8 @@ async def temp_upload(
     signed ``?token=`` — minted by the MCP ``add_resource`` tool for local-file paths — the
     server additionally finishes ingestion in-request: it resolves the upload, calls
     ``add_resource`` with the token-bound ``to``/``reason``, and returns the final result, so
-    the agent never needs a second call. The ``?token=`` query param is consumed by the auth
+    the agent never needs a second call. Tokens minted by the MCP ``add_skill`` tool install
+    the upload as skills instead. The ``?token=`` query param is consumed by the auth
     dependency.
     """
     signed = getattr(request.state, "signed_upload", None)
@@ -188,6 +193,16 @@ async def temp_upload(
         temp_file_id = await store.save_upload(file, effective_upload_mode, _ctx)
         if signed is None:
             return {"temp_file_id": temp_file_id}
+        if signed.kind == "skill":
+            return await ingest_temp_upload_skill(
+                store,
+                temp_file_id,
+                _ctx,
+                target_uri=signed.skill_target_uri,
+                names=signed.skill_names,
+                list_only=signed.list_only,
+                source_type="mcp",
+            )
         return await ingest_temp_upload(
             store,
             temp_file_id,
@@ -252,6 +267,7 @@ async def add_resource(
     allow_local_path_resolution = False
     original_filename = None
     resolved = None
+    shared_source_ref = None
     if request.temp_file_id:
         if request.watch_interval > 0:
             raise InvalidArgumentError(
@@ -261,12 +277,20 @@ async def add_resource(
                 "sitemap / RSS source instead, or re-add the resource when the "
                 "source changes."
             )
-        resolved = await TempUploadStore.build(http_request.app.state.config).resolve_for_consume(
-            request.temp_file_id, _ctx
-        )
-        path = resolved.local_path
-        original_filename = resolved.original_filename
-        allow_local_path_resolution = True
+        store = TempUploadStore.build(http_request.app.state.config)
+        # A shared upload already lives in durable storage: the API only validates
+        # a reference and the SOURCE worker downloads it once, avoiding a second
+        # API-side download + task re-stage. Local uploads keep the copy path.
+        shared_source_ref = await store.resolve_shared_reference(request.temp_file_id, _ctx)
+        if shared_source_ref is not None:
+            path = shared_source_ref.original_filename or request.temp_file_id
+            original_filename = shared_source_ref.original_filename or None
+            allow_local_path_resolution = True
+        else:
+            resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+            path = resolved.local_path
+            original_filename = resolved.original_filename
+            allow_local_path_resolution = True
     elif path is not None:
         path = require_remote_resource_source(path, declared_connector_add_type=request.add_type)
     if path is None:
@@ -309,6 +333,7 @@ async def add_resource(
                 instruction=request.instruction,
                 wait=request.wait,
                 timeout=request.timeout,
+                acl=request.acl,
                 tags=request.tags,
                 tag_mode=request.tag_mode,
                 allow_local_path_resolution=allow_local_path_resolution,
@@ -316,6 +341,7 @@ async def add_resource(
                 internal_task=request.internal_task,
                 is_active=request.is_active,
                 args=request.args,
+                shared_source=shared_source_ref,
                 **kwargs,
             )
         except Exception:
@@ -341,7 +367,6 @@ async def add_skill(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add skill to OpenViking."""
-    service = get_service()
     target_uri = resolve_path_variables(request.target_uri).strip() if request.target_uri else ""
     if target_uri:
         target_uri = validate_content_target_uri(
@@ -377,20 +402,19 @@ async def add_skill(
 
     async def _add() -> dict[str, Any]:
         try:
-            result = await service.resources.add_skill(
-                data=data,
-                ctx=_ctx,
+            return await install_skills(
+                data,
+                _ctx,
+                names=request.skills,
+                list_only=request.list_only,
                 wait=request.wait,
                 timeout=request.timeout,
+                target_uri=target_uri,
+                source_metadata=source_metadata,
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
-                target_uri=target_uri,
+                telemetry=request.telemetry,
             )
-            await persist_skill_source_metadata(service, _ctx, result, source_metadata)
-        except Exception:
-            raise
-        else:
-            return result
         finally:
             if resolved:
                 await resolved.cleanup()

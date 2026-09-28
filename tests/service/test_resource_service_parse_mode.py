@@ -34,6 +34,9 @@ class _ResourceProcessor:
     async def prepare_durable_source(self, *_args, **_kwargs):
         return None
 
+    async def github_token_for(self, *_args, **_kwargs):
+        return None
+
     async def finish_prepared_resource(self, *_args, **_kwargs):
         return {"status": "success"}
 

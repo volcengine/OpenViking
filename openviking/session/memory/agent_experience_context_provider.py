@@ -10,7 +10,7 @@ No tool calls — all context is prefetched. Top-3 candidates also include their
 source_trajectories as grounding material.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext
@@ -24,6 +24,9 @@ from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
+
+if TYPE_CHECKING:
+    from openviking.config.vlm import VLMHandle
 
 logger = get_logger(__name__)
 
@@ -50,8 +53,13 @@ class AgentExperienceContextProvider(SessionExtractContextProvider):
         trajectory_summary: str,
         trajectory_uri: str,
         latest_archive_overview: str = "",
+        vlm_config: Optional["VLMHandle"] = None,
     ):
-        super().__init__(messages=messages, latest_archive_overview=latest_archive_overview)
+        super().__init__(
+            messages=messages,
+            latest_archive_overview=latest_archive_overview,
+            vlm_config=vlm_config,
+        )
         self.trajectory_summary = trajectory_summary
         self.trajectory_uri = trajectory_uri
         self.prefetched_uris: List[str] = []

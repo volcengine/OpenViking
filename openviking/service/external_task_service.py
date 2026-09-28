@@ -5,14 +5,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol
 from uuid import uuid4
 
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import TaskRecord, TaskStatus, get_task_tracker
-from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.service.task_tracker_concurrency import (
+    KeyedAsyncLockPool,
+    OwnerLoopDispatcher,
+    run_to_completion,
+)
 from openviking.storage.queuefs import QueueManager, get_queue_manager
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -65,12 +72,18 @@ class ExternalTaskProvider(Protocol):
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot: ...
 
     async def cancel(
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot: ...
 
 
@@ -79,10 +92,13 @@ class ExternalTaskService:
 
     def __init__(self) -> None:
         self._providers: dict[str, ExternalTaskProvider] = {}
-        # Accessed only on the service loop. Restored owners may include multiple
+        # Restored before workers start, then accessed only by the ExternalTask
+        # queue's loop. Restored owners may include multiple
         # tasks submitted before target serialization was enabled.
         self._owners: dict[tuple[str | None, str, str], set[str]] = {}
         self._executing: set[str] = set()
+        self._submission_locks = KeyedAsyncLockPool[str]()
+        self._submission_dispatcher = OwnerLoopDispatcher()
 
     def register(self, provider: ExternalTaskProvider) -> None:
         if provider.task_type in self._providers:
@@ -138,21 +154,75 @@ class ExternalTaskService:
         private_payload: Mapping[str, Any] | None = None,
         connection: Mapping[str, Any],
         ctx: RequestContext,
+        idempotency_key: str | None = None,
+    ) -> TaskRecord:
+        async def create_task():
+            return await self._create(
+                task_type,
+                resource_id=resource_id,
+                payload=payload,
+                private_payload=private_payload,
+                connection=connection,
+                ctx=ctx,
+                idempotency_key=idempotency_key,
+            )
+
+        if not idempotency_key:
+            return await create_task()
+        key = submission_task_id(ctx, task_type, "", idempotency_key)
+
+        async def serialized():
+            async with self._submission_locks.acquire(key):
+                return await run_to_completion(create_task)
+
+        return await self._submission_dispatcher.run(serialized)
+
+    async def _create(
+        self,
+        task_type: str,
+        *,
+        resource_id: str | None,
+        payload: Mapping[str, Any],
+        private_payload: Mapping[str, Any] | None = None,
+        connection: Mapping[str, Any],
+        ctx: RequestContext,
+        idempotency_key: str | None = None,
     ) -> TaskRecord:
         provider = self._provider(task_type)
         tracker = get_task_tracker()
+        request_hash = submission_request_hash(payload, private_payload)
+        token = uuid4().hex
+        task_id = (
+            submission_task_id(ctx, task_type, provider.task_id_prefix, idempotency_key)
+            if idempotency_key
+            else f"{provider.task_id_prefix}{token}"
+        )
         task = await tracker.create(
             task_type,
             resource_id=resource_id,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            task_id=f"{provider.task_id_prefix}{uuid4().hex}",
-            meta={"request": dict(payload)},
+            task_id=task_id,
+            meta={
+                "request": dict(payload),
+                **(
+                    {"submission_hash": request_hash, "submission_token": token}
+                    if idempotency_key
+                    else {}
+                ),
+            },
             auth={
                 "openviking_connection": dict(connection),
                 "external_request_private": dict(private_payload or {}),
             },
         )
+        if idempotency_key and task.meta.get("submission_hash") != request_hash:
+            raise ConflictError("Idempotency-Key was already used with different parameters")
+        if idempotency_key and task.meta.get("submission_token") != token:
+            # Recover a creation interrupted before queue delivery. Duplicate
+            # deliveries are safe: execute claims each task before submitting.
+            await self._resume_submission(task, ctx)
+            return task
         enqueued = False
         try:
             await tracker.update_stage(
@@ -188,6 +258,47 @@ class ExternalTaskService:
             raise
         return task
 
+    async def recover_submission(
+        self,
+        task_type: str,
+        payload: Mapping[str, Any],
+        private_payload: Mapping[str, Any],
+        ctx: RequestContext,
+        key: str,
+    ) -> TaskRecord | None:
+        async def recover():
+            provider = self._provider(task_type)
+            task = await get_task_tracker().get(
+                submission_task_id(ctx, task_type, provider.task_id_prefix, key),
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+            )
+            if task is None:
+                return None
+            if task.meta.get("submission_hash") != submission_request_hash(
+                payload, private_payload
+            ):
+                raise ConflictError("Idempotency-Key was already used with different parameters")
+            await self._resume_submission(task, ctx)
+            return task
+
+        async def serialized():
+            async with self._submission_locks.acquire(submission_task_id(ctx, task_type, "", key)):
+                return await run_to_completion(recover)
+
+        return await self._submission_dispatcher.run(serialized)
+
+    async def _resume_submission(self, task: TaskRecord, ctx: RequestContext) -> None:
+        if task.status == TaskStatus.PENDING:
+            await get_queue_manager().enqueue(
+                QueueManager.EXTERNAL_TASK,
+                {
+                    "task_id": task.task_id,
+                    "account_id": ctx.account_id,
+                    "user_id": ctx.user.user_id,
+                },
+            )
+
     async def execute(self, task_id: str, account_id: str, user_id: str) -> bool:
         """Return False when this delivery must rotate behind other target work."""
         tracker = get_task_tracker()
@@ -221,7 +332,7 @@ class ExternalTaskService:
             if task_id in self._executing or (owners and task_id not in owners):
                 return False
             # No await between checking and claiming: concurrent deliveries on the
-            # service loop cannot both acquire an unoccupied target.
+            # queue loop cannot both acquire an unoccupied target.
             if key is not None:
                 self._owners.setdefault(key, set()).add(task_id)
             self._executing.add(task_id)
@@ -276,7 +387,12 @@ class ExternalTaskService:
                 )
             while True:
                 snapshot = await self._retry(
-                    lambda: provider.get(external_task_id, connection),
+                    lambda: provider.get(
+                        external_task_id,
+                        connection,
+                        payload=payload,
+                        private_payload=private_payload,
+                    ),
                     task_id=task_id,
                     operation_name="poll",
                     poll_interval=provider.poll_interval_seconds,
@@ -359,7 +475,9 @@ class ExternalTaskService:
             meta = snapshot.meta or {}
             if task is not None and (
                 task.stage != stage
-                or any(key not in task.meta or task.meta[key] != value for key, value in meta.items())
+                or any(
+                    key not in task.meta or task.meta[key] != value for key, value in meta.items()
+                )
             ):
                 await tracker.update_stage(
                     task_id,
@@ -441,7 +559,9 @@ class ExternalTaskService:
                         user_id=user_id,
                     )
                 snapshot = await self._retry(
-                    lambda task_id=external_task_id: provider.cancel(task_id, connection),
+                    lambda task_id=external_task_id: provider.cancel(
+                        task_id, connection, payload=payload, private_payload=private_payload
+                    ),
                     task_id=ov_task_id,
                     operation_name="cancel",
                     poll_interval=provider.poll_interval_seconds,
@@ -457,7 +577,9 @@ class ExternalTaskService:
                         return
                     await asyncio.sleep(provider.poll_interval_seconds)
                     snapshot = await self._retry(
-                        lambda task_id=external_task_id: provider.get(task_id, connection),
+                        lambda task_id=external_task_id: provider.get(
+                            task_id, connection, payload=payload, private_payload=private_payload
+                        ),
                         task_id=ov_task_id,
                         operation_name="poll cancellation",
                         poll_interval=provider.poll_interval_seconds,
@@ -513,3 +635,21 @@ __all__ = [
     "ExternalTaskService",
     "ExternalTaskSnapshot",
 ]
+
+
+def submission_task_id(ctx: RequestContext, task_type: str, prefix: str, key: str) -> str:
+    scope = json.dumps([ctx.account_id, ctx.user.user_id, task_type, key])
+    return prefix + hashlib.sha256(scope.encode()).hexdigest()
+
+
+def submission_request_hash(
+    payload: Mapping[str, Any], private_payload: Mapping[str, Any] | None
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {"payload": dict(payload), "private": dict(private_payload or {})},
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()

@@ -13,5 +13,3 @@ class ReindexConfig(BaseModel):
         gt=0,
         description="Maximum number of files read, prepared, and enqueued concurrently",
     )
-
-    model_config = {"extra": "forbid"}

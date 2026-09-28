@@ -12,7 +12,7 @@ description: |
   training pipeline to learn better experience memories from this commit rollout.
 
 directory: "viking://user/{{ user_space }}/memories/cases"
-filename_template: "{{ case_name }}.md"
+filename_template: "{{ case_name|lower }}.md"
 enabled: true
 peer_enabled: false
 content_template: |

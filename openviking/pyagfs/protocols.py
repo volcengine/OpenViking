@@ -104,6 +104,7 @@ class AGFSSyncClientProtocol(Protocol):
         offset: int = 0,
         sort_by: str | None = None,
         sort_order: str = "asc",
+        directories_only: bool = False,
     ) -> list[Dict[str, Any]]:
         """Return a sorted range from a directory tree."""
 

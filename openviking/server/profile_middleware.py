@@ -9,12 +9,11 @@ import json
 import site
 import sysconfig
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from fastapi import Request
-from fastapi.responses import FileResponse, JSONResponse
-from starlette.responses import Response as StarletteResponse
-from starlette.responses import StreamingResponse
+from fastapi.responses import JSONResponse
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 PROFILE_TRUE_VALUES = {"1", "true", "yes", "on"}
 PROFILE_SORT_BY = "cumulative"
@@ -110,7 +109,7 @@ def _sanitize_profile_path(path: str) -> str:
                     return "/".join(parts[idx + 1 :])
 
         for idx, part in enumerate(parts):
-            if part.startswith("python") and idx + 1 < len(parts):
+            if part.startswith("python") and part[6:7].isdigit() and idx + 1 < len(parts):
                 suffix = parts[idx + 1 :]
                 if suffix:
                     return "/".join(suffix)
@@ -167,60 +166,55 @@ def format_profile_output(profiler: cProfile.Profile) -> list[str]:
     return truncated.splitlines()
 
 
-async def inject_profile_into_response(response, profile_lines: list[str]):
-    if isinstance(response, (FileResponse, StreamingResponse)):
-        return response
+class ProfileMiddleware:
+    """Profile response generation and annotate ordinary JSON responses."""
 
-    content_type = response.headers.get("content-type", "").lower()
-    if "application/json" not in content_type and "+json" not in content_type:
-        return response
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
 
-    if hasattr(response, "body") and response.body is not None:
-        body = response.body
-    else:
-        body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
-
-    try:
-        payload = json.loads(body)
-    except (TypeError, ValueError):
-        return StarletteResponse(
-            content=body,
-            status_code=response.status_code,
-            headers=dict(response.headers),
-            media_type=response.media_type,
-        )
-
-    if not isinstance(payload, dict):
-        return StarletteResponse(
-            content=body,
-            status_code=response.status_code,
-            headers=dict(response.headers),
-            media_type=response.media_type,
-        )
-
-    payload["profile"] = profile_lines
-    rebuilt = JSONResponse(status_code=response.status_code, content=payload)
-    for key, value in response.headers.items():
-        if key.lower() not in {"content-length", "content-type"}:
-            rebuilt.headers[key] = value
-    return rebuilt
-
-
-def create_profile_http_middleware() -> Callable[[Request, Callable[..., Awaitable]], Awaitable]:
-    async def add_profile_output(request: Request, call_next: Callable[..., Awaitable]):
-        if not profile_enabled(request):
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not profile_enabled(Request(scope)):
+            await self.app(scope, receive, send)
+            return
 
         profiler = cProfile.Profile()
+        response_start: Message | None = None
+
+        async def send_profiled(message: Message) -> None:
+            nonlocal response_start
+            if message["type"] == "http.response.start":
+                profiler.disable()
+                headers = Headers(raw=message.get("headers", []))
+                content_type = headers.get("content-type", "").lower()
+                # JSONResponse sends a sized body in one message. StreamingResponse
+                # omits its length; FileResponse advertises byte ranges/downloads.
+                if (
+                    scope["method"] != "HEAD"
+                    and ("application/json" in content_type or "+json" in content_type)
+                    and "content-length" in headers
+                    and "content-disposition" not in headers
+                    and "accept-ranges" not in headers
+                ):
+                    response_start = message
+                    return
+            elif response_start is not None:
+                if message["type"] == "http.response.body" and not message.get("more_body", False):
+                    try:
+                        payload = json.loads(message.get("body", b""))
+                    except (TypeError, ValueError):
+                        payload = None
+                    if isinstance(payload, dict):
+                        payload["profile"] = format_profile_output(profiler)
+                        body = JSONResponse(payload).body
+                        MutableHeaders(scope=response_start)["content-length"] = str(len(body))
+                        message = {**message, "body": body}
+                # A chunked body or pathsend is passed through without buffering.
+                await send(response_start)
+                response_start = None
+            await send(message)
+
         profiler.enable()
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_profiled)
         finally:
             profiler.disable()
-
-        profile_lines = format_profile_output(profiler)
-        return await inject_profile_into_response(response, profile_lines)
-
-    return add_profile_output

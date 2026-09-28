@@ -8,12 +8,12 @@ files' MEMORY_FIELDS metadata.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
+from openviking.concurrency import AsyncSemaphore
 from openviking.core.namespace import (
     NamespaceShapeError,
     canonical_user_root,
@@ -127,7 +127,8 @@ class ResourceMemoryLinkService:
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_service = session_service
-        self._reason_session_lock = asyncio.Lock()
+        # Additions run on queue loops; deletions can run on the HTTP loop.
+        self._reason_session_lock = AsyncSemaphore()
 
     def set_dependencies(
         self,

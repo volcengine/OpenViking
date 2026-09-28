@@ -5,6 +5,7 @@ import asyncio
 import threading
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -23,6 +24,15 @@ def make_backend(adapter):
         bound_account_id="acc1",
         shared_adapter=adapter,
     )
+
+
+class _BorrowableBackend(_SingleAccountBackend):
+    def __init__(self):
+        super().__init__(
+            VectorDBBackendConfig(backend="local", name="context", dimension=4),
+            bound_account_id="acc1",
+            shared_adapter=SimpleNamespace(mode="local"),
+        )
 
 
 @pytest.mark.asyncio
@@ -186,6 +196,7 @@ async def test_single_account_backend_upsert_many_rejects_invalid_adapter_result
 @pytest.mark.asyncio
 async def test_viking_vector_index_backend_upsert_many_delegates_once():
     backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = None
     ctx = SimpleNamespace(account_id="acc1")
     records = [{"id": "rec-1"}, {"id": "rec-2"}]
     calls = []
@@ -195,7 +206,7 @@ async def test_viking_vector_index_backend_upsert_many_delegates_once():
             calls.append(data_list)
             return [row["id"] for row in data_list]
 
-    backend._get_backend_for_context = lambda _ctx: _BoundBackend()
+    backend._get_backend_for_context = AsyncMock(return_value=_BoundBackend())
 
     assert await backend.upsert_many(records, ctx=ctx) == ["rec-1", "rec-2"]
     assert calls == [records]
@@ -207,7 +218,7 @@ async def test_viking_vector_index_backend_bulk_ingest_balances_scope_on_error()
     ctx = SimpleNamespace(account_id="acc1")
     calls = []
 
-    class _BoundBackend:
+    class _BoundBackend(_BorrowableBackend):
         async def begin_bulk_ingest(self):
             calls.append("begin")
 
@@ -215,7 +226,7 @@ async def test_viking_vector_index_backend_bulk_ingest_balances_scope_on_error()
             calls.append("end")
 
     bound_backend = _BoundBackend()
-    backend._get_backend_for_context = lambda _ctx: bound_backend
+    backend._get_backend_for_context = AsyncMock(return_value=bound_backend)
 
     with pytest.raises(RuntimeError, match="injected"):
         async with backend.bulk_ingest(ctx=ctx):
@@ -234,7 +245,7 @@ async def test_bulk_ingest_cancellation_during_threaded_begin_balances_scope():
     begin_finished = threading.Event()
     calls = []
 
-    class _BoundBackend:
+    class _BoundBackend(_BorrowableBackend):
         async def begin_bulk_ingest(self):
             def blocking_begin():
                 begin_started.set()
@@ -247,7 +258,8 @@ async def test_bulk_ingest_cancellation_during_threaded_begin_balances_scope():
         async def end_bulk_ingest(self):
             calls.append("end")
 
-    backend._get_backend_for_context = lambda _ctx: _BoundBackend()
+    bound_backend = _BoundBackend()
+    backend._get_backend_for_context = AsyncMock(return_value=bound_backend)
 
     async def enter_scope():
         async with backend.bulk_ingest(ctx=ctx):
@@ -264,6 +276,7 @@ async def test_bulk_ingest_cancellation_during_threaded_begin_balances_scope():
         with pytest.raises(asyncio.CancelledError):
             await task
         assert calls == ["begin", "end"]
+        assert not bound_backend._operations
     finally:
         allow_begin.set()
         if not task.done():
@@ -280,7 +293,7 @@ async def test_bulk_ingest_cancellation_during_threaded_end_waits_for_cleanup():
     end_finished = threading.Event()
     calls = []
 
-    class _BoundBackend:
+    class _BoundBackend(_BorrowableBackend):
         async def begin_bulk_ingest(self):
             calls.append("begin")
 
@@ -293,7 +306,8 @@ async def test_bulk_ingest_cancellation_during_threaded_end_waits_for_cleanup():
 
             await asyncio.to_thread(blocking_end)
 
-    backend._get_backend_for_context = lambda _ctx: _BoundBackend()
+    bound_backend = _BoundBackend()
+    backend._get_backend_for_context = AsyncMock(return_value=bound_backend)
 
     async def use_scope():
         async with backend.bulk_ingest(ctx=ctx):
@@ -311,6 +325,7 @@ async def test_bulk_ingest_cancellation_during_threaded_end_waits_for_cleanup():
         with pytest.raises(asyncio.CancelledError):
             await task
         assert calls == ["begin", "body", "end"]
+        assert not bound_backend._operations
     finally:
         allow_end.set()
         if not task.done():
@@ -328,6 +343,11 @@ async def test_viking_vector_index_backend_upsert_many_persists_batch(tmp_path):
             dimension=4,
             path=str(tmp_path),
         )
+    )
+    backend.set_vector_config_resolver(
+        SimpleNamespace(resolve=AsyncMock(return_value=SimpleNamespace(
+            dedicated_vectordb=False, vectordb=backend._config,
+        )))
     )
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     schema = {

@@ -1,228 +1,80 @@
 from datetime import datetime
 
+import pytest
 from vikingbot.observability.outcome import evaluate_response_outcome
 
 
-def test_evaluate_response_outcome_marks_resolved_without_follow_up():
-    evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            }
-        ],
-        "resp-1",
-        now=datetime.fromisoformat("2026-04-30T00:05:00"),
-    )
-
-    assert evaluation is not None
-    assert evaluation.outcome_label == "resolved"
-    assert evaluation.resolved_in_one_turn is True
-    assert evaluation.reask_within_10m is False
-    assert evaluation.clarification_turns == 0
-    assert evaluation.follow_up_without_feedback is False
-
-
-def test_evaluate_response_outcome_prefers_positive_feedback():
-    evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            },
-            {
-                "role": "user",
-                "content": "thanks",
-                "timestamp": "2026-04-30T00:01:00",
-            },
-        ],
-        "resp-1",
-        feedback_events=[
-            {
-                "response_id": "resp-1",
-                "feedback_type": "thumb_up",
-            }
-        ],
-        now=datetime.fromisoformat("2026-04-30T00:02:00"),
-    )
-
-    assert evaluation is not None
-    assert evaluation.outcome_label == "positive_feedback"
-    assert evaluation.resolved_in_one_turn is True
-    assert evaluation.reask_within_10m is False
-    assert evaluation.clarification_turns == 0
-    assert evaluation.follow_up_without_feedback is False
-
-
-def test_evaluate_response_outcome_marks_negative_feedback():
-    evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            }
-        ],
-        "resp-1",
-        feedback_events=[
-            {
-                "response_id": "resp-1",
-                "feedback_type": "thumb_down",
-            }
-        ],
-        now=datetime.fromisoformat("2026-04-30T00:02:00"),
-    )
-
-    assert evaluation is not None
-    assert evaluation.outcome_label == "negative_feedback"
-    assert evaluation.resolved_in_one_turn is False
-    assert evaluation.follow_up_without_feedback is False
-
-
-def test_evaluate_response_outcome_maps_positive_rating_to_positive_feedback():
-    evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            },
+@pytest.mark.parametrize(
+    "feedback, follow_up_minute, expected",
+    [
+        pytest.param(None, None, ("resolved", True, False, 0, False), id="resolved"),
+        pytest.param(
+            {"feedback_type": "thumb_up"},
+            1,
+            ("positive_feedback", True, False, 0, False),
+            id="positive-feedback",
+        ),
+        pytest.param(
+            {"feedback_type": "thumb_down"},
+            None,
+            ("negative_feedback", False, False, 0, False),
+            id="negative-feedback",
+        ),
+        pytest.param(
+            {"feedback_type": "rating", "feedback_score": 1},
+            1,
+            ("positive_feedback", True, False, 0, False),
+            id="positive-rating",
+        ),
+        pytest.param(
+            {"feedback_type": "rating", "feedback_score": -1},
+            None,
+            ("negative_feedback", False, False, 0, False),
+            id="negative-rating",
+        ),
+        pytest.param(
+            {"feedback_type": "rating", "feedback_score": 0},
+            None,
+            ("resolved", True, False, 0, False),
+            id="neutral-rating",
+        ),
+        pytest.param(None, 5, ("reasked", False, True, 1, False), id="reasked"),
+        pytest.param(
+            None, 20, ("follow_up_without_feedback", False, False, 1, True), id="later-follow-up"
+        ),
+    ],
+)
+def test_response_outcome(feedback, follow_up_minute, expected):
+    messages = [
+        {
+            "role": "assistant",
+            "content": "hello",
+            "response_id": "resp-1",
+            "timestamp": "2026-04-30T00:00:00",
+        }
+    ]
+    if follow_up_minute is not None:
+        messages.append(
             {
                 "role": "user",
-                "content": "thanks",
-                "timestamp": "2026-04-30T00:01:00",
-            },
-        ],
-        "resp-1",
-        feedback_events=[
-            {
-                "response_id": "resp-1",
-                "feedback_type": "rating",
-                "feedback_score": 1,
+                "content": "follow-up",
+                "timestamp": f"2026-04-30T00:{follow_up_minute:02d}:00",
             }
-        ],
-        now=datetime.fromisoformat("2026-04-30T00:02:00"),
-    )
-
-    assert evaluation is not None
-    assert evaluation.outcome_label == "positive_feedback"
-    assert evaluation.resolved_in_one_turn is True
-    assert evaluation.reask_within_10m is False
-    assert evaluation.clarification_turns == 0
-    assert evaluation.follow_up_without_feedback is False
-    assert evaluation.evidence["feedback_score"] == 1.0
-
-
-def test_evaluate_response_outcome_maps_negative_rating_to_negative_feedback():
+        )
+    events = [{"response_id": "resp-1", **feedback}] if feedback is not None else []
     evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            }
-        ],
+        messages,
         "resp-1",
-        feedback_events=[
-            {
-                "response_id": "resp-1",
-                "feedback_type": "rating",
-                "feedback_score": -1,
-            }
-        ],
-        now=datetime.fromisoformat("2026-04-30T00:02:00"),
+        feedback_events=events,
+        now=datetime(2026, 4, 30, 0, (follow_up_minute or 1) + 1),
     )
-
     assert evaluation is not None
-    assert evaluation.outcome_label == "negative_feedback"
-    assert evaluation.resolved_in_one_turn is False
-    assert evaluation.follow_up_without_feedback is False
-    assert evaluation.evidence["feedback_score"] == -1.0
-
-
-def test_evaluate_response_outcome_keeps_heuristic_outcome_for_neutral_rating():
-    evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            }
-        ],
-        "resp-1",
-        feedback_events=[
-            {
-                "response_id": "resp-1",
-                "feedback_type": "rating",
-                "feedback_score": 0,
-            }
-        ],
-        now=datetime.fromisoformat("2026-04-30T00:02:00"),
-    )
-
-    assert evaluation is not None
-    assert evaluation.outcome_label == "resolved"
-    assert evaluation.resolved_in_one_turn is True
-    assert evaluation.evidence["feedback_score"] == 0.0
-
-
-def test_evaluate_response_outcome_marks_reasked_within_window():
-    evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            },
-            {
-                "role": "user",
-                "content": "that did not help",
-                "timestamp": "2026-04-30T00:05:00",
-            },
-        ],
-        "resp-1",
-        now=datetime.fromisoformat("2026-04-30T00:06:00"),
-    )
-
-    assert evaluation is not None
-    assert evaluation.outcome_label == "reasked"
-    assert evaluation.resolved_in_one_turn is False
-    assert evaluation.reask_within_10m is True
-    assert evaluation.clarification_turns == 1
-    assert evaluation.follow_up_without_feedback is False
-
-
-def test_evaluate_response_outcome_marks_follow_up_without_feedback():
-    evaluation = evaluate_response_outcome(
-        [
-            {
-                "role": "assistant",
-                "content": "hello",
-                "response_id": "resp-1",
-                "timestamp": "2026-04-30T00:00:00",
-            },
-            {
-                "role": "user",
-                "content": "another question later",
-                "timestamp": "2026-04-30T00:20:00",
-            },
-        ],
-        "resp-1",
-        now=datetime.fromisoformat("2026-04-30T00:21:00"),
-    )
-
-    assert evaluation is not None
-    assert evaluation.outcome_label == "follow_up_without_feedback"
-    assert evaluation.resolved_in_one_turn is False
-    assert evaluation.reask_within_10m is False
-    assert evaluation.clarification_turns == 1
-    assert evaluation.follow_up_without_feedback is True
+    assert (
+        evaluation.outcome_label,
+        evaluation.resolved_in_one_turn,
+        evaluation.reask_within_10m,
+        evaluation.clarification_turns,
+        evaluation.follow_up_without_feedback,
+    ) == expected
+    if feedback is not None and "feedback_score" in feedback:
+        assert evaluation.evidence["feedback_score"] == feedback["feedback_score"]

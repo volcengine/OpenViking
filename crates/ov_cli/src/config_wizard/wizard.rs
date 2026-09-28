@@ -3682,11 +3682,15 @@ async fn run_account_management_menu(
                             "正在删除账户...",
                         ),
                     ))?;
-                    delete_root_account(&client, &account.account_id).await?;
+                    let task = delete_root_account(&client, &account.account_id).await?;
                     if clear_config_account_selection(config, root_api_key, &account.account_id) {
                         save_user_management_local_config(store, config_name.as_deref(), config)?;
                     }
-                    *account_list_notice = Some(deleted_account_notice(&account.account_id));
+                    let task_id = task["task_id"].as_str().ok_or_else(|| {
+                        Error::Parse("Account deletion response has no task_id".to_string())
+                    })?;
+                    *account_list_notice =
+                        Some(account_deletion_notice(&account.account_id, task_id));
                     return Ok(false);
                 }
                 PromptResult::Value(false) | PromptResult::Back => continue,
@@ -4099,10 +4103,10 @@ fn user_management_save_target(config_name: &str) -> String {
     }
 }
 
-fn deleted_account_notice(account_id: &str) -> String {
+fn account_deletion_notice(account_id: &str, task_id: &str) -> String {
     match Language::current() {
-        Language::En => format!("Deleted account {account_id}/."),
-        Language::ZhCn => format!("已删除账户 {account_id}/。"),
+        Language::En => format!("Account {account_id}/ disabled. Cleanup task: {task_id}"),
+        Language::ZhCn => format!("账户 {account_id}/ 已停用，后台清理任务：{task_id}"),
     }
 }
 
@@ -4651,10 +4655,9 @@ async fn create_root_user(client: &BaseClient, account_id: &str, user_id: &str) 
         .await
 }
 
-async fn delete_root_account(client: &BaseClient, account_id: &str) -> Result<()> {
+async fn delete_root_account(client: &BaseClient, account_id: &str) -> Result<Value> {
     let path = format!("/api/v1/admin/accounts/{account_id}");
-    let _: Value = client.delete(&path, &[]).await?;
-    Ok(())
+    client.delete(&path, &[]).await
 }
 
 async fn delete_root_user(client: &BaseClient, account_id: &str, user_id: &str) -> Result<()> {
@@ -4679,7 +4682,9 @@ fn root_accounts_from_value(value: &Value) -> Vec<RootAccountSummary> {
         .flat_map(|items| items.iter())
         .filter_map(|item| {
             let account_id = item.get("account_id")?.as_str()?.trim();
-            if account_id.is_empty() {
+            if account_id.is_empty()
+                || item.get("status").and_then(Value::as_str) == Some("deleting")
+            {
                 return None;
             }
             Some(RootAccountSummary {
@@ -8113,6 +8118,7 @@ mod tests {
         let accounts = root_accounts_from_value(&json!([
             {"account_id": "beta", "user_count": 0},
             {"account_id": "", "user_count": 9},
+            {"account_id": "deleting-account", "user_count": 2, "status": "deleting"},
             {"account_id": "alpha", "user_count": 2}
         ]));
         assert_eq!(

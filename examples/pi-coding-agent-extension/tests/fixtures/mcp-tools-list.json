@@ -1,0 +1,649 @@
+{
+  "_note": "Sample of the OpenViking MCP tools/list response, captured 2026-09-21 from a live openviking-server. It exists so the bridge tests can exercise real schema shapes. It is NOT the authoritative tool catalogue: the extension mirrors whatever the server returns at runtime and never ships a hard-coded list. Refresh it by re-running an MCP initialize + tools/list against a server whenever a test needs newer schemas.",
+  "tools": [
+    {
+      "name": "find",
+      "description": "Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score.",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "target_uri": {
+            "default": "",
+            "title": "Target Uri",
+            "type": "string"
+          },
+          "limit": {
+            "default": 10,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "min_score": {
+            "default": 0.35,
+            "title": "Min Score",
+            "type": "number"
+          },
+          "level": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Level"
+          },
+          "context_type": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Context Type"
+          },
+          "read_content": {
+            "default": false,
+            "title": "Read Content",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "findArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "search",
+      "description": "Deep semantic retrieval with optional session context and intent analysis.\n\n    ``mode=\"list\"`` returns ranked memories, resources, and skills with URI,\n    abstract, and score. ``mode=\"context\"`` returns an injection-ready,\n    token-budgeted context block and supports category quotas, purpose presets,\n    detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.\n    ``target_uri`` is only supported in list mode.\n    ",
+      "inputSchema": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "target_uri": {
+            "default": "",
+            "title": "Target Uri",
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "limit": {
+            "default": 10,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "min_score": {
+            "type": "number",
+            "title": "Min Score"
+          },
+          "level": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Level"
+          },
+          "context_type": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Context Type"
+          },
+          "mode": {
+            "default": "list",
+            "enum": [
+              "list",
+              "context"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "query_expansion": {
+            "default": "auto",
+            "enum": [
+              "off",
+              "auto"
+            ],
+            "title": "Query Expansion",
+            "type": "string"
+          },
+          "max_tokens": {
+            "default": 1600,
+            "maximum": 32000,
+            "minimum": 64,
+            "title": "Max Tokens",
+            "type": "integer"
+          },
+          "quotas": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Quotas"
+          },
+          "purpose": {
+            "enum": [
+              "chat",
+              "coding"
+            ],
+            "type": "string",
+            "title": "Purpose"
+          },
+          "detail": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "abstract",
+              "overview",
+              "full"
+            ],
+            "title": "Detail",
+            "type": "string"
+          },
+          "detail_by_category": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Detail By Category"
+          },
+          "dedup_turns": {
+            "default": 0,
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Dedup Turns",
+            "type": "integer"
+          },
+          "exclude_uris": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "type": "array",
+            "title": "Exclude Uris"
+          },
+          "peer_scope": {
+            "default": "all",
+            "enum": [
+              "actor",
+              "all"
+            ],
+            "title": "Peer Scope",
+            "type": "string"
+          },
+          "other_peer_penalty": {
+            "type": "number",
+            "title": "Other Peer Penalty"
+          },
+          "other_peer_penalties": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Other Peer Penalties"
+          },
+          "rewrite": {
+            "default": "off",
+            "enum": [
+              "off",
+              "auto"
+            ],
+            "title": "Rewrite",
+            "type": "string"
+          },
+          "rewrite_max_bullets": {
+            "default": 6,
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Rewrite Max Bullets",
+            "type": "integer"
+          },
+          "read_content": {
+            "default": false,
+            "title": "Read Content",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "searchArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "read",
+      "description": "Read one or more viking:// file URIs. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead.",
+      "inputSchema": {
+        "properties": {
+          "uris": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uris"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "limit": {
+            "default": -1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uris"
+        ],
+        "title": "readArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list",
+      "description": "List one sorted page under a viking:// directory URI.\n\n    Args:\n        uri: Directory URI to list.\n        recursive: Whether to recursively list descendants.\n        offset: Number of visible entries to skip.\n        limit: Optional maximum number of entries.\n        sort_by: Optional name or modification-time ordering.\n        sort_order: Ascending or descending order.\n\n    Returns:\n        A line-oriented directory listing.\n    ",
+      "inputSchema": {
+        "properties": {
+          "uri": {
+            "title": "Uri",
+            "type": "string"
+          },
+          "recursive": {
+            "default": false,
+            "title": "Recursive",
+            "type": "boolean"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "sort_by": {
+            "enum": [
+              "name",
+              "mtime"
+            ],
+            "type": "string",
+            "title": "Sort By"
+          },
+          "sort_order": {
+            "default": "asc",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Sort Order",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri"
+        ],
+        "title": "lsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "tree",
+      "description": "Show one visible page from a recursive directory tree.\n\n    Args:\n        uri: Directory URI to traverse.\n        level_limit: Maximum traversal depth.\n        node_limit: Existing default result limit.\n        include_abstract: Whether to include file summaries.\n        offset: Number of visible nodes to skip.\n        limit: Optional result limit that overrides node_limit.\n\n    Returns:\n        An indented directory tree.\n    ",
+      "inputSchema": {
+        "properties": {
+          "uri": {
+            "default": "viking://",
+            "title": "Uri",
+            "type": "string"
+          },
+          "level_limit": {
+            "default": 3,
+            "title": "Level Limit",
+            "type": "integer"
+          },
+          "node_limit": {
+            "default": 1000,
+            "title": "Node Limit",
+            "type": "integer"
+          },
+          "include_abstract": {
+            "default": false,
+            "title": "Include Abstract",
+            "type": "boolean"
+          },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "title": "treeArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "remember",
+      "description": "Store information into OpenViking long-term memory. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting.",
+      "inputSchema": {
+        "properties": {
+          "messages": {
+            "items": {
+              "properties": {
+                "role": {
+                  "description": "Message role",
+                  "enum": [
+                    "user",
+                    "assistant"
+                  ],
+                  "title": "Role",
+                  "type": "string"
+                },
+                "content": {
+                  "description": "Message text content",
+                  "title": "Content",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "role",
+                "content"
+              ],
+              "title": "StoreMessage",
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "messages"
+        ],
+        "title": "rememberArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "write",
+      "description": "Write text to a viking:// file. Use this to save files (notes, profiles, knowledge, state) in OpenViking the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite.\n\n    - mode=\"replace\" (default): overwrite the file; creates it and any missing parent directories if needed.\n    - mode=\"create\": fail if the file already exists.\n    - Any new file (whether created by \"replace\" or \"create\") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts\n    - mode=\"append\": append to the end of an existing file; fails if the file does not exist.\n\n    Writable scopes: viking://resources/, viking://user/{user_id}/, viking://agent/. The viking://~ home alias expands to the caller's user root. The managed user subtrees skills/, peers/, privacy/ and sessions/ are read-only. After a write, semantic search indexes refresh in the background; pass wait=true to block until search reflects the change.",
+      "inputSchema": {
+        "properties": {
+          "uri": {
+            "title": "Uri",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "mode": {
+            "default": "replace",
+            "enum": [
+              "replace",
+              "append",
+              "create"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "wait": {
+            "default": false,
+            "title": "Wait",
+            "type": "boolean"
+          },
+          "timeout": {
+            "type": "number",
+            "title": "Timeout"
+          }
+        },
+        "required": [
+          "uri",
+          "content"
+        ],
+        "title": "writeArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "edit",
+      "description": "Replace an exact string with new text in an existing viking:// file. Use this for targeted changes instead of rewriting the whole file with the write tool. old_string must match the file's current content exactly, including indentation and newlines; use the read tool first to see it. The edit fails and the file is left unchanged if old_string is not found, or if it matches more than once and replace_all is false (pass more surrounding context to make it unique, or set replace_all=true to replace every occurrence). Pass new_string=\"\" to delete old_string.\n\n    Editing a memory file preserves its metadata; after an edit, search indexes refresh in the background (pass wait=true to block until search reflects the change).",
+      "inputSchema": {
+        "properties": {
+          "uri": {
+            "title": "Uri",
+            "type": "string"
+          },
+          "old_string": {
+            "title": "Old String",
+            "type": "string"
+          },
+          "new_string": {
+            "title": "New String",
+            "type": "string"
+          },
+          "replace_all": {
+            "default": false,
+            "title": "Replace All",
+            "type": "boolean"
+          },
+          "wait": {
+            "default": false,
+            "title": "Wait",
+            "type": "boolean"
+          },
+          "timeout": {
+            "type": "number",
+            "title": "Timeout"
+          }
+        },
+        "required": [
+          "uri",
+          "old_string",
+          "new_string"
+        ],
+        "title": "editArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "add_resource",
+      "description": "Add a resource to OpenViking. Asynchronous — processing happens in the background.\n\n    Remote URL: pass ``path`` as an http(s)://, git@, ssh://, or git:// URL. A sitemap /\n    RSS / Atom URL ingests the WHOLE site as one resource tree; pass ``args={\"site\": true}``\n    to force whole-site ingestion from a bare domain.\n\n    Local file: pass ``path`` as a filesystem path (e.g. ``/tmp/foo.pdf``). The response is an\n    upload instruction — HTTP POST the file to the returned URL and the server ingests it\n    automatically; you do NOT need to call this tool again.\n\n    Args:\n        path: Remote URL or local filesystem path. Required unless ``temp_file_id`` is set.\n        temp_file_id: Server-minted upload id from a prior signed local-file upload.\n        add_type: Explicit Connector source type (e.g. \"tos\", \"git\"). When set, the\n            request routes through the Connector integration (must be enabled\n            server-side) and ``path`` is sent verbatim — never treated as a local\n            file. Requires an exact ``to`` target and cannot be combined with\n            ``temp_file_id`` or ``parent``. Leave empty for the default path-probing\n            behavior.\n        description: Optional human-readable reason for adding the resource.\n        watch_interval: Auto-refresh cadence in minutes. 0 = no watch. Prefer >=1440 (24h)\n            unless the source changes faster — every refresh re-embeds the whole resource.\n            Only applies to remote-URL invocations.\n        processing_mode: \"semantic_and_vectors\" for normal semantic processing, or\n            \"vectors_only\" to skip semantic understanding and only build vector indexes.\n        to: Exact final URI including the leaf name (e.g.\n            \"viking://resources/volcengine/OpenViking\"). Written verbatim; an existing\n            target is synced to match the new source, so visible entries it does not\n            contain are deleted. Required when ``add_type`` is set.\n        parent: Existing directory to store the resource under, for remote or\n            local-file imports; the leaf name comes from the source. Never overwrites\n            — a collision reserves the next free name (\"name_1\", \"name_2\", ...) and\n            returns a warning. Mutually exclusive with ``to``; not supported when\n            ``add_type`` is set. Leaving both empty derives the directory and the name\n            from the source and handles collisions like ``parent``.\n        tags: Optional explicit k=v retrieval tags to apply after ingestion.\n        tag_mode: Tag update mode, \"replace\" or \"append\". Defaults to \"replace\".\n        args: Parser-specific options, e.g. {\"auth_config\": {\"token\": \"...\"}}\n            for native HTTPS Git imports and watches, {\"feishu_access_token\": \"...\"}\n            for Feishu imports, {\"site\": true} for whole-site ingestion, or\n            {\"parse_mode\": \"no_split\"} to keep each parsed document body in one file.\n    ",
+      "inputSchema": {
+        "properties": {
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "temp_file_id": {
+            "default": "",
+            "title": "Temp File Id",
+            "type": "string"
+          },
+          "add_type": {
+            "default": "",
+            "title": "Add Type",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "watch_interval": {
+            "default": 0,
+            "title": "Watch Interval",
+            "type": "number"
+          },
+          "processing_mode": {
+            "default": "semantic_and_vectors",
+            "enum": [
+              "semantic_and_vectors",
+              "vectors_only"
+            ],
+            "title": "Processing Mode",
+            "type": "string"
+          },
+          "to": {
+            "default": "",
+            "title": "To",
+            "type": "string"
+          },
+          "parent": {
+            "default": "",
+            "title": "Parent",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "tag_mode": {
+            "default": "replace",
+            "title": "Tag Mode",
+            "type": "string"
+          },
+          "args": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Args"
+          }
+        },
+        "title": "add_resourceArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_watches",
+      "description": "List watch tasks (auto-refresh subscriptions) visible to the current user.",
+      "inputSchema": {
+        "properties": {},
+        "title": "list_watchesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "cancel_watch",
+      "description": "Cancel a watch task by its target URI (e.g. \"viking://resources/volcengine/OpenViking\").",
+      "inputSchema": {
+        "properties": {
+          "to_uri": {
+            "title": "To Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "to_uri"
+        ],
+        "title": "cancel_watchArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "grep",
+      "description": "Search content in viking:// files using regex patterns (like grep). Supports multiple patterns searched concurrently. Use this for exact text matching; use the search tool for semantic retrieval.",
+      "inputSchema": {
+        "properties": {
+          "uri": {
+            "title": "Uri",
+            "type": "string"
+          },
+          "pattern": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pattern"
+          },
+          "case_insensitive": {
+            "default": false,
+            "title": "Case Insensitive",
+            "type": "boolean"
+          },
+          "node_limit": {
+            "default": 10,
+            "title": "Node Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uri",
+          "pattern"
+        ],
+        "title": "grepArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "glob",
+      "description": "Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval.",
+      "inputSchema": {
+        "properties": {
+          "pattern": {
+            "title": "Pattern",
+            "type": "string"
+          },
+          "uri": {
+            "default": "viking://",
+            "title": "Uri",
+            "type": "string"
+          },
+          "node_limit": {
+            "default": 100,
+            "title": "Node Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "title": "globArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "forget",
+      "description": "Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling.",
+      "inputSchema": {
+        "properties": {
+          "uri": {
+            "title": "Uri",
+            "type": "string"
+          },
+          "recursive": {
+            "default": false,
+            "title": "Recursive",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "uri"
+        ],
+        "title": "forgetArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "health",
+      "description": "Check whether the OpenViking server is healthy.",
+      "inputSchema": {
+        "properties": {},
+        "title": "healthArguments",
+        "type": "object"
+      }
+    }
+  ]
+}

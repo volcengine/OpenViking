@@ -1674,7 +1674,7 @@ class AgentLoop:
                         result_text if isinstance(result, MultimodalToolResult) else result
                     )
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"[RESULT]: {result_text[:600]}")
+                    logger.info(f"[RESULT]: {result_text[:200]}")
 
                     if publish_events:
                         await self.bus.publish_outbound(
@@ -2034,6 +2034,10 @@ class AgentLoop:
             disabled_tools = msg.metadata.get("disabled_tools", []) if msg.metadata else []
             if not isinstance(disabled_tools, list):
                 disabled_tools = []
+            if msg.metadata.get("studio_managed"):
+                from vikingbot.studio.policy import disabled_group_tools
+
+                disabled_tools = list(set(disabled_tools) | set(disabled_group_tools(self.tools.tool_names)))
             openviking_connection = getattr(msg, "openviking_connection", None)
             if not isinstance(openviking_connection, dict):
                 openviking_connection = None

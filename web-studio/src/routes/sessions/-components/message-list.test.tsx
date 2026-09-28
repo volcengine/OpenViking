@@ -120,3 +120,28 @@ describe('MessageList reasoning', () => {
     expect(details?.className).toContain('group/reasoning')
   })
 })
+
+describe('MessageList images', () => {
+  it('renders an image using the server message format', () => {
+    const { container } = render(
+      <MessageList
+        messages={[
+          {
+            id: 'image-message',
+            role: 'user',
+            created_at: '2026-09-13T00:00:00Z',
+            parts: [
+              {
+                type: 'image_url',
+                image_url: { url: 'https://example.com/a.png', detail: 'auto' },
+              },
+            ],
+          },
+        ]}
+      />,
+    )
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(
+      'https://example.com/a.png',
+    )
+  })
+})

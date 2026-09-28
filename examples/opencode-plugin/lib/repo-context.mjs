@@ -1,4 +1,4 @@
-import { effectivePeerId, log, makeRequest, unwrapResponse } from "./utils.mjs"
+import { effectivePeerId, log, makeRequest } from "./utils.mjs"
 
 export function createRepoContext({ config }) {
   let cachedRepos = null
@@ -14,13 +14,12 @@ export function createRepoContext({ config }) {
     }
 
     try {
-      const response = await makeRequest(config, {
+      const result = await makeRequest(config, {
         method: "GET",
         endpoint: `/api/v1/fs/ls?uri=${encodeURIComponent("viking://resources/")}&recursive=false&simple=false`,
         timeoutMs: 8000,
         actorPeerId: effectivePeerId(config),
       })
-      const result = unwrapResponse(response)
       const items = Array.isArray(result) ? result : []
       const repos = items
         .filter((item) => item?.uri?.startsWith("viking://resources/") && item.uri !== "viking://resources/")

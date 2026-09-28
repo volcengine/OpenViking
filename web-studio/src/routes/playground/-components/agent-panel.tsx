@@ -1,3 +1,4 @@
+import { useDefaultConversationTitles } from '#/lib/sessions/use-default-conversation-titles'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
@@ -10,6 +11,7 @@ import {
   SquarePenIcon,
 } from 'lucide-react'
 
+import { DeleteConversation } from '#/components/sessions/delete-conversation'
 import { Button } from '#/components/ui/button'
 import {
   Dialog,
@@ -20,7 +22,10 @@ import {
 } from '#/components/ui/dialog'
 import { cn } from '#/lib/utils'
 import { useAppConnection } from '#/hooks/use-app-connection'
-import { createRandomUuid } from '#/lib/browser-crypto'
+import {
+  createVikingBotWebSessionId,
+  isVikingBotWebSession,
+} from '#/lib/sessions/vikingbot-sessions'
 import { useChat } from '#/lib/sessions/use-chat'
 import {
   useBotHealth,
@@ -37,7 +42,6 @@ import {
   getErrorMessage,
   readPlaygroundAgentSessionIds,
   registerPlaygroundAgentSessionId,
-  withTimeout,
 } from '../-lib/utils'
 
 export function AgentPanel({
@@ -54,21 +58,36 @@ export function AgentPanel({
   const { t } = useTranslation('playground')
   const { identityScopeKey } = useAppConnection()
   const [sessionId, setSessionId] = useState(
-    initialSessionId ?? createRandomUuid(),
+    initialSessionId ?? createVikingBotWebSessionId(),
   )
   const [historyOpen, setHistoryOpen] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [isCreatingSession, setIsCreatingSession] = useState(false)
+  const [historySessionId, setHistorySessionId] = useState(initialSessionId)
+  const [persistedSessionId, setPersistedSessionId] = useState(initialSessionId)
   const creationStartedRef = useRef(false)
+  const creationGenerationRef = useRef(0)
+  useEffect(
+    () => () => {
+      creationGenerationRef.current += 1
+    },
+    [],
+  )
   const botHealth = useBotHealth()
   const createSession = useCreateSession()
   const { data: sessions, isLoading: isLoadingSessions } =
     useSessionListByRecency()
-  const { getTitle, setTitle } = useSessionTitles(identityScopeKey)
+  const { getTitle, removeTitle } = useSessionTitles(identityScopeKey)
   const [playgroundSessionIds, setPlaygroundSessionIds] = useState<string[]>(
     () => readPlaygroundAgentSessionIds(identityScopeKey),
   )
-  const { data: historyMessages } = useSessionMessages(sessionId)
+  useDefaultConversationTitles(
+    identityScopeKey,
+    sessions
+      .filter((session) => isVikingBotWebSession(session, playgroundSessionIds))
+      .map((session) => session.session_id),
+  )
+  const { data: historyMessages } = useSessionMessages(historySessionId)
   const chat = useChat({
     identityScopeKey,
     initialMessages: historyMessages,
@@ -78,53 +97,32 @@ export function AgentPanel({
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  const handleNewSession = useCallback(async () => {
+  const handleNewSession = useCallback(() => {
     if (isCreatingSession) return
-
+    creationGenerationRef.current += 1
     chat.abort()
     chat.setMessages([])
-    creationStartedRef.current = true
-    setIsCreatingSession(true)
+    creationStartedRef.current = false
     setSessionError(null)
-
-    try {
-      const result = await withTimeout(
-        createSession.mutateAsync(undefined),
-        12_000,
-        t('agent.createTimeout'),
-      )
-      setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(result.session_id, identityScopeKey),
-      )
-      setTitle(result.session_id, t('agent.newSessionTitle'))
-      setSessionId(result.session_id)
-      onSessionChange(result.session_id)
-      setHistoryOpen(false)
-    } catch (error) {
-      creationStartedRef.current = false
-      setSessionError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setIsCreatingSession(false)
-    }
-  }, [
-    chat,
-    createSession,
-    identityScopeKey,
-    isCreatingSession,
-    onSessionChange,
-    setTitle,
-    t,
-  ])
+    setHistorySessionId(undefined)
+    setPersistedSessionId(undefined)
+    setSessionId(createVikingBotWebSessionId())
+    onSessionChange('')
+    setHistoryOpen(false)
+  }, [chat, isCreatingSession, onSessionChange])
 
   const handleSwitchSession = useCallback(
     (nextSessionId: string) => {
+      creationGenerationRef.current += 1
       chat.abort()
-      creationStartedRef.current = true
+      creationStartedRef.current = false
       setSessionError(null)
       setIsCreatingSession(false)
       setPlaygroundSessionIds(
         registerPlaygroundAgentSessionId(nextSessionId, identityScopeKey),
       )
+      setHistorySessionId(nextSessionId)
+      setPersistedSessionId(nextSessionId)
       setSessionId(nextSessionId)
       onSessionChange(nextSessionId)
       setHistoryOpen(false)
@@ -132,21 +130,14 @@ export function AgentPanel({
     [chat, identityScopeKey, onSessionChange],
   )
 
-  // Notify parent of the initial sessionId so the URL stays in sync.
-  // The session is lazily created on the backend by the first addMessage call.
+  // Only publish IDs that exist on the server; drafts must not survive in the URL.
   useEffect(() => {
-    if (sessionId) {
-      onSessionChange(sessionId)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (sessionId) {
+    if (persistedSessionId) {
       setPlaygroundSessionIds(
-        registerPlaygroundAgentSessionId(sessionId, identityScopeKey),
+        registerPlaygroundAgentSessionId(persistedSessionId, identityScopeKey),
       )
     }
-  }, [identityScopeKey, sessionId])
+  }, [identityScopeKey, persistedSessionId])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -158,10 +149,34 @@ export function AgentPanel({
   ])
 
   const send = useCallback(
-    (message: string) => {
+    async (message: string) => {
+      if (creationStartedRef.current) return false
+      if (!persistedSessionId) {
+        const generation = ++creationGenerationRef.current
+        creationStartedRef.current = true
+        setIsCreatingSession(true)
+        setSessionError(null)
+        try {
+          const result = await createSession.mutateAsync(sessionId)
+          if (generation !== creationGenerationRef.current) return false
+          setPersistedSessionId(result.session_id)
+          onSessionChange(result.session_id)
+        } catch (error) {
+          if (generation === creationGenerationRef.current) {
+            setSessionError(getErrorMessage(error))
+          }
+          return false
+        } finally {
+          if (generation === creationGenerationRef.current) {
+            creationStartedRef.current = false
+            setIsCreatingSession(false)
+          }
+        }
+      }
       void chat.send(message)
+      return true
     },
-    [chat],
+    [chat, createSession, onSessionChange, persistedSessionId, sessionId],
   )
 
   const isStreaming = chat.status === 'streaming'
@@ -170,17 +185,9 @@ export function AgentPanel({
   const displayedSessionTitle =
     sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
   const reversedSessions = useMemo(() => {
-    // `sessions` is already sorted by recency (newest first). Filter to
-    // sessions that were opened in this playground, preserving recency order.
-    const sessionById = new Map(
-      sessions.map((session) => [session.session_id, session]),
+    return sessions.filter((session) =>
+      isVikingBotWebSession(session, playgroundSessionIds),
     )
-
-    return playgroundSessionIds
-      .map((playgroundSessionId) => sessionById.get(playgroundSessionId))
-      .filter((session): session is NonNullable<typeof session> =>
-        Boolean(session),
-      )
   }, [sessions, playgroundSessionIds])
 
   return (
@@ -252,6 +259,7 @@ export function AgentPanel({
         ) : (
           <div className="border-t bg-background/80">
             <Composer
+              key={sessionId}
               variant="compact"
               isStreaming={isStreaming}
               onCancel={chat.abort}
@@ -286,30 +294,57 @@ export function AgentPanel({
                   const title = getTitle(session.session_id)
 
                   return (
-                    <button
+                    <div
                       key={session.session_id}
-                      type="button"
-                      className={cn(
-                        'flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors hover:border-primary/45 hover:bg-muted/45',
-                        active
-                          ? 'border-primary/60 bg-primary/10'
-                          : 'border-border bg-background',
-                      )}
-                      onClick={() => handleSwitchSession(session.session_id)}
+                      className="group/conversation flex items-center gap-1"
                     >
-                      <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-foreground">
-                          {title}
+                      <button
+                        type="button"
+                        className={cn(
+                          'flex min-w-0 flex-1 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors hover:border-primary/45 hover:bg-muted/45',
+                          active
+                            ? 'border-primary/60 bg-primary/10'
+                            : 'border-border bg-background',
+                        )}
+                        onClick={() => handleSwitchSession(session.session_id)}
+                      >
+                        <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-foreground">
+                            {title}
+                          </span>
+                          <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                            {session.session_id}
+                          </span>
                         </span>
-                        <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                          {session.session_id}
-                        </span>
-                      </span>
-                      {active ? (
-                        <CheckCircle2Icon className="size-4 shrink-0 text-primary" />
-                      ) : null}
-                    </button>
+                        {active ? (
+                          <CheckCircle2Icon className="size-4 shrink-0 text-primary" />
+                        ) : null}
+                      </button>
+                      <DeleteConversation
+                        id={session.session_id}
+                        title={title}
+                        onDeleted={() => {
+                          removeTitle(session.session_id)
+                          setPlaygroundSessionIds((ids) =>
+                            ids.filter((id) => id !== session.session_id),
+                          )
+                          if (session.session_id === sessionId) {
+                            creationGenerationRef.current += 1
+                            chat.abort()
+                            chat.setMessages([])
+                            creationStartedRef.current = false
+                            setIsCreatingSession(false)
+                            setSessionError(null)
+                            setHistorySessionId(undefined)
+                            setPersistedSessionId(undefined)
+                            setSessionId(createVikingBotWebSessionId())
+                            onSessionChange('')
+                            setHistoryOpen(false)
+                          }
+                        }}
+                      />
+                    </div>
                   )
                 })}
               </div>

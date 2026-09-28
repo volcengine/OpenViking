@@ -39,7 +39,7 @@ impl MultiWriteWrappedFS {
                 for entry in inner
                     .primary()
                     .backend
-                    .tree_directory(&normalized, true, None, None, None, None, None)
+                    .tree_directory(&normalized, true, None, None, None, None, None, false)
                     .await?
                 {
                     if entry.info.is_dir {

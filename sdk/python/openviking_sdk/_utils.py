@@ -1,14 +1,26 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
 from __future__ import annotations
 
 import asyncio
 import atexit
 import os
 import threading
+from pathlib import Path
 from typing import Any, Coroutine
 
 _worker_lock = threading.Lock()
 _worker_loop: asyncio.AbstractEventLoop | None = None
 _worker_thread: threading.Thread | None = None
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 async def _capture_result(coro: Coroutine[Any, Any, Any]) -> tuple[bool, Any]:

@@ -6,6 +6,40 @@ Multi-version management is powered by [gitoxide](https://github.com/Byron/gitox
 
 > For the full API reference of each command's parameters and responses, see [Snapshots API](../api/11-snapshot.md).
 
+## When to commit
+
+Ordinary `write` and `rm` operations change the live workspace directly. Enabling snapshots does not automatically create a version after every write. A prior file version is recoverable through snapshots only if a successful snapshot commit covered that path. Commit after an import, before and after a batch change, or at a business checkpoint, and retain the returned `commit_oid`.
+
+Snapshots version the file tree. They do not roll back current ACLs or preserve historical vector indexes. After restoring files, `restore` rebuilds indexes asynchronously when needed. It changes the workspace; inspect its plan with `dry_run` first.
+
+`client.snapshot.commit()` saves file versions, while a session's `commit()` archives conversation and processes memory. Some memory workflows call snapshot after updating experiences; this does not make snapshots automatic for every write.
+
+## Commit scope and concurrency
+
+USER / ADMIN callers must supply `paths` for `commit` and `log`, `project_dir` for `restore`, and a file `path` for `show`. Only local ROOT mode may omit those scope parameters. Committing a project directory with write access keeps unrelated resources out of the change.
+
+| `commit(paths=...)` input | Meaning |
+| --- | --- |
+| Existing file URI | Process that file |
+| Existing directory URI | Recursively process current files and record deletions of previously snapshotted files in that subtree |
+| Missing URI | Record deletion of that path and its subtree from the previous snapshot; no change if neither existed there |
+| `[]` | Explicit empty scope; no changes |
+| `None` / omitted | Entire account tree; ROOT only |
+
+A partial commit starts from the branch's previous snapshot and preserves its versions outside the requested scope. After deletion, include the deleted URI or a covering parent directory in the next commit. Dropping the URI from `paths` would omit the deletion. A trailing `/` does not declare a file/directory type, and the current API has no explicit per-target type parameter.
+
+For non-ROOT explicit-path commits, locks are selected from current target state before scope authorization and snapshot creation:
+
+| Target state | Filesystem PathLock | Cache (Redis) PathLock |
+| --- | --- | --- |
+| Existing file | Exact | Exact |
+| Existing directory | Tree | Tree |
+| Missing path | Skip locking this target | Tree |
+
+Filesystem skips missing targets to avoid creating a target directory or a missing parent chain just to store a lock token. The target still participates in snapshot deletion processing. A concurrent recreation may be missed or read before its write finishes; a later commit records the final state. ROOT bypasses this explicit-path locking flow.
+
+Snapshots are not a globally atomic view of arbitrary concurrent I/O. For a deterministic checkpoint, finish writes in the intended scope before committing. Locks coordinate only operations participating in the [PathLock protocol](../concepts/09-transaction.md).
+
 ## Prerequisites
 
 - You already have a working `ov.conf`.
@@ -141,9 +175,8 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
     mode="create",
-    wait=True,
 )
-v1 = client.snapshot.commit(message="v1 initial import")
+v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 print("v1:", v1["commit_oid"])
 
 # 2. Modify and commit v2
@@ -151,16 +184,15 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
     mode="replace",
-    wait=True,
 )
-v2 = client.snapshot.commit(message="v2 update")
+v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. Walk history
-for c in client.snapshot.log(limit=10):
+for c in client.snapshot.log(limit=10, paths=[root]):
     print(c["oid"][:8], c["message"])
 
-# 4. Inspect a commit's metadata
-print(client.snapshot.show(v1["commit_oid"])["message"])
+# 4. Read historical file content
+print(client.snapshot.show(v1["commit_oid"], path=f"{root}/guide.md"))
 
 # 5. Restore the workspace to v1 (creates a new "forward" commit on top of v2)
 client.snapshot.restore(project_dir=root, source_commit=v1["commit_oid"], message="restore to v1")
@@ -174,13 +206,13 @@ The CLI subcommands live under `ov snapshot`:
 
 ```bash
 # Commit the current workspace state
-ov snapshot commit -m "v1 initial import" -o json
+ov snapshot commit -m "v1 initial import" --paths viking://resources/my_project -o json
 
 # Walk history (newest first)
-ov snapshot log --limit 10 -o json
+ov snapshot log --paths viking://resources/my_project --limit 10 -o json
 
-# View commit metadata
-ov snapshot show <commit_oid> -o json
+# Read historical file content
+ov snapshot show <commit_oid> --path viking://resources/my_project/guide.md
 
 # Read a file's content from a commit (defaults to stdout; use --out-file to write a local file)
 ov snapshot show <commit_oid> --path viking://resources/my_project/guide.md --out-file ./guide.md
@@ -199,14 +231,14 @@ ov snapshot restore <commit_oid> viking://resources/my_project --dry-run -o json
 curl -X POST "http://localhost:1933/api/v1/snapshot/commit" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{"message": "v1 initial import"}'
+  -d '{"message": "v1 initial import", "paths": ["viking://resources/my_project"]}'
 
 # Walk history
-curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10" \
+curl -X GET "http://localhost:1933/api/v1/snapshot/log?branch=main&limit=10&paths=viking://resources/my_project" \
   -H "X-API-Key: your-key"
 
-# View commit metadata
-curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=<commit_oid>" \
+# Read historical file content
+curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=<commit_oid>&path=viking://resources/my_project/guide.md" \
   -H "X-API-Key: your-key"
 
 # Restore
@@ -264,7 +296,7 @@ client.snapshot.delete_gitignore()
 On subsequent commits, files matching the rules are excluded, and the response's `ignored` field reports how many candidate paths were skipped:
 
 ```python
-v = client.snapshot.commit(message="with ignore")
+v = client.snapshot.commit(message="with ignore", paths=["viking://resources/my_project"])
 print(v["result"], v.get("ignored"))  # created, 1
 ```
 

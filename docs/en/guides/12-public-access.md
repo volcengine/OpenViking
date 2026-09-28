@@ -14,6 +14,41 @@ public HTTPS domain.
 Prerequisites: a public domain, ports 80 + 443 reachable, DNS pointing at
 your host.
 
+## Authenticate before exposing the proxy
+
+Configure authentication before publishing any route, including when the upstream listens on `127.0.0.1`. A reverse proxy makes that localhost service reachable from the internet. The default `dev` mode accepts requests as ROOT; TLS and `OPENVIKING_PUBLIC_BASE_URL` do not add authentication.
+
+For API key authentication, merge this section into `ov.conf`, replace the placeholder with a secret, and restart the server:
+
+```json
+{
+  "server": {
+    "auth_mode": "api_key",
+    "root_api_key": "<your-secret-root-key>"
+  }
+}
+```
+
+Use the root key only for administration, such as creating the account and its first admin through the [Admin API](04-authentication.md#managing-accounts-and-users). Use the resulting user/admin key for tenant data APIs. Do not put the root key in a public browser client or configure the proxy to attach it to all requests. Keep the backend port private so clients use the intended HTTPS entrypoint.
+
+Before allowing users to connect, check the public URL:
+
+```bash
+# Expected: 401 in the API key setup above, never a successful directory listing.
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  'https://ov.your-domain.com/api/v1/fs/ls?uri=viking://resources'
+
+# Set OPENVIKING_API_KEY to a tenant-bound user/admin key first. Expected: 200.
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H "X-API-Key: $OPENVIKING_API_KEY" \
+  'https://ov.your-domain.com/api/v1/fs/ls?uri=viking://resources'
+
+# Health is intentionally unauthenticated; 200 here does not verify access control.
+curl -sS https://ov.your-domain.com/health
+```
+
+If you use OIDC or a trusted identity gateway instead, follow that mode's [authentication requirements](04-authentication.md) and verify rejection of unauthenticated data requests. Do not expose a `trusted` backend directly to callers who can supply their own identity headers.
+
 <a id="adding-https-for-public-access"></a>
 
 ## Option A: bundled Caddy with auto Let's Encrypt (recommended)
@@ -36,7 +71,7 @@ as the issuer in OAuth metadata and `WWW-Authenticate` headers) and Caddy
 
 ```caddyfile
 {$OPENVIKING_PUBLIC_BASE_URL} {
-    reverse_proxy openviking:1933
+    reverse_proxy openviking:{$OPENVIKING_SERVER_PORT:1933}
     # Pin ACME registration email (optional):
     # tls {$OV_ACME_EMAIL}
 }
@@ -158,7 +193,7 @@ or in `ov.conf`:
 ## Compatibility note: the `:1934` single-upstream proxy
 
 `docker compose up` also ships a Caddy reverse proxy on port 1934, simply
-`reverse_proxy openviking:1933` — **kept only for compatibility with
+`reverse_proxy openviking:{$OPENVIKING_SERVER_PORT:1933}` — **kept only for compatibility with
 deployments that already bookmarked 1934**. New deployments can connect to
 1933 directly; there is no routing value here. Remove the caddy service and
 the 1934 port mapping in `docker-compose.yml` if you don't need it.

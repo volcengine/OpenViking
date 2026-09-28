@@ -355,7 +355,7 @@ class OTelMetricExporter(MetricExporter):
 
         Empty unlabeled counters emit a single zero data point to match PrometheusExporter.
         """
-        for name, counter_series in self._registry.iter_counters():
+        for name, counter_series in self._registry.iter_counters(include_start_time=True):
             metric = metrics.add()
             metric.name = name
             metric.description = "OpenViking metric."
@@ -379,7 +379,9 @@ class OTelMetricExporter(MetricExporter):
 
         Bucket counts and explicit bounds are copied directly from the registry snapshot.
         """
-        for name, label_names, bucket_bounds, series_iter in self._registry.iter_histograms():
+        for name, label_names, bucket_bounds, series_iter in self._registry.iter_histograms(
+            include_start_time=True
+        ):
             series_list = list(series_iter)
             metric = metrics.add()
             metric.name = name
@@ -400,9 +402,9 @@ class OTelMetricExporter(MetricExporter):
         This mirrors the `openviking_metrics_dropped_series_total` metric emitted by
         PrometheusExporter.
         """
-        dropped_points: list[tuple[tuple[tuple[str, str], ...], float]] = []
+        dropped_points: list[tuple[tuple[tuple[str, str], ...], float, int]] = []
         for metric_name, dropped in self._registry.iter_dropped_series():
-            dropped_points.append(((("metric", metric_name),), float(dropped)))
+            dropped_points.append(((("metric", metric_name),), float(dropped), self._start_time_ns))
 
         if not dropped_points:
             return
@@ -417,7 +419,7 @@ class OTelMetricExporter(MetricExporter):
         Build an OTLP Sum message from a counter-like registry family.
 
         Args:
-            series: List of `(labels, value)` tuples from MetricRegistry.
+            series: List of `(labels, value, start_time_ns)` tuples from MetricRegistry.
             now_ns: Export timestamp in nanoseconds.
             name: Metric family name for zero-series handling.
         """
@@ -435,13 +437,13 @@ class OTelMetricExporter(MetricExporter):
             sum_metric.data_points.append(point)
             return sum_metric
 
-        for labels, value in series:
+        for labels, value, start_time_ns in series:
             point = NumberDataPoint(
-                start_time_unix_nano=self._start_time_ns,
-                time_unix_nano=now_ns,
+                start_time_unix_nano=start_time_ns,
+                time_unix_nano=max(now_ns, start_time_ns),
             )
             point.attributes.extend(self._build_attributes(labels))
-            if float(value).is_integer():
+            if float(value).is_integer() and -(2**63) <= value < 2**63:
                 point.as_int = int(value)
             else:
                 point.as_double = float(value)
@@ -467,7 +469,7 @@ class OTelMetricExporter(MetricExporter):
         for labels, value in series:
             point = NumberDataPoint(time_unix_nano=now_ns)
             point.attributes.extend(self._build_attributes(labels))
-            if float(value).is_integer():
+            if float(value).is_integer() and -(2**63) <= value < 2**63:
                 point.as_int = int(value)
             else:
                 point.as_double = float(value)
@@ -486,10 +488,9 @@ class OTelMetricExporter(MetricExporter):
         Build an OTLP Histogram message from a registry histogram family.
 
         Args:
-            name: Histogram family name.
             label_names: Registered label keys for the family.
             bucket_bounds: Explicit bucket upper bounds from the registry.
-            series_list: Histogram series snapshot from the registry.
+            series_list: Registry series with bucket counts, totals and start_time_ns.
             now_ns: Export timestamp in nanoseconds.
         """
         histogram_metric = Histogram(
@@ -508,10 +509,10 @@ class OTelMetricExporter(MetricExporter):
             histogram_metric.data_points.append(point)
             return histogram_metric
 
-        for labels, bucket_counts, count, value_sum in series_list:
+        for labels, bucket_counts, count, value_sum, start_time_ns in series_list:
             point = HistogramDataPoint(
-                start_time_unix_nano=self._start_time_ns,
-                time_unix_nano=now_ns,
+                start_time_unix_nano=start_time_ns,
+                time_unix_nano=max(now_ns, start_time_ns),
                 count=int(count),
                 sum=float(value_sum),
             )

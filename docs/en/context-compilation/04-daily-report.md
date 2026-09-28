@@ -9,14 +9,14 @@ Skill source: [examples/compile/ov-compile-skills/daily-report](https://github.c
 Daily-report sources are usually sessions, messages, or documents already in OpenViking. To import a batch of records from local:
 
 ```bash
-ov add-resource ./work-logs --to viking://resources/work-logs --wait
+ov add-resource ./work-logs --to viking://resources/work-logs
 ov ls -r viking://resources/work-logs
 ```
 
 ## Step 2: Add the Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/daily-report --wait
+ov add-skill examples/compile/ov-compile-skills/daily-report
 ov skills list
 # → viking://agent/skills/daily-report  (or viking://user/<you>/skills/daily-report)
 ```

@@ -6,11 +6,16 @@ import shutil
 import sys
 import time
 import unittest
+from contextlib import ExitStack
+from unittest.mock import patch
 
+from openviking.storage.vectordb import engine
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
+from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 
 DB_PATH_CRASH = "./test_data/test_db_crash_recovery"
 DB_PATH_ROBUST = "./test_data/test_db_robust_crash"
+LARGE_TEXT = "旧数据升级后的长文本" * 4000
 
 
 def worker_write_and_crash(path, start_id, count, event_ready):
@@ -52,8 +57,42 @@ def worker_write_and_crash(path, start_id, count, event_ready):
                 }
             )
 
-        print(f"[Subprocess] Upserting {count} items...")
-        col.upsert_data(data)
+        # Seed real unversioned candidate and delta rows as an older writer did.
+        # Keep one legacy row untouched; update the other after switching writers.
+        legacy_fields = [
+            ("label", "uint64"),
+            ("vector", "list_float32"),
+            ("sparse_raw_terms", "list_string"),
+            ("sparse_values", "list_float32"),
+            ("fields", "string"),
+        ]
+        with ExitStack() as legacy_writer:
+            for record_type, definitions in (
+                (CandidateData, [*legacy_fields, ("expire_ns_ts", "uint64")]),
+                (DeltaRecord, [("type", "uint64"), *legacy_fields, ("old_fields", "string")]),
+            ):
+                legacy_schema = engine.Schema(
+                    [
+                        {
+                            "name": name,
+                            "id": index,
+                            "data_type": getattr(engine.FieldType, field_type),
+                        }
+                        for index, (name, field_type) in enumerate(definitions)
+                    ]
+                )
+                legacy_writer.enter_context(
+                    patch.object(record_type, "bytes_row", engine.BytesRow(legacy_schema))
+                )
+            col.upsert_data(data[:2])
+
+        print(f"[Subprocess] Upserting {count} mixed-format items...")
+        col.upsert_data(data[2:])
+        col.update_data([{"id": start_id, "data": LARGE_TEXT}])
+        col.update_data([{"id": start_id, "data": LARGE_TEXT + " updated"}])
+        # Leave a large deletion in the log too, without changing the final count.
+        col.upsert_data([{"id": start_id + count, "vector": [0.1] * 4, "data": LARGE_TEXT}])
+        col.delete_data([start_id + count])
         print("[Subprocess] Upsert done. Not closing.")
 
         # Notify main process that write is done
@@ -208,6 +247,10 @@ class TestCrashRecovery(unittest.TestCase):
         self.assertEqual(
             len(res.items), data_count, f"Should find all {data_count} items in KV Store"
         )
+        payloads = {item.id: item.fields["data"] for item in res.items}
+        self.assertEqual(payloads[0], LARGE_TEXT + " updated")
+        self.assertEqual(payloads[1], "crash_data_1")
+        self.assertEqual(col.fetch_data([data_count]).ids_not_exist, [data_count])
 
         print("[Main] Data fetch verified.")
 
@@ -226,6 +269,7 @@ class TestCrashRecovery(unittest.TestCase):
         self.assertEqual(
             len(found_ids), data_count, "Index should contain all items after recovery"
         )
+        self.assertEqual(set(found_ids), set(all_ids))
 
         col.close()
         print("[Main] Simple recovery test passed.")

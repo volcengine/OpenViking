@@ -3,13 +3,11 @@
 """Regression tests for image tool sandbox file handling."""
 
 import base64
-import importlib.util
-import sys
-import types
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from vikingbot.agent.tools import image as image_module
+from vikingbot.agent.tools.image import ImageGenerationTool
 
 
 class _FakeSandbox:
@@ -33,70 +31,13 @@ class _SandboxManager:
         return self._sandbox
 
 
-def _load_image_module(monkeypatch):
-    """Load the image tool module directly so this regression stays isolated."""
-    repo_root = Path(__file__).resolve().parents[2]
-    image_path = repo_root / "bot" / "vikingbot" / "agent" / "tools" / "image.py"
-    image_format_path = repo_root / "bot" / "vikingbot" / "utils" / "image_format.py"
-
-    base_mod = types.ModuleType("vikingbot.agent.tools.base")
-
-    class Tool:
-        pass
-
-    class ToolContext:
-        pass
-
-    base_mod.Tool = Tool
-    base_mod.ToolContext = ToolContext
-
-    events_mod = types.ModuleType("vikingbot.bus.events")
-
-    class OutboundMessage:
-        def __init__(self, **kwargs):
-            self.__dict__.update(kwargs)
-
-    events_mod.OutboundMessage = OutboundMessage
-
-    utils_mod = types.ModuleType("vikingbot.utils")
-    utils_mod.get_data_path = lambda: repo_root
-    image_format_spec = importlib.util.spec_from_file_location(
-        "image_format_under_test", image_format_path
-    )
-    image_format_module = importlib.util.module_from_spec(image_format_spec)
-    assert image_format_spec.loader is not None
-    image_format_spec.loader.exec_module(image_format_module)
-    utils_mod.detect_image_format = image_format_module.detect_image_format
-
-    monkeypatch.setitem(sys.modules, "vikingbot", types.ModuleType("vikingbot"))
-    monkeypatch.setitem(sys.modules, "vikingbot.agent", types.ModuleType("vikingbot.agent"))
-    monkeypatch.setitem(
-        sys.modules, "vikingbot.agent.tools", types.ModuleType("vikingbot.agent.tools")
-    )
-    monkeypatch.setitem(sys.modules, "vikingbot.agent.tools.base", base_mod)
-    monkeypatch.setitem(sys.modules, "vikingbot.bus", types.ModuleType("vikingbot.bus"))
-    monkeypatch.setitem(sys.modules, "vikingbot.bus.events", events_mod)
-    monkeypatch.setitem(sys.modules, "vikingbot.utils", utils_mod)
-
-    spec = importlib.util.spec_from_file_location("image_tool_under_test", image_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_image_tool(monkeypatch):
-    return _load_image_module(monkeypatch).ImageGenerationTool
-
-
 @pytest.mark.asyncio
-async def test_image_tool_uses_sandbox_for_local_paths(monkeypatch, tmp_path):
+async def test_image_tool_uses_sandbox_for_local_paths(tmp_path):
     secret = tmp_path / "host-secret.png"
     secret.write_bytes(b"OPENVIKING_HOST_SECRET_MARKER")
     sandbox = _FakeSandbox(error=PermissionError("outside sandbox"))
     context = SimpleNamespace(session_key="session", sandbox_manager=_SandboxManager(sandbox))
 
-    ImageGenerationTool = _load_image_tool(monkeypatch)
     tool = ImageGenerationTool()
 
     with pytest.raises(PermissionError):
@@ -106,11 +47,10 @@ async def test_image_tool_uses_sandbox_for_local_paths(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_image_tool_reads_sandbox_local_file_paths(monkeypatch):
+async def test_image_tool_reads_sandbox_local_file_paths():
     sandbox = _FakeSandbox(files={"image.png": b"SANDBOX_IMAGE_BYTES"})
     context = SimpleNamespace(session_key="session", sandbox_manager=_SandboxManager(sandbox))
 
-    ImageGenerationTool = _load_image_tool(monkeypatch)
     tool = ImageGenerationTool()
     data_uri, format_type = await tool._parse_image_data("image.png", context)
 
@@ -120,42 +60,16 @@ async def test_image_tool_reads_sandbox_local_file_paths(monkeypatch):
     assert base64.b64decode(data_uri.split(",", 1)[1]) == b"SANDBOX_IMAGE_BYTES"
 
 
-@pytest.mark.asyncio
-async def test_image_tool_keeps_data_uri_support_without_sandbox_context(monkeypatch):
-    ImageGenerationTool = _load_image_tool(monkeypatch)
-    tool = ImageGenerationTool()
-    data_uri = "data:image/png;base64,UE5H"
-
-    parsed, format_type = await tool._parse_image_data(data_uri)
-
-    assert parsed == data_uri
-    assert format_type == "data"
-
-
-def test_image_tool_documents_mask_sandbox_local_paths(monkeypatch):
-    ImageGenerationTool = _load_image_tool(monkeypatch)
-    tool = ImageGenerationTool()
-
-    mask_description = tool.parameters["properties"]["mask"]["description"]
-
-    assert "sandbox-local" in mask_description
+@pytest.mark.parametrize(
+    "source, expected_type",
+    [("data:image/png;base64,UE5H", "data"), ("https://example.com/image.png", "url")],
+)
+async def test_image_tool_accepts_remote_images_without_sandbox(source, expected_type):
+    assert await ImageGenerationTool()._parse_image_data(source) == (source, expected_type)
 
 
 @pytest.mark.asyncio
-async def test_image_tool_keeps_url_support_without_sandbox_context(monkeypatch):
-    ImageGenerationTool = _load_image_tool(monkeypatch)
-    tool = ImageGenerationTool()
-    image_url = "https://example.com/image.png"
-
-    parsed, format_type = await tool._parse_image_data(image_url)
-
-    assert parsed == image_url
-    assert format_type == "url"
-
-
-@pytest.mark.asyncio
-async def test_image_tool_rejects_local_paths_without_sandbox_context(monkeypatch):
-    ImageGenerationTool = _load_image_tool(monkeypatch)
+async def test_image_tool_rejects_local_paths_without_sandbox_context():
     tool = ImageGenerationTool()
 
     with pytest.raises(ValueError, match="sandbox context"):
@@ -171,8 +85,7 @@ async def test_edit_mode_reads_base_image_and_mask_from_sandbox(monkeypatch, tmp
         }
     )
     context = SimpleNamespace(session_key="session", sandbox_manager=_SandboxManager(sandbox))
-    module = _load_image_module(monkeypatch)
-    monkeypatch.setattr(module, "get_data_path", lambda: tmp_path)
+    monkeypatch.setattr(image_module, "get_data_path", lambda: tmp_path)
     captured_kwargs = {}
 
     async def fake_image_edit(**kwargs):
@@ -181,8 +94,8 @@ async def test_edit_mode_reads_base_image_and_mask_from_sandbox(monkeypatch, tmp
             data=[SimpleNamespace(b64_json=base64.b64encode(b"OUTPUT").decode())]
         )
 
-    monkeypatch.setattr(module.litellm, "aimage_edit", fake_image_edit)
-    tool = module.ImageGenerationTool(gen_image_model="openai/dall-e-2")
+    monkeypatch.setattr(image_module.litellm, "aimage_edit", fake_image_edit)
+    tool = ImageGenerationTool(gen_image_model="openai/dall-e-2")
 
     result = await tool.execute(
         context,
@@ -205,16 +118,17 @@ async def test_edit_mode_reads_base_image_and_mask_from_sandbox(monkeypatch, tmp
 
 @pytest.mark.asyncio
 async def test_image_tool_saves_generated_jpeg_with_jpg_extension(monkeypatch, tmp_path):
-    module = _load_image_module(monkeypatch)
-    monkeypatch.setattr(module, "get_data_path", lambda: tmp_path)
+    monkeypatch.setattr(image_module, "get_data_path", lambda: tmp_path)
     jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01fake-jpeg"
 
     async def fake_image_generation(**kwargs):
-        return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(jpeg_bytes).decode())])
+        return SimpleNamespace(
+            data=[SimpleNamespace(b64_json=base64.b64encode(jpeg_bytes).decode())]
+        )
 
-    monkeypatch.setattr(module.litellm, "aimage_generation", fake_image_generation)
+    monkeypatch.setattr(image_module.litellm, "aimage_generation", fake_image_generation)
     context = SimpleNamespace(session_key="session", channel_metadata={})
-    tool = module.ImageGenerationTool()
+    tool = ImageGenerationTool()
 
     result = await tool.execute(context, mode="generate", prompt="make a jpeg", send_to_user=False)
 

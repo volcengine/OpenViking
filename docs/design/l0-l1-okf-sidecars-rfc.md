@@ -23,7 +23,7 @@ OpenViking uses a three-layer context model:
 | L1 | `.overview.md` | directory overview for navigation and rerank |
 | L2 | source files and subdirectories | full content loaded on demand |
 
-The current implementation treats `.abstract.md` and `.overview.md` as generated hidden sidecars. `SemanticProcessor` / `SemanticDagExecutor` generate them bottom-up, and the vector pipeline maps those two filenames to `ContextLevel.ABSTRACT` and `ContextLevel.OVERVIEW`.
+The current implementation treats `.abstract.md` and `.overview.md` as generated hidden sidecars. `SemanticProcessor` / `SemanticTreeExecutor` generate them bottom-up, and the vector pipeline maps those two filenames to `ContextLevel.ABSTRACT` and `ContextLevel.OVERVIEW`.
 
 ## Goals
 

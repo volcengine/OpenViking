@@ -44,7 +44,7 @@ USER 和 ADMIN 调用 `commit`、`log`、`restore` 时必须显式传入 `paths`
 
 - HTTP 路由：[snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/server/routers/snapshot.py)，前缀 `/api/v1/snapshot`。
 - 命名空间（SDK）：[client.py](https://github.com/volcengine/OpenViking/blob/main/sdk/python/openviking_sdk/client.py)，暴露为 `client.snapshot.*`。
-- 底层语义实现：[viking_fs.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs.py) 的 `commit` / `restore` / `show` / `log` / `diff`。
+- 底层语义实现：[_snapshot.py](https://github.com/volcengine/OpenViking/blob/main/openviking/storage/viking_fs/_snapshot.py) 的 `commit` / `restore` / `show` / `log` / `diff`。
 - CLI 命令：[main.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/main.rs) 的 `SnapshotCmd`，子命令 [snapshot.rs](https://github.com/volcengine/OpenViking/blob/main/crates/ov_cli/src/commands/snapshot.rs)。
 
 ## API 参考
@@ -53,12 +53,14 @@ USER 和 ADMIN 调用 `commit`、`log`、`restore` 时必须显式传入 `paths`
 
 把当前工作区状态保存成一个新的快照。
 
+局部提交保留范围外的上次快照内容。删除文件或目录后，仍需把该 URI 或其父目录传入 `paths` 才会记录删除。末尾 `/` 不声明类型。非 ROOT 提交对现存文件加 Exact、现存目录加 Tree；缺失路径在 filesystem 锁后端不加锁，在 cache 后端加 Tree。缺失目标的并发重建不保证被本次快照完整记录，见 [提交范围与并发](../guides/15-snapshot.md#提交范围与并发)。
+
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | message | str | 是 | - | 提交说明 |
-| paths | List[str] | 否 | null | 限定本次快照的 `viking://` URI 列表，条目可以是文件或目录；目录会按照快照的剪枝规则递归展开。USER/ADMIN 必须显式传入；`null` 只保留给本地 ROOT 模式的整棵账号树快照。传入空列表 `[]` 表示显式的空路径集（不会产生改动）。如果某个路径在 VFS 和前一次快照中都不存在，会输出一条 warn，并按"对该名称下任何子树执行删除"处理 |
+| paths | List[str] | 否 | null | 限定本次快照的 `viking://` URI 列表，条目可以是文件或目录；目录会按照快照的剪枝规则递归展开。USER/ADMIN 必须显式传入；`null` 只保留给本地 ROOT 模式的整棵账号树快照。传入空列表 `[]` 表示显式的空路径集（不会产生改动）。缺失路径会从新快照移除此前的同名文件及其子树；若此前也不存在则告警并无改动 |
 | branch | str | 否 | `main` | 要推进的分支 |
 | author_name | str | 否 | null | 覆盖默认的提交者名字（默认 `viking-bot`） |
 | author_email | str | 否 | null | 覆盖默认的提交者邮箱 |
@@ -680,7 +682,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv1 content\n",
     mode="create",
-    wait=True,
 )
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 
@@ -689,7 +690,6 @@ client.write(
     uri=f"{root}/guide.md",
     content="# Guide\n\nv2 content\n",
     mode="replace",
-    wait=True,
 )
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 

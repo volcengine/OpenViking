@@ -1,13 +1,42 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
+
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils.resource_refs import (
     contains_resource_uri,
+    content_references_resource,
     extract_resource_uris,
     sync_memory_resource_refs,
     unlink_resource_references_from_memory,
 )
+
+
+@pytest.mark.parametrize(
+    ("name", "encoded"),
+    [("a#one.md", "a%23one.md"), ("a%23one.md", "a%2523one.md")],
+)
+@pytest.mark.parametrize("bare", [False, True])
+def test_resource_refs_preserve_literal_filenames(name, encoded, bare):
+    root = "viking://resources/source/"
+    uri = root + name
+    content = f"Source {uri}" if bare else f"[Source]({root}{encoded}#intro)"
+    mf = MemoryFile(content=content, extra_fields={})
+
+    assert extract_resource_uris(content) == [uri]
+    assert sync_memory_resource_refs(mf, source="compile")
+    assert mf.extra_fields["resource_refs"][0]["resource_uri"] == uri
+    assert f"]({root}{encoded}" in mf.content
+    assert not sync_memory_resource_refs(mf, source="compile")
+    assert extract_resource_uris(mf.content) == [uri]
+    assert content_references_resource(mf.content, uri)
+    for other in {"a#one.md", "a%23one.md", "a#two.md", "a"} - {name}:
+        assert not content_references_resource(mf.content, root + other)
+        assert not unlink_resource_references_from_memory(mf, root + other)
+    assert unlink_resource_references_from_memory(mf, uri)
+    assert mf.content == "Source"
+    assert "resource_refs" not in mf.extra_fields
 
 
 def test_extract_resource_uris_stops_at_common_sentence_delimiters():

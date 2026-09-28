@@ -9,6 +9,7 @@ import openviking.metrics.global_api as global_api
 from openviking.metrics.collectors.base import EventMetricCollector
 from openviking.metrics.collectors.cache import CacheCollector
 from openviking.metrics.collectors.embedding import EmbeddingCollector
+from openviking.metrics.collectors.queue import QueueDurationCollector
 from openviking.metrics.collectors.rerank import RerankCollector
 from openviking.metrics.collectors.retrieval import RetrievalCollector
 from openviking.metrics.collectors.session import SessionCollector
@@ -57,19 +58,85 @@ def test_cache_collector_uses_supported_events_and_receive_hook_routing(
     assert 'openviking_cache_misses_total{level="L1"} 1' in text
 
 
-def test_session_collector_records_lifecycle_and_contexts_and_archive(registry, render_prometheus):
+def test_queue_duration_collector_records_processing_and_end_to_end_histograms(
+    registry, render_prometheus
+):
+    collector = QueueDurationCollector()
+
+    collector.receive(
+        "queue.processed",
+        {
+            "queue": "Semantic",
+            "outcome": "success",
+            "process_duration_seconds": 2.5,
+            "end_to_end_duration_seconds": 8.0,
+        },
+        registry,
+    )
+
+    text = render_prometheus(registry)
+    labels = 'outcome="success",queue="Semantic"'
+    assert f"openviking_queue_process_duration_seconds_count{{{labels}}} 1" in text
+    assert f"openviking_queue_process_duration_seconds_sum{{{labels}}} 2.5" in text
+    assert f"openviking_queue_end_to_end_duration_seconds_count{{{labels}}} 1" in text
+    assert f"openviking_queue_end_to_end_duration_seconds_sum{{{labels}}} 8.0" in text
+    assert (
+        "openviking_queue_end_to_end_duration_seconds_bucket{"
+        'le="86400.0",outcome="success",queue="Semantic"} 1' in text
+    )
+
+
+def test_queue_duration_collector_allows_processing_only_and_ignores_bad_payloads(
+    registry, render_prometheus
+):
+    collector = QueueDurationCollector()
+    collector.receive(
+        "queue.processed",
+        {
+            "queue": "Embedding",
+            "outcome": "requeued",
+            "process_duration_seconds": 0.5,
+        },
+        registry,
+    )
+    collector.receive(
+        "queue.processed",
+        {
+            "queue": "Embedding",
+            "outcome": "unknown",
+            "process_duration_seconds": 1.0,
+        },
+        registry,
+    )
+    collector.receive("queue.processed", {"queue": "Embedding"}, registry)
+    collector.receive(
+        "queue.processed",
+        {
+            "queue": "Embedding",
+            "outcome": "success",
+            "process_duration_seconds": float("nan"),
+        },
+        registry,
+    )
+
+    text = render_prometheus(registry)
+    assert (
+        "openviking_queue_process_duration_seconds_count{"
+        'outcome="requeued",queue="Embedding"} 1' in text
+    )
+    assert "openviking_queue_end_to_end_duration_seconds" not in text
+    assert 'outcome="unknown"' not in text
+
+
+def test_session_collector_records_lifecycle_and_archive(registry, render_prometheus):
     c = SessionCollector()
     c.receive("session.lifecycle", {"action": "create", "status": "ok"}, registry)
-    c.receive("session.contexts_used", {"action": "create", "delta": 2}, registry)
     c.receive("session.archive", {"status": "ok"}, registry)
 
     text = render_prometheus(registry)
     assert (
         'openviking_session_lifecycle_total{account_id="__unknown__",action="create",status="ok"} 1'
         in text
-    )
-    assert (
-        'openviking_session_contexts_used_total{account_id="__unknown__",action="create"} 2' in text
     )
     assert 'openviking_session_archive_total{account_id="__unknown__",status="ok"} 1' in text
 
@@ -81,12 +148,10 @@ def test_session_collector_ignores_malformed_payloads_instead_of_raising(
 
     c.receive("session.lifecycle", "not-a-dict", registry)
     c.receive("session.lifecycle", {"action": "create"}, registry)
-    c.receive("session.contexts_used", {"action": "create"}, registry)
     c.receive("session.archive", {}, registry)
 
     text = render_prometheus(registry)
     assert "openviking_session_lifecycle_total" not in text
-    assert "openviking_session_contexts_used_total" not in text
     assert "openviking_session_archive_total" not in text
 
 
@@ -235,7 +300,9 @@ def test_embedding_collector_maps_call_metrics_and_tokens(registry, render_prome
     )
 
 
-def test_embedding_collector_records_failed_call_duration_with_error_code(registry, render_prometheus):
+def test_embedding_collector_records_failed_call_duration_with_error_code(
+    registry, render_prometheus
+):
     EmbeddingCollector().receive(
         "embedding.call",
         {
@@ -341,7 +408,9 @@ def _emit_retrieval(registry, *, result_count, context_type="search", rerank_use
     )
 
 
-def test_retrieval_collector_zero_result_records_downstream_without_raising(registry, render_prometheus):
+def test_retrieval_collector_zero_result_records_downstream_without_raising(
+    registry, render_prometheus
+):
     """Regression for #2922: a zero-result retrieval is a normal outcome, not an error.
 
     Previously ``record_completed`` incremented RESULTS_TOTAL by ``max(0, result_count)``,
@@ -353,10 +422,17 @@ def test_retrieval_collector_zero_result_records_downstream_without_raising(regi
     _emit_retrieval(registry, result_count=0)
     text = render_prometheus(registry)
 
-    assert re.search(r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
-    assert re.search(r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert re.search(
+        r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
+    )
+    assert re.search(
+        r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
+    )
     # Latency histogram still observed one sample (proving the method did not abort early).
-    assert re.search(r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert re.search(
+        r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?',
+        text,
+    )
     # No positive results -> RESULTS_TOTAL has no series for this context.
     assert not re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"', text)
 
@@ -367,18 +443,33 @@ def test_retrieval_collector_positive_result_increments_results_total(registry, 
     _emit_retrieval(registry, result_count=3, rerank_used=True)
     text = render_prometheus(registry)
 
-    assert re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"[^}]*\} 3(?:\.0)?', text)
-    assert re.search(r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
-    assert not re.search(r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"', text)
+    assert re.search(
+        r'openviking_retrieval_results_total\{[^}]*context_type="search"[^}]*\} 3(?:\.0)?', text
+    )
+    assert re.search(
+        r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
+    )
+    assert not re.search(
+        r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"', text
+    )
 
 
-def test_retrieval_collector_negative_result_count_is_bucketed_as_zero_result(registry, render_prometheus):
+def test_retrieval_collector_negative_result_count_is_bucketed_as_zero_result(
+    registry, render_prometheus
+):
     """A malformed negative result_count must not raise or drop metrics; it is classified
     as an empty retrieval (no positive results) so telemetry stays internally consistent."""
     _emit_retrieval(registry, result_count=-1)
     text = render_prometheus(registry)
 
-    assert re.search(r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
-    assert re.search(r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
-    assert re.search(r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text)
+    assert re.search(
+        r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
+    )
+    assert re.search(
+        r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
+    )
+    assert re.search(
+        r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?',
+        text,
+    )
     assert not re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"', text)

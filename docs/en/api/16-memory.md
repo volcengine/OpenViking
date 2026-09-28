@@ -26,7 +26,7 @@ These are the enabled built-in types. Deployments can extend or override them wi
 
 ### recall()
 
-> **Deprecated**: `/api/v1/search/recall` is now a thin preset over [`/api/v1/search/search` with `mode="context"`](06-retrieval.md#searchmodecontext) and carries no assembly logic of its own. New integrations should target the context face directly; the v1 field aliases are accepted only here and will be removed in the next minor release. Responses carry a `Deprecation: true` header.
+> **Deprecated**: `/api/v1/search/recall` is now a thin preset over [`/api/v1/search/search` with `mode="context"`](06-retrieval.md#search-mode-context) and carries no assembly logic of its own. New integrations should target the context face directly; the v1 field aliases are accepted only here and will be removed in the next minor release. Responses carry a `Deprecation: true` header.
 
 Search each memory type independently and assemble a bounded memory block that can be injected directly into Agent context. Relative to the context face, `/recall` overlays `purpose="coding"`, the v1-compatible `score_threshold=0.1`, `dedup_turns=5` when a `session_id` is present, and `query_expansion="auto"`. Coding Agent plugins explicitly send `score_threshold=0.35`; the public `/recall` default remains `0.1` so an unchanged request does not silently lose results after upgrading. Omitting `quotas` keeps v1's bucket defaults (`events=10, entities=10, preferences=3, experiences=0`); sending `"quotas": null` explicitly opts into the `purpose` preset ratios instead.
 
@@ -114,7 +114,7 @@ The response shape matches the context face (flat entries, flat XML in `rendered
 }
 ```
 
-See [Retrieval - search(mode="context")](06-retrieval.md#searchmodecontext) for field meanings. Shape changes relative to v1: `type` → `category`, `mode` → `detail`, `content`/`summary` → `text`, `rendered` moves from three-level nesting to flat `<memory>` tags, and `rank` is no longer returned.
+See [Retrieval - search(mode="context")](06-retrieval.md#search-mode-context) for field meanings. Shape changes relative to v1: `type` → `category`, `mode` → `detail`, `content`/`summary` → `text`, `rendered` moves from three-level nesting to flat `<memory>` tags, and `rank` is no longer returned.
 
 The public Python, TypeScript, Go SDKs and the `ov` CLI do not wrap this endpoint yet, so this section shows only the HTTP tab plus the MCP call that does exist.
 

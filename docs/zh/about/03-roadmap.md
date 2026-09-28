@@ -1,115 +1,19 @@
 # 路线图
 
-本文档概述 OpenViking 的开发路线图。
+本页区分当前 `main` 分支的实现与后续方向，不承诺发布时间或优先级。已发布版本请查阅 [release notes](https://github.com/volcengine/OpenViking/releases)。
 
-## 已完成功能
+## main 已实现
 
-### 核心基础设施
-- 三层信息模型（L0/L1/L2）
-- Viking URI 寻址系统
-- 双层存储（AGFS + 向量索引）
-- 异步/同步客户端支持
-- QueueFS SQLite 存储后端
+- **上下文与检索：** L0/L1/L2 分层、Viking URI、语义搜索和上下文感知检索。[概念说明](../concepts/03-context-layers.md)
+- **资源：** 文档、代码、网页和媒体导入，可重复读取来源的定时更新。音视频文件可保存；内容理解需要启用兼容的 VLM。[资源管理](../api/02-resources.md)
+- **更新与历史：** 根据 freshness 刷新父目录摘要，以及基于 Git 的快照提交、历史查询和恢复。父目录刷新可能延后；快照需显式提交，恢复的是文件内容，不含历史 ACL 或向量索引。[上下文分层](../concepts/03-context-layers.md) · [快照指南](../guides/15-snapshot.md)
+- **会话与记忆：** 对话追踪、记忆提取和会话归档。[会话说明](../concepts/08-session.md)
+- **接入与集成：** HTTP API、SDK、CLI、MCP 和 Agent 插件。[API 概览](../api/01-overview.md) · [MCP 指南](../guides/06-mcp-integration.md)
+- **运维：** JSON 配置（`ov.conf`）、多模型供应商、租户隔离、加密、可观测性和本地/S3 存储。[配置指南](../guides/01-configuration.md) · [部署指南](../guides/03-deployment.md)
 
-### 资源管理
-- 文本资源管理（Markdown、HTML、PDF）
-- 自动 L0/L1 生成
-- 带向量索引的语义搜索
-- 资源关联和链接
-- 内容写入 API
-- Agent 命名空间管理
+## 后续方向
 
-### 多模态解析
-- 图像 OCR 和解析
-- 音频转写（Whisper ASR）
-- 视频解析
-- PDF 书签提取
-- Word、PowerPoint、Excel、EPub、ZIP 解析器
-- 代码文件解析
-- 飞书/Lark 文档解析器
+- 继续完善分布式存储。
+- 接入更多 Agent 框架。
 
-### 检索
-- 基本语义搜索（`find`）
-- 带意图分析的上下文感知搜索（`search`）
-- 基于会话的查询扩展
-- 多供应商重排序流水线（OpenAI、LiteLLM、Cohere、Volcengine）
-
-### 会话与记忆
-- 对话状态追踪
-- 上下文和技能使用追踪
-- 自动记忆提取
-- 使用 LLM 的记忆去重
-- 会话归档和压缩
-- Working Memory V2 及冷存储归档
-
-### 技能
-- 技能定义和存储
-- MCP 工具自动转换
-- 技能搜索和检索
-
-### 多租户与安全
-- 多租户支持与账户隔离
-- 文件和文档加密
-- 用户级隐私配置 API
-- API Key 认证
-
-### 配置与供应商
-- 可插拔的 Embedding 提供者（OpenAI、Gemini、Volcengine、MiniMax、LiteLLM、Jina、Cohere、DashScope、Voyage、本地）
-- 可插拔的 LLM 提供者
-- 可插拔的重排序提供者
-- 基于 YAML 的配置
-- 安装向导（`openviking-server init`）
-
-### Server 与 Client 架构
-- HTTP Server（FastAPI）
-- 内置 MCP 端点
-- Python HTTP Client
-- Python HTTP Client SDK
-- Web 控制台
-
-### CLI
-- Rust CLI（`ov` 命令）
-- TUI 文件系统浏览器
-- 隐私、搜索、会话、资源及管理命令
-
-### Bot 集成
-- VikingBot 框架
-- 飞书/Lark 频道
-- Telegram 频道
-
-### 生态与插件
-- OpenClaw 插件（编程 Agent 上下文引擎）
-- Claude Code 记忆插件
-- Codex 记忆插件
-
-### 可观测性
-- Prometheus 指标
-- OpenTelemetry 链路追踪
-- HTTP 可观测性中间件
-
-### 部署
-- Docker 镜像和 Docker Compose
-- Kubernetes Helm Chart
-- 云端 VikingDB 支持
-
----
-
-## 未来计划
-
-### 上下文管理
-- 上下文修改对上层的传导更新
-- 支持对上下文的版本管理和回滚（参考 git）
-
-### 分布式存储
-- 分布式存储后端
-
-### 生态
-- 更多 Agent 框架适配器
-
-欢迎在 issue 中提出建议和反馈。
-
----
-
-## 贡献
-
-我们欢迎贡献以帮助实现这些目标。请参阅 [贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。
+提案与范围讨论见 [GitHub issues](https://github.com/volcengine/OpenViking/issues)，参与开发见[贡献指南](https://github.com/volcengine/OpenViking/blob/main/CONTRIBUTING_CN.md)。

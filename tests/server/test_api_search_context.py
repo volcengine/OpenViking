@@ -68,12 +68,18 @@ async def test_context_mode_quotas_use_category_ownership_roots(
     monkeypatch,
 ):
     targets = []
+    skill_targets = []
 
     async def fake_find(**kwargs):
         targets.append(kwargs["target_uri"])
         return _FakeFindResult()
 
+    async def fake_find_skills(**kwargs):
+        skill_targets.append(kwargs["target_uri"])
+        return _FakeFindResult()
+
     monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
     response = await client.post(
         "/api/v1/search/search",
         json={
@@ -86,8 +92,7 @@ async def test_context_mode_quotas_use_category_ownership_roots(
 
     assert response.status_code == 200
     assert any(target.endswith("/memories/events") for target in targets)
-    assert any(target.endswith("/user/default/skills") for target in targets)
-    assert "viking://agent/skills" in targets
+    assert skill_targets == [["viking://user/default/skills", "viking://agent/skills"]]
 
 
 async def test_coding_purpose_searches_all_domains_and_actor_resource(
@@ -96,12 +101,18 @@ async def test_coding_purpose_searches_all_domains_and_actor_resource(
     monkeypatch,
 ):
     calls = []
+    skill_targets = []
 
     async def fake_find(**kwargs):
         calls.append(kwargs)
         return _FakeFindResult()
 
+    async def fake_find_skills(**kwargs):
+        skill_targets.append(kwargs["target_uri"])
+        return _FakeFindResult()
+
     monkeypatch.setattr(service.search, "find", fake_find)
+    monkeypatch.setattr(service.search, "find_skills", fake_find_skills)
     response = await client.post(
         "/api/v1/search/search",
         headers={"X-OpenViking-Actor-Peer": "current"},
@@ -122,7 +133,7 @@ async def test_coding_purpose_searches_all_domains_and_actor_resource(
     assert any(target.endswith("/memories/experiences") for target in targets)
     assert "viking://resources" in targets
     assert any(target.endswith("/peers/current/resources") for target in targets)
-    assert any(target.endswith("/skills") for target in targets)
+    assert skill_targets == [["viking://user/default/skills", "viking://agent/skills"]]
     assert response.json()["result"]["stats"]["quotas"] == {
         "events": 1,
         "entities": 2,

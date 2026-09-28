@@ -16,6 +16,7 @@ Features:
 - IANA Media Type (MIME) based content detection for URLs without file extensions
 """
 
+import socket
 import tempfile
 from enum import Enum
 from pathlib import Path
@@ -30,8 +31,15 @@ from openviking.parse.parsers.media.constants import (
     VIDEO_EXTENSIONS,
 )
 from openviking.utils import is_code_hosting_blob_url
+from openviking.utils.exceptions import error_code_from_http_status
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    InvalidArgumentError,
+    OpenVikingError,
+    PermissionDeniedError,
+    UnavailableError,
+)
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -581,27 +589,29 @@ class HTTPAccessor(DataAccessor):
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
                 except httpx.ConnectError as e:
-                    user_msg = "HTTP request failed: could not connect to server. Check the URL or your network."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
+                    cause: BaseException | None = e
+                    while cause is not None:
+                        if isinstance(cause, socket.gaierror) and cause.errno == socket.EAI_NONAME:
+                            raise InvalidArgumentError(
+                                f"Source URL host does not exist: {url}", details={"source": url}
+                            ) from e
+                        cause = cause.__cause__ or cause.__context__
+                    raise UnavailableError(
+                        "source URL", reason=f"Could not connect to {url}: {e}"
+                    ) from e
                 except httpx.TimeoutException as e:
-                    user_msg = "HTTP request failed: timeout. The server took too long to respond."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
+                    raise DeadlineExceededError(f"Fetch source URL {url}", self.timeout) from e
                 except httpx.HTTPStatusError as e:
-                    status_code = e.response.status_code if e.response else "unknown"
-                    if status_code == 401:
-                        user_msg = f"HTTP request failed: authentication error ({status_code}). Check your credentials or permissions."
-                    elif status_code == 403:
-                        user_msg = f"HTTP request failed: access denied ({status_code}). The site blocked the request (login or anti-bot may be required)."
-                    elif status_code == 404:
-                        user_msg = f"HTTP request failed: not found ({status_code}). The URL may be invalid or the resource was removed."
-                    elif 500 <= status_code < 600:
-                        user_msg = f"HTTP request failed: server error ({status_code}). The server encountered an error."
-                    else:
-                        user_msg = f"HTTP request failed: status code {status_code}."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
-                except Exception as e:
-                    user_msg = "HTTP request failed: unexpected error."
-                    raise RuntimeError(f"{user_msg} URL: {url}. Details: {e}") from e
+                    status_code = e.response.status_code
+                    raise OpenVikingError(
+                        f"Source URL returned HTTP {status_code}: {url}",
+                        code=error_code_from_http_status(status_code),
+                        details={"source": url, "upstream_status_code": status_code},
+                    ) from e
+                except httpx.InvalidURL as e:
+                    raise InvalidArgumentError(f"Invalid source URL: {url}") from e
+                except httpx.RequestError as e:
+                    raise UnavailableError("source URL", reason=str(e)) from e
 
                 meta = self._finalize_download_metadata(
                     url=url,

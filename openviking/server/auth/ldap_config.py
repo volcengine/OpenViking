@@ -61,8 +61,6 @@ class LDAPConfig(BaseModel):
         default_factory=_ldap_default_identity
     )
 
-    model_config = {"extra": "forbid"}
-
     @field_validator("host")
     @classmethod
     def validate_host(cls, v: str) -> str:

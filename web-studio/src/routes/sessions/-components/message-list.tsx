@@ -1,9 +1,9 @@
 import { memo, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
+import { BotIcon, CheckIcon, CopyIcon, UserIcon } from 'lucide-react'
 import type { TFunction } from 'i18next'
 
-import { resolvePublicAsset } from '#/lib/public-path'
+import { groupMessages } from '#/lib/sessions/group-messages'
 import type {
   Message,
   MessagePart,
@@ -16,8 +16,6 @@ import {
   ReasoningBlock,
   ToolCallBlock,
 } from './message-parts'
-
-const OPENVIKING_ICON_SRC = resolvePublicAsset('favicon-32.png')
 
 // ---------------------------------------------------------------------------
 // CopyButton
@@ -104,16 +102,16 @@ function TypingIndicator() {
 }
 
 // ---------------------------------------------------------------------------
-// BotAvatar — product brand avatar
+// AgentAvatar — generic agent avatar
 // ---------------------------------------------------------------------------
 
-function BotAvatar({ compact }: { compact?: boolean }) {
+function AgentAvatar({ compact }: { compact?: boolean }) {
   const sizeClass = compact ? 'size-6' : 'size-7'
   return (
     <div
-      className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full ring-1 ring-border/20 overflow-hidden`}
+      className={`flex ${sizeClass} shrink-0 items-center justify-center rounded-full border border-border/70 bg-muted/60 text-muted-foreground`}
     >
-      <img src={OPENVIKING_ICON_SRC} alt="OpenViking" className={sizeClass} />
+      <BotIcon className={compact ? 'size-3.5' : 'size-4'} aria-hidden="true" />
     </div>
   )
 }
@@ -139,12 +137,30 @@ export function MessageList({
   streaming,
 }: MessageListProps) {
   const isExpanded = layout === 'expanded'
-  const safeMessages = Array.isArray(messages) ? messages : []
+  const safeMessages = groupMessages([
+    ...(Array.isArray(messages) ? messages : []),
+    ...(streaming
+      ? [
+          {
+            id: '__streaming__',
+            role: 'assistant' as const,
+            parts: streaming.parts ?? [],
+            created_at: new Date().toISOString(),
+          },
+        ]
+      : []),
+  ])
+  const streamingGroup =
+    streaming && safeMessages.at(-1)?.role === 'assistant'
+      ? safeMessages.pop()
+      : undefined
   return (
     <>
       {safeMessages.map((msg, idx) => {
         const prev = idx > 0 ? safeMessages[idx - 1] : null
-        const sameRole = prev?.role === msg.role
+        const sameRole =
+          prev?.role === msg.role &&
+          (!prev.turn_id || !msg.turn_id || prev.turn_id === msg.turn_id)
         return msg.role === 'user' ? (
           <UserMessage
             key={msg.id}
@@ -165,6 +181,7 @@ export function MessageList({
       {streaming && (
         <StreamingAssistantMessage
           {...streaming}
+          parts={streamingGroup?.parts ?? streaming.parts}
           expanded={isExpanded}
           onResourceClick={onResourceClick}
         />
@@ -191,7 +208,7 @@ const UserMessage = memo(function UserMessage({
 
   return (
     <div
-      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} group/msg flex gap-2 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-4xl'} group/msg flex gap-2 justify-end ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
       <div className="flex items-end gap-1.5 self-end opacity-0 transition-opacity group-hover/msg:opacity-100">
         <span className="text-[10px] text-muted-foreground/40 opacity-0 transition-opacity group-hover/msg:opacity-100 select-none">
@@ -204,6 +221,7 @@ const UserMessage = memo(function UserMessage({
           expanded ? 'max-w-[88%] space-y-1.5' : 'max-w-[75%] space-y-1.5'
         }
       >
+        <Attachments parts={message.parts} />
         {text && (
           <div className="whitespace-pre-wrap rounded-2xl rounded-tr-sm border border-border/70 bg-muted/70 px-4 py-2.5 text-sm leading-6 text-foreground shadow-sm">
             {text}
@@ -241,14 +259,14 @@ const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
-      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-4xl'} group/msg flex gap-2 items-start ${compact ? 'mb-1.5' : 'mb-5'}`}
     >
       {!compact ? (
-        <BotAvatar compact={expanded} />
+        <AgentAvatar compact={expanded} />
       ) : (
         <div className="w-6 shrink-0" />
       )}
-      <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
+      <div className="relative max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border/60 bg-card px-4 py-3 text-sm">
         {(Array.isArray(message.parts) ? message.parts : []).map((part, i) => {
           switch (part.type) {
             case 'text':
@@ -279,8 +297,9 @@ const AssistantMessage = memo(function AssistantMessage({
             }
             case 'tool_result':
               return null
+            case 'image_url':
             case 'context':
-              return null
+              return <Attachments key={i} parts={[part]} />
           }
         })}
         <div className="absolute right-2 top-2 flex items-center gap-1.5 rounded-lg bg-background/85 px-1.5 py-1 opacity-0 shadow-sm ring-1 ring-border/40 backdrop-blur transition-opacity group-hover/msg:opacity-100">
@@ -313,10 +332,10 @@ function StreamingAssistantMessage({
 
   return (
     <div
-      className={`${expanded ? 'w-full' : 'w-full max-w-[clamp(48rem,68vw,72rem)]'} mb-5 flex gap-2 items-start`}
+      className={`${expanded ? 'w-full' : 'w-full max-w-4xl'} mb-5 flex gap-2 items-start`}
     >
-      <BotAvatar compact={expanded} />
-      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-muted/30 px-4 py-3 text-sm shadow-md shadow-black/5 dark:border-white/10 dark:bg-card/95 dark:shadow-black/30">
+      <AgentAvatar compact={expanded} />
+      <div className="max-w-full min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border/60 bg-card px-4 py-3 text-sm">
         {safeParts.map((part, i) =>
           renderStreamingPart(part, i, toolResultsById, onResourceClick),
         )}
@@ -357,8 +376,9 @@ function renderStreamingPart(
       return null
     case 'text':
       return <MarkdownContent key={index} content={part.text} isStreaming />
+    case 'image_url':
     case 'context':
-      return null
+      return <Attachments key={index} parts={[part]} />
   }
 }
 
@@ -382,5 +402,37 @@ function StreamingToolPart({
       }
       onResourceClick={onResourceClick}
     />
+  )
+}
+
+function Attachments({ parts }: { parts: MessagePart[] }) {
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (part.type === 'context')
+          return (
+            <div
+              key={index}
+              className="my-2 break-all rounded-md border px-3 py-2 text-xs text-muted-foreground"
+              title={part.abstract}
+            >
+              {part.uri}
+            </div>
+          )
+        if (
+          part.type === 'image_url' &&
+          /^(https?:|data:image\/)/i.test(part.image_url.url)
+        )
+          return (
+            <img
+              key={index}
+              src={part.image_url.url}
+              alt=""
+              className="my-2 max-h-80 max-w-full rounded-lg object-contain"
+            />
+          )
+        return null
+      })}
+    </>
   )
 }

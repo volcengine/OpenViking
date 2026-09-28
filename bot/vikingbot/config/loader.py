@@ -159,7 +159,15 @@ def load_config() -> Config:
                 )
 
             server_managed = _is_truthy_env(VIKINGBOT_WITH_OPENVIKING_SERVER_ENV)
-            bot_server_data = {} if server_managed else bot_data.get("ov_server", {})
+            configured_bot_server = bot_data.get("ov_server", {})
+            # --with-bot owns the server lifecycle and endpoint, but Bot-level
+            # OpenViking credentials and settings still belong to the Bot.
+            # Ignore only an explicitly configured alternate server URL.
+            bot_server_data = (
+                _server_managed_bot_server_data(configured_bot_server)
+                if server_managed
+                else configured_bot_server
+            )
             server_section_present = "server" in full_data and isinstance(
                 full_data.get("server"), dict
             )
@@ -230,6 +238,13 @@ def _merge_vlm_model_config(
             agents["temperature"] = vlm_data["temperature"]
         if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
             agents["extra_headers"] = vlm_data["extra_headers"]
+
+
+def _server_managed_bot_server_data(value: Any) -> dict:
+    """Keep Bot OpenViking settings while ignoring an alternate server URL."""
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if key != "server_url"}
 
 
 def _merge_ov_server_config(

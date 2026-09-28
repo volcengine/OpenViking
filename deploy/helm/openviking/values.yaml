@@ -3,6 +3,8 @@
 replicaCount: 1
 
 image:
+  # Prefer ghcr.io. If it is hard to reach, use the mirror:
+  #   repository: openviking-cn-beijing.cr.volces.com/volcengine/openviking
   repository: ghcr.io/volcengine/openviking
   # Use Always for the default moving tag. Pin a version and set IfNotPresent if
   # you want Kubernetes to reuse cached immutable images.

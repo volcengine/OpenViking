@@ -19,56 +19,13 @@ class _SandboxManager:
 
 
 @pytest.mark.asyncio
-async def test_exec_tool_applies_working_dir_for_all_sandbox_backends():
-    calls = []
-
-    class Sandbox:
-        sandbox_cwd = "/workspace"
-
-        async def execute(self, command, timeout):
-            calls.append((command, timeout))
-            return "ok"
-
-    context = SimpleNamespace(
-        sandbox_manager=_SandboxManager(Sandbox()),
-        session_key="session",
-    )
-
-    result = await ExecTool(timeout=7).execute(
-        context,
-        command="pwd",
-        working_dir="directory with spaces",
-    )
-
-    assert result == "ok"
-    assert calls == [("cd 'directory with spaces' && pwd", 7)]
-
-
-@pytest.mark.asyncio
-async def test_exec_tool_pwd_without_working_dir_uses_sandbox_root():
-    class Sandbox:
-        sandbox_cwd = "/workspace"
-
-        async def execute(self, command, timeout):
-            raise AssertionError((command, timeout))
-
-    context = SimpleNamespace(
-        sandbox_manager=_SandboxManager(Sandbox()),
-        session_key="session",
-    )
-
-    result = await ExecTool().execute(context, command="pwd")
-
-    assert result == "/workspace"
-
-
-@pytest.mark.asyncio
-async def test_exec_tool_working_dir_changes_real_command_cwd(tmp_path):
+@pytest.mark.parametrize("relative_dir", [None, "directory with spaces"])
+async def test_exec_tool_runs_in_selected_directory(tmp_path, relative_dir):
     class Config:
         restrict_workspaces = True
 
     workspace = tmp_path / "workspace"
-    working_dir = workspace / "directory with spaces"
+    working_dir = workspace / relative_dir if relative_dir else workspace
     working_dir.mkdir(parents=True)
     session_key = SessionKey(type="cli", channel_id="default", chat_id="exec-test")
     sandbox = DirectBackend(Config(), session_key, workspace)
@@ -80,8 +37,8 @@ async def test_exec_tool_working_dir_changes_real_command_cwd(tmp_path):
         )
         result = await ExecTool().execute(
             context,
-            command="pwd",
-            working_dir="directory with spaces",
+            command="python3 -c 'import os; print(os.getcwd())'",
+            working_dir=relative_dir,
         )
     finally:
         await sandbox.stop()

@@ -4,7 +4,7 @@ Community-maintained integrations for various agent runtimes. Each differs in ta
 
 ## ZCode memory integration
 
-Source: [examples/zcode-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin)
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
 The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks and an OpenViking MCP server:
 
@@ -45,7 +45,45 @@ After restarting ZCode, verify that:
 | MCP tools not appearing | The MCP proxy failed to start | Check the absolute `mcp.servers.openviking` command in `~/.zcode/cli/config.json` |
 | Duplicate captures | An older installation left duplicate hook entries | Run `install.sh --harness zcode --uninstall`, then reinstall |
 
-Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/zcode-memory-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/zcode-memory-plugin/DESIGN.md).
+Implementation details and currently verified ZCode assumptions are documented in the plugin's [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) and [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md).
+
+## Kimi Code memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Kimi Code integration is a native managed plugin. It reuses the shared
+OpenViking hook runtime and adds only Kimi-specific event mapping, wire
+transcript decoding, output formatting, and commit policy:
+
+- **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
+- **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
+- The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/memory-plugin-shared/install.sh) \
+  --harness kimicode
+```
+
+Use the TOS mirror where GitHub is unavailable:
+
+```bash
+bash <(curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/memory-plugin-shared/install.sh) \
+  --harness kimicode --dist tos
+```
+
+The installer assembles a self-contained runtime under
+`$KIMI_CODE_HOME/plugins/managed/openviking-memory/` (default Kimi home:
+`~/.kimi-code/`), then updates only the `openviking-memory` entry in
+`plugins/installed.json`. Existing plugin records are preserved. Re-run the
+same command to upgrade, or add `--uninstall` to remove only this plugin.
+
+The verified host contract and version are recorded in
+[`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md).
 
 ## AstrBot plugin
 

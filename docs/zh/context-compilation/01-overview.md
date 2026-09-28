@@ -41,6 +41,10 @@ Compile 本身不规定「编译成什么」——那由 Skill 决定。同一�
 
 前两个示例还给出了从**导入来源 → 添加 Skill → 执行编译 → 可视化产物**的完整 `ov` 命令，照着做就能得到一张可交互的 HTML 图。
 
+## 不止生成新产物：整理已有记忆
+
+除了用 Skill 把来源材料编译成新的知识产物，`ov compile` 还有一种特殊模式——把 `--skill` 设为 `memory`，即可对已有的**记忆**目录做就地整理（去重、合并、拆分、精简），且不经过 VikingBot。详见 [记忆整理](./06-memory-consolidation.md)。
+
 ## 前置条件
 
 - 一个正在运行、且启用了 Bot（`--with-bot`）的 OpenViking 服务。默认端点是 `http://localhost:1933`；远程使用需要 API Key，参见 [鉴权](../guides/04-authentication.md)。没有服务先看 [快速开始](../getting-started/02-quickstart.md)。

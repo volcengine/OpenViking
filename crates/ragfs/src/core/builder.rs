@@ -14,7 +14,6 @@ use super::filesystem::FileSystem;
 use super::mountable::MountableFS;
 use super::stats_wrapper::StatsWrappedFS;
 
-#[cfg(feature = "cache")]
 use super::errors::{Error, Result};
 #[cfg(feature = "cache")]
 use crate::cache::{CacheNamespace, CachePolicy};
@@ -27,6 +26,8 @@ use crate::lock::{
     FilesystemPathLockProvider, MemoryPathLockProvider, PathLockConfig, PathLockManager,
     PathLockProvider, PathLockWrappedFS,
 };
+#[cfg(feature = "cache")]
+use crate::lock::RedisPathLockProvider;
 
 #[cfg(feature = "s3")]
 use crate::plugins::S3FSPlugin;
@@ -123,7 +124,7 @@ pub struct RagfsStack {
 /// Encryption config is forwarded to `MountableFS` so it can wrap individual backends
 /// with `EncryptionWrappedFS` during `mount()`. The top is always `StatsWrappedFS`.
 /// PathLockWrappedFS is always inserted between stats and mountable.
-pub async fn build_default_stack(config: RagfsConfig) -> RagfsStack {
+pub async fn build_default_stack(config: RagfsConfig) -> Result<RagfsStack> {
     let mountable = Arc::new(MountableFS::new());
     build_stack_with_mountable(config, mountable).await
 }
@@ -135,7 +136,7 @@ pub async fn build_default_stack(config: RagfsConfig) -> RagfsStack {
 pub async fn build_stack_with_mountable(
     config: RagfsConfig,
     mountable: Arc<MountableFS>,
-) -> RagfsStack {
+) -> Result<RagfsStack> {
     build_stack_with_mountable_and_runtime(config, mountable, None).await
 }
 
@@ -146,11 +147,23 @@ pub async fn build_configured_stack(
     cache: Option<CacheStackConfig>,
 ) -> Result<RagfsStack> {
     let Some(cache) = cache else {
-        return Ok(build_default_stack(config).await);
+        return build_default_stack(config).await;
     };
-    if cache.cachefs.enabled && cache.provider.is_none() {
+    let pathlock_uses_cache = config.pathlock.provider == "cache";
+    if (cache.cachefs.enabled || pathlock_uses_cache) && cache.provider.is_none() {
         return Err(Error::config(
-            "cache provider is required when CacheFS is enabled".to_string(),
+            "cache provider is required when CacheFS or cache-backed PathLock is enabled"
+                .to_string(),
+        ));
+    }
+    if pathlock_uses_cache
+        && !matches!(
+            &cache.provider,
+            Some(CacheRuntimeProviderConfig::Redis(_))
+        )
+    {
+        return Err(Error::config(
+            "cache-backed PathLock requires the shared cache provider to be redis".to_string(),
         ));
     }
     let runtime = match cache.provider {
@@ -190,7 +203,7 @@ pub async fn build_configured_stack(
     } else {
         Arc::new(MountableFS::new())
     };
-    Ok(build_stack_with_mountable_and_runtime(config, mountable, runtime).await)
+    build_stack_with_mountable_and_runtime(config, mountable, runtime).await
 }
 
 async fn build_stack_with_mountable_and_runtime(
@@ -198,7 +211,7 @@ async fn build_stack_with_mountable_and_runtime(
     mountable: Arc<MountableFS>,
     #[cfg(feature = "cache")] runtime: Option<Arc<CacheRuntime>>,
     #[cfg(not(feature = "cache"))] _runtime: Option<()>,
-) -> RagfsStack {
+) -> Result<RagfsStack> {
     #[cfg(feature = "cache")]
     register_builtin_plugins_with_runtime(&mountable, runtime.clone()).await;
     #[cfg(not(feature = "cache"))]
@@ -212,11 +225,41 @@ async fn build_stack_with_mountable_and_runtime(
     }
 
     let provider: Arc<dyn PathLockProvider> = match config.pathlock.provider.as_str() {
-        "memory" => Arc::new(MemoryPathLockProvider::new()),
-        _ => Arc::new(FilesystemPathLockProvider::new(
+        "filesystem" => Arc::new(FilesystemPathLockProvider::new(
             mountable.clone() as Arc<dyn FileSystem>,
             config.pathlock.lock_expire_secs,
         )),
+        "memory" => Arc::new(MemoryPathLockProvider::new()),
+        #[cfg(feature = "cache")]
+        "cache" => {
+            let runtime = runtime.clone().ok_or_else(|| {
+                Error::config("cache provider is required for cache-backed PathLock".to_string())
+            })?;
+            let namespace = config.pathlock.namespace.as_deref().ok_or_else(|| {
+                Error::config("pathlock namespace is required for cache-backed PathLock".to_string())
+            })?;
+            Arc::new(
+                RedisPathLockProvider::new(
+                    runtime,
+                    namespace,
+                    config.pathlock.lock_expire_secs,
+                )
+                .map_err(|error| {
+                    Error::config(format!("Redis PathLock initialization failed: {error}"))
+                })?,
+            )
+        }
+        #[cfg(not(feature = "cache"))]
+        "cache" => {
+            return Err(Error::config(
+                "cache-backed PathLock requires the ragfs cache feature".to_string(),
+            ));
+        }
+        other => {
+            return Err(Error::config(format!(
+                "unsupported PathLock provider: {other}"
+            )));
+        }
     };
     let pathlock_manager = Arc::new(PathLockManager::new(
         mountable.clone() as Arc<dyn FileSystem>,
@@ -233,13 +276,13 @@ async fn build_stack_with_mountable_and_runtime(
     ));
 
     let top: Arc<dyn FileSystem> = Arc::new(StatsWrappedFS::with_arc(inner));
-    RagfsStack {
+    Ok(RagfsStack {
         mountable,
         top,
         pathlock_manager,
         #[cfg(feature = "cache")]
         cache_runtime: runtime,
-    }
+    })
 }
 
 /// The single built-in plugin registration sequence (eliminates drift across call sites).
@@ -310,6 +353,7 @@ mod tests {
             }),
             pathlock: PathLockConfig {
                 provider: "filesystem".to_string(),
+                namespace: None,
                 lock_timeout_secs: 0.0,
                 lock_expire_secs: 30.0,
             },
@@ -348,7 +392,7 @@ mod tests {
 
     #[tokio::test]
     async fn encrypted_stack_encrypts_on_disk() {
-        let stack = build_default_stack(enc_config()).await;
+        let stack = build_default_stack(enc_config()).await.unwrap();
         mount_mem(&stack).await;
 
         let ctx = Arc::new(FsContextInner::new("tenant"));
@@ -369,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn encrypted_stack_with_pathlock_does_not_reacquire_final_lock() {
-        let stack = build_default_stack(enc_pathlock_config()).await;
+        let stack = build_default_stack(enc_pathlock_config()).await.unwrap();
         mount_mem(&stack).await;
 
         let write = FS_CTX.scope(Arc::new(FsContextInner::new("tenant")), async {
@@ -397,7 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn encrypted_write_extends_outer_lease() {
-        let stack = build_default_stack(enc_pathlock_config()).await;
+        let stack = build_default_stack(enc_pathlock_config()).await.unwrap();
         mount_mem(&stack).await;
         let manager = &stack.pathlock_manager;
         let outer = manager
@@ -428,7 +472,7 @@ mod tests {
 
     #[tokio::test]
     async fn encrypted_write_rejects_uncovered_outer_lease() {
-        let stack = build_default_stack(enc_pathlock_config()).await;
+        let stack = build_default_stack(enc_pathlock_config()).await.unwrap();
         mount_mem(&stack).await;
         let manager = &stack.pathlock_manager;
         let outer = manager
@@ -461,14 +505,14 @@ mod tests {
 
     #[tokio::test]
     async fn default_stack_initializes_pathlock_manager() {
-        let stack = build_default_stack(RagfsConfig::default()).await;
+        let stack = build_default_stack(RagfsConfig::default()).await.unwrap();
         let snapshot = stack.pathlock_manager.observe().await;
         assert_eq!(snapshot.active_locks, 0);
     }
 
     #[tokio::test]
     async fn plaintext_stack_has_no_encryption_layer() {
-        let stack = build_default_stack(RagfsConfig::default()).await;
+        let stack = build_default_stack(RagfsConfig::default()).await.unwrap();
         mount_mem(&stack).await;
 
         // No FS_CTX scope needed; bytes are stored verbatim.
@@ -489,6 +533,89 @@ mod tests {
             .unwrap();
 
         assert!(stack.cache_runtime.is_none());
+    }
+
+    #[tokio::test]
+    async fn default_stack_rejects_unknown_pathlock_provider() {
+        let config = RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "unknown".to_string(),
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+
+        let error = match build_default_stack(config).await {
+            Ok(_) => panic!("unknown PathLock provider unexpectedly built"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("unknown"));
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn configured_stack_rejects_redis_pathlock_without_runtime() {
+        let config = RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "cache".to_string(),
+                namespace: Some("builder-test".to_string()),
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+
+        let error = match build_configured_stack(config, None).await {
+            Ok(_) => panic!("Redis PathLock unexpectedly built without Runtime"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("cache provider"));
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn configured_stack_builds_redis_pathlock_with_shared_runtime() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let namespace = format!("builder-pathlock-test-{}", std::process::id());
+        let config = RagfsConfig {
+            pathlock: PathLockConfig {
+                provider: "cache".to_string(),
+                namespace: Some(namespace),
+                lock_expire_secs: 3.0,
+                ..PathLockConfig::default()
+            },
+            ..RagfsConfig::default()
+        };
+        let stack = build_configured_stack(
+            config,
+            Some(CacheStackConfig {
+                provider: Some(CacheRuntimeProviderConfig::Redis(RedisProviderConfig {
+                    endpoints: vec![endpoint],
+                    command_timeout_ms: 1_000,
+                    ..RedisProviderConfig::default()
+                })),
+                cachefs: CacheFsConfig::default(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let lease = stack
+            .pathlock_manager
+            .acquire_exact(
+                "/local/account-a/builder",
+                std::time::Duration::ZERO,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(stack.cache_runtime.is_some());
+        assert_eq!(lease.lease.lock_paths, vec!["/local/account-a/builder"]);
+        stack.pathlock_manager.release(&lease).await.unwrap();
     }
 
     #[cfg(feature = "cache")]
@@ -558,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn encrypted_stack_preserves_queuefs_control_semantics() {
-        let stack = build_default_stack(enc_config()).await;
+        let stack = build_default_stack(enc_config()).await.unwrap();
         stack
             .mountable
             .mount(plugin_config("queuefs", "/queue", HashMap::new()))
@@ -586,7 +713,7 @@ mod tests {
     #[tokio::test]
     async fn encrypted_mount_writes_backend_shape_guard() {
         let dir = TempDir::new().unwrap();
-        let stack = build_default_stack(enc_config()).await;
+        let stack = build_default_stack(enc_config()).await.unwrap();
 
         mount_local(&stack, "/local", dir.path().to_str().unwrap())
             .await
@@ -610,7 +737,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("legacy.txt"), b"plaintext").unwrap();
 
-        let stack = build_default_stack(enc_config()).await;
+        let stack = build_default_stack(enc_config()).await.unwrap();
         let err = mount_local(&stack, "/local", dir.path().to_str().unwrap())
             .await
             .unwrap_err();
@@ -641,7 +768,7 @@ mod tests {
         )
         .unwrap();
 
-        let stack = build_default_stack(enc_config()).await;
+        let stack = build_default_stack(enc_config()).await.unwrap();
         mount_local(&stack, "/local", dir.path().to_str().unwrap())
             .await
             .unwrap();

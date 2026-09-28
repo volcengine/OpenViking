@@ -11,6 +11,8 @@ import pytest
 
 from openviking.service.core import OpenVikingService
 from openviking.utils.agfs_utils import RagfsBindingConfig
+from openviking.utils.process_lock import LOCK_FILENAME
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 class _FakeCacheConfig:
@@ -100,19 +102,24 @@ async def test_build_ragfs_binding_config_works_inside_running_event_loop(monkey
     assert isinstance(service._encryptor, _FakeEncryptor)
 
 
-def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path):
+@pytest.mark.parametrize("backend", ["local", "cuvs"])
+def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path, backend):
     """Acquire the data-dir lock once before startup encryption bootstrap."""
 
     calls = []
 
     def _acquire(path: str) -> str:
         calls.append(path)
-        return str(tmp_path / ".openviking.pid")
+        return str(tmp_path / LOCK_FILENAME)
 
     monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = SimpleNamespace(
-        storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=False)
+        storage=SimpleNamespace(
+            workspace=str(tmp_path),
+            skip_process_lock=False,
+            vectordb=SimpleNamespace(backend=backend),
+        )
     )
     service._data_dir_lock_acquired = False
     service._data_dir_lock_path = None
@@ -121,36 +128,41 @@ def test_ensure_data_dir_lock_acquired_once(monkeypatch, tmp_path):
     service._ensure_data_dir_lock_acquired()
 
     assert calls == [str(tmp_path)]
-    assert service._data_dir_lock_path == str(tmp_path / ".openviking.pid")
+    assert service._data_dir_lock_path == str(tmp_path / LOCK_FILENAME)
 
 
-def test_ensure_data_dir_lock_respects_skip_process_lock(monkeypatch, tmp_path):
-    """Skip lock acquisition entirely when storage.skip_process_lock is enabled."""
-
-    calls = []
+@pytest.mark.parametrize(
+    "backend,skip_process_lock",
+    [("local", True), ("cuvs", True), ("http", False), ("volcengine", False), ("vikingdb", False)],
+)
+def test_ensure_data_dir_lock_skips_shared_backends_and_explicit_opt_out(
+    monkeypatch, tmp_path, backend, skip_process_lock
+):
+    """Shared backends and explicit opt-out must never attempt a workspace lock."""
 
     def _acquire(path: str) -> str:
-        calls.append(path)
-        return str(tmp_path / ".openviking.pid")
+        pytest.fail("Shared backends and explicit opt-out must not access the workspace lock")
 
     monkeypatch.setattr("openviking.utils.process_lock.acquire_data_dir_lock", _acquire)
     service = OpenVikingService.__new__(OpenVikingService)
     service._config = SimpleNamespace(
-        storage=SimpleNamespace(workspace=str(tmp_path), skip_process_lock=True)
+        storage=SimpleNamespace(
+            workspace=str(tmp_path),
+            skip_process_lock=skip_process_lock,
+            vectordb=SimpleNamespace(backend=backend),
+        )
     )
     service._data_dir_lock_acquired = False
     service._data_dir_lock_path = None
 
     service._ensure_data_dir_lock_acquired()
 
-    assert calls == []
-    assert service._data_dir_lock_acquired is True
     assert service._data_dir_lock_path is None
 
 
 def test_release_data_dir_lock_resets_service_state(monkeypatch, tmp_path):
     calls = []
-    lock_path = str(tmp_path / ".openviking.pid")
+    lock_path = str(tmp_path / LOCK_FILENAME)
     monkeypatch.setattr("openviking.utils.process_lock.release_data_dir_lock", calls.append)
     service = OpenVikingService.__new__(OpenVikingService)
     service._data_dir_lock_acquired = True
@@ -206,6 +218,8 @@ async def test_close_releases_data_dir_lock_after_successful_cleanup(monkeypatch
     released = []
     service = OpenVikingService.__new__(OpenVikingService)
     service._resource_service = _ResourceService()
+    service._config = SimpleNamespace(vlm=VLMConfig())
+    service._runtime_config_manager = None
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
     service._queue_manager = None

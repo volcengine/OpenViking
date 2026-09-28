@@ -22,10 +22,10 @@ if str(SETUP_DIR) not in sys.path:
     sys.path.insert(0, str(SETUP_DIR))
 
 get_host_engine_build_config = importlib.import_module(
-    "build_support.x86_profiles"
+    "scripts.build_support.x86_profiles"
 ).get_host_engine_build_config
 resolve_openviking_version = importlib.import_module(
-    "build_support.versioning"
+    "scripts.build_support.versioning"
 ).resolve_openviking_version
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"

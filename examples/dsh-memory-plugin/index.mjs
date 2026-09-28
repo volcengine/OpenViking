@@ -4,7 +4,7 @@ import { injectStartupProfile } from "./lifecycle.mjs";
 import { mountOpenVikingMcp } from "./mcp.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 import { mountOpenVikingSkills } from "./skills.mjs";
-import { guardVikingUri } from "./uri-guard.mjs";
+import { guardVikingUri, noticeVikingUri } from "./uri-guard.mjs";
 
 export const name = "openviking-memory";
 export const inject = ["agents", "sessions", "tools"];
@@ -12,7 +12,11 @@ export const inject = ["agents", "sessions", "tools"];
 export function apply(ctx, input = {}) {
   const config = resolveConfig(input);
   const client = new OpenVikingClient(config);
-  const runtime = new OpenVikingRuntime(client, config, ctx.logger);
+  const runtime = new OpenVikingRuntime(client, config, ctx.logger, cwd => (
+    // Rebuild from the host input, not the config already merged for boot's cwd.
+    // The shared loader preserves host/env precedence over workspace peers.
+    resolveConfig(input, process.env, cwd).effectivePeer
+  ));
   const skipMemory = session => (
     config.skipSubagentSessions && session?.header?.origin === "subagent"
   );
@@ -71,6 +75,7 @@ export function apply(ctx, input = {}) {
   });
 
   ctx.on("tools/pre-execute", guardVikingUri);
+  ctx.on("tools/post-execute", noticeVikingUri);
 
   // Mounted last, and deliberately not awaited: the bridge's apply blocks on
   // its first tools/list, so a server that accepts the connection but never

@@ -46,8 +46,6 @@ class CommitPolicy(BaseModel):
         description="WM v2 sliding window: messages to retain live after a commit (0 = archive all).",
     )
 
-    model_config = {"extra": "forbid"}
-
 
 class IngestHarnessConfig(BaseModel):
     """Per-harness ingest settings, keyed by registry name (e.g. ``claude_code``)."""
@@ -79,8 +77,6 @@ class IngestHarnessConfig(BaseModel):
     )
     commit: CommitPolicy = Field(default_factory=CommitPolicy)
 
-    model_config = {"extra": "forbid"}
-
 
 class IngestConfig(BaseModel):
     """Top-level ingest configuration (``ingest`` section of ``ov.conf``)."""
@@ -109,8 +105,6 @@ class IngestConfig(BaseModel):
         default_factory=dict,
         description="Per-harness configuration, keyed by registry name.",
     )
-
-    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def _apply_env_overrides(self) -> "IngestConfig":

@@ -118,53 +118,6 @@ class TestSessionConcurrency:
             if session_id:
                 api_client.delete_session(session_id)
 
-    def test_session_used_without_contexts_or_skill(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            used_resp = api_client.session_used(session_id)
-            assert used_resp.status_code == 200, (
-                f"session_used with no params should return 200, got {used_resp.status_code}: {used_resp.text[:200]}"
-            )
-            result = used_resp.json().get("result", {})
-            assert result.get("session_id") == session_id
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
-    def test_session_used_multiple_times_accumulates(self, api_client):
-        session_id = None
-        try:
-            create_resp = api_client.create_session()
-            assert create_resp.status_code == 200
-            session_id = create_resp.json()["result"]["session_id"]
-
-            api_client.add_message(session_id, "user", "Used accumulation test")
-
-            api_client.session_used(
-                session_id,
-                contexts=["viking://resources/ctx1"],
-                skill={"name": "skill-a"},
-            )
-
-            api_client.session_used(
-                session_id,
-                contexts=["viking://resources/ctx2", "viking://resources/ctx3"],
-                skill={"name": "skill-b"},
-            )
-
-            get_resp = api_client.get_session(session_id)
-            assert get_resp.status_code == 200
-            result = get_resp.json().get("result", {})
-
-            assert result.get("session_id") == session_id
-        finally:
-            if session_id:
-                api_client.delete_session(session_id)
-
     def test_session_with_custom_id(self, api_client):
         custom_id = f"custom-{uuid.uuid4().hex[:8]}"
         try:

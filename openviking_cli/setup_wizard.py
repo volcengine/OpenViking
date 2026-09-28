@@ -34,7 +34,7 @@ from openviking_cli.utils.ollama import (
 _DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 _DEFAULT_KIMI_BASE_URL = "https://api.kimi.com/coding"
 _DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
-_DEFAULT_CODEX_MODEL = "gpt-5.4"
+_DEFAULT_CODEX_MODEL = "gpt-5.6-terra"
 _DEFAULT_KIMI_MODEL = "kimi-code"
 _DEFAULT_GLM_MODEL = "glm-4.6v"
 

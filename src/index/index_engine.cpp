@@ -7,8 +7,8 @@
 #include <unistd.h>
 
 namespace vectordb {
-IndexEngine::IndexEngine(const std::string& path_or_json) {
-  impl_ = std::make_shared<IndexManagerImpl>(path_or_json);
+IndexEngine::IndexEngine(const std::string& path_or_json, bool normalize_vector) {
+  impl_ = std::make_shared<IndexManagerImpl>(path_or_json, normalize_vector);
 }
 
 SearchResult IndexEngine::search(const SearchRequest& req) {

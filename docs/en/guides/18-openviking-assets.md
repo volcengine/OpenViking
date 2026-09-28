@@ -254,12 +254,6 @@ Remove `dry_run` after reviewing the plan:
 ov add-resource --manifest manifest.yaml
 ```
 
-Wait for each resource to finish processing:
-
-```bash
-ov add-resource --manifest manifest.yaml --wait --timeout 600
-```
-
 The repository contains a complete example — a shared Catalog plus a Manifest that selects from
 it — under
 [`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets).

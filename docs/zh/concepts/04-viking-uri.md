@@ -146,9 +146,9 @@ viking://agent/tools/mcp/                           # MCP 工具配置（规划�
 viking://agent/payments/ap2/                        # 支付配置（规划中）
 ```
 
-`viking://agent/...` 为全局共享作用域，account 下所有用户均可访问，
-不通过 agent_id 隔离。旧版（0.3.x）遗留的 `viking://agent/...` 数据仍可通过
-只读兼容入口访问，但新数据应按照新的目录语义写入。
+`viking://agent/...` 是 account 内公共能力与配置目录，可包含 skills、endpoints、tools、payments 等子目录。
+目录名不表示 Agent 身份，`actor_peer_id` 不过滤该目录；共享范围限于当前账号。
+Peer 数据使用 `viking://user/<user_id>/peers/<peer_id>/...`。
 
 ### 会话数据
 
@@ -273,8 +273,8 @@ viking://
     └── history/
 ```
 
-`viking://agent/...` 作用域为全局共享的 agent 能力根，account 下所有用户均可访问，
-不通过 agent_id 隔离。旧版（0.3.x）遗留的 `viking://agent/...` 数据仍可通过只读兼容入口访问。
+`viking://agent/...` 是 account 内公共目录，不包含 Agent ID 身份层。
+`actor_peer_id` 只过滤当前用户的 `peers` 集合，公共目录仍按账号隔离。
 
 ## URI 操作
 

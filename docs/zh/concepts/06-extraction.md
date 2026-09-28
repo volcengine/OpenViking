@@ -125,13 +125,7 @@ L0/L1 是目录级 sidecar，不是 per-file sidecar。生成父目录摘要时�
 
 ### Freshness、采样与父级刷新
 
-每次生成都会记录直接子项的 `total_entries`、`sampled_entries` 和 `unsampled_entries`。直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性稳定采样。已知子项发生变化但父正文尚未刷新时，`pending_child_changes` 会递增；刷新成功后重置为 0。
-
-当前每个成功的 resource/skill 语义任务都会继续安排父目录刷新，并在入队前将父目录标记为 pending。该行为会一直传播到 namespace 根边界。
-
-> **TODO：使用 freshness 控制冒泡频率**
->
-> 当前按每次成功任务冒泡会使热点深层目录产生重复刷新和向上写放大。后续应基于 `pending_child_changes`、采样覆盖率、直接子项变化规模和最近刷新状态进行合并、阈值控制或时间窗口节流，同时保持最终一致性。
+每次生成都会记录直接子项覆盖情况，超过 `semantic.overview_sample_limit`（默认 32）时使用稳定采样。resource/skill 的父级刷新取决于子目录 L0 正文变化和 freshness 阈值，L0 正文不变时不向上传播。`pending_child_changes` 统计等待刷新的变化事件，同一子项重复变化也会分别计数。阈值、手动刷新和延后更新的规则见[上下文层级](03-context-layers.md)。
 
 ### 处理限制
 

@@ -1,6 +1,8 @@
 import os
 import uuid
 
+import pytest
+
 
 class TestFsCp:
     def test_cp_file_preserves_source_and_content(self, api_client):
@@ -10,7 +12,31 @@ class TestFsCp:
         content = f"copy payload {suffix}"
         try:
             write = api_client.fs_write(source, content, mode="create", wait=True)
-            assert write.status_code == 200
+            assert write.status_code == 200, write.text
+
+            if os.getenv("HAS_SECRETS", "true").lower() == "true":
+                write_result = write.json().get("result", {})
+                preparation_error = f"Source index preparation failed: {write.text}"
+                assert write_result.get("vector_status") == "complete", preparation_error
+                assert write_result.get("semantic_status") != "failed", preparation_error
+                queue_status = write_result.get("queue_status") or {}
+                for queue_name in ("Semantic", "Embedding"):
+                    queue_result = queue_status.get(queue_name, {})
+                    assert not queue_result.get("error_count", 0), preparation_error
+                    assert not queue_result.get("errors"), preparation_error
+
+                source_index = api_client.find(
+                    query="",
+                    target_uri=source,
+                    filter={"op": "must", "field": "uri", "conds": [source]},
+                    limit=5,
+                )
+                source_index_error = (
+                    f"Source index missing before cp: write={write.text}; find={source_index.text}"
+                )
+                assert source_index.status_code == 200, source_index_error
+                resources = source_index.json().get("result", {}).get("resources", [])
+                assert any(item.get("uri") == source for item in resources), source_index_error
 
             copied = api_client.fs_cp(source, target)
             assert copied.status_code == 200, copied.text
@@ -27,10 +53,22 @@ class TestFsCp:
                 assert content in read.json().get("result", "")
 
             if os.getenv("HAS_SECRETS", "true").lower() == "true":
-                found = api_client.find(query=suffix, target_uri=target, limit=5)
-                assert found.status_code == 200
-                resources = found.json().get("result", {}).get("resources", [])
-                assert any(item.get("uri") == target for item in resources)
+                vectors = result.get("vectors", {})
+                assert vectors.get("scanned", 0) > 0, copied.text
+                assert vectors.get("written") == vectors["scanned"], copied.text
+                # This contract checks index copying, not the embedding model's
+                # similarity score for a random UUID. Filter-only find still
+                # reads the vector store and preserves tenant/access scoping.
+                for uri in (source, target):
+                    found = api_client.find(
+                        query="",
+                        target_uri=uri,
+                        filter={"op": "must", "field": "uri", "conds": [uri]},
+                        limit=5,
+                    )
+                    assert found.status_code == 200, found.text
+                    resources = found.json().get("result", {}).get("resources", [])
+                    assert any(item.get("uri") == uri for item in resources), found.text
 
             assert api_client.fs_rm(source).status_code == 200
             assert api_client.fs_read(target).status_code == 200
@@ -55,7 +93,7 @@ class TestFsCp:
             )
 
             without_recursive = api_client.fs_cp(source, target)
-            assert without_recursive.status_code == 412, without_recursive.text
+            assert without_recursive.status_code == 400, without_recursive.text
 
             copied = api_client.fs_cp(source, target, recursive=True)
             assert copied.status_code == 200, copied.text
@@ -73,20 +111,61 @@ class TestFsCp:
         suffix = uuid.uuid4().hex[:8]
         source = f"viking://resources/cp-overwrite-source-{suffix}.md"
         target = f"viking://resources/cp-overwrite-target-{suffix}.md"
+        source_content = f"new payload {suffix}"
+        target_content = f"old target content must be completely replaced {suffix}"
         try:
             assert (
-                api_client.fs_write(source, "source remains", mode="create", wait=True).status_code
+                api_client.fs_write(source, source_content, mode="create", wait=True).status_code
                 == 200
             )
             assert (
-                api_client.fs_write(target, "target remains", mode="create", wait=True).status_code
+                api_client.fs_write(target, target_content, mode="create", wait=True).status_code
                 == 200
             )
 
             copied = api_client.fs_cp(source, target)
             assert copied.status_code == 200, copied.text
-            assert "source remains" in api_client.fs_read(source).json().get("result", "")
-            assert "source remains" in api_client.fs_read(target).json().get("result", "")
+            result = copied.json().get("result", {})
+            assert result.get("from") == source
+            assert result.get("to") == target
+            assert result.get("phase") == "completed"
+            assert result.get("recursive") is False
+            for uri in (source, target):
+                read = api_client.fs_read(uri)
+                assert read.status_code == 200, read.text
+                assert read.json().get("result") == source_content
         finally:
             api_client.fs_rm(source)
             api_client.fs_rm(target)
+
+    @pytest.mark.parametrize("source_is_dir", [False, True], ids=["file-to-dir", "dir-to-file"])
+    def test_cp_rejects_file_directory_type_conflicts(self, api_client, source_is_dir):
+        suffix = uuid.uuid4().hex[:8]
+        file_uri = f"viking://resources/cp-type-file-{suffix}.md"
+        directory_uri = f"viking://resources/cp-type-dir-{suffix}"
+        child_uri = f"{directory_uri}/child.md"
+        file_content = f"file remains {suffix}"
+        child_content = f"directory child remains {suffix}"
+        try:
+            assert api_client.fs_mkdir(directory_uri).status_code == 200
+            # mkdir queues a parent refresh; finish it before preparing files so
+            # this test exercises type validation, not a transient refresh lock.
+            settled = api_client.system_wait(timeout=30)
+            assert settled.status_code == 200, settled.text
+            for uri, content in ((file_uri, file_content), (child_uri, child_content)):
+                write = api_client.fs_write(uri, content, mode="create", wait=True)
+                assert write.status_code == 200, write.text
+
+            source, target = (
+                (directory_uri, file_uri) if source_is_dir else (file_uri, directory_uri)
+            )
+            copied = api_client.fs_cp(source, target, recursive=source_is_dir)
+            assert copied.status_code == 400, copied.text
+            assert copied.json().get("error", {}).get("code") == "INVALID_ARGUMENT"
+            for uri, content in ((file_uri, file_content), (child_uri, child_content)):
+                read = api_client.fs_read(uri)
+                assert read.status_code == 200, read.text
+                assert read.json().get("result") == content
+        finally:
+            api_client.fs_rm(file_uri)
+            api_client.fs_rm(directory_uri, recursive=True)

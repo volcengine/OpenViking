@@ -78,6 +78,13 @@ end
 return payload
 "#;
 
+pub(super) const STATUS_SCRIPT: &str = r#"
+if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 0 then
+    return nil
+end
+return {redis.call('LLEN', KEYS[2]), redis.call('ZCARD', KEYS[3])}
+"#;
+
 pub(super) const LIST_UNACKED_SCRIPT: &str = r#"
 local result = {}
 local pending = redis.call('LRANGE', KEYS[1], 0, -1)

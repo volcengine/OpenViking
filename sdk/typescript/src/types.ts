@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 /** Arbitrary JSON object returned by APIs without a dedicated result type. */
 export type JsonObject = Record<string, unknown>;
 /** One target URI or multiple target scopes. */
@@ -9,6 +12,8 @@ export type ClientHeaders =
 export type UploadMode = "local" | "shared";
 /** Resource post-ingest processing modes accepted by addResource. */
 export type ProcessingMode = "semantic_and_vectors" | "vectors_only";
+/** Observer response format supported by HTTP observer APIs. */
+export type ObserverFormat = "table" | "json";
 /** Conflict policy accepted when importing an OVPack. */
 export type PackConflictPolicy = "fail" | "overwrite" | "skip";
 /** Vector handling strategy accepted when importing an OVPack. */
@@ -72,8 +77,14 @@ export interface WaitOptions {
   timeout?: number;
   telemetry?: unknown;
 }
+/** Writable direct grants and inheritance mode. */
+export interface AclSpec {
+  acl_mode?: "inherit" | "restricted";
+  entries?: { principal: string; level: "read" | "write" | "manage" }[];
+}
 /** Resource import options. */
 export interface AddResourceOptions extends WaitOptions {
+  acl?: AclSpec;
   to?: string;
   parent?: string;
   createParent?: boolean;
@@ -89,15 +100,16 @@ export interface AddResourceOptions extends WaitOptions {
   processingMode?: ProcessingMode;
   args?: JsonObject;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
+  acl?: AclSpec;
   mode?: string;
   processingMode?: ProcessingMode;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -131,7 +143,7 @@ export interface ReindexOptions {
   dryRun?: boolean;
   recursive?: boolean;
   tags?: string[];
-  tagMode?: "replace" | "append";
+  tagMode?: "replace" | "append" | "clear";
   extra?: JsonObject;
 }
 /** Semantic retrieval options shared by find and search. */
@@ -219,7 +231,11 @@ export interface ListOptions {
 export interface TreeOptions {
   output?: string;
   absLimit?: number;
+  includeAbstract?: boolean;
+  includeOverview?: boolean;
+  overviewLimit?: number;
   showAllHidden?: boolean;
+  directoriesOnly?: boolean;
   nodeLimit?: number;
   levelLimit?: number;
   offset?: number;

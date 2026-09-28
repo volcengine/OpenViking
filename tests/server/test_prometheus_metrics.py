@@ -4,6 +4,7 @@
 """Tests for the Prometheus metrics endpoint and exposition output."""
 
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -119,6 +120,33 @@ class TestRetrievalStatsMetricsIntegration:
 @pytest.mark.asyncio
 class TestMetricsEndpoint:
     """Tests for the /metrics HTTP endpoint."""
+
+    async def test_ragfs_authoritative_metrics_endpoint(self):
+        """Export fixed native records through bootstrap and HTTP; return None."""
+        records = [
+            {"name": "lock_active", "labels": {}, "type": "gauge", "value": 2.0},
+            {"name": "lock_stale", "labels": {}, "type": "gauge", "value": 7.0},
+        ]
+        service = SimpleNamespace(_agfs_client=SimpleNamespace(metrics=lambda: records))
+        config = ServerConfig(
+            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))
+        )
+        app = create_app(config=config, service=None)
+        init_metrics_from_server_config(config, app=app, service=service)
+        try:
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.get("/metrics")
+            assert response.status_code == 200
+            assert "# TYPE openviking_lock_active gauge" in response.text
+            assert "openviking_lock_active 2.0" in response.text
+            assert "# TYPE openviking_lock_stale gauge" in response.text
+            assert "openviking_lock_stale 7.0" in response.text
+            assert "openviking_lock_active_leases" not in response.text
+            assert "openviking_lock_stale_tokens_removed_total" not in response.text
+        finally:
+            shutdown_metrics(app=app)
 
     async def test_metrics_disabled_returns_404(self):
         config = ServerConfig()

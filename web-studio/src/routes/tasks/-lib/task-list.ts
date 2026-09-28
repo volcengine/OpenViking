@@ -1,13 +1,11 @@
 import { getOvResult, getTasks } from '#/lib/ov-client'
-import {
-  normalizeTasks,
-  normalizeTaskStatus,
-} from '#/routes/tasks/-lib/task-record'
+import { normalizeTasks } from '#/routes/tasks/-lib/task-record'
 import type { TaskRecord, TaskStatus } from '#/routes/tasks/-lib/task-record'
 
 export type TaskStatusFilter = Exclude<TaskStatus, 'unknown'> | 'all'
 
 export type TaskTypeFilter =
+  | 'compile'
   | 'add_resource'
   | 'add_skill'
   | 'admin_reindex'
@@ -19,14 +17,6 @@ export type TaskTypeFilter =
   | 'all'
 
 export const MAX_TASKS = 200
-
-/** Prefer the API status; do not invent pending from a running-slot cap. */
-export function getEffectiveTaskStatus(
-  taskItem: TaskRecord,
-  _list?: TaskRecord[],
-): TaskStatus {
-  return normalizeTaskStatus(taskItem.status)
-}
 
 export async function fetchTasks(
   taskType: TaskTypeFilter,

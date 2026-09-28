@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from openviking.session.memory.dataclass import MemoryFile
@@ -251,10 +252,14 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
     monkeypatch.setattr(gradient_estimator_module, "MemoryIsolationHandler", FakeIsolationHandler)
     monkeypatch.setattr(gradient_estimator_module, "ExtractLoop", FakeExtractLoop)
 
+    vlm = SimpleNamespace(model="account-model")
+    resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
     estimator = ExperienceGradientEstimator(
-        viking_fs=SimpleNamespace(), vlm=SimpleNamespace()
+        viking_fs=SimpleNamespace(),
+        vlm_resolver=resolver,
     )
     context = _context()
+    context.request_context.account_id = "account-a"
 
     gradients = await estimator.estimate(analysis, _experience_set(), context)
 
@@ -263,8 +268,11 @@ async def test_experience_gradient_estimator_runs_extract_loop(monkeypatch):
         "messages": context.messages,
         "trajectory_summary": analysis.trajectories[0].content,
         "trajectory_uri": analysis.trajectories[0].uri,
+        "vlm_config": vlm,
     }
+    resolver.get_vlm.assert_awaited_once_with(context.request_context.account_id)
     assert captured["request_context"] is context.request_context
     assert captured["allowed_memory_types"] == {"experiences"}
     assert captured["prepare_messages_called"] is True
+    assert captured["extract_loop_kwargs"]["vlm"] is vlm
     assert captured["extract_loop_kwargs"]["context_provider"]._isolation_handler is not None

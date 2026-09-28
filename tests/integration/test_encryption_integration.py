@@ -134,7 +134,7 @@ class TestEncryptionDisabled:
             reason="Normal operation test",
             build_index=False,
         )
-        entries = await service.fs.ls(result["root_uri"], ctx=request_context)
+        entries = (await service.fs.ls(result["root_uri"], ctx=request_context)).entries
         contents = [
             await service.fs.read(data["uri"], ctx=request_context)
             for data in entries

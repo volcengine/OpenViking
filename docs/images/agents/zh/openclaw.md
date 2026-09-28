@@ -12,7 +12,7 @@
    openclaw openviking setup --base-url https://api.vikingdb.cn-beijing.volces.com/openviking --api-key <$OPENVIKING_API_KEY>
    ```
 
-3. 配置 `peer_role`：`peer_role` 用于标识对话参与者的类型，并非权限角色。其中，`assistant` 表示不同的 Agent、工具或模型，`person` 表示不同的人类参与者。完成上述配置后，`peer_role` 默认为 `none`。如需调整 `peer_role`，可执行以下命令：
+3. 配置 `peer_role`：`peer_role` 用于标识对话参与者的类型，并非权限角色。其中，`assistant` 表示不同的 Agent、工具或模型，`sender` 表示不同的人类参与者。完成上述配置后，`peer_role` 默认为 `none`。如需调整 `peer_role`，可执行以下命令：
 
    ```bash
    openclaw openviking setup --reconfigure

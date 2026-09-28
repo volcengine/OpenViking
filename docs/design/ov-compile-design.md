@@ -77,6 +77,50 @@ CLI 不等待任务完成。用户通过 `ov task status <task_id>` 查询状态
 
 Task 结果中的 `created`、`updated` 和 `unchanged` 只统计 Agent 本次提交的页面；未被草稿触达的目标页面不计入 `unchanged`。`page_count` 等于三者之和，`link_count` 只统计最终正文中实际渲染出的 bundle 内 WikiLink。
 
+### 2.3 记忆整理模式（`--skill memory`）
+
+除了上面基于 VikingBot Skill 的 Wiki 整理，`ov compile` 还支持一种**记忆整理模式**：把 `--skill`
+设为哨兵值 `memory`，即可对 `--to` 指定的 memories 根目录或某个记忆类型目录做**就地整理**（去重、合并、拆分、原地精简），
+产物严格遵守各自记忆类型的 schema。该模式完全在 OpenViking 进程内通过现有 memory 框架
+（`ExtractLoop` + `MemoryUpdater`）执行，**不经过 VikingBot**。
+
+```bash
+# 整理 entities 记忆（就地去重/合并/规范化）
+ov compile \
+  --to viking://user/<user_id>/memories/entities \
+  --skill memory \
+  --instruction "合并明显重复的实体，但不同实体不要合并；保留每个实体的独立事实"
+
+# 也可以整理其它记忆类型，例如 preferences
+ov compile \
+  --to viking://user/<user_id>/memories/preferences \
+  --skill memory
+```
+
+参数规则：
+
+| 参数 | 规则 |
+| --- | --- |
+| `--skill` | 固定值 `memory`（哨兵，不解析为真实 Skill）触发记忆整理模式 |
+| `--to` | 必填，可为 `.../memories` 根目录或某个记忆类型目录（如 `.../memories/entities`）；不接受用户根目录 |
+| `--from` | 记忆模式下**不接受**；整理就地发生在 `--to` 空间内 |
+| `--instruction` | 可选，作为整理指令（软提示）喂给整理模型；用于点破"两条其实是同一实体需合并"这类模型无法自行判断的场景 |
+
+行为要点：
+
+- **类型范围**：指定类型目录时只加载该类型；指定 memories 根目录时按 schema 存储路径发现已存在且已启用的类型，包括根目录单文件记忆，在同一任务、同一 ExtractLoop 中联合整理，不拆子任务。各类型仍遵守自身 schema；结果的 `memory_types` 列出本次范围，根目录请求的 `memory_type` 为 `null`。
+  改名或合并时，系统仍可更新其它类型的相邻记忆文件以迁移 links/backlinks。
+- **就地整理**：`--from` 与 `--to` 是同一空间，不引入外部来源，因此不存在跨身份空间的串号问题；
+  空间（self 或某个 `peers/{peer_id}`）由 `--to` 的 URI 决定。
+- **保守合并**：默认只合并明显同一身份的记忆；模型无法从内容判断的合并（如"阿珍就是陈静娴"），
+  必须通过 `--instruction` 明确点破。
+- **安全改名**：schema 允许 URI 字段变更时，公共 memory 写入层按“写入新 URI、迁移引用、删除旧 URI”
+  执行，结果记为 `adds` 新 URI + `deletes` 旧 URI。若目标 URI 已存在则报冲突、不覆盖，模型读取两份
+  记忆后需显式更新目标，并用 replacement 关系删除源文件。
+- **异步任务**：与普通 compile 一致，命令返回一个 `cmp_` 前缀的 `task_id`，通过 `ov task status <task_id>`
+  查询结果。记忆模式的任务结果包含变化文件清单，字段沿用 `memory_diff.json` 的语义
+  （`adds` / `updates` / `deletes` 及对应 `total_*`，仅文件 URI，不含内容），并带上本次整理的 `trace_id`。
+
 ## 3. 架构
 
 ```text
@@ -446,7 +490,7 @@ POST /api/v1/content/batch-write
 ```json
 {
   "root_uri": "viking://resources/团队知识库",
-  "wait": true,
+  "wait": false,
   "timeout": 300,
   "operations": [
     {

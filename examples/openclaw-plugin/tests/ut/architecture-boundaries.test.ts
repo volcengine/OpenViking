@@ -870,7 +870,6 @@ describe("architecture boundaries", () => {
   it("keeps auto-recall helper tests off the index compatibility facade", () => {
     const violations = [
       "tests/ut/build-memory-lines.test.ts",
-      "tests/context-bloat-730.test.ts",
       "tests/ut/index-utils.test.ts",
     ].flatMap((file) => {
       const source = readFileSync(join(rootDir, file), "utf8");

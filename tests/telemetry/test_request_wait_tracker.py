@@ -71,6 +71,21 @@ def test_request_wait_tracker_counts_contexts_indexed_by_request():
     assert tracker.get_embedding_context_count(telemetry_id) == 0
 
 
+def test_request_wait_tracker_accumulates_queue_wait_and_execution_durations():
+    tracker = RequestWaitTracker()
+    telemetry_id = "tm_queue_timing"
+
+    tracker.register_request(telemetry_id)
+    tracker.record_semantic_timing(telemetry_id, queue_wait_ms=12.5, execute_ms=30.0)
+    tracker.record_semantic_timing(telemetry_id, queue_wait_ms=7.5, execute_ms=10.0)
+    tracker.record_embedding_timing(telemetry_id, queue_wait_ms=5.0, execute_ms=8.0)
+
+    assert tracker.get_queue_timing(telemetry_id) == {
+        "semantic": {"queue_wait_ms": 20.0, "execute_ms": 40.0},
+        "embedding": {"queue_wait_ms": 5.0, "execute_ms": 8.0},
+    }
+
+
 async def test_wait_for_request_timeout_keeps_existing_error():
     tracker = RequestWaitTracker()
     telemetry_id = "tm_wait_timeout"

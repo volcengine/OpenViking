@@ -48,12 +48,12 @@ export function TokenTrendChart({
                 <stop
                   offset="5%"
                   stopColor={TOKEN_COLORS.input}
-                  stopOpacity={0.52}
+                  stopOpacity={0.12}
                 />
                 <stop
                   offset="95%"
                   stopColor={TOKEN_COLORS.input}
-                  stopOpacity={0.14}
+                  stopOpacity={0.02}
                 />
               </linearGradient>
               <linearGradient
@@ -66,12 +66,12 @@ export function TokenTrendChart({
                 <stop
                   offset="5%"
                   stopColor={TOKEN_COLORS.output}
-                  stopOpacity={0.46}
+                  stopOpacity={0.12}
                 />
                 <stop
                   offset="95%"
                   stopColor={TOKEN_COLORS.output}
-                  stopOpacity={0.11}
+                  stopOpacity={0.02}
                 />
               </linearGradient>
               <linearGradient
@@ -84,18 +84,18 @@ export function TokenTrendChart({
                 <stop
                   offset="5%"
                   stopColor={TOKEN_COLORS.embedding}
-                  stopOpacity={0.36}
+                  stopOpacity={0.12}
                 />
                 <stop
                   offset="95%"
                   stopColor={TOKEN_COLORS.embedding}
-                  stopOpacity={0.08}
+                  stopOpacity={0.02}
                 />
               </linearGradient>
             </defs>
             <CartesianGrid
               stroke="currentColor"
-              strokeOpacity={0.08}
+              strokeOpacity={0.05}
               vertical={false}
             />
             <XAxis

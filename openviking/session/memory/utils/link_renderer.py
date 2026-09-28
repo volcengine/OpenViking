@@ -2,7 +2,7 @@ import posixpath
 import re
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterator, List, Optional
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from openviking.core.namespace import uri_parts
 
@@ -182,13 +182,18 @@ class LinkRenderer:
         return None
 
     @staticmethod
+    def encode_markdown_target(path: str) -> str:
+        """Encode a literal file path for Markdown; append any fragment afterward."""
+        return re.sub(r"[%# ()]", lambda match: quote(match.group(), safe=""), path)
+
+    @staticmethod
     def normalize_markdown_target(target: str) -> str:
-        """Decode and normalize a parsed Markdown link destination."""
-        target = unquote(target.strip())
+        """Decode a Markdown destination once, after removing its fragment."""
+        target = target.strip()
         if target.startswith("<") and target.endswith(">"):
             target = target[1:-1]
         target = LinkRenderer._BACKSLASH_ESCAPE_RE.sub(r"\1", target)
-        target = target.split("#", 1)[0]
+        target = unquote(target.split("#", 1)[0])
         return target.rstrip("/") if "://" in target else posixpath.normpath(target)
 
     @staticmethod
@@ -207,12 +212,9 @@ class LinkRenderer:
         link_spans = {(link.start, link.end) for link in markdown_links}
         non_link_protected = [span for span in protected_spans if span not in link_spans]
         relative_target = LinkRenderer.relative_path(source_uri, target_uri)
-        expected_targets = {
-            LinkRenderer.normalize_markdown_target(target_uri),
-            LinkRenderer.normalize_markdown_target(
-                relative_target if relative_target is not None else target_uri
-            ),
-        }
+        expected_targets = {target_uri.rstrip("/")}
+        if relative_target is not None:
+            expected_targets.add(posixpath.normpath(relative_target))
 
         for link in markdown_links:
             if link.start > 0 and content[link.start - 1] == "!":
@@ -273,12 +275,7 @@ class LinkRenderer:
             if any(not (end <= rs or start >= re_) for rs, re_, _ in replacements):
                 continue
 
-            # Percent-encode spaces in the rendered target so the link is portable
-            # across markdown renderers (e.g. `[Frank](entities/frank ocean.md)`
-            # would otherwise be ambiguous). We accept the literal-space form when
-            # matching existing links, but always emit the encoded form when
-            # generating new ones.
-            encoded_target = link_target.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+            encoded_target = LinkRenderer.encode_markdown_target(link_target)
             rendered = f"[{content[start:end]}]({encoded_target})"
             replacements.append((start, end, rendered))
 
@@ -315,6 +312,42 @@ class LinkRenderer:
         """Remove markdown links regardless of target scheme, keeping only link text."""
 
         return LinkRenderer._replace_markdown_links(content, lambda link: link.text)
+
+    @staticmethod
+    def strip_managed_links(content: str, source_uri: str, links: List[Dict]) -> str:
+        """Strip only Markdown links represented by the supplied StoredLink metadata.
+
+        External links and unrelated hand-written relative links are preserved. This is used
+        before remapping a managed relation so a stale rendered destination can be regenerated
+        from the updated metadata.
+        """
+        managed: List[tuple[str, set[str]]] = []
+        for stored_link in links or []:
+            if stored_link.get("from_uri") != source_uri:
+                continue
+            match_text = str(stored_link.get("match_text") or "")
+            target_uri = str(stored_link.get("to_uri") or "")
+            if not match_text or not target_uri:
+                continue
+            expected_targets = {LinkRenderer.normalize_markdown_target(target_uri)}
+            relative_target = LinkRenderer.relative_path(source_uri, target_uri)
+            if relative_target is not None:
+                expected_targets.add(LinkRenderer.normalize_markdown_target(relative_target))
+            managed.append((match_text, expected_targets))
+
+        if not managed:
+            return content
+
+        def _replace_link(link: MarkdownLink) -> str:
+            normalized_target = LinkRenderer.normalize_markdown_target(link.target)
+            for match_text, expected_targets in managed:
+                if normalized_target not in expected_targets:
+                    continue
+                if LinkRenderer._find_match_span(link.text, match_text) is not None:
+                    return link.text
+            return content[link.start : link.end]
+
+        return LinkRenderer._replace_markdown_links(content, _replace_link)
 
     @staticmethod
     def relative_path(source_uri: str, target_uri: str) -> Optional[str]:

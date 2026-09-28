@@ -148,7 +148,9 @@ describe("OpenClaw 5.5 package runtime contract", () => {
   it("builds and publishes compiled runtime output for TypeScript entries", () => {
     expect(packageJson.scripts?.build).toContain("rmSync('dist'");
     expect(packageJson.scripts?.build).toContain("tsc -p tsconfig.build.json");
-    expect(packageJson.scripts?.prepack).toBe("npm run build");
+    expect(packageJson.scripts?.prepack).toBe(
+      "node ../memory-plugin-shared/sync.mjs && npm run build",
+    );
     expect(packageJson.files).toContain("dist/");
     expect(packageJson.files).toContain("shared/");
     expect(packageJson.files).toContain("install-manifest.json");

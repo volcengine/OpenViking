@@ -21,14 +21,14 @@ Skill 源码：[examples/compile/ov-compile-skills/knowledge-graph](https://gith
 ## 第一步：准备来源
 
 ```bash
-ov add-resource ./journal-to-the-west --to viking://resources/journal --wait
+ov add-resource ./journal-to-the-west --to viking://resources/journal
 ov ls -r viking://resources/journal
 ```
 
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-graph --wait
+ov add-skill examples/compile/ov-compile-skills/knowledge-graph
 ov skills list
 # → viking://agent/skills/knowledge-graph
 ```

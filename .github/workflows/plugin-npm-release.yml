@@ -1,0 +1,110 @@
+name: Plugin npm Release
+
+# Publishes the memory plugins that ship as npm packages. One push filter covers
+# every package in the matrix, so a change to one of them also starts the other
+# legs; those legs stop at the already-published check instead of republishing.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "examples/dsh-memory-plugin/**"
+      - "examples/opencode-plugin/**"
+      - "examples/memory-plugin-shared/lib/**"
+      - "examples/memory-plugin-shared/sync.mjs"
+      - ".github/workflows/plugin-npm-release.yml"
+      - ".github/scripts/opencode-release-version*.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    # Forks must not publish the official packages.
+    if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main'
+    name: Publish ${{ matrix.package }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: "@openviking/dsh-memory-plugin"
+            directory: examples/dsh-memory-plugin
+            install: npm ci
+          - package: "@openviking/opencode-plugin"
+            directory: examples/opencode-plugin
+            # No lockfile in this package, so npm ci cannot run here.
+            install: npm install
+    concurrency:
+      group: plugin-npm-release-${{ matrix.directory }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          # Queued runs package current main, never an older event snapshot.
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: ${{ matrix.install }}
+
+      - name: Validate package
+        run: |
+          node ../memory-plugin-shared/sync.mjs
+          npm run check
+          npm test
+          npm pack --dry-run
+
+      - name: Resolve release version
+        id: package
+        env:
+          EXPECTED_NAME: ${{ matrix.package }}
+        run: |
+          if [ "$EXPECTED_NAME" = "@openviking/opencode-plugin" ]; then
+            node --test "$GITHUB_WORKSPACE/.github/scripts/opencode-release-version.test.mjs"
+            SOURCE_COMMIT="$(git rev-parse HEAD)"
+            export SOURCE_COMMIT
+            cd "$GITHUB_WORKSPACE"
+            node .github/scripts/opencode-release-version.mjs
+            exit 0
+          fi
+          package_name=$(node -p "require('./package.json').name")
+          package_version=$(node -p "require('./package.json').version")
+          if [ "$package_name" != "$EXPECTED_NAME" ]; then
+            echo "Unexpected package name: $package_name" >&2
+            exit 1
+          fi
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+          if npm view "$package_name@$package_version" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$package_name@$package_version is already published; skipping."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate versioned artifact
+        if: steps.package.outputs.published == 'false'
+        run: npm pack --dry-run
+
+      - name: Publish package
+        if: steps.package.outputs.published == 'false'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+          else
+            echo "::notice::NPM_TOKEN is not set; npm publish will use Trusted Publishing/OIDC. For first-time packages, publish once with an npm token or configure npm trusted publishing after the package exists."
+          fi
+          npm publish --access public --provenance --tag latest

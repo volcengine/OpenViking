@@ -4,11 +4,18 @@
 
 import base64
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
+import httpx
+
+from openviking.models.network import (
+    create_optional_async_httpx_client,
+    create_optional_sync_httpx_client,
+)
 from openviking.telemetry import tracer
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking.utils.message_format import format_messages, sanitize_openai_messages
@@ -35,7 +42,8 @@ _DASHSCOPE_HOSTS = {
 
 
 # These names select existing OpenAI request defaults, not general reasoning capability.
-_OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+# gpt-5 and later generations (gpt-6, gpt-7, ...) share the o-series request contract.
+_OPENAI_REASONING_MODEL_PATTERN = re.compile(r"(?:gpt-(?:[5-9]|[1-9]\d)|o[134])")
 
 
 def _build_openai_client_kwargs(
@@ -75,6 +83,18 @@ class OpenAIVLM(VLMBase):
         self._async_client_cache = LoopScopedAsyncClientCache()
         self.api_version = config.get("api_version")
         self.reasoning_effort = config.get("reasoning_effort")
+        self.keepalive_expiry = config.get("keepalive_expiry")
+
+    def _http_client_kwargs(self) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {"timeout": self.timeout}
+        if self.keepalive_expiry is not None:
+            defaults = openai.DEFAULT_CONNECTION_LIMITS
+            kwargs["limits"] = httpx.Limits(
+                max_connections=defaults.max_connections,
+                max_keepalive_connections=defaults.max_keepalive_connections,
+                keepalive_expiry=self.keepalive_expiry,
+            )
+        return kwargs
 
     def get_client(self):
         """Get sync client"""
@@ -89,6 +109,16 @@ class OpenAIVLM(VLMBase):
                 self.extra_headers,
                 self.timeout,
             )
+            http_kwargs = self._http_client_kwargs()
+            http_client = create_optional_sync_httpx_client(
+                self.api_base,
+                client_cls=openai.DefaultHttpxClient,
+                **http_kwargs,
+            )
+            if http_client is None and self.keepalive_expiry is not None:
+                http_client = openai.DefaultHttpxClient(**http_kwargs)
+            if http_client is not None:
+                kwargs["http_client"] = http_client
             if self.provider == "azure":
                 self._sync_client = openai.AzureOpenAI(**kwargs)
             else:
@@ -107,6 +137,16 @@ class OpenAIVLM(VLMBase):
             self.extra_headers,
             self.timeout,
         )
+        http_kwargs = self._http_client_kwargs()
+        http_client = create_optional_async_httpx_client(
+            self.api_base,
+            client_cls=openai.DefaultAsyncHttpxClient,
+            **http_kwargs,
+        )
+        if http_client is None and self.keepalive_expiry is not None:
+            http_client = openai.DefaultAsyncHttpxClient(**http_kwargs)
+        if http_client is not None:
+            kwargs["http_client"] = http_client
         if self.provider == "azure":
             return openai.AsyncAzureOpenAI(**kwargs)
         return openai.AsyncOpenAI(**kwargs)
@@ -114,6 +154,12 @@ class OpenAIVLM(VLMBase):
     def get_async_client(self):
         """Get an async client scoped to the current event loop."""
         return self._async_client_cache.get(self._build_async_client)
+
+    def close(self) -> None:
+        """Close clients and HTTP transports owned by this backend."""
+        if self._sync_client is not None:
+            self._sync_client.close()
+        self._async_client_cache.close_all_with_close()
 
     def _supports_enable_thinking(self) -> bool:
         """Return True for OpenAI-compatible DashScope endpoints that accept enable_thinking."""
@@ -137,7 +183,7 @@ class OpenAIVLM(VLMBase):
         self, kwargs: Dict[str, Any], thinking: bool, max_tokens: Optional[int] = None
     ) -> None:
         """Apply model defaults, explicit settings, and provider-specific body fields."""
-        if kwargs["model"].lower().startswith(_OPENAI_REASONING_MODEL_PREFIXES):
+        if _OPENAI_REASONING_MODEL_PATTERN.match(kwargs["model"].lower()):
             max_tokens_param = "max_completion_tokens"
             kwargs["reasoning_effort"] = "low"
         else:

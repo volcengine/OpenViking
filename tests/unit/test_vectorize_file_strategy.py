@@ -10,6 +10,7 @@ from openviking.parse.parsers.media.utils import (
     MPEG_TS_PACKET_SIZE,
     MPEG_TS_PROBE_BYTES,
 )
+from openviking.storage.index_action import FieldPatch
 from openviking.utils import embedding_utils
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils.config.parser_config import ImageConfig
@@ -52,6 +53,11 @@ class DummyFS:
         self.read_calls = []
         self.read_file_calls = 0
         self.read_file_bytes_calls = 0
+        self.vector_store = self
+        self._vector_config_resolver = self
+
+    async def resolve(self, account_id):
+        return types.SimpleNamespace(embedding=embedding_utils.get_openviking_config().embedding)
 
     async def read(self, _path, offset=0, size=-1, ctx=None):
         self.read_calls.append((offset, size))
@@ -165,10 +171,49 @@ async def test_vectorize_disambiguates_typescript_and_mpeg_ts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vectorize_file_uses_summary_first(monkeypatch):
+@pytest.mark.parametrize("text_source", ["summary_first", "summary_only"])
+@pytest.mark.parametrize("summary", ["short summary", ""])
+async def test_vectorize_file_uses_summary_first(monkeypatch, text_source, summary):
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+    cfg = EmbeddingConfig(
+        dense={
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "api_base": "http://localhost:8080/v1",
+            "dimension": 1536,
+        },
+        text_source=text_source,
+        max_input_tokens=1000,
+    )
     queue = DummyQueue()
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("X" * 5000))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("raw content"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(embedding=cfg),
+    )
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/test.md",
+        summary_dict={"name": "test.md", "summary": summary},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+    )
+
+    assert len(queue.items) == 1
+    assert queue.items[0].message == (summary or "raw content")
+    assert "content" not in queue.items[0].context_data
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_threads_supplied_md5_without_reading_bytes(monkeypatch):
+    # The upload site already holds the final bytes; vectorize_file must accept
+    # the fingerprint via file_md5 and never read the file back to compute it.
+    queue = DummyQueue()
+    fs = DummyFS("deployment guide")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         embedding_utils,
         "get_openviking_config",
@@ -176,16 +221,72 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
             embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
         ),
     )
+
     await embedding_utils.vectorize_file(
-        file_path="viking://user/default/resources/test.md",
-        summary_dict={"name": "test.md", "summary": "short summary"},
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        file_md5="a" * 32,
+    )
+
+    assert len(queue.items) == 1
+    assert queue.items[0].context_data["md5"] == "a" * 32
+    # No file read was issued just to fingerprint the content.
+    assert fs.read_file_bytes_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_uses_supplied_content_without_reading_file(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("remote content")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/a.py",
+        summary_dict={"name": "a.py", "summary": ""},
+        parent_uri="viking://user/default/resources",
+        ctx=DummyReq(),
+        file_content=b"print('local')",
+    )
+
+    assert queue.items[0].message == "print('local')"
+    assert fs.read_file_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_vectorize_file_omits_md5_when_not_supplied(monkeypatch):
+    queue = DummyQueue()
+    fs = DummyFS("deployment guide")
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://user/default/resources/demo.md",
+        summary_dict={"name": "demo.md", "summary": "deployment summary"},
         parent_uri="viking://user/default/resources",
         ctx=DummyReq(),
     )
 
     assert len(queue.items) == 1
-    assert queue.items[0].message == "short summary"
-    assert "content" not in queue.items[0].context_data
+    # Unknown fingerprint must not be emitted, so a partial update never clears it.
+    assert "md5" not in queue.items[0].context_data
+    assert fs.read_file_bytes_calls == 0
 
 
 @pytest.mark.asyncio
@@ -558,6 +659,26 @@ async def test_vectorize_directory_meta_appends_search_tags_by_level(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_vectorize_directory_meta_applies_merge_per_level(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://user/default/resources/demo",
+        abstract="demo abstract",
+        overview="demo overview",
+        ctx=DummyReq(),
+        actions={0: "merge", 1: "upsert"},
+    )
+
+    assert len(queue.items) == 2
+    assert "_upsert_options" not in queue.items[0].context_data
+    assert queue.items[0].action.value == "merge"
+    assert queue.items[1].action.value == "upsert"
+
+
+@pytest.mark.asyncio
 async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     """L1 records must carry the overview in the abstract scalar so Rerank
     sees L1 text instead of the L0 abstract."""
@@ -582,7 +703,9 @@ async def test_vectorize_directory_meta_l1_abstract_is_overview(monkeypatch):
     }
     await embedding_utils.vectorize_directory_meta(
         uri=uri,
-        abstract=render_abstract_overview(ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata),
+        abstract=render_abstract_overview(
+            ContextLevel.ABSTRACT, uri, "Visible abstract.", metadata
+        ),
         overview=render_abstract_overview(ContextLevel.OVERVIEW, uri, overview, metadata),
         ctx=DummyReq(),
     )
@@ -1061,3 +1184,170 @@ async def test_vectorize_directory_meta_truncates_oversized_abstract(monkeypatch
         abstract = item.context_data["abstract"]
         assert len(abstract.encode("utf-8")) <= embedding_utils._ABSTRACT_MAX_BYTES
         assert abstract.encode("utf-8").decode("utf-8") == abstract
+
+
+@pytest.mark.asyncio
+async def test_skill_directory_body_frontmatter_is_not_parsed_twice(monkeypatch):
+    from openviking.storage.abstract_overview import (
+        AbstractOverviewFormatError,
+        render_abstract_overview,
+    )
+
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("ignored"))
+    uri = "viking://agent/skills/demo"
+    body = "---\nname: demo\ndescription: Tool instructions\n---\n\n# Parameters\nKeep this body."
+    await embedding_utils.vectorize_directory_meta(
+        uri, "name: demo", body, context_type="skill", ctx=DummyReq(), content_is_body=True
+    )
+    overview_msg = next(item for item in queue.items if item.context_data["level"] == 1)
+    assert overview_msg.context_data["abstract"] == body
+    assert body in overview_msg.message
+
+    # Existing callers still validate serialized sidecars, and strip only the
+    # outer system metadata from a valid document containing frontmatter.
+    with pytest.raises(AbstractOverviewFormatError, match="must contain directory"):
+        await embedding_utils.vectorize_directory_meta(uri, "abstract", body, ctx=DummyReq())
+    queue.items.clear()
+    await embedding_utils.vectorize_directory_meta(
+        uri, "abstract", render_abstract_overview(1, uri, body), ctx=DummyReq()
+    )
+    overview_msg = next(item for item in queue.items if item.context_data["level"] == 1)
+    assert overview_msg.context_data["abstract"] == body
+    assert body in overview_msg.message
+
+
+@pytest.mark.asyncio
+async def test_full_upsert_uses_resolved_search_tags_from_plan(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("body"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://resources/repo/a.py",
+        summary_dict={"name": "a.py", "summary": "summary"},
+        parent_uri="viking://resources/repo",
+        ctx=DummyReq(),
+        scalar_override={"search_tags": ["team=old", "lang=python", "team=new", "owner=alice"]},
+        ingest_options=IngestOptions.from_search_tags(["team=new", "owner=alice"], mode="append"),
+        action="upsert",
+    )
+
+    msg = queue.items[0]
+    assert msg.context_data["search_tags"] == [
+        "team=old",
+        "lang=python",
+        "team=new",
+        "owner=alice",
+    ]
+    assert msg.action.value == "upsert"
+    assert msg.context_data["_upsert_options"] == {"search_tag_mode": "append"}
+
+
+@pytest.mark.asyncio
+async def test_context_vectorization_defaults_to_merge_for_legacy_producers(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("body"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://resources/repo/a.py",
+        summary_dict={"name": "a.py", "summary": "summary"},
+        parent_uri="viking://resources/repo",
+        ctx=DummyReq(),
+    )
+    await embedding_utils.vectorize_directory_meta(
+        uri="viking://resources/repo",
+        abstract="abstract",
+        overview="overview",
+        ctx=DummyReq(),
+    )
+
+    assert [message.action.value for message in queue.items] == ["merge", "merge", "merge"]
+    assert all(message.field_patch is None for message in queue.items)
+
+
+@pytest.mark.asyncio
+async def test_planned_merge_does_not_copy_context_into_patch_seed(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("body"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://resources/repo/a.py",
+        summary_dict={"name": "a.py", "summary": "large summary"},
+        parent_uri="viking://resources/repo",
+        ctx=DummyReq(),
+        action="merge",
+        field_patch=FieldPatch(
+            {"search_tags": ["scope=new"]},
+            {"search_tags": "append"},
+        ),
+    )
+
+    msg = queue.items[0]
+    assert msg.context_data["abstract"] == "large summary"
+    assert msg.field_patch == FieldPatch(
+        {"search_tags": ["scope=new"]},
+        {"search_tags": "append"},
+    )
+
+
+def test_semantic_processor_uses_merge_for_unplanned_vectorization():
+    import inspect
+
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+
+    assert (
+        inspect.signature(SemanticProcessor._vectorize_single_file).parameters["action"].default
+        == "merge"
+    )
+
+
+@pytest.mark.asyncio
+async def test_full_upsert_carries_existing_record_id_as_internal_override(monkeypatch):
+    queue = DummyQueue()
+    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
+    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("body"))
+    monkeypatch.setattr(
+        embedding_utils,
+        "get_openviking_config",
+        lambda: types.SimpleNamespace(
+            embedding=types.SimpleNamespace(text_source="summary_only", max_input_tokens=1000)
+        ),
+    )
+
+    await embedding_utils.vectorize_file(
+        file_path="viking://resources/repo/a.py",
+        summary_dict={"name": "a.py", "summary": "summary"},
+        parent_uri="viking://resources/repo",
+        ctx=DummyReq(),
+        scalar_override={"_record_id": "id-from-vector-db"},
+        action="upsert",
+    )
+
+    msg = queue.items[0]
+    assert msg.context_data["_upsert_record_id"] == "id-from-vector-db"
+    assert "_record_id" not in msg.context_data

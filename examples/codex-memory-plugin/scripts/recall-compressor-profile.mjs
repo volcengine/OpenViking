@@ -2,6 +2,7 @@ import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdir, rename, writeFile } from "node:fs/promises";
+import { normalizeRewriteMode } from "./shared/plugin-config.mjs";
 import { getStateDir } from "./session-state.mjs";
 
 const DEFAULT_PRIMARY = { model: "gpt-5.3-codex-spark", thinking: "default", source: "default_primary" };
@@ -25,7 +26,9 @@ function normalizeModel(value) {
 }
 
 export function recallCompressionExplicitlyOff(cfg) {
-  return !cfg.recallCompress || isOff(cfg.recallCompressModel) || isOff(cfg.recallCompressThinking);
+  const mode = normalizeRewriteMode(cfg.recallRewrite ?? cfg.recallCompress, "off");
+  return mode === "off" || mode === "server"
+    || isOff(cfg.recallCompressModel) || isOff(cfg.recallCompressThinking);
 }
 
 export function buildCodexExecArgs(profile, outputPath, cfg = {}) {

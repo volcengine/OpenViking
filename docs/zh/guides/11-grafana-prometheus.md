@@ -463,4 +463,4 @@ Bind for 0.0.0.0:9090 failed: port is already allocated
 - [指标与 Metrics](../concepts/12-metrics.md)
 - [Metrics API](../api/09-metrics.md)
 - [服务端部署](03-deployment.md)
-- [快速开始：服务端模式](../getting-started/03-quickstart-server.md)
+- [快速开始](../getting-started/02-quickstart.md)

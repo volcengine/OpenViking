@@ -65,12 +65,31 @@ async def assemble_context(
     expansion_mode = params.query_expansion if intent_enabled else "off"
     needs_session = bool(params.session_id) and (expansion_mode == "auto" or params.dedup_turns > 0)
     session = await _load_session(service, ctx, params.session_id) if needs_session else None
+    resolver = getattr(service, "vlm_resolver", None)
 
-    queries, expansion_status = await expand_queries(
-        query=params.query,
-        session=session,
-        mode=expansion_mode,
-    )
+    if expansion_mode == "auto" and session is not None:
+        if resolver is None:
+            raise RuntimeError(
+                "Context assembly requires a VLM resolver for account-owned expansion"
+            )
+        try:
+            expansion_planner = await resolver.get_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account expansion planner unavailable: %s", exc)
+            queries, expansion_status = [params.query], "failed"
+        else:
+            queries, expansion_status = await expand_queries(
+                query=params.query,
+                session=session,
+                mode=expansion_mode,
+                planner=expansion_planner,
+            )
+    else:
+        queries, expansion_status = await expand_queries(
+            query=params.query,
+            session=session,
+            mode=expansion_mode,
+        )
 
     ledger = await RecallLedger.load(
         service=service,
@@ -84,7 +103,7 @@ async def assemble_context(
     # The fan-out below embeds each planned query once per (query, target)
     # find, so wrap it in the request-scoped query embedding cache: sibling
     # finds share the first in-flight embed of each distinct query text.
-    with query_embed_cache_scope():
+    async with query_embed_cache_scope():
         candidates, gather_stats = await gather_candidates(
             service=service,
             ctx=ctx,
@@ -124,13 +143,32 @@ async def assemble_context(
     digest = ""
     rewrite_status = "off"
     rewrite_usage: Optional[Dict[str, int]] = None
-    if plan.entries and server_rewrite_enabled(params.rewrite):
-        digest, rewrite_status, rewrite_usage = await rewrite_context(
-            query=params.query,
-            rendered=rendered or render_context(plan.entries),
-            max_bullets=params.rewrite_max_bullets,
-            valid_uris=[entry.uri for entry in plan.entries],
-        )
+    rewrite_enabled = server_rewrite_enabled(params.rewrite)
+    if params.rewrite == "auto" and resolver is not None:
+        try:
+            rewrite_enabled = await resolver.has_dedicated_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account rewrite planner unavailable: %s", exc)
+            rewrite_enabled = False
+            rewrite_status = "failed"
+    if plan.entries and rewrite_enabled:
+        if resolver is None:
+            raise RuntimeError(
+                "Context assembly requires a VLM resolver for account-owned rewrite"
+            )
+        try:
+            planner = await resolver.get_query_planner(ctx.account_id)
+        except Exception as exc:
+            logger.warning("Account rewrite planner unavailable: %s", exc)
+            rewrite_status = "failed"
+        else:
+            digest, rewrite_status, rewrite_usage = await rewrite_context(
+                query=params.query,
+                rendered=rendered or render_context(plan.entries),
+                max_bullets=params.rewrite_max_bullets,
+                valid_uris=[entry.uri for entry in plan.entries],
+                planner=planner,
+            )
         if rewrite_status == "no_relevant":
             rendered = ""
 

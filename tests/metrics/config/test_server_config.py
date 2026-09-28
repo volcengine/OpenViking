@@ -3,25 +3,27 @@
 
 import json
 
-import pytest
-
 from openviking.server.config import load_server_config
 
 
-def test_load_server_config_rejects_legacy_server_metrics_field(tmp_path):
+def test_load_server_config_ignores_legacy_observability_fields(tmp_path):
     config_path = tmp_path / "ov.conf"
-    config_path.write_text(json.dumps({"server": {"metrics": {"enabled": True}}}))
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "metrics": {"enabled": True},
+                    "telemetry": {"prometheus": {"enabled": True}},
+                }
+            }
+        )
+    )
 
-    with pytest.raises(ValueError, match=r"server\.metrics"):
-        load_server_config(str(config_path))
+    config = load_server_config(str(config_path))
 
-
-def test_load_server_config_rejects_legacy_server_telemetry_field(tmp_path):
-    config_path = tmp_path / "ov.conf"
-    config_path.write_text(json.dumps({"server": {"telemetry": {"prometheus": {"enabled": True}}}}))
-
-    with pytest.raises(ValueError, match=r"server\.telemetry"):
-        load_server_config(str(config_path))
+    assert config.observability.metrics.enabled is False
+    assert "metrics" not in config.model_dump()
+    assert "telemetry" not in config.model_dump()
 
 
 def test_load_server_config_preserves_metrics_fields_under_server_observability(tmp_path):

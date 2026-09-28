@@ -2,6 +2,15 @@
 
 This document defines the unified structure and writing conventions for API module documentation in the `docs/en/api/` directory.
 
+## Keep documentation current
+
+- Update the English and Chinese pages in the same PR, including navigation and examples. Keep one canonical explanation and link to it from related pages.
+- Lead with the reader's task, prerequisites, a working example, and its expected result. Move implementation details below the usage instructions.
+- Verify defaults and supported options against the current implementation. Distinguish released behavior from work on `main` and future plans; link to the relevant release or PR when it matters.
+- Use valid JSON for copyable configuration. Label fragments or pseudocode explicitly; do not mix comments into a `json` block.
+- Link to official documentation for external tools and services. Describe only the setup needed here instead of duplicating their manuals.
+- Before submitting, run `npm run check:docs`, `npm run check:api`, and `npm run docs:build` from `docs/`. Automated checks cover structure and examples, not factual correctness or translation quality.
+
 ## Directory Structure
 
 API documentation is organized by module, with one file per module, using a two-digit numerical prefix.

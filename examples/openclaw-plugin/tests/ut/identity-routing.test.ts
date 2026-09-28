@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createSessionAgentResolver,
@@ -49,9 +49,18 @@ describe("identity routing registry", () => {
       peerRole: "sender",
       senderPeerId: "sender-42",
     })).toBe("sender-42");
-    expect(() => resolveOpenVikingActorPeerId({ peerRole: "sender" })).toThrow(
-      "peer_role=sender requires a sender identity",
-    );
+  });
+
+  it("widens to the unscoped request with a warning when the sender is missing", () => {
+    const warn = vi.fn();
+    expect(resolveOpenVikingActorPeerId({ peerRole: "sender", warn })).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("no sender identity"));
+
+    warn.mockClear();
+    expect(resolveOpenVikingActorPeerId({ peerRole: "sender", senderPeerId: "sender-42", warn })).toBe("sender-42");
+    expect(resolveOpenVikingActorPeerId({ peerRole: "assistant", assistantPeerId: "agent", warn })).toBe("agent");
+    expect(resolveOpenVikingActorPeerId({ peerRole: "none", warn })).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("resolves session-scoped agents with aliases and config prefix unchanged", () => {

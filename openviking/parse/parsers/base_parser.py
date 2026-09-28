@@ -109,15 +109,3 @@ class BaseParser(ABC):
         from openviking.storage.viking_fs import get_viking_fs
 
         return get_viking_fs()
-
-    def _create_temp_uri(self) -> str:
-        """
-        Create a temporary URI for storing intermediate files during parsing.
-
-        This is a common utility method for all parsers that follow the
-        three-phase parsing architecture.
-
-        Returns:
-            Temporary URI string (e.g., "viking://temp/abc12345")
-        """
-        return self._get_viking_fs().create_temp_uri()

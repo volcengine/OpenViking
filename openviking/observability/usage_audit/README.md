@@ -120,6 +120,15 @@ store backend，而不是让多个实例各写各的本地 SQLite。
 
 `2xx` 和 `3xx` 记为 `success`，`4xx/5xx` 记为 `error`。Dashboard 今日检索只展示成功请求数。
 
+`usage_retrieval_hourly.result_count` 累加成功 HTTP 响应中的最终结果条数：列表模式使用
+`total`，`search` 的 context 模式使用 `entries` 长度。失败请求只增加请求数。
+该值随 `http.request` 写入，不累加内部 `retrieval.completed` 的结果数；一次 HTTP 请求
+可能触发多个内部检索并去重、截断，因此不能直接与进程启动以来的 retrieval observer
+计数对齐。现有统计范围仍为上表两个端点，不包含 MCP 或已弃用的 `/recall`。
+
+结果总数不是零结果请求数，仅凭 `request_count` 和 `result_count` 无法还原零结果率。
+修复前已有桶中的结果数仍为历史零值，不会回填。
+
 ### 上下文提交热力图
 
 来自成功的公开写请求：

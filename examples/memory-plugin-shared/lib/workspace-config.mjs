@@ -23,6 +23,7 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 
+import { WORKSPACE_ENUMS, WORKSPACE_KNOB_MAP, WORKSPACE_RANGES } from "./config-schema.mjs";
 import { CONFIG_DIR_NAME, LOCAL_FILE, TEAM_FILE } from "./workspace-identity.mjs";
 
 /**
@@ -94,37 +95,14 @@ export const FORBIDDEN_KEYS = [
  */
 export const FREE_FORM_SECTIONS = ["labels"];
 
-const ENUMS = {
-  "recall.peer_scope": ["all", "actor"],
-  "peer.source": null, // free-form: preset name, template, or template array
-};
-
-const RANGES = {
-  "recall.dedup_turns": { min: 0, max: 20, integer: true },
-  "recall.max_items": { min: 1, max: 100, integer: true },
-  "recall.score_threshold": { min: 0, max: 1, integer: false },
-  "capture.commit_token_threshold": { min: 1000, max: 1_000_000, integer: true },
-};
-
 /**
- * The workspace schema in the vocabulary the harness loaders already speak.
- *
- * Only knobs a loader actually reads appear here — the same rule the ovcli
- * `plugin` section follows, so the schema never advertises a setting that
- * silently does nothing. `labels` is metadata for humans and is not projected.
+ * The workspace schema is a projection of `config-schema.mjs`: the dotted key,
+ * its enum members and its range all come from the one knob declaration, so a
+ * knob cannot be spelled one way here and another way in the loaders.
  */
-const KNOB_MAP = {
-  "peer.id": "peerId",
-  "peer.source": "peerSource",
-  "recall.enabled": "autoRecall",
-  "recall.peer_scope": "recallPeerScope",
-  "recall.dedup_turns": "recallDedupTurns",
-  "recall.max_items": "recallLimit",
-  "recall.score_threshold": "scoreThreshold",
-  "capture.enabled": "autoCapture",
-  "capture.commit_token_threshold": "commitTokenThreshold",
-  "bypass.session_patterns": "bypassSessionPatterns",
-};
+const ENUMS = WORKSPACE_ENUMS;
+const RANGES = WORKSPACE_RANGES;
+const KNOB_MAP = WORKSPACE_KNOB_MAP;
 
 export const WORKSPACE_SCHEMA_KEYS = Object.keys(KNOB_MAP);
 

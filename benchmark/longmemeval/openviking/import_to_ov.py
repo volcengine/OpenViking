@@ -271,7 +271,7 @@ async def submit_viking_ingest(
                     options={"created_at": msg_created_at} if msg_created_at else None,
                 )
 
-            result = await client.commit_session(session_id, options={"telemetry": True})
+            result = await client.commit_session(session_id, telemetry=True)
             if result.get("status") not in ("committed", "accepted"):
                 raise RuntimeError(f"Commit failed: {result}")
 

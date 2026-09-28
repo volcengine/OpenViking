@@ -1,0 +1,2 @@
+.side-rays-container { width: 100%; height: 100%; position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.side-rays-container canvas { display: block; width: 100%; height: 100%; }

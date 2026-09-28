@@ -11,6 +11,41 @@ OpenViking 默认在 1933 端口对外提供 REST API、MCP、OAuth、`.well-kno
 
 前提：有公网域名、80 + 443 端口可达、DNS 已指向。
 
+## 先配置认证，再开放反向代理
+
+发布任何路由前都要配置认证，即使上游只监听 `127.0.0.1`。反向代理会让这个本地服务可从公网访问。默认 `dev` 模式以 ROOT 身份接受请求；TLS 和 `OPENVIKING_PUBLIC_BASE_URL` 都不会增加身份认证。
+
+使用 API Key 认证时，将下面的配置合并到 `ov.conf`，用密钥替换占位值，然后重启服务：
+
+```json
+{
+  "server": {
+    "auth_mode": "api_key",
+    "root_api_key": "<your-secret-root-key>"
+  }
+}
+```
+
+root key 仅用于管理操作，例如通过 [Admin API](04-authentication.md) 创建 account 和首个管理员。租户数据 API 使用返回的 user/admin key。不要把 root key 放进公开的浏览器客户端，也不要让反向代理为所有请求自动附加 root key。后端端口应保持私有，让客户端通过预期的 HTTPS 入口访问。
+
+允许用户接入前，在公网 URL 上验证：
+
+```bash
+# 上述 API Key 配置下预期为 401，不能成功返回目录列表。
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  'https://ov.your-domain.com/api/v1/fs/ls?uri=viking://resources'
+
+# 先将 OPENVIKING_API_KEY 设置为绑定租户身份的 user/admin key。预期为 200。
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H "X-API-Key: $OPENVIKING_API_KEY" \
+  'https://ov.your-domain.com/api/v1/fs/ls?uri=viking://resources'
+
+# health 刻意不要求认证；这里的 200 不能证明访问控制已生效。
+curl -sS https://ov.your-domain.com/health
+```
+
+如果使用 OIDC 或可信身份网关，应遵循对应模式的 [认证要求](04-authentication.md)，并验证未认证的数据请求会被拒绝。不要让可自行填写身份请求头的调用者直接访问 `trusted` 后端。
+
 <a id="添加-https公网访问"></a>
 
 ## 方式 A：用自带 Caddy 自动签发 Let's Encrypt 证书（推荐）
@@ -32,7 +67,7 @@ OV_ACME_EMAIL=admin@your-domain.com   # 可选；推荐用于 Let's Encrypt
 
 ```caddyfile
 {$OPENVIKING_PUBLIC_BASE_URL} {
-    reverse_proxy openviking:1933
+    reverse_proxy openviking:{$OPENVIKING_SERVER_PORT:1933}
     # 绑定 ACME 注册邮箱（可选）：
     # tls {$OV_ACME_EMAIL}
 }

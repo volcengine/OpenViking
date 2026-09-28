@@ -209,7 +209,7 @@ function ConnectionSettingsRoute() {
     serverMode === 'trusted' &&
     !probeQuery.isFetching &&
     !hasControlCredential &&
-    (adminProbe?.state === 'error' || dataProbe?.state === 'error')
+    probeQuery.data?.rootApiKeyRequired === true
   const keyGuide =
     serverMode === 'trusted'
       ? trustedCredentialRequired

@@ -48,6 +48,37 @@ class ModelsObserver(BaseObserver):
         """
         return self._format_status_as_table()
 
+    def get_status_json(self) -> dict:
+        """Return model usage data as structured JSON."""
+        vlm = []
+        embedding = []
+        rerank = []
+
+        if self._vlm_instance:
+            try:
+                vlm = self._get_vlm_usage() or self._get_configured_vlm() or []
+            except Exception as e:
+                logger.warning(f"Error getting VLM usage: {e}")
+                vlm = self._get_configured_vlm() or []
+
+        if self._embedding_instance:
+            try:
+                embedding = self._get_embedding_usage() or []
+            except Exception as e:
+                logger.warning(f"Error getting Embedding usage: {e}")
+
+        if self._rerank_instance:
+            try:
+                rerank = self._get_rerank_usage() or []
+            except Exception as e:
+                logger.warning(f"Error getting Rerank usage: {e}")
+
+        return {
+            "vlm": vlm,
+            "embedding": embedding,
+            "rerank": rerank,
+        }
+
     def _format_status_as_table(self) -> str:
         """
         Format token usage status as a table using tabulate.

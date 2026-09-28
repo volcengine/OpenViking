@@ -12,6 +12,9 @@ on:
       - main
     paths:
       - "examples/openclaw-plugin/**"
+      - "examples/memory-plugin-shared/lib/**"
+      - "examples/memory-plugin-shared/sync.mjs"
+      - ".github/workflows/clawhub-dev-release.yml"
   workflow_dispatch:
     inputs:
       version:

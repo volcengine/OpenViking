@@ -129,7 +129,9 @@ class IndexEngineProxy:
             normalize_vector_flag (bool): If True, all vectors will be L2-normalized
                 before being added to the index or used for search. Defaults to False.
         """
-        self.index_engine: Optional[engine.IndexEngine] = engine.IndexEngine(index_path_or_json)
+        self.index_engine: Optional[engine.IndexEngine] = engine.IndexEngine(
+            index_path_or_json, normalize_vector_flag
+        )
         self.normalize_vector_flag = normalize_vector_flag
 
     def search(
@@ -468,9 +470,9 @@ class LocalIndex(IIndex):
         description: Optional[str],
     ):
         meta_data: Dict[str, Any] = {}
-        if scalar_index:
+        if scalar_index is not None:
             meta_data["ScalarIndex"] = scalar_index
-        if description:
+        if description is not None:
             meta_data["Description"] = description
         if not meta_data:
             return

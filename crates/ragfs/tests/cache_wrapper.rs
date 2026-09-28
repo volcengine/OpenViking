@@ -3,7 +3,9 @@ use ragfs::cache::{
     CacheDecision, CacheNamespace, CachePolicy, CacheTraversalMode, CachedFileSystem,
 };
 use ragfs::cache_runtime::{CacheRuntime, MemoryMockProvider};
-use ragfs::core::{FsContextInner, GrepResult, MultiWriteWrappedFS, TreeEntry, FS_CTX};
+use ragfs::core::{
+    FsContextInner, GrepOptions, GrepResult, MultiWriteWrappedFS, TreeEntry, FS_CTX,
+};
 use ragfs::plugins::MemFileSystem;
 use ragfs::{Error, FileInfo, FileSystem, Result, WriteFlag};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -129,24 +131,10 @@ impl FileSystem for CountingFileSystem {
         &self,
         path: &str,
         pattern: &str,
-        recursive: bool,
-        case_insensitive: bool,
-        node_limit: Option<usize>,
-        exclude_path: Option<&str>,
-        level_limit: Option<usize>,
+        options: GrepOptions<'_>,
     ) -> Result<GrepResult> {
         self.greps.fetch_add(1, Ordering::Relaxed);
-        self.inner
-            .grep(
-                path,
-                pattern,
-                recursive,
-                case_insensitive,
-                node_limit,
-                exclude_path,
-                level_limit,
-            )
-            .await
+        self.inner.grep(path, pattern, options).await
     }
 
     async fn tree_directory(
@@ -282,7 +270,14 @@ async fn default_grep_delegates_to_backend() {
     let (fs, _) = cached_fs(backend);
 
     let result = fs
-        .grep("/docs", "needle", true, false, None, None, None)
+        .grep(
+            "/docs",
+            "needle",
+            GrepOptions {
+                recursive: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -345,7 +340,14 @@ async fn cached_grep_traversal_reuses_directory_and_file_cache_after_warmup() {
     );
 
     let first = fs
-        .grep("/docs", "needle", true, false, None, None, None)
+        .grep(
+            "/docs",
+            "needle",
+            GrepOptions {
+                recursive: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(first.count, 2);
@@ -355,7 +357,14 @@ async fn cached_grep_traversal_reuses_directory_and_file_cache_after_warmup() {
     assert_eq!(probe.stat_count(), 1);
 
     let second = fs
-        .grep("/docs", "needle", true, false, None, None, None)
+        .grep(
+            "/docs",
+            "needle",
+            GrepOptions {
+                recursive: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     assert_eq!(second.count, 2);
@@ -377,6 +386,47 @@ async fn cached_grep_traversal_reuses_directory_and_file_cache_after_warmup() {
 }
 
 #[tokio::test]
+async fn cached_grep_includes_context_from_cached_content() {
+    let backend = CountingFileSystem::new();
+    backend.mkdir("/docs", 0o755).await.unwrap();
+    backend
+        .write(
+            "/docs/a.md",
+            b"first\nbefore\nneedle\nafter",
+            0,
+            WriteFlag::Create,
+        )
+        .await
+        .unwrap();
+    let (fs, _) = cached_fs_with_policy(
+        backend,
+        CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
+    );
+
+    let result = fs
+        .grep(
+            "/docs",
+            "needle",
+            GrepOptions {
+                recursive: true,
+                before_context: 2,
+                after_context: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let matched = &result.matches[0];
+    assert_eq!(matched.before_context.as_ref().unwrap()[0].content, "first");
+    assert_eq!(
+        matched.before_context.as_ref().unwrap()[1].content,
+        "before"
+    );
+    assert_eq!(matched.after_context.as_ref().unwrap()[0].content, "after");
+}
+
+#[tokio::test]
 async fn cached_grep_batches_generation_validation_after_warmup() {
     let backend = CountingFileSystem::new();
     backend.mkdir("/docs", 0o755).await.unwrap();
@@ -394,13 +444,27 @@ async fn cached_grep_batches_generation_validation_after_warmup() {
         CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
     );
 
-    fs.grep("/docs", "needle", true, false, None, None, None)
-        .await
-        .unwrap();
+    fs.grep(
+        "/docs",
+        "needle",
+        GrepOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     provider.reset_observed_reads();
 
     let result = fs
-        .grep("/docs", "needle", true, false, None, None, None)
+        .grep(
+            "/docs",
+            "needle",
+            GrepOptions {
+                recursive: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -429,13 +493,27 @@ async fn cached_grep_memoizes_generation_keys_within_one_traversal() {
         CachePolicy::default().with_traversal_mode(CacheTraversalMode::CachedTraversal),
     );
 
-    fs.grep("/docs", "needle", true, false, None, None, None)
-        .await
-        .unwrap();
+    fs.grep(
+        "/docs",
+        "needle",
+        GrepOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     provider.reset_observed_reads();
 
     let result = fs
-        .grep("/docs", "needle", true, false, None, None, None)
+        .grep(
+            "/docs",
+            "needle",
+            GrepOptions {
+                recursive: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -477,13 +555,27 @@ async fn cached_grep_scans_cached_files_with_bounded_concurrency() {
         provider,
     );
 
-    fs.grep("/docs", "needle", true, false, None, None, None)
-        .await
-        .unwrap();
+    fs.grep(
+        "/docs",
+        "needle",
+        GrepOptions {
+            recursive: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     provider.reset_observed_reads();
 
     let result = fs
-        .grep("/docs", "needle", true, false, None, None, None)
+        .grep(
+            "/docs",
+            "needle",
+            GrepOptions {
+                recursive: true,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -527,11 +619,14 @@ async fn cached_grep_traversal_matches_default_grep_semantics() {
         .grep(
             "/docs",
             "needle",
-            true,
-            true,
-            Some(2),
-            Some("/docs/skip"),
-            Some(1),
+            GrepOptions {
+                recursive: true,
+                case_insensitive: true,
+                node_limit: Some(2),
+                exclude_path: Some("/docs/skip"),
+                level_limit: Some(1),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -539,11 +634,14 @@ async fn cached_grep_traversal_matches_default_grep_semantics() {
         .grep(
             "/docs",
             "needle",
-            true,
-            true,
-            Some(2),
-            Some("/docs/skip"),
-            Some(1),
+            GrepOptions {
+                recursive: true,
+                case_insensitive: true,
+                node_limit: Some(2),
+                exclude_path: Some("/docs/skip"),
+                level_limit: Some(1),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -580,9 +678,16 @@ async fn cached_grep_traversal_falls_back_for_multiwrite_backend() {
     let ctx = Arc::new(FsContextInner::new("acct"));
     let result = FS_CTX
         .scope(ctx, async {
-            fs.grep("/docs", "needle", true, false, None, None, None)
-                .await
-                .unwrap()
+            fs.grep(
+                "/docs",
+                "needle",
+                GrepOptions {
+                    recursive: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
         })
         .await;
 

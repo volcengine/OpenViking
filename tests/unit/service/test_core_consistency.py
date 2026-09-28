@@ -12,6 +12,7 @@ from openviking.service.core import OpenVikingService
 from openviking.storage.index_consistency import IndexConsistencyReport
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
@@ -130,6 +131,8 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
 
     service = OpenVikingService.__new__(OpenVikingService)
     service._resource_service = ResourceService()
+    service._config = SimpleNamespace(vlm=VLMConfig())
+    service._runtime_config_manager = None
     service._watch_scheduler = None
     service._session_auto_commit_scheduler = None
     service._queue_manager = QueueManager()

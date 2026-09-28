@@ -110,8 +110,7 @@ commit() executes in two phases:
 5. Generate structured summary (LLM) → write `.abstract.md` and `.overview.md`
 6. Extract long-term memories
 7. Write `memory_diff.json` (memory change audit log) to archive directory
-8. Update active_count
-9. Write `.done` completion marker
+8. Write `.done` completion marker
 
 ### Summary Format
 

@@ -20,6 +20,7 @@ from openviking.service.external_task_service import (
     ExternalTaskSnapshot,
 )
 from openviking.service.fs_service import FSService
+from openviking.service.memory_compile import MemoryCompileRunner
 from openviking.service.task_tracker import SENSITIVE_TASK_KEYS, TaskRecord
 from openviking_cli.exceptions import (
     InvalidArgumentError,
@@ -32,15 +33,23 @@ from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 _ACTIVE_STATUSES = frozenset({"accepted", "pending", "running", "committing"})
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
+# Sentinel --skill value that routes a Compile request to in-process memory
+# consolidation instead of the VikingBot agent path. It is not a real Skill URI.
+MEMORY_COMPILE_SKILL = "memory"
+
 
 class CompileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    from_: list[str] = Field(alias="from", min_length=1)
+    from_: list[str] = Field(default_factory=list, alias="from")
     to: str = Field(min_length=1)
     skill: str = Field(min_length=1)
     instruction: str | None = None
     args: dict[str, Any] | None = None
+
+    @property
+    def is_memory_mode(self) -> bool:
+        return self.skill == MEMORY_COMPILE_SKILL
 
     @model_validator(mode="before")
     @classmethod
@@ -62,12 +71,20 @@ class CompileRequest(BaseModel):
         self.from_ = sources
         self.to = self.to.strip().rstrip("/")
         self.skill = self.skill.strip().rstrip("/")
-        self.instruction = self.instruction.strip() if self.instruction and self.instruction.strip() else None
+        self.instruction = (
+            self.instruction.strip() if self.instruction and self.instruction.strip() else None
+        )
         self.args = dict(self.args) if self.args else None
         if not self.to:
             raise ValueError("to must not be empty")
         if not self.skill:
             raise ValueError("skill must not be empty")
+        # Memory mode consolidates the --to space in place and takes no sources;
+        # every other skill still requires at least one --from directory.
+        if not self.is_memory_mode and not self.from_:
+            raise ValueError("from must contain at least one directory")
+        if self.is_memory_mode and self.from_:
+            raise ValueError("--skill memory consolidates --to in place and takes no --from")
         return self
 
 
@@ -115,6 +132,7 @@ class CompileAPIClient:
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, str]:
+        """Build Runtime headers from saved connection data; legacy tasks may lack request_id."""
         headers = {
             "Content-Type": "application/json",
         }
@@ -123,6 +141,9 @@ class CompileAPIClient:
         api_key = str(connection.get("api_key") or "").strip()
         if api_key:
             headers["X-API-Key"] = api_key
+        request_id = connection.get("request_id")
+        if request_id:
+            headers["X-Tt-Logid"] = request_id
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
         return headers
@@ -147,11 +168,13 @@ class CompileAPIClient:
         session_id: str,
         *,
         connection: Mapping[str, Any],
+        args: Mapping[str, Any] | None = None,
     ) -> CompileSessionStatus:
+        """Query a session with its original args; omit args for legacy tasks."""
         body = await self._request(
             "POST",
             "/runtime/v1/tasks/status",
-            json={"session_id": session_id},
+            json={"session_id": session_id, **({"args": dict(args)} if args is not None else {})},
             headers=self._headers(connection),
         )
         return self._validate(CompileSessionStatus, body)
@@ -161,11 +184,13 @@ class CompileAPIClient:
         session_id: str,
         *,
         connection: Mapping[str, Any],
+        args: Mapping[str, Any] | None = None,
     ) -> CompileSessionStatus:
+        """Cancel a session with its original args; omit args for legacy tasks."""
         body = await self._request(
             "POST",
             "/runtime/v1/tasks/cancel",
-            json={"session_id": session_id},
+            json={"session_id": session_id, **({"args": dict(args)} if args is not None else {})},
             headers=self._headers(connection),
         )
         return self._validate(CompileSessionStatus, body)
@@ -191,7 +216,9 @@ class CompileAPIClient:
                     json=dict(json),
                 )
         except httpx.RequestError as exc:
-            raise ExternalTaskError("UNAVAILABLE", str(exc), transient=True) from exc
+            reason = str(exc).strip() or type(exc).__name__
+            message = f"Failed to reach the compile kernel service: {reason}"
+            raise ExternalTaskError("UNAVAILABLE", message, transient=True) from exc
 
         try:
             body = response.json()
@@ -252,6 +279,11 @@ class CompileService:
         self._tasks = tasks
         self._fs = fs
         self._local_endpoint: _CompileEndpoint | None = None
+        self._memory_runner: MemoryCompileRunner | None = None
+
+    def configure_memory_runner(self, vikingdb: Any = None) -> None:
+        """Install the in-process memory-consolidation runner for `--skill memory`."""
+        self._memory_runner = MemoryCompileRunner(self._fs, vikingdb=vikingdb)
 
     @property
     def poll_interval_seconds(self) -> float:
@@ -286,13 +318,44 @@ class CompileService:
     def _client(self) -> CompileAPIClient:
         return CompileAPIClient(self._endpoint())
 
+    def capabilities(self, ctx: RequestContext) -> dict[str, Any]:
+        try:
+            endpoint = self._endpoint()
+        except UnavailableError:
+            return {"configured": False, "can_create": False, "reason_code": "NOT_CONFIGURED"}
+        allowed = endpoint.local or bool(ctx.api_key)
+        return {
+            "configured": True,
+            "can_create": allowed,
+            "reason_code": None if allowed else "API_KEY_REQUIRED",
+        }
+
     async def create(
         self,
         request: CompileRequest,
         *,
         connection: Mapping[str, Any],
         ctx: RequestContext,
+        idempotency_key: str | None = None,
     ) -> TaskRecord:
+        if request.is_memory_mode:
+            if self._memory_runner is None:
+                raise UnavailableError(
+                    "memory compile", "memory consolidation runner is not configured"
+                )
+            return await self._memory_runner.create(
+                target=request.to,
+                instruction=request.instruction,
+                ctx=ctx,
+            )
+        request = self._normalize_request_uris(request, ctx)
+        if idempotency_key:
+            payload, private_payload = self._split_payload(request)
+            existing = await self._tasks.recover_submission(
+                self.task_type, payload, private_payload, ctx, idempotency_key
+            )
+            if existing is not None:
+                return existing
         endpoint = self._endpoint()
         if not endpoint.local and not str(connection.get("api_key") or "").strip():
             raise UnauthenticatedError("Compile requires a forwardable OpenViking API key")
@@ -305,6 +368,7 @@ class CompileService:
             private_payload=private_payload,
             connection=connection,
             ctx=ctx,
+            **({"idempotency_key": idempotency_key} if idempotency_key else {}),
         )
 
     async def submit(
@@ -315,13 +379,9 @@ class CompileService:
         connection: Mapping[str, Any],
     ) -> str:
         request_payload = dict(payload)
-        public_args = request_payload.get("args")
-        private_args = private_payload.get("args")
-        if isinstance(public_args, dict) or isinstance(private_args, dict):
-            request_payload["args"] = {
-                **(public_args if isinstance(public_args, dict) else {}),
-                **(private_args if isinstance(private_args, dict) else {}),
-            }
+        args = self._merge_args(payload, private_payload)
+        if args is not None:
+            request_payload["args"] = args
         accepted = await self._client().create(
             {"task_type": self.task_type, "payload": request_payload},
             connection=connection,
@@ -333,72 +393,102 @@ class CompileService:
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot:
-        return self._snapshot(await self._client().get(external_task_id, connection=connection))
+        """Query Runtime using args from the task's persisted public and private payloads."""
+        return self._snapshot(
+            await self._client().get(
+                external_task_id,
+                connection=connection,
+                args=self._merge_args(payload, private_payload),
+            )
+        )
 
     async def cancel(
         self,
         external_task_id: str,
         connection: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any] | None = None,
+        private_payload: Mapping[str, Any] | None = None,
     ) -> ExternalTaskSnapshot:
-        return self._snapshot(await self._client().cancel(external_task_id, connection=connection))
+        """Cancel Runtime work using the original task payloads, including restored secrets."""
+        return self._snapshot(
+            await self._client().cancel(
+                external_task_id,
+                connection=connection,
+                args=self._merge_args(payload, private_payload),
+            )
+        )
 
-    async def _normalize_request(
-        self,
-        request: CompileRequest,
-        ctx: RequestContext,
+    @staticmethod
+    def _merge_args(
+        payload: Mapping[str, Any] | None,
+        private_payload: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """Recombine saved args without mutation, or return None when absent.
+
+        Private values take precedence. The result can contain credentials and
+        is only for Runtime request bodies, never logs or public task metadata.
+        """
+        public_args = (payload or {}).get("args")
+        private_args = (private_payload or {}).get("args")
+        if not isinstance(public_args, dict) and not isinstance(private_args, dict):
+            return None
+        return {
+            **(public_args if isinstance(public_args, dict) else {}),
+            **(private_args if isinstance(private_args, dict) else {}),
+        }
+
+    def _normalize_request_uris(
+        self, request: CompileRequest, ctx: RequestContext
     ) -> CompileRequest:
-        sources: list[str] = []
-        for index, source in enumerate(request.from_):
-            uri = validate_request_viking_uri(
-                resolve_path_variables(source),
-                ctx,
-                field_name=f"from[{index}]",
-            ).rstrip("/")
-            stat = await self._fs.stat(uri, ctx)
-            if not stat.get("isDir"):
-                raise InvalidArgumentError(f"Compile source must be a directory: {uri}")
-            canonical = str(stat.get("uri") or uri).rstrip("/")
-            if canonical not in sources:
-                sources.append(canonical)
-
-        skill = request.skill
-        if skill.endswith("/SKILL.md"):
-            skill = skill[: -len("/SKILL.md")]
+        """Normalize identity-bound names without requiring live resources."""
+        sources = list(
+            dict.fromkeys(
+                validate_request_viking_uri(
+                    resolve_path_variables(source), ctx, field_name=f"from[{index}]"
+                ).rstrip("/")
+                for index, source in enumerate(request.from_)
+            )
+        )
+        skill = request.skill.removesuffix("/SKILL.md")
         skill = validate_request_viking_uri(
-            resolve_path_variables(skill),
-            ctx,
-            field_name="skill",
+            resolve_path_variables(skill), ctx, field_name="skill"
         ).rstrip("/")
         if not classify_uri(skill).is_skill_root:
             raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
-        skill_stat = await self._fs.stat(skill, ctx)
-        if not skill_stat.get("isDir"):
-            raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
-        skill = str(skill_stat.get("uri") or skill).rstrip("/")
-        skill_file = await self._fs.stat(f"{skill}/SKILL.md", ctx)
-        if skill_file.get("isDir"):
-            raise InvalidArgumentError("Skill directory must contain a SKILL.md file")
-
         target = validate_request_viking_uri(
-            resolve_path_variables(request.to),
-            ctx,
-            field_name="to",
+            resolve_path_variables(request.to), ctx, field_name="to"
         ).rstrip("/")
         self._validate_target(target)
-        await self._fs.ensure_write_access(target, ctx)
+        return request.model_copy(update={"from_": sources, "to": target, "skill": skill})
+
+    async def _normalize_request(
+        self, request: CompileRequest, ctx: RequestContext
+    ) -> CompileRequest:
+        request = self._normalize_request_uris(request, ctx)
+        for uri in request.from_:
+            stat = await self._fs.stat(uri, ctx)
+            if not stat.get("isDir"):
+                raise InvalidArgumentError(f"Compile source must be a directory: {uri}")
+        skill_stat = await self._fs.stat(request.skill, ctx)
+        if not skill_stat.get("isDir"):
+            raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
+        skill_file = await self._fs.stat(f"{request.skill}/SKILL.md", ctx)
+        if skill_file.get("isDir"):
+            raise InvalidArgumentError("Skill directory must contain a SKILL.md file")
+        await self._fs.ensure_write_access(request.to, ctx)
         try:
-            target_stat = await self._fs.stat(target, ctx)
+            target_stat = await self._fs.stat(request.to, ctx)
         except NotFoundError:
             pass
         else:
             if not target_stat.get("isDir"):
                 raise InvalidArgumentError("Compile target must be a directory")
-            target = str(target_stat.get("uri") or target).rstrip("/")
-
-        return request.model_copy(
-            update={"from_": sources, "to": target, "skill": skill},
-        )
+        return request
 
     @staticmethod
     def _validate_target(target: str) -> None:
@@ -487,6 +577,7 @@ class CompileService:
             error_code=error_code,
             error_message=error_message,
         )
+
 
 __all__ = [
     "CompileAPIClient",

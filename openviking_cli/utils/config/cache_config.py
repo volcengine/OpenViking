@@ -15,8 +15,6 @@ class CacheConfig(BaseModel):
         repr=False,
     )
 
-    model_config = {"extra": "forbid"}
-
     @model_validator(mode="after")
     def validate_config(self):
         if not self.provider.strip():

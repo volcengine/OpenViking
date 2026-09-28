@@ -205,7 +205,7 @@ openclaw openviking setup --base-url <OPENVIKING_URL> --api-key <API_KEY> --forc
 | `assistant` | `viking://user/alice/peers/main/memories/...` | OpenViking user 代表人，并希望把 assistant 归因的 peer 记忆按不同 OpenClaw 助手分开。 |
 | `sender` | `viking://user/support-agent/peers/customer-42/memories/...` | OpenViking user 代表 agent，并希望把 sender 归因的 peer 记忆按不同发送者分开。 |
 
-`person` 仍作为 `sender` 的旧配置别名被兼容；新配置请使用 `sender`。
+安装和 setup 只接受 `sender`；已有配置里的 `person` 仍按 `sender` 生效。
 
 例如，让每个助手使用独立的 peer 记忆，并可选给 assistant id 加前缀：
 
@@ -405,7 +405,7 @@ ov-install
 | `--current-version` | 查看 helper 记录的当前版本 |
 | `--base-url URL` | OpenViking 服务器地址（启用非交互模式） |
 | `--api-key KEY` | OpenViking API key |
-| `--peer-role ROLE` | 记忆归属：`none`、`assistant` 或 `sender`；旧值 `person` 作为 `sender` 的别名兼容 |
+| `--peer-role ROLE` | 记忆归属：`none`、`assistant` 或 `sender` |
 | `--peer-prefix PREFIX` | assistant `peer_id` / actor peer 值的前缀 |
 | `--update` | 更新 helper 管理的安装 |
 

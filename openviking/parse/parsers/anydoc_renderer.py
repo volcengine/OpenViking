@@ -472,6 +472,10 @@ class _AnyDocMarkdownRenderer:
                     fence = self._backtick_fence(text, 1)
                     pad = " " if text.startswith("`") or text.endswith("`") else ""
                     parts.append(f"{fence}{pad}{text}{pad}{fence}")
+            elif kind == "math":
+                source = self._escape_math_source(block.text or "", context="table_cell")
+                if source:
+                    parts.append(f"${source}$")
             elif kind != "rule":
                 raise RuntimeError(f"Unsupported AnyDoc table-cell block kind: {kind}")
         return "<br>".join(line.strip() for line in "<br>".join(parts).splitlines() if line.strip())

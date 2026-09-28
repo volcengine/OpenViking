@@ -11,7 +11,9 @@ consume-and-burn primitive.
 The token carries the identity bound at issue time (account/user), the caller's actor peer
 scope (``actor_peer_id``), and the business params (``to``/``parent``/``reason``/``parse_mode``) so the server can
 finish ingestion automatically once the file lands — the caller does not re-invoke
-``add_resource``, and the ingest keeps the original peer scope. The ``temp_file_id`` is minted by
+``add_resource``, and the ingest keeps the original peer scope. Tokens minted by the MCP
+``add_skill`` tool carry ``kind="skill"`` plus the skill install params instead, and the upload
+is installed as skills rather than ingested as a resource. The ``temp_file_id`` is minted by
 :class:`openviking.server.temp_upload_store.TempUploadStore` at upload time, so the token
 does not pre-bind a filename and the upload can flow through either the local or shared
 TempUploadStore mode without a side-channel.
@@ -52,6 +54,10 @@ class _TokenInfo:
     tag_mode: str
     parse_mode: str
     expires_at: float
+    kind: str = "resource"
+    skill_target_uri: str = ""
+    skill_names: Optional[list[str]] = None
+    list_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,10 @@ class ConsumedUploadToken:
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
     parse_mode: str = "default"
+    kind: str = "resource"
+    skill_target_uri: str = ""
+    skill_names: Optional[list[str]] = None
+    list_only: bool = False
 
 
 class UploadTokenStore:
@@ -88,8 +98,12 @@ class UploadTokenStore:
         tags: Optional[list[str]] = None,
         tag_mode: str = "replace",
         parse_mode: str = "default",
+        kind: str = "resource",
+        skill_target_uri: str = "",
+        skill_names: Optional[list[str]] = None,
+        list_only: bool = False,
     ) -> Tuple[str, float]:
-        """Mint a fresh token bound to the caller identity and resource ingestion parameters.
+        """Mint a fresh token bound to the caller identity and ingestion parameters.
 
         ``actor_peer_id`` is captured from the minting request's context so server-side
         auto-ingest keeps the caller's peer scope (reason-memory routing) — it is NOT taken
@@ -110,6 +124,10 @@ class UploadTokenStore:
             tag_mode,
             parse_mode,
             expires_at,
+            kind,
+            skill_target_uri,
+            skill_names,
+            list_only,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -138,6 +156,10 @@ class UploadTokenStore:
             tags=info.tags,
             tag_mode=info.tag_mode,
             parse_mode=info.parse_mode,
+            kind=info.kind,
+            skill_target_uri=info.skill_target_uri,
+            skill_names=info.skill_names,
+            list_only=info.list_only,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

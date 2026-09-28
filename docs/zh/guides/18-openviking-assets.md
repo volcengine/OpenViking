@@ -240,12 +240,6 @@ ov add-resource --manifest manifest.yaml --args dry_run:true
 ov add-resource --manifest manifest.yaml
 ```
 
-等待每个资源处理完成：
-
-```bash
-ov add-resource --manifest manifest.yaml --wait --timeout 600
-```
-
 仓库中包含一个完整示例（一份共享 Catalog 加一份按名选择的 Manifest），位于
 [`examples/openviking-assets`](https://github.com/volcengine/OpenViking/tree/main/examples/openviking-assets)。
 

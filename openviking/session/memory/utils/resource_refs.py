@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 
 RESOURCE_REF_SOURCE_CONTENT_WRITE = "content.write"
 RESOURCE_REF_SOURCE_SESSION_COMMIT = "session.commit"
@@ -89,13 +90,12 @@ def content_references_resource(
 
 
 def extract_resource_uris(content: str) -> List[str]:
-    """Extract visible resource URIs from markdown links or bare URI text."""
-    uris: List[str] = []
-    for match in _MARKDOWN_RESOURCE_LINK_RE.finditer(content or ""):
-        uri = _trim_resource_uri(match.group(2).strip())
-        if uri:
-            uris.append(uri)
+    """Extract literal storage URIs, decoding Markdown destinations only."""
+    refs, markdown_spans = _extract_markdown_resource_refs(content, ())
+    uris = [ref["resource_uri"] for ref in refs]
     for match in _RESOURCE_URI_RE.finditer(content or ""):
+        if _overlaps_spans(match.start(), match.end(), markdown_spans):
+            continue
         uri = _trim_resource_uri(match.group(0))
         if uri:
             uris.append(uri)
@@ -174,7 +174,9 @@ def _extract_markdown_resource_refs(
         if _overlaps_spans(match.start(), match.end(), protected_spans):
             continue
         label = match.group(1).strip()
-        resource_uri = _trim_resource_uri(match.group(2).strip())
+        resource_uri = LinkRenderer.normalize_markdown_target(
+            _trim_resource_uri(match.group(2).strip())
+        )
         link_spans.append((match.start(), match.end()))
         refs.append(
             {
@@ -193,7 +195,7 @@ def _unlink_matching_markdown_resource_links(
 ) -> str:
     def replacement(match: re.Match[str]) -> str:
         label = match.group(1).strip()
-        linked_uri = match.group(2)
+        linked_uri = LinkRenderer.normalize_markdown_target(match.group(2))
         if resource_ref_matches(linked_uri, resource_uri, recursive=recursive):
             return label
         return match.group(0)
@@ -208,7 +210,13 @@ def _remove_matching_bare_resource_uris(
     recursive: bool,
 ) -> str:
     text = content or ""
+    # Surviving Markdown destinations are encoded URLs, not bare storage URIs.
+    markdown_spans = [
+        (match.start(), match.end()) for match in _MARKDOWN_RESOURCE_LINK_RE.finditer(text)
+    ]
     for match in reversed(list(_RESOURCE_URI_RE.finditer(text))):
+        if _overlaps_spans(match.start(), match.end(), markdown_spans):
+            continue
         matched_uri = _trim_resource_uri(match.group(0))
         if not resource_ref_matches(matched_uri, resource_uri, recursive=recursive):
             continue
@@ -249,7 +257,7 @@ def _linkify_bare_resource_uris(
         if contains_resource_uri(anchor) or "](" in anchor:
             continue
         refs[-1]["match_text"] = anchor
-        replacement = f"[{anchor}]({resource_uri})"
+        replacement = f"[{anchor}]({LinkRenderer.encode_markdown_target(resource_uri)})"
         updated = updated[:anchor_start] + replacement + updated[end:]
         covered_start = anchor_start
 

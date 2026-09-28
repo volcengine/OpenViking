@@ -72,6 +72,7 @@ _TYPE_STYLE = {
     "project": {"label": "项目", "color": "#ff8f3d", "symbol": "square"},
     "system": {"label": "系统", "color": "#2dc8ff", "symbol": "hexagon"},
     "service": {"label": "服务", "color": "#2dc8ff", "symbol": "hexagon"},
+    "module": {"label": "模块", "color": "#67d5b5", "symbol": "square"},
     "dataset": {"label": "数据集", "color": "#82aaff", "symbol": "square"},
     "standard": {"label": "标准", "color": "#c792ea", "symbol": "diamond"},
     "other": {"label": "其他", "color": "#9aa8c7", "symbol": "circle"},

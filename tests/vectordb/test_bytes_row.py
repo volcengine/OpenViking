@@ -363,11 +363,27 @@ class TestTextFieldType(unittest.TestCase):
         self.assertEqual(self.py_row.deserialize_field(cpp_bytes, "body"), data["body"])
 
     def test_binary_consistency(self):
+        legacy_data = {"label": 42, "body": "升级前的记录"}
+        readers = []
+        for fields, field_type, schema, row in (
+            (self.cpp_fields, engine.FieldType, engine.Schema, engine.BytesRow),
+            (self.py_fields, _PyFieldType, _PySchema, _PyBytesRow),
+        ):
+            legacy_schema = schema([fields[0], {**fields[1], "data_type": field_type.string}])
+            legacy_bytes = row(legacy_schema).serialize(legacy_data)
+            reader = row(schema([fields[0], {**fields[1], "legacy_data_type": field_type.string}]))
+            self.assertEqual(reader.deserialize(legacy_bytes), legacy_data)
+            readers.append(reader)
+
         data = self._make_data()
-        py_bytes = self.py_row.serialize(data)
-        cpp_bytes = self.cpp_row.serialize(data)
-        self.assertEqual(len(py_bytes), len(cpp_bytes), "Binary length mismatch")
-        self.assertEqual(py_bytes, cpp_bytes, "Binary content mismatch")
+        cpp_bytes, py_bytes = [reader.serialize(data) for reader in readers]
+        self.assertEqual(cpp_bytes, py_bytes, "Binary content mismatch")
+        for reader in readers:
+            self.assertEqual(reader.deserialize(cpp_bytes), data)
+            self.assertEqual(reader.deserialize_field(cpp_bytes, "label"), 42)
+            for invalid in (b"\x00\x01", b"\x00\x02\x02"):
+                with self.assertRaisesRegex((ValueError, RuntimeError), "record version"):
+                    reader.deserialize(invalid)
 
     def test_text_declared_via_metadata(self):
         @serializable

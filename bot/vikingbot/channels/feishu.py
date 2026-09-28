@@ -31,7 +31,9 @@ except ImportError:
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import BotMode, FeishuChannelConfig
+from vikingbot.config.schema import BotMode, Config, FeishuChannelConfig
+from vikingbot.utils.image_format import sniff_image_format
+from vikingbot.utils.session_paths import workspace_name
 
 try:
     import lark_oapi as lark
@@ -98,9 +100,17 @@ class FeishuChannel(BaseChannel):
         "EatingFood",
     ]
 
-    def __init__(self, config: FeishuChannelConfig, bus: MessageBus, **kwargs):
+    def __init__(
+        self,
+        config: FeishuChannelConfig,
+        bus: MessageBus,
+        *,
+        bot_config: Config | None = None,
+        **kwargs,
+    ):
         super().__init__(config, bus, **kwargs)
         self.config: FeishuChannelConfig = config
+        self._bot_config = bot_config
         self._client: Any = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
@@ -128,7 +138,7 @@ class FeishuChannel(BaseChannel):
         ):  # Refresh 1 min before expire
             return self._tenant_access_token
 
-        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        url = f"{self.config.domain}/open-apis/auth/v3/tenant_access_token/internal"
         payload = {"app_id": self.config.app_id, "app_secret": self.config.app_secret}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -151,7 +161,7 @@ class FeishuChannel(BaseChannel):
             raise ValueError("Feishu image upload requires a non-empty image")
 
         token = await self._get_tenant_access_token()
-        url = "https://open.feishu.cn/open-apis/im/v1/images"
+        url = f"{self.config.domain}/open-apis/im/v1/images"
 
         headers = {"Authorization": f"Bearer {token}"}
         data = {"image_type": "message"}
@@ -297,6 +307,12 @@ class FeishuChannel(BaseChannel):
 
         return "group"  # 失败默认普通群
 
+    def _is_bot_mention(self, mention) -> bool:
+        bot_id = getattr(self, "bot_open_id", None)
+        if bot_id:
+            return getattr(getattr(mention, "id", None), "open_id", None) == bot_id
+        return bool(self.config.bot_name and getattr(mention, "name", "") == self.config.bot_name)
+
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
@@ -317,6 +333,7 @@ class FeishuChannel(BaseChannel):
             lark.Client.builder()
             .app_id(self.config.app_id)
             .app_secret(self.config.app_secret)
+            .domain(self.config.domain)
             .log_level(lark.LogLevel.INFO)
             .build()
         )
@@ -336,6 +353,7 @@ class FeishuChannel(BaseChannel):
             self.config.app_id,
             self.config.app_secret,
             event_handler=event_handler,
+            domain=self.config.domain,
             log_level=lark.LogLevel.INFO,
         )
 
@@ -519,19 +537,19 @@ class FeishuChannel(BaseChannel):
 
         return elements or [{"tag": "markdown", "content": content}]
 
-    async def send(self, msg: OutboundMessage) -> None:
+    async def send(self, msg: OutboundMessage) -> bool:
         """Send a message through Feishu."""
         # 先调用基类处理通用动作
         if await super().send(msg):
-            return
+            return False
 
         if not self._client:
             logger.warning("Feishu client not initialized")
-            return
+            return False
 
         # Only send normal response messages, skip thinking/tool_call/etc.
         if not msg.is_normal_message:
-            return
+            return False
 
         try:
             # logger.info(f"Sending message {msg}")
@@ -542,14 +560,14 @@ class FeishuChannel(BaseChannel):
                 logger.warning(
                     f"Skipping Feishu message without reply_to metadata: session={msg.session_key}"
                 )
-                return
+                return False
             if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
                 receive_id_type = "open_id"
 
             # Process images and get cleaned content
-            cleaned_content, images = await self._extract_and_upload_images(msg.content)
+            cleaned_content, images = await self._extract_and_upload_images(msg.content, msg)
 
             content_with_mentions = cleaned_content
 
@@ -647,8 +665,11 @@ class FeishuChannel(BaseChannel):
                         f"msg={response.msg}, log_id={response.get_log_id()}"
                     )
 
+            return response.success()
+
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
+            return False
 
     @staticmethod
     def _reply_to_message_id_from_metadata(metadata: dict[str, Any] | None) -> str | None:
@@ -985,10 +1006,9 @@ class FeishuChannel(BaseChannel):
 
             # 5. 检查是否被@
             is_mentioned = False
-            bot_name = self.config.bot_name
-            if hasattr(message, "mentions") and message.mentions and bot_name:
+            if hasattr(message, "mentions") and message.mentions:
                 for mention in message.mentions:
-                    if hasattr(mention, "name") and mention.name == bot_name:
+                    if self._is_bot_mention(mention):
                         is_mentioned = True
                         break
 
@@ -1011,7 +1031,7 @@ class FeishuChannel(BaseChannel):
                     if placeholder not in content:
                         continue
                     mention_name = getattr(mention, "name", "")
-                    if bot_name and mention_name == bot_name:
+                    if self._is_bot_mention(mention):
                         content = content.replace(placeholder, "")
                         continue
                     if hasattr(mention, "id") and mention.id:
@@ -1047,6 +1067,13 @@ class FeishuChannel(BaseChannel):
                         message.root_id = message.message_id
                     final_chat_id = f"{reply_to}#{message.root_id}"
 
+            topic_title = ""
+            if chat_mode == "thread" and message.root_id == message_id and msg_type == "post":
+                try:
+                    topic_title = json.loads(message.content).get("title", "")
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
             # 10. 转发到消息总线
             logger.info(f"Received message from Feishu: {content}")
             await self._handle_message(
@@ -1063,6 +1090,7 @@ class FeishuChannel(BaseChannel):
                     "msg_type": msg_type,
                     "root_id": message.root_id,
                     "chat_mode": chat_mode,
+                    "topic_title": topic_title if isinstance(topic_title, str) else "",
                     "sender_id": sender_id,
                 },
             )
@@ -1070,41 +1098,88 @@ class FeishuChannel(BaseChannel):
         except Exception:
             logger.exception("Error processing Feishu message")
 
-    async def _extract_and_upload_images(self, content: str) -> tuple[str, list[dict]]:
-        """Extract images from markdown content, upload to Feishu, and return cleaned content."""
-        images = []
-        cleaned_content = content
+    async def _download_viking_image(self, uri: str, msg: OutboundMessage | None) -> bytes:
+        """Read an image with the same sender scope used by OpenViking tools."""
+        from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+        from vikingbot.openviking_mount.ov_server import VikingClient
 
-        # Pattern 1: ![alt](send://...)
-        markdown_pattern = r"!\[([^\]]*)\]\((send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)"
-        for m in re.finditer(markdown_pattern, content):
-            img_url = m.group(2)
-            try:
-                is_content, result = await self._parse_data_uri(img_url)
+        sender_id = msg.metadata.get("sender_id") if msg else None
+        if not isinstance(sender_id, str) or not sender_id.strip():
+            raise ValueError("OpenViking image delivery requires the original sender identity")
 
-                if not is_content and isinstance(result, bytes):
+        config = self._bot_config or load_config()
+        client = await VikingClient.create(
+            workspace_name(msg.session_key, config.sandbox.mode, portable=False),
+            actor_peer_id=sender_id,
+            config=config,
+        )
+        try:
+            stat = await client.stat(uri)
+            size = stat.get("size")
+            if (
+                isinstance(size, bool)
+                or not isinstance(size, int)
+                or not 0 < size <= MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+            ):
+                raise ValueError(
+                    "OpenViking image size is unavailable or exceeds the delivery limit"
+                )
+            data = await client.download_bytes(uri)
+            if len(data) > size or sniff_image_format(data) is None:
+                raise ValueError("OpenViking image changed size or has an unsupported format")
+            return data
+        finally:
+            await client.close()
+
+    async def _extract_and_upload_images(
+        self, content: str, msg: OutboundMessage | None = None
+    ) -> tuple[str, list[dict]]:
+        """Upload explicit images, preserving URI citations and Markdown examples."""
+        # Viking URIs also appear in listings and citations: only image Markdown
+        # requests delivery. Keep bare send:// support for the image generation tool.
+        # Consume code spans/blocks first so syntax examples never send an image.
+        path = r"(?:[^\s()<>]|\([^()\n]*\))"
+        uri = rf"send://{path}+?\.(?:png|jpe?g|gif|bmp|webp)(?:[?#][^\s<>)]*)?"
+        image_uri = rf"(?:<(?:send|viking)://[^<>\n]+>|(?:send|viking)://{path}+?)"
+        pattern = re.compile(
+            r"(?P<literal>^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[^\n]*(?:\n|$)"
+            r"[\s\S]*?(?:^[ \t]{0,3}(?P=fence)[`~]*[ \t]*(?:\n|$)|\Z)"
+            r"|(?P<ticks>`+)(?!`)[\s\S]*?(?<!`)(?P=ticks)(?!`)"
+            r"|\\.)"
+            rf"|!\[[^\]]*\]\(\s*(?P<image>{image_uri})"
+            r"(?:\s+[\"'][^\n]*?[\"'])?\s*\)"
+            rf"|(?P<bare>{uri})(?=$|[\s<>`\[\](){{}},;.!?。，；！：])",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        images: list[dict] = []
+        replacements: dict[str, str] = {}
+        parts: list[str] = []
+        last_end = 0
+        for match in pattern.finditer(content):
+            if match.group("literal") is not None:
+                continue
+            img_url = match.group("image") or match.group("bare")
+            img_url = img_url.removeprefix("<").removesuffix(">")
+            scheme, location = img_url.split("://", 1)
+            img_url = f"{scheme.lower()}://{location}"
+            if img_url not in replacements:
+                try:
+                    if img_url.lower().startswith("viking://"):
+                        result = await asyncio.wait_for(
+                            self._download_viking_image(img_url, msg), timeout=60.0
+                        )
+                    else:
+                        is_content, result = await self._parse_data_uri(img_url)
+                        if is_content or not isinstance(result, bytes):
+                            raise ValueError("Image reference did not resolve to image bytes")
                     image_key = await self._upload_image_to_feishu(result)
                     images.append({"image_key": image_key})
-            except Exception as e:
-                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
-
-        # Remove markdown image syntax
-        cleaned_content = re.sub(markdown_pattern, "", cleaned_content)
-
-        # Pattern 2: send://... (without alt text)
-        send_pattern = r"(send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)?"
-        for m in re.finditer(send_pattern, content):
-            img_url = m.group(1) or ""
-            try:
-                is_content, result = await self._parse_data_uri(img_url)
-
-                if not is_content and isinstance(result, bytes):
-                    image_key = await self._upload_image_to_feishu(result)
-                    images.append({"image_key": image_key})
-            except Exception as e:
-                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
-
-        # Remove standalone send:// URLs
-        cleaned_content = re.sub(send_pattern, "", cleaned_content)
-
-        return cleaned_content.strip(), images
+                    replacements[img_url] = ""
+                except Exception as exc:
+                    logger.warning(f"Failed to send image {img_url[:100]}: {exc}")
+                    replacements[img_url] = "[图片发送失败]"
+            parts.append(content[last_end : match.start()])
+            parts.append(replacements[img_url])
+            last_end = match.end()
+        parts.append(content[last_end:])
+        return "".join(parts).strip(), images

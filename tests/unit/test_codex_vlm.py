@@ -140,7 +140,7 @@ def test_codex_vision_completion_converts_images(mock_resolve, mock_openai_class
     )
     mock_openai_class.return_value = mock_real_client
 
-    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.3-codex"})
+    vlm = CodexVLM({"provider": "openai-codex", "model": "gpt-5.6-terra"})
     result = vlm.get_vision_completion("describe", [b"\x89PNG\r\n\x1a\n0000"])
 
     assert result == "image result"

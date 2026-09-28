@@ -1,13 +1,13 @@
 ## Step 1: Configure MCP
 
 1. Open WorkBuddy, select **Experts · Skills · Connectors** in the sidebar, and open the **Connectors** tab.
-![Open WorkBuddy Connectors](https://docs.openviking.net/agents/image/workbuddy/01-open-connectors.png)
+![Open WorkBuddy Connectors](https://docs.openviking.net/agents/image/workbuddy/01-open-connectors.webp)
 
 2. Select **Custom Connector** in the upper-right corner to open MCP service management.
-![Open Custom Connector](https://docs.openviking.net/agents/image/workbuddy/02-custom-connector.png)
+![Open Custom Connector](https://docs.openviking.net/agents/image/workbuddy/02-custom-connector.webp)
 
 3. Select **Configure MCP** to open the MCP configuration editor.
-![Open the MCP configuration editor](https://docs.openviking.net/agents/image/workbuddy/03-configure-mcp.png)
+![Open the MCP configuration editor](https://docs.openviking.net/agents/image/workbuddy/03-configure-mcp.webp)
 
 4. Add this configuration:
 
@@ -25,16 +25,16 @@
    ```
 
 5. Select **Save** in the upper-right corner. The configuration is saved when the green success message appears.
-![Save the MCP configuration](https://docs.openviking.net/agents/image/workbuddy/04-save-config.png)
+![Save the MCP configuration](https://docs.openviking.net/agents/image/workbuddy/04-save-config.webp)
 
 6. Return to the MCP list. If WorkBuddy asks you to trust this MCP service on first connection, select **Trust**.
-![Trust the OpenViking MCP service](https://docs.openviking.net/agents/image/workbuddy/05-trust-server.png)
+![Trust the OpenViking MCP service](https://docs.openviking.net/agents/image/workbuddy/05-trust-server.webp)
 
 ## Step 2: Verify
 
 Return to the MCP list. Confirm that `OpenViking` appears under “My MCP,” is enabled, and shows enabled tools when expanded.
 
-![Verify OpenViking MCP tools](https://docs.openviking.net/agents/image/workbuddy/06-verify-tools.png)
+![Verify OpenViking MCP tools](https://docs.openviking.net/agents/image/workbuddy/06-verify-tools.webp)
 
 ## Troubleshooting
 

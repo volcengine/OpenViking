@@ -17,8 +17,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from PIL import Image
 
+from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
+from openviking.parse.parsers.media.audio import AudioParser
 from openviking.parse.parsers.media.image import ImageParser
 from openviking.parse.parsers.media.naming import resolve_media_names
+from openviking.parse.parsers.media.video import VideoParser
 from openviking_cli.utils.config.parser_config import ImageConfig
 
 
@@ -143,3 +146,88 @@ async def test_image_parser_falls_back_to_temp_name(tmp_path):
         result = await parser.parse(str(upload))
 
     assert result.root.meta["original_filename"] == "upload_0123456789abcdef.png"
+
+
+@pytest.mark.asyncio
+async def test_image_parser_writes_local_artifact(tmp_path):
+    upload = tmp_path / "upload.png"
+    content = _png_bytes()
+    upload.write_bytes(content)
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+
+    result = await ImageParser(config=ImageConfig()).parse(
+        upload, resource_name="vacation", parse_output_store=store
+    )
+
+    assert result.artifact_ref is not None
+    assert result.artifact_ref.backend == "local"
+    rel = "vacation_png/vacation.png"
+    assert Path(result.artifact_ref.root, rel).read_bytes() == content
+    assert set(await read_artifact_manifest(store, result.artifact_ref)) == {rel}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parser", "filename", "content", "resource_rel"),
+    [
+        (AudioParser(), "clip.mp3", b"ID3audio", "clip_mp3"),
+        (VideoParser(), "clip.mp4", b"\x00\x00\x00\x18ftypvideo", "clip_mp4"),
+    ],
+)
+async def test_audio_and_video_write_local_artifacts(
+    tmp_path, parser, filename, content, resource_rel
+):
+    source = tmp_path / filename
+    source.write_bytes(content)
+    store = LocalParseOutputStore(str(tmp_path / f"artifacts-{resource_rel}"))
+
+    result = await parser.parse(source, parse_output_store=store)
+
+    assert result.artifact_ref is not None
+    assert result.artifact_ref.resource_rel == resource_rel
+    rel = f"{resource_rel}/{filename}"
+    assert Path(result.artifact_ref.root, rel).read_bytes() == content
+    assert set(await read_artifact_manifest(store, result.artifact_ref)) == {rel}
+
+
+@pytest.mark.asyncio
+async def test_image_parser_cleans_local_artifact_when_write_fails(tmp_path):
+    class FailingStore(LocalParseOutputStore):
+        async def write_bytes(self, ref, rel_path, content):
+            raise OSError("disk full")
+
+    upload = tmp_path / "upload.png"
+    upload.write_bytes(_png_bytes())
+    artifact_root = tmp_path / "artifacts"
+    store = FailingStore(str(artifact_root))
+
+    with pytest.raises(OSError, match="disk full"):
+        await ImageParser(config=ImageConfig()).parse(upload, parse_output_store=store)
+
+    assert list(artifact_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parser", "filename", "content"),
+    [
+        (AudioParser(), "clip.mp3", b"ID3audio"),
+        (VideoParser(), "clip.mp4", b"\x00\x00\x00\x18ftypvideo"),
+    ],
+)
+async def test_audio_and_video_clean_local_artifact_when_write_fails(
+    tmp_path, parser, filename, content
+):
+    class FailingStore(LocalParseOutputStore):
+        async def write_bytes(self, ref, rel_path, content):
+            raise OSError("disk full")
+
+    source = tmp_path / filename
+    source.write_bytes(content)
+    artifact_root = tmp_path / f"artifacts-{filename}"
+    store = FailingStore(str(artifact_root))
+
+    with pytest.raises(OSError, match="disk full"):
+        await parser.parse(source, parse_output_store=store)
+
+    assert list(artifact_root.iterdir()) == []

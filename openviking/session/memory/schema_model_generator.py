@@ -22,7 +22,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.memory_isolation_handler import RoleScope
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
-from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking.session.memory.utils.description_template import render_description_template
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -91,15 +91,7 @@ class SchemaModelGenerator:
         self._operations_model: Optional[Type[BaseModel]] = None
 
     def _render_description(self, description: str) -> str:
-        if not description:
-            return description
-        if "{{" not in description and "{%" not in description and "{#" not in description:
-            return description
-        return TemplateUtils.render(
-            description,
-            self._template_context,
-            strip=False,
-        )
+        return render_description_template(description, self._template_context, strip=False)
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
@@ -167,17 +159,22 @@ class SchemaModelGenerator:
             ),
         )
 
-        immutable_field_names = []
+        identity_field_names = set(memory_type.identity_fields(include_peer_id=False))
+        required_on_create = [
+            field.name
+            for field in memory_type.fields
+            if field.merge_op == MergeOp.IMMUTABLE or field.name in identity_field_names
+        ]
 
         # Add business fields from schema
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
             if field.merge_op == MergeOp.IMMUTABLE:
-                # Immutable fields: only base type, required
-                immutable_field_names.append(field.name)
+                # Existing updates may omit immutable fields. New objects are
+                # checked by the conditional validator below.
                 field_definitions[field.name] = (
-                    base_type,
-                    Field(..., description=self._render_description(field.description)),
+                    Optional[base_type],
+                    Field(None, description=self._render_description(field.description)),
                 )
             else:
                 # Mutable fields: Union[base_type, patch_type], optional
@@ -191,10 +188,40 @@ class SchemaModelGenerator:
                     Optional[union_type],
                     Field(None, description=desc),
                 )
+
         # Create the model
+        @model_validator(mode="before")
+        def require_new_object_identity(cls, data):
+            del cls
+            if not isinstance(data, dict):
+                return data
+            try:
+                is_new = int(data.get("page_id")) >= 100
+            except (TypeError, ValueError):
+                return data
+            missing = [name for name in required_on_create if data.get(name) is None]
+            if is_new and missing:
+                raise ValueError("new memory item requires fields: " + ", ".join(missing))
+            return data
+
+        json_schema_extra = None
+        if required_on_create:
+            json_schema_extra = {
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": {"page_id": {"minimum": 100}},
+                            "required": ["page_id"],
+                        },
+                        "then": {"required": required_on_create},
+                    }
+                ]
+            }
+
         model = create_model(
             model_name,
-            __config__=ConfigDict(extra="ignore"),
+            __config__=ConfigDict(extra="ignore", json_schema_extra=json_schema_extra),
+            __validators__={"require_new_object_identity": require_new_object_identity},
             **field_definitions,
         )
 
@@ -218,7 +245,9 @@ class SchemaModelGenerator:
             models[memory_type.memory_type] = self.create_flat_data_model(memory_type)
         return models
 
-    def create_structured_operations_model(self, role_scope: Optional[RoleScope] = None) -> Type[BaseModel]:
+    def create_structured_operations_model(
+        self, role_scope: Optional[RoleScope] = None
+    ) -> Type[BaseModel]:
         """
         Create a structured MemoryOperations model with type-safe write operations.
 
@@ -361,6 +390,7 @@ class SchemaModelGenerator:
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
 
+
 class SchemaPromptGenerator:
     """
     Prompt generator that incorporates schema information into LLM prompts.
@@ -380,9 +410,7 @@ class SchemaPromptGenerator:
         self._template_context = dict(template_context or {})
 
     def _render_description(self, description: str) -> str:
-        if not description:
-            return description
-        return TemplateUtils.render(description, self._template_context)
+        return render_description_template(description, self._template_context)
 
     def generate_type_descriptions(self) -> str:
         """
@@ -395,7 +423,7 @@ class SchemaPromptGenerator:
 
         for mt in self.schemas:
             lines.append(f"\n### {mt.memory_type}")
-            lines.append(f"{self._render_description(mt.description)}")
+            lines.append(self._render_description(mt.description))
 
             # Add URI format information
             if mt.directory or mt.filename_template:
@@ -418,7 +446,8 @@ class SchemaPromptGenerator:
                 lines.append("\n**Fields:**")
                 for field in mt.fields:
                     lines.append(
-                        f"- `{field.name}` ({field.field_type.value}): {self._render_description(field.description)}"
+                        f"- `{field.name}` ({field.field_type.value}): "
+                        f"{self._render_description(field.description)}"
                     )
 
         return "\n".join(lines)

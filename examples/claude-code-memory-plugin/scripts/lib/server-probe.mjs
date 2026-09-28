@@ -14,6 +14,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildOvHeaders } from "../shared/ov-http.mjs";
 import { STATE_DIR } from "./state.mjs";
 
 const CACHE_FILE = join(STATE_DIR, "server-probe.json");
@@ -62,11 +63,9 @@ export async function probeServer(cfg, { ttlMs = DEFAULT_TTL_MS } = {}) {
     if (cached.base_url === cfg.baseUrl) return cached;
   }
 
-  const headers = { "Content-Type": "application/json" };
-  if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
-  if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
-  if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
-  if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
+  // No actor peer: /health is not scoped to one, and the statusline probe is
+  // shared across every session on this machine.
+  const headers = buildOvHeaders(cfg);
 
   const t0 = Date.now();
   let healthy = false;

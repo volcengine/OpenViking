@@ -126,13 +126,7 @@ L0/L1 are directory sidecars, not per-file sidecars. Parent-summary generation c
 
 ### Freshness, Sampling, and Parent Refresh
 
-Each generation records direct-child `total_entries`, `sampled_entries`, and `unsampled_entries`. When the direct-child count exceeds `semantic.overview_sample_limit` (32 by default), OpenViking uses deterministic stable sampling. `pending_child_changes` increases when a known child change is not yet reflected in the parent body and resets to 0 after a successful refresh.
-
-Currently, each successful resource/skill semantic task schedules the next parent refresh and marks that parent pending before enqueue, continuing to the namespace-root boundary.
-
-> **TODO: control bubbling frequency with freshness**
->
-> Bubbling after every successful task can create repeated refreshes and upward write amplification in hot, deeply nested directories. A future scheduler should use `pending_child_changes`, sampling coverage, direct-child change volume, and recent refresh state to coalesce, threshold, or time-window parent refreshes while preserving eventual consistency.
+Each generation records direct-child coverage and uses stable sampling above `semantic.overview_sample_limit` (default 32). Resource/skill parent refreshes depend on child L0 body changes and freshness thresholds; unchanged L0 bodies do not propagate. `pending_child_changes` counts change events awaiting refresh, including repeated changes to the same child. See [Context Layers](03-context-layers.md#freshness-and-stable-sampling) for thresholds, manual refresh behavior, and deferred updates.
 
 ### Processing Limits
 

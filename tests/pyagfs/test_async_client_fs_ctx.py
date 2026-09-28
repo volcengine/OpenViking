@@ -14,6 +14,7 @@ class _RecordingClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict[str, str] | None]] = []
         self.list_options: dict[str, Any] = {}
+        self.tree_options: dict[str, Any] = {}
 
     def write(self, path: str, data: bytes, *, ctx: dict[str, str] | None = None) -> str:
         """Record write ctx and return a stable fake backend id."""
@@ -35,6 +36,18 @@ class _RecordingClient:
         """Record listing options and return an empty result."""
         self.calls.append(("ls", path, ctx))
         self.list_options = options
+        return []
+
+    def tree_directory(
+        self,
+        path: str,
+        *,
+        ctx: dict[str, str] | None = None,
+        **options: Any,
+    ) -> list[dict[str, Any]]:
+        """Record tree options and return an empty result."""
+        self.calls.append(("tree_directory", path, ctx))
+        self.tree_options = options
         return []
 
 
@@ -72,6 +85,19 @@ async def test_async_client_uses_system_ctx_for_non_local_agfs_path() -> None:
     await agfs.read("/queue/semantic/dequeue")
 
     assert client.calls == [("read", "/queue/semantic/dequeue", {"account_id": "_system"})]
+
+
+@pytest.mark.asyncio
+async def test_async_client_passes_directories_only_to_tree_directory() -> None:
+    client = _RecordingClient()
+    agfs = AsyncAGFSClient(client)
+
+    await agfs.tree_directory("/local/acct-1/data", directories_only=True)
+
+    assert client.calls == [
+        ("tree_directory", "/local/acct-1/data", {"account_id": "acct-1"})
+    ]
+    assert client.tree_options["directories_only"] is True
 
 
 @pytest.mark.asyncio

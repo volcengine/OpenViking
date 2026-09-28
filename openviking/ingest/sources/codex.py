@@ -13,12 +13,35 @@ Records: ``{timestamp, type, payload}``. Conversation turns are
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openviking.ingest.models import NormalizedMessage, SessionRef
 from openviking.ingest.registry import register_source
 from openviking.ingest.sources.base import JsonlLogSource
+
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _session_id_for_file(meta_id: Optional[str], path: Path) -> str:
+    """Session id for a single rollout file.
+
+    Codex keeps ``session_meta.id`` unchanged when a session is forked/continued, but
+    writes the continuation to a *new* file whose name carries an extra UUID
+    (``rollout-<ts>-<base-uuid>_<fork-uuid>.jsonl``). Using the shared id as the cursor
+    key makes two files fight over one byte offset, and because the cursor also stores
+    the inode, every poll then looks like log rotation and re-reads the file from the
+    top. Append the extra UUID so each file owns its own cursor.
+    """
+    base = meta_id or path.stem
+    uuids = _UUID_RE.findall(path.stem)
+    extras = [u for u in uuids if u != base]
+    if len(uuids) >= 2 and extras:
+        return f"{base}_{extras[-1]}"
+    return base
 
 
 def _join_content(content: Any) -> str:
@@ -44,7 +67,7 @@ class CodexSource(JsonlLogSource):
         meta = self._peek_session_meta(path)
         return SessionRef(
             harness=self.name,
-            native_session_id=meta.get("id") or path.stem,
+            native_session_id=_session_id_for_file(meta.get("id"), path),
             locator=str(path),
             started_at=meta.get("timestamp"),
             meta={"model": meta.get("model_provider"), "cwd": meta.get("cwd")},
