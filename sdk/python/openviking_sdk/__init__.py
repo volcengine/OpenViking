@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
 from .actor_peer import get_actor_peer_id, use_actor_peer
 from .client import AsyncHTTPClient, SyncHTTPClient
 from .errors import (

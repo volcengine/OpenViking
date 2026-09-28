@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
 import pytest
 from openviking_sdk import AsyncHTTPClient
 from openviking_sdk.errors import (

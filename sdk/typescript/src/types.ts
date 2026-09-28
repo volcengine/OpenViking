@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 /** Arbitrary JSON object returned by APIs without a dedicated result type. */
 export type JsonObject = Record<string, unknown>;
 /** One target URI or multiple target scopes. */
