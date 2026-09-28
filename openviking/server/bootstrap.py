@@ -385,12 +385,13 @@ def _wait_for_bot_ready(process, status_path: Path) -> None:
             status = json.loads(status_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, ValueError):
             status = {}
-        if status.get("pid") == process.pid:
-            timeout = max(timeout, int(status.get("timeout", timeout)))
-            if status.get("status") == "failed":
-                raise RuntimeError(status.get("error") or "VikingBot initialization failed")
-            if status.get("status") == "ready":
-                return
+        # The per-launch status path identifies this gateway. Windows launchers
+        # can have a different PID from the Python process reporting readiness.
+        timeout = max(timeout, int(status.get("timeout", timeout)))
+        if status.get("status") == "failed":
+            raise RuntimeError(status.get("error") or "VikingBot initialization failed")
+        if status.get("status") == "ready":
+            return
         time.sleep(0.1)
     raise TimeoutError("VikingBot readiness timed out; check Docker/image pulls and the Bot log.")
 
