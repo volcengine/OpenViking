@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 from typing import Any, Mapping
 
 from openviking.concurrency import bounded_map
+from openviking.storage.abstract_overview import parse_overview_file_summaries
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.resource_diff import ContentState, IndexState
 from openviking.storage.resource_rnfv import (
@@ -580,6 +581,18 @@ def _field_patch(request: RequestIntent, record: VectorRecordSnapshot | None) ->
             values[intent.field] = intent.value
             modes[intent.field] = intent.mode
     return FieldPatch(values, modes) if values else None
+
+
+def _rfv_file_summary(
+    snapshot: Any, relative_path: str, record: VectorRecordSnapshot | None
+) -> str:
+    parent_uri = _uri(snapshot.request.target_uri, _parent(relative_path))
+    overview = snapshot.source_contents.get((parent_uri, 1))
+    if isinstance(overview, (str, bytes)):
+        summary = parse_overview_file_summaries(overview).get(relative_path.rsplit("/", 1)[-1])
+        if summary:
+            return summary
+    return str(record.fields.get("abstract") or "") if record else ""
 
 
 def _semantic_closure(
@@ -1183,7 +1196,7 @@ def build_rfv_context_update_plan(
                         ),
                         field_patch=field_patch,
                         md5=entry.level_md5s.get(level),
-                        summary=str(record.fields.get("abstract") or "") if record else "",
+                        summary=_rfv_file_summary(snapshot, path, record),
                     )
                 )
             elif field_patch is not None and record is not None:

@@ -12,7 +12,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Sequence, TypeVar
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit
 
 import yaml
 
@@ -395,6 +395,62 @@ def body_for_preview(raw: str | bytes) -> str:
     # Rendering adds one canonical terminal newline to the stored document.
     # It is a serialization detail, not part of semantic accessor output.
     return document.body.rstrip("\r\n")
+
+
+def parse_overview_file_summaries(overview_content: str | bytes) -> Dict[str, str]:
+    """Extract direct-file summaries from an overview body."""
+    overview = body_for_preview(overview_content)
+    if not overview.strip():
+        return {}
+
+    summaries: Dict[str, str] = {}
+    current_file = ""
+    current_summary_lines: list[str] = []
+
+    def save_current() -> None:
+        if current_file and current_summary_lines:
+            summaries[current_file] = " ".join(current_summary_lines).strip()
+
+    for line in overview.split("\n"):
+        header_match = re.match(r"^###\s+(.+?)\s*$", line)
+        if header_match:
+            save_current()
+            heading = header_match.group(1).strip()
+            file_name = _overview_heading_file_name(heading)
+            parts = file_name.split()
+            current_file = parts[0] if len(parts) >= 2 and parts[0] == parts[1] else file_name
+            current_summary_lines = []
+            continue
+
+        numbered_match = re.match(r"^\[(\d+)\]\s+(.+?):\s*(.+)$", line)
+        if numbered_match:
+            save_current()
+            current_file = numbered_match.group(2).strip()
+            current_summary_lines = [numbered_match.group(3).strip()]
+            continue
+
+        if current_file:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                current_summary_lines.append(stripped)
+
+    save_current()
+    return summaries
+
+
+def _overview_heading_file_name(heading: str) -> str:
+    """Return the direct entry name represented by an overview H3 heading."""
+    if heading.startswith("[") and heading.endswith(")"):
+        destination_start = heading.rfind("](")
+        if destination_start > 0:
+            target = heading[destination_start + 2 : -1].strip()
+            if target.startswith("<") and target.endswith(">"):
+                target = target[1:-1].strip()
+            if target.startswith("viking://"):
+                path = unquote(urlsplit(target).path).rstrip("/")
+                if path:
+                    return path.rsplit("/", 1)[-1]
+    return heading
 
 
 def body_for_embedding(

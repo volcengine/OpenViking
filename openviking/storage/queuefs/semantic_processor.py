@@ -8,7 +8,6 @@ import threading
 import time
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
-from urllib.parse import unquote, urlsplit
 
 from openviking.core.namespace import classify_uri
 from openviking.observability.context import (
@@ -45,6 +44,7 @@ from openviking.storage.abstract_overview import (
     deterministic_sample,
     freshness_metadata,
     markdown_safe_viking_uri,
+    parse_overview_file_summaries,
     plan_abstract_overview_refresh,
     write_abstract_overview,
 )
@@ -1479,73 +1479,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
     @classmethod
     def _parse_overview_md(cls, overview_content: str) -> Dict[str, str]:
-        """Parse overview.md and extract file summaries.
-
-        Args:
-            overview_content: Content of the overview.md file
-
-        Returns:
-            Dictionary mapping file names to their summaries
-        """
-        import re
-
-        summaries: Dict[str, str] = {}
-
-        overview_content = body_for_preview(overview_content)
-        if not overview_content or not overview_content.strip():
-            return summaries
-
-        lines = overview_content.split("\n")
-        current_file = None
-        current_summary_lines: List[str] = []
-
-        for line in lines:
-            header_match = re.match(r"^###\s+(.+?)\s*$", line)
-            if header_match:
-                if current_file and current_summary_lines:
-                    summaries[current_file] = " ".join(current_summary_lines).strip()
-
-                file_name = cls._overview_heading_cache_key(header_match.group(1).strip())
-                parts = file_name.split()
-                if len(parts) >= 2 and parts[0] == parts[1]:
-                    file_name = parts[0]
-
-                current_file = file_name
-                current_summary_lines = []
-                continue
-
-            numbered_match = re.match(r"^\[(\d+)\]\s+(.+?):\s*(.+)$", line)
-            if numbered_match:
-                if current_file and current_summary_lines:
-                    summaries[current_file] = " ".join(current_summary_lines).strip()
-                current_file = numbered_match.group(2).strip()
-                current_summary_lines = [numbered_match.group(3).strip()]
-                continue
-
-            if current_file:
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    current_summary_lines.append(stripped)
-
-        if current_file and current_summary_lines:
-            summaries[current_file] = " ".join(current_summary_lines).strip()
-
-        return summaries
-
-    @staticmethod
-    def _overview_heading_cache_key(heading: str) -> str:
-        """Return the entry name represented by a plain or linked H3 heading."""
-        if heading.startswith("[") and heading.endswith(")"):
-            destination_start = heading.rfind("](")
-            if destination_start > 0:
-                target = heading[destination_start + 2 : -1].strip()
-                if target.startswith("<") and target.endswith(">"):
-                    target = target[1:-1].strip()
-                if target.startswith("viking://"):
-                    path = unquote(urlsplit(target).path).rstrip("/")
-                    if path:
-                        return path.rsplit("/", 1)[-1]
-        return heading
+        """Parse overview.md and extract direct-file summaries."""
+        return parse_overview_file_summaries(overview_content)
 
     async def _generate_overview(
         self,
