@@ -270,6 +270,18 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 
 ## 配置部分
 
+### model_retry
+
+离线任务的非流式 VLM text/vision 和 Embedding 共用一份额外尝试额度：
+
+```json
+{ "model_retry": { "max_retries": 3 } }
+```
+
+`model_retry.max_retries` 是非负整数，默认 `3`；设为 `0` 禁止额外尝试。每个正常生成或向量计算的首次尝试不扣额度，失败后的重试或切换凭证扣 1；成功、切换模型和进入下游队列不重置。预算在任务首次使用时固定，在线模型调用最多一次。
+
+该配置是进程级策略。共享额度保存在当前进程的任务索引中，不跨 Pod 或重启持久化。旧的 `embedding.max_retries` / `vlm.max_retries` 保留兼容，但不再控制已迁移的非流式模型入口；原来设为 `0` 的部署应同步设置 `model_retry.max_retries=0`。媒体、流式和自定义 adapter 仍需按各自路径核对，详见[设计与覆盖边界](../../design/model-retry-governance-zh.md)。
+
 ### embedding
 
 用于向量搜索的 Embedding 模型配置，支持 dense、sparse 和 hybrid 三种模式。
@@ -300,7 +312,7 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`；必须 `>= 1`） |
-| `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
+| `max_retries` | int | 旧路径兼容参数；已迁移的模型入口使用任务级 `model_retry.max_retries` |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 已弃用，作为 `summary_first` 的兼容别名；旧配置仍可加载，会记录警告并归一为 `summary_first`。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
 | `provider` | str | `"openai"`、`"azure"`、`"volcengine"`、`"vikingdb"`、`"jina"`、`"ollama"`、`"gemini"`、`"voyage"`、`"dashscope"`、`"minimax"`、`"cohere"`、`"litellm"` 或 `"local"` |
@@ -312,11 +324,11 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 | `encoding_format` | str | （仅 OpenAI / Azure）Embedding 值的传输格式：`"float"` 或 `"base64"`。留空时使用 OpenAI Python SDK 默认值；当上游网关无法正确处理 base64 embedding payload 时，可设置为 `"float"`。 |
 | `extra_body` | object | （仅 OpenAI / Azure）合并进每次 embedding 请求体的额外 JSON 字段。适用于接受厂商专有字段的 OpenAI 兼容网关，例如 OpenRouter 的 provider 路由 `{"provider": {"sort": "latency"}}`。发生冲突时，显式设置的 `query_param`/`document_param` 键优先。 |
 
-`embedding.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；`400`、`401`、`403`、`AccountOverdue` 这类永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
+离线瞬时错误（如短期 `429`、可恢复 `5xx`、超时和连接错误）使用任务剩余额度；认证或配额错误只在有其他候选凭证时切换，同样扣额度。参数、内容安全和未知错误立即失败。指数退避带随机抖动，上限 30 秒，并尊重该上限内的 Retry-After；超过上限则终止。
 
 #### Embedding 熔断（Circuit Breaker）
 
-当 embedding provider 出现连续瞬时错误（如 `429`、`5xx`）时，OpenViking 会触发熔断，在一段时间内暂停调用 provider，并将 embedding 任务重新入队。超过基础 `reset_timeout` 后进入 HALF_OPEN，允许一次探测请求；如果探测失败，则下一次 `reset_timeout` 翻倍（上限为 `max_reset_timeout`）。
+当 embedding provider 出现连续瞬时错误（如 `429`、`5xx`）时，OpenViking 会触发进程内熔断，消费者在当前 delivery 内有限等待准入，取消可退出；等待结束仍被拒绝则失败。模型失败不会通过重新入队获得新额度。超过基础 `reset_timeout` 后进入 HALF_OPEN，允许一次探测请求；如果探测失败，则下一次 `reset_timeout` 翻倍（上限为 `max_reset_timeout`）。
 
 ```json
 {
@@ -693,7 +705,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `api_base` | str | API 端点（可选） |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
-| `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
+| `max_retries` | int | 旧路径兼容参数；已迁移的非流式模型入口使用任务级 `model_retry.max_retries` |
 | `credentials` | array | 有序 VLM 凭据/模型列表，索引 0 优先级最高。每项可单独覆盖 `provider`、`model`、`api_key`、`api_base`、`api_version`、`extra_headers`、`extra_request_body`、`reasoning_effort` 和 `keepalive_expiry` |
 | `failback_timeout_seconds` | float | 切换到低优先级 credential 后，尝试逐级切回的时间阈值（默认：`600`） |
 | `failback_request_count` | int | 低优先级 credential 成功处理多少次请求后尝试逐级切回（默认：`50`） |
@@ -710,7 +722,7 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `media.file_poll_interval` | float | Provider 侧媒体预处理轮询间隔秒数（默认：`3`） |
 | `media.video_fps` | float | Provider 支持时使用的视频采样帧率，范围 `0.2` 到 `5.0`（默认：`1.0`） |
 
-`vlm.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；认证、鉴权、欠费等永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
+非流式 text/vision 使用上面的 `model_retry` 策略，与同一个离线任务的 Embedding 共用额度；在线调用不自动重试。媒体和流式路径尚未全部迁移到此预算。
 
 **可用模型**
 
@@ -2107,7 +2119,7 @@ Error: VLM request timeout
 
 - 检查网络连接
 - 增加配置中的超时时间
-- 对偶发超时，适当增大 `vlm.max_retries`
+- 对离线任务的偶发超时，评估后适当增大共享的 `model_retry.max_retries`
 - 尝试更小的模型
 - 如为批量导入场景，结合降低 `vlm.max_concurrent`
 
@@ -2119,7 +2131,7 @@ Error: Rate limit exceeded
 
 火山引擎有速率限制。考虑批量处理时添加延迟或升级套餐。
 - 优先降低 `embedding.max_concurrent` / `vlm.max_concurrent`
-- 对偶发 `429` 可保留少量 `max_retries`；若希望快速失败，可将其设为 `0`
+- 对离线偶发 `429` 可保留少量 `model_retry.max_retries`；若希望快速失败，可将其设为 `0`
 
 ## 相关文档
 

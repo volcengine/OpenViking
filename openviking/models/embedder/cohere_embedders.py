@@ -134,9 +134,17 @@ class CohereDenseEmbedder(DenseEmbedderBase):
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         input_type = "search_query" if is_query else "search_document"
-        try:
+
+        def _call() -> EmbedResult:
             vectors = self._call_api([text], input_type)
-            result = EmbedResult(dense_vector=self._normalize_vector(vectors[0]))
+            return EmbedResult(dense_vector=self._normalize_vector(vectors[0]))
+
+        try:
+            result = self._run_with_retry(
+                _call,
+                logger=logger,
+                operation_name="Cohere embedding",
+            )
             # Estimate token usage
             estimated_tokens = self._estimate_tokens(text)
             self.update_token_usage(

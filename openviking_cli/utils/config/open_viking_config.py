@@ -183,6 +183,17 @@ class RuntimeConfigSettings(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ModelRetryConfig(BaseModel):
+    """One extra-attempt allowance shared by all model calls in an offline task."""
+
+    max_retries: int = Field(
+        default=3,
+        ge=0,
+        strict=True,
+        description="Extra model attempts shared by one offline task; first attempts are free",
+    )
+
+
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
@@ -209,6 +220,8 @@ class OpenVikingConfig(BaseModel):
     )
 
     vlm: VLMConfig = Field(default_factory=VLMConfig, description="VLM configuration")
+
+    model_retry: ModelRetryConfig = Field(default_factory=ModelRetryConfig)
 
     query_planner: Optional[VLMConfig] = Field(
         default=None,

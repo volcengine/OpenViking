@@ -559,8 +559,11 @@ async def test_evict_keeps_cached_task_when_persistent_delete_fails():
     agfs = _FakeAgfs()
     tracker = TaskTracker(store=PersistentTaskStore(agfs))
     t = await tracker.create("session_commit", **_owner_kwargs())
+    budget = tracker.model_retry_budget(t.task_id, 3)
+    assert budget.try_consume()
     await tracker.start(t.task_id)
     await tracker.complete(t.task_id, {})
+    assert tracker.model_retry_budget(t.task_id, 3) is budget
     tracker._tasks[t.task_id].updated_at = time.time() - tracker.TTL_COMPLETED - 1
     agfs.fail_rm = True
 
@@ -568,12 +571,14 @@ async def test_evict_keeps_cached_task_when_persistent_delete_fails():
 
     assert await tracker.get(t.task_id) is not None
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is not None
+    assert tracker.model_retry_budget(t.task_id, 3) is budget
 
     agfs.fail_rm = False
     await tracker._evict_expired()
 
     assert await tracker.get(t.task_id) is None
     assert await tracker._store.get(t.task_id, **_owner_kwargs()) is None
+    assert tracker.model_retry_budget(t.task_id, 3) is not budget
     assert all(call["ctx"]["disable_auto_pathlock"] == "true" for call in agfs.rm_calls)
 
 

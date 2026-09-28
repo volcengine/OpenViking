@@ -14,6 +14,7 @@ from openviking.storage.queuefs.embedding_msg import (
     UpdateFieldsPayload,
 )
 from openviking.telemetry.request_wait_tracker import RequestWaitTracker
+from openviking.utils.model_call import model_workload
 
 
 def test_embedding_msg_roundtrip_preserves_id_for_request_wait_tracker():
@@ -46,6 +47,16 @@ def test_embedding_msg_roundtrip_preserves_queue_enqueue_time():
     )
 
     assert EmbeddingMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
+
+
+def test_embedding_msg_roundtrip_preserves_root_task_attribution():
+    with model_workload("add_resource", root_task_id="task-embedding"):
+        msg = EmbeddingMsg(
+            "hello",
+            {"uri": "viking://resources/demo", "account_id": "default"},
+        )
+
+    assert EmbeddingMsg.from_json(msg.to_json()).root_task_id == "task-embedding"
 
 
 def test_legacy_embedding_msg_without_account_id_is_rejected():

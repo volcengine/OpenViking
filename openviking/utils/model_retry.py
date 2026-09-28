@@ -6,7 +6,11 @@ import random
 import re
 import threading
 import time
-from typing import Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, Iterable, Iterator, TypeVar
+
+import httpx
+from requests.exceptions import ConnectionError as RequestsConnectionError
+from requests.exceptions import Timeout as RequestsTimeout
 
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.utils.exceptions import AllCredentialsFailedError
@@ -23,8 +27,45 @@ ERROR_CLASS_INPUT_TOO_LARGE = "input_too_large"
 ERROR_CLASS_QUOTA_EXCEEDED = "quota_exceeded"
 ERROR_CLASS_TRANSIENT = "transient"
 ERROR_CLASS_UNKNOWN = "unknown"
+_ERROR_CLASSES = frozenset(
+    {
+        ERROR_CLASS_PERMANENT,
+        ERROR_CLASS_AUTH,
+        ERROR_CLASS_CONTENT_SAFETY,
+        ERROR_CLASS_INPUT_TOO_LARGE,
+        ERROR_CLASS_QUOTA_EXCEEDED,
+        ERROR_CLASS_TRANSIENT,
+        ERROR_CLASS_UNKNOWN,
+    }
+)
 
 _METRIC_ERROR_CODE_MAX_LENGTH = 64
+
+
+class ProviderModelError(RuntimeError):
+    """A provider error normalized before it reaches the shared retry owner.
+
+    Some providers return credential or quota failures through a successful HTTP
+    response, or use a generic HTTP status for multiple error classes.  Adapters
+    use this exception to preserve the provider code and give the owner an
+    unambiguous classification without teaching the generic classifier every
+    provider's private code table.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_class: str,
+        error_code: object | None = None,
+        status_code: int | None = None,
+    ):
+        if error_class not in _ERROR_CLASSES:
+            raise ValueError(f"unsupported model error class: {error_class}")
+        self.error_class = error_class
+        self.error_code = None if error_code is None else str(error_code)
+        self.status_code = status_code
+        super().__init__(message)
 
 
 def _normalize_metric_error_code(value: object) -> str | None:
@@ -43,6 +84,45 @@ def _normalize_metric_error_code(value: object) -> str | None:
     return code
 
 
+def _iter_structured_error_facts(error: BaseException) -> Iterator[tuple[str, object]]:
+    """Yield normalized-field candidates without flattening status and semantics.
+
+    Keeping the fact kind lets classification evaluate semantic provider codes
+    before HTTP status while metrics retain the provider's stable field order.
+    """
+    for exc in _iter_exception_chain(error):
+        candidates = [
+            ("status", getattr(exc, "status_code", None)),
+            ("code", getattr(exc, "error_code", None)),
+            ("code", getattr(exc, "code", None)),
+            ("code", getattr(exc, "type", None)),
+            ("status", getattr(getattr(exc, "response", None), "status_code", None)),
+        ]
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            candidates.extend(
+                [
+                    ("status", body.get("status_code")),
+                    ("status", body.get("status")),
+                    ("code", body.get("error_code")),
+                    ("code", body.get("code")),
+                    ("code", body.get("type")),
+                ]
+            )
+            nested = body.get("error")
+            if isinstance(nested, dict):
+                candidates.extend(
+                    [
+                        ("status", nested.get("status_code")),
+                        ("status", nested.get("status")),
+                        ("code", nested.get("error_code")),
+                        ("code", nested.get("code")),
+                        ("code", nested.get("type")),
+                    ]
+                )
+        yield from ((kind, value) for kind, value in candidates if value is not None)
+
+
 def extract_metric_error_code(error: BaseException) -> str:
     """Extract a low-cardinality provider error code for model-call metrics.
 
@@ -50,24 +130,10 @@ def extract_metric_error_code(error: BaseException) -> str:
     provider messages and request IDs are intentionally never used as metric labels.
     """
     error_chain = _iter_exception_chain(error)
-    for exc in error_chain:
-        for attr in ("status_code", "error_code", "code"):
-            normalized = _normalize_metric_error_code(getattr(exc, attr, None))
-            if normalized is not None:
-                return normalized
-
-        body = getattr(exc, "body", None)
-        if isinstance(body, dict):
-            candidates = [body.get("status_code"), body.get("error_code"), body.get("code")]
-            nested = body.get("error")
-            if isinstance(nested, dict):
-                candidates.extend(
-                    [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
-                )
-            for value in candidates:
-                normalized = _normalize_metric_error_code(value)
-                if normalized is not None:
-                    return normalized
+    for _kind, value in _iter_structured_error_facts(error):
+        normalized = _normalize_metric_error_code(value)
+        if normalized is not None:
+            return normalized
 
     if any(isinstance(exc, TimeoutError) for exc in error_chain):
         return "timeout"
@@ -203,6 +269,38 @@ def _pattern_matches(text_lower: str, text_compact: str, pattern: str) -> bool:
     return pattern in text_lower or pattern in text_compact
 
 
+def _classify_error_values(values: Iterable[object]) -> str:
+    texts = [(str(value).lower(), str(value).lower().replace(" ", "")) for value in values]
+    if any(text_compact == "20015" for _text_lower, text_compact in texts):
+        return ERROR_CLASS_INPUT_TOO_LARGE
+    categories = (
+        (ERROR_CLASS_INPUT_TOO_LARGE, INPUT_TOO_LARGE_PATTERNS),
+        (ERROR_CLASS_CONTENT_SAFETY, CONTENT_SAFETY_PATTERNS),
+        (ERROR_CLASS_AUTH, AUTH_API_ERROR_PATTERNS),
+        (ERROR_CLASS_QUOTA_EXCEEDED, ("insufficient_quota", *QUOTA_EXCEEDED_PATTERNS)),
+        (ERROR_CLASS_PERMANENT, PERMANENT_API_ERROR_PATTERNS),
+        (ERROR_CLASS_TRANSIENT, TRANSIENT_API_ERROR_PATTERNS),
+    )
+    for error_class, patterns in categories:
+        for text_lower, text_compact in texts:
+            if any(_pattern_matches(text_lower, text_compact, pattern) for pattern in patterns):
+                return error_class
+    return ERROR_CLASS_UNKNOWN
+
+
+def _structured_http_status(error: BaseException) -> int | None:
+    for kind, value in _iter_structured_error_facts(error):
+        if kind != "status":
+            continue
+        try:
+            status = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 100 <= status <= 599:
+            return status
+    return None
+
+
 def classify_api_error(error: Exception) -> str:
     """Classify an API error into one of the ERROR_CLASS_* categories.
 
@@ -229,64 +327,73 @@ def classify_api_error(error: Exception) -> str:
             return ERROR_CLASS_AUTH
         return ERROR_CLASS_UNKNOWN
 
-    for exc in (error, getattr(error, "__cause__", None)):
+    chain = _iter_exception_chain(error)
+    for exc in chain:
+        if getattr(exc, "model_retry_terminal", False):
+            return getattr(
+                getattr(exc, "model_call_error", exc), "error_class", ERROR_CLASS_UNKNOWN
+            )
+
+    # Provider adapters may know more than an HTTP status can express (for
+    # example, Gemini reports an invalid API key as HTTP 400). Honour that
+    # normalization before applying generic transport rules.
+    for exc in chain:
+        error_class = getattr(exc, "error_class", None)
+        if error_class in _ERROR_CLASSES:
+            return error_class
+
+    for exc in chain:
         if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
             return ERROR_CLASS_PERMANENT
 
-    texts = [str(error)]
-    if error.__cause__ is not None:
-        texts.append(str(error.__cause__))
+    # Semantic provider codes/types take priority over their enclosing HTTP
+    # status (for example AccountOverdue over 400, or insufficient_quota over 429).
+    structured_class = _classify_error_values(
+        value for kind, value in _iter_structured_error_facts(error) if kind == "code"
+    )
+    if structured_class != ERROR_CLASS_UNKNOWN:
+        return structured_class
 
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in INPUT_TOO_LARGE_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_INPUT_TOO_LARGE
+    # A structured HTTP status is stronger evidence than incidental numeric
+    # message content (for example, "limit is 400 requests per minute").
+    status = _structured_http_status(error)
+    if status is not None:
+        if status == 413:
+            return ERROR_CLASS_INPUT_TOO_LARGE
+        if status in {401, 403}:
+            return ERROR_CLASS_AUTH
+        if status in {408, 409, 429} or 500 <= status < 600:
+            return ERROR_CLASS_TRANSIENT
+        if 400 <= status < 500:
+            return ERROR_CLASS_PERMANENT
 
-    # Content safety before permanent so a moderation message containing "400"
-    # is not misclassified as a permanent parameter error.
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in CONTENT_SAFETY_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_CONTENT_SAFETY
+    # Free-form messages are the weakest signal, but use the same category
+    # table and precedence as structured semantic codes.
+    message_class = _classify_error_values(str(exc) for exc in chain)
+    if message_class != ERROR_CLASS_UNKNOWN:
+        return message_class
 
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in PERMANENT_API_ERROR_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_PERMANENT
-
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in AUTH_API_ERROR_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_AUTH
-
-    # Check quota_exceeded *before* transient so that "429 … AccountQuotaExceeded"
-    # is classified as quota_exceeded, not transient.
-    for text in texts:
-        text_lower = text.lower()
-        for pattern in QUOTA_EXCEEDED_PATTERNS:
-            if pattern in text_lower:
-                return ERROR_CLASS_QUOTA_EXCEEDED
-
-    for text in texts:
-        text_lower = text.lower()
-        text_compact = text_lower.replace(" ", "")
-        for pattern in TRANSIENT_API_ERROR_PATTERNS:
-            if _pattern_matches(text_lower, text_compact, pattern):
-                return ERROR_CLASS_TRANSIENT
-
+    for exc in chain:
+        if isinstance(
+            exc,
+            (
+                TimeoutError,
+                ConnectionError,
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.RemoteProtocolError,
+                RequestsTimeout,
+                RequestsConnectionError,
+            ),
+        ):
+            return ERROR_CLASS_TRANSIENT
     return ERROR_CLASS_UNKNOWN
 
 
 def is_retryable_api_error(error: Exception) -> bool:
     """Return True if the error should be retried."""
+    if any(getattr(exc, "model_retry_terminal", False) for exc in _iter_exception_chain(error)):
+        return False
     return classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
@@ -359,6 +466,8 @@ def is_retryable_rate_limit_error(exc: BaseException) -> bool:
     VikingBot provider adapters and benchmark integrations can share the same
     classifier without importing each other's heavier runtime dependencies.
     """
+    if any(getattr(item, "model_retry_terminal", False) for item in _iter_exception_chain(exc)):
+        return False
     if _structured_rate_limit_match(exc):
         return True
     text = str(exc or "")
@@ -600,8 +709,9 @@ class OrderedCredentialSwitcher:
             - credential-level ``auth`` errors (401/403) advance to the next
               credential in multi-credential mode; the last (or single)
               credential fails fast.
-            - ``quota_exceeded`` (and ``transient`` once its retries are
-              exhausted) and ``unknown`` advance to the next credential.
+            - ``quota_exceeded`` and ``transient`` once its retries are
+              exhausted advance to the next credential.
+            - ``unknown`` fails fast because replay safety is not known.
         """
         if n < 1:
             raise ValueError("Number of credentials must be >= 1")
@@ -668,14 +778,14 @@ class OrderedCredentialSwitcher:
     def is_fail_fast(error_class: str) -> bool:
         """Whether an error is request-level and must not try other credentials.
 
-        Request-level errors (400 parameter error, input too large, content
-        safety) fail on every credential of the same model, so the caller should
-        re-raise immediately instead of cycling through credentials.
+        Request-level errors fail on every credential of the same model. Unknown
+        errors also fail fast because issuing the request again may duplicate work.
         """
         return error_class in (
             ERROR_CLASS_PERMANENT,
             ERROR_CLASS_INPUT_TOO_LARGE,
             ERROR_CLASS_CONTENT_SAFETY,
+            ERROR_CLASS_UNKNOWN,
         )
 
     def commit_success(self, idx: int) -> None:

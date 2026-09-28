@@ -272,6 +272,18 @@ Use a vision-capable GLM model such as `glm-4.6v` or `glm-5v-turbo` when OpenVik
 
 ## Configuration Sections
 
+### model_retry
+
+Non-streaming VLM text/vision and Embedding calls within one offline task share an allowance for extra attempts:
+
+```json
+{ "model_retry": { "max_retries": 3 } }
+```
+
+`model_retry.max_retries` is a non-negative integer, default `3`. Set it to `0` to disable extra attempts. The first attempt of each normal generation or embedding call is free; retries and credential failover each consume one. Success, model changes and downstream queues do not reset the allowance. The limit is fixed when the task first uses it. Online model calls make one attempt.
+
+This is a process-level policy, stored in the local task index. It is not durable across Pods or restarts. Legacy `embedding.max_retries` / `vlm.max_retries` settings remain accepted but no longer govern migrated model calls; deployments that previously set them to `0` should also set `model_retry.max_retries=0`. Media, streaming and custom adapters require separate coverage checks; see the [design and supported boundaries](../../design/model-retry-governance-zh.md).
+
 ### embedding
 
 Embedding model configuration for vector search, supporting dense, sparse, and hybrid modes.
@@ -301,7 +313,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`; must be `>= 1`) |
-| `max_retries` | int | Maximum retry attempts for transient embedding provider errors (`embedding.max_retries`, default: `3`; `0` disables retry) |
+| `max_retries` | int | Legacy compatibility setting; migrated model calls use the task allowance in `model_retry.max_retries` |
 | `text_source` | str | Text used for vectorizing text files. `content_only` reads raw content, `summary_first` uses summary when available and falls back to content, `summary_only` is a deprecated alias for `summary_first`; existing configurations still load, log a warning, and normalize to `summary_first`. Default: `content_only` |
 | `max_input_tokens` | int | Maximum estimated raw text tokens sent to the embedding model when content is used. Default: `4096` |
 | `provider` | str | `"openai"`, `"azure"`, `"volcengine"`, `"vikingdb"`, `"jina"`, `"ollama"`, `"gemini"`, `"voyage"`, `"dashscope"`, `"minimax"`, `"cohere"`, `"litellm"`, or `"local"` |
@@ -313,11 +325,11 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | `encoding_format` | str | (OpenAI / Azure only) Wire format for embedding values: `"float"` or `"base64"`. Leave unset to use the OpenAI Python SDK default. Set to `"float"` when the upstream gateway cannot deserialize base64 embedding payloads correctly. |
 | `extra_body` | object | (OpenAI / Azure only) Extra JSON body fields merged into every embeddings request. Useful for OpenAI-compatible gateways that accept vendor-specific fields, e.g. OpenRouter provider routing `{"provider": {"sort": "latency"}}`. Explicit `query_param`/`document_param` keys take precedence on conflict. |
 
-`embedding.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent errors such as `400`, `401`, `403`, and `AccountOverdue` are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
+Offline transient errors (short-term `429`, recoverable `5xx`, timeouts and connection failures) use the remaining task allowance. Authentication or quota errors can switch to another candidate credential, consuming the same allowance. Invalid input, content safety and unknown errors fail immediately. Exponential backoff uses jitter and a 30-second cap; Retry-After is respected within that cap, and larger values terminate the call.
 
 #### Embedding Circuit Breaker
 
-When the embedding provider experiences consecutive transient failures (e.g. `429`, `5xx`), OpenViking opens a circuit breaker to temporarily stop calling the provider and re-enqueue embedding tasks. After the base `reset_timeout`, it allows a probe request (HALF_OPEN). If the probe fails, the next `reset_timeout` is doubled (capped by `max_reset_timeout`).
+When the embedding provider experiences consecutive transient failures (e.g. `429`, `5xx`), OpenViking opens a process-local circuit breaker. Consumers wait for admission within the current delivery for a bounded, cancellable interval, then fail if admission is still denied. Model failures do not obtain a new allowance through requeue. After the base `reset_timeout`, it allows a probe request (HALF_OPEN). If the probe fails, the next `reset_timeout` is doubled (capped by `max_reset_timeout`).
 
 ```json
 {
@@ -727,7 +739,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
-| `max_retries` | int | Maximum retry attempts for transient VLM provider errors (default: `3`; `0` disables retry) |
+| `max_retries` | int | Legacy compatibility setting; migrated non-streaming calls use `model_retry.max_retries` |
 | `credentials` | array | Ordered VLM credential/model list, with index 0 having the highest priority. Each item can override `provider`, `model`, `api_key`, `api_base`, `api_version`, `extra_headers`, `extra_request_body`, `reasoning_effort`, and `keepalive_expiry` |
 | `failback_timeout_seconds` | float | Time threshold for attempting a step back toward a higher-priority credential after failover (default: `600`) |
 | `failback_request_count` | int | Successful requests on a lower-priority credential before attempting a step back (default: `50`) |
@@ -744,7 +756,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `media.file_poll_interval` | float | Provider-side preprocessing poll interval in seconds (default: `3`) |
 | `media.video_fps` | float | Video frame sampling rate when supported by the provider, from `0.2` through `5.0` (default: `1.0`) |
 
-`vlm.max_retries` only applies to transient errors such as `429`, `5xx`, timeouts, and connection failures. Permanent authentication, authorization, and billing errors are not retried automatically. The backoff strategy is exponential backoff with jitter, starting at `0.5s` and capped at `8s`.
+Non-streaming text/vision follows the `model_retry` policy above and shares its offline task allowance with Embedding. Online calls do not automatically retry. Media and streaming paths have not all migrated to this budget.
 
 **Available Models**
 
@@ -2141,7 +2153,7 @@ Error: VLM request timeout
 
 - Check network connectivity
 - Increase timeout in config
-- For intermittent timeouts, increase `vlm.max_retries` moderately
+- For intermittent offline timeouts, evaluate a modest increase to the shared `model_retry.max_retries` allowance
 - Try a smaller model
 - For bulk ingestion, consider lowering `vlm.max_concurrent`
 
@@ -2153,7 +2165,7 @@ Error: Rate limit exceeded
 
 Volcengine has rate limits. Consider batch processing with delays or upgrading your plan.
 - Lower `embedding.max_concurrent` / `vlm.max_concurrent` first
-- Keep a small `max_retries` value for occasional `429`s; set it to `0` if you prefer fail-fast behavior
+- Keep a small `model_retry.max_retries` allowance for occasional offline `429`s; set it to `0` for fail-fast behavior
 
 ## Related Documentation
 

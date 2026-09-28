@@ -63,8 +63,9 @@ from openviking.session.working_memory import (
 )
 from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking.telemetry.context import bind_telemetry_stage
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.model_retry import is_retryable_api_error, retry_async
+from openviking.utils.model_call import model_workload
 from openviking.utils.time_utils import get_current_timestamp
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import (
@@ -88,9 +89,6 @@ MemoryPolicyProvider = Callable[[], Awaitable[MemoryPolicyData]]
 logger = get_logger(__name__)
 
 _PHASE2_QUEUE_WAIT_TIMEOUT_SECONDS = 1800.0
-_MEMORY_EXTRACTION_MAX_RETRIES = 3
-_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS = 1.0
-_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS = 8.0
 _AGENT_TRAINING_REQUIRED_MEMORY_TYPES = frozenset({"experiences"})
 _SESSION_PHASE1_LOCK_TIMEOUT_SECONDS = 30.0
 
@@ -1649,7 +1647,10 @@ class Session:
         """
         # ponytail: reuse archive ordering; no second session identity or context store.
         newest = f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
-        if self._compression.compression_index > 0 and await self._archives.is_context_reset_archive(newest):
+        if (
+            self._compression.compression_index > 0
+            and await self._archives.is_context_reset_archive(newest)
+        ):
             return  # Context is already empty; no second boundary needed.
         self._compression.compression_index += 1
         archive_uri = (
@@ -1978,7 +1979,10 @@ class Session:
             request_wait_tracker.register_request(telemetry.telemetry_id)
             register_telemetry(telemetry)
             try:
-                with bind_telemetry(telemetry):
+                with (
+                    bind_telemetry(telemetry),
+                    model_workload("session_commit", root_task_id=task_id),
+                ):
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
                     extraction_batch_limits = resolve_extraction_batch_limits(auto_commit_policy)
@@ -2091,24 +2095,22 @@ class Session:
                                 },
                             )
 
-                    async def _run_retryable_phase2_step(
+                    async def _run_phase2_step(
                         operation_name: str,
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
-                        # Secondary safety net on top of the per-call retry that the
-                        # VLM/embedding layer already performs. Reuses the shared
-                        # transient-error classifier so permanent failures (auth,
-                        # quota, content-safety, 400, oversized input) fail fast
-                        # instead of being retried pointlessly.
-                        return await retry_async(
-                            fn,
-                            max_retries=_MEMORY_EXTRACTION_MAX_RETRIES,
-                            base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
-                            max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
-                            is_retryable=is_retryable_api_error,
-                            logger=logger,
-                            operation_name=operation_name,
-                        )
+                        # A step can have storage side effects and several model calls.
+                        # Retrying it would replay successful work and reset model budgets.
+                        if operation_name == "archive_summary":
+                            stage = "archive_summary"
+                        elif "skill" in operation_name:
+                            stage = "skill_extract"
+                        elif "working" in operation_name:
+                            stage = "working_memory"
+                        else:
+                            stage = "memory_extract"
+                        with bind_telemetry_stage(stage):
+                            return await fn()
 
                     async def _run_recorded_memory_step(
                         operation_name: str,
@@ -2116,7 +2118,7 @@ class Session:
                         step_messages: List[Message],
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
-                        result = await _run_retryable_phase2_step(operation_name, fn)
+                        result = await _run_phase2_step(operation_name, fn)
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
                         )
@@ -2127,7 +2129,9 @@ class Session:
                             archive_uri,
                             {
                                 "completed_memory_steps": (
-                                    self._archives.serialize_completed_memory_steps(completed_memory_steps)
+                                    self._archives.serialize_completed_memory_steps(
+                                        completed_memory_steps
+                                    )
                                 )
                             },
                         )
@@ -2172,7 +2176,9 @@ class Session:
                         extraction_tasks: List[Any] = []
                         extraction_labels: List[str] = []
                         if working_memory_enabled:
-                            extraction_tasks.append(_run_archive_summary())
+                            extraction_tasks.append(
+                                _run_phase2_step("archive_summary", _run_archive_summary)
+                            )
                             extraction_labels.append("archive_summary")
 
                         if self._session_compressor and long_term_has_work:
@@ -2280,7 +2286,10 @@ class Session:
                                 "Memory and session skill extraction skipped "
                                 "(disabled by config or memory_policy)"
                             )
-                        await _run_archive_summary()
+                        if working_memory_enabled:
+                            await _run_phase2_step("archive_summary", _run_archive_summary)
+                        else:
+                            await _run_archive_summary()
 
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its
@@ -2673,7 +2682,9 @@ class Session:
                     archive["archive_uri"],
                 )
 
-        merged_messages = self._archives.stable_deduplicate_messages(archive_messages + list(self._messages))
+        merged_messages = self._archives.stable_deduplicate_messages(
+            archive_messages + list(self._messages)
+        )
         merged_messages = await self._checkpoints.insert_terminal_checkpoints(
             merged_messages,
             terminal if terminal_state == "completed" else None,
@@ -2910,7 +2921,7 @@ class Session:
           ``update_working_memory`` tool forced on; parse per-section
           decisions and merge them against the previous WM. Invalid response
           content may fall back to the creation prompt. Model-call failures
-          propagate to the task owner; retries belong to the VLM provider.
+          propagate to the task owner; retries consume the offline task budget.
         """
         wm.wm_debug(
             f"_generate_archive_summary_async called "
@@ -2967,58 +2978,48 @@ class Session:
                 f"branch=CREATE (prior={'legacy' if latest_archive_overview else 'none'} "
                 f"{len(latest_archive_overview or '')}B)"
             )
-            try:
-                prompt = render_prompt(
-                    "compression.ov_wm_v2",
-                    {
-                        "messages": formatted,
-                        "latest_archive_overview": latest_archive_overview or "",
-                        "checkpoint_instructions": checkpoint_instructions,
-                        "output_language": output_language,
+            prompt = render_prompt(
+                "compression.ov_wm_v2",
+                {
+                    "messages": formatted,
+                    "latest_archive_overview": latest_archive_overview or "",
+                    "checkpoint_instructions": checkpoint_instructions,
+                    "output_language": output_language,
+                },
+            )
+            # Only successful response parsing may fall back. Every model-call
+            # failure, including an opaque legacy error, must reach task failure.
+            if checkpoint_requests:
+                response = await vlm.get_completion_async(
+                    prompt=prompt,
+                    tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
+                    tool_choice={
+                        "type": "function",
+                        "function": {"name": "create_working_memory"},
                     },
                 )
-                if checkpoint_requests:
-                    response = await vlm.get_completion_async(
-                        prompt=prompt,
-                        tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
-                        tool_choice={
-                            "type": "function",
-                            "function": {"name": "create_working_memory"},
-                        },
-                    )
-                    if not (
-                        getattr(response, "has_tool_calls", False)
-                        and getattr(response, "tool_calls", None)
-                    ):
-                        raise ValueError(
-                            "Working Memory creation returned no create_working_memory tool call"
-                        )
-                    args = response.tool_calls[0].arguments
-                    if isinstance(args, str):
-                        args = json.loads(args)
-                    if not isinstance(args, dict):
-                        raise ValueError("create_working_memory arguments must be an object")
-                    working_memory = args.get("working_memory")
-                    if not isinstance(working_memory, str) or not working_memory.strip():
-                        raise ValueError("create_working_memory.working_memory is empty")
-                    return _ArchiveSummaryResult(
-                        overview=working_memory,
-                        checkpoint_summaries=wm.parse_required_checkpoint_summaries(
-                            args,
-                            len(checkpoint_requests),
-                        ),
-                    )
+            else:
                 return await vlm.get_completion_async(prompt)
-            except Exception as e:
-                wm.wm_debug(f"creation failed: {e}")
-                logger.warning(f"WM creation failed: {e}")
-                if checkpoint_requests:
-                    raise
-                turn_count = len([m for m in messages if is_user_query(m)])
-                return (
-                    f"# Session Summary\n\n"
-                    f"**Overview**: {turn_count} turns, {len(messages)} messages"
+            if not (
+                getattr(response, "has_tool_calls", False) and getattr(response, "tool_calls", None)
+            ):
+                raise ValueError(
+                    "Working Memory creation returned no create_working_memory tool call"
                 )
+            args = response.tool_calls[0].arguments
+            if isinstance(args, str):
+                args = json.loads(args)
+            if not isinstance(args, dict):
+                raise ValueError("create_working_memory arguments must be an object")
+            working_memory = args.get("working_memory")
+            if not isinstance(working_memory, str) or not working_memory.strip():
+                raise ValueError("create_working_memory.working_memory is empty")
+            return _ArchiveSummaryResult(
+                overview=working_memory,
+                checkpoint_summaries=wm.parse_required_checkpoint_summaries(
+                    args, len(checkpoint_requests)
+                ),
+            )
 
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
         wm.wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
