@@ -164,3 +164,37 @@ test("loadConfig defaults an invalid commit keep recent count", async () => {
     }
   })
 })
+
+test("the capture scope knobs default to not storing tool traffic", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-scope-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      const cfg = loadConfig(dir, join(dir, "project"))
+      assert.equal(cfg.captureToolResults, false)
+      assert.equal(cfg.captureAssistantFinalOnly, false)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})
+
+test("the capture scope env overrides flip both knobs", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-scope-env-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
+      }
+      process.env.OPENVIKING_CAPTURE_TOOL_RESULTS = "1"
+      process.env.OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY = "1"
+      const cfg = loadConfig(dir, join(dir, "project"))
+      assert.equal(cfg.captureToolResults, true)
+      assert.equal(cfg.captureAssistantFinalOnly, true)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
+  })
+})

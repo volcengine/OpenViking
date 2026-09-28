@@ -4,8 +4,11 @@ import {
   collectToolNamesByIdFromEntries,
   extractCaptureTurns,
   extractPartsFromPayload,
+  extractTextFromPayload,
+  finalAssistantKeepMask,
   findLastHumanTurnIndex,
   filterCaptureParts,
+  isToolTransportRole,
   sanitizeCapturedText,
   shapeCapturePayload,
   shapeCaptureParts,
@@ -16,6 +19,8 @@ const CAPTURE_CONFIG = {
   captureAssistantTurns: true,
   captureToolMaxChars: 1000000,
   captureMaxLength: 24000,
+  // Tool traffic is opt-in; these cases are about what happens once it is on.
+  captureToolResults: true,
 }
 
 function toolPart(parts) {
@@ -197,7 +202,7 @@ test("filterCaptureParts prunes blank text parts even with no rules configured",
   const shaped = filterCaptureParts(
     [{ type: "text", text: "  " }, { type: "text", text: " kept " }, TOOL_PART],
     "user",
-    {},
+    { captureToolResults: true },
   )
   assert.equal(shaped.dropped, false)
   assert.deepEqual(shaped.parts, [{ type: "text", text: "kept" }, TOOL_PART])
@@ -207,7 +212,7 @@ test("filterCaptureParts substitutes in every text part and leaves tool parts al
   const shaped = filterCaptureParts(
     [{ type: "text", text: "token sk_ABCDEF here" }, TOOL_PART, { type: "text", text: "and sk_ZZZ" }],
     "user",
-    { captureFilters: ["s/sk_[A-Za-z0-9]+/[redacted]/g"] },
+    { captureToolResults: true, captureFilters: ["s/sk_[A-Za-z0-9]+/[redacted]/g"] },
   )
   assert.equal(shaped.dropped, false)
   assert.deepEqual(shaped.parts, [
@@ -218,7 +223,7 @@ test("filterCaptureParts substitutes in every text part and leaves tool parts al
 })
 
 test("filterCaptureParts takes one drop verdict on the aggregate, tool parts included", () => {
-  const cfg = { captureFilters: ["d/^internal notes/"] }
+  const cfg = { captureToolResults: true, captureFilters: ["d/^internal notes/"] }
   const shaped = filterCaptureParts(
     [{ type: "text", text: "internal notes" }, TOOL_PART, { type: "text", text: "trailing" }],
     "user",
@@ -238,7 +243,10 @@ test("filterCaptureParts takes one drop verdict on the aggregate, tool parts inc
 })
 
 test("filterCaptureParts never judges a turn that carries no text", () => {
-  const shaped = filterCaptureParts([TOOL_PART], "user", { captureFilters: ["k/never matches/"] })
+  const shaped = filterCaptureParts([TOOL_PART], "user", {
+    captureToolResults: true,
+    captureFilters: ["k/never matches/"],
+  })
   assert.equal(shaped.dropped, false)
   assert.deepEqual(shaped.parts, [TOOL_PART])
   assert.equal(filterCaptureParts([], "user", { captureFilters: ["k/x/"] }).dropped, false)
@@ -251,6 +259,7 @@ test("already-extracted parts are sanitized before capture rules run", () => {
   ]
   assert.equal(shapeCaptureParts(parts, "user", { captureFilters: ["k/approved/"] }).dropped, true)
   assert.deepEqual(shapeCaptureParts(parts, "user", {
+    captureToolResults: true,
     captureFilters: ["d/approved/", "s/SECRET123/[redacted]/g"],
   }).parts, [{ type: "text", text: "Remember [redacted]" }, TOOL_PART])
   assert.equal(parts[0].text.includes("SECRET123"), true)
@@ -278,12 +287,14 @@ test("shared capture filters aggregate text and leave tool payloads intact", () 
   }, { faithful: true }).dropped, true)
 
   const shaped = shapeCapturePayload(payload, "assistant", {
+    captureToolResults: true,
     captureFilters: ["s/secret/[redacted]/g"],
   }, { faithful: true })
   assert.equal(shaped.text, "Remember [redacted]")
   assert.equal(shaped.parts[1].tool_input.secret, true)
 
   const toolOnly = shapeCapturePayload({ role: "assistant", content: payload.content.slice(1) }, "assistant", {
+    captureToolResults: true,
     captureFilters: ["k/never matches/"],
   }, { faithful: true })
   assert.equal(toolOnly.dropped, false)
@@ -357,4 +368,151 @@ test("extractCaptureTurns honours the role scope of a capture rule", () => {
   ]
   const turns = extractCaptureTurns(entries, cfg)
   assert.deepEqual(turns.map((turn) => turn.role), ["user"])
+})
+
+// --- capture scope knobs ----------------------------------------------------
+
+function assistantEntry(text) {
+  return { payload: { role: "assistant", content: [{ type: "output_text", text }] } }
+}
+
+function toolCallEntry(callId = "c1") {
+  return { payload: { type: "function_call", name: "shell", arguments: "{\"cmd\":\"ls\"}", call_id: callId } }
+}
+
+function toolResultEntry(callId = "c1", output = "a.txt b.txt") {
+  return { payload: { type: "function_call_output", call_id: callId, output } }
+}
+
+function codexTurn() {
+  return [
+    userEntry("please fix the failing test"),
+    assistantEntry("let me look at it"),
+    toolCallEntry(),
+    toolResultEntry(),
+    assistantEntry("the fix is in the parser"),
+  ]
+}
+
+test("captureToolResults is off by default, so tool traffic is not stored", () => {
+  const turns = extractCaptureTurns(codexTurn(), { captureAssistantTurns: true })
+  assert.deepEqual(turns.map((turn) => turn.role), ["user", "assistant", "assistant"])
+  assert.equal(turns.some((turn) => toolPart(turn.parts)), false)
+})
+
+test("captureToolResults=true keeps every tool call and result", () => {
+  const turns = extractCaptureTurns(codexTurn(), { captureAssistantTurns: true, captureToolResults: true })
+  assert.deepEqual(turns.map((turn) => turn.role), ["user", "assistant", "assistant", "user", "assistant"])
+  assert.equal(turns.filter((turn) => toolPart(turn.parts)).length, 2)
+})
+
+test("captureToolResults off keeps the text beside an embedded tool call", () => {
+  const entries = [{
+    payload: {
+      role: "assistant",
+      content: [
+        { type: "output_text", text: "let me check that file" },
+        { type: "tool_use", name: "read", input: { path: "a.txt" } },
+      ],
+    },
+  }]
+  const cfg = { captureAssistantTurns: true, captureToolResults: false }
+  assert.deepEqual(extractCaptureTurns(entries, cfg), [{
+    role: "assistant",
+    text: "let me check that file",
+    parts: [{ type: "text", text: "let me check that file" }],
+  }])
+})
+
+test("captureToolResults off also drops the rendered tool text", () => {
+  const payload = { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "file body" }] }
+  const kept = extractTextFromPayload(payload, { includeTool: false })
+  assert.equal(kept, "")
+  assert.notEqual(extractTextFromPayload(payload, { includeTool: true }), "")
+  assert.deepEqual(extractPartsFromPayload(payload, { includeTool: false }), [])
+})
+
+test("filterCaptureParts drops tool parts unless captureToolResults is true", () => {
+  const shaped = filterCaptureParts(
+    [{ type: "text", text: "keep this prose" }, TOOL_PART],
+    "assistant",
+    {},
+  )
+  assert.equal(shaped.dropped, false)
+  assert.deepEqual(shaped.parts, [{ type: "text", text: "keep this prose" }])
+})
+
+test("captureAssistantFinalOnly keeps one assistant reply per user turn", () => {
+  const entries = [
+    userEntry("what did we decide"),
+    assistantEntry("first draft"),
+    assistantEntry("second draft"),
+    assistantEntry("final answer"),
+  ]
+  const cfg = { captureAssistantTurns: true, captureAssistantFinalOnly: true }
+  assert.deepEqual(extractCaptureTurns(entries, cfg).map((turn) => turn.text), [
+    "what did we decide",
+    "final answer",
+  ])
+})
+
+test("captureAssistantFinalOnly does not treat a tool result as a turn boundary", () => {
+  const entries = [
+    userEntry("what did we decide"),
+    assistantEntry("draft"),
+    toolResultEntry("c1", "tool noise"),
+    assistantEntry("final answer"),
+  ]
+  const cfg = {
+    captureAssistantTurns: true,
+    captureAssistantFinalOnly: true,
+    captureToolResults: true,
+  }
+  const turns = extractCaptureTurns(entries, cfg)
+  // The tool result normalizes to `user`; it must not open a group of its own, or
+  // "draft" would survive as the last reply of a phantom turn.
+  assert.deepEqual(turns.filter((turn) => turn.role === "assistant").map((turn) => turn.text), ["final answer"])
+  assert.equal(turns.filter((turn) => toolPart(turn.parts)).length, 1)
+})
+
+test("both capture scope knobs combine", () => {
+  const cfg = {
+    captureAssistantTurns: true,
+    captureToolResults: false,
+    captureAssistantFinalOnly: true,
+  }
+  assert.deepEqual(extractCaptureTurns(codexTurn(), cfg).map((turn) => [turn.role, turn.text]), [
+    ["user", "please fix the failing test"],
+    ["assistant", "the fix is in the parser"],
+  ])
+})
+
+test("finalAssistantKeepMask keeps the last assistant entry of each user turn", () => {
+  const entries = [
+    { role: "user", isToolTransport: false },
+    { role: "assistant", isToolTransport: false },
+    { role: "assistant", isToolTransport: false },
+    { role: "user", isToolTransport: false },
+    { role: "assistant", isToolTransport: false },
+  ]
+  assert.deepEqual(finalAssistantKeepMask(entries), [true, false, true, true, true])
+})
+
+test("finalAssistantKeepMask does not let a tool result open a group", () => {
+  const entries = [
+    { role: "user", isToolTransport: false },
+    { role: "assistant", isToolTransport: false },
+    { role: "user", isToolTransport: true },
+    { role: "assistant", isToolTransport: false },
+  ]
+  assert.deepEqual(finalAssistantKeepMask(entries), [true, false, true, true])
+})
+
+test("isToolTransportRole tells a tool record from a human or model message", () => {
+  assert.equal(isToolTransportRole("function_call"), true)
+  assert.equal(isToolTransportRole("function_call_output"), true)
+  assert.equal(isToolTransportRole("tool"), true)
+  assert.equal(isToolTransportRole("tool_result"), true)
+  assert.equal(isToolTransportRole("user"), false)
+  assert.equal(isToolTransportRole("assistant"), false)
 })

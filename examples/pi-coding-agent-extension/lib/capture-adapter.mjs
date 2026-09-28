@@ -1,4 +1,6 @@
 import {
+  finalAssistantKeepMask,
+  isToolTransportRole,
   shapeCapturePayload,
 } from "../shared/capture-utils.mjs";
 
@@ -26,12 +28,14 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
   const resetWatermark = entries.length < previousCount;
   const start = resetWatermark ? 0 : Math.min(previousCount, entries.length);
   const payloads = [];
+  const collected = [];
 
   for (const entry of entries.slice(start)) {
     const payload = entryPayload(entry);
     if (!payload) continue;
 
-    const role = normalizeRole(payload.role || payload.type || payload.kind);
+    const raw = payload.role || payload.type || payload.kind;
+    const role = normalizeRole(raw);
     if (!role) continue;
     if (role === "assistant" && cfg.captureAssistantTurns === false) continue;
 
@@ -53,7 +57,23 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
       ? { role, parts: bodyParts }
       : { role, content: shaped.text };
     if (cfg.peerId) body.peer_id = cfg.peerId;
-    payloads.push(body);
+    collected.push({ body, isToolTransport: isToolTransportRole(raw) });
+  }
+
+  // `captureAssistantFinalOnly` keeps one assistant reply per user turn. Tool
+  // entries normalize onto user/assistant, so a group may only be opened by an
+  // entry that is not tool transport — otherwise every tool result would split
+  // one turn in two.
+  if (cfg.captureAssistantFinalOnly === true) {
+    const keep = finalAssistantKeepMask(collected.map((item) => ({
+      role: item.body.role,
+      isToolTransport: item.isToolTransport,
+    })));
+    collected.forEach((item, i) => {
+      if (keep[i]) payloads.push(item.body);
+    });
+  } else {
+    for (const item of collected) payloads.push(item.body);
   }
 
   return {

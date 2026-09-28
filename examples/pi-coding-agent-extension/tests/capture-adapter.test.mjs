@@ -268,3 +268,52 @@ for (const [mode, modeConfig] of [
     assert.equal(result.nextEntryCount, 1);
   });
 }
+
+test("captureToolResults off drops tool traffic and keeps the prose", () => {
+  const branch = [
+    { type: "message", message: { role: "assistant", content: [
+      { type: "text", text: "the fix is in the parser" },
+      { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "x" } },
+    ] } },
+  ];
+
+  const off = extractBranchCapturePayloads(branch, 0, { captureToolResults: false });
+  assert.deepEqual(off.payloads.map((payload) => payload.role), ["assistant"]);
+  assert.deepEqual(off.payloads[0].parts, [{ type: "text", text: "the fix is in the parser" }]);
+
+  const on = extractBranchCapturePayloads(branch, 0, { captureToolResults: true });
+  assert.equal(on.payloads[0].parts.filter((part) => part.type === "tool").length, 1);
+});
+
+test("captureAssistantFinalOnly keeps the last assistant reply of the turn", () => {
+  const branch = [
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "what did we decide" }] } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "first draft" }] } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "final answer" }] } },
+  ];
+
+  const result = extractBranchCapturePayloads(branch, 0, { captureAssistantTurns: true, captureAssistantFinalOnly: true });
+  assert.deepEqual(
+    result.payloads.map((payload) => payload.parts[0].text),
+    ["what did we decide", "final answer"],
+  );
+});
+
+test("captureAssistantFinalOnly does not let a tool result open a turn", () => {
+  const branch = [
+    { type: "message", message: { role: "user", content: [{ type: "text", text: "what did we decide" }] } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "draft" }] } },
+    { type: "message", message: { type: "toolResult", callId: "c1", output: "tool noise" } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "final answer" }] } },
+  ];
+
+  const result = extractBranchCapturePayloads(branch, 0, {
+    captureAssistantTurns: true,
+    captureAssistantFinalOnly: true,
+    captureToolResults: true,
+  });
+  assert.deepEqual(
+    result.payloads.filter((payload) => payload.role === "assistant").map((payload) => payload.parts[0].text),
+    ["final answer"],
+  );
+});

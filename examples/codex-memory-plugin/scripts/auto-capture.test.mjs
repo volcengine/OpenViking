@@ -132,6 +132,7 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
         {
           OPENVIKING_AUTO_CAPTURE: "1",
           OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+          OPENVIKING_CAPTURE_TOOL_RESULTS: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
           OPENVIKING_DEBUG: "1",
           OPENVIKING_DEBUG_LOG: debugLogPath,
@@ -267,6 +268,7 @@ test("auto-capture sends every new turn when one response exceeds the old limit"
         {
           OPENVIKING_AUTO_CAPTURE: "1",
           OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+          OPENVIKING_CAPTURE_TOOL_RESULTS: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
           OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
@@ -419,6 +421,7 @@ test("auto-capture skips compacted history after transcript shrink", async () =>
         {
           OPENVIKING_AUTO_CAPTURE: "1",
           OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+          OPENVIKING_CAPTURE_TOOL_RESULTS: "1",
           OPENVIKING_CODEX_STATE_DIR: stateDir,
           OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
           OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),

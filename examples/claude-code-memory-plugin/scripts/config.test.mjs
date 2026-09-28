@@ -190,3 +190,22 @@ test("a comma survives in a configured rule but splits an env one", () => {
     assert.deepEqual(loadConfig().captureFilters, ["s/a{2", "}/X/"]);
   });
 });
+
+test("the capture scope knobs reach the Claude Code harness", () => {
+  withConfigs({
+    ov: { server: { host: "127.0.0.1" } },
+  }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolResults, false);
+    assert.equal(cfg.captureAssistantFinalOnly, false);
+  });
+
+  withConfigs({
+    ov: { server: { host: "127.0.0.1" } },
+    env: { OPENVIKING_CAPTURE_TOOL_RESULTS: "1", OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY: "1" },
+  }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolResults, true);
+    assert.equal(cfg.captureAssistantFinalOnly, true);
+  });
+});

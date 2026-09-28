@@ -210,8 +210,12 @@ function blockToText(block, options) {
 
   const type = normalizeType(block.type || block.kind || block.role);
   if (TEXT_BLOCK_TYPES.has(type)) return blockText(block);
-  if (isToolCallBlock(block)) return formatToolBlock(block, "call", options.toolMaxChars);
-  if (isToolResultBlock(block)) return formatToolBlock(block, "result", options.toolMaxChars);
+  if (isToolCallBlock(block)) {
+    return options.includeTool === false ? "" : formatToolBlock(block, "call", options.toolMaxChars);
+  }
+  if (isToolResultBlock(block)) {
+    return options.includeTool === false ? "" : formatToolBlock(block, "result", options.toolMaxChars);
+  }
   if (Array.isArray(block.content)) return extractTextFromContent(block.content, options);
   if (!type) return blockText(block);
   return "";
@@ -228,6 +232,7 @@ export function extractTextFromContent(content, options = {}) {
       .join("\n\n");
   }
   if (typeof content === "object") {
+    if (opts.includeTool === false && (isToolCallBlock(content) || isToolResultBlock(content))) return "";
     return blockToText(content, opts) || stringifyCompact(content, opts.toolMaxChars);
   }
   return "";
@@ -238,6 +243,7 @@ export function extractTextFromPayload(payload, options = {}) {
   const chunks = [];
   const directType = normalizeType(payload.type || payload.kind || payload.role);
   if (TOOL_RESULT_TYPES.has(directType) || directType === "tool" || TOOL_CALL_TYPES.has(directType)) {
+    if (options.includeTool === false) return "";
     const direct = blockToText(payload, { toolMaxChars: DEFAULT_TOOL_MAX_CHARS, ...options });
     if (direct) return direct;
   }
@@ -250,11 +256,13 @@ export function extractTextFromPayload(payload, options = {}) {
     if (contentText) chunks.push(contentText);
   }
 
-  for (const key of ["tool_calls", "toolCalls", "function_call", "functionCall", "tool_call", "toolCall"]) {
-    const value = payload[key];
-    if (!value) continue;
-    const toolText = extractTextFromContent(value, options);
-    if (toolText) chunks.push(toolText);
+  if (options.includeTool !== false) {
+    for (const key of ["tool_calls", "toolCalls", "function_call", "functionCall", "tool_call", "toolCall"]) {
+      const value = payload[key];
+      if (!value) continue;
+      const toolText = extractTextFromContent(value, options);
+      if (toolText) chunks.push(toolText);
+    }
   }
 
   if (chunks.length === 0) {
@@ -304,7 +312,7 @@ function collectToolNamesByIdFromPayload(payload, out) {
 }
 
 function extractPartsFromContent(content, options = {}) {
-  const opts = { toolMaxChars: DEFAULT_TOOL_MAX_CHARS, toolNameById: {}, ...options };
+  const opts = { toolMaxChars: DEFAULT_TOOL_MAX_CHARS, toolNameById: {}, includeTool: true, ...options };
   const parts = [];
   if (!content) return parts;
   if (typeof content === "string") {
@@ -318,6 +326,7 @@ function extractPartsFromContent(content, options = {}) {
   }
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
+    if (opts.includeTool === false && (isToolCallBlock(block) || isToolResultBlock(block))) continue;
     if (isToolCallBlock(block)) {
       parts.push(buildToolPart(block, "call", opts));
     } else if (isToolResultBlock(block)) {
@@ -332,49 +341,55 @@ function extractPartsFromContent(content, options = {}) {
 
 export function extractPartsFromPayload(payload, options = {}) {
   if (!payload || typeof payload !== "object") return [];
-  const opts = { toolMaxChars: DEFAULT_TOOL_MAX_CHARS, toolNameById: {}, ...options };
+  const opts = { toolMaxChars: DEFAULT_TOOL_MAX_CHARS, toolNameById: {}, includeTool: true, ...options };
   if (payload.message && typeof payload.message === "object") {
     return extractPartsFromPayload(payload.message, opts);
   }
 
   const directType = normalizeType(payload.type || payload.kind || payload.role);
   if (TOOL_CALL_TYPES.has(directType) || isToolCallBlock(payload)) {
-    return [buildToolPart(payload, "call", opts)];
+    return opts.includeTool === false ? [] : [buildToolPart(payload, "call", opts)];
   }
   if (TOOL_RESULT_TYPES.has(directType) || directType === "tool" || directType === "function") {
-    return [buildToolPart(payload, "result", opts)];
+    return opts.includeTool === false ? [] : [buildToolPart(payload, "result", opts)];
   }
 
   const parts = [];
   if (payload.content !== undefined) {
     parts.push(...extractPartsFromContent(payload.content, opts));
   }
-  for (const key of ["tool_calls", "toolCalls", "function_call", "functionCall", "tool_call", "toolCall"]) {
-    const value = payload[key];
-    if (!value) continue;
-    if (Array.isArray(value)) {
-      for (const block of value) parts.push(...extractPartsFromPayload(block, opts));
-    } else {
-      parts.push(...extractPartsFromPayload(value, opts));
+  if (opts.includeTool !== false) {
+    for (const key of ["tool_calls", "toolCalls", "function_call", "functionCall", "tool_call", "toolCall"]) {
+      const value = payload[key];
+      if (!value) continue;
+      if (Array.isArray(value)) {
+        for (const block of value) parts.push(...extractPartsFromPayload(block, opts));
+      } else {
+        parts.push(...extractPartsFromPayload(value, opts));
+      }
     }
   }
   return parts;
 }
 
 /**
- * Prune blank text parts and run `cfg.captureFilters` over the ones that remain.
+ * Prune blank text parts, optionally remove tool traffic, and run
+ * `cfg.captureFilters` over the text parts that remain.
  *
  * One drop verdict is taken per turn, on the aggregate of its text parts; the
  * individual parts are then rewritten with the substitutions only, so a rule can
  * never both keep and drop the same turn. Tool call/result parts are carried
- * through untouched — filters match conversation text, not tool payloads — but a
- * turn dropped on its text takes its tool parts with it.
+ * through untouched when `cfg.captureToolResults` is true — filters match
+ * conversation text, not tool payloads — but a turn dropped on its text takes its
+ * tool parts with it.
  */
 export function filterCaptureParts(parts, role, cfg = {}) {
+  const includeTool = cfg.captureToolResults === true;
   const kept = [];
   for (const part of parts || []) {
     if (!part) continue;
     if (part.type !== "text") {
+      if (!includeTool) continue;
       kept.push(part);
       continue;
     }
@@ -433,7 +448,11 @@ function faithfulCaptureDecision(text, cfg) {
  * will not be sent cannot satisfy a keep rule. Tool parts are never filtered.
  */
 export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}, faithful = false } = {}) {
-  const options = { toolMaxChars: cfg.captureToolMaxChars, toolNameById };
+  const options = {
+    toolMaxChars: cfg.captureToolMaxChars,
+    toolNameById,
+    includeTool: cfg.captureToolResults === true,
+  };
   const rawText = extractTextFromPayload(payload, options);
   const sourceParts = extractPartsFromPayload(payload, options);
   const hasTextPart = sourceParts.some((part) => part?.type === "text");
@@ -463,9 +482,64 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   return { parts, text: decision.shouldCapture ? decision.text : "", signalText: signalText || "", dropped: false };
 }
 
+/**
+ * True when a raw entry role identifies a tool call/result transport record rather
+ * than a human or model message. `normalizeCaptureRole` folds these onto
+ * user/assistant, so a caller that needs the original distinction — capture scope,
+ * or turn boundaries under `captureAssistantFinalOnly` — has to ask here.
+ */
+export function isToolTransportRole(role) {
+  const value = normalizeType(role);
+  return value === "tool" || value === "function" ||
+    TOOL_CALL_TYPES.has(value) || TOOL_RESULT_TYPES.has(value);
+}
+
+/**
+ * Which entries survive `captureAssistantFinalOnly`, as a mask over the input
+ * order. A group opens on a non-transport `user` entry; inside a group every
+ * non-assistant entry survives and only the last assistant entry does.
+ *
+ * A tool result normalizes to the `user` role in a rollout, so only an entry that
+ * is not tool transport may open a group; otherwise every tool result would split
+ * one turn in two. Shared by the harnesses that assemble their own turn list — they
+ * hand over `{ role, isToolTransport }` descriptors and drop the masked-out
+ * entries.
+ */
+export function finalAssistantKeepMask(entries) {
+  const keep = new Array(entries.length).fill(true);
+  let group = [];
+  const flush = () => {
+    if (!group.length) return;
+    let last = -1;
+    for (const i of group) {
+      if (entries[i].role === "assistant") last = i;
+    }
+    for (const i of group) {
+      if (entries[i].role === "assistant" && i !== last) keep[i] = false;
+    }
+    group = [];
+  };
+  entries.forEach((entry, i) => {
+    if (entry.role === "user" && !entry.isToolTransport) flush();
+    group.push(i);
+  });
+  flush();
+  return keep;
+}
+
+function applyCaptureScope(collected, cfg) {
+  if (cfg.captureAssistantFinalOnly !== true) return collected.map((entry) => entry.turn);
+  const keep = finalAssistantKeepMask(collected.map((entry) => ({
+    role: entry.turn.role,
+    isToolTransport: entry.isToolTransport,
+  })));
+  return collected.filter((_, i) => keep[i]).map((entry) => entry.turn);
+}
+
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {
+  const includeTool = cfg.captureToolResults === true;
   const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
-  const turns = [];
+  const collected = [];
   for (const entry of rolloutEntries || []) {
     if (!entry || typeof entry !== "object") continue;
     const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
@@ -475,11 +549,17 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
     if (!role) continue;
     if (isAssistantSideCaptureRole(rawRole) && !cfg.captureAssistantTurns) continue;
 
+    const isToolTransport = isToolTransportRole(rawRole);
+    if (!includeTool && isToolTransport) continue;
+
     const shaped = shapeCapturePayload(payload, role, cfg, { toolNameById });
     if (shaped.dropped || (!shaped.text && shaped.parts.length === 0)) continue;
-    turns.push({ role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts });
+    collected.push({
+      turn: { role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts },
+      isToolTransport,
+    });
   }
-  return turns;
+  return applyCaptureScope(collected, cfg);
 }
 
 /**

@@ -194,7 +194,9 @@ Recall covers skills as well as memories: the server-assembled context block can
 | `OPENVIKING_AUTO_CAPTURE`              | `true`       | Enable auto-capture; also gates write hooks (PreCompact / SessionEnd / SubagentStop) |
 | `OPENVIKING_CAPTURE_MODE`              | `semantic`   | `semantic` (always capture) or `keyword` (trigger-based)                 |
 | `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`      | Max sanitized text length for the capture decision                       |
-| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` for user-only.     |
+| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns. Set to `0` for user-only.                      |
+| `OPENVIKING_CAPTURE_TOOL_RESULTS`      | `false`      | Include tool calls and tool results. Off by default: they are the bulk of a session's bytes and the least reusable part of it. |
+| `OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY` | `false`   | Store only the last assistant reply of each user turn, so a reply the model rewrote several times is kept once, in its final shape. |
 | `OPENVIKING_CAPTURE_TOOL_MAX_CHARS`    | `1000000`    | Guard cap on one tool part's `tool_output`; oversized output is externalized server-side |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`      | Pending-token threshold for client-driven commit                         |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`      | Token budget when fetching archive overview on session resume            |

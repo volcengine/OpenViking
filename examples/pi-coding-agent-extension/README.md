@@ -179,8 +179,9 @@ integrations should configure category `quotas` when they need exact ceilings.
 |--------------------------|------------|--------------------------------------------------------------------------|
 | `captureMode`            | `"semantic"` | `"semantic"` (always capture) or `"keyword"` (trigger-based)           |
 | `captureMaxLength`       | `24000`    | Max sanitized text length for the capture decision                       |
-| `captureAssistantTurns`  | `true`     | Include assistant turns (text + tool USE inputs)                         |
-| `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
+| `captureAssistantTurns`  | `true`     | Include assistant turns                                                   |
+| `captureAssistantFinalOnly` | `false` | Store only the last assistant reply of each user turn                     |
+| `captureToolResults`     | `false`    | Set to `true` to keep tool calls and tool results. Off by default: `lib/capture-adapter.mjs` drops both the structured tool parts and their rendered text, bounded by `captureToolMaxChars` when on |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
 | `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
 | `commitKeepRecentCount`  | `10`       | Live tail kept after commit                                              |

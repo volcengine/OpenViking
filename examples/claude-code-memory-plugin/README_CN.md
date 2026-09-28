@@ -165,7 +165,9 @@ claude
 | `OPENVIKING_AUTO_CAPTURE`              | `true`        | 启用自动捕获；同时 gate 写 hook（PreCompact / SessionEnd / SubagentStop） |
 | `OPENVIKING_CAPTURE_MODE`              | `semantic`    | `semantic`（总是捕获）或 `keyword`（基于触发词）                   |
 | `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`       | 捕获判定时 sanitized 文本的长度上限                                |
-| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合(文本 + tool 输入/输出)。设为 `0` 可退回仅用户   |
+| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合。设为 `0` 可退回仅用户                      |
+| `OPENVIKING_CAPTURE_TOOL_RESULTS`      | `false`       | 捕获 tool 调用与 tool 结果。默认关闭：它们占了一个会话大部分字节，却是最难被复用的部分 |
+| `OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY` | `false`    | 每个用户回合只存最后一条 assistant 回复，即模型反复改写过的答复只留最终形态 |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`       | client-driven commit 的 pending-token 阈值                         |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`       | resume 时拉取 archive overview 的 token 预算                       |
 | `OPENVIKING_CAPTURE_FILTERS`           | `""`          | 逗号分隔的正则规则，作用于每个被捕获的回合 —— 见[输入过滤器](#输入过滤器) |

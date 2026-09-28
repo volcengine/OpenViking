@@ -143,7 +143,14 @@ export const KNOBS = [
   // conversation extracts noticeably worse.
   { name: "captureAssistantTurns", type: "bool", default: true, env: "OPENVIKING_CAPTURE_ASSISTANT_TURNS", capability: "capture" },
   { name: "captureLastAssistantOnStop", type: "bool", default: true, env: "OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP", capability: "capture" },
+  // Tool calls and tool results are opt-in. They are the bulk of a coding
+  // session's bytes but the least reusable part of it, so a memory plugin that
+  // stores them by default pays for context it will not recall.
   { name: "captureToolResults", type: "bool", default: false, env: "OPENVIKING_CAPTURE_TOOL_RESULTS", capability: "capture" },
+  // Default false: when on, only the last assistant reply of each user turn is
+  // captured, so a reply the model rewrote several times is stored once, in its
+  // final shape.
+  { name: "captureAssistantFinalOnly", type: "bool", default: false, env: "OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY", capability: "capture" },
   { name: "captureFilters", type: "list", default: [], env: "OPENVIKING_CAPTURE_FILTERS", capability: "capture" },
   // 0 means "derive from timeoutMs": a write gets a longer budget than a read.
   { name: "captureTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_CAPTURE_TIMEOUT_MS", capability: "capture" },

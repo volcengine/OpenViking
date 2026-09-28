@@ -215,3 +215,40 @@ for (const mode of ["off", "client", "server", "auto", "0", "1"]) {
     });
   });
 }
+
+test("the capture scope knobs default to not storing tool traffic", () => {
+  withConfigs({ ov: { server: { host: "127.0.0.1" } } }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolResults, false);
+    assert.equal(cfg.captureAssistantFinalOnly, false);
+  });
+});
+
+test("plugin.codex turns tool capture on and keeps the final assistant reply", () => {
+  withConfigs({
+    cli: {
+      url: "http://127.0.0.1:1933",
+      api_key: "sk-cli",
+      plugin: { codex: { captureToolResults: true, captureAssistantFinalOnly: true } },
+    },
+  }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolResults, true);
+    assert.equal(cfg.captureAssistantFinalOnly, true);
+  });
+});
+
+test("the capture scope env overrides beat the configured values", () => {
+  withConfigs({
+    cli: {
+      url: "http://127.0.0.1:1933",
+      api_key: "sk-cli",
+      plugin: { codex: { captureToolResults: false, captureAssistantFinalOnly: false } },
+    },
+    env: { OPENVIKING_CAPTURE_TOOL_RESULTS: "1", OPENVIKING_CAPTURE_ASSISTANT_FINAL_ONLY: "1" },
+  }, () => {
+    const cfg = loadConfig();
+    assert.equal(cfg.captureToolResults, true);
+    assert.equal(cfg.captureAssistantFinalOnly, true);
+  });
+});

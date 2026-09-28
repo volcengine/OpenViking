@@ -7,6 +7,8 @@ const CAPTURE_CONFIG = {
   captureAssistantTurns: true,
   captureToolMaxChars: 1000000,
   captureMaxLength: 24000,
+  // Tool traffic is opt-in; this suite is about what happens once it is on.
+  captureToolResults: true,
 };
 
 const startupBlocks = [
