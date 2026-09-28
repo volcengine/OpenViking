@@ -571,6 +571,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                     source=msg.plan.source_metadata,
                                     semantic_plan=msg.plan,
                                     telemetry_id=msg.telemetry_id,
+                                    generation_trigger=msg.generation_trigger,
                                 )
                                 await executor.run(run_uri)
                                 self._cache_tree_stats(

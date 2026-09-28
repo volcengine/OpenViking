@@ -91,8 +91,6 @@ class SetTagsRequest(BaseModel):
 
 
 class ReindexRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     uri: str
     mode: str = "vectors_only"
     force: bool = False

@@ -1441,16 +1441,20 @@ class SemanticTreeExecutor:
                 # The package root describes the skill definition, independently
                 # of the summaries produced for its attachments.
                 definition_changed = f"{dir_uri}/SKILL.md" in self._changed_paths
+                plan_entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
+                repair = bool(plan_entry is not None and plan_entry.repair)
                 overview, abstract = await self._processor._skill_root_semantics(
                     dir_uri,
                     ctx=self._ctx,
-                    regenerate=self._generation_trigger == "reindex" or definition_changed,
+                    regenerate=self._generation_trigger == "reindex"
+                    or definition_changed
+                    or repair,
                     lock=self._lock,
                     skill_content=self._source_contents.get((f"{dir_uri}/SKILL.md", 2)),
                 )
                 should_write = False
-                need_vectorize = not self._incremental_update or definition_changed
-                children_changed = definition_changed
+                need_vectorize = not self._incremental_update or definition_changed or repair
+                children_changed = definition_changed or repair
             elif self._generation_trigger == "content_copy" and not node.transfer_inputs_ready:
                 need_vectorize = False
                 should_write = False
@@ -1546,6 +1550,7 @@ class SemanticTreeExecutor:
                 entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
                 slots = {slot.level: slot for slot in entry.index_slots} if entry else {}
 
+            enqueued_levels: set[int] = set()
             if need_vectorize and not self._skip_vectorization:
                 assert overview is not None and abstract is not None
                 try:
@@ -1627,8 +1632,6 @@ class SemanticTreeExecutor:
                     if self._context_type != "skill":
                         raise
                     self._record_skill_failure(dir_uri, e)
-            else:
-                enqueued_levels = set()
 
             for level, slot in sorted(slots.items()):
                 if (

@@ -27,7 +27,6 @@ from openviking.core.namespace import (
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
-from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import body_for_preview, embedding_text_for_body
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -36,15 +35,12 @@ from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.content_hash import content_md5
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.embedding_utils import (
     _apply_ingest_options,
     _decode_text_bytes,
     _truncate_abstract_bytes,
     get_resource_content_type,
-    vectorize_directory_meta,
-    vectorize_file,
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
@@ -259,17 +255,19 @@ class ReindexExecutor:
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.reindex_msg import ReindexMsg
 
-        service = get_service()
-        path = service.viking_fs._uri_to_path(uri, ctx=ctx)
-        stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
-        acquire = (
-            service.viking_fs._async_agfs.pathlock_acquire_tree
-            if stat.get("isDir", stat.get("is_dir"))
-            else service.viking_fs._async_agfs.pathlock_acquire_exact
-        )
-        lease = await acquire(path)
+        service = None
+        lease = None
         enqueued = False
         try:
+            service = get_service()
+            path = service.viking_fs._uri_to_path(uri, ctx=ctx)
+            stat = await service.viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            acquire = (
+                service.viking_fs._async_agfs.pathlock_acquire_tree
+                if stat.get("isDir", stat.get("is_dir"))
+                else service.viking_fs._async_agfs.pathlock_acquire_exact
+            )
+            lease = await acquire(path)
             handoff = await service.viking_fs._async_agfs.pathlock_to_handoff(lease)
             msg = ReindexMsg(
                 task_id=task.task_id,
@@ -298,7 +296,7 @@ class ReindexExecutor:
                 task.task_id, "queued", account_id=ctx.account_id, user_id=ctx.user.user_id
             )
         except BaseException:
-            if lease is not None:
+            if lease is not None and service is not None:
                 await service.viking_fs._async_agfs.pathlock_release(lease)
             if not enqueued:
                 await tracker.fail(
@@ -666,51 +664,6 @@ class ReindexExecutor:
             "warnings": counters.warnings,
         }
 
-    async def _run_tracked(
-        self,
-        task_id: str,
-        *,
-        uri: str,
-        object_type: str,
-        mode: str,
-        force: bool = False,
-        recursive: bool = True,
-        ingest_options: IngestOptions | None = None,
-        ctx: RequestContext,
-    ) -> None:
-        tracker = get_task_tracker()
-        tracker.register_running_task(task_id)
-        try:
-            await tracker.start(task_id, account_id=ctx.account_id, user_id=ctx.user.user_id)
-            with bind_task_context(task_id, ctx.account_id, ctx.user.user_id):
-                result = await self._run(
-                    uri=uri,
-                    object_type=object_type,
-                    mode=mode,
-                    force=force,
-                    recursive=recursive,
-                    ingest_options=ingest_options,
-                    ctx=ctx,
-                )
-            await tracker.complete(
-                task_id,
-                result,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-        except asyncio.CancelledError:
-            # TaskWorkIndex finalizes after this active task and its queue work settle.
-            return
-        except Exception as exc:
-            await tracker.fail(
-                task_id,
-                str(exc),
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-            )
-        finally:
-            await tracker.unregister_running_task(task_id)
-
     async def _reindex_resource(
         self,
         *,
@@ -1006,184 +959,6 @@ class ReindexExecutor:
         )
         await processor.on_dequeue({"data": msg.to_json()}, lock=lock)
 
-    async def _reindex_resource_vectors(
-        self,
-        *,
-        uri: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
-        recursive: bool = True,
-        ingest_options: IngestOptions | None = None,
-    ) -> None:
-        viking_fs = get_viking_fs()
-        try:
-            if not await viking_fs.exists(uri, ctx=ctx):
-                raise NotFoundError(uri, "resource")
-            stat = await viking_fs.stat(uri, ctx=ctx)
-            is_dir = stat.get("isDir", stat.get("is_dir")) if isinstance(stat, dict) else False
-            if is_dir and recursive:
-                entries = await self._tree_all(viking_fs, uri, show_all_hidden=True, ctx=ctx)
-            else:
-                entries = []
-        except Exception as exc:
-            raise NotFoundError(uri, "resource") from exc
-
-        if is_dir:
-            directories = [uri]
-            files: list[str] = []
-            for entry in entries:
-                entry_uri = entry.get("uri")
-                if not entry_uri:
-                    continue
-                if entry.get("isDir"):
-                    directories.append(entry_uri)
-                elif not self._is_hidden_meta_file(entry_uri):
-                    files.append(entry_uri)
-        else:
-            directories = []
-            files = [uri]
-
-        await self._reindex_resource_vectors_from_entries(
-            **self._with_ingest_options(
-                {
-                    "root_uri": uri,
-                    "directories": directories,
-                    "files": files,
-                    "counters": counters,
-                    "ctx": ctx,
-                },
-                ingest_options,
-            )
-        )
-
-    async def _reindex_resource_vectors_from_entries(
-        self,
-        *,
-        root_uri: str,
-        directories: Iterable[str],
-        files: Iterable[str],
-        counters: _ReindexCounters,
-        ctx: RequestContext,
-        ingest_options: IngestOptions | None = None,
-    ) -> None:
-        deduped_directories = []
-        seen_directories = set()
-        for directory_uri in directories:
-            if directory_uri and directory_uri not in seen_directories:
-                deduped_directories.append(directory_uri)
-                seen_directories.add(directory_uri)
-
-        deduped_files = []
-        seen_files = set()
-        for file_uri in files:
-            if file_uri and file_uri not in seen_files:
-                deduped_files.append(file_uri)
-                seen_files.add(file_uri)
-
-        for directory_uri in deduped_directories:
-            if directory_uri == "viking://":
-                continue
-            counters.scanned_records += 1
-            abstract = await self._read_directory_abstract(directory_uri, ctx=ctx)
-            overview = await self._read_directory_overview(directory_uri, ctx=ctx)
-            if not overview:
-                overview = abstract
-            if not abstract and not overview:
-                counters.unsupported_records += 1
-                counters.warnings.append(f"No semantic source found for {directory_uri}")
-                continue
-            if abstract:
-                try:
-                    await self._upsert_context(
-                        uri=directory_uri,
-                        parent_uri=VikingURI(directory_uri).parent.uri,
-                        abstract=abstract,
-                        vector_text=embedding_text_for_body(
-                            ContextLevel.ABSTRACT, directory_uri, abstract
-                        ),
-                        is_leaf=False,
-                        context_type=context_type_for_uri(directory_uri),
-                        level=ContextLevel.ABSTRACT,
-                        ctx=ctx,
-                        ingest_options=ingest_options,
-                    )
-                    counters.rebuilt_records += 1
-                except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {directory_uri} L0 vector: {exc}")
-            if overview:
-                try:
-                    await self._upsert_context(
-                        uri=directory_uri,
-                        parent_uri=VikingURI(directory_uri).parent.uri,
-                        # L1 abstract scalar carries the overview for Rerank.
-                        abstract=_truncate_abstract_bytes(overview),
-                        vector_text=embedding_text_for_body(
-                            ContextLevel.OVERVIEW, directory_uri, overview
-                        ),
-                        is_leaf=False,
-                        context_type=context_type_for_uri(directory_uri),
-                        level=ContextLevel.OVERVIEW,
-                        ctx=ctx,
-                        ingest_options=ingest_options,
-                    )
-                    counters.rebuilt_records += 1
-                except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {directory_uri} L1 vector: {exc}")
-
-        async def process_file(file_uri: str) -> _ReindexCounters:
-            file_counters = _ReindexCounters(scanned_records=1)
-            parent_uri = VikingURI(file_uri).parent.uri
-            try:
-                file_bytes = await get_viking_fs().read_file_bytes(file_uri, ctx=ctx)
-            except Exception as exc:
-                file_counters.failed_records += 1
-                file_counters.warnings.append(f"Failed to read {file_uri} for reindex: {exc}")
-                return file_counters
-            summary = await self._best_file_summary(file_uri, ctx=ctx)
-            vector_text = await self._best_resource_file_vector_text(
-                file_uri, summary, ctx=ctx, file_content=file_bytes
-            )
-            if not vector_text:
-                file_counters.unsupported_records += 1
-                file_counters.warnings.append(f"No vector source found for {file_uri}")
-                return file_counters
-            abstract = self._prefer_non_empty(summary, vector_text)
-            try:
-                await self._upsert_context(
-                    uri=file_uri,
-                    parent_uri=parent_uri,
-                    abstract=abstract,
-                    vector_text=vector_text,
-                    is_leaf=True,
-                    context_type=context_type_for_uri(file_uri),
-                    level=ContextLevel.DETAIL,
-                    ctx=ctx,
-                    ingest_options=ingest_options,
-                    md5=content_md5(file_bytes),
-                )
-                file_counters.rebuilt_records += 1
-            except Exception as exc:
-                file_counters.failed_records += 1
-                file_counters.warnings.append(f"Failed to reindex {file_uri} vector: {exc}")
-            return file_counters
-
-        concurrency = self._effective_file_vectorization_concurrency()
-        if deduped_files:
-            logger.info(
-                "Reindex resource file vectorization: root=%s files=%d concurrency=%d",
-                root_uri,
-                len(deduped_files),
-                concurrency,
-            )
-        await self._run_ordered_counter_batches(
-            deduped_files,
-            concurrency=concurrency,
-            processor=process_file,
-            counters=counters,
-        )
-
     async def reindex_directory_marker(
         self, *, dir_uri: str, level: ContextLevel, ctx: RequestContext
     ) -> None:
@@ -1461,103 +1236,6 @@ class ReindexExecutor:
                 root_is_dir=False,
                 formal_entries=[],
             )
-
-    async def _reindex_skill_vectors(
-        self,
-        *,
-        uri: str,
-        counters: _ReindexCounters,
-        ctx: RequestContext,
-        recursive: bool = True,
-        ingest_options: IngestOptions | None = None,
-    ) -> None:
-        viking_fs = get_viking_fs()
-        owner_ctx = self._content_owner_ctx(uri, ctx)
-        pending = [uri]
-        while pending:
-            directory_uri = pending.pop()
-            counters.scanned_records += 1
-            abstract = await self._read_directory_abstract(directory_uri, ctx=ctx)
-            overview = await self._read_directory_overview(directory_uri, ctx=ctx)
-            for level in (0, 1):
-                if abstract if level == 0 else overview:
-                    continue
-                record = await self._fetch_existing_record(
-                    uri=directory_uri, level=level, ctx=owner_ctx
-                )
-                if level == 0:
-                    abstract = self._record_abstract(record)
-                else:
-                    overview = self._record_abstract(record)
-            if abstract or overview:
-                try:
-                    await vectorize_directory_meta(
-                        directory_uri,
-                        abstract,
-                        overview,
-                        context_type="skill",
-                        ctx=owner_ctx,
-                        include_abstract=bool(abstract),
-                        include_overview=bool(overview),
-                        ingest_options=ingest_options,
-                        content_is_body=True,
-                        **(
-                            {
-                                "meta": await self._skill_meta(
-                                    uri=directory_uri, abstract=abstract, ctx=ctx
-                                )
-                            }
-                            if classify_uri(directory_uri).is_skill_root
-                            else {}
-                        ),
-                    )
-                    counters.rebuilt_records += int(bool(abstract)) + int(bool(overview))
-                except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {directory_uri}: {exc}")
-            else:
-                counters.unsupported_records += 1
-                counters.warnings.append(f"No semantic source found for {directory_uri}")
-
-            if not recursive:
-                continue
-            from openviking.storage.queuefs.semantic_executor import _SKIP_FILENAMES
-            from openviking.storage.viking_fs import LS_ALL_NODES
-
-            entries = await viking_fs.ls(directory_uri, node_limit=LS_ALL_NODES, ctx=ctx)
-            for entry in entries:
-                name = entry.get("name", "")
-                if not name or name.startswith(".") or name in _SKIP_FILENAMES:
-                    continue
-                child_uri = VikingURI(directory_uri).join(name).uri
-                if entry.get("isDir", False):
-                    pending.append(child_uri)
-                    continue
-                counters.scanned_records += 1
-                try:
-                    record = await self._fetch_existing_record(
-                        uri=child_uri, level=2, ctx=owner_ctx
-                    )
-                    summary = self._record_abstract(record)
-                    if not summary:
-                        summary = await self._best_file_summary(child_uri, ctx=ctx)
-                    enqueued = await vectorize_file(
-                        file_path=child_uri,
-                        summary_dict={"name": name, "summary": summary},
-                        parent_uri=directory_uri,
-                        context_type="skill",
-                        ctx=owner_ctx,
-                        preserve_existing_created_at=True,
-                        ingest_options=ingest_options,
-                    )
-                    if enqueued:
-                        counters.rebuilt_records += 1
-                    else:
-                        counters.unsupported_records += 1
-                        counters.warnings.append(f"No vector source found for {child_uri}")
-                except Exception as exc:
-                    counters.failed_records += 1
-                    counters.warnings.append(f"Failed to reindex {child_uri}: {exc}")
 
     async def _reindex_memory_vectors(
         self,

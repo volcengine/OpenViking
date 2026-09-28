@@ -2678,13 +2678,17 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
                     {"search_tags": "append"},
                 ),
                 md5="new-md5",
+                summary="existing summary",
             ),
             DirectIndexAction(
-                "upsert",
+                "merge",
                 "viking://resources/repo",
                 0,
                 "repo-l0",
-                upsert_fields={"search_tags": ["scope=new"]},
+                field_patch=FieldPatch(
+                    {"search_tags": ["scope=new"]},
+                    {"search_tags": "replace"},
+                ),
                 md5="abstract-md5",
             ),
             DirectIndexAction(
@@ -2723,6 +2727,7 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
             {"search_tags": ["scope=new"]},
             {"search_tags": "append"},
         ),
+        summary="existing summary",
         file_content=b"print('current')",
     )
     vectorize_directory.assert_awaited_once_with(
@@ -2734,10 +2739,16 @@ async def test_resource_processor_dispatches_direct_index_actions_without_semant
         include_abstract=True,
         include_overview=True,
         content_is_body=True,
-        actions={0: "upsert", 1: "upsert"},
+        actions={0: "merge", 1: "upsert"},
         scalar_overrides={
-            0: {"search_tags": ["scope=new"], "_record_id": "repo-l0"},
+            0: {"_record_id": "repo-l0"},
             1: {"_record_id": "repo-l1"},
+        },
+        field_patches={
+            0: FieldPatch(
+                {"search_tags": ["scope=new"]},
+                {"search_tags": "replace"},
+            )
         },
         md5s={0: "abstract-md5", 1: "overview-md5"},
     )
@@ -3535,7 +3546,7 @@ async def test_semantic_processor_runs_only_plan_execution_roots(monkeypatch):
         root_write_result = None
 
         def __init__(self, **kwargs):
-            calls.append(("init", kwargs["semantic_plan"]))
+            calls.append(("init", kwargs))
 
         async def run(self, uri):
             calls.append(("run", uri))
@@ -3622,11 +3633,13 @@ async def test_semantic_processor_runs_only_plan_execution_roots(monkeypatch):
         user_id="user",
         role="user",
         plan=plan,
+        generation_trigger="reindex",
     )
 
     await processor.on_dequeue(msg.to_dict())
 
     assert [value for kind, value in calls if kind == "run"] == [root]
+    assert calls[0][1]["generation_trigger"] == "reindex"
 
 
 @pytest.mark.asyncio

@@ -604,7 +604,7 @@ This API operates on existing `viking://...` content. It does not import new fil
 | tags | list[str] | No | `null` | Write tags to every successfully rebuilt vector record. Omitting tags, or passing an empty list with `replace`, preserves existing tags |
 | tag_mode | str | No | `replace` | Tag write mode: `replace`, `append`, or `clear`; `clear` removes existing tags without requiring `tags` |
 
-The HTTP request body rejects unknown fields. `uri` may use OpenViking path variables accepted by other content APIs; it is resolved before validation.
+The HTTP request body ignores unknown fields to preserve compatibility while clients and servers evolve independently. `uri` may use OpenViking path variables accepted by other content APIs; it is resolved before validation.
 
 **Supported URI scopes**
 

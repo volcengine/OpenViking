@@ -161,6 +161,7 @@ class _FakeProcessor:
         overview,
         ctx=None,
         ingest_options=None,
+        skill_source_path="",
         scalar_overrides=None,
         actions=None,
         field_patches=None,
@@ -327,6 +328,62 @@ async def test_semantic_plan_repair_regenerates_and_reembeds_directory(monkeypat
         0: content_md5(b"abstract"),
         1: content_md5(b"FILES:"),
     }
+
+
+@pytest.mark.asyncio
+async def test_skill_plan_repair_regenerates_and_reembeds_skill_root(monkeypatch):
+    from openviking.storage.context_update_plan import (
+        IndexSlot,
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    root_uri = "viking://user/alice/skills/demo"
+    fake_fs = _FakeVikingFS(tree={root_uri: []}, file_contents={})
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    processor = _FakeProcessor(fake_fs)
+    processor._skill_root_semantics = AsyncMock(return_value=("skill overview", "skill abstract"))
+    plan = SemanticPlan(
+        root_uri,
+        "skill",
+        SemanticTreeSnapshot(
+            (
+                SemanticTreeEntry(
+                    "",
+                    "directory",
+                    "unchanged",
+                    "aggregate",
+                    index_slots=(
+                        IndexSlot(0, "skill-l0", {"abstract": "old"}, action="upsert"),
+                        IndexSlot(1, "skill-l1", {"abstract": "old"}, action="upsert"),
+                    ),
+                    repair=True,
+                ),
+            )
+        ),
+    )
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="skill",
+        max_concurrent_llm=1,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+        semantic_plan=plan,
+        generation_trigger="content_write",
+        source_contents={(f"{root_uri}/SKILL.md", 2): b"name: demo"},
+    )
+
+    await executor.run(root_uri)
+
+    processor._skill_root_semantics.assert_awaited_once()
+    assert processor._skill_root_semantics.await_args.kwargs["regenerate"] is True
+    assert processor.vectorized_dirs == [root_uri]
 
 
 @pytest.mark.asyncio

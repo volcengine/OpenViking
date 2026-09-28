@@ -94,9 +94,7 @@ async def build_rfv_snapshot(
 ) -> RFVSnapshot:
     """Read one complete F/V inventory and each selected embedding source once."""
     root = target_uri.rstrip("/")
-    projection = request_intent.required_vector_fields()
-    if request_intent.processing_mode != "vectors_only":
-        projection = projection | {"abstract"}
+    projection = request_intent.required_vector_fields() | {"abstract"}
     if target_uri.rstrip("/").startswith(("viking://user/", "viking://agent/skills/")):
         projection = projection | {"name", "description", "tags"}
 
@@ -118,7 +116,12 @@ async def build_rfv_snapshot(
         if not is_dir:
             return is_dir, [], True
         if not recursive:
-            entries = await viking_fs.ls(root, node_limit=None, ctx=ctx)
+            entries = await viking_fs.ls(
+                root,
+                node_limit=None,
+                show_all_hidden=True,
+                ctx=ctx,
+            )
             return is_dir, list(entries), True
         raw_entries = await viking_fs.tree(
             root,

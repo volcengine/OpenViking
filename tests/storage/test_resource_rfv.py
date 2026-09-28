@@ -577,12 +577,72 @@ async def test_build_rfv_snapshot_non_recursive_directory_reads_only_direct_chil
     )
 
     fs.tree.assert_not_awaited()
-    fs.ls.assert_awaited_once_with(root, node_limit=None, ctx=ANY)
+    fs.ls.assert_awaited_once_with(root, node_limit=None, show_all_hidden=True, ctx=ANY)
     assert set(snapshot.formal.entries) == {"", "docs", "a.md"}
     assert snapshot.input_only_paths == frozenset({"docs", "a.md"})
     assert db.get_incremental_inventory_under_uri.await_args.kwargs["recursive"] is False
     assert (
         db.get_incremental_inventory_under_uri.await_args.kwargs["include_direct_children"] is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_vectors_only_force_plan_preserves_existing_file_summary():
+    from openviking.storage.context_update_plan import (
+        ContextUpdatePlan,
+        IndexAction,
+        build_rfv_context_update_plan,
+    )
+    from openviking.storage.resource_rfv import build_rfv_snapshot
+
+    uri = "viking://resources/demo/a.md"
+    fs = SimpleNamespace(
+        stat=AsyncMock(return_value={"isDir": False}),
+        read_file_bytes=AsyncMock(return_value=b"current body"),
+    )
+    db = SimpleNamespace(
+        get_incremental_inventory_under_uri=AsyncMock(
+            return_value={
+                "a-l2": {
+                    "id": "a-l2",
+                    "uri": uri,
+                    "level": 2,
+                    "md5": "old-md5",
+                    "abstract": "existing summary",
+                }
+            }
+        )
+    )
+
+    snapshot = await build_rfv_snapshot(
+        viking_fs=fs,
+        vikingdb=db,
+        target_uri=uri,
+        ctx=object(),
+        request_intent=RequestIntent(uri, "vectors_only", force=True),
+        recursive=False,
+    )
+    _, plan = build_rfv_context_update_plan(
+        snapshot=snapshot,
+        context_type="resource",
+        account_id="acc",
+    )
+
+    assert db.get_incremental_inventory_under_uri.await_args.kwargs["output_fields"] == [
+        "abstract",
+        "id",
+        "level",
+        "md5",
+        "uri",
+    ]
+    assert len(plan.direct_index_actions) == 1
+    action = plan.direct_index_actions[0]
+    assert action.action is IndexAction.MERGE
+    assert action.record_id == "a-l2"
+    assert action.summary == "existing summary"
+    assert (
+        ContextUpdatePlan.from_dict(plan.to_dict()).direct_index_actions[0].summary
+        == "existing summary"
     )
 
 
@@ -735,6 +795,81 @@ async def test_non_recursive_semantic_plan_rejects_direct_child_without_reusable
         ValueError, match="non-recursive semantic plan lacks reusable abstract for child"
     ):
         build_rfv_context_update_plan(snapshot=snapshot, context_type="resource", account_id="acc")
+
+
+@pytest.mark.asyncio
+async def test_non_recursive_plan_keeps_hidden_children_and_never_mutates_input_only_nodes():
+    from openviking.storage.context_update_plan import build_rfv_context_update_plan
+    from openviking.storage.resource_rfv import build_rfv_snapshot
+    from openviking.utils.ingest_options import IngestOptions
+
+    root = "viking://resources/demo"
+
+    class _OneLevelFS:
+        stat = AsyncMock(return_value={"isDir": True})
+        ls = AsyncMock(
+            return_value=[
+                {"uri": f"{root}/.env", "name": ".env", "isDir": False},
+                {"uri": f"{root}/a.md", "name": "a.md", "isDir": False},
+                {"uri": f"{root}/.abstract.md", "name": ".abstract.md", "isDir": False},
+                {"uri": f"{root}/.overview.md", "name": ".overview.md", "isDir": False},
+            ]
+        )
+        read_file_bytes = AsyncMock(
+            side_effect=lambda uri, ctx=None: {
+                f"{root}/.abstract.md": b"root abstract",
+                f"{root}/.overview.md": b"root overview",
+            }[uri]
+        )
+
+    db = SimpleNamespace(
+        get_incremental_inventory_under_uri=AsyncMock(
+            return_value={
+                "root-l0": {"id": "root-l0", "uri": root, "level": 0, "abstract": "old"},
+                "root-l1": {"id": "root-l1", "uri": root, "level": 1, "abstract": "old"},
+                "env-l2": {
+                    "id": "env-l2",
+                    "uri": f"{root}/.env",
+                    "level": 2,
+                    "md5": "old-env",
+                    "abstract": "env summary",
+                    "search_tags": ["team=old"],
+                },
+                "a-l2": {
+                    "id": "a-l2",
+                    "uri": f"{root}/a.md",
+                    "level": 2,
+                    "md5": "old-a",
+                    "abstract": "a summary",
+                    "search_tags": ["team=old"],
+                },
+            }
+        )
+    )
+    request = RequestIntent.from_ingest_options(
+        target_uri=root,
+        processing_mode="semantic_and_vectors",
+        force=True,
+        ingest_options=IngestOptions.from_search_tags(["team=new"], mode="replace"),
+    )
+
+    snapshot = await build_rfv_snapshot(
+        viking_fs=_OneLevelFS(),
+        vikingdb=db,
+        target_uri=root,
+        ctx=object(),
+        request_intent=request,
+        recursive=False,
+    )
+    _, plan = build_rfv_context_update_plan(
+        snapshot=snapshot,
+        context_type="resource",
+        account_id="acc",
+    )
+
+    assert {".env", "a.md"}.issubset(snapshot.formal.entries)
+    assert snapshot.input_only_paths == frozenset({".env", "a.md"})
+    assert {action.record_id for action in plan.direct_index_actions}.isdisjoint({"env-l2", "a-l2"})
 
 
 @pytest.mark.asyncio

@@ -1451,6 +1451,7 @@ class ResourceProcessor:
                     },
                     "action": action.action.value,
                     "field_patch": action.field_patch,
+                    "summary": action.summary,
                 }
                 source = (source_contents or {}).get((action.uri, action.level))
                 if source is not None:
@@ -1536,6 +1537,11 @@ class ResourceProcessor:
                         "_record_id": action.record_id,
                     }
                     for level, action in levels.items()
+                },
+                field_patches={
+                    level: action.field_patch
+                    for level, action in levels.items()
+                    if action.field_patch is not None
                 },
                 md5s={
                     level: action.md5 for level, action in levels.items() if action.md5 is not None
@@ -1680,6 +1686,7 @@ class ResourceProcessor:
         action: str = "merge",
         file_content: bytes | None = None,
         materialize_content: bool = False,
+        summary: str = "",
     ) -> bool:
         parent = VikingURI(file_uri).parent
         if parent is None:
@@ -1687,7 +1694,7 @@ class ResourceProcessor:
         name = file_uri.rsplit("/", 1)[-1]
         return await vectorize_file(
             file_path=file_uri,
-            summary_dict={"name": name, "summary": ""},
+            summary_dict={"name": name, "summary": summary},
             parent_uri=parent.uri,
             context_type=context_type_for_uri(file_uri),
             ctx=ctx,

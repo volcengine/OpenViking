@@ -381,6 +381,7 @@ class DirectIndexAction:
     upsert_fields: Mapping[str, Any] = field(default_factory=dict)
     field_patch: FieldPatch | None = None
     md5: str | None = None
+    summary: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "action", IndexAction(self.action))
@@ -836,8 +837,11 @@ def build_context_update_plan(
     direct_actions: list[DirectIndexAction] = [
         DirectIndexAction(IndexAction.DELETE, record.uri, record.level, record.record_id)
         for record in duplicate_records
+        if record.relative_path not in input_only_paths
     ]
     for path, entry in sorted(diff.entries.items()):
+        if path in input_only_paths:
+            continue
         state = ContentState(entry.content_state)
         kind = entry.new_kind
         if state in {ContentState.ADDED, ContentState.RESTORE, ContentState.MODIFIED}:
@@ -922,11 +926,14 @@ def build_context_update_plan(
                     ),
                     field_patch=field_patch if index_action is IndexAction.MERGE else None,
                     md5=entry.md5,
+                    summary=str(record.fields.get("abstract") or "") if record else "",
                 )
             )
 
     scheduled_direct_ids = {action.record_id for action in direct_actions}
     for path, levels in records_by_path.items():
+        if path in input_only_paths:
+            continue
         for record in levels.values():
             field_patch = _field_patch(request, record) if request.vectorize else None
             patch_values = dict(field_patch.values) if field_patch is not None else {}
@@ -1131,9 +1138,12 @@ def build_rfv_context_update_plan(
     direct_actions: list[DirectIndexAction] = [
         DirectIndexAction(IndexAction.DELETE, record.uri, record.level, record.record_id)
         for record in duplicate_records
+        if record.relative_path not in snapshot.input_only_paths
     ]
 
     for path, entry in sorted(diff.entries.items()):
+        if path in snapshot.input_only_paths:
+            continue
         existing = records_by_path.get(path, {})
         if entry.new_kind is None and IndexState(entry.index_state) is IndexState.ORPHAN:
             direct_actions.extend(
@@ -1173,6 +1183,7 @@ def build_rfv_context_update_plan(
                         ),
                         field_patch=field_patch,
                         md5=entry.level_md5s.get(level),
+                        summary=str(record.fields.get("abstract") or "") if record else "",
                     )
                 )
             elif field_patch is not None and record is not None:
