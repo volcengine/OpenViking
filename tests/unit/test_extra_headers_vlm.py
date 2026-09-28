@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from litellm.llms.ollama.chat.transformation import OllamaChatConfig
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
+from volcenginesdkarkruntime import Ark, AsyncArk
 from volcenginesdkarkruntime._exceptions import ArkAPIStatusError
 
 from openviking.models.vlm.backends.litellm_vlm import (
@@ -487,35 +488,68 @@ class TestVLMBaseExtraHeaders:
 class TestVLMExtraRequestBody:
     """Test provider-specific VLM request body passthrough."""
 
-    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
-    def test_completion_body_overrides_configured_reasoning_effort(self, mock_openai_class):
+    @pytest.mark.parametrize(
+        ("provider", "model", "sync_client_cls", "async_client_cls", "extra_body"),
+        [
+            (
+                "glm",
+                "glm-5.3-flash",
+                OpenAI,
+                AsyncOpenAI,
+                {"reasoning_effort": "high", "seed": 7},
+            ),
+            (
+                "volcengine",
+                "ep-test",
+                Ark,
+                AsyncArk,
+                {"service_tier": "flex", "thinking": {"type": "disabled"}},
+            ),
+        ],
+    )
+    async def test_completion_body_overrides_configured_defaults(
+        self, monkeypatch, provider, model, sync_client_cls, async_client_cls, extra_body
+    ):
         send = MagicMock(
-            return_value=httpx.Response(
+            side_effect=lambda request: httpx.Response(
                 200,
                 json={
                     "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                 },
             )
         )
-        with OpenAI(
+        vlm = VLMConfig(
+            provider=provider,
+            model=model,
+            api_key="sk-test",
+            reasoning_effort="low",
+            thinking=True,
+            extra_request_body=extra_body,
+        ).get_vlm_instance()
+
+        with sync_client_cls(
             api_key="sk-test",
             http_client=httpx.Client(transport=httpx.MockTransport(send)),
         ) as client:
-            mock_openai_class.return_value = client
-            vlm = VLMConfig(
-                provider="glm",
-                model="glm-5.3-flash",
-                api_key="sk-test",
-                reasoning_effort="low",
-                extra_request_body={"reasoning_effort": "high", "seed": 7},
-            ).get_vlm_instance()
-
+            monkeypatch.setattr(vlm, "get_client", lambda: client)
             assert vlm.get_completion("hello") == "ok"
             assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
 
+        async with async_client_cls(
+            api_key="sk-test",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(send)),
+        ) as async_client:
+            monkeypatch.setattr(vlm, "get_async_client", lambda: async_client)
+            assert await vlm.get_completion_async("hello") == "ok"
+            assert (
+                await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])
+                == "ok"
+            )
+
         bodies = [json.loads(call.args[0].content) for call in send.call_args_list]
-        assert [body["reasoning_effort"] for body in bodies] == ["high", "high"]
-        assert [body["seed"] for body in bodies] == [7, 7]
+        assert len(bodies) == 4
+        for body in bodies:
+            assert {key: body[key] for key in extra_body} == extra_body
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
     def test_dashscope_thinking_merges_with_extra_request_body(self, mock_openai_class):

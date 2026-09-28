@@ -207,6 +207,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if tools:
@@ -249,6 +251,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
         if tools:
@@ -432,6 +436,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if tools:
@@ -480,6 +486,8 @@ class VolcEngineVLM(OpenAIVLM):
             "thinking": {"type": "disabled" if not effective_thinking else "enabled"},
             "extra_headers": build_volcengine_request_headers(self.extra_headers),
         }
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if tools:
