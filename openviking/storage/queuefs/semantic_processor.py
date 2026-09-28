@@ -82,6 +82,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
 class RequestQueueStats:
     processed: int = 0
     requeue_count: int = 0
@@ -152,15 +153,23 @@ class SemanticProcessor(DequeueHandlerBase):
 
     async def _get_vlm_config(self, ctx: RequestContext) -> "VLMHandle":
         if self._vlm_resolver is None:
-            raise RuntimeError(
-                "SemanticProcessor requires a VLM resolver for account-owned work"
-            )
+            raise RuntimeError("SemanticProcessor requires a VLM resolver for account-owned work")
         return await self._vlm_resolver.get_vlm(ctx.account_id)
 
     @classmethod
     def _cache_tree_stats(cls, telemetry_id: str, uri: str, stats: SemanticTreeStats) -> None:
         with cls._stats_lock:
             if telemetry_id:
+                previous = cls._tree_stats_by_telemetry_id.get(telemetry_id)
+                if previous is not None:
+                    stats = SemanticTreeStats(
+                        total_nodes=previous.total_nodes + stats.total_nodes,
+                        pending_nodes=previous.pending_nodes + stats.pending_nodes,
+                        in_progress_nodes=previous.in_progress_nodes + stats.in_progress_nodes,
+                        done_nodes=previous.done_nodes + stats.done_nodes,
+                        failures=[*previous.failures, *stats.failures],
+                        indexed_records=previous.indexed_records + stats.indexed_records,
+                    )
                 cls._tree_stats_by_telemetry_id[telemetry_id] = stats
             cls._tree_stats_by_uri[uri] = stats
             cls._tree_stats_order.append((telemetry_id, uri))
@@ -286,8 +295,10 @@ class SemanticProcessor(DequeueHandlerBase):
         else:
             logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
-    async def _enqueue_skill_retry(self, queue, msg: SemanticMsg, scope: SemanticLockScope) -> None:
-        """Transfer the live package lease to a retry before releasing this worker.
+    async def _enqueue_semantic_retry(
+        self, queue, msg: SemanticMsg, scope: SemanticLockScope
+    ) -> None:
+        """Transfer the live semantic lease to a retry before releasing this worker.
 
         Reusing the consumed handoff would require acquiring an unrelated lock,
         which conflicts with an update request still waiting under its outer lease.
@@ -306,6 +317,10 @@ class SemanticProcessor(DequeueHandlerBase):
                 scope.lock = await agfs.pathlock_adopt(handoff)
                 scope._owned = True
             raise
+
+    async def _enqueue_skill_retry(self, queue, msg: SemanticMsg, scope: SemanticLockScope) -> None:
+        """Compatibility wrapper for existing skill retry callers."""
+        await self._enqueue_semantic_retry(queue, msg, scope)
 
     async def _requeue_semantic_msg_after_error(
         self,
@@ -529,8 +544,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
                     if self._vlm_resolver is None:
                         raise RuntimeError(
-                            "SemanticProcessor requires a VLM resolver "
-                            "for account-owned work"
+                            "SemanticProcessor requires a VLM resolver for account-owned work"
                         )
                     if not await work.acquire_lock(current_ctx):
                         get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
@@ -562,7 +576,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 self._cache_tree_stats(
                                     msg.telemetry_id, run_uri, executor.get_stats()
                                 )
-                                if not executor.stale and msg.plan.propagation.enabled:
+                                if not executor.stale:
                                     write_result = getattr(
                                         executor,
                                         "root_write_result",
@@ -1232,6 +1246,7 @@ class SemanticProcessor(DequeueHandlerBase):
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
         file_content: Optional[bytes] = None,
+        materialize_content: bool = False,
     ) -> Dict[str, Any]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
@@ -1850,6 +1865,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ctx: RequestContext,
         regenerate: bool = False,
         lock: Optional[Dict[str, Any]] = None,
+        skill_content: str | bytes | None = None,
     ) -> Tuple[str, str]:
         """Keep the package root tied only to its SKILL.md definition."""
         viking_fs = get_viking_fs()
@@ -1866,7 +1882,11 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.core.skill_loader import SkillLoader
         from openviking.utils.skill_processor import SkillProcessor
 
-        content = await viking_fs.read_file(f"{uri}/SKILL.md", ctx=ctx)
+        content = (
+            skill_content
+            if skill_content is not None
+            else await viking_fs.read_file(f"{uri}/SKILL.md", ctx=ctx)
+        )
         if isinstance(content, bytes):
             content = content.decode("utf-8")
         definition = SkillLoader.parse(content)
@@ -1907,6 +1927,7 @@ class SemanticProcessor(DequeueHandlerBase):
         include_abstract: bool = True,
         include_overview: bool = True,
         telemetry_id: str | None = None,
+        md5s: Optional[Dict[int, str]] = None,
     ) -> set[int]:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -1939,6 +1960,7 @@ class SemanticProcessor(DequeueHandlerBase):
             include_abstract=include_abstract,
             include_overview=include_overview,
             telemetry_id=telemetry_id,
+            md5s=md5s,
         )
 
     async def _load_transfer_file_summaries(
@@ -2004,6 +2026,7 @@ class SemanticProcessor(DequeueHandlerBase):
         ingest_options: IngestOptions | None = None,
         file_md5: Optional[str] = None,
         file_content: Optional[bytes] = None,
+        materialize_content: bool = False,
         scalar_override: Optional[Dict[str, Any]] = None,
         field_patch: FieldPatch | None = None,
         action: str = "merge",
@@ -2024,6 +2047,7 @@ class SemanticProcessor(DequeueHandlerBase):
             ingest_options=ingest_options,
             file_md5=file_md5,
             file_content=file_content,
+            materialize_content=materialize_content,
             scalar_override=scalar_override,
             field_patch=field_patch,
             action=action,

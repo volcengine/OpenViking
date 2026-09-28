@@ -92,6 +92,7 @@ class QueueManager:
     # Keep the on-disk name stable so pre-upgrade jobs remain recoverable.
     EXTERNAL_PARSE = "ExternalParse"
     ADD_RESOURCE = "AddResource"
+    REINDEX = "Reindex"
     SESSION_COMMIT = "SessionCommit"
     EXTERNAL_TASK = "ExternalTask"
     # Account and user cleanup share one consumer. Retain the persisted name
@@ -262,6 +263,8 @@ class QueueManager:
             return self._max_concurrent_external_parse
         if queue_name == self.ADD_RESOURCE:
             return self._max_concurrent_add_resource
+        if queue_name == self.REINDEX:
+            return 1
         if queue_name == self.SESSION_COMMIT:
             return self._max_concurrent_session_commit
         if queue_name == self.EXTERNAL_TASK:

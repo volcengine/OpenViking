@@ -27,7 +27,7 @@ import asyncio
 import json
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Mapping, Tuple
 
@@ -115,6 +115,8 @@ class ResourceDiffEntry:
     old_kind: str | None = None
     new_kind: str | None = None
     md5: str | None = None
+    level_states: Mapping[int, IndexState] = field(default_factory=dict)
+    level_md5s: Mapping[int, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

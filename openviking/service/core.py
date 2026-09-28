@@ -36,6 +36,7 @@ from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.queuefs.add_resource_processor import AddResourceProcessor
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
+from openviking.storage.queuefs.reindex_processor import ReindexProcessor
 from openviking.storage.queuefs.session_commit_processor import SessionCommitProcessor
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -259,11 +260,7 @@ class OpenVikingService:
         if manager is None:
             return
         base_config = self._config.model_copy(
-            update={
-                "agent_evolution": self._agent_evolution_base_config.model_copy(
-                    deep=True
-                )
-            }
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)}
         )
         await manager.replace_base_config(base_config)
 
@@ -285,11 +282,7 @@ class OpenVikingService:
         if self._agfs_client is None:
             raise RuntimeError("AGFS client not initialized")
         base_config = self._config.model_copy(
-            update={
-                "agent_evolution": self._agent_evolution_base_config.model_copy(
-                    deep=True
-                )
-            },
+            update={"agent_evolution": self._agent_evolution_base_config.model_copy(deep=True)},
         )
         manager = build_runtime_config_manager(
             AsyncAGFSClient(self._agfs_client),
@@ -617,6 +610,11 @@ class OpenVikingService:
                     allow_create=True,
                 )
             self._queue_manager.get_queue(
+                self._queue_manager.REINDEX,
+                dequeue_handler=ReindexProcessor(self._viking_fs),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
                 self._queue_manager.SESSION_COMMIT,
                 dequeue_handler=SessionCommitProcessor(
                     self._session_service,
@@ -757,8 +755,8 @@ class OpenVikingService:
         *,
         uri: str,
         mode: str = "vectors_only",
+        force: bool = False,
         wait: bool = True,
-        dry_run: bool = False,
         recursive: bool = True,
         tags: list[str] | None = None,
         tag_mode: str = "replace",
@@ -779,9 +777,10 @@ class OpenVikingService:
             "uri": uri,
             "mode": mode,
             "wait": wait,
-            "dry_run": dry_run,
             "ctx": effective_ctx,
         }
+        if force:
+            execute_kwargs["force"] = True
         if not recursive:
             execute_kwargs["recursive"] = False
         if tags is not None or tag_mode == "clear":

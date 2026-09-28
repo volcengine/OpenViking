@@ -588,6 +588,9 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         ctx: RequestContext,
     ) -> str:
         inserted_data = embedding_msg.context_data
+        materialized = inserted_data.pop("_materialized_content", None)
+        if isinstance(materialized, str):
+            return materialized[:VIKINGDB_CONTENT_MAX_SIZE]
         if inserted_data.get("is_leaf") and inserted_data.get("context_type") in (
             ContextType.RESOURCE.value,
             ContextType.SKILL.value,
@@ -894,6 +897,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             embedding_msg,
                             ctx,
                         )
+                    inserted_data.pop("_materialized_content", None)
                     if embedding_msg.action is IndexAction.MERGE:
                         field_patch = embedding_msg.field_patch
                         merge_fields = dict(field_patch.values) if field_patch is not None else {}

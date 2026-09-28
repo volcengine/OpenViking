@@ -302,11 +302,72 @@ async def test_api_create_mode_regression_replace_unchanged(client_with_resource
     assert read_resp.json()["result"] == "# Updated\n\nFresh content."
 
 
-async def test_set_tags_requires_tags_field(client_with_resource):
-    client, uri = client_with_resource
-    file_uri = await _first_file_uri(client, uri)
-    resp = await client.post("/api/v1/fs/attrs/set_tags", json={"uri": file_uri})
-    assert resp.status_code == 400
+async def test_set_tags_omitted_tags_is_noop(client, service, monkeypatch):
+    captured = {}
+
+    async def fake_set_tags(
+        *,
+        uri,
+        tags,
+        ctx,
+        mode="replace",
+        recursive=False,
+    ):
+        del ctx
+        captured["uri"] = uri
+        captured["tags"] = tags
+        captured["mode"] = mode
+        captured["recursive"] = recursive
+        return {"uri": uri, "tags": tags, "mode": mode}
+
+    monkeypatch.setattr(service.fs, "set_tags", fake_set_tags)
+
+    resp = await client.post(
+        "/api/v1/fs/attrs/set_tags",
+        json={"uri": "viking://resources/demo/file.md"},
+    )
+
+    assert resp.status_code == 200
+    assert captured == {
+        "uri": "viking://resources/demo/file.md",
+        "tags": [],
+        "mode": "replace",
+        "recursive": False,
+    }
+
+
+async def test_set_tags_clear_allows_omitted_tags(client, service, monkeypatch):
+    captured = {}
+
+    async def fake_set_tags(
+        *,
+        uri,
+        tags,
+        ctx,
+        mode="replace",
+        recursive=False,
+    ):
+        del ctx
+        captured["uri"] = uri
+        captured["tags"] = tags
+        captured["mode"] = mode
+        captured["recursive"] = recursive
+        return {"uri": uri, "tags": tags, "mode": mode}
+
+    monkeypatch.setattr(service.fs, "set_tags", fake_set_tags)
+
+    resp = await client.post(
+        "/api/v1/fs/attrs/set_tags",
+        json={"uri": "viking://resources/demo/file.md", "mode": "clear"},
+    )
+
+    assert resp.status_code == 200
+    assert captured == {
+        "uri": "viking://resources/demo/file.md",
+        "tags": [],
+        "mode": "clear",
+        "recursive": False,
+    }
 
 
 async def test_set_tags_passes_tags_to_service(client, service, monkeypatch):

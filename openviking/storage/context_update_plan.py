@@ -53,11 +53,6 @@ class FileVectorSource(str, Enum):
 
 
 @dataclass(frozen=True)
-class ParentPropagation:
-    enabled: bool = True
-
-
-@dataclass(frozen=True)
 class FileRefreshIntent:
     """Refresh a flat file and its parent after synchronous content commit."""
 
@@ -247,7 +242,6 @@ class SemanticPlan:
     context_type: str
     tree: SemanticTreeSnapshot
     vectorize: bool = True
-    propagation: ParentPropagation = field(default_factory=ParentPropagation)
     file_vector_source: FileVectorSource = FileVectorSource.CONTENT
     ingest_options: IngestOptions = field(default_factory=IngestOptions)
     source_metadata: Mapping[str, str] | None = None
@@ -301,7 +295,6 @@ class SemanticPlan:
             context_type=str(data["context_type"]),
             tree=SemanticTreeSnapshot.from_dict(data.get("tree", {})),
             vectorize=bool(data.get("vectorize", True)),
-            propagation=ParentPropagation(**dict(data.get("propagation", {}))),
             file_vector_source=FileVectorSource(
                 data.get("file_vector_source", FileVectorSource.CONTENT.value)
             ),
@@ -593,6 +586,7 @@ def _semantic_closure(
     new_kinds: Mapping[str, str],
     *,
     repair_indexes: bool = True,
+    input_only_paths: frozenset[str] = frozenset(),
 ) -> tuple[set[str], set[str], set[str]]:
     """Return active nodes, membership-changing parents, and retained closure.
 
@@ -612,6 +606,8 @@ def _semantic_closure(
             parent = _parent(parent)
 
     for path, entry in diff.entries.items():
+        if path in input_only_paths:
+            continue
         content_state = ContentState(entry.content_state)
         index_state = IndexState(entry.index_state)
         content_requires_semantics = content_state in {
@@ -624,7 +620,12 @@ def _semantic_closure(
             or (
                 repair_indexes
                 and index_state
-                in {IndexState.MISSING, IndexState.PARTIAL, IndexState.LEVEL_CONFLICT}
+                in {
+                    IndexState.MISSING,
+                    IndexState.PARTIAL,
+                    IndexState.LEVEL_CONFLICT,
+                }
+                or (repair_indexes and index_state is IndexState.STALE and bool(entry.level_states))
             )
         ) and entry.new_kind in {"file", "directory"}:
             active.add(path)
@@ -643,6 +644,51 @@ def _semantic_closure(
         if path and _parent(path) in active:
             retained.add(path)
     return active, membership_changed, retained
+
+
+def _promote_missing_semantic_inputs(
+    *,
+    active: set[str],
+    retained: set[str],
+    new_kinds: Mapping[str, str],
+    records_by_path: Mapping[str, Mapping[int, VectorRecordSnapshot]],
+    input_only_paths: frozenset[str] = frozenset(),
+) -> None:
+    """Promote retained inputs that cannot provide an abstract to a parent.
+
+    An L2 record can be vector-complete after a vectors-only ingest while still
+    lacking the file abstract required by its parent's first aggregation.  The
+    same applies to a retained directory without an L0 abstract.  Semantic
+    closure therefore tracks reusable abstracts independently from index MD5.
+    """
+    while True:
+        missing_inputs = {
+            path
+            for path in retained - active
+            if new_kinds.get(path) in {"file", "directory"}
+            and (
+                (
+                    record := records_by_path.get(path, {}).get(
+                        2 if new_kinds.get(path) == "file" else 0
+                    )
+                )
+                is None
+                or not str(record.fields.get("abstract") or "").strip()
+            )
+        }
+        blocked_inputs = missing_inputs & input_only_paths
+        if blocked_inputs:
+            raise ValueError(
+                "non-recursive semantic plan lacks reusable abstract for "
+                + ", ".join(sorted(blocked_inputs))
+            )
+        promoted = missing_inputs - input_only_paths
+        if not promoted:
+            return
+        active.update(promoted)
+        for path in new_kinds:
+            if path and _parent(path) in promoted:
+                retained.add(path)
 
 
 async def hydrate_context_plan_records(
@@ -761,6 +807,7 @@ def build_context_update_plan(
     ingest_options: IngestOptions | Mapping[str, Any] | None = None,
     source_metadata: Mapping[str, str] | None = None,
     closure: tuple[set[str], set[str], set[str]] | None = None,
+    input_only_paths: frozenset[str] = frozenset(),
 ) -> ContextUpdatePlan:
     """Compile resolved RNFV facts into synchronous and asynchronous actions.
 
@@ -779,6 +826,7 @@ def build_context_update_plan(
         diff,
         new_kinds,
         repair_indexes=request.vectorize and request.processing_mode != "vectors_only",
+        input_only_paths=input_only_paths,
     )
     semantic_enabled = request.processing_mode != "vectors_only"
     if not semantic_enabled:
@@ -918,6 +966,15 @@ def build_context_update_plan(
                 )
                 scheduled_direct_ids.add(record.record_id)
 
+    if semantic_enabled:
+        _promote_missing_semantic_inputs(
+            active=active,
+            retained=retained,
+            new_kinds=new_kinds,
+            records_by_path=records_by_path,
+            input_only_paths=input_only_paths,
+        )
+
     semantic_entries: list[SemanticTreeEntry] = []
     for path in sorted(retained, key=lambda value: (value.count("/"), value)):
         kind = new_kinds.get(path)
@@ -926,7 +983,9 @@ def build_context_update_plan(
         diff_entry = diff.entries.get(path)
         state = ContentState(diff_entry.content_state) if diff_entry else ContentState.UNCHANGED
         action = (
-            SemanticAction.GENERATE
+            SemanticAction.REUSE
+            if path in input_only_paths
+            else SemanticAction.GENERATE
             if kind == "file" and path in active
             else SemanticAction.AGGREGATE
             if kind == "directory" and path in active
@@ -959,6 +1018,8 @@ def build_context_update_plan(
                 )
                 else IndexAction.UPSERT
             )
+            if diff_entry and diff_entry.level_states:
+                index_action = IndexAction.MERGE
             slots.append(
                 IndexSlot(
                     level,
@@ -992,7 +1053,17 @@ def build_context_update_plan(
                     request.vectorize
                     and diff_entry
                     and IndexState(diff_entry.index_state)
-                    in {IndexState.MISSING, IndexState.PARTIAL, IndexState.LEVEL_CONFLICT}
+                    in {
+                        IndexState.MISSING,
+                        IndexState.PARTIAL,
+                        IndexState.LEVEL_CONFLICT,
+                    }
+                    or (
+                        request.vectorize
+                        and diff_entry
+                        and IndexState(diff_entry.index_state) is IndexState.STALE
+                        and bool(diff_entry.level_states)
+                    )
                 ),
             )
         )
@@ -1022,6 +1093,111 @@ def build_context_update_plan(
         tuple(content_actions),
         semantic_plan,
         tuple(direct_actions),
+    )
+
+
+def build_rfv_context_update_plan(
+    *,
+    snapshot: Any,
+    context_type: str,
+    account_id: str,
+    source_metadata: Mapping[str, str] | None = None,
+) -> tuple[Any, ContextUpdatePlan]:
+    """Compile an R/F/V maintenance snapshot without inventing content writes."""
+    from openviking.storage.resource_rfv import resolve_rfv_state
+
+    diff = resolve_rfv_state(snapshot)
+    if snapshot.request.processing_mode != "vectors_only":
+        plan = build_context_update_plan(
+            root_uri=snapshot.request.target_uri,
+            context_type=context_type,
+            request=snapshot.request,
+            diff=diff,
+            new_kinds={
+                path: "directory" if entry.is_dir else "file"
+                for path, entry in snapshot.formal.entries.items()
+            },
+            artifact_paths={},
+            records=snapshot.vectors.records_by_id,
+            is_code_repo=False,
+            account_id=account_id,
+            source_metadata=source_metadata or snapshot.source_metadata,
+            input_only_paths=snapshot.input_only_paths,
+        )
+        if plan.content_tree_actions:
+            raise ValueError("RFV maintenance plan must not mutate formal content")
+        return diff, plan
+    records_by_path, duplicate_records = _records_by_path(snapshot.vectors.records_by_id)
+    direct_actions: list[DirectIndexAction] = [
+        DirectIndexAction(IndexAction.DELETE, record.uri, record.level, record.record_id)
+        for record in duplicate_records
+    ]
+
+    for path, entry in sorted(diff.entries.items()):
+        existing = records_by_path.get(path, {})
+        if entry.new_kind is None and IndexState(entry.index_state) is IndexState.ORPHAN:
+            direct_actions.extend(
+                DirectIndexAction(IndexAction.DELETE, record.uri, level, record.record_id)
+                for level, record in sorted(existing.items())
+            )
+            continue
+
+        expected_levels = {2} if entry.new_kind == "file" else {0, 1}
+        for level, record in sorted(existing.items()):
+            if level not in expected_levels or (
+                snapshot.request.processing_mode == "vectors_only"
+                and IndexState(entry.level_states.get(level, IndexState.ABSENT))
+                is IndexState.ORPHAN
+            ):
+                direct_actions.append(
+                    DirectIndexAction(IndexAction.DELETE, record.uri, level, record.record_id)
+                )
+
+        for level in sorted(expected_levels):
+            record = existing.get(level)
+            level_state = IndexState(entry.level_states.get(level, IndexState.MISSING))
+            field_patch = _field_patch(snapshot.request, record)
+            if level_state in {IndexState.MISSING, IndexState.STALE}:
+                if level not in entry.level_md5s:
+                    continue
+                uri = _uri(snapshot.request.target_uri, path)
+                direct_actions.append(
+                    DirectIndexAction(
+                        IndexAction.MERGE,
+                        uri,
+                        level,
+                        (
+                            record.record_id
+                            if record is not None
+                            else vector_record_id(account_id, uri, level)
+                        ),
+                        field_patch=field_patch,
+                        md5=entry.level_md5s.get(level),
+                    )
+                )
+            elif field_patch is not None and record is not None:
+                direct_actions.append(
+                    DirectIndexAction(
+                        IndexAction.UPDATE_FIELDS,
+                        record.uri,
+                        level,
+                        record.record_id,
+                        field_patch=field_patch.with_seed(
+                            {
+                                "uri": record.uri,
+                                "account_id": account_id,
+                                "level": level,
+                                **(_portable_existing_fields(record) or {}),
+                                **field_patch.resolve(record.fields),
+                            }
+                        ),
+                    )
+                )
+
+    return diff, ContextUpdatePlan(
+        snapshot.request.target_uri,
+        context_type,
+        direct_index_actions=tuple(direct_actions),
     )
 
 
@@ -1200,13 +1376,13 @@ __all__ = [
     "IndexAction",
     "IndexSlot",
     "IndexState",
-    "ParentPropagation",
     "SemanticAction",
     "SemanticPlan",
     "SemanticTreeEntry",
     "SemanticTreeSnapshot",
     "build_context_update_plan",
     "build_context_update_plan_from_snapshot",
+    "build_rfv_context_update_plan",
     "execute_content_tree_actions",
     "hydrate_context_plan_records",
 ]

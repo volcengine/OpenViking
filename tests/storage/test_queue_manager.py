@@ -45,6 +45,7 @@ def test_queue_concurrency_uses_separate_configured_values() -> None:
 
     assert manager._max_concurrent_for_queue(manager.EXTERNAL_PARSE) == 9
     assert manager._max_concurrent_for_queue(manager.ADD_RESOURCE) == 7
+    assert manager._max_concurrent_for_queue(manager.REINDEX) == 1
     assert manager._max_concurrent_for_queue(manager.SESSION_COMMIT) == 5
 
 

@@ -2132,8 +2132,10 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
         batch_size: int = 100,
         output_fields: Optional[List[str]] = None,
+        recursive: bool = True,
+        include_direct_children: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
-        """Strictly load lightweight L0/L1/L2 metadata below a resource root."""
+        """Strictly load lightweight L0/L1/L2 metadata in a URI scope."""
         projection = list(
             dict.fromkeys(
                 [
@@ -2146,7 +2148,11 @@ class VikingVectorIndexBackend:
         scope = And(
             [
                 Eq("account_id", ctx.account_id),
-                PathScope("uri", canonical_uri, depth=-1),
+                PathScope(
+                    "uri",
+                    canonical_uri,
+                    depth=-1 if recursive else 1 if include_direct_children else 0,
+                ),
                 In("level", [0, 1, 2]),
             ]
         )
