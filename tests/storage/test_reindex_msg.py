@@ -229,3 +229,50 @@ async def test_reindex_processor_cancellation_releases_root_lock_handoff():
     assert outcome.outcome.value == "cancelled"
     agfs.pathlock_adopt.assert_awaited_once_with({"lease_ref": "root-handoff"})
     agfs.pathlock_release.assert_awaited_once_with({"lease": "root"})
+
+
+@pytest.mark.asyncio
+async def test_reindex_processor_does_not_release_lease_owned_by_failed_executor(monkeypatch):
+    from openviking.storage.queuefs.reindex_processor import ReindexProcessor
+
+    tracker = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(status=TaskStatus.RUNNING)),
+        start=AsyncMock(),
+        complete=AsyncMock(),
+        fail=AsyncMock(),
+        wait_for_descendants=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.reindex_processor.get_task_tracker", Mock(return_value=tracker)
+    )
+    monkeypatch.setattr(
+        "openviking.server.dependencies.get_service",
+        lambda: SimpleNamespace(_vlm_resolver=None, _vector_config_resolver=None),
+    )
+    agfs = SimpleNamespace(pathlock_release=AsyncMock())
+
+    async def fail_after_releasing(_self, *, existing_lease, **_kwargs):
+        await agfs.pathlock_release(existing_lease)
+        raise RuntimeError("semantic plan enqueue failed")
+
+    monkeypatch.setattr(
+        "openviking.service.reindex_executor.ReindexExecutor._run",
+        fail_after_releasing,
+    )
+    processor = ReindexProcessor(SimpleNamespace(_async_agfs=agfs))
+    processor._adopt_or_reacquire = AsyncMock(return_value={"lease": "root"})
+    message = ReindexMsg(
+        task_id="task-1",
+        uri="viking://resources/demo",
+        object_type="resource",
+        mode="semantic_and_vectors",
+        account_id="account-1",
+        user_id="user-1",
+        role="admin",
+    )
+
+    outcome = await processor.on_dequeue({"id": "queue-1", "data": message.to_dict()})
+
+    assert outcome.outcome.value == "failed"
+    agfs.pathlock_release.assert_awaited_once_with({"lease": "root"})
+    tracker.fail.assert_awaited_once()

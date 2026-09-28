@@ -110,6 +110,11 @@ class ReindexProcessor(DequeueHandlerBase):
                 vector_config_resolver=service._vector_config_resolver,
             )
             with bind_task_context(msg.task_id, ctx.account_id, ctx.user.user_id):
+                # _run owns an existing lease and releases or hands it off on
+                # every exit path. Clear this consumer's reference before the
+                # call so an exception cannot release the same lease twice.
+                executor_lease = lease
+                lease = None
                 result = await executor._run(
                     uri=msg.uri,
                     object_type=msg.object_type,
@@ -120,9 +125,8 @@ class ReindexProcessor(DequeueHandlerBase):
                         mode=msg.mode, tags=msg.tags, tag_mode=msg.tag_mode
                     ),
                     ctx=ctx,
-                    existing_lease=lease,
+                    existing_lease=executor_lease,
                 )
-            lease = None
             if metadata is not None:
                 await tracker.wait_for_descendants(msg.task_id, metadata.work_id)
             await tracker.complete(
