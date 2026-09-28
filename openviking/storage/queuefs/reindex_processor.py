@@ -29,6 +29,8 @@ class ReindexProcessor(DequeueHandlerBase):
             user=UserIdentifier(account_id=msg.account_id, user_id=msg.user_id),
             role=Role(msg.role),
             group_ids=tuple(msg.group_ids),
+            actor_peer_id=msg.actor_peer_id,
+            bypass_acl=msg.bypass_acl,
         )
 
     async def _adopt_or_reacquire(self, msg: ReindexMsg, ctx: RequestContext) -> Dict[str, Any]:

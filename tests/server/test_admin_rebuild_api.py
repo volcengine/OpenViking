@@ -521,9 +521,7 @@ async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
         "openviking.service.reindex_executor.get_service",
         lambda: SimpleNamespace(viking_fs=FakeVikingFS()),
     )
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.get_queue_manager", lambda: FakeQueueManager()
-    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: FakeQueueManager())
     ctx = RequestContext(
         user=UserIdentifier(account_id="test", user_id="alice"),
         role=Role.ROOT,
@@ -548,6 +546,8 @@ async def test_reindex_executor_passes_tags_to_background_run(monkeypatch):
     assert message.tags == ["Team=Search"]
     assert message.tag_mode == "append"
     assert message.lock_handoff == {"handoff": "root"}
+    assert message.actor_peer_id == ctx.actor_peer_id
+    assert message.bypass_acl is ctx.bypass_acl
 
 
 @pytest.mark.asyncio

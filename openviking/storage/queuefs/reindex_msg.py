@@ -20,6 +20,8 @@ class ReindexMsg:
     tags: Optional[list[str]] = None
     tag_mode: str = "replace"
     group_ids: list[str] = field(default_factory=list)
+    actor_peer_id: Optional[str] = None
+    bypass_acl: bool = False
     telemetry_id: Optional[str] = None
     lock_handoff: Optional[Dict[str, Any]] = None
     lock_handoff_retry: int = 0
@@ -50,6 +52,10 @@ class ReindexMsg:
             tags=list(data["tags"]) if isinstance(data.get("tags"), list) else None,
             tag_mode=str(data.get("tag_mode") or "replace"),
             group_ids=[str(value) for value in data.get("group_ids", [])],
+            actor_peer_id=data.get("actor_peer_id")
+            if isinstance(data.get("actor_peer_id"), str)
+            else None,
+            bypass_acl=bool(data.get("bypass_acl", False)),
             telemetry_id=data.get("telemetry_id")
             if isinstance(data.get("telemetry_id"), str)
             else None,

@@ -284,6 +284,8 @@ class ReindexExecutor:
                 user_id=ctx.user.user_id,
                 group_ids=list(ctx.group_ids),
                 role=str(ctx.role),
+                actor_peer_id=ctx.actor_peer_id,
+                bypass_acl=ctx.bypass_acl,
                 telemetry_id=get_current_telemetry().telemetry_id or None,
                 lock_handoff=handoff,
             )

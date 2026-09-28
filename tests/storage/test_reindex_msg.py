@@ -22,6 +22,8 @@ def test_reindex_msg_round_trips_only_request_descriptor():
         user_id="user-1",
         group_ids=["group-1"],
         role="admin",
+        actor_peer_id="peer-1",
+        bypass_acl=True,
         lock_handoff={"lease_ref": "lease-1"},
     )
 
@@ -30,6 +32,27 @@ def test_reindex_msg_round_trips_only_request_descriptor():
     assert restored == message
     assert "source_contents" not in restored.to_dict()
     assert "snapshot" not in restored.to_dict()
+
+
+def test_reindex_processor_restores_actor_peer_and_acl_bypass_context():
+    from openviking.storage.queuefs.reindex_processor import ReindexProcessor
+
+    message = ReindexMsg(
+        task_id="task-1",
+        uri="viking://resources/demo",
+        object_type="resource",
+        mode="vectors_only",
+        account_id="account-1",
+        user_id="user-1",
+        role="admin",
+        actor_peer_id="peer-1",
+        bypass_acl=True,
+    )
+
+    ctx = ReindexProcessor._ctx(message)
+
+    assert ctx.actor_peer_id == "peer-1"
+    assert ctx.bypass_acl is True
 
 
 def test_reindex_msg_rejects_missing_descriptor_fields():
