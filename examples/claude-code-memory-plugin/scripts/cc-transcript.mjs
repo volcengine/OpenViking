@@ -11,6 +11,8 @@
 import {
   collectToolNamesByIdFromEntries,
   extractPartsFromPayload,
+  finalAssistantKeepMask,
+  isToolTransportRole,
   normalizeCaptureRole,
 } from "./shared/capture-utils.mjs";
 
@@ -132,15 +134,31 @@ function textFromParts(parts) {
 export function extractCaptureTurns(messages, cfg = {}) {
   const payloads = (messages || []).map((message) => normalizeMessage(message, cfg));
   const toolNameById = collectToolNamesByIdFromEntries(payloads.filter(Boolean));
-  const turns = [];
+  const includeTool = cfg.captureToolResults === true;
+  const collected = [];
   for (const payload of payloads) {
     const role = payload && normalizeCaptureRole(payload.role);
     if (!role) continue;
+    const isToolTransport = isToolTransportRole(payload.role);
+    if (!includeTool && isToolTransport) continue;
     // Output was capped in normalizeBlock; capping it again here would eat the
     // "[truncated, N more chars]" note that cap just appended.
-    const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
+    const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById, includeTool });
     if (parts.length === 0) continue;
-    turns.push({ role, text: textFromParts(parts), parts });
+    // Claude nests a tool result inside a `user` message rather than giving it
+    // a transport role of its own, so a message carrying nothing but tool parts
+    // is tool traffic whatever its role says. `captureAssistantFinalOnly` needs
+    // that: otherwise such a message opens a group and splits one turn in two.
+    const toolOnly = parts.every((part) => part.type !== "text");
+    collected.push({
+      turn: { role, text: textFromParts(parts), parts },
+      isToolTransport: isToolTransport || toolOnly,
+    });
   }
-  return turns;
+  if (cfg.captureAssistantFinalOnly !== true) return collected.map((item) => item.turn);
+  const keep = finalAssistantKeepMask(collected.map((item) => ({
+    role: item.turn.role,
+    isToolTransport: item.isToolTransport,
+  })));
+  return collected.filter((_, i) => keep[i]).map((item) => item.turn);
 }

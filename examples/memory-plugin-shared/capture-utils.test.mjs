@@ -176,6 +176,54 @@ test("the Claude Code adapter is the extractCaptureTurns its callers import", as
   )
 })
 
+/**
+ * Claude Code does not route through the shared `extractCaptureTurns`: its
+ * adapter flattens a nested `tool_result` and reads the capture scope itself.
+ * These cases exist because that adapter has its own loop, so the shared
+ * function's coverage says nothing about whether the knob reaches Claude Code.
+ */
+test("the Claude Code adapter honours the capture scope knobs", async () => {
+  const cc = await import("../claude-code-memory-plugin/scripts/cc-transcript.mjs")
+  const turn = () => [{
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text: "what did we decide" }] },
+  }, {
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text: "first draft" }] },
+  }, {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "a.txt" } }],
+    },
+  }, {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "file body" }] }],
+    },
+  }, {
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text: "final answer" }] },
+  }]
+  const roles = (cfg) => cc.extractCaptureTurns(turn(), cfg).map((t) => t.role)
+
+  // Off by default: the tool call and the tool result are both gone.
+  assert.deepEqual(roles({}), ["user", "assistant", "assistant"])
+  assert.deepEqual(roles({ captureToolResults: true }), ["user", "assistant", "assistant", "user", "assistant"])
+  // A nested tool result opens no group, so "final answer" is still the last
+  // reply of the one turn rather than of a turn the tool result invented.
+  assert.deepEqual(
+    cc.extractCaptureTurns(turn(), { captureToolResults: true, captureAssistantFinalOnly: true })
+      .map((t) => t.text),
+    ["what did we decide", "", "final answer"],
+  )
+  assert.deepEqual(
+    cc.extractCaptureTurns(turn(), { captureAssistantFinalOnly: true }).map((t) => t.text),
+    ["what did we decide", "final answer"],
+  )
+})
+
 test("the Codex adapter is the extractCaptureTurns its callers import", async () => {
   const codex = await import("../codex-memory-plugin/scripts/capture-utils.mjs")
   const vendored = await import("../codex-memory-plugin/scripts/shared/capture-utils.mjs")

@@ -58,6 +58,9 @@ function baseConfig(endpoint) {
     timeoutMs: 5000,
     autoCapture: true,
     captureAssistantTurns: true,
+    // Tool traffic is opt-in; the cases that assert on tool parts say so here
+    // rather than each repeating it.
+    captureToolResults: true,
     captureToolMaxChars: 2000,
     captureMode: "semantic",
     captureMaxLength: 24000,

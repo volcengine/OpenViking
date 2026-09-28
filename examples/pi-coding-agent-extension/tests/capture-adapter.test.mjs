@@ -39,7 +39,8 @@ for (const role of ["toolResult", "tool_result", "tool"]) {
           message: { role, toolCallId: "call-1", toolName: "bash", content: output, isError },
         },
       ];
-      const cfg = { captureAssistantTurns: true, captureToolMaxChars: 2000 };
+      // Tool traffic is opt-in; this case is about what happens once it is on.
+      const cfg = { captureAssistantTurns: true, captureToolMaxChars: 2000, captureToolResults: true };
       const result = extractBranchCapturePayloads(branch, 0, cfg);
       assert.deepEqual(result.payloads.map((payload) => payload.role), ["user", "assistant", "user"]);
       assert.deepEqual(result.payloads[1].parts, [{
@@ -113,7 +114,7 @@ test("tool-only payloads carry tool output once, not duplicated as text", () => 
       },
     ],
     0,
-    { captureAssistantTurns: true, captureToolMaxChars: 1000000 },
+    { captureAssistantTurns: true, captureToolMaxChars: 1000000, captureToolResults: true },
   );
 
   const parts = payloads.flatMap((payload) => payload.parts || []);
@@ -130,15 +131,15 @@ test("mixed text and tool capture does not duplicate rendered tool calls", () =>
       { type: "text", text: "Run this." },
       { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "x" } },
     ],
-  }], 0, { faithfulCapture: true });
+  }], 0, { faithfulCapture: true, captureToolResults: true });
   assert.equal(payloads[0].parts[0].text, "Run this.");
   assert.equal(payloads[0].parts[1].tool_name, "lookup");
 });
 
 for (const [mode, modeConfig] of [
-  ["normal", {}],
-  ["takeover", { takeoverEnabled: true }],
-  ["faithful", { faithfulCapture: true }],
+  ["normal", { captureToolResults: true }],
+  ["takeover", { takeoverEnabled: true, captureToolResults: true }],
+  ["faithful", { faithfulCapture: true, captureToolResults: true }],
 ]) {
   for (const [name, rules, text, expected] of [
     ["substitution", ["s/secret/[removed]/g"], "Remember secret for later.", "Remember [removed] for later."],
