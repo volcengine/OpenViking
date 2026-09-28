@@ -41,3 +41,20 @@ def test_unknown_field_is_still_rejected(load, tmp_path):
 
     with pytest.raises(ValueError):
         load(str(path))
+
+
+@LOADERS
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"auth_mode": "oidc", "oidc_token": "header.payload.signature"},
+        # The trusted-mode client example in docs/*/guides/04-authentication.md.
+        {"auth_mode": "trusted", "api_key": "key", "account": "acme", "user": "alice"},
+    ],
+    ids=["oidc_token", "trusted"],
+)
+def test_auth_settings_the_rust_cli_reads_are_accepted(load, tmp_path, fields):
+    path = tmp_path / "ovcli.conf"
+    path.write_text(json.dumps({"url": "http://localhost:1933", **fields}))
+
+    assert load(str(path)) is not None
