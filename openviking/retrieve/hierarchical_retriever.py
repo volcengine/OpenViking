@@ -48,7 +48,7 @@ class RetrieverMode(str):
 class HierarchicalRetriever:
     """Global retriever with dense and sparse vector support."""
 
-    RERANK_CANDIDATE_MULTIPLIER = 3
+    RERANK_CANDIDATE_MULTIPLIER = 2
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -285,11 +285,15 @@ class HierarchicalRetriever:
                 [document for _, document in rerank_documents],
             )
         except Exception as e:
-            logger.warning("[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e)
+            logger.warning(
+                "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
+            )
             return fallback_scores
 
         if not scores or len(scores) != len(rerank_documents):
-            logger.warning("[HierarchicalRetriever] Invalid rerank result, fallback to vector scores")
+            logger.warning(
+                "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
+            )
             return fallback_scores
 
         normalized_scores = list(fallback_scores)

@@ -22,7 +22,7 @@ Query → Intent Analysis (search only, optional) → Global Vector Search → R
 
 1. **Intent Analysis** (search only): Understand query intent, expand queries
 2. **Vector Search**: Find candidates using embeddings
-3. **Rerank**: THINKING with a usable reranker reranks `3 × limit` recalled candidates once; otherwise recall is limited to `limit` hits
+3. **Rerank**: THINKING with a usable reranker reranks `2 × limit` recalled candidates once; otherwise recall is limited to `limit` hits
 4. **Results**: Return top-k contexts
 
 ## API Reference
@@ -372,7 +372,7 @@ The `search()` method adds session context understanding and intent analysis cap
 1. Load session context (if session_id is provided)
 2. Analyze query intent, understand actual needs combined with conversation history
 3. Expand queries to improve recall rate
-4. Run one global search per query; with a usable reranker, recall `3 × limit` candidates and rerank once to return at most `limit` results, otherwise recall `limit` hits directly
+4. Run one global search per query; with a usable reranker, recall `2 × limit` candidates and rerank once to return at most `limit` results, otherwise recall `limit` hits directly
 5. Return search results with query plan
 
 **Code Entry Points**:

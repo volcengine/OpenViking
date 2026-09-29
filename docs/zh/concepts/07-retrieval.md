@@ -78,7 +78,7 @@ class TypedQuery:
 | 模式 | 向量候选数 | Rerank |
 |------|------------|--------|
 | QUICK | `limit` | 不执行 |
-| THINKING，且配置了可用的 Rerank | `3 × limit` | 对召回候选统一执行一次，返回最多 `limit` 条 |
+| THINKING，且配置了可用的 Rerank | `2 × limit` | 对召回候选统一执行一次，返回最多 `limit` 条 |
 | THINKING，未配置可用的 Rerank | `limit` | 不执行 |
 
 `find()` 使用 QUICK。`search()` 配置了可用的 Rerank 时自动使用 THINKING，否则使用 QUICK。这是内部检索模式，不是 LLM 的思考参数，也不控制会话意图分析。意图分析生成的多条查询仍分别检索和排序，再按现有方式汇总。
@@ -87,7 +87,7 @@ class TypedQuery:
 
 ## Rerank 策略
 
-Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例如 `limit=10`，启用 Rerank 时先召回向量分数最高的 30 条，再按 Rerank 结果返回最多 10 条；未启用时直接召回 10 条。
+Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例如 `limit=10`，启用 Rerank 时先召回向量分数最高的 20 条，再按 Rerank 结果返回最多 10 条；未启用时直接召回 10 条。
 
 - 使用候选索引记录的 `abstract` 字段作为 Rerank 文本。
 - 分数阈值在 Rerank 后应用；未启用 Rerank 时使用向量分数。

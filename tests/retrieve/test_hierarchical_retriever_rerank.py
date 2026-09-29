@@ -109,7 +109,7 @@ def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", [None, RetrieverMode.THINKING])
 async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
-    fake_client = FakeRerankClient([0.1, 0.2, 0.3, 0.4, 0.95, 0.99])
+    fake_client = FakeRerankClient([0.1, 0.2, 0.95, 0.99])
     monkeypatch.setattr(
         "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
         lambda config: fake_client,
@@ -117,9 +117,7 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
     storage = DummyStorage(
         [
             _result("viking://resources/root", 0.95, level=0, abstract="root abstract"),
-            _result("viking://resources/file-a", 0.9, abstract="file A"),
             _result("viking://resources/dir", 0.85, level=1, abstract="dir overview"),
-            _result("viking://resources/file-b", 0.8, abstract="file B"),
             _result("viking://resources/file-c", 0.2, abstract="file C"),
             _result("viking://resources/file-d", 0.05, abstract="file D"),
             _result("viking://resources/outside-pool", 0.01, abstract="outside pool"),
@@ -137,11 +135,9 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
         "viking://resources/file-c",
     ]
     assert [ctx.score for ctx in result.matched_contexts] == [0.99, 0.95]
-    assert fake_client.calls == [
-        ("hello", ["root abstract", "file A", "dir overview", "file B", "file C", "file D"])
-    ]
+    assert fake_client.calls == [("hello", ["root abstract", "dir overview", "file C", "file D"])]
     assert len(storage.search_calls) == 1
-    assert storage.search_calls[0]["limit"] == 6
+    assert storage.search_calls[0]["limit"] == 4
     assert storage.search_calls[0]["level"] is None
     assert storage.search_calls[0]["target_directories"] == ["viking://resources"]
     assert storage.search_calls[0]["extra_filter"] == scope
@@ -261,7 +257,7 @@ async def test_retrieve_falls_back_to_vector_scores_when_rerank_fails(monkeypatc
     ]
     assert [ctx.score for ctx in result.matched_contexts] == [0.8, 0.2]
     assert len(storage.search_calls) == 1
-    assert storage.search_calls[0]["limit"] == 6
+    assert storage.search_calls[0]["limit"] == 4
     assert fake_client.calls == [("hello", ["deep B", "deep A", "deep C"])]
 
 
