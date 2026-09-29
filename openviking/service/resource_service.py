@@ -651,6 +651,26 @@ class ResourceService:
             )
             return False
 
+    def _track_background_task(self, task: asyncio.Task[Any], label: str) -> None:
+        self._background_tasks.add(task)
+
+        def _on_done(done: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                exc = done.exception()
+            except asyncio.CancelledError:
+                return
+            if exc is not None:
+                logger.error(
+                    "Background resource task %s failed",
+                    label,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+
+        task.add_done_callback(_on_done)
+
     async def close_background_tasks(self) -> None:
         """Cancel in-flight connector monitoring tasks during service shutdown."""
         if not self._background_tasks:
@@ -2312,6 +2332,11 @@ class ResourceService:
                     user_id=user_id,
                 )
         except Exception as exc:
+            logger.exception(
+                "Queue processing monitor failed for task_id=%s telemetry_id=%s",
+                task_id,
+                telemetry_id,
+            )
             await task_tracker.fail(task_id, str(exc), account_id=account_id, user_id=user_id)
         finally:
             request_wait_tracker.cleanup(telemetry_id)
@@ -2530,11 +2555,12 @@ class ResourceService:
             processing_started = True
             if not wait:
                 monitor_started = True
-                asyncio.create_task(
+                monitor_task = asyncio.create_task(
                     self._monitor_queue_processing(
                         task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
                     )
                 )
+                self._track_background_task(monitor_task, f"queue_monitor:{task.task_id}")
             if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                 result["root_uri"] = result["uri"]
 
@@ -2585,11 +2611,12 @@ class ResourceService:
                     # A standalone add retains its original timeout behavior.
                     # An update's caller separately cancels before restoring.
                     monitor_started = True
-                    asyncio.create_task(
+                    monitor_task = asyncio.create_task(
                         self._monitor_queue_processing(
                             task.task_id, telemetry_id, ctx.account_id, ctx.user.user_id
                         )
                     )
+                    self._track_background_task(monitor_task, f"queue_monitor:{task.task_id}")
                 else:
                     failure_message = str(exc) or "Skill processing cancelled"
                     await run_to_completion(
