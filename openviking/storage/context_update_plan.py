@@ -589,14 +589,20 @@ def _rfv_file_summary(
     record: VectorRecordSnapshot | None,
     overview_summaries: dict[str, Mapping[str, str]],
 ) -> str:
-    parent_uri = _uri(snapshot.request.target_uri, _parent(relative_path))
+    file_name = relative_path.rsplit("/", 1)[-1]
+    if not relative_path and not snapshot.formal.entries[""].is_dir:
+        file_uri = snapshot.request.target_uri.rstrip("/")
+        parent_uri = file_uri.rsplit("/", 1)[0]
+        file_name = file_uri.rsplit("/", 1)[-1]
+    else:
+        parent_uri = _uri(snapshot.request.target_uri, _parent(relative_path))
     overview = snapshot.source_contents.get((parent_uri, 1))
     if isinstance(overview, (str, bytes)):
         summaries = overview_summaries.get(parent_uri)
         if summaries is None:
             summaries = parse_overview_file_summaries(overview)
             overview_summaries[parent_uri] = summaries
-        summary = summaries.get(relative_path.rsplit("/", 1)[-1])
+        summary = summaries.get(file_name)
         if summary:
             return summary
     return str(record.fields.get("abstract") or "") if record else ""

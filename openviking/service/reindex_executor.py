@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Optional
 
 from openviking.config.vlm import VLMResolver
@@ -725,6 +725,28 @@ class ReindexExecutor:
             account_id=run.ctx.account_id,
             source_metadata=snapshot.source_metadata,
         )
+        if (
+            mode == "vectors_only"
+            and not snapshot.formal.entries[""].is_dir
+            and any(
+                action.level == int(ContextLevel.DETAIL)
+                and action.action.value in {"merge", "upsert"}
+                for action in plan.direct_index_actions
+            )
+        ):
+            enriched_snapshot = await self._with_single_file_parent_overview(
+                snapshot,
+                ctx=run.ctx,
+                viking_fs=service.viking_fs,
+            )
+            if enriched_snapshot is not snapshot:
+                snapshot = enriched_snapshot
+                diff, plan = build_rfv_context_update_plan(
+                    snapshot=snapshot,
+                    context_type=context_type,
+                    account_id=run.ctx.account_id,
+                    source_metadata=snapshot.source_metadata,
+                )
         run.counters.scanned_records += len(snapshot.formal.entries)
         if plan.direct_index_actions:
             owner_ctx = self._content_owner_ctx(uri, run.ctx)
@@ -766,6 +788,32 @@ class ReindexExecutor:
                 ingest_options=run.ingest_options,
                 file_md5=plan.file_refresh.md5,
             )
+
+    @staticmethod
+    async def _with_single_file_parent_overview(
+        snapshot: Any,
+        *,
+        ctx: RequestContext,
+        viking_fs: Any,
+    ) -> Any:
+        """Best-effort hydrate a file root's parent overview for L2 summary reuse."""
+        parent = VikingURI(snapshot.request.target_uri).parent
+        if parent is None:
+            return snapshot
+        try:
+            raw = await viking_fs.read_file_bytes(f"{parent.uri}/.overview.md", ctx=ctx)
+            overview = body_for_preview(raw)
+        except Exception:
+            return snapshot
+        if not overview.strip():
+            return snapshot
+        return replace(
+            snapshot,
+            source_contents={
+                **snapshot.source_contents,
+                (parent.uri, int(ContextLevel.OVERVIEW)): overview,
+            },
+        )
 
     async def _enqueue_reindex_semantic_plan(
         self,

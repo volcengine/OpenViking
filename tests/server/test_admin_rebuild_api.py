@@ -910,6 +910,113 @@ async def test_reindex_rfv_enqueues_semantic_plan_without_snapshot_source_bytes(
     assert b"reindex source must stay in memory" not in json.dumps(queue.message.to_dict()).encode()
 
 
+@pytest.mark.asyncio
+async def test_single_file_vectors_only_reindex_reads_parent_overview_only_for_rebuild(monkeypatch):
+    import openviking.service.reindex_executor as reindex_mod
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+    from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
+    from openviking.storage.resource_rnfv import RequestIntent, VectorIndexSnapshot
+
+    file_uri = "viking://resources/demo/a.md"
+    parent_uri = "viking://resources/demo"
+    snapshot = RFVSnapshot(
+        request=RequestIntent(file_uri, "vectors_only", force=True),
+        formal=RFVFormalSnapshot({"": RFVEntry(file_uri, "", False, {2: "a-md5"})}),
+        vectors=VectorIndexSnapshot({}, frozenset({"id", "uri", "level", "md5", "abstract"})),
+        source_contents={(file_uri, 2): b"current body"},
+    )
+    fs = SimpleNamespace(
+        read_file_bytes=AsyncMock(return_value=b"### a.md\nOverview summary."),
+    )
+    service = SimpleNamespace(
+        viking_fs=fs,
+        vikingdb_manager=SimpleNamespace(uses_content_field=False),
+        _resource_processor=None,
+    )
+    enqueued = AsyncMock(return_value=1)
+    monkeypatch.setattr(reindex_mod, "get_service", lambda: service)
+    monkeypatch.setattr(
+        "openviking.storage.resource_rfv.build_rfv_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+    monkeypatch.setattr(
+        "openviking.utils.resource_processor.ResourceProcessor._enqueue_index_actions",
+        enqueued,
+    )
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+    run = _make_reindex_run(ctx, _ReindexCounters())
+    run.root_is_dir = False
+
+    await ReindexExecutor()._reindex_rfv(
+        uri=file_uri,
+        mode="vectors_only",
+        context_type="resource",
+        recursive=False,
+        run=run,
+    )
+
+    fs.read_file_bytes.assert_awaited_once_with(f"{parent_uri}/.overview.md", ctx=ctx)
+    actions = enqueued.await_args.args[0]
+    assert len(actions) == 1
+    assert actions[0].summary == "Overview summary."
+
+
+@pytest.mark.asyncio
+async def test_single_file_vectors_only_noop_does_not_read_parent_overview(monkeypatch):
+    import openviking.service.reindex_executor as reindex_mod
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+    from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
+    from openviking.storage.resource_rnfv import (
+        RequestIntent,
+        VectorIndexSnapshot,
+        VectorRecordSnapshot,
+    )
+
+    file_uri = "viking://resources/demo/a.md"
+    snapshot = RFVSnapshot(
+        request=RequestIntent(file_uri, "vectors_only"),
+        formal=RFVFormalSnapshot({"": RFVEntry(file_uri, "", False, {2: "a-md5"})}),
+        vectors=VectorIndexSnapshot(
+            {
+                "a-l2": VectorRecordSnapshot(
+                    "a-l2", file_uri, "", 2, {"md5": "a-md5", "abstract": "summary"}
+                )
+            },
+            frozenset({"id", "uri", "level", "md5", "abstract"}),
+        ),
+    )
+    fs = SimpleNamespace(read_file_bytes=AsyncMock())
+    service = SimpleNamespace(
+        viking_fs=fs,
+        vikingdb_manager=SimpleNamespace(uses_content_field=False),
+        _resource_processor=None,
+    )
+    monkeypatch.setattr(reindex_mod, "get_service", lambda: service)
+    monkeypatch.setattr(
+        "openviking.storage.resource_rfv.build_rfv_snapshot",
+        AsyncMock(return_value=snapshot),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice"),
+        role=Role.ROOT,
+    )
+    run = _make_reindex_run(ctx, _ReindexCounters())
+    run.root_is_dir = False
+
+    await ReindexExecutor()._reindex_rfv(
+        uri=file_uri,
+        mode="vectors_only",
+        context_type="resource",
+        recursive=False,
+        run=run,
+    )
+
+    fs.read_file_bytes.assert_not_awaited()
+
+
 def test_reindex_merges_persisted_semantic_plan_stats_into_response_counters():
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
     from openviking.storage.queuefs.semantic_executor import SemanticTreeStats
