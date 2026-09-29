@@ -298,7 +298,7 @@ export default async function (pi: ExtensionAPI) {
       await sync.replayPending();
 
       // Profile injection
-      profileBlock = await buildSessionProfileBlock(client, config);
+      profileBlock = await buildSessionProfileBlock(client, config, logger);
 
       updateStatus(ctx, connected, windows, sync.sessionId);
 
@@ -605,12 +605,21 @@ function matchBypass(cwd: string, pattern: string): boolean {
 /** Build the <openviking-context> profile block. */
 async function buildSessionProfileBlock(
   client: OVClient, config: OVConfig,
+  logger?: ReturnType<typeof createLogger>,
 ): Promise<string> {
   try {
     const profile = await buildProfileBlock(
       (path: string, init?: any, options?: any) => client.fetchJSON(path, init, 10000),
       config.profileTokenBudget,
       config.peerId,
+      {
+        // This call site used to pass no options at all, so it also missed the
+        // byte cap. The logger matters more: without it the read/ls failures
+        // profile-inject reports are dropped and a broken server still reads
+        // as "no profile yet".
+        ...config,
+        log: (stage: string, data: unknown) => logger?.log(stage, data),
+      },
     );
     if (!profile?.block) return "";
     return [

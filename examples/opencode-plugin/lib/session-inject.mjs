@@ -18,7 +18,13 @@ export function createSessionInject({ config, sessionManager }) {
       fetchJSON(config, endpoint, init, { ...options, actorPeerId, timeoutMs: 10000 })
 
     const parts = []
-    const profile = await buildProfileBlock(clientFetch, config.profileTokenBudget, actorPeerId, config)
+    // buildProfileBlock reports read/ls failures as log(stage, data); this
+    // host's logger takes (level, tool, message, data), so the stages are
+    // mapped onto it. Both stages are failures, hence ERROR.
+    const profile = await buildProfileBlock(clientFetch, config.profileTokenBudget, actorPeerId, {
+      ...config,
+      log: (stage, data) => log("ERROR", "session-inject", stage, data),
+    })
     if (profile?.block) parts.push(profile.block)
 
     const archive = await fetchArchiveBlock(clientFetch, ovSessionId, config.resumeContextBudget)

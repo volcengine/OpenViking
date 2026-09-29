@@ -70,7 +70,7 @@ async function sessionStart(ctx) {
     await writeHookState(clientId, ctx.nativeSessionId, { ...state, lastSessionStartAt: now });
     await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
     if ((host.profileStage || "session-start") !== "session-start") return "";
-    const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
+    const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd, log).catch((error) => {
       logError("profile", error);
       return null;
     });
@@ -94,7 +94,7 @@ async function promptSubmit(ctx) {
     const parts = [];
     let profileInjected = Boolean(state.profileInjected);
     if (host.profileStage === "first-prompt" && !profileInjected) {
-      const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
+      const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd, log).catch((error) => {
         logError("profile", error);
         return null;
       });

@@ -281,9 +281,9 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
   });
 }
 
-export async function buildAgentProfile(fetchJSON, cfg, cwd) {
+export async function buildAgentProfile(fetchJSON, cfg, cwd, log = () => {}) {
   const peer = resolveEffectivePeerId({ cfg, cwd });
-  const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId, cfg);
+  const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId, { ...cfg, log });
   return profile?.block || null;
 }
 
