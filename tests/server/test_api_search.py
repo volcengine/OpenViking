@@ -162,6 +162,56 @@ async def test_search_context_rejects_read_content(client: httpx.AsyncClient):
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
+async def test_search_context_rejects_include_timestamps(client: httpx.AsyncClient):
+    response = await client.post(
+        "/api/v1/search/search",
+        json={"query": "visible", "mode": "context", "include_timestamps": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "service_method"),
+    [
+        ("/api/v1/search/find", "find"),
+        ("/api/v1/search/search", "search"),
+    ],
+)
+async def test_search_endpoints_expose_timestamps_only_when_requested(
+    client: httpx.AsyncClient, service, monkeypatch, endpoint: str, service_method: str
+):
+    async def fake_search(**kwargs):
+        del kwargs
+        return FindResult(
+            memories=[],
+            resources=[
+                MatchedContext(
+                    uri="viking://resources/visible.md",
+                    context_type=ContextType.RESOURCE,
+                    created_at="2026-09-01T01:02:03.004Z",
+                    updated_at="2026-09-02T05:06:07.008Z",
+                )
+            ],
+            skills=[],
+        )
+
+    monkeypatch.setattr(service.search, service_method, fake_search)
+
+    default_response = await client.post(endpoint, json={"query": "visible"})
+    timestamped_response = await client.post(
+        endpoint, json={"query": "visible", "include_timestamps": True}
+    )
+
+    default_item = default_response.json()["result"]["resources"][0]
+    timestamped_item = timestamped_response.json()["result"]["resources"][0]
+    assert "created_at" not in default_item
+    assert "updated_at" not in default_item
+    assert timestamped_item["created_at"] == "2026-09-01T01:02:03.004Z"
+    assert timestamped_item["updated_at"] == "2026-09-02T05:06:07.008Z"
+
+
 @pytest.mark.parametrize(
     ("endpoint", "service_method"),
     [

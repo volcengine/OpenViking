@@ -131,6 +131,7 @@ class FindRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    include_timestamps: bool = False
     tags: Optional[List[str]] = None
     since: Optional[str] = None
     until: Optional[str] = None
@@ -214,6 +215,7 @@ class SearchRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    include_timestamps: bool = False
     tags: Optional[List[str]] = None
 
     since: Optional[str] = None
@@ -247,6 +249,8 @@ class SearchRequest(BaseModel):
 
         if self.read_content:
             raise ValueError("read_content is only supported in mode='list'")
+        if self.include_timestamps:
+            raise ValueError("include_timestamps is only supported in mode='list'")
         if self.target_uri:
             raise ValueError("target_uri is not supported in mode='context'")
         _reject_unknown_quota_and_detail(self.quotas, self.detail)
@@ -379,7 +383,10 @@ async def find(
     )
     result = execution.result
     if hasattr(result, "to_dict"):
-        result = result.to_dict(include_provenance=request.include_provenance)
+        result = result.to_dict(
+            include_provenance=request.include_provenance,
+            include_timestamps=request.include_timestamps,
+        )
     if request.read_content:
         result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
@@ -503,7 +510,10 @@ async def search(
     )
     result = execution.result
     if hasattr(result, "to_dict"):
-        result = result.to_dict(include_provenance=request.include_provenance)
+        result = result.to_dict(
+            include_provenance=request.include_provenance,
+            include_timestamps=request.include_timestamps,
+        )
     if request.read_content:
         result = await _inline_read_content(result, service=service, ctx=_ctx)
     result = _sanitize_floats(result)
