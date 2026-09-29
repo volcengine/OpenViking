@@ -278,10 +278,13 @@ class OpenVikingCompactHook(Hook):
 
 class OpenVikingPostCallHook(Hook):
     name = "openviking_post_call"
-    # Hook execute() is genuinely async (it awaits ov_client search/read). Mark it
-    # async so the hook manager routes it through asyncio.gather with other async
-    # hooks instead of the sequential sync_hooks path.
-    is_sync = False
+    # is_sync=True routes through the HookManager sync path, where each hook's
+    # return value is threaded back into kwargs:
+    #     `kwargs = await hook.execute(context, **kwargs)`
+    # The default is_sync=False routes through asyncio.gather, which discards
+    # return values — the enriched {tool_name, params, result} dict would be
+    # silently dropped.
+    is_sync = True
 
     async def _get_client(self, workspace_id: str, config: Any = None) -> VikingClient:
         return await get_global_client(workspace_id, config=config)
@@ -403,9 +406,16 @@ class OpenVikingPostCallHook(Hook):
                 await ov_client.close()
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
+        # uris reaches us as raw model-supplied params, so it may be null or a
+        # scalar even though the tool schema declares an array. Guard before
+        # iterating: on the sync path an uncaught TypeError here would fail the
+        # whole tool call, because the registry calls execute_hooks() outside
+        # its own try/except (unlike the async path's return_exceptions=True).
+        uris = params.get("uris") if isinstance(params, dict) else None
         is_skill_read = tool_name == "read_file" or (
             tool_name == "openviking_multi_read"
-            and any(str(uri).rstrip("/").endswith("/SKILL.md") for uri in params.get("uris", []))
+            and isinstance(uris, list)
+            and any(str(uri).rstrip("/").endswith("/SKILL.md") for uri in uris)
         )
         if is_skill_read:
             if result and not isinstance(result, Exception):
