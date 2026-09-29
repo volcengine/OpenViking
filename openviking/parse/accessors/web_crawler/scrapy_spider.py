@@ -4,7 +4,7 @@
 
 import os
 from collections.abc import Iterator
-from urllib.parse import urljoin, urlparse
+from urllib.parse import ParseResult, urljoin, urlparse
 
 import scrapy
 from parsel import Selector
@@ -13,7 +13,6 @@ from scrapy.exceptions import CloseSpider
 from openviking.parse.accessors.http_accessor import URLType, URLTypeDetector
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
 from openviking.parse.accessors.web_crawler.models import CrawledDownload, CrawledPage
-
 
 _DOWNLOAD_URL_TYPES = frozenset(
     {
@@ -28,6 +27,24 @@ _DOWNLOAD_EXTENSIONS = frozenset(
     for ext, url_type in URLTypeDetector.EXTENSION_MAP.items()
     if url_type in _DOWNLOAD_URL_TYPES
 )
+
+
+def _normalized_host_port(parsed: ParseResult) -> tuple[str, int | None]:
+    """Return a comparable host key with default HTTP(S) ports elided."""
+    hostname = parsed.hostname
+    if not hostname:
+        return parsed.netloc.lower(), None
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return parsed.netloc.lower(), None
+
+    if (parsed.scheme.lower() == "http" and port == 80) or (
+        parsed.scheme.lower() == "https" and port == 443
+    ):
+        port = None
+    return hostname.rstrip(".").lower(), port
 
 
 class OpenVikingWebSpider(scrapy.Spider):
@@ -71,7 +88,7 @@ class OpenVikingWebSpider(scrapy.Spider):
         self.config = config
         self.collector = collector
         self.download_collector = download_collector
-        self.root_host = urlparse(root_url).netloc.lower()
+        self.root_host_key = _normalized_host_port(urlparse(root_url))
         self._success_count = 0
         self._seen_download_urls: set[str] = set()
 
@@ -199,7 +216,10 @@ class OpenVikingWebSpider(scrapy.Spider):
     def _passes_url_filters(self, url: str, parsed) -> bool:
         if parsed.scheme not in ("http", "https"):
             return False
-        if not self.config.allow_external_links and parsed.netloc.lower() != self.root_host:
+        if (
+            not self.config.allow_external_links
+            and _normalized_host_port(parsed) != self.root_host_key
+        ):
             return False
         if self.config.include_paths and not self._matches_any(
             parsed.path, self.config.include_paths
