@@ -242,7 +242,7 @@ The older size settings apply to fallback recall, not the primary context reques
 
 ## Behavior
 
-- Agent startup injects the OpenViking profile, the available-memory index, and the `<available-skills>` catalog through `agent.inject()`, and registers the per-session disposal commit. On DSH `0.1.7` and later this runs from the serial `agent/created` event (`{ agent, source, signal? }`), which holds queued input until it settles; DSH `0.1.0-rc.6` and `0.1.5` emit `agent/created` without `source` and start the session through `agent/session-start` instead. Startup runs once per agent, and `agent/pre-step` delivers the profile only if startup did not.
+- Agent startup injects the OpenViking profile, the user-level and current actor peer's available-memory indexes, and the `<available-skills>` catalog through `agent.inject()`, and registers the per-session disposal commit. A missing actor peer or peer memory directory is ignored, and all populated memory indexes share `profileTokenBudget`. On DSH `0.1.7` and later this runs from the serial `agent/created` event (`{ agent, source, signal? }`), which holds queued input until it settles; DSH `0.1.0-rc.6` and `0.1.5` emit `agent/created` without `source` and start the session through `agent/session-start` instead. Startup runs once per agent, and `agent/pre-step` delivers the profile only if startup did not.
 - `agent/pre-step` retrieves with the current step input and appends a durable plugin message to that same step.
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
 - `turn/end` checks the OpenViking pending-token threshold and commits when required.
