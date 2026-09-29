@@ -104,6 +104,12 @@ class PatchOp(MergeOpBase):
         # 空字符串和 None 都保持原值
         if patch_value is None or patch_value == "":
             return current_value
+        # Stored verbatim (#4413): a full replacement carries no SEARCH to
+        # prove the model copied the numbered read view, and consecutive
+        # numeric columns (years, quarter indexes) are indistinguishable from
+        # display prefixes by shape alone. Stripping here destroys genuine
+        # data, so prefix cleanup only happens where SEARCH itself is numbered
+        # (see _clean_replace_prefixes in patch_handler).
         return patch_value
 
     def _extract_replace_when_no_original(self, patch_value: Any) -> Any:
@@ -125,6 +131,10 @@ class PatchOp(MergeOpBase):
         # patch. Taking only blocks[0] would silently drop every subsequent
         # fact/preference the model extracted.
         if isinstance(patch_value, StrPatch):
+            # Block replaces are stored verbatim (#4413): an empty SEARCH
+            # carries no evidence that prefixes were copied from the numbered
+            # read view, and stripping by shape alone would eat consecutive
+            # numeric columns (years, quarter indexes).
             replaces = [b.replace for b in patch_value.blocks if b.replace is not None]
             return "\n".join(replaces) if replaces else ""
 
