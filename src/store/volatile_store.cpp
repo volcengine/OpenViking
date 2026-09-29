@@ -24,6 +24,11 @@ std::vector<std::string> VolatileStore::get_data(
 
 int VolatileStore::put_data(const std::vector<std::string>& keys,
                             const std::vector<std::string>& values) {
+  if (keys.size() != values.size()) {
+    SPDLOG_WARN("VolatileStore::put_data length mismatch: keys={}, values={}",
+                keys.size(), values.size());
+    return -1;
+  }
   std::unique_lock<std::shared_mutex> lock(mutex_);
   for (size_t i = 0; i < keys.size(); ++i) {
     data_[keys[i]] = values[i];

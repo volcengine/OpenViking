@@ -52,6 +52,11 @@ std::vector<std::string> PersistStore::get_data(
 
 int PersistStore::put_data(const std::vector<std::string>& keys,
                            const std::vector<std::string>& values) {
+  if (keys.size() != values.size()) {
+    SPDLOG_WARN("PersistStore::put_data length mismatch: keys={}, values={}",
+                keys.size(), values.size());
+    return -1;
+  }
   leveldb::WriteBatch batch;
   for (size_t i = 0; i < keys.size(); ++i) {
     batch.Put(keys[i], values[i]);
